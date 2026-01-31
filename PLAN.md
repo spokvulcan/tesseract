@@ -5,7 +5,7 @@
 A privacy-focused, offline voice-to-text dictation application for macOS using native Swift/SwiftUI. The app captures audio via push-to-talk, transcribes locally using WhisperKit, and injects text into any focused application.
 
 ### Key Decisions
-- **Platform**: macOS only (Apple Silicon M1/M2 with 16GB RAM)
+- **Platform**: macOS 26+ (Apple Silicon)
 - **Framework**: Native Swift/SwiftUI
 - **ASR Engine**: WhisperKit (CoreML-based, 9x faster than whisper.cpp on Apple Silicon)
 - **VAD**: Silero VAD for speech segmentation
@@ -28,7 +28,7 @@ A privacy-focused, offline voice-to-text dictation application for macOS using n
 **Description**: Set up the project with proper capabilities, entitlements, and build settings for a sandboxed macOS app.
 
 **Subtasks**:
-1. Set deployment target to macOS 13.0 (Ventura) for WhisperKit compatibility
+1. Set deployment target to macOS 26.0 (Tahoe)
 2. Add required capabilities in Signing & Capabilities:
    - App Sandbox (enabled)
    - Hardened Runtime (enabled)
@@ -36,7 +36,7 @@ A privacy-focused, offline voice-to-text dictation application for macOS using n
    - `com.apple.security.device.audio-input` = YES (microphone access)
    - `com.apple.security.accessibility` = YES (for text injection, requires non-sandbox or special handling)
 4. Set build settings:
-   - Enable Swift 5.9+
+   - Enable Swift 6.2
    - Set optimization level to `-O` for Release
    - Enable whole module optimization
 5. Create Info.plist entries:
