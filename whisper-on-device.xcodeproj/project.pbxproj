@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		E0C654CB2F2E9A9E003C1B55 /* PLAN.md in Resources */ = {isa = PBXBuildFile; fileRef = E0C654CA2F2E9A9E003C1B55 /* PLAN.md */; };
 		E0C655372F2E9DE5003C1B55 /* IMPLEMENTATION_LOG.md in Resources */ = {isa = PBXBuildFile; fileRef = E0C655362F2E9DE5003C1B55 /* IMPLEMENTATION_LOG.md */; };
+		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -121,6 +123,7 @@
 			);
 			name = "whisper-on-device";
 			packageProductDependencies = (
+				E0C655412F2EA000003C1B55 /* WhisperKit */,
 			);
 			productName = "whisper-on-device";
 			productReference = E0C654902F2E946A003C1B55 /* whisper-on-device.app */;
@@ -204,6 +207,9 @@
 			);
 			mainGroup = E0C654872F2E946A003C1B55;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E0C654912F2E946A003C1B55 /* Products */;
 			projectDirPath = "";
@@ -591,6 +597,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/WhisperKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.12.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E0C655412F2EA000003C1B55 /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */;
+			productName = WhisperKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E0C654882F2E946A003C1B55 /* Project object */;
 }
