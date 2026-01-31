@@ -275,7 +275,8 @@ struct ModelDownloadStep: View {
     private func loadModelAndContinue() {
         isLoadingModel = true
         Task {
-            try? await container.transcriptionEngine.loadModel(selectedModel)
+            let modelPath = container.modelManager.getLocalModelPath(selectedModel)
+            try? await container.transcriptionEngine.loadModel(selectedModel, modelPath: modelPath)
             isLoadingModel = false
             onContinue()
         }

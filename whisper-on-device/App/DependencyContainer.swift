@@ -51,7 +51,8 @@ final class DependencyContainer: ObservableObject {
 
         // Load model if previously selected
         if modelManager.isModelDownloaded(settingsManager.whisperModel) {
-            try? await transcriptionEngine.loadModel(settingsManager.whisperModel)
+            let modelPath = modelManager.getLocalModelPath(settingsManager.whisperModel)
+            try? await transcriptionEngine.loadModel(settingsManager.whisperModel, modelPath: modelPath)
         }
     }
 }

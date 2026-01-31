@@ -156,6 +156,20 @@ struct AudioLevelMeter: View {
     }
 }
 
+// MARK: - Recommended Badge
+
+struct RecommendedBadge: View {
+    var body: some View {
+        Text("Recommended")
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.accentColor, in: Capsule())
+    }
+}
+
 // MARK: - Model Settings Tab
 
 struct ModelSettingsTab: View {
@@ -174,6 +188,9 @@ struct ModelSettingsTab: View {
                     ForEach(WhisperModel.allCases) { model in
                         HStack {
                             Text(model.displayName)
+                            if model.isRecommended {
+                                RecommendedBadge()
+                            }
                             Spacer()
                             if modelManager.isModelDownloaded(model) {
                                 Image(systemName: "checkmark.circle.fill")
@@ -196,6 +213,8 @@ struct ModelSettingsTab: View {
                         Text("Size: \(String(format: "%.1f", selectedModel.sizeGB)) GB")
                         Spacer()
                         Text("RAM: \(selectedModel.recommendedRAMGB) GB+")
+                        Spacer()
+                        Label(selectedModel.languageSupport.displayText, systemImage: "globe")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -247,7 +266,8 @@ struct ModelSettingsTab: View {
         isLoadingModel = true
         Task {
             defer { isLoadingModel = false }
-            try? await container.transcriptionEngine.loadModel(model)
+            let modelPath = modelManager.getLocalModelPath(model)
+            try? await container.transcriptionEngine.loadModel(model, modelPath: modelPath)
         }
     }
 }
@@ -259,7 +279,12 @@ struct ModelDownloadRow: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text(model.displayName)
+                HStack {
+                    Text(model.displayName)
+                    if model.isRecommended {
+                        RecommendedBadge()
+                    }
+                }
                 Text("\(String(format: "%.1f", model.sizeGB)) GB")
                     .font(.caption)
                     .foregroundStyle(.secondary)

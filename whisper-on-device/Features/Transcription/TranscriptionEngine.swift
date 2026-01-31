@@ -19,7 +19,7 @@ final class TranscriptionEngine: ObservableObject {
 
     init() {}
 
-    func loadModel(_ model: WhisperModel) async throws {
+    func loadModel(_ model: WhisperModel, modelPath: URL? = nil) async throws {
         // Unload existing model first
         if whisperActor != nil {
             unloadModel()
@@ -27,7 +27,7 @@ final class TranscriptionEngine: ObservableObject {
 
         // Create the actor and load model
         let actor = WhisperActor()
-        try await actor.loadModel(model)
+        try await actor.loadModel(model, modelPath: modelPath)
 
         whisperActor = actor
         isModelLoaded = true
@@ -66,14 +66,38 @@ final class TranscriptionEngine: ObservableObject {
 actor WhisperActor {
     private var whisperKit: WhisperKit?
 
-    func loadModel(_ model: WhisperModel) async throws {
-        whisperKit = try await WhisperKit(
-            model: model.rawValue,
-            computeOptions: .init(
-                audioEncoderCompute: .cpuAndNeuralEngine,
-                textDecoderCompute: .cpuAndNeuralEngine
-            )
+    func loadModel(_ model: WhisperModel, modelPath: URL?) async throws {
+        // Configure compute units for each model component
+        // GPU is faster for encoding, Neural Engine for decoding
+        let computeOptions = ModelComputeOptions(
+            melCompute: .cpuAndGPU,
+            audioEncoderCompute: .cpuAndGPU,
+            textDecoderCompute: .cpuAndNeuralEngine,
+            prefillCompute: .cpuAndGPU
         )
+
+        // Build configuration
+        let config: WhisperKitConfig
+
+        if let modelPath = modelPath {
+            // Use already-downloaded model from local path
+            config = WhisperKitConfig(
+                modelFolder: modelPath.path,
+                computeOptions: computeOptions,
+                prewarm: true,
+                load: true,
+                download: false
+            )
+        } else {
+            // Download and load model
+            config = WhisperKitConfig(
+                model: model.rawValue,
+                computeOptions: computeOptions,
+                prewarm: true
+            )
+        }
+
+        whisperKit = try await WhisperKit(config)
     }
 
     func transcribe(_ audioData: AudioData) async throws -> TranscriptionResult {
