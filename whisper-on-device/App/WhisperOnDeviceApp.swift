@@ -22,6 +22,8 @@ struct WhisperOnDeviceApp: App {
                 audioCapture: container.audioCaptureEngine,
                 selectedNavigation: $selectedNavigation
             )
+            .containerBackground(.ultraThinMaterial, for: .window)
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .environmentObject(container)
             .focusedSceneValue(\.dictationActions, DictationActions(
                 toggleRecording: { [weak container] in
@@ -53,8 +55,8 @@ struct WhisperOnDeviceApp: App {
             }
         }
         .windowStyle(.titleBar)
-        .windowResizability(.contentSize)
-        .defaultSize(width: 700, height: 550)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 800, height: 700)
         .commands {
             CommandGroup(replacing: .newItem) {}  // Remove "New Window" command
 

@@ -103,8 +103,10 @@ struct WaveformVisualizer: View {
             return .orange
         case .listening:
             return .yellow
-        case .idle, .error:
-            return .gray
+        case .idle:
+            return .secondary
+        case .error:
+            return .red
         }
     }
 
@@ -116,8 +118,10 @@ struct WaveformVisualizer: View {
             return 0.7
         case .listening:
             return 0.5
-        case .idle, .error:
-            return 0.3
+        case .idle:
+            return 0.25
+        case .error:
+            return 0.4
         }
     }
 

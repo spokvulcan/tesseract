@@ -12,41 +12,64 @@ struct DictationContentView: View {
     @ObservedObject var permissionsManager: PermissionsManager
     @ObservedObject var audioCapture: AudioCaptureEngine
 
+    private let contentMaxWidth: CGFloat = 820
+
     var body: some View {
-        VStack(spacing: 20) {
-            // Status Header
-            StatusHeader(
-                state: coordinator.state,
-                isModelLoaded: transcriptionEngine.isModelLoaded,
-                modelName: transcriptionEngine.loadedModel?.displayName
-            )
+        VStack(spacing: 16) {
+            VStack(spacing: 16) {
+                StatusHeader(
+                    state: coordinator.state,
+                    isModelLoaded: transcriptionEngine.isModelLoaded,
+                    modelName: transcriptionEngine.loadedModel?.displayName
+                )
 
-            // Recording Button
-            RecordingButtonView(
-                state: coordinator.state,
-                onToggle: { coordinator.toggleRecording() }
-            )
-            .disabled(!transcriptionEngine.isModelLoaded || permissionsManager.microphonePermission != .granted)
+                RecordingButtonView(
+                    state: coordinator.state,
+                    onToggle: { coordinator.toggleRecording() }
+                )
+                .disabled(!transcriptionEngine.isModelLoaded || permissionsManager.microphonePermission != .granted)
 
-            // Waveform Visualizer
-            WaveformVisualizer(
-                audioCapture: audioCapture,
-                state: coordinator.state
-            )
+                WaveformVisualizer(
+                    audioCapture: audioCapture,
+                    state: coordinator.state
+                )
+                .frame(height: 72)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.thinMaterial)
+                )
 
-            // Last Transcription
+                Text("Shortcut: Shift+Command+D")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(.regularMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(.quaternary, lineWidth: 1)
+                    )
+            )
+            .frame(maxWidth: contentMaxWidth)
+
             if !coordinator.lastTranscription.isEmpty {
                 LastTranscriptionView(text: coordinator.lastTranscription)
+                    .frame(maxWidth: contentMaxWidth)
             }
 
-            Divider()
-
-            // History
             TranscriptionHistoryView(history: history)
-
-            Spacer()
+                .frame(maxWidth: contentMaxWidth)
+                .frame(maxHeight: .infinity, alignment: .top)
         }
-        .padding()
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationTitle("Dictation")
     }
 }

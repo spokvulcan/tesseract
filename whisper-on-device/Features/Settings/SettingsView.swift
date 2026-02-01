@@ -30,6 +30,7 @@ struct GeneralSettingsSection: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("General")
     }
 }
@@ -67,6 +68,7 @@ struct AudioSettingsSection: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Audio")
     }
 }
@@ -227,6 +229,7 @@ struct ModelSettingsSection: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Model")
     }
 
@@ -359,6 +362,7 @@ struct AdvancedSettingsSection: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Advanced")
     }
 

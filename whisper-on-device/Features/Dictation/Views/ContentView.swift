@@ -35,6 +35,8 @@ struct ContentView: View {
                     permissionsManager: permissionsManager,
                     audioCapture: audioCapture
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.clear)
             } else {
                 NavigationItem.dictation.viewForPage(
                     coordinator: coordinator,
@@ -43,8 +45,11 @@ struct ContentView: View {
                     permissionsManager: permissionsManager,
                     audioCapture: audioCapture
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.clear)
             }
         }
+        .navigationSplitViewStyle(.balanced)
     }
 }
 
