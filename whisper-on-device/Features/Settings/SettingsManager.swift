@@ -28,6 +28,27 @@ final class SettingsManager: ObservableObject {
 
     @AppStorage("restoreClipboard") var restoreClipboard = true
 
+    @AppStorage("visualizationType") var visualizationTypeRaw: String = VisualizationType.organicBlob.rawValue
+
+    var visualizationType: VisualizationType {
+        get { VisualizationType(rawValue: visualizationTypeRaw) ?? .organicBlob }
+        set { visualizationTypeRaw = newValue.rawValue }
+    }
+
+    @AppStorage("overlayStyle") var overlayStyleRaw: String = OverlayStyle.pill.rawValue
+
+    var overlayStyle: OverlayStyle {
+        get { OverlayStyle(rawValue: overlayStyleRaw) ?? .pill }
+        set { overlayStyleRaw = newValue.rawValue }
+    }
+
+    @AppStorage("glowTheme") var glowThemeRaw: String = GlowTheme.appleIntelligence.rawValue
+
+    var glowTheme: GlowTheme {
+        get { GlowTheme(rawValue: glowThemeRaw) ?? .appleIntelligence }
+        set { glowThemeRaw = newValue.rawValue }
+    }
+
     // MARK: - Audio Settings
 
     @AppStorage("selectedMicrophoneUID") var selectedMicrophoneUID: String = ""
@@ -88,6 +109,9 @@ final class SettingsManager: ObservableObject {
         showInMenuBar = true
         autoInsertText = true
         restoreClipboard = true
+        visualizationTypeRaw = VisualizationType.organicBlob.rawValue
+        overlayStyleRaw = OverlayStyle.pill.rawValue
+        glowThemeRaw = GlowTheme.appleIntelligence.rawValue
         selectedMicrophoneUID = ""
         vadSensitivity = 0.5
         silenceThreshold = 0.5

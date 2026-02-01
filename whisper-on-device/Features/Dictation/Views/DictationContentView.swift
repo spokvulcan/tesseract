@@ -55,10 +55,6 @@ struct DictationContentView: View {
         .padding(.top, 16)
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .overlay(alignment: .bottom) {
-            RecordingWaveHUD(audioCapture: audioCapture, state: coordinator.state)
-                .padding(.bottom, 18)
-        }
         .navigationTitle("Dictation")
     }
 }

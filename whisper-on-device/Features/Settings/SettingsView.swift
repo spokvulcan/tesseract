@@ -28,6 +28,44 @@ struct GeneralSettingsSection: View {
                 Toggle("Play sounds", isOn: $settings.playSounds)
                 Toggle("Show notifications", isOn: $settings.showNotifications)
             }
+
+            Section("Recording Overlay") {
+                Picker("Overlay Style", selection: $settings.overlayStyleRaw) {
+                    ForEach(OverlayStyle.allCases) { style in
+                        Text(style.displayName).tag(style.rawValue)
+                    }
+                }
+
+                if let style = OverlayStyle(rawValue: settings.overlayStyleRaw) {
+                    Text(style.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                // Show visualization picker only for pill style
+                if settings.overlayStyle == .pill {
+                    Picker("Animation Style", selection: $settings.visualizationTypeRaw) {
+                        ForEach(VisualizationType.allCases) { type in
+                            Text(type.displayName).tag(type.rawValue)
+                        }
+                    }
+
+                    if let type = VisualizationType(rawValue: settings.visualizationTypeRaw) {
+                        Text(type.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                // Show glow theme picker for full-screen border style
+                if settings.overlayStyle == .fullScreenBorder {
+                    Picker("Glow Theme", selection: $settings.glowThemeRaw) {
+                        ForEach(GlowTheme.allCases) { theme in
+                            Text(theme.displayName).tag(theme.rawValue)
+                        }
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)

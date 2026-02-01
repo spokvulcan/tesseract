@@ -56,10 +56,6 @@ struct MainWindowView: View {
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .frame(minWidth: 400, minHeight: 500)
-        .overlay(alignment: .bottom) {
-            RecordingWaveHUD(audioCapture: audioCapture, state: coordinator.state)
-                .padding(.bottom, 18)
-        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 SettingsLink {
