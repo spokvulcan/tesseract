@@ -11,6 +11,7 @@ struct DictationContentView: View {
     @ObservedObject var history: TranscriptionHistory
     @ObservedObject var permissionsManager: PermissionsManager
     @ObservedObject var audioCapture: AudioCaptureEngine
+    @ObservedObject private var settings = SettingsManager.shared
 
     private let contentMaxWidth: CGFloat = 820
 
@@ -29,19 +30,7 @@ struct DictationContentView: View {
                 )
                 .disabled(!transcriptionEngine.isModelLoaded || permissionsManager.microphonePermission != .granted)
 
-                WaveformVisualizer(
-                    audioCapture: audioCapture,
-                    state: coordinator.state
-                )
-                .frame(height: 72)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.thinMaterial)
-                )
-
-                Text("Shortcut: Shift+Command+D")
+                Text("Shortcut: \(settings.hotkey.displayString)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -57,19 +46,19 @@ struct DictationContentView: View {
             )
             .frame(maxWidth: contentMaxWidth)
 
-            if !coordinator.lastTranscription.isEmpty {
-                LastTranscriptionView(text: coordinator.lastTranscription)
-                    .frame(maxWidth: contentMaxWidth)
-            }
-
             TranscriptionHistoryView(history: history)
                 .frame(maxWidth: contentMaxWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
+                .layoutPriority(1)
         }
         .padding(.horizontal, 24)
         .padding(.top, 16)
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .bottom) {
+            RecordingWaveHUD(audioCapture: audioCapture, state: coordinator.state)
+                .padding(.bottom, 18)
+        }
         .navigationTitle("Dictation")
     }
 }

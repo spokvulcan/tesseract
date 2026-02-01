@@ -12,7 +12,7 @@ struct OnboardingView: View {
 
     @State private var currentStep = 0
 
-    private let totalSteps = 4
+    private let totalSteps = 5
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,15 +31,21 @@ struct OnboardingView: View {
                 )
                 .tag(1)
 
+                AccessibilityPermissionStep(
+                    permissionsManager: permissionsManager,
+                    onContinue: nextStep
+                )
+                .tag(2)
+
                 ModelDownloadStep(
                     modelManager: modelManager,
                     onContinue: nextStep,
                     onSkip: nextStep
                 )
-                .tag(2)
+                .tag(3)
 
                 ReadyStep(onComplete: complete)
-                    .tag(3)
+                    .tag(4)
             }
             .tabViewStyle(.automatic)
         }
@@ -171,6 +177,102 @@ struct MicrophonePermissionStep: View {
     }
 }
 
+// MARK: - Accessibility Permission Step
+
+struct AccessibilityPermissionStep: View {
+    @ObservedObject var permissionsManager: PermissionsManager
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            Image(systemName: "hand.raised.circle.fill")
+                .font(.system(size: 60))
+                .foregroundStyle(permissionColor)
+
+            Text("Accessibility Access")
+                .font(.title)
+                .fontWeight(.bold)
+
+            Text("WhisperOnDevice needs Accessibility access to capture your hotkey without typing unwanted characters.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+
+            Spacer()
+
+            switch permissionsManager.accessibilityPermission {
+            case .granted:
+                Label("Accessibility access granted", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+
+                Button("Continue") {
+                    onContinue()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+            case .denied, .unknown:
+                VStack(spacing: 12) {
+                    Button("Grant Accessibility Access") {
+                        permissionsManager.requestAccessibilityPermission()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+
+                    Button("Skip for now") {
+                        onContinue()
+                    }
+                    .buttonStyle(.bordered)
+                    .foregroundStyle(.secondary)
+
+                    Text("Without Accessibility access, the hotkey may type characters while recording.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 20)
+                }
+
+            case .requesting:
+                VStack(spacing: 8) {
+                    ProgressView()
+                    Text("Waiting for permission...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+            case .restricted:
+                Label("Accessibility access restricted", systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+
+                Button("Skip for now") {
+                    onContinue()
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Spacer()
+        }
+        .padding()
+        .onAppear {
+            permissionsManager.checkAccessibilityPermission()
+        }
+    }
+
+    private var permissionColor: Color {
+        switch permissionsManager.accessibilityPermission {
+        case .granted:
+            return .green
+        case .denied:
+            return .orange
+        default:
+            return .blue
+        }
+    }
+}
+
 // MARK: - Model Download Step
 
 struct ModelDownloadStep: View {
@@ -287,6 +389,7 @@ struct ModelDownloadStep: View {
 
 struct ReadyStep: View {
     let onComplete: () -> Void
+    @ObservedObject private var settings = SettingsManager.shared
 
     var body: some View {
         VStack(spacing: 24) {
@@ -304,7 +407,7 @@ struct ReadyStep: View {
                 HotkeyHint(
                     icon: "keyboard",
                     title: "Push-to-Talk",
-                    description: "Press and hold F5 to record, release to transcribe"
+                    description: "Press and hold \(settings.hotkey.displayString) to record, release to transcribe"
                 )
 
                 HotkeyHint(

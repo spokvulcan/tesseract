@@ -28,6 +28,7 @@ struct KeyCombo: Codable, Equatable, Sendable {
         if flags.contains(.option) { parts.append("⌥") }
         if flags.contains(.shift) { parts.append("⇧") }
         if flags.contains(.command) { parts.append("⌘") }
+        if flags.contains(.function) { parts.append("fn") }
 
         parts.append(keyCodeToString(keyCode))
 
@@ -63,4 +64,5 @@ struct KeyCombo: Codable, Equatable, Sendable {
     static let f5 = KeyCombo(keyCode: UInt16(kVK_F5))
     static let optionSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .option)
     static let controlSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .control)
+    static let functionSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .function)
 }

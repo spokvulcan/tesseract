@@ -11,6 +11,7 @@ struct MainWindowView: View {
     @ObservedObject var history: TranscriptionHistory
     @ObservedObject var permissionsManager: PermissionsManager
     @ObservedObject var audioCapture: AudioCaptureEngine
+    @ObservedObject private var settings = SettingsManager.shared
 
     private let contentMaxWidth: CGFloat = 820
 
@@ -29,19 +30,7 @@ struct MainWindowView: View {
                 )
                 .disabled(!transcriptionEngine.isModelLoaded || permissionsManager.microphonePermission != .granted)
 
-                WaveformVisualizer(
-                    audioCapture: audioCapture,
-                    state: coordinator.state
-                )
-                .frame(height: 72)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.thinMaterial)
-                )
-
-                Text("Shortcut: Shift+Command+D")
+                Text("Shortcut: \(settings.hotkey.displayString)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -57,20 +46,20 @@ struct MainWindowView: View {
             )
             .frame(maxWidth: contentMaxWidth)
 
-            if !coordinator.lastTranscription.isEmpty {
-                LastTranscriptionView(text: coordinator.lastTranscription)
-                    .frame(maxWidth: contentMaxWidth)
-            }
-
             TranscriptionHistoryView(history: history)
                 .frame(maxWidth: contentMaxWidth)
                 .frame(maxHeight: .infinity, alignment: .top)
+                .layoutPriority(1)
         }
         .padding(.horizontal, 24)
         .padding(.top, 16)
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .frame(minWidth: 400, minHeight: 500)
+        .overlay(alignment: .bottom) {
+            RecordingWaveHUD(audioCapture: audioCapture, state: coordinator.state)
+                .padding(.bottom, 18)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 SettingsLink {
@@ -257,58 +246,6 @@ struct RecordingButtonView: View {
     }
 }
 
-// MARK: - Last Transcription
-
-struct LastTranscriptionView: View {
-    let text: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("Last Transcription", systemImage: "text.bubble")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(text, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .help("Copy to clipboard")
-                .accessibilityLabel("Copy transcription to clipboard")
-            }
-
-            Text(text)
-                .font(.body)
-                .textSelection(.enabled)
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color.primary.opacity(0.04))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(.quaternary, lineWidth: 1)
-                        )
-                )
-                .accessibilityLabel("Transcription: \(text)")
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(.quaternary, lineWidth: 1)
-                )
-        )
-    }
-}
-
 // MARK: - History View
 
 struct TranscriptionHistoryView: View {
@@ -344,7 +281,7 @@ struct TranscriptionHistoryView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("History", systemImage: "clock")
-                    .font(.headline)
+                    .font(.title3)
 
                 Spacer()
 
@@ -359,14 +296,14 @@ struct TranscriptionHistoryView: View {
             if history.entries.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "text.bubble")
-                        .font(.system(size: 28))
+                        .font(.system(size: 32))
                         .foregroundStyle(.tertiary)
                     Text("No transcriptions yet")
-                        .font(.subheadline)
+                        .font(.body)
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, minHeight: 160)
-                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, minHeight: 220)
+                .padding(.vertical, 16)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -377,9 +314,11 @@ struct TranscriptionHistoryView: View {
                     .padding(.horizontal, 4)
                 }
                 .scrollContentBackground(.hidden)
+                .frame(maxHeight: .infinity)
                 .accessibilityLabel("Transcription history, \(history.entries.count) items")
             }
         }
+        .frame(maxHeight: .infinity)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -394,7 +333,7 @@ struct HistoryDateSection: View {
         VStack(alignment: .leading, spacing: 0) {
             // Date header
             Text(dateLabel)
-                .font(.caption)
+                .font(.callout)
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
                 .padding(.top, 14)
@@ -434,8 +373,7 @@ struct TimelineEntryRow: View {
         HStack(alignment: .top, spacing: 12) {
             // Time column
             Text(timeString)
-                .font(.caption)
-                .fontWeight(.medium)
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.tertiary)
                 .monospacedDigit()
                 .frame(width: 70, alignment: .trailing)
@@ -462,23 +400,40 @@ struct TimelineEntryRow: View {
             }
 
             // Content
-            VStack(alignment: .leading, spacing: 4) {
-                Text(entry.text)
-                    .font(.body)
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(entry.text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                HStack(spacing: 8) {
-                    Text(String(format: "%.1fs", entry.duration))
-                    if !entry.model.isEmpty {
-                        Text(entry.model)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                    HStack(spacing: 8) {
+                        Text(String(format: "%.1fs", entry.duration))
+                        if !entry.model.isEmpty {
+                            Text(entry.model)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(entry.text, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .help("Copy to clipboard")
+                .opacity(isHovered ? 1 : 0)
+                .allowsHitTesting(isHovered)
+                .accessibilityLabel("Copy transcription")
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 10)
@@ -488,23 +443,16 @@ struct TimelineEntryRow: View {
                     .fill(isHovered ? Color.primary.opacity(0.04) : Color.clear)
             )
             .contentShape(RoundedRectangle(cornerRadius: 10))
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isHovered = hovering
-                }
-            }
-            .contextMenu {
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(entry.text, forType: .string)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(entry.text), recorded at \(timeString), duration \(String(format: "%.1f", entry.duration)) seconds")
-        .accessibilityHint("Right-click to copy")
+        .accessibilityHint("Copy button appears on hover")
     }
 }
 

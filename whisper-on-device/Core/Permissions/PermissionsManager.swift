@@ -94,7 +94,12 @@ final class PermissionsManager: ObservableObject {
     }
 
     var allPermissionsGranted: Bool {
+        microphonePermission == .granted && accessibilityPermission == .granted
+    }
+
+    /// Returns true if the minimum required permissions (microphone) are granted.
+    /// Accessibility is recommended but not strictly required.
+    var minimumPermissionsGranted: Bool {
         microphonePermission == .granted
-        // Note: Accessibility is optional for clipboard-based injection
     }
 }

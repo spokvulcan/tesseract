@@ -44,9 +44,9 @@ final class SettingsManager: ObservableObject {
 
     // MARK: - Hotkey Settings
 
-    @AppStorage("hotkeyKeyCode") var hotkeyKeyCode: Int = 96  // F5
+    @AppStorage("hotkeyKeyCode") var hotkeyKeyCode: Int = Int(KeyCombo.optionSpace.keyCode)  // Option + Space
 
-    @AppStorage("hotkeyModifiers") var hotkeyModifiers: Int = 0
+    @AppStorage("hotkeyModifiers") var hotkeyModifiers: Int = Int(KeyCombo.optionSpace.modifiers)
 
     var hotkey: KeyCombo {
         get {
@@ -93,8 +93,8 @@ final class SettingsManager: ObservableObject {
         silenceThreshold = 0.5
         selectedModel = WhisperModel.base.rawValue
         language = "auto"
-        hotkeyKeyCode = 96
-        hotkeyModifiers = 0
+        hotkeyKeyCode = Int(KeyCombo.optionSpace.keyCode)
+        hotkeyModifiers = Int(KeyCombo.optionSpace.modifiers)
         maxRecordingDuration = 60.0
         playSounds = true
         showNotifications = true
