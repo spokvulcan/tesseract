@@ -232,14 +232,6 @@ struct LastTranscriptionView: View {
 
 struct TranscriptionHistoryView: View {
     @ObservedObject var history: TranscriptionHistory
-    @State private var searchText = ""
-
-    var filteredEntries: [TranscriptionEntry] {
-        if searchText.isEmpty {
-            return history.entries
-        }
-        return history.search(searchText)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -260,18 +252,14 @@ struct TranscriptionHistoryView: View {
                 }
             }
 
-            TextField("Search...", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Search transcription history")
-
-            if filteredEntries.isEmpty {
+            if history.entries.isEmpty {
                 Text("No transcriptions yet")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding()
             } else {
                 List {
-                    ForEach(filteredEntries) { entry in
+                    ForEach(history.entries) { entry in
                         TranscriptionEntryRow(entry: entry)
                     }
                     .onDelete { offsets in
@@ -279,7 +267,7 @@ struct TranscriptionHistoryView: View {
                     }
                 }
                 .listStyle(.inset)
-                .accessibilityLabel("Transcription history, \(filteredEntries.count) items")
+                .accessibilityLabel("Transcription history, \(history.entries.count) items")
             }
         }
     }
@@ -294,7 +282,7 @@ struct TranscriptionEntryRow: View {
                 .lineLimit(2)
 
             HStack {
-                Text(entry.timestamp, style: .relative)
+                Text(formattedTimestamp)
                 Text("•")
                     .accessibilityHidden(true)
                 Text(String(format: "%.1fs", entry.duration))
@@ -311,6 +299,26 @@ struct TranscriptionEntryRow: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(entry.text, forType: .string)
             }
+        }
+    }
+
+    private var formattedTimestamp: String {
+        let calendar = Calendar.current
+        let now = Date()
+
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "h:mm a"
+        let timeString = timeFormatter.string(from: entry.timestamp)
+
+        if calendar.isDateInToday(entry.timestamp) {
+            return "today at \(timeString)"
+        } else if calendar.isDateInYesterday(entry.timestamp) {
+            return "yesterday at \(timeString)"
+        } else {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateFormat = "MMM d"
+            let dateString = dateFormatter.string(from: entry.timestamp)
+            return "\(dateString) at \(timeString)"
         }
     }
 }

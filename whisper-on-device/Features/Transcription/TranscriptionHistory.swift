@@ -63,15 +63,6 @@ final class TranscriptionHistory: ObservableObject {
         saveToDisk()
     }
 
-    func search(_ query: String) -> [TranscriptionEntry] {
-        guard !query.isEmpty else { return entries }
-
-        let lowercasedQuery = query.lowercased()
-        return entries.filter { entry in
-            entry.text.lowercased().contains(lowercasedQuery)
-        }
-    }
-
     func entries(from startDate: Date, to endDate: Date) -> [TranscriptionEntry] {
         entries.filter { entry in
             entry.timestamp >= startDate && entry.timestamp <= endDate
