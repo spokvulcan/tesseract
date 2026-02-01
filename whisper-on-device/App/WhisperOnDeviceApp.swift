@@ -5,6 +5,22 @@
 
 import SwiftUI
 
+/// Helper view that captures the openWindow environment action and provides it to the AppDelegate
+private struct WindowOpenerView: View {
+    @Environment(\.openWindow) private var openWindow
+    let appDelegate: AppDelegate
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                appDelegate.onOpenWindow = { [openWindow] in
+                    openWindow(id: "main")
+                }
+            }
+    }
+}
+
 @main
 struct WhisperOnDeviceApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -13,7 +29,7 @@ struct WhisperOnDeviceApp: App {
     @State private var selectedNavigation: NavigationItem? = .dictation
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             ContentView(
                 coordinator: container.dictationCoordinator,
                 transcriptionEngine: container.transcriptionEngine,
@@ -22,6 +38,9 @@ struct WhisperOnDeviceApp: App {
                 audioCapture: container.audioCaptureEngine,
                 selectedNavigation: $selectedNavigation
             )
+            .background {
+                WindowOpenerView(appDelegate: appDelegate)
+            }
             .containerBackground(.ultraThinMaterial, for: .window)
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .environmentObject(container)

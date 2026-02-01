@@ -10,12 +10,45 @@ import SwiftUI
 struct GeneralSettingsSection: View {
     @ObservedObject private var settings = SettingsManager.shared
 
+    // Prevent disabling both dock and menu bar
+    private var showInDockBinding: Binding<Bool> {
+        Binding(
+            get: { settings.showInDock },
+            set: { newValue in
+                // Only allow turning off dock if menu bar is enabled
+                if !newValue && !settings.showInMenuBar {
+                    return // Don't allow - would make app inaccessible
+                }
+                settings.showInDock = newValue
+            }
+        )
+    }
+
+    private var showInMenuBarBinding: Binding<Bool> {
+        Binding(
+            get: { settings.showInMenuBar },
+            set: { newValue in
+                // Only allow turning off menu bar if dock is enabled
+                if !newValue && !settings.showInDock {
+                    return // Don't allow - would make app inaccessible
+                }
+                settings.showInMenuBar = newValue
+            }
+        )
+    }
+
     var body: some View {
         Form {
             Section {
                 Toggle("Launch at Login", isOn: $settings.launchAtLogin)
-                Toggle("Show in Dock", isOn: $settings.showInDock)
-                Toggle("Show in Menu Bar", isOn: $settings.showInMenuBar)
+                Toggle("Show in Dock", isOn: showInDockBinding)
+                Toggle("Show in Menu Bar", isOn: showInMenuBarBinding)
+
+                if !settings.showInDock || !settings.showInMenuBar {
+                    Text("At least one must be enabled to access the app")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("After Transcription") {

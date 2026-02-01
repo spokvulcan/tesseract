@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var menuBarManager: MenuBarManager?
     var mainWindow: NSWindow?
     private var navigationSelection: Binding<NavigationItem?>?
+    var onOpenWindow: (() -> Void)?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Setup will be done by the App struct after container is created
@@ -58,6 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            // No visible windows - show the main window
+            showMainWindow()
+        }
+        return true
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         // Could preload model here if needed
     }
@@ -75,12 +84,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Window Management
 
     func showMainWindow() {
-        if let window = mainWindow {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+        // Activate the app first to bring it to the foreground
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Find content windows (excluding panels like status bar menus)
+        let contentWindows = NSApp.windows.filter { window in
+            !(window is NSPanel) && window.canBecomeMain
+        }
+
+        if let visibleWindow = contentWindows.first(where: { $0.isVisible }) {
+            // If there's already a visible window, bring it to front
+            visibleWindow.makeKeyAndOrderFront(nil)
+        } else if let hiddenWindow = contentWindows.first {
+            // If there's a hidden window, show it
+            hiddenWindow.makeKeyAndOrderFront(nil)
         } else {
-            // Window will be created by SwiftUI
-            NSApp.activate(ignoringOtherApps: true)
+            // No windows exist - need to create one via SwiftUI
+            // Use the callback provided by the App struct
+            onOpenWindow?()
         }
     }
 
