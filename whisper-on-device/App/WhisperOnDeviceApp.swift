@@ -10,15 +10,17 @@ struct WhisperOnDeviceApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var container = DependencyContainer()
     @State private var showOnboarding = false
+    @State private var selectedNavigation: NavigationItem? = .dictation
 
     var body: some Scene {
         WindowGroup {
-            MainWindowView(
+            ContentView(
                 coordinator: container.dictationCoordinator,
                 transcriptionEngine: container.transcriptionEngine,
                 history: container.transcriptionHistory,
                 permissionsManager: container.permissionsManager,
-                audioCapture: container.audioCaptureEngine
+                audioCapture: container.audioCaptureEngine,
+                selectedNavigation: $selectedNavigation
             )
             .environmentObject(container)
             .focusedSceneValue(\.dictationActions, DictationActions(
@@ -35,7 +37,7 @@ struct WhisperOnDeviceApp: App {
             ))
             .task {
                 await container.setup()
-                appDelegate.setupWithContainer(container)
+                appDelegate.setupWithContainer(container, navigationSelection: $selectedNavigation)
 
                 // Show onboarding if needed
                 if !SettingsManager.shared.hasCompletedOnboarding {
@@ -52,16 +54,19 @@ struct WhisperOnDeviceApp: App {
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
-        .defaultSize(width: 500, height: 600)
+        .defaultSize(width: 700, height: 550)
         .commands {
             CommandGroup(replacing: .newItem) {}  // Remove "New Window" command
 
-            DictationCommands()
-        }
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    selectedNavigation = .general
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
 
-        Settings {
-            SettingsView()
-                .environmentObject(container)
+            DictationCommands()
         }
     }
 }

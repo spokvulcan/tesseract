@@ -5,36 +5,9 @@
 
 import SwiftUI
 
-struct SettingsView: View {
-    var body: some View {
-        TabView {
-            GeneralSettingsTab()
-                .tabItem {
-                    Label("General", systemImage: "gear")
-                }
+// MARK: - General Settings Section
 
-            AudioSettingsTab()
-                .tabItem {
-                    Label("Audio", systemImage: "mic")
-                }
-
-            ModelSettingsTab()
-                .tabItem {
-                    Label("Model", systemImage: "brain")
-                }
-
-            AdvancedSettingsTab()
-                .tabItem {
-                    Label("Advanced", systemImage: "slider.horizontal.3")
-                }
-        }
-        .frame(width: 500, height: 400)
-    }
-}
-
-// MARK: - General Settings Tab
-
-struct GeneralSettingsTab: View {
+struct GeneralSettingsSection: View {
     @ObservedObject private var settings = SettingsManager.shared
 
     var body: some View {
@@ -57,13 +30,13 @@ struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
+        .navigationTitle("General")
     }
 }
 
-// MARK: - Audio Settings Tab
+// MARK: - Audio Settings Section
 
-struct AudioSettingsTab: View {
+struct AudioSettingsSection: View {
     @ObservedObject private var settings = SettingsManager.shared
     @StateObject private var audioDeviceManager = AudioDeviceManager()
 
@@ -94,7 +67,7 @@ struct AudioSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
+        .navigationTitle("Audio")
     }
 }
 
@@ -170,9 +143,9 @@ struct RecommendedBadge: View {
     }
 }
 
-// MARK: - Model Settings Tab
+// MARK: - Model Settings Section
 
-struct ModelSettingsTab: View {
+struct ModelSettingsSection: View {
     @EnvironmentObject private var container: DependencyContainer
     @ObservedObject private var settings = SettingsManager.shared
     @State private var isLoadingModel = false
@@ -254,7 +227,7 @@ struct ModelSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
+        .navigationTitle("Model")
     }
 
     private func loadSelectedModel(_ rawValue: String) {
@@ -317,9 +290,9 @@ struct ModelDownloadRow: View {
     }
 }
 
-// MARK: - Advanced Settings Tab
+// MARK: - Advanced Settings Section
 
-struct AdvancedSettingsTab: View {
+struct AdvancedSettingsSection: View {
     @ObservedObject private var settings = SettingsManager.shared
     @StateObject private var hotkeyManager = HotkeyManager()
     @State private var isRecordingHotkey = false
@@ -386,7 +359,7 @@ struct AdvancedSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .padding()
+        .navigationTitle("Advanced")
     }
 
     private func recordNewHotkey() {
@@ -401,6 +374,14 @@ struct AdvancedSettingsTab: View {
     }
 }
 
-#Preview {
-    SettingsView()
+#Preview("General") {
+    GeneralSettingsSection()
+}
+
+#Preview("Audio") {
+    AudioSettingsSection()
+}
+
+#Preview("Advanced") {
+    AdvancedSettingsSection()
 }

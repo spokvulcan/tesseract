@@ -14,13 +14,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var container: DependencyContainer?
     var menuBarManager: MenuBarManager?
     var mainWindow: NSWindow?
+    private var navigationSelection: Binding<NavigationItem?>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Setup will be done by the App struct after container is created
     }
 
-    func setupWithContainer(_ container: DependencyContainer) {
+    func setupWithContainer(_ container: DependencyContainer, navigationSelection: Binding<NavigationItem?>) {
         self.container = container
+        self.navigationSelection = navigationSelection
 
         // Setup menu bar
         menuBarManager = MenuBarManager()
@@ -28,8 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarManager?.onShowMainWindow = { [weak self] in
             self?.showMainWindow()
         }
-        menuBarManager?.onShowSettings = {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        menuBarManager?.onShowSettings = { [weak self] in
+            self?.navigateToSettings()
         }
         menuBarManager?.onQuit = {
             NSApp.terminate(nil)
@@ -80,6 +82,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Window will be created by SwiftUI
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    func navigateToSettings() {
+        navigationSelection?.wrappedValue = .general
+        showMainWindow()
     }
 
     private func updateDockVisibility() {
