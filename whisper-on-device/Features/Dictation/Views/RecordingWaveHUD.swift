@@ -15,45 +15,17 @@ struct RecordingWaveHUD: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            let phase = reduceMotion ? 0 : CGFloat(time * 2.2)
+        Group {
+            if state == .recording {
+                TimelineView(.animation) { timeline in
+                    let time = timeline.date.timeIntervalSinceReferenceDate
+                    let phase = reduceMotion ? 0 : CGFloat(time * 2.2)
 
-            ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.45),
-                                        Color.white.opacity(0.12),
-                                        Color.white.opacity(0.35)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1
-                            )
-                    )
-                    .shadow(color: Color.black.opacity(0.15), radius: 12, y: 6)
-
-                LiquidWaveCanvas(level: smoothedLevel, phase: phase)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 10)
-
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                    hudContent(phase: phase)
+                }
+            } else {
+                hudContent(phase: 0)
             }
-            .frame(width: 240, height: 54)
-            .opacity(isVisible ? 1 : 0)
-            .scaleEffect(isVisible ? 1 : 0.86)
-            .animation(
-                reduceMotion ? .linear(duration: 0) : .spring(response: 0.32, dampingFraction: 0.7),
-                value: isVisible
-            )
         }
         .onAppear {
             isVisible = state == .recording
@@ -72,6 +44,45 @@ struct RecordingWaveHUD: View {
             }
         }
         .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func hudContent(phase: CGFloat) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.45),
+                                    Color.white.opacity(0.12),
+                                    Color.white.opacity(0.35)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.15), radius: 12, y: 6)
+
+            LiquidWaveCanvas(level: smoothedLevel, phase: phase)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+        }
+        .frame(width: 240, height: 54)
+        .opacity(isVisible ? 1 : 0)
+        .scaleEffect(isVisible ? 1 : 0.86)
+        .animation(
+            reduceMotion ? .linear(duration: 0) : .spring(response: 0.32, dampingFraction: 0.7),
+            value: isVisible
+        )
     }
 }
 

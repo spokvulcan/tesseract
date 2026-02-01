@@ -70,7 +70,7 @@ final class HotkeyManager: ObservableObject {
             options: .defaultTap,  // Enables suppression (return nil to suppress)
             eventsOfInterest: CGEventMask(eventMask),
             callback: { proxy, type, event, refcon -> Unmanaged<CGEvent>? in
-                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
 
                 let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
 
@@ -79,7 +79,7 @@ final class HotkeyManager: ObservableObject {
                     if let tap = manager.eventTap {
                         CGEvent.tapEnable(tap: tap, enable: true)
                     }
-                    return Unmanaged.passRetained(event)
+                    return Unmanaged.passUnretained(event)
                 }
 
                 // Check if this event matches our hotkey
@@ -129,7 +129,7 @@ final class HotkeyManager: ObservableObject {
                 }
 
                 // Return nil to suppress, or pass through the event
-                return shouldSuppress ? nil : Unmanaged.passRetained(event)
+                return shouldSuppress ? nil : Unmanaged.passUnretained(event)
             },
             userInfo: refcon
         )
