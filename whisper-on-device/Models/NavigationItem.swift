@@ -8,22 +8,20 @@ import SwiftUI
 enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case dictation
     case general
-    case audio
     case model
-    case advanced
+    case recording
 
     var id: String { rawValue }
 
     static let mainPages: [NavigationItem] = [.dictation]
-    static let settingsPages: [NavigationItem] = [.general, .audio, .advanced]
+    static let settingsPages: [NavigationItem] = [.general, .recording]
 
     var name: LocalizedStringResource {
         switch self {
         case .dictation: "Dictation"
         case .general: "General"
-        case .audio: "Audio"
         case .model: "Model"
-        case .advanced: "Advanced"
+        case .recording: "Recording"
         }
     }
 
@@ -31,9 +29,8 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         switch self {
         case .dictation: "mic.fill"
         case .general: "gear"
-        case .audio: "waveform"
         case .model: "brain"
-        case .advanced: "slider.horizontal.3"
+        case .recording: "waveform"
         }
     }
 
@@ -56,12 +53,10 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
             )
         case .general:
             GeneralSettingsSection()
-        case .audio:
-            AudioSettingsSection()
         case .model:
             ModelSettingsSection()
-        case .advanced:
-            AdvancedSettingsSection()
+        case .recording:
+            RecordingSettingsSection()
         }
     }
 }

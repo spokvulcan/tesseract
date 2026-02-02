@@ -22,29 +22,50 @@ struct LanguagePickerView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Search field
+        VStack(alignment: .leading, spacing: 12) {
+            // Header with current selection
             HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Search languages...", text: $searchText)
-                    .textFieldStyle(.plain)
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+                Text("Transcription Language")
+                    .font(.headline)
+                Spacer()
+                if let current = SupportedLanguage.language(forCode: selectedLanguage) {
+                    Text(current.displayName)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(8)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(8)
-            .padding(.bottom, 8)
 
-            // Language list
+            // Search field - use ZStack to ensure full clickable area
+            ZStack {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quinary)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 12))
+                        .allowsHitTesting(false)
+
+                    TextField("Search languages...", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.tertiary)
+                                .font(.system(size: 12))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+            }
+            .frame(height: 28)
+
+            // Language list using ScrollView for reliable scrolling
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(filteredLanguages) { language in
@@ -54,15 +75,30 @@ struct LanguagePickerView: View {
                         )
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            selectedLanguage = language.code
+                            // Dispatch to avoid "Publishing changes from within view updates"
+                            Task { @MainActor in
+                                selectedLanguage = language.code
+                            }
                         }
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(8)
             }
-            .frame(maxHeight: 300)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(8)
+            .frame(height: 280)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(.quaternary, lineWidth: 1)
+            )
+
+            // Helper text
+            if filteredLanguages.isEmpty {
+                Text("No languages found matching \"\(searchText)\"")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, 8)
+            }
         }
     }
 }
@@ -72,16 +108,16 @@ struct LanguageRow: View {
     let isSelected: Bool
 
     var body: some View {
-        HStack {
+        HStack(spacing: 10) {
             Text(language.flag)
-                .font(.title2)
+                .font(.title3)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(language.name)
-                    .fontWeight(isSelected ? .medium : .regular)
+                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
                 if let nativeName = language.nativeName, nativeName != language.name {
                     Text(nativeName)
-                        .font(.caption)
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -91,13 +127,11 @@ struct LanguageRow: View {
             if isSelected {
                 Image(systemName: "checkmark")
                     .foregroundStyle(.tint)
-                    .fontWeight(.semibold)
+                    .font(.system(size: 12, weight: .semibold))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
-        .cornerRadius(6)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
     }
 }
 

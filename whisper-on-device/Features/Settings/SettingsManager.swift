@@ -46,10 +46,6 @@ final class SettingsManager: ObservableObject {
 
     @AppStorage("selectedMicrophoneUID") var selectedMicrophoneUID: String = ""
 
-    @AppStorage("vadSensitivity") var vadSensitivity: Double = 0.5
-
-    @AppStorage("silenceThreshold") var silenceThreshold: Double = 0.5
-
     // MARK: - Language Settings
 
     @AppStorage("language") var language: String = "en"
@@ -100,8 +96,6 @@ final class SettingsManager: ObservableObject {
         overlayStyleRaw = OverlayStyle.pill.rawValue
         glowThemeRaw = GlowTheme.appleIntelligence.rawValue
         selectedMicrophoneUID = ""
-        vadSensitivity = 0.5
-        silenceThreshold = 0.5
         language = "en"
         hotkeyKeyCode = Int(KeyCombo.optionSpace.keyCode)
         hotkeyModifiers = Int(KeyCombo.optionSpace.modifiers)

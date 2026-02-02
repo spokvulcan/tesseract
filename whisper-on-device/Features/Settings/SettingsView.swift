@@ -97,44 +97,6 @@ struct GeneralSettingsSection: View {
     }
 }
 
-// MARK: - Audio Settings Section
-
-struct AudioSettingsSection: View {
-    @ObservedObject private var settings = SettingsManager.shared
-    @StateObject private var audioDeviceManager = AudioDeviceManager()
-
-    var body: some View {
-        Form {
-            Section("Microphone") {
-                Picker("Input Device", selection: $settings.selectedMicrophoneUID) {
-                    Text("System Default").tag("")
-                    ForEach(audioDeviceManager.availableDevices) { device in
-                        Text(device.name).tag(device.uid)
-                    }
-                }
-
-                AudioLevelMeter()
-                    .frame(height: 20)
-            }
-
-            Section("Voice Detection") {
-                VStack(alignment: .leading) {
-                    Text("Sensitivity: \(Int(settings.vadSensitivity * 100))%")
-                    Slider(value: $settings.vadSensitivity, in: 0...1)
-                }
-
-                VStack(alignment: .leading) {
-                    Text("Silence Threshold: \(String(format: "%.1f", settings.silenceThreshold))s")
-                    Slider(value: $settings.silenceThreshold, in: 0.1...2.0, step: 0.1)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Audio")
-    }
-}
-
 // MARK: - Audio Level Meter
 
 struct AudioLevelMeter: View {
@@ -239,15 +201,28 @@ struct ModelSettingsSection: View {
     }
 }
 
-// MARK: - Advanced Settings Section
+// MARK: - Recording Settings Section
 
-struct AdvancedSettingsSection: View {
+struct RecordingSettingsSection: View {
     @ObservedObject private var settings = SettingsManager.shared
     @StateObject private var hotkeyManager = HotkeyManager()
+    @StateObject private var audioDeviceManager = AudioDeviceManager()
     @State private var isRecordingHotkey = false
 
     var body: some View {
         Form {
+            Section("Microphone") {
+                Picker("Input Device", selection: $settings.selectedMicrophoneUID) {
+                    Text("System Default").tag("")
+                    ForEach(audioDeviceManager.availableDevices) { device in
+                        Text(device.name).tag(device.uid)
+                    }
+                }
+
+                AudioLevelMeter()
+                    .frame(height: 20)
+            }
+
             Section("Global Hotkey") {
                 HStack {
                     Text("Push-to-Talk Key:")
@@ -278,24 +253,15 @@ struct AdvancedSettingsSection: View {
                 }
             }
 
-            Section("Recording") {
+            Section("Duration") {
                 VStack(alignment: .leading) {
                     Text("Maximum duration: \(Int(settings.maxRecordingDuration))s")
                     Slider(value: $settings.maxRecordingDuration, in: 10...120, step: 10)
                 }
             }
 
-            Section("Language") {
-                DisclosureGroup {
-                    LanguagePickerView(selectedLanguage: $settings.language)
-                } label: {
-                    HStack {
-                        Text("Transcription Language")
-                        Spacer()
-                        Text(settings.selectedLanguage.displayName)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+            Section {
+                LanguagePickerView(selectedLanguage: $settings.language)
             }
 
             Section {
@@ -307,7 +273,7 @@ struct AdvancedSettingsSection: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
-        .navigationTitle("Advanced")
+        .navigationTitle("Recording")
     }
 
     private func recordNewHotkey() {
@@ -326,12 +292,8 @@ struct AdvancedSettingsSection: View {
     GeneralSettingsSection()
 }
 
-#Preview("Audio") {
-    AudioSettingsSection()
-}
-
-#Preview("Advanced") {
-    AdvancedSettingsSection()
+#Preview("Recording") {
+    RecordingSettingsSection()
 }
 
 // MARK: - Notifications
