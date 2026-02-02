@@ -159,12 +159,9 @@ struct RecordingButtonView: View {
                 }
 
                 Circle()
-                    .fill(buttonBackgroundColor.gradient)
+                    .fill(buttonBackgroundColor.opacity(0.85))
                     .frame(width: buttonSize, height: buttonSize)
-                    .overlay(
-                        Circle()
-                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-                    )
+                    .glassEffect(.regular.tint(buttonBackgroundColor))
                     .shadow(color: Color.black.opacity(0.15), radius: 8, y: 3)
                     .animation(.easeInOut(duration: 0.2), value: state)
 
