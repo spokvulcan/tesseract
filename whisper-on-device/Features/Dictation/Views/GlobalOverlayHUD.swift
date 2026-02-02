@@ -74,12 +74,16 @@ struct GlobalOverlayHUD: View {
     }
 
     private func visualizationContent(level: CGFloat, phase: CGFloat) -> some View {
-        LiquidWaveView(level: level, phase: phase)
+        AudioBarsView(level: level, phase: phase)
     }
 
     private var processingView: some View {
-        pillContainer {
-            ProcessingDotsView()
+        TimelineView(.animation(minimumInterval: 1.0 / 120.0)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+
+            pillContainer {
+                ProcessingDotsView(time: time)
+            }
         }
     }
 

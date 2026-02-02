@@ -5,77 +5,74 @@
 
 import SwiftUI
 
-/// Animated processing indicator with 3 pulsing dots.
-/// Uses staggered scale and opacity animation with gradient fills.
+/// Animated processing indicator with pulsing white dots.
+/// Uses external time input with onChange - same pattern as AudioBarsView.
+/// Animation flows left-to-right with gentle size variation.
 struct ProcessingDotsView: View {
-    @State private var isAnimating = false
+    let time: Double
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let dotSize: CGFloat = 6
-    private let dotSpacing: CGFloat = 8
-    private let animationDuration: Double = 0.6
+    @State private var phase: Double = 0
+
+    private let dotCount = 5
+    private let dotSize: CGFloat = 8
+    private let maxScale: CGFloat = 1.5
+    private let dotSpacing: CGFloat = 4
+
+    // Container size to accommodate max scaled dot
+    private var containerSize: CGFloat { dotSize * maxScale }
+
+    // Soft off-white color for elegance
+    private let dotColor = Color(white: 0.85)
 
     var body: some View {
         HStack(spacing: dotSpacing) {
-            ForEach(0..<3) { index in
-                dot(index: index)
+            ForEach(0..<dotCount, id: \.self) { index in
+                dotView(index: index)
+                    .frame(width: containerSize, height: containerSize)
             }
         }
-        .onAppear {
+        .drawingGroup()  // GPU-accelerated rendering
+        .onChange(of: time) { _, newTime in
             if !reduceMotion {
-                isAnimating = true
+                phase = newTime * 3.5
             }
         }
-        .onDisappear {
-            isAnimating = false
-        }
     }
 
-    private func dot(index: Int) -> some View {
-        Circle()
-            .fill(dotGradient)
+    private func dotView(index: Int) -> some View {
+        // Left-to-right wave with subtle offset
+        let dotPhase = phase - Double(index) * 0.35
+
+        // Primary wave for size
+        let wave = (sin(dotPhase) + 1.0) / 2.0
+
+        // Secondary gentle vibration
+        let vibration = sin(dotPhase * 1.8) * 0.15
+
+        let scale: CGFloat = reduceMotion ? 1.0 : (0.4 + wave * 0.9 + vibration)
+        let opacity = reduceMotion ? 0.9 : (0.6 + wave * 0.4)
+
+        return Circle()
+            .fill(dotColor.opacity(opacity))
             .frame(width: dotSize, height: dotSize)
-            .scaleEffect(scaleForDot(index: index))
-            .opacity(opacityForDot(index: index))
-            .animation(
-                reduceMotion ? nil : Animation
-                    .easeInOut(duration: animationDuration)
-                    .repeatForever(autoreverses: true)
-                    .delay(Double(index) * 0.15),
-                value: isAnimating
-            )
-    }
-
-    private var dotGradient: LinearGradient {
-        LinearGradient(
-            colors: [.white, .cyan.opacity(0.9)],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-
-    private func scaleForDot(index: Int) -> CGFloat {
-        if reduceMotion {
-            return 1.0
-        }
-        return isAnimating ? 1.0 : 0.7
-    }
-
-    private func opacityForDot(index: Int) -> Double {
-        if reduceMotion {
-            return 1.0
-        }
-        return isAnimating ? 1.0 : 0.5
+            .scaleEffect(scale)
     }
 }
 
 #Preview {
-    VStack(spacing: 20) {
-        ProcessingDotsView()
-            .padding()
-            .background(Color.black.opacity(0.3))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+    ZStack {
+        Color.black.opacity(0.6)
+
+        TimelineView(.animation) { timeline in
+            ProcessingDotsView(time: timeline.date.timeIntervalSinceReferenceDate)
+                .frame(height: 32)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+        }
     }
-    .padding()
+    .frame(width: 200, height: 100)
 }
