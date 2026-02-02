@@ -14,8 +14,6 @@ struct GlobalOverlayHUD: View {
     @State private var smoothedLevel: CGFloat = 0.08
     @State private var isVisible = false
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     // Updated to smaller, more elegant size
     private let hudWidth: CGFloat = 120
     private let hudHeight: CGFloat = 32
@@ -63,7 +61,7 @@ struct GlobalOverlayHUD: View {
     private var recordingView: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
-            let phase = reduceMotion ? 0 : CGFloat(time * 2.2)
+            let phase = CGFloat(time * 2.2)
 
             pillContainer {
                 visualizationContent(level: smoothedLevel, phase: phase)
@@ -119,11 +117,11 @@ struct GlobalOverlayHUD: View {
         let show = newState == .recording || newState == .processing
 
         if show {
-            withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 isVisible = true
             }
         } else {
-            withAnimation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.8)) {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                 isVisible = false
             }
         }
@@ -131,12 +129,8 @@ struct GlobalOverlayHUD: View {
 
     private func updateAudioLevel(_ newValue: Float) {
         let clamped = max(0.06, min(CGFloat(newValue), 1))
-        if reduceMotion {
+        withAnimation(.easeOut(duration: 0.1)) {
             smoothedLevel = clamped
-        } else {
-            withAnimation(.easeOut(duration: 0.1)) {
-                smoothedLevel = clamped
-            }
         }
     }
 }

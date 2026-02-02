@@ -11,8 +11,6 @@ struct AudioBarsView: View {
     let level: CGFloat
     let phase: CGFloat  // unused, kept for API compatibility
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     @State private var samples: [CGFloat] = Array(repeating: 0.1, count: 20)
 
     private let barCount = 20
@@ -58,14 +56,9 @@ struct AudioBarsView: View {
     }
 
     private func pushSample(_ newLevel: CGFloat) {
-        if reduceMotion {
+        withAnimation(.linear(duration: 0.05)) {
             samples.removeFirst()
             samples.append(newLevel)
-        } else {
-            withAnimation(.linear(duration: 0.05)) {
-                samples.removeFirst()
-                samples.append(newLevel)
-            }
         }
     }
 }

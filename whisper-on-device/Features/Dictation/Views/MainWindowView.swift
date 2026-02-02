@@ -162,8 +162,6 @@ struct RecordingButtonView: View {
 
     @State private var isPulsing = false
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         Button(action: onToggle) {
             ZStack {
@@ -176,7 +174,7 @@ struct RecordingButtonView: View {
                     )
                     .shadow(color: Color.black.opacity(0.2), radius: 10, y: 4)
 
-                if state == .recording && !reduceMotion {
+                if state == .recording {
                     Circle()
                         .stroke(Color.red.opacity(0.5), lineWidth: 4)
                         .frame(width: 90, height: 90)
@@ -191,7 +189,7 @@ struct RecordingButtonView: View {
                 Image(systemName: buttonIcon)
                     .font(.system(size: 32))
                     .foregroundStyle(.white)
-                    .symbolEffect(.pulse, isActive: state == .processing && !reduceMotion)
+                    .symbolEffect(.pulse, isActive: state == .processing)
             }
         }
         .buttonStyle(.plain)

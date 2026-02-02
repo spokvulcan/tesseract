@@ -12,14 +12,12 @@ struct RecordingWaveHUD: View {
     @State private var isVisible = false
     @State private var smoothedLevel: CGFloat = 0.08
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         Group {
             if state == .recording {
                 TimelineView(.animation) { timeline in
                     let time = timeline.date.timeIntervalSinceReferenceDate
-                    let phase = reduceMotion ? 0 : CGFloat(time * 2.2)
+                    let phase = CGFloat(time * 2.2)
 
                     hudContent(phase: phase)
                 }
@@ -35,12 +33,8 @@ struct RecordingWaveHUD: View {
         }
         .onReceive(audioCapture.$audioLevel) { newValue in
             let clamped = max(0.06, min(CGFloat(newValue), 1))
-            if reduceMotion {
+            withAnimation(.easeOut(duration: 0.12)) {
                 smoothedLevel = clamped
-            } else {
-                withAnimation(.easeOut(duration: 0.12)) {
-                    smoothedLevel = clamped
-                }
             }
         }
         .allowsHitTesting(false)
@@ -80,7 +74,7 @@ struct RecordingWaveHUD: View {
         .opacity(isVisible ? 1 : 0)
         .scaleEffect(isVisible ? 1 : 0.86)
         .animation(
-            reduceMotion ? .linear(duration: 0) : .spring(response: 0.32, dampingFraction: 0.7),
+            .spring(response: 0.32, dampingFraction: 0.7),
             value: isVisible
         )
     }

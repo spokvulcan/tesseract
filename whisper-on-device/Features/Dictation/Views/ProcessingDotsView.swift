@@ -11,8 +11,6 @@ import SwiftUI
 struct ProcessingDotsView: View {
     let time: Double
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     @State private var phase: Double = 0
 
     private let dotCount = 5
@@ -35,9 +33,7 @@ struct ProcessingDotsView: View {
         }
         .drawingGroup()  // GPU-accelerated rendering
         .onChange(of: time) { _, newTime in
-            if !reduceMotion {
-                phase = newTime * 3.5
-            }
+            phase = newTime * 3.5
         }
     }
 
@@ -51,8 +47,8 @@ struct ProcessingDotsView: View {
         // Secondary gentle vibration
         let vibration = sin(dotPhase * 1.8) * 0.15
 
-        let scale: CGFloat = reduceMotion ? 1.0 : (0.4 + wave * 0.9 + vibration)
-        let opacity = reduceMotion ? 0.9 : (0.6 + wave * 0.4)
+        let scale: CGFloat = 0.4 + wave * 0.9 + vibration
+        let opacity = 0.6 + wave * 0.4
 
         return Circle()
             .fill(dotColor.opacity(opacity))
