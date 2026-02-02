@@ -194,9 +194,9 @@ final class DictationCoordinator: ObservableObject {
         case .startRecording:
             NSSound(named: "Tink")?.play()
         case .success:
-            NSSound(named: "Glass")?.play()
+            NSSound(named: "Purr")?.play()
         case .error:
-            NSSound(named: "Basso")?.play()
+            NSSound(named: "Funk")?.play()
         }
     }
 
