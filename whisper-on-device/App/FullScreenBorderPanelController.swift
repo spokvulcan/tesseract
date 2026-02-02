@@ -15,8 +15,8 @@ final class FullScreenBorderPanelController {
     private var hostingView: NSHostingView<FullScreenBorderOverlayView>?
     private var cancellables = Set<AnyCancellable>()
 
-    private var currentState: DictationState = .idle
-    private var currentAudioLevel: Float = 0
+    /// Shared observable state for the SwiftUI view
+    private let overlayState = OverlayState()
 
     private var isEnabled = true
 
@@ -83,12 +83,11 @@ final class FullScreenBorderPanelController {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
 
-        // Create SwiftUI hosting view
-        let overlayView = FullScreenBorderOverlayView(
-            state: currentState,
-            audioLevel: currentAudioLevel,
-            theme: settings.glowTheme
-        )
+        // Initialize overlay state with current theme
+        overlayState.glowTheme = settings.glowTheme
+
+        // Create SwiftUI hosting view with observable state (created once, not replaced)
+        let overlayView = FullScreenBorderOverlayView(overlayState: overlayState)
         let hostingView = NSHostingView(rootView: overlayView)
         hostingView.frame = panel.contentView?.bounds ?? screen.frame
         hostingView.autoresizingMask = [.width, .height]
@@ -105,8 +104,10 @@ final class FullScreenBorderPanelController {
     private func handleStateChange(_ state: DictationState) {
         guard isEnabled else { return }
 
-        currentState = state
-        updateHostingView()
+        // Update observable state (SwiftUI view will react automatically)
+        overlayState.dictationState = state
+        // Also update theme in case it changed
+        overlayState.glowTheme = settings.glowTheme
 
         switch state {
         case .recording, .processing, .error:
@@ -119,17 +120,8 @@ final class FullScreenBorderPanelController {
     private func handleAudioLevelChange(_ level: Float) {
         guard isEnabled else { return }
 
-        currentAudioLevel = level
-        updateHostingView()
-    }
-
-    private func updateHostingView() {
-        let overlayView = FullScreenBorderOverlayView(
-            state: currentState,
-            audioLevel: currentAudioLevel,
-            theme: settings.glowTheme
-        )
-        hostingView?.rootView = overlayView
+        // Update observable state (SwiftUI view will react automatically)
+        overlayState.audioLevel = level
     }
 
     private func showPanel() {
@@ -156,8 +148,11 @@ final class FullScreenBorderPanelController {
             context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
-        }, completionHandler: { [weak panel] in
-            panel?.orderOut(nil)
+        }, completionHandler: {
+            // Ensure orderOut is called on MainActor
+            Task { @MainActor [weak panel] in
+                panel?.orderOut(nil)
+            }
         })
     }
 }

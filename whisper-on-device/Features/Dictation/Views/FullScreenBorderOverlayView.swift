@@ -158,29 +158,28 @@ extension Color {
 // MARK: - Wrapper for App Integration
 
 struct FullScreenBorderOverlayView: View {
-    let state: DictationState
-    let audioLevel: Float
-    let theme: GlowTheme
+    /// Observable state shared with the panel controller (not replaced on updates)
+    var overlayState: OverlayState
 
     @State private var isVisible = false
 
     var body: some View {
         ZStack {
             if shouldShow {
-                GlowEffect(audioLevel: CGFloat(audioLevel), theme: theme)
+                GlowEffect(audioLevel: CGFloat(overlayState.audioLevel), theme: overlayState.glowTheme)
                     .opacity(isVisible ? 1 : 0)
             }
         }
-        .onChange(of: state) { _, newState in
+        .onChange(of: overlayState.dictationState) { _, newState in
             handleStateChange(newState)
         }
         .onAppear {
-            handleStateChange(state)
+            handleStateChange(overlayState.dictationState)
         }
     }
 
     private var shouldShow: Bool {
-        switch state {
+        switch overlayState.dictationState {
         case .recording, .processing, .error:
             return true
         default:
@@ -216,5 +215,14 @@ struct FullScreenBorderOverlayView: View {
 
 #Preview("Fire") {
     GlowEffect(audioLevel: 0.5, theme: .fire)
+        .background(Color.black)
+}
+
+#Preview("Full Screen Overlay") {
+    let state = OverlayState()
+    state.dictationState = .recording
+    state.audioLevel = 0.5
+    state.glowTheme = .appleIntelligence
+    return FullScreenBorderOverlayView(overlayState: state)
         .background(Color.black)
 }

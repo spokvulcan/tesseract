@@ -15,8 +15,8 @@ final class OverlayPanelController {
     private var hostingView: NSHostingView<GlobalOverlayHUD>?
     private var cancellables = Set<AnyCancellable>()
 
-    private var currentState: DictationState = .idle
-    private var currentAudioLevel: Float = 0
+    /// Shared observable state for the SwiftUI view
+    private let overlayState = OverlayState()
 
     private var isEnabled = true
 
@@ -81,11 +81,8 @@ final class OverlayPanelController {
         panel.hasShadow = false  // SwiftUI handles shadow
         panel.hidesOnDeactivate = false
 
-        // Create SwiftUI hosting view
-        let hudView = GlobalOverlayHUD(
-            state: currentState,
-            audioLevel: currentAudioLevel
-        )
+        // Create SwiftUI hosting view with observable state (created once, not replaced)
+        let hudView = GlobalOverlayHUD(overlayState: overlayState)
         let hostingView = NSHostingView(rootView: hudView)
         hostingView.frame = panel.contentView?.bounds ?? .zero
         hostingView.autoresizingMask = [.width, .height]
@@ -119,8 +116,8 @@ final class OverlayPanelController {
     private func handleStateChange(_ state: DictationState) {
         guard isEnabled else { return }
 
-        currentState = state
-        updateHostingView()
+        // Update observable state (SwiftUI view will react automatically)
+        overlayState.dictationState = state
 
         switch state {
         case .recording, .processing:
@@ -133,16 +130,8 @@ final class OverlayPanelController {
     private func handleAudioLevelChange(_ level: Float) {
         guard isEnabled else { return }
 
-        currentAudioLevel = level
-        updateHostingView()
-    }
-
-    private func updateHostingView() {
-        let hudView = GlobalOverlayHUD(
-            state: currentState,
-            audioLevel: currentAudioLevel
-        )
-        hostingView?.rootView = hudView
+        // Update observable state (SwiftUI view will react automatically)
+        overlayState.audioLevel = level
     }
 
     private func showPanel() {
@@ -167,8 +156,11 @@ final class OverlayPanelController {
             context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
-        }, completionHandler: { [weak panel] in
-            panel?.orderOut(nil)
+        }, completionHandler: {
+            // Ensure orderOut is called on MainActor
+            Task { @MainActor [weak panel] in
+                panel?.orderOut(nil)
+            }
         })
     }
 }

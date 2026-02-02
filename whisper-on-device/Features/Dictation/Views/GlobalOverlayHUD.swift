@@ -8,8 +8,8 @@ import SwiftUI
 /// Global overlay HUD that displays recording waveform or processing indicator.
 /// Designed as a floating pill that appears on top of all applications.
 struct GlobalOverlayHUD: View {
-    let state: DictationState
-    let audioLevel: Float
+    /// Observable state shared with the panel controller (not replaced on updates)
+    var overlayState: OverlayState
 
     @State private var smoothedLevel: CGFloat = 0.08
     @State private var isVisible = false
@@ -27,19 +27,19 @@ struct GlobalOverlayHUD: View {
                     .scaleEffect(isVisible ? 1 : 0.85)
             }
         }
-        .onChange(of: state) { _, newState in
+        .onChange(of: overlayState.dictationState) { _, newState in
             updateVisibility(for: newState)
         }
-        .onChange(of: audioLevel) { _, newValue in
+        .onChange(of: overlayState.audioLevel) { _, newValue in
             updateAudioLevel(newValue)
         }
         .onAppear {
-            updateVisibility(for: state)
+            updateVisibility(for: overlayState.dictationState)
         }
     }
 
     private var shouldShow: Bool {
-        switch state {
+        switch overlayState.dictationState {
         case .recording, .processing:
             return true
         default:
@@ -50,9 +50,9 @@ struct GlobalOverlayHUD: View {
     @ViewBuilder
     private var hudContent: some View {
         Group {
-            if state == .recording {
+            if overlayState.dictationState == .recording {
                 recordingView
-            } else if state == .processing {
+            } else if overlayState.dictationState == .processing {
                 processingView
             }
         }
@@ -136,13 +136,19 @@ struct GlobalOverlayHUD: View {
 }
 
 #Preview("Recording") {
-    GlobalOverlayHUD(state: .recording, audioLevel: 0.5)
+    let state = OverlayState()
+    state.dictationState = .recording
+    state.audioLevel = 0.5
+    return GlobalOverlayHUD(overlayState: state)
         .padding(50)
         .background(Color.gray.opacity(0.3))
 }
 
 #Preview("Processing") {
-    GlobalOverlayHUD(state: .processing, audioLevel: 0)
+    let state = OverlayState()
+    state.dictationState = .processing
+    state.audioLevel = 0
+    return GlobalOverlayHUD(overlayState: state)
         .padding(50)
         .background(Color.gray.opacity(0.3))
 }
