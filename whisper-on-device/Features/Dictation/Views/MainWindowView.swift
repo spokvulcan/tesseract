@@ -198,7 +198,6 @@ struct RecordingButtonView: View {
         .onChange(of: state) { _, newState in
             isPulsing = newState == .recording
         }
-        .sensoryFeedback(.impact, trigger: state)
     }
 
     private var accessibilityLabel: String {

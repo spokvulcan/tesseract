@@ -28,19 +28,26 @@ final class TextInjector: ObservableObject {
         // Copy text to clipboard
         copyToClipboard(text)
 
-        // Small delay to ensure clipboard is updated
-        try await Task.sleep(for: .milliseconds(50))
+        // Skip paste simulation if our own app window is focused
+        // to prevent system alert sound (no text field to receive paste)
+        let isOwnAppFocused = NSApp.isActive && NSApp.keyWindow != nil && !(NSApp.keyWindow is NSPanel)
 
-        // Simulate Cmd+V paste
-        simulatePaste()
+        if !isOwnAppFocused {
+            // Small delay to ensure clipboard is updated
+            try await Task.sleep(for: .milliseconds(50))
 
-        // Small delay before restoring clipboard
-        try await Task.sleep(for: .milliseconds(100))
+            // Simulate Cmd+V paste
+            simulatePaste()
 
-        // Restore original clipboard contents
-        if restoreClipboard {
-            restoreClipboardContents()
+            // Small delay before restoring clipboard
+            try await Task.sleep(for: .milliseconds(100))
+
+            // Restore original clipboard contents
+            if restoreClipboard {
+                restoreClipboardContents()
+            }
         }
+        // When own app is focused, text remains on clipboard for manual paste
 
         lastInjectionSucceeded = true
     }

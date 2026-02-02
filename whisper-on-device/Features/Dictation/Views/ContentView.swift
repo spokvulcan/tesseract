@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var coordinator: DictationCoordinator
@@ -50,6 +51,9 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        // Silently consume paste commands to prevent system alert sound
+        // when text is injected while the app window is focused
+        .onPasteCommand(of: [.plainText]) { _ in }
     }
 }
 
