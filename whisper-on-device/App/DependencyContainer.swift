@@ -88,6 +88,9 @@ final class DependencyContainer: ObservableObject {
             let modelPath = modelManager.getLocalModelPath(settingsManager.whisperModel)
             try? await transcriptionEngine.loadModel(settingsManager.whisperModel, modelPath: modelPath)
         }
+
+        // Pre-warm audio engine to avoid CoreAudio warnings on first recording
+        await audioCaptureEngine.prewarmAudio()
     }
 
     /// Updates which overlay controller is active based on current settings
