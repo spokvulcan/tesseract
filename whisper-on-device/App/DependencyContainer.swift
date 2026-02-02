@@ -42,9 +42,14 @@ final class DependencyContainer: ObservableObject {
         )
     }()
 
+    private var hasSetup = false
+
     init() {}
 
     func setup() async {
+        // Prevent duplicate setup from multiple window instances
+        guard !hasSetup else { return }
+        hasSetup = true
         // Setup hotkey callbacks
         hotkeyManager.currentHotkey = settingsManager.hotkey
         hotkeyManager.onHotkeyDown = { [weak self] in

@@ -13,15 +13,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     var container: DependencyContainer?
     var menuBarManager: MenuBarManager?
-    var mainWindow: NSWindow?
+    private weak var trackedMainWindow: NSWindow?
     private var navigationSelection: Binding<NavigationItem?>?
     var onOpenWindow: (() -> Void)?
+    private var hasSetupWithContainer = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Ensure only one instance of the app runs at a time
+        ensureSingleInstance()
+
+        // Setup window lifecycle tracking
+        setupWindowTracking()
+
         // Setup will be done by the App struct after container is created
     }
 
+    private func setupWindowTracking() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowWillClose(_:)),
+            name: NSWindow.willCloseNotification,
+            object: nil
+        )
+    }
+
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              !(window is NSPanel),
+              window.canBecomeMain else { return }
+        trackedMainWindow = window
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window === trackedMainWindow else { return }
+        trackedMainWindow = nil
+    }
+
+    private func ensureSingleInstance() {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.whisper-on-device"
+        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+
+        // If more than one instance is running (including this one), terminate this instance
+        if runningApps.count > 1 {
+            // Activate the other instance
+            if let otherInstance = runningApps.first(where: { $0 != NSRunningApplication.current }) {
+                otherInstance.activate()
+            }
+            // Terminate this instance
+            NSApp.terminate(nil)
+        }
+    }
+
     func setupWithContainer(_ container: DependencyContainer, navigationSelection: Binding<NavigationItem?>) {
+        // Prevent duplicate setup from multiple window instances
+        guard !hasSetupWithContainer else { return }
+        hasSetupWithContainer = true
+
         self.container = container
         self.navigationSelection = navigationSelection
 
@@ -84,25 +138,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Window Management
 
     func showMainWindow() {
-        // Activate the app first to bring it to the foreground
-        NSApp.activate(ignoringOtherApps: true)
+        // First check tracked window (fastest path)
+        if let tracked = trackedMainWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            tracked.makeKeyAndOrderFront(nil)
+            return
+        }
 
-        // Find content windows (excluding panels like status bar menus)
+        // Fallback: find content windows (excluding panels like status bar menus)
         let contentWindows = NSApp.windows.filter { window in
             !(window is NSPanel) && window.canBecomeMain
         }
 
-        if let visibleWindow = contentWindows.first(where: { $0.isVisible }) {
-            // If there's already a visible window, bring it to front
-            visibleWindow.makeKeyAndOrderFront(nil)
-        } else if let hiddenWindow = contentWindows.first {
-            // If there's a hidden window, show it
-            hiddenWindow.makeKeyAndOrderFront(nil)
-        } else {
-            // No windows exist - need to create one via SwiftUI
-            // Use the callback provided by the App struct
-            onOpenWindow?()
+        // If we have any content window (visible or hidden), use it
+        if let existingWindow = contentWindows.first {
+            NSApp.activate(ignoringOtherApps: true)
+            existingWindow.makeKeyAndOrderFront(nil)
+            trackedMainWindow = existingWindow
+            return
         }
+
+        // No windows exist - need to create one via SwiftUI
+        NSApp.activate(ignoringOtherApps: true)
+        onOpenWindow?()
     }
 
     func navigateToSettings() {
