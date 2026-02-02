@@ -94,9 +94,6 @@ final class DependencyContainer: ObservableObject {
         } else {
             print("Warning: Bundled model not found")
         }
-
-        // Pre-warm audio engine to avoid CoreAudio warnings on first recording
-        await audioCaptureEngine.prewarmAudio()
     }
 
     /// Updates which overlay controller is active based on current settings

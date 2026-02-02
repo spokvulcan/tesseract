@@ -65,7 +65,6 @@ final class AudioCaptureEngine: ObservableObject {
     @Published private(set) var audioLevel: Float = 0
 
     private var audioEngine: AVAudioEngine?
-    private var isEnginePrepared = false
     private let sampleBuffer = SampleBuffer()
     private var captureStartTime: Date?
     private let levelRelay = AudioLevelRelay()
@@ -77,45 +76,6 @@ final class AudioCaptureEngine: ObservableObject {
 
     init() {}
 
-    /// Pre-warms the audio engine to establish CoreAudio connections at app launch.
-    /// This moves the HAL initialization warnings to startup time instead of first recording.
-    /// The engine is kept running (without a tap) to maintain the HAL connection.
-    /// Only call this if microphone permission is already granted.
-    func prewarmAudio() async {
-        // Skip if already prepared or currently capturing
-        guard audioEngine == nil, !isCapturing else { return }
-
-        // Only prewarm if we have microphone permission
-        let authStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-        guard authStatus == .authorized else { return }
-
-        audioEngine = AVAudioEngine()
-        guard let audioEngine else { return }
-
-        // Access inputNode to trigger HAL connection setup
-        let inputNode = audioEngine.inputNode
-        inputSampleRate = inputNode.outputFormat(forBus: 0).sampleRate
-
-        // Prepare the engine (establishes audio graph)
-        audioEngine.prepare()
-
-        do {
-            // Start the engine and keep it running to maintain the HAL connection
-            try audioEngine.start()
-
-            // Small delay to let CoreAudio complete its initialization
-            try await Task.sleep(for: .milliseconds(150))
-
-            // Keep engine running - don't stop it
-            // The engine will run idle (without a tap) until recording starts
-            isEnginePrepared = true
-        } catch {
-            // Pre-warming failed, but that's okay - it will initialize on first capture
-            audioEngine.stop()
-            self.audioEngine = nil
-        }
-    }
-
     func startCapture() throws {
         guard !isCapturing else { return }
 
@@ -125,12 +85,7 @@ final class AudioCaptureEngine: ObservableObject {
             throw DictationError.microphonePermissionDenied
         }
 
-        // Reuse existing engine or create new one (only on first use)
-        if audioEngine == nil {
-            audioEngine = AVAudioEngine()
-            isEnginePrepared = false
-        }
-
+        audioEngine = AVAudioEngine()
         guard let audioEngine else {
             throw DictationError.audioCaptureFailed("Failed to create audio engine")
         }
@@ -173,21 +128,15 @@ final class AudioCaptureEngine: ObservableObject {
         }
 
         do {
-            // Only prepare once - this is the expensive operation that triggers CoreAudio setup
-            if !isEnginePrepared {
-                audioEngine.prepare()
-                isEnginePrepared = true
-            }
-            // Only start if not already running (may be running from prewarm)
-            if !audioEngine.isRunning {
-                try audioEngine.start()
-            }
+            audioEngine.prepare()
+            try audioEngine.start()
             isCapturing = true
         } catch {
             levelUpdateTimer?.invalidate()
             levelUpdateTimer = nil
             inputNode.removeTap(onBus: 0)
             audioEngine.stop()
+            self.audioEngine = nil
             throw DictationError.audioCaptureFailed(error.localizedDescription)
         }
     }
@@ -198,7 +147,8 @@ final class AudioCaptureEngine: ObservableObject {
         levelUpdateTimer?.invalidate()
         levelUpdateTimer = nil
         audioEngine?.inputNode.removeTap(onBus: 0)
-        // Keep engine running to maintain HAL connection - just remove the tap
+        audioEngine?.stop()
+        audioEngine = nil
         isCapturing = false
         audioLevel = 0
 

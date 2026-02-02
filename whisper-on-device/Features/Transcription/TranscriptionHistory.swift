@@ -17,7 +17,12 @@ final class TranscriptionHistory: ObservableObject {
     init(maxEntries: Int = 100) {
         self.maxEntries = maxEntries
 
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            // Use temp directory as fallback
+            self.storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("transcription_history.json")
+            loadFromDisk()
+            return
+        }
         let appDirectory = appSupport.appendingPathComponent("WhisperOnDevice", isDirectory: true)
 
         // Create directory if needed

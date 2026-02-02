@@ -100,7 +100,7 @@ struct GeneralSettingsSection: View {
 // MARK: - Audio Level Meter
 
 struct AudioLevelMeter: View {
-    @StateObject private var audioCapture = AudioCaptureEngine()
+    @ObservedObject var audioCapture: AudioCaptureEngine
     @State private var isTestingMic = false
 
     var body: some View {
@@ -205,8 +205,7 @@ struct ModelSettingsSection: View {
 
 struct RecordingSettingsSection: View {
     @ObservedObject private var settings = SettingsManager.shared
-    @StateObject private var hotkeyManager = HotkeyManager()
-    @StateObject private var audioDeviceManager = AudioDeviceManager()
+    @EnvironmentObject private var container: DependencyContainer
     @State private var isRecordingHotkey = false
 
     var body: some View {
@@ -214,12 +213,12 @@ struct RecordingSettingsSection: View {
             Section("Microphone") {
                 Picker("Input Device", selection: $settings.selectedMicrophoneUID) {
                     Text("System Default").tag("")
-                    ForEach(audioDeviceManager.availableDevices) { device in
+                    ForEach(container.audioDeviceManager.availableDevices) { device in
                         Text(device.name).tag(device.uid)
                     }
                 }
 
-                AudioLevelMeter()
+                AudioLevelMeter(audioCapture: container.audioCaptureEngine)
                     .frame(height: 20)
             }
 
@@ -280,7 +279,7 @@ struct RecordingSettingsSection: View {
         isRecordingHotkey = true
 
         Task {
-            if let combo = await hotkeyManager.recordHotkey() {
+            if let combo = await container.hotkeyManager.recordHotkey() {
                 settings.hotkey = combo
             }
             isRecordingHotkey = false
@@ -294,6 +293,7 @@ struct RecordingSettingsSection: View {
 
 #Preview("Recording") {
     RecordingSettingsSection()
+        .environmentObject(DependencyContainer())
 }
 
 // MARK: - Notifications

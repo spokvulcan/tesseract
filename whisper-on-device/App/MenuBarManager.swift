@@ -12,11 +12,8 @@ import Combine
 final class MenuBarManager: ObservableObject {
     private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
-    private var animationTimer: Timer?
-    private var isAnimationHighlighted = true
 
     @Published var isRecording = false
-    @Published var isProcessing = false
 
     weak var coordinator: DictationCoordinator?
 
@@ -75,25 +72,16 @@ final class MenuBarManager: ObservableObject {
 
         statusItem?.menu = menu
 
-        // Subscribe to state changes
+        // Subscribe to state changes for menu item text
         $isRecording
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.updateIcon()
                 self?.updateMenuItems()
-            }
-            .store(in: &cancellables)
-
-        $isProcessing
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.updateIcon()
             }
             .store(in: &cancellables)
     }
 
     func teardownMenuBar() {
-        stopRecordingAnimation()
         if let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
@@ -102,15 +90,10 @@ final class MenuBarManager: ObservableObject {
 
     func updateState(from dictationState: DictationState) {
         switch dictationState {
-        case .idle, .error:
+        case .idle, .error, .processing:
             isRecording = false
-            isProcessing = false
         case .listening, .recording:
             isRecording = true
-            isProcessing = false
-        case .processing:
-            isRecording = false
-            isProcessing = true
         }
     }
 
@@ -119,49 +102,12 @@ final class MenuBarManager: ObservableObject {
     private func updateIcon() {
         guard let button = statusItem?.button else { return }
 
-        let tintColor: NSColor
-
-        if isRecording {
-            tintColor = .systemRed
-            startRecordingAnimation()
-        } else if isProcessing {
-            tintColor = .systemOrange
-            stopRecordingAnimation()
-        } else {
-            // Use nil for idle state to let the system handle template image coloring
-            // This ensures proper appearance in both Light and Dark menu bar
-            tintColor = .secondaryLabelColor
-            stopRecordingAnimation()
-        }
-
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "WhisperOnDevice")?
             .withSymbolConfiguration(config) {
-            // Make it a template image for proper menu bar appearance adaptation
-            image.isTemplate = !isRecording && !isProcessing
+            image.isTemplate = true
             button.image = image
-            button.contentTintColor = (isRecording || isProcessing) ? tintColor : nil
         }
-    }
-
-    private func startRecordingAnimation() {
-        guard animationTimer == nil else { return }
-
-        isAnimationHighlighted = true
-        // Timer callback must dispatch to MainActor since Timer closures aren't actor-isolated
-        animationTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.isAnimationHighlighted.toggle()
-                self.statusItem?.button?.alphaValue = self.isAnimationHighlighted ? 1.0 : 0.5
-            }
-        }
-    }
-
-    private func stopRecordingAnimation() {
-        animationTimer?.invalidate()
-        animationTimer = nil
-        statusItem?.button?.alphaValue = 1.0
     }
 
     private func updateMenuItems() {
