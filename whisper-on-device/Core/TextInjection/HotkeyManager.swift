@@ -59,7 +59,9 @@ final class HotkeyManager: ObservableObject {
     // MARK: - CGEventTap Implementation
 
     private func startEventTap() {
-        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        let eventMask = (1 << CGEventType.keyDown.rawValue) |
+                        (1 << CGEventType.keyUp.rawValue) |
+                        (1 << CGEventType.flagsChanged.rawValue)
 
         // Store self pointer for callback
         let refcon = Unmanaged.passUnretained(self).toOpaque()
@@ -98,38 +100,40 @@ final class HotkeyManager: ObservableObject {
                 let relevantModifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
                 let currentModifiers = modifiers.intersection(relevantModifiers)
 
-                // Access currentHotkey on MainActor
-                var shouldSuppress = false
-                var isKeyDown = false
-                var isKeyUp = false
-
-                // We need to dispatch to main for state updates, but check hotkey match synchronously
-                // by capturing the hotkey values we need
+                // Capture hotkey configuration for comparison
                 let hotkeyKeyCode = manager.currentHotkey.keyCode
                 let hotkeyModifiers = NSEvent.ModifierFlags(rawValue: manager.currentHotkey.modifiers)
+                let relevantHotkeyModifiers = hotkeyModifiers.intersection([.command, .option, .control, .shift])
 
+                // Check for release conditions (main key released or modifier released)
+                let isMainKeyUp = type == .keyUp && keyCode == hotkeyKeyCode
+                let isModifierReleased = type == .flagsChanged && !currentModifiers.contains(relevantHotkeyModifiers)
+
+                if isMainKeyUp || isModifierReleased {
+                    DispatchQueue.main.async {
+                        guard manager.isHotkeyPressed else { return }
+                        manager.isHotkeyPressed = false
+                        manager.onHotkeyUp?()
+                    }
+                    // Suppress main key up, pass through modifier changes
+                    return isMainKeyUp ? nil : Unmanaged.passUnretained(event)
+                }
+
+                // Normal hotkey down detection (requires exact match)
                 let matches = keyCode == hotkeyKeyCode &&
                               currentModifiers.rawValue == hotkeyModifiers.rawValue
 
-                if matches {
-                    shouldSuppress = true
-                    isKeyDown = type == .keyDown
-                    isKeyUp = type == .keyUp
-
-                    // Dispatch UI updates to main actor
+                if matches && type == .keyDown {
                     DispatchQueue.main.async {
-                        if isKeyDown && !manager.isHotkeyPressed {
-                            manager.isHotkeyPressed = true
-                            manager.onHotkeyDown?()
-                        } else if isKeyUp && manager.isHotkeyPressed {
-                            manager.isHotkeyPressed = false
-                            manager.onHotkeyUp?()
-                        }
+                        guard !manager.isHotkeyPressed else { return }
+                        manager.isHotkeyPressed = true
+                        manager.onHotkeyDown?()
                     }
+                    return nil  // Suppress the key down event
                 }
 
-                // Return nil to suppress, or pass through the event
-                return shouldSuppress ? nil : Unmanaged.passUnretained(event)
+                // Pass through non-hotkey events
+                return Unmanaged.passUnretained(event)
             },
             userInfo: refcon
         )
@@ -202,43 +206,50 @@ final class HotkeyManager: ObservableObject {
     private func handleKeyEvent(_ event: NSEvent) {
         let keyCode = event.keyCode
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift, .function])
+        let targetModifiers = NSEvent.ModifierFlags(rawValue: currentHotkey.modifiers)
+        let relevantTargetModifiers = targetModifiers.intersection([.command, .option, .control, .shift])
 
-        // Check if this matches our hotkey
+        // When engaged, check for any release that should stop recording
+        if isHotkeyPressed {
+            // Main key released (regardless of modifier state)
+            if event.type == .keyUp && keyCode == currentHotkey.keyCode {
+                isHotkeyPressed = false
+                onHotkeyUp?()
+                return
+            }
+
+            // Modifier released (via flagsChanged)
+            if event.type == .flagsChanged {
+                let currentRelevant = modifiers.intersection([.command, .option, .control, .shift])
+                if !currentRelevant.contains(relevantTargetModifiers) {
+                    isHotkeyPressed = false
+                    onHotkeyUp?()
+                    return
+                }
+            }
+        }
+
+        // Handle modifier-only hotkeys (like Option key alone)
+        if currentHotkey.keyCode == 0 && event.type == .flagsChanged {
+            if modifiers == targetModifiers && !isHotkeyPressed {
+                isHotkeyPressed = true
+                onHotkeyDown?()
+            } else if modifiers != targetModifiers && isHotkeyPressed {
+                isHotkeyPressed = false
+                onHotkeyUp?()
+            }
+            return
+        }
+
+        // Hotkey down detection (requires exact match)
         guard keyCode == currentHotkey.keyCode,
               modifiers.rawValue == currentHotkey.modifiers else {
             return
         }
 
-        switch event.type {
-        case .keyDown:
-            if !isHotkeyPressed {
-                isHotkeyPressed = true
-                onHotkeyDown?()
-            }
-
-        case .keyUp:
-            if isHotkeyPressed {
-                isHotkeyPressed = false
-                onHotkeyUp?()
-            }
-
-        case .flagsChanged:
-            // Handle modifier-only hotkeys (like Option key alone)
-            if currentHotkey.keyCode == 0 {
-                let currentModifiers = event.modifierFlags.intersection([.command, .option, .control, .shift, .function])
-                let targetModifiers = NSEvent.ModifierFlags(rawValue: currentHotkey.modifiers)
-
-                if currentModifiers == targetModifiers && !isHotkeyPressed {
-                    isHotkeyPressed = true
-                    onHotkeyDown?()
-                } else if currentModifiers != targetModifiers && isHotkeyPressed {
-                    isHotkeyPressed = false
-                    onHotkeyUp?()
-                }
-            }
-
-        default:
-            break
+        if event.type == .keyDown && !isHotkeyPressed {
+            isHotkeyPressed = true
+            onHotkeyDown?()
         }
     }
 
