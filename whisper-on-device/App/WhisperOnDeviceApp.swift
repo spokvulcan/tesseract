@@ -90,6 +90,9 @@ struct WhisperOnDeviceApp: App {
                     isPresented: $showOnboarding
                 )
             }
+            .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
+                showOnboarding = true
+            }
         }
         // Prevent WindowGroup from creating multiple windows via external events
         .handlesExternalEvents(matching: Set<String>())

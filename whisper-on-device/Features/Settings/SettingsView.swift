@@ -62,6 +62,12 @@ struct GeneralSettingsSection: View {
                 Toggle("Show notifications", isOn: $settings.showNotifications)
             }
 
+            Section("Setup") {
+                Button("Run Setup Wizard...") {
+                    NotificationCenter.default.post(name: .showOnboarding, object: nil)
+                }
+            }
+
             Section("Recording Overlay") {
                 Picker("Overlay Style", selection: $settings.overlayStyleRaw) {
                     ForEach(OverlayStyle.allCases) { style in
@@ -280,17 +286,15 @@ struct AdvancedSettingsSection: View {
             }
 
             Section("Language") {
-                Picker("Transcription Language", selection: $settings.language) {
-                    Text("Auto-detect").tag("auto")
-                    Text("English").tag("en")
-                    Text("Spanish").tag("es")
-                    Text("French").tag("fr")
-                    Text("German").tag("de")
-                    Text("Italian").tag("it")
-                    Text("Portuguese").tag("pt")
-                    Text("Russian").tag("ru")
-                    Text("Japanese").tag("ja")
-                    Text("Chinese").tag("zh")
+                DisclosureGroup {
+                    LanguagePickerView(selectedLanguage: $settings.language)
+                } label: {
+                    HStack {
+                        Text("Transcription Language")
+                        Spacer()
+                        Text(settings.selectedLanguage.displayName)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -328,4 +332,10 @@ struct AdvancedSettingsSection: View {
 
 #Preview("Advanced") {
     AdvancedSettingsSection()
+}
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    static let showOnboarding = Notification.Name("showOnboarding")
 }

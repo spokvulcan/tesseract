@@ -52,7 +52,11 @@ final class SettingsManager: ObservableObject {
 
     // MARK: - Language Settings
 
-    @AppStorage("language") var language: String = "auto"
+    @AppStorage("language") var language: String = "en"
+
+    var selectedLanguage: SupportedLanguage {
+        SupportedLanguage.language(forCode: language) ?? .auto
+    }
 
     // MARK: - Hotkey Settings
 
@@ -98,7 +102,7 @@ final class SettingsManager: ObservableObject {
         selectedMicrophoneUID = ""
         vadSensitivity = 0.5
         silenceThreshold = 0.5
-        language = "auto"
+        language = "en"
         hotkeyKeyCode = Int(KeyCombo.optionSpace.keyCode)
         hotkeyModifiers = Int(KeyCombo.optionSpace.modifiers)
         maxRecordingDuration = 60.0

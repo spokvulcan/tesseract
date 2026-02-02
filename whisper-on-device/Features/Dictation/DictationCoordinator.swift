@@ -131,8 +131,8 @@ final class DictationCoordinator: ObservableObject {
 
         Task {
             do {
-                // Transcribe
-                let result = try await transcriptionEngine.transcribe(audioData)
+                // Transcribe with selected language
+                let result = try await transcriptionEngine.transcribe(audioData, language: settings.language)
 
                 // Post-process
                 let processedText = postProcessor.process(result.text)

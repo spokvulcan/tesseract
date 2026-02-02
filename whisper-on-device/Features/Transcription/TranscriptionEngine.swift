@@ -38,7 +38,7 @@ final class TranscriptionEngine: ObservableObject {
         isModelLoaded = false
     }
 
-    func transcribe(_ audioData: AudioData) async throws -> TranscriptionResult {
+    func transcribe(_ audioData: AudioData, language: String = "auto") async throws -> TranscriptionResult {
         guard let whisperActor else {
             throw DictationError.modelNotLoaded
         }
@@ -50,7 +50,9 @@ final class TranscriptionEngine: ObservableObject {
         isTranscribing = true
         defer { isTranscribing = false }
 
-        return try await whisperActor.transcribe(audioData)
+        // Pass nil for auto-detect, otherwise pass the language code
+        let languageCode = language == "auto" ? nil : language
+        return try await whisperActor.transcribe(audioData, language: languageCode)
     }
 
     func cancelTranscription() {
@@ -86,20 +88,21 @@ actor WhisperActor {
         whisperKit = try await WhisperKit(config)
     }
 
-    func transcribe(_ audioData: AudioData) async throws -> TranscriptionResult {
+    func transcribe(_ audioData: AudioData, language: String? = nil) async throws -> TranscriptionResult {
         guard let whisperKit else {
             throw DictationError.modelNotLoaded
         }
 
         let startTime = Date()
 
-        let options = DecodingOptions(
+        var options = DecodingOptions(
             task: .transcribe,
             usePrefillPrompt: false,
             skipSpecialTokens: true,
             withoutTimestamps: false,
             clipTimestamps: []
         )
+        options.language = language
 
         // Capture whisperKit in a local constant to satisfy concurrency checking
         let kit = whisperKit
@@ -123,7 +126,7 @@ actor WhisperActor {
         }
 
         return TranscriptionResult(
-            text: firstResult.text.trimmingCharacters(in: .whitespacesAndNewlines),
+            text: firstResult.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
             segments: segments,
             language: firstResult.language,
             processingTime: processingTime
