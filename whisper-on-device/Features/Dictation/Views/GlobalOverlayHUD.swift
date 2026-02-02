@@ -10,7 +10,6 @@ import SwiftUI
 struct GlobalOverlayHUD: View {
     let state: DictationState
     let audioLevel: Float
-    var visualizationType: VisualizationType = .organicBlob
 
     @State private var smoothedLevel: CGFloat = 0.08
     @State private var isVisible = false
@@ -74,18 +73,8 @@ struct GlobalOverlayHUD: View {
         }
     }
 
-    @ViewBuilder
     private func visualizationContent(level: CGFloat, phase: CGFloat) -> some View {
-        switch visualizationType {
-        case .liquidWave:
-            LiquidWaveView(level: level, phase: phase)
-        case .breathingRectangle:
-            BreathingRectangleView(level: level, phase: phase)
-        case .pulsingRings:
-            PulsingRingsView(level: level, phase: phase)
-        case .organicBlob:
-            OrganicBlobView(level: level, phase: phase)
-        }
+        LiquidWaveView(level: level, phase: phase)
     }
 
     private var processingView: some View {
@@ -148,26 +137,8 @@ struct GlobalOverlayHUD: View {
     }
 }
 
-#Preview("Recording - Organic Blob") {
-    GlobalOverlayHUD(state: .recording, audioLevel: 0.5, visualizationType: .organicBlob)
-        .padding(50)
-        .background(Color.gray.opacity(0.3))
-}
-
-#Preview("Recording - Breathing Rectangle") {
-    GlobalOverlayHUD(state: .recording, audioLevel: 0.5, visualizationType: .breathingRectangle)
-        .padding(50)
-        .background(Color.gray.opacity(0.3))
-}
-
-#Preview("Recording - Pulsing Rings") {
-    GlobalOverlayHUD(state: .recording, audioLevel: 0.5, visualizationType: .pulsingRings)
-        .padding(50)
-        .background(Color.gray.opacity(0.3))
-}
-
-#Preview("Recording - Liquid Wave") {
-    GlobalOverlayHUD(state: .recording, audioLevel: 0.5, visualizationType: .liquidWave)
+#Preview("Recording") {
+    GlobalOverlayHUD(state: .recording, audioLevel: 0.5)
         .padding(50)
         .background(Color.gray.opacity(0.3))
 }
@@ -176,19 +147,4 @@ struct GlobalOverlayHUD: View {
     GlobalOverlayHUD(state: .processing, audioLevel: 0)
         .padding(50)
         .background(Color.gray.opacity(0.3))
-}
-
-#Preview("All Visualization Types") {
-    VStack(spacing: 24) {
-        ForEach(VisualizationType.allCases) { type in
-            VStack(spacing: 4) {
-                Text(type.displayName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                GlobalOverlayHUD(state: .recording, audioLevel: 0.5, visualizationType: type)
-            }
-        }
-    }
-    .padding(50)
-    .background(Color.gray.opacity(0.3))
 }

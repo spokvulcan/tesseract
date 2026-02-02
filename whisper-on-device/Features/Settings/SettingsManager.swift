@@ -28,13 +28,6 @@ final class SettingsManager: ObservableObject {
 
     @AppStorage("restoreClipboard") var restoreClipboard = true
 
-    @AppStorage("visualizationType") var visualizationTypeRaw: String = VisualizationType.organicBlob.rawValue
-
-    var visualizationType: VisualizationType {
-        get { VisualizationType(rawValue: visualizationTypeRaw) ?? .organicBlob }
-        set { visualizationTypeRaw = newValue.rawValue }
-    }
-
     @AppStorage("overlayStyle") var overlayStyleRaw: String = OverlayStyle.pill.rawValue
 
     var overlayStyle: OverlayStyle {
@@ -109,7 +102,6 @@ final class SettingsManager: ObservableObject {
         showInMenuBar = true
         autoInsertText = true
         restoreClipboard = true
-        visualizationTypeRaw = VisualizationType.organicBlob.rawValue
         overlayStyleRaw = OverlayStyle.pill.rawValue
         glowThemeRaw = GlowTheme.appleIntelligence.rawValue
         selectedMicrophoneUID = ""

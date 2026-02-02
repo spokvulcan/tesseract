@@ -75,21 +75,6 @@ struct GeneralSettingsSection: View {
                         .foregroundStyle(.secondary)
                 }
 
-                // Show visualization picker only for pill style
-                if settings.overlayStyle == .pill {
-                    Picker("Animation Style", selection: $settings.visualizationTypeRaw) {
-                        ForEach(VisualizationType.allCases) { type in
-                            Text(type.displayName).tag(type.rawValue)
-                        }
-                    }
-
-                    if let type = VisualizationType(rawValue: settings.visualizationTypeRaw) {
-                        Text(type.description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
                 // Show glow theme picker for full-screen border style
                 if settings.overlayStyle == .fullScreenBorder {
                     Picker("Glow Theme", selection: $settings.glowThemeRaw) {

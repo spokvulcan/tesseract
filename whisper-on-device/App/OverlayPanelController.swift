@@ -84,8 +84,7 @@ final class OverlayPanelController {
         // Create SwiftUI hosting view
         let hudView = GlobalOverlayHUD(
             state: currentState,
-            audioLevel: currentAudioLevel,
-            visualizationType: settings.visualizationType
+            audioLevel: currentAudioLevel
         )
         let hostingView = NSHostingView(rootView: hudView)
         hostingView.frame = panel.contentView?.bounds ?? .zero
@@ -141,8 +140,7 @@ final class OverlayPanelController {
     private func updateHostingView() {
         let hudView = GlobalOverlayHUD(
             state: currentState,
-            audioLevel: currentAudioLevel,
-            visualizationType: settings.visualizationType
+            audioLevel: currentAudioLevel
         )
         hostingView?.rootView = hudView
     }
