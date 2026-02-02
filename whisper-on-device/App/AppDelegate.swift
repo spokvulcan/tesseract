@@ -115,8 +115,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            // No visible windows - show the main window
-            showMainWindow()
+            // Defer to next run loop iteration to let any SwiftUI window become visible first.
+            // This prevents duplicate window creation from the race condition where both
+            // SwiftUI and our code try to create windows simultaneously.
+            DispatchQueue.main.async { [weak self] in
+                let hasVisibleWindow = NSApp.windows.contains {
+                    !($0 is NSPanel) && $0.canBecomeMain && $0.isVisible
+                }
+                if !hasVisibleWindow {
+                    self?.showMainWindow()
+                }
+            }
         }
         return true
     }

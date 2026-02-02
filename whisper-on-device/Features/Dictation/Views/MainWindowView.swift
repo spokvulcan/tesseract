@@ -224,42 +224,31 @@ struct RecordingButtonView: View {
 struct TranscriptionHistoryView: View {
     @ObservedObject var history: TranscriptionHistory
 
-    private var groupedEntries: [(String, [TranscriptionEntry])] {
-        let calendar = Calendar.current
-        let grouped = Dictionary(grouping: history.entries) { entry -> String in
-            if calendar.isDateInToday(entry.timestamp) {
-                return "TODAY"
-            } else if calendar.isDateInYesterday(entry.timestamp) {
-                return "YESTERDAY"
-            } else {
-                let formatter = DateFormatter()
-                formatter.dateFormat = "EEEE, MMM d"
-                return formatter.string(from: entry.timestamp).uppercased()
-            }
-        }
-
-        // Sort groups by most recent first
-        let sortedKeys = grouped.keys.sorted { key1, key2 in
-            let date1 = grouped[key1]?.first?.timestamp ?? Date.distantPast
-            let date2 = grouped[key2]?.first?.timestamp ?? Date.distantPast
-            return date1 > date2
-        }
-
-        return sortedKeys.map { key in
-            (key, grouped[key]?.sorted { $0.timestamp > $1.timestamp } ?? [])
-        }
-    }
+    // Layout constants for header alignment
+    private let timeColumnWidth: CGFloat = 70
+    private let timeToConnectorSpacing: CGFloat = 12
+    private let connectorWidth: CGFloat = 8
+    private let connectorToContentSpacing: CGFloat = 12
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if history.entries.isEmpty {
+            if history.flattenedItems.isEmpty {
                 // Empty state - minimal
                 Spacer()
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(groupedEntries, id: \.0) { dateGroup, entries in
-                            HistoryDateSection(dateLabel: dateGroup, entries: entries)
+                        ForEach(history.flattenedItems) { item in
+                            switch item {
+                            case .header(let label, _):
+                                HistorySectionHeader(
+                                    label: label,
+                                    leadingPadding: timeColumnWidth + timeToConnectorSpacing + connectorWidth + connectorToContentSpacing
+                                )
+                            case .entry(let entry, let isFirst, let isLast):
+                                TimelineEntryRow(entry: entry, isFirst: isFirst, isLast: isLast)
+                                    .equatable()
+                            }
                         }
                     }
                     .padding(.horizontal, 4)
@@ -274,56 +263,39 @@ struct TranscriptionHistoryView: View {
     }
 }
 
-// MARK: - History Date Section
+// MARK: - History Section Header
 
-struct HistoryDateSection: View {
-    let dateLabel: String
-    let entries: [TranscriptionEntry]
-
-    // Layout constants matching TimelineEntryRow
-    private let timeColumnWidth: CGFloat = 70
-    private let timeToConnectorSpacing: CGFloat = 12
-    private let connectorWidth: CGFloat = 8
-    private let connectorToContentSpacing: CGFloat = 12
+struct HistorySectionHeader: View, Equatable {
+    let label: String
+    let leadingPadding: CGFloat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Date header - aligned with transcription text
-            Text(dateLabel)
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundStyle(.tertiary)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
-                .padding(.leading, timeColumnWidth + timeToConnectorSpacing + connectorWidth + connectorToContentSpacing)
+        Text(label)
+            .font(.caption)
+            .fontWeight(.medium)
+            .foregroundStyle(.tertiary)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+            .padding(.leading, leadingPadding)
+    }
 
-            // Timeline entries
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                    TimelineEntryRow(
-                        entry: entry,
-                        isFirst: index == 0,
-                        isLast: index == entries.count - 1
-                    )
-                }
-            }
-        }
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.label == rhs.label && lhs.leadingPadding == rhs.leadingPadding
     }
 }
 
 // MARK: - Timeline Entry Row
 
-struct TimelineEntryRow: View {
+struct TimelineEntryRow: View, Equatable {
     let entry: TranscriptionEntry
     let isFirst: Bool
     let isLast: Bool
 
     @State private var isHovered = false
 
+    // Use cached formatter from TranscriptionHistory
     private var timeString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: entry.timestamp)
+        TranscriptionHistory.formattedTime(for: entry.timestamp)
     }
 
     var body: some View {
@@ -337,24 +309,7 @@ struct TimelineEntryRow: View {
                 .padding(.top, 2)
 
             // Timeline connector
-            VStack(spacing: 0) {
-                // Line above dot
-                Rectangle()
-                    .fill(isFirst ? Color.clear : Color.secondary.opacity(0.25))
-                    .frame(width: 1.5)
-                    .frame(height: 8)
-
-                // Dot
-                Circle()
-                    .fill(Color.secondary.opacity(0.5))
-                    .frame(width: 6, height: 6)
-
-                // Line below dot
-                Rectangle()
-                    .fill(isLast ? Color.clear : Color.secondary.opacity(0.25))
-                    .frame(width: 1.5)
-                    .frame(maxHeight: .infinity)
-            }
+            TimelineConnector(isFirst: isFirst, isLast: isLast)
 
             // Content
             HStack(alignment: .top, spacing: 8) {
@@ -395,14 +350,45 @@ struct TimelineEntryRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
+        .onHover { isHovered = $0 }  // No animation - instant state change
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(entry.text), recorded at \(timeString), duration \(String(format: "%.1f", entry.duration)) seconds")
         .accessibilityHint("Copy button appears on hover")
+    }
+
+    // Equatable conformance for efficient diffing
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.entry.id == rhs.entry.id &&
+        lhs.isFirst == rhs.isFirst &&
+        lhs.isLast == rhs.isLast
+    }
+}
+
+// MARK: - Timeline Connector (Extracted for simplicity)
+
+private struct TimelineConnector: View {
+    let isFirst: Bool
+    let isLast: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Line above dot
+            Rectangle()
+                .fill(isFirst ? Color.clear : Color.secondary.opacity(0.25))
+                .frame(width: 1.5)
+                .frame(height: 8)
+
+            // Dot
+            Circle()
+                .fill(Color.secondary.opacity(0.5))
+                .frame(width: 6, height: 6)
+
+            // Line below dot
+            Rectangle()
+                .fill(isLast ? Color.clear : Color.secondary.opacity(0.25))
+                .frame(width: 1.5)
+                .frame(maxHeight: .infinity)
+        }
     }
 }
 

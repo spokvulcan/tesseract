@@ -84,11 +84,10 @@ final class HotkeyManager: ObservableObject {
                     return Unmanaged.passUnretained(event)
                 }
 
-                // Check if this event matches our hotkey
                 let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
                 let flags = event.flags
 
-                // Convert CGEventFlags to NSEvent.ModifierFlags for comparison
+                // Convert CGEventFlags to NSEvent.ModifierFlags
                 var modifiers: NSEvent.ModifierFlags = []
                 if flags.contains(.maskCommand) { modifiers.insert(.command) }
                 if flags.contains(.maskAlternate) { modifiers.insert(.option) }
@@ -96,43 +95,68 @@ final class HotkeyManager: ObservableObject {
                 if flags.contains(.maskShift) { modifiers.insert(.shift) }
                 if flags.contains(.maskSecondaryFn) { modifiers.insert(.function) }
 
-                // Get the expected modifiers (only the relevant ones for comparison)
-                let relevantModifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
-                let currentModifiers = modifiers.intersection(relevantModifiers)
-
-                // Capture hotkey configuration for comparison
                 let hotkeyKeyCode = manager.currentHotkey.keyCode
                 let hotkeyModifiers = NSEvent.ModifierFlags(rawValue: manager.currentHotkey.modifiers)
-                let relevantHotkeyModifiers = hotkeyModifiers.intersection([.command, .option, .control, .shift])
 
-                // Check for release conditions (main key released or modifier released)
-                let isMainKeyUp = type == .keyUp && keyCode == hotkeyKeyCode
-                let isModifierReleased = type == .flagsChanged && !currentModifiers.contains(relevantHotkeyModifiers)
+                // Filter to only relevant modifiers for comparison (consistent on both sides)
+                let relevantModifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+                let currentRelevant = modifiers.intersection(relevantModifiers)
+                let hotkeyRelevant = hotkeyModifiers.intersection(relevantModifiers)
 
-                if isMainKeyUp || isModifierReleased {
-                    DispatchQueue.main.async {
-                        guard manager.isHotkeyPressed else { return }
-                        manager.isHotkeyPressed = false
-                        manager.onHotkeyUp?()
+                // EARLY EXIT: If this is NOT our hotkey's key code, pass through immediately
+                // This ensures Cmd+Space and other shortcuts work normally
+                if type == .keyDown || type == .keyUp {
+                    if keyCode != hotkeyKeyCode {
+                        return Unmanaged.passUnretained(event)
                     }
-                    // Suppress main key up, pass through modifier changes
-                    return isMainKeyUp ? nil : Unmanaged.passUnretained(event)
                 }
 
-                // Normal hotkey down detection (requires exact match)
-                let matches = keyCode == hotkeyKeyCode &&
-                              currentModifiers.rawValue == hotkeyModifiers.rawValue
-
-                if matches && type == .keyDown {
-                    DispatchQueue.main.async {
-                        guard !manager.isHotkeyPressed else { return }
-                        manager.isHotkeyPressed = true
-                        manager.onHotkeyDown?()
+                // Handle flagsChanged - ALWAYS pass through, but track modifier state for release detection
+                if type == .flagsChanged {
+                    // Check if our hotkey's modifier was released while hotkey was engaged
+                    if manager.isHotkeyPressed && !currentRelevant.contains(hotkeyRelevant) {
+                        DispatchQueue.main.async {
+                            guard manager.isHotkeyPressed else { return }
+                            manager.isHotkeyPressed = false
+                            manager.onHotkeyUp?()
+                        }
                     }
-                    return nil  // Suppress the key down event
+                    // ALWAYS pass through flagsChanged events - never suppress modifier changes
+                    return Unmanaged.passUnretained(event)
                 }
 
-                // Pass through non-hotkey events
+                // At this point: type is keyDown or keyUp, and keyCode matches our hotkey's key
+
+                // Handle key up - only suppress if it's our hotkey being released
+                if type == .keyUp {
+                    if manager.isHotkeyPressed {
+                        DispatchQueue.main.async {
+                            manager.isHotkeyPressed = false
+                            manager.onHotkeyUp?()
+                        }
+                        return nil  // Suppress our hotkey's key up
+                    }
+                    // Key up but we weren't tracking it as pressed - pass through
+                    return Unmanaged.passUnretained(event)
+                }
+
+                // Handle key down - suppress if modifiers match (including key repeats)
+                if type == .keyDown {
+                    if currentRelevant == hotkeyRelevant {
+                        // Only trigger onHotkeyDown on first press, not repeats
+                        if !manager.isHotkeyPressed {
+                            DispatchQueue.main.async {
+                                manager.isHotkeyPressed = true
+                                manager.onHotkeyDown?()
+                            }
+                        }
+                        return nil  // Suppress our hotkey's key down (and all repeats)
+                    }
+                    // Key matches but modifiers don't (e.g., Cmd+Space when hotkey is Option+Space)
+                    return Unmanaged.passUnretained(event)
+                }
+
+                // Unknown event type - pass through
                 return Unmanaged.passUnretained(event)
             },
             userInfo: refcon

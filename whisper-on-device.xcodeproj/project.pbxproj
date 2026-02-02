@@ -7,8 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		E0C654CB2F2E9A9E003C1B55 /* PLAN.md in Resources */ = {isa = PBXBuildFile; fileRef = E0C654CA2F2E9A9E003C1B55 /* PLAN.md */; };
-		E0C655372F2E9DE5003C1B55 /* IMPLEMENTATION_LOG.md in Resources */ = {isa = PBXBuildFile; fileRef = E0C655362F2E9DE5003C1B55 /* IMPLEMENTATION_LOG.md */; };
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
 /* End PBXBuildFile section */
 
@@ -33,8 +31,6 @@
 		E0C654902F2E946A003C1B55 /* whisper-on-device.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "whisper-on-device.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0C6549F2F2E946B003C1B55 /* whisper-on-deviceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "whisper-on-deviceTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0C654A92F2E946B003C1B55 /* whisper-on-deviceUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "whisper-on-deviceUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
-		E0C654CA2F2E9A9E003C1B55 /* PLAN.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PLAN.md; sourceTree = "<group>"; };
-		E0C655362F2E9DE5003C1B55 /* IMPLEMENTATION_LOG.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = IMPLEMENTATION_LOG.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -84,8 +80,6 @@
 		E0C654872F2E946A003C1B55 = {
 			isa = PBXGroup;
 			children = (
-				E0C655362F2E9DE5003C1B55 /* IMPLEMENTATION_LOG.md */,
-				E0C654CA2F2E9A9E003C1B55 /* PLAN.md */,
 				E0C654922F2E946A003C1B55 /* whisper-on-device */,
 				E0C654A22F2E946B003C1B55 /* whisper-on-deviceTests */,
 				E0C654AC2F2E946B003C1B55 /* whisper-on-deviceUITests */,
@@ -227,8 +221,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E0C654CB2F2E9A9E003C1B55 /* PLAN.md in Resources */,
-				E0C655372F2E9DE5003C1B55 /* IMPLEMENTATION_LOG.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -526,6 +518,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5RBTC2MNY8;
 				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "tesseract.whisper-on-deviceUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -545,6 +538,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5RBTC2MNY8;
 				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "tesseract.whisper-on-deviceUITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
