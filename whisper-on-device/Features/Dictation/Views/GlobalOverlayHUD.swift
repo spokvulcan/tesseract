@@ -89,7 +89,7 @@ struct GlobalOverlayHUD: View {
         ZStack {
             // Glass background
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(.thickMaterial)
 
             // Subtle gradient border
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

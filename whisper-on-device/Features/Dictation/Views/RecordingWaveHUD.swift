@@ -44,7 +44,7 @@ struct RecordingWaveHUD: View {
     private func hudContent(phase: CGFloat) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(.thickMaterial)
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(

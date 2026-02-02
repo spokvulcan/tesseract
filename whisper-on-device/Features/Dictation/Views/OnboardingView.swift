@@ -75,7 +75,7 @@ struct OnboardingView: View {
             .padding()
         }
         .frame(width: 550, height: 500)
-        .background(.ultraThinMaterial)
+        .background(.thickMaterial)
     }
 
     @ViewBuilder

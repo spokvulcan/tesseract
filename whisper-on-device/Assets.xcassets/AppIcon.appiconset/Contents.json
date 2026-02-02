@@ -1,52 +1,162 @@
 {
   "images" : [
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x.png",
+      "idiom" : "universal",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 1.png",
+      "idiom" : "universal",
+      "language-direction" : "left-to-right",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 2.png",
+      "idiom" : "universal",
+      "language-direction" : "right-to-left",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 19.png",
       "idiom" : "mac",
+      "language-direction" : "left-to-right",
       "scale" : "1x",
       "size" : "16x16"
     },
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 20.png",
       "idiom" : "mac",
+      "language-direction" : "right-to-left",
+      "scale" : "1x",
+      "size" : "16x16"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 21.png",
+      "idiom" : "mac",
+      "language-direction" : "left-to-right",
       "scale" : "2x",
       "size" : "16x16"
     },
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 22.png",
       "idiom" : "mac",
+      "language-direction" : "right-to-left",
+      "scale" : "2x",
+      "size" : "16x16"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 15.png",
+      "idiom" : "mac",
+      "language-direction" : "left-to-right",
       "scale" : "1x",
       "size" : "32x32"
     },
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 16.png",
       "idiom" : "mac",
+      "language-direction" : "right-to-left",
+      "scale" : "1x",
+      "size" : "32x32"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 17.png",
+      "idiom" : "mac",
+      "language-direction" : "left-to-right",
       "scale" : "2x",
       "size" : "32x32"
     },
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 18.png",
       "idiom" : "mac",
+      "language-direction" : "right-to-left",
+      "scale" : "2x",
+      "size" : "32x32"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 11.png",
+      "idiom" : "mac",
+      "language-direction" : "left-to-right",
       "scale" : "1x",
       "size" : "128x128"
     },
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 12.png",
       "idiom" : "mac",
+      "language-direction" : "right-to-left",
+      "scale" : "1x",
+      "size" : "128x128"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 13.png",
+      "idiom" : "mac",
+      "language-direction" : "left-to-right",
       "scale" : "2x",
       "size" : "128x128"
     },
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 14.png",
       "idiom" : "mac",
+      "language-direction" : "right-to-left",
+      "scale" : "2x",
+      "size" : "128x128"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 8.png",
+      "idiom" : "mac",
+      "language-direction" : "left-to-right",
       "scale" : "1x",
       "size" : "256x256"
     },
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 9.png",
       "idiom" : "mac",
+      "language-direction" : "right-to-left",
+      "scale" : "1x",
+      "size" : "256x256"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 10.png",
+      "idiom" : "mac",
+      "language-direction" : "left-to-right",
       "scale" : "2x",
       "size" : "256x256"
     },
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 7.png",
       "idiom" : "mac",
+      "language-direction" : "right-to-left",
+      "scale" : "2x",
+      "size" : "256x256"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 4.png",
+      "idiom" : "mac",
+      "language-direction" : "left-to-right",
       "scale" : "1x",
       "size" : "512x512"
     },
     {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 5.png",
       "idiom" : "mac",
+      "language-direction" : "right-to-left",
+      "scale" : "1x",
+      "size" : "512x512"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 6.png",
+      "idiom" : "mac",
+      "language-direction" : "left-to-right",
+      "scale" : "2x",
+      "size" : "512x512"
+    },
+    {
+      "filename" : "ondevise-iOS-Default-1024x1024@1x 3.png",
+      "idiom" : "mac",
+      "language-direction" : "right-to-left",
       "scale" : "2x",
       "size" : "512x512"
     }

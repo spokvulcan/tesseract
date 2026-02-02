@@ -60,7 +60,7 @@ struct WhisperOnDeviceApp: App {
             .background {
                 WindowOpenerView(appDelegate: appDelegate)
             }
-            .containerBackground(.ultraThinMaterial, for: .window)
+            .containerBackground(.thickMaterial, for: .window)
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .environmentObject(container)
             .focusedSceneValue(\.dictationActions, DictationActions(
