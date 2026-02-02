@@ -17,33 +17,26 @@ struct MainWindowView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            VStack(spacing: 16) {
-                StatusHeader(
-                    state: coordinator.state,
-                    isModelLoaded: transcriptionEngine.isModelLoaded,
-                    modelName: transcriptionEngine.isModelLoaded ? WhisperModel.displayName : nil
-                )
-
+            // Compact recording control - no card, centered layout
+            VStack(spacing: 4) {
+                // Button (centered, fixed 96pt)
                 RecordingButtonView(
                     state: coordinator.state,
                     onToggle: { coordinator.toggleRecording() }
                 )
                 .disabled(!transcriptionEngine.isModelLoaded || permissionsManager.microphonePermission != .granted)
+                .frame(height: 96)
 
+                // Status indicator below button (fixed 36pt)
+                StatusIndicator(state: coordinator.state)
+                    .frame(height: 36)
+
+                // Shortcut hint (fixed 16pt)
                 Text("Shortcut: \(settings.hotkey.displayString)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .frame(height: 16)
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.regularMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(.quaternary, lineWidth: 1)
-                    )
-            )
             .frame(maxWidth: contentMaxWidth)
 
             TranscriptionHistoryView(history: history)
@@ -66,58 +59,41 @@ struct MainWindowView: View {
     }
 }
 
-// MARK: - Status Header
+// MARK: - Status Indicator (Compact, centered)
 
-struct StatusHeader: View {
+struct StatusIndicator: View {
     let state: DictationState
-    let isModelLoaded: Bool
-    let modelName: String?
+
+    // Fixed height: status line (18) + spacing (2) + detail line (16) = 36
+    private let totalHeight: CGFloat = 36
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 9, height: 9)
-                        .accessibilityHidden(true)
+        VStack(spacing: 2) {
+            // Status line - centered with dot
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
 
-                    Text(statusTitle)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                }
-
-                if let detail = statusDetail {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text(statusTitle)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Status: \(statusTitle)")
-            .accessibilityHint(statusDetail ?? "")
+            .frame(height: 18)
+            .animation(.easeInOut(duration: 0.2), value: state)
 
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("Model")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                if let modelName {
-                    Text(modelName)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                } else if !isModelLoaded {
-                    Text("Not loaded")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .accessibilityLabel("Warning: No transcription model loaded")
-                }
-            }
+            // Error detail - always reserves space
+            Text(statusDetail ?? " ")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(height: 16)
+                .opacity(statusDetail != nil ? 1 : 0)
         }
+        .frame(height: totalHeight)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Status: \(statusTitle)")
+        .accessibilityHint(statusDetail ?? "")
     }
 
     private var statusTitle: String {
@@ -162,22 +138,18 @@ struct RecordingButtonView: View {
 
     @State private var isPulsing = false
 
+    // Compact button: 64px with pulse ring up to 72 × 1.2 = 86px
+    private let buttonSize: CGFloat = 64
+    private let containerSize: CGFloat = 96
+
     var body: some View {
         Button(action: onToggle) {
             ZStack {
-                Circle()
-                    .fill(buttonBackgroundColor.gradient)
-                    .frame(width: 80, height: 80)
-                    .overlay(
-                        Circle()
-                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-                    )
-                    .shadow(color: Color.black.opacity(0.2), radius: 10, y: 4)
-
+                // Pulse ring - only rendered when recording to avoid idle CPU usage
                 if state == .recording {
                     Circle()
-                        .stroke(Color.red.opacity(0.5), lineWidth: 4)
-                        .frame(width: 90, height: 90)
+                        .stroke(Color.red.opacity(0.5), lineWidth: 3)
+                        .frame(width: 72, height: 72)
                         .scaleEffect(isPulsing ? 1.2 : 1.0)
                         .opacity(isPulsing ? 0 : 1)
                         .animation(
@@ -186,11 +158,22 @@ struct RecordingButtonView: View {
                         )
                 }
 
+                Circle()
+                    .fill(buttonBackgroundColor.gradient)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.15), radius: 8, y: 3)
+                    .animation(.easeInOut(duration: 0.2), value: state)
+
                 Image(systemName: buttonIcon)
-                    .font(.system(size: 32))
+                    .font(.system(size: 26))
                     .foregroundStyle(.white)
                     .symbolEffect(.pulse, isActive: state == .processing)
             }
+            .frame(width: containerSize, height: containerSize)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
@@ -401,16 +384,9 @@ struct TimelineEntryRow: View {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    HStack(spacing: 8) {
-                        Text(String(format: "%.1fs", entry.duration))
-                        if !entry.model.isEmpty {
-                            Text(entry.model)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                    }
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    Text(String(format: "%.1fs", entry.duration))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 8)

@@ -17,33 +17,26 @@ struct DictationContentView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            VStack(spacing: 16) {
-                StatusHeader(
-                    state: coordinator.state,
-                    isModelLoaded: transcriptionEngine.isModelLoaded,
-                    modelName: transcriptionEngine.isModelLoaded ? WhisperModel.displayName : nil
-                )
-
+            // Compact recording control - no card, centered layout
+            VStack(spacing: 4) {
+                // Button (centered, fixed 96pt)
                 RecordingButtonView(
                     state: coordinator.state,
                     onToggle: { coordinator.toggleRecording() }
                 )
                 .disabled(!transcriptionEngine.isModelLoaded || permissionsManager.microphonePermission != .granted)
+                .frame(height: 96)
 
+                // Status indicator below button (fixed 36pt)
+                StatusIndicator(state: coordinator.state)
+                    .frame(height: 36)
+
+                // Shortcut hint (fixed 16pt)
                 Text("Shortcut: \(settings.hotkey.displayString)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .frame(height: 16)
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(.regularMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(.quaternary, lineWidth: 1)
-                    )
-            )
             .frame(maxWidth: contentMaxWidth)
 
             TranscriptionHistoryView(history: history)
