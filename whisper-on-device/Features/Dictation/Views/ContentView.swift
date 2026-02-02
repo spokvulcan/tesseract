@@ -15,8 +15,11 @@ struct ContentView: View {
 
     @Binding var selectedNavigation: NavigationItem?
 
+    // Sidebar closed by default
+    @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
+
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(selection: $selectedNavigation)
                 .navigationDestination(for: NavigationItem.self) { page in
                     page.viewForPage(

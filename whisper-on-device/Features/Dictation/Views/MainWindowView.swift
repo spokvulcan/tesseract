@@ -254,32 +254,10 @@ struct TranscriptionHistoryView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("History", systemImage: "clock")
-                    .font(.title3)
-
-                Spacer()
-
-                Button("Clear") {
-                    history.clear()
-                }
-                .buttonStyle(.borderless)
-                .disabled(history.entries.isEmpty)
-                .accessibilityLabel("Clear transcription history")
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
             if history.entries.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.tertiary)
-                    Text("No transcriptions yet")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 220)
-                .padding(.vertical, 16)
+                // Empty state - minimal
+                Spacer()
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -305,16 +283,22 @@ struct HistoryDateSection: View {
     let dateLabel: String
     let entries: [TranscriptionEntry]
 
+    // Layout constants matching TimelineEntryRow
+    private let timeColumnWidth: CGFloat = 70
+    private let timeToConnectorSpacing: CGFloat = 12
+    private let connectorWidth: CGFloat = 8
+    private let connectorToContentSpacing: CGFloat = 12
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Date header
+            // Date header - aligned with transcription text
             Text(dateLabel)
-                .font(.callout)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .padding(.top, 14)
-                .padding(.bottom, 6)
-                .padding(.leading, 2)
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+                .padding(.leading, timeColumnWidth + timeToConnectorSpacing + connectorWidth + connectorToContentSpacing)
 
             // Timeline entries
             VStack(alignment: .leading, spacing: 0) {
