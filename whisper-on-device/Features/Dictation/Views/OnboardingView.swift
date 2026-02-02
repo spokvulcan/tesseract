@@ -7,12 +7,11 @@ import SwiftUI
 
 struct OnboardingView: View {
     @ObservedObject var permissionsManager: PermissionsManager
-    @ObservedObject var modelManager: ModelManager
     @Binding var isPresented: Bool
 
     @State private var currentStep = 0
 
-    private let totalSteps = 5
+    private let totalSteps = 4
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,15 +36,8 @@ struct OnboardingView: View {
                 )
                 .tag(2)
 
-                ModelDownloadStep(
-                    modelManager: modelManager,
-                    onContinue: nextStep,
-                    onSkip: nextStep
-                )
-                .tag(3)
-
                 ReadyStep(onComplete: complete)
-                    .tag(4)
+                    .tag(3)
             }
             .tabViewStyle(.automatic)
         }
@@ -273,118 +265,6 @@ struct AccessibilityPermissionStep: View {
     }
 }
 
-// MARK: - Model Download Step
-
-struct ModelDownloadStep: View {
-    @EnvironmentObject private var container: DependencyContainer
-    @ObservedObject var modelManager: ModelManager
-    let onContinue: () -> Void
-    let onSkip: () -> Void
-
-    @State private var selectedModel: WhisperModel = .base
-    @State private var isLoadingModel = false
-
-    var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 60))
-                .foregroundStyle(.tint)
-
-            Text("Download Model")
-                .font(.title)
-                .fontWeight(.bold)
-
-            Text("Choose a transcription model. Larger models are more accurate but use more memory.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-
-            // Model picker
-            Picker("Model", selection: $selectedModel) {
-                ForEach(WhisperModel.allCases) { model in
-                    Text("\(model.displayName) (\(String(format: "%.1f", model.sizeGB)) GB)")
-                        .tag(model)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-
-            Text(selectedModel.description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            if modelManager.isDownloading[selectedModel] == true {
-                VStack(spacing: 8) {
-                    ProgressView(value: modelManager.downloadProgress[selectedModel] ?? 0)
-                        .frame(width: 200)
-
-                    Text("Downloading... \(Int((modelManager.downloadProgress[selectedModel] ?? 0) * 100))%")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Button("Cancel") {
-                        modelManager.cancelDownload(selectedModel)
-                    }
-                    .buttonStyle(.bordered)
-                }
-            } else if isLoadingModel {
-                VStack(spacing: 8) {
-                    ProgressView()
-                    Text("Loading model...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if modelManager.isModelDownloaded(selectedModel) {
-                Label("Model downloaded", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-
-                Button("Continue") {
-                    // Save selection and load model before continuing
-                    SettingsManager.shared.whisperModel = selectedModel
-                    loadModelAndContinue()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-            } else {
-                HStack(spacing: 16) {
-                    Button("Skip for now") {
-                        onSkip()
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("Download") {
-                        Task {
-                            try? await modelManager.downloadModel(selectedModel)
-                            // Save selection after successful download
-                            SettingsManager.shared.whisperModel = selectedModel
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                }
-            }
-
-            Spacer()
-        }
-        .padding()
-    }
-
-    private func loadModelAndContinue() {
-        isLoadingModel = true
-        Task {
-            let modelPath = container.modelManager.getLocalModelPath(selectedModel)
-            try? await container.transcriptionEngine.loadModel(selectedModel, modelPath: modelPath)
-            isLoadingModel = false
-            onContinue()
-        }
-    }
-}
-
 // MARK: - Ready Step
 
 struct ReadyStep: View {
@@ -463,7 +343,6 @@ struct HotkeyHint: View {
 #Preview {
     OnboardingView(
         permissionsManager: PermissionsManager(),
-        modelManager: ModelManager(),
         isPresented: .constant(true)
     )
 }

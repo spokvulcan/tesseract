@@ -87,7 +87,6 @@ struct WhisperOnDeviceApp: App {
             .sheet(isPresented: $showOnboarding) {
                 OnboardingView(
                     permissionsManager: container.permissionsManager,
-                    modelManager: container.modelManager,
                     isPresented: $showOnboarding
                 )
             }

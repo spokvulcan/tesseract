@@ -148,7 +148,7 @@ final class DictationCoordinator: ObservableObject {
                 history.add(
                     text: processedText,
                     duration: audioData.duration,
-                    model: settings.selectedModel
+                    model: WhisperModel.displayName
                 )
 
                 // Inject text if enabled

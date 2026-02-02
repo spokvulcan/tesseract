@@ -187,165 +187,49 @@ struct AudioLevelMeter: View {
     }
 }
 
-// MARK: - Recommended Badge
-
-struct RecommendedBadge: View {
-    var body: some View {
-        Text("Recommended")
-            .font(.caption2)
-            .fontWeight(.medium)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Color.accentColor, in: Capsule())
-    }
-}
-
 // MARK: - Model Settings Section
 
 struct ModelSettingsSection: View {
     @EnvironmentObject private var container: DependencyContainer
-    @ObservedObject private var settings = SettingsManager.shared
-    @State private var isLoadingModel = false
-
-    private var modelManager: ModelManager {
-        container.modelManager
-    }
 
     var body: some View {
         Form {
             Section("Transcription Model") {
-                Picker("Model", selection: $settings.selectedModel) {
-                    ForEach(WhisperModel.allCases) { model in
-                        HStack {
-                            Text(model.displayName)
-                            if model.isRecommended {
-                                RecommendedBadge()
-                            }
-                            Spacer()
-                            if modelManager.isModelDownloaded(model) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                        .tag(model.rawValue)
-                    }
-                }
-                .onChange(of: settings.selectedModel) { _, newValue in
-                    loadSelectedModel(newValue)
-                }
-
-                if let selectedModel = WhisperModel(rawValue: settings.selectedModel) {
-                    Text(selectedModel.description)
-                        .font(.caption)
+                HStack {
+                    Text("Model")
+                    Spacer()
+                    Text(WhisperModel.displayName)
                         .foregroundStyle(.secondary)
+                }
 
-                    HStack {
-                        Text("Size: \(String(format: "%.1f", selectedModel.sizeGB)) GB")
-                        Spacer()
-                        Text("RAM: \(selectedModel.recommendedRAMGB) GB+")
-                        Spacer()
-                        Label(selectedModel.languageSupport.displayText, systemImage: "globe")
-                    }
+                Text(WhisperModel.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                    // Show loading or status
-                    if isLoadingModel {
-                        HStack {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                            Text("Loading model...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if container.transcriptionEngine.loadedModel == selectedModel {
-                        Text("✓ Model loaded and ready")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    } else if modelManager.isModelDownloaded(selectedModel) {
-                        Text("Model downloaded but not loaded")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
+                HStack {
+                    Text("Size: \(String(format: "%.1f", WhisperModel.sizeGB)) GB")
+                    Spacer()
+                    Text("RAM: \(WhisperModel.recommendedRAMGB) GB+")
+                    Spacer()
+                    Label("\(WhisperModel.languageCount) languages", systemImage: "globe")
                 }
-            }
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
-            Section("Download") {
-                ForEach(WhisperModel.allCases) { model in
-                    ModelDownloadRow(model: model, modelManager: modelManager)
+                if container.transcriptionEngine.isModelLoaded {
+                    Label("Model loaded and ready", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                } else {
+                    Label("Model not loaded", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
-            }
-
-            Section {
-                let usedSpace = modelManager.diskSpaceUsed()
-                Text("Disk space used: \(ByteCountFormatter.string(fromByteCount: usedSpace, countStyle: .file))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .navigationTitle("Model")
-    }
-
-    private func loadSelectedModel(_ rawValue: String) {
-        guard let model = WhisperModel(rawValue: rawValue),
-              modelManager.isModelDownloaded(model) else {
-            return
-        }
-
-        isLoadingModel = true
-        Task {
-            defer { isLoadingModel = false }
-            let modelPath = modelManager.getLocalModelPath(model)
-            try? await container.transcriptionEngine.loadModel(model, modelPath: modelPath)
-        }
-    }
-}
-
-struct ModelDownloadRow: View {
-    let model: WhisperModel
-    @ObservedObject var modelManager: ModelManager
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading) {
-                HStack {
-                    Text(model.displayName)
-                    if model.isRecommended {
-                        RecommendedBadge()
-                    }
-                }
-                Text("\(String(format: "%.1f", model.sizeGB)) GB")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            if modelManager.isDownloading[model] == true {
-                ProgressView(value: modelManager.downloadProgress[model] ?? 0)
-                    .frame(width: 100)
-
-                Button("Cancel") {
-                    modelManager.cancelDownload(model)
-                }
-                .buttonStyle(.bordered)
-            } else if modelManager.isModelDownloaded(model) {
-                Button("Delete") {
-                    try? modelManager.deleteModel(model)
-                }
-                .buttonStyle(.bordered)
-            } else {
-                Button("Download") {
-                    Task {
-                        try? await modelManager.downloadModel(model)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
     }
 }
 

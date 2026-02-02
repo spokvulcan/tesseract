@@ -21,7 +21,7 @@ struct MainWindowView: View {
                 StatusHeader(
                     state: coordinator.state,
                     isModelLoaded: transcriptionEngine.isModelLoaded,
-                    modelName: transcriptionEngine.loadedModel?.displayName
+                    modelName: transcriptionEngine.isModelLoaded ? WhisperModel.displayName : nil
                 )
 
                 RecordingButtonView(

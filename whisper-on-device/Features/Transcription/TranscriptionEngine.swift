@@ -12,14 +12,14 @@ import CoreML
 final class TranscriptionEngine: ObservableObject {
     @Published private(set) var isModelLoaded = false
     @Published private(set) var isTranscribing = false
-    @Published private(set) var loadedModel: WhisperModel?
 
     private var whisperActor: WhisperActor?
     private var transcriptionTask: Task<TranscriptionResult, Error>?
 
     init() {}
 
-    func loadModel(_ model: WhisperModel, modelPath: URL? = nil) async throws {
+    /// Loads the bundled Whisper model from the specified path.
+    func loadModel(from modelPath: URL) async throws {
         // Unload existing model first
         if whisperActor != nil {
             unloadModel()
@@ -27,17 +27,15 @@ final class TranscriptionEngine: ObservableObject {
 
         // Create the actor and load model
         let actor = WhisperActor()
-        try await actor.loadModel(model, modelPath: modelPath)
+        try await actor.loadModel(from: modelPath)
 
         whisperActor = actor
         isModelLoaded = true
-        loadedModel = model
     }
 
     func unloadModel() {
         whisperActor = nil
         isModelLoaded = false
-        loadedModel = nil
     }
 
     func transcribe(_ audioData: AudioData) async throws -> TranscriptionResult {
@@ -66,7 +64,7 @@ final class TranscriptionEngine: ObservableObject {
 actor WhisperActor {
     private var whisperKit: WhisperKit?
 
-    func loadModel(_ model: WhisperModel, modelPath: URL?) async throws {
+    func loadModel(from modelPath: URL) async throws {
         // Configure compute units for each model component
         // GPU is faster for encoding, Neural Engine for decoding
         let computeOptions = ModelComputeOptions(
@@ -76,26 +74,14 @@ actor WhisperActor {
             prefillCompute: .cpuAndGPU
         )
 
-        // Build configuration
-        let config: WhisperKitConfig
-
-        if let modelPath = modelPath {
-            // Use already-downloaded model from local path
-            config = WhisperKitConfig(
-                modelFolder: modelPath.path,
-                computeOptions: computeOptions,
-                prewarm: true,
-                load: true,
-                download: false
-            )
-        } else {
-            // Download and load model
-            config = WhisperKitConfig(
-                model: model.rawValue,
-                computeOptions: computeOptions,
-                prewarm: true
-            )
-        }
+        // Load from bundled model path
+        let config = WhisperKitConfig(
+            modelFolder: modelPath.path,
+            computeOptions: computeOptions,
+            prewarm: true,
+            load: true,
+            download: false
+        )
 
         whisperKit = try await WhisperKit(config)
     }

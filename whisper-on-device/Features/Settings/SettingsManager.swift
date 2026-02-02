@@ -50,9 +50,7 @@ final class SettingsManager: ObservableObject {
 
     @AppStorage("silenceThreshold") var silenceThreshold: Double = 0.5
 
-    // MARK: - Model Settings
-
-    @AppStorage("selectedModel") var selectedModel: String = WhisperModel.base.rawValue
+    // MARK: - Language Settings
 
     @AppStorage("language") var language: String = "auto"
 
@@ -87,13 +85,6 @@ final class SettingsManager: ObservableObject {
 
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding = false
 
-    // MARK: - Computed Properties
-
-    var whisperModel: WhisperModel {
-        get { WhisperModel(rawValue: selectedModel) ?? .base }
-        set { selectedModel = newValue.rawValue }
-    }
-
     // MARK: - Methods
 
     func resetToDefaults() {
@@ -107,7 +98,6 @@ final class SettingsManager: ObservableObject {
         selectedMicrophoneUID = ""
         vadSensitivity = 0.5
         silenceThreshold = 0.5
-        selectedModel = WhisperModel.base.rawValue
         language = "auto"
         hotkeyKeyCode = Int(KeyCombo.optionSpace.keyCode)
         hotkeyModifiers = Int(KeyCombo.optionSpace.modifiers)

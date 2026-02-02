@@ -83,10 +83,16 @@ final class DependencyContainer: ObservableObject {
             }
             .store(in: &overlayCancellables)
 
-        // Load model if previously selected
-        if modelManager.isModelDownloaded(settingsManager.whisperModel) {
-            let modelPath = modelManager.getLocalModelPath(settingsManager.whisperModel)
-            try? await transcriptionEngine.loadModel(settingsManager.whisperModel, modelPath: modelPath)
+        // Load bundled model
+        if let modelPath = modelManager.getBundledModelPath() {
+            do {
+                try await transcriptionEngine.loadModel(from: modelPath)
+                print("Loaded bundled model from: \(modelPath.path)")
+            } catch {
+                print("Failed to load bundled model: \(error)")
+            }
+        } else {
+            print("Warning: Bundled model not found")
         }
 
         // Pre-warm audio engine to avoid CoreAudio warnings on first recording
