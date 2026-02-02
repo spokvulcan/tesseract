@@ -95,14 +95,16 @@ actor WhisperActor {
 
         let startTime = Date()
 
-        var options = DecodingOptions(
+        let options = DecodingOptions(
             task: .transcribe,
-            usePrefillPrompt: false,
+            language: language,
+            temperature: 0.0,                    // Greedy decoding for deterministic output
+            usePrefillPrompt: language != nil,   // Use prefill prompt when language is specified
             skipSpecialTokens: true,
             withoutTimestamps: false,
-            clipTimestamps: []
+            clipTimestamps: [],
+            noSpeechThreshold: 0.6               // Standard silence detection threshold
         )
-        options.language = language
 
         // Capture whisperKit in a local constant to satisfy concurrency checking
         let kit = whisperKit
