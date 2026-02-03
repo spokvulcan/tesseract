@@ -25,6 +25,8 @@ This document tracks what needs to be done to prepare the application for distri
 - [x] Privacy descriptions set (microphone, Apple Events)
 - [x] Version/build numbers set
 - [x] Whisper model bundled
+- [x] App icon added (all required sizes)
+- [x] App category set (`public.app-category.utilities`)
 
 ---
 
@@ -32,21 +34,7 @@ This document tracks what needs to be done to prepare the application for distri
 
 ### Required
 
-#### 1. App Icon
-The icon asset catalog is empty - no images exist.
-
-**Required sizes (1x and 2x for each):**
-- 16x16
-- 32x32
-- 128x128
-- 256x256
-- 512x512
-
-**Total: 10 PNG files**
-
-Location: `whisper-on-device/Assets.xcassets/AppIcon.appiconset/`
-
-#### 2. Code Signing for Distribution
+#### 1. Code Signing for Distribution
 
 Current signing identity is "Apple Development" which only works for local testing.
 
@@ -60,7 +48,7 @@ Current signing identity is "Apple Development" which only works for local testi
 - Subject to App Store review process
 - More restrictive sandboxing requirements
 
-#### 3. Notarization
+#### 2. Notarization
 
 Required for direct distribution. Apple must notarize the app for it to run on other Macs without Gatekeeper warnings.
 
@@ -88,7 +76,7 @@ xcrun notarytool submit build/export/WhisperOnDevice.app.zip \
 xcrun stapler staple build/export/WhisperOnDevice.app
 ```
 
-#### 4. Create Distribution Package
+#### 3. Create Distribution Package
 
 **DMG (recommended for direct distribution):**
 ```bash
@@ -105,7 +93,7 @@ create-dmg \
   "build/export/"
 ```
 
-#### 5. Testing on Clean Machine
+#### 4. Testing on Clean Machine
 
 - [ ] Test on a Mac without Xcode installed
 - [ ] Verify Accessibility permission prompt appears
@@ -126,14 +114,6 @@ Current product name: `whisper-on-device`
 Consider changing to: `WhisperOnDevice` or `Whisper`
 
 Set in Xcode: Target → General → Display Name
-
-#### App Category
-
-Set `LSApplicationCategoryType` in build settings for Finder/App Store categorization.
-
-Suggested values:
-- `public.app-category.productivity`
-- `public.app-category.utilities`
 
 #### Hardened Runtime
 

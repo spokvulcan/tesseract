@@ -15,6 +15,8 @@ final class OverlayPanelController {
     private var hostingView: NSHostingView<GlobalOverlayHUD>?
     private var cancellables = Set<AnyCancellable>()
     private var hideRequestID: UInt = 0
+    private var lastState: DictationState = .idle
+    private let bottomInset: CGFloat = 60
 
     /// Shared observable state for the SwiftUI view
     private let overlayState = OverlayState()
@@ -28,7 +30,9 @@ final class OverlayPanelController {
     /// Enable or disable this overlay controller
     func setEnabled(_ enabled: Bool) {
         isEnabled = enabled
-        if !enabled {
+        if enabled {
+            applyVisibility(for: lastState)
+        } else {
             hidePanel()
         }
     }
@@ -58,9 +62,11 @@ final class OverlayPanelController {
     }
 
     private func createPanel() {
+        let initialSize = panelSize(for: .idle)
+
         // Create borderless panel with the new smaller size
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 120, height: 32),
+            contentRect: NSRect(origin: .zero, size: initialSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -94,24 +100,27 @@ final class OverlayPanelController {
         self.hostingView = hostingView
 
         // Position at bottom center of main screen
-        positionPanel()
+        updatePanelFrame(for: .idle, animated: false)
 
         // Initially hidden
         panel.alphaValue = 0
     }
 
-    private func positionPanel() {
+    private func updatePanelFrame(for state: DictationState, animated: Bool) {
         guard let panel = panel,
               let screen = screenForOverlay() else { return }
 
         let screenFrame = screen.visibleFrame
-        let panelSize = panel.frame.size
+        let size = panelSize(for: state)
+        let x = screenFrame.midX - size.width / 2
+        let y = screenFrame.minY + bottomInset
+        let frame = NSRect(x: x, y: y, width: size.width, height: size.height)
 
-        // Bottom center, with some padding from bottom
-        let x = screenFrame.midX - panelSize.width / 2
-        let y = screenFrame.minY + 60  // 60pt from bottom
-
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        if animated {
+            panel.animator().setFrame(frame, display: false)
+        } else {
+            panel.setFrame(frame, display: false)
+        }
     }
 
     private func screenForOverlay() -> NSScreen? {
@@ -123,13 +132,16 @@ final class OverlayPanelController {
     }
 
     private func handleStateChange(_ state: DictationState) {
-        guard isEnabled else { return }
-
         // Update observable state (SwiftUI view will react automatically)
+        lastState = state
         overlayState.dictationState = state
+        guard isEnabled else { return }
+        applyVisibility(for: state)
+    }
 
+    private func applyVisibility(for state: DictationState) {
         switch state {
-        case .recording, .processing:
+        case .recording, .processing, .error:
             showPanel()
         default:
             hidePanel()
@@ -148,7 +160,7 @@ final class OverlayPanelController {
         hideRequestID &+= 1
 
         // Reposition in case screen changed
-        positionPanel()
+        updatePanelFrame(for: lastState, animated: true)
 
         panel.orderFrontRegardless()
 
@@ -175,5 +187,14 @@ final class OverlayPanelController {
                 panel?.orderOut(nil)
             }
         })
+    }
+
+    private func panelSize(for state: DictationState) -> CGSize {
+        switch state {
+        case .error:
+            return GlobalOverlayHUD.Metrics.errorSize
+        case .recording, .processing, .listening, .idle:
+            return GlobalOverlayHUD.Metrics.pillSize
+        }
     }
 }

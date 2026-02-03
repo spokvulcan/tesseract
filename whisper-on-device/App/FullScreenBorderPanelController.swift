@@ -15,6 +15,7 @@ final class FullScreenBorderPanelController {
     private var hostingView: NSHostingView<FullScreenBorderOverlayView>?
     private var cancellables = Set<AnyCancellable>()
     private var hideRequestID: UInt = 0
+    private var lastState: DictationState = .idle
 
     /// Shared observable state for the SwiftUI view
     private let overlayState = OverlayState()
@@ -52,7 +53,9 @@ final class FullScreenBorderPanelController {
     /// Enable or disable this overlay controller
     func setEnabled(_ enabled: Bool) {
         isEnabled = enabled
-        if !enabled {
+        if enabled {
+            applyVisibility(for: lastState)
+        } else {
             hidePanel()
         }
     }
@@ -111,13 +114,16 @@ final class FullScreenBorderPanelController {
     }
 
     private func handleStateChange(_ state: DictationState) {
-        guard isEnabled else { return }
-
         // Update observable state (SwiftUI view will react automatically)
+        lastState = state
         overlayState.dictationState = state
         // Also update theme in case it changed
         overlayState.glowTheme = settings.glowTheme
+        guard isEnabled else { return }
+        applyVisibility(for: state)
+    }
 
+    private func applyVisibility(for state: DictationState) {
         switch state {
         case .recording, .processing, .error:
             showPanel()

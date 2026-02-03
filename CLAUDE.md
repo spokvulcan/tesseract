@@ -19,6 +19,10 @@ xcodebuild build -project whisper-on-device.xcodeproj -scheme whisper-on-device
 
 # Run tests (not needed during MVP development)
 xcodebuild test -project whisper-on-device.xcodeproj -scheme whisper-on-device
+
+# Clean build cache
+xcodebuild clean -project whisper-on-device.xcodeproj -scheme whisper-on-device
+rm -rf ~/Library/Developer/Xcode/DerivedData/whisper-on-device-*
 ```
 
 Tests use Swift's `Testing` framework (not XCTest). Test files are in `whisper-on-deviceTests/`.
