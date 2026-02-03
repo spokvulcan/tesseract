@@ -1,4 +1,4 @@
-# WhisperOnDevice Distribution Checklist
+# Tesseract Distribution Checklist
 
 This document tracks what needs to be done to prepare the application for distribution.
 
@@ -8,7 +8,7 @@ This document tracks what needs to be done to prepare the application for distri
 
 | Setting | Value |
 |---------|-------|
-| Bundle Identifier | `tesseract.whisper-on-device` |
+| Bundle Identifier | `com.tesseract.app` |
 | Version | 1.0 |
 | Build | 1 |
 | Development Team | Configured |
@@ -105,25 +105,25 @@ Required for direct distribution. Apple must notarize the app for it to run on o
 ```bash
 # 1. Archive the app
 xcodebuild archive \
-  -project whisper-on-device.xcodeproj \
-  -scheme whisper-on-device \
-  -archivePath build/WhisperOnDevice.xcarchive
+  -project tesseract.xcodeproj \
+  -scheme tesseract \
+  -archivePath build/Tesseract.xcarchive
 
 # 2. Export the archive
 xcodebuild -exportArchive \
-  -archivePath build/WhisperOnDevice.xcarchive \
+  -archivePath build/Tesseract.xcarchive \
   -exportPath build/export \
   -exportOptionsPlist ExportOptions.plist
 
 # 3. Notarize
-xcrun notarytool submit build/export/WhisperOnDevice.app.zip \
+xcrun notarytool submit build/export/Tesseract.app.zip \
   --apple-id YOUR_APPLE_ID \
   --team-id YOUR_TEAM_ID \
   --password APP_SPECIFIC_PASSWORD \
   --wait
 
 # 4. Staple the notarization ticket
-xcrun stapler staple build/export/WhisperOnDevice.app
+xcrun stapler staple build/export/Tesseract.app
 ```
 
 #### 3. Create Distribution Package
@@ -132,14 +132,14 @@ xcrun stapler staple build/export/WhisperOnDevice.app
 ```bash
 # Using create-dmg (brew install create-dmg)
 create-dmg \
-  --volname "WhisperOnDevice" \
+  --volname "Tesseract" \
   --volicon "path/to/icon.icns" \
   --window-pos 200 120 \
   --window-size 600 400 \
   --icon-size 100 \
-  --icon "WhisperOnDevice.app" 150 190 \
+  --icon "Tesseract.app" 150 190 \
   --app-drop-link 450 190 \
-  "WhisperOnDevice-1.0.dmg" \
+  "Tesseract-1.0.dmg" \
   "build/export/"
 ```
 
@@ -149,9 +149,7 @@ create-dmg \
 
 #### App Display Name
 
-Current product name: `whisper-on-device`
-
-Consider changing to: `WhisperOnDevice` or `Whisper`
+Current product name: `tesseract`
 
 Set in Xcode: Target → General → Display Name
 

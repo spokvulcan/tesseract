@@ -2,7 +2,7 @@
 
 ## App Name
 
-WhisperOnDevice
+Tesseract
 
 ## Subtitle (30 chars max)
 
@@ -10,11 +10,11 @@ Offline push-to-talk dictation
 
 ## Promotional Text (170 chars max)
 
-Dictate anywhere on your Mac. WhisperOnDevice transcribes on-device with Whisper and types into your active app. No accounts. No cloud. Just press the hotkey and speak.
+Dictate anywhere on your Mac. Tesseract transcribes on-device with Whisper and types into your active app. No accounts. No cloud. Just press the hotkey and speak.
 
 ## Description
 
-WhisperOnDevice is a privacy-first dictation app for macOS. Press and hold a hotkey, speak, and release to transcribe. Your words are processed entirely on-device with Whisper and typed directly into whatever app you're using.
+Tesseract is a privacy-first dictation app for macOS. Press and hold a hotkey, speak, and release to transcribe. Your words are processed entirely on-device with Whisper and typed directly into whatever app you're using.
 
 Features:
 - 100% offline transcription with WhisperKit (Core ML)
@@ -48,7 +48,7 @@ Secondary (optional): Utilities
 
 ## App Review Notes
 
-WhisperOnDevice uses:
+Tesseract uses:
 - Microphone access for recording dictation.
 - Accessibility permission to capture the global hotkey and to simulate paste into the active app.
 

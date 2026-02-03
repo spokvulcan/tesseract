@@ -1,4 +1,4 @@
-# WhisperOnDevice
+# Tesseract
 
 A privacy-first dictation app for macOS that transcribes your voice entirely on-device. Press a hotkey to record, release to transcribe, and the text is automatically typed into whatever app you're using.
 

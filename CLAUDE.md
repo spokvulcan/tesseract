@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-WhisperOnDevice is a privacy-focused, offline voice-to-text dictation app for macOS. It captures audio via push-to-talk, transcribes locally using WhisperKit, and injects text into any focused application.
+Tesseract is a privacy-focused, offline voice-to-text dictation app for macOS. It captures audio via push-to-talk, transcribes locally using WhisperKit, and injects text into any focused application.
 
 - **Platform**: macOS 26+ (Apple Silicon only)
 - **Framework**: Swift 6.2 / SwiftUI
@@ -15,17 +15,17 @@ WhisperOnDevice is a privacy-focused, offline voice-to-text dictation app for ma
 
 ```bash
 # Build
-xcodebuild build -project whisper-on-device.xcodeproj -scheme whisper-on-device
+xcodebuild build -project tesseract.xcodeproj -scheme tesseract
 
 # Run tests (not needed during MVP development)
-xcodebuild test -project whisper-on-device.xcodeproj -scheme whisper-on-device
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract
 
 # Clean build cache
-xcodebuild clean -project whisper-on-device.xcodeproj -scheme whisper-on-device
-rm -rf ~/Library/Developer/Xcode/DerivedData/whisper-on-device-*
+xcodebuild clean -project tesseract.xcodeproj -scheme tesseract
+rm -rf ~/Library/Developer/Xcode/DerivedData/tesseract-*
 ```
 
-Tests use Swift's `Testing` framework (not XCTest). Test files are in `whisper-on-deviceTests/`.
+Tests use Swift's `Testing` framework (not XCTest). Test files are in `tesseractTests/`.
 
 **Note**: Tests are not required during the current MVP development phase. Focus on build verification only.
 
@@ -34,7 +34,7 @@ Tests use Swift's `Testing` framework (not XCTest). Test files are in `whisper-o
 ### Code Organization
 
 ```
-whisper-on-device/
+tesseract/
 ├── App/                    # Entry point, AppDelegate, MenuBarManager, DependencyContainer
 ├── Core/
 │   ├── Audio/              # AudioCaptureEngine, AudioDeviceManager, AudioConverter
@@ -68,7 +68,7 @@ Uses clipboard-based injection (copy → simulate Cmd+V → restore) instead of 
 
 ## Key Configuration
 
-### Entitlements (`whisper-on-device.entitlements`)
+### Entitlements (`tesseract.entitlements`)
 - `com.apple.security.app-sandbox` - sandboxed app
 - `com.apple.security.device.audio-input` - microphone access
 - `com.apple.security.network.client` - model downloads

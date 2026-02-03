@@ -1,6 +1,6 @@
-# WhisperOnDevice Architecture
+# Tesseract Architecture
 
-This document describes the architecture of WhisperOnDevice, a privacy-focused, offline voice-to-text dictation app for macOS.
+This document describes the architecture of Tesseract, a privacy-focused, offline voice-to-text dictation app for macOS.
 
 For development guidelines and build commands, see [CLAUDE.md](./CLAUDE.md).
 
@@ -8,7 +8,7 @@ For development guidelines and build commands, see [CLAUDE.md](./CLAUDE.md).
 
 ## Overview
 
-WhisperOnDevice captures audio via push-to-talk, transcribes locally using WhisperKit (CoreML-based), and injects text into any focused application. All processing happens on-device with no network requests for transcription.
+Tesseract captures audio via push-to-talk, transcribes locally using WhisperKit (CoreML-based), and injects text into any focused application. All processing happens on-device with no network requests for transcription.
 
 **Key Principles:**
 - Privacy-first: No audio data leaves the device
@@ -22,7 +22,7 @@ WhisperOnDevice captures audio via push-to-talk, transcribes locally using Whisp
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        WhisperOnDevice                          │
+│                          Tesseract                              │
 ├─────────────────────────────────────────────────────────────────┤
 │  App Layer                                                      │
 │  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
@@ -59,9 +59,9 @@ WhisperOnDevice captures audio via push-to-talk, transcribes locally using Whisp
 ## Directory Structure
 
 ```
-whisper-on-device/
+tesseract/
 ├── App/                         # Application lifecycle
-│   ├── WhisperOnDeviceApp.swift # SwiftUI App entry point
+│   ├── TesseractApp.swift       # SwiftUI App entry point
 │   ├── AppDelegate.swift        # macOS lifecycle, single instance
 │   ├── DependencyContainer.swift# Service instantiation & wiring
 │   ├── MenuBarManager.swift     # Status bar menu
@@ -305,7 +305,7 @@ Uses `@AppStorage` for UserDefaults persistence:
 
 JSON file persistence:
 
-- Location: `~/Library/Application Support/WhisperOnDevice/transcription_history.json`
+- Location: `~/Library/Application Support/Tesseract/transcription_history.json`
 - Stores up to 100 entries (configurable)
 - Auto-prunes oldest entries
 
