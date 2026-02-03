@@ -193,8 +193,10 @@ final class OverlayPanelController {
         switch state {
         case .error:
             return GlobalOverlayHUD.Metrics.errorSize
-        case .recording, .processing, .listening, .idle:
-            return GlobalOverlayHUD.Metrics.pillSize
+        case .processing:
+            return GlobalOverlayHUD.Metrics.processingSize
+        case .recording, .listening, .idle:
+            return GlobalOverlayHUD.Metrics.recordingSize
         }
     }
 }

@@ -140,6 +140,10 @@ struct CompactLanguagePickerView: View {
     @Binding var selectedLanguage: String
     @State private var searchText = ""
 
+    private var currentLanguage: SupportedLanguage? {
+        SupportedLanguage.language(forCode: selectedLanguage)
+    }
+
     private var filteredLanguages: [SupportedLanguage] {
         if searchText.isEmpty {
             return SupportedLanguage.all
@@ -154,6 +158,32 @@ struct CompactLanguagePickerView: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            if let currentLanguage {
+                HStack {
+                    Text("Selected language")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    HStack(spacing: 6) {
+                        Text(currentLanguage.flag)
+                            .font(.callout)
+                        Text(currentLanguage.name)
+                            .font(.callout)
+                            .fontWeight(.medium)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.accentColor.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.accentColor.opacity(0.35), lineWidth: 1)
+                    )
+                }
+            }
+
             // Search field
             HStack {
                 Image(systemName: "magnifyingglass")

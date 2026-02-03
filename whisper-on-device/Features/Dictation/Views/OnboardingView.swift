@@ -3,6 +3,7 @@
 //  whisper-on-device
 //
 
+import AppKit
 import SwiftUI
 
 struct OnboardingView: View {
@@ -34,13 +35,9 @@ struct OnboardingView: View {
                 .foregroundStyle(.secondary)
                 .padding(.top, 8)
 
-            // Scrollable content area
-            ScrollView {
-                VStack {
-                    stepContent
-                        .frame(maxWidth: .infinity)
-                }
-                .padding()
+            OnboardingStepLayout {
+                stepContent
+                    .frame(maxWidth: .infinity)
             }
 
             Divider()
@@ -74,7 +71,7 @@ struct OnboardingView: View {
             }
             .padding()
         }
-        .frame(width: 550, height: 500)
+        .frame(width: 550, height: 620)
         .background(.thickMaterial)
     }
 
@@ -124,16 +121,43 @@ struct OnboardingView: View {
     }
 }
 
+private struct OnboardingStepLayout<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            VStack(spacing: 0) {
+                Spacer(minLength: 12)
+                content
+                Spacer(minLength: 12)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 20)
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    content
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 20)
+            }
+            .scrollIndicators(.visible)
+        }
+    }
+}
+
 // MARK: - Welcome Step Content
 
 struct WelcomeStepContent: View {
     var body: some View {
         VStack(spacing: 24) {
-            Spacer(minLength: 20)
-
-            Image(systemName: "waveform.circle.fill")
-                .font(.system(size: 80))
-                .foregroundStyle(.tint)
+            AppIconView(size: 84)
 
             Text("Welcome to WhisperOnDevice")
                 .font(.largeTitle)
@@ -152,9 +176,20 @@ struct WelcomeStepContent: View {
                 FeatureRow(icon: "keyboard", title: "Push-to-Talk", description: "Simple hotkey to start dictating")
             }
             .padding(.top, 12)
-
-            Spacer(minLength: 20)
         }
+    }
+}
+
+struct AppIconView: View {
+    let size: CGFloat
+
+    var body: some View {
+        Image(nsImage: NSApp.applicationIconImage)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
     }
 }
 
@@ -188,8 +223,6 @@ struct LanguageSelectionStepContent: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            Spacer(minLength: 20)
-
             Image(systemName: "globe")
                 .font(.system(size: 60))
                 .foregroundStyle(.tint)
@@ -206,8 +239,6 @@ struct LanguageSelectionStepContent: View {
 
             CompactLanguagePickerView(selectedLanguage: $settings.language)
                 .padding(.horizontal, 20)
-
-            Spacer(minLength: 20)
         }
     }
 }
@@ -219,8 +250,6 @@ struct MicrophonePermissionStepContent: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Spacer(minLength: 20)
-
             Image(systemName: "mic.circle.fill")
                 .font(.system(size: 60))
                 .foregroundStyle(permissionColor)
@@ -235,11 +264,7 @@ struct MicrophonePermissionStepContent: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 20)
 
-            Spacer(minLength: 20)
-
             permissionContent
-
-            Spacer(minLength: 20)
         }
     }
 
@@ -300,8 +325,6 @@ struct AccessibilityPermissionStepContent: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Spacer(minLength: 20)
-
             Image(systemName: "hand.raised.circle.fill")
                 .font(.system(size: 60))
                 .foregroundStyle(permissionColor)
@@ -316,11 +339,7 @@ struct AccessibilityPermissionStepContent: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 20)
 
-            Spacer(minLength: 20)
-
             permissionContent
-
-            Spacer(minLength: 20)
         }
         .onAppear {
             permissionsManager.checkAccessibilityPermission()
@@ -390,8 +409,6 @@ struct ReadyStepContent: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Spacer(minLength: 20)
-
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 80))
                 .foregroundStyle(.green)
@@ -430,8 +447,6 @@ struct ReadyStepContent: View {
                 )
             }
             .padding(.horizontal, 20)
-
-            Spacer(minLength: 20)
         }
     }
 }

@@ -16,7 +16,8 @@ struct GlobalOverlayHUD: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Metrics {
-        static let pillSize = CGSize(width: 120, height: 32)
+        static let recordingSize = CGSize(width: 120, height: 32)
+        static let processingSize = CGSize(width: 112, height: 34)
         static let errorSize = CGSize(width: 260, height: 44)
     }
 
@@ -79,13 +80,35 @@ struct GlobalOverlayHUD: View {
     }
 
     private var processingView: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 120.0)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
+        Group {
+            if reduceMotion {
+                pillContainer(style: .processing, time: nil) {
+                    processingContent(time: nil)
+                }
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+                    let time = timeline.date.timeIntervalSinceReferenceDate
 
-            pillContainer(style: .processing, time: time) {
-                ProcessingDotsView(time: time)
+                    pillContainer(style: .processing, time: time) {
+                        processingContent(time: time)
+                    }
+                }
             }
         }
+    }
+
+    private func processingContent(time: TimeInterval?) -> some View {
+        HStack(spacing: 8) {
+            if let time {
+                ProcessingDotsView(time: time)
+                    .frame(height: 12)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     private var errorView: some View {
@@ -149,8 +172,10 @@ struct GlobalOverlayHUD: View {
         switch style {
         case .error:
             return Metrics.errorSize
-        case .recording, .processing:
-            return Metrics.pillSize
+        case .recording:
+            return Metrics.recordingSize
+        case .processing:
+            return Metrics.processingSize
         }
     }
 

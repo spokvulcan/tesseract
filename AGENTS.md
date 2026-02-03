@@ -15,6 +15,10 @@
 - `xcodebuild test -project whisper-on-device.xcodeproj -scheme whisper-on-device` runs tests (currently optional during MVP development).
 - `open whisper-on-device.xcodeproj` opens the project in Xcode.
 
+## Build Verification Requirement
+- Always run `xcodebuild build -project whisper-on-device.xcodeproj -scheme whisper-on-device` after any code change.
+- If the build fails, fix the errors before replying. Do not leave build errors unresolved.
+
 ## Coding Style & Naming Conventions
 - Swift 6.2 + SwiftUI; follow Xcode’s default formatting (4-space indentation).
 - Type names use UpperCamelCase; properties and functions use lowerCamelCase.
