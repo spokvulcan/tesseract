@@ -1,0 +1,74 @@
+{
+  "version": "2.6",
+  "children": [
+    {
+      "type": "frame",
+      "id": "xh2pr",
+      "x": 0,
+      "y": 0,
+      "name": "Tesseract Icon",
+      "width": 512,
+      "height": 512,
+      "layout": "none",
+      "children": [
+        {
+          "type": "rectangle",
+          "cornerRadius": 114,
+          "id": "KrwqH",
+          "x": 0,
+          "y": 0,
+          "name": "Background",
+          "fill": "#121212",
+          "width": 512,
+          "height": 512
+        },
+        {
+          "type": "path",
+          "id": "3sjsQ",
+          "x": 126.0962,
+          "y": 106,
+          "name": "Hollow Hexagon Ring (Perfect)",
+          "geometry": "M129.9038 0l129.9038 75 0 150-129.9038 75-129.9038-75 0-150z m0 40l-95.2627 55 0 110 95.2627 55 95.2627-55 0-110z",
+          "fillRule": "evenodd",
+          "fill": "#C0C0C0",
+          "width": 259.8076,
+          "height": 300
+        },
+        {
+          "type": "path",
+          "id": "2T4gb",
+          "x": 186.72,
+          "y": 176,
+          "name": "Cube Top",
+          "geometry": "M69.28 80l69.28-40-69.28-40-69.28 40z",
+          "fill": "#FFFFFF",
+          "width": 138.56,
+          "height": 80
+        },
+        {
+          "type": "path",
+          "id": "COpsy",
+          "x": 186.608616581926,
+          "y": 216.06444335346498,
+          "name": "Cube Left",
+          "rotation": 0.10642044956664377,
+          "geometry": "M69.28 40l-69.28-40 0 80 69.28 40z",
+          "fill": "#A0A0A0",
+          "width": 69.28,
+          "height": 120
+        },
+        {
+          "type": "path",
+          "id": "97Vm4",
+          "x": 256,
+          "y": 216,
+          "name": "Cube Right",
+          "geometry": "M0 40l0 80 69.28-40 0-80z",
+          "fill": "#707070",
+          "width": 69.28,
+          "height": 120
+        }
+      ]
+    }
+  ]
+}
