@@ -14,6 +14,15 @@ This document tracks what needs to be done to prepare the application for distri
 | Development Team | Configured |
 | Code Signing | Automatic (Apple Development) |
 | Minimum macOS | 26 (Tahoe) |
+| Entitlements | App Sandbox, Audio Input (Microphone) |
+| Privacy Usage Strings | NSMicrophoneUsageDescription |
+
+---
+
+## Entitlements and Privacy Notes
+
+- The app does not currently use Apple Events, so no Apple Events usage string or automation entitlements are included.
+- The app does not use outbound networking or user-selected file access. If those are added later, update entitlements accordingly.
 
 ---
 
@@ -21,32 +30,73 @@ This document tracks what needs to be done to prepare the application for distri
 
 - [x] Bundle identifier set
 - [x] Development team configured
-- [x] Entitlements configured (sandbox, microphone, network, file access)
-- [x] Privacy descriptions set (microphone, Apple Events)
+- [x] Entitlements configured (sandbox, microphone)
+- [x] Privacy description set (microphone)
 - [x] Version/build numbers set
 - [x] Whisper model bundled
 - [x] App icon added (all required sizes)
-- [x] App category set (`public.app-category.utilities`)
+- [x] App category set (`public.app-category.productivity`)
 
 ---
 
 ## Needs to Be Done
 
-### Required
+### Required for Mac App Store
 
-#### 1. Code Signing for Distribution
+#### 1. Code Signing for App Store
 
 Current signing identity is "Apple Development" which only works for local testing.
 
-**For direct distribution (outside App Store):**
-- Need "Developer ID Application" certificate
-- Requires paid Apple Developer Program ($99/year)
-- Generate at: https://developer.apple.com/account/resources/certificates
+- Create an **Apple Distribution** certificate
+- Create a **Mac App Store** provisioning profile
+- Update target signing to use Apple Distribution (Automatic is OK once the cert/profile exist)
 
-**For Mac App Store:**
-- Need "Apple Distribution" certificate
-- Subject to App Store review process
-- More restrictive sandboxing requirements
+#### 2. App Store Connect Setup
+
+- Create the app record (bundle ID, SKU, name, primary language)
+- Configure pricing, availability, and age rating
+- Complete App Privacy (data collection/usage) and Export Compliance
+
+#### 3. App Store Metadata and Assets
+
+- Fill in description, subtitle, keywords, and promotional text
+- Provide support URL and privacy policy URL
+- Add screenshots and app preview if desired
+
+Draft copy lives in `APP_STORE_METADATA.md`.
+
+#### 4. Archive and Upload
+
+- Archive with **Release** configuration
+- Upload from Xcode Organizer to App Store Connect
+- Confirm the build appears in App Store Connect
+
+#### 5. TestFlight (Recommended)
+
+- Run an internal TestFlight build to verify entitlements, permissions, and onboarding
+
+#### 6. App Review Submission
+
+- Provide review notes (permissions + hotkey flow)
+- Submit once metadata and build are complete
+
+#### 7. Pre-Submission Testing
+
+- [ ] Test on a Mac without Xcode installed
+- [ ] Verify Accessibility permission prompt appears
+- [ ] Verify Microphone permission prompt appears
+- [ ] Verify model loads correctly from bundle
+- [ ] Test push-to-talk recording flow
+- [ ] Test text injection into various apps (Notes, TextEdit, browser)
+- [ ] Test menu bar functionality
+- [ ] Test settings persistence
+
+### Direct Distribution (Optional)
+
+#### 1. Developer ID Signing
+
+- Create "Developer ID Application" certificate
+- Requires paid Apple Developer Program
 
 #### 2. Notarization
 
@@ -93,22 +143,12 @@ create-dmg \
   "build/export/"
 ```
 
-#### 4. Testing on Clean Machine
-
-- [ ] Test on a Mac without Xcode installed
-- [ ] Verify Accessibility permission prompt appears
-- [ ] Verify Microphone permission prompt appears
-- [ ] Verify model loads correctly from bundle
-- [ ] Test push-to-talk recording flow
-- [ ] Test text injection into various apps (Notes, TextEdit, browser)
-- [ ] Test menu bar functionality
-- [ ] Test settings persistence
-
 ---
 
 ### Optional / Nice-to-Have
 
 #### App Display Name
+
 Current product name: `whisper-on-device`
 
 Consider changing to: `WhisperOnDevice` or `Whisper`
@@ -127,6 +167,7 @@ Already enabled via sandbox, but verify these options:
 ## Distribution Channels
 
 ### Option A: Direct Distribution (Recommended for MVP)
+
 1. Sign with Developer ID
 2. Notarize with Apple
 3. Distribute via website/GitHub Releases as DMG
@@ -135,9 +176,10 @@ Already enabled via sandbox, but verify these options:
 **Cons:** Users see "downloaded from internet" warning on first launch
 
 ### Option B: Mac App Store
+
 1. Sign with Apple Distribution certificate
-2. Submit for App Store review
-3. Distribute via Mac App Store
+2. Upload build to App Store Connect
+3. Submit for App Store review
 
 **Pros:** Trusted source, automatic updates, wider reach
 **Cons:** Review delays, revenue share (15-30%), stricter sandboxing
@@ -150,11 +192,13 @@ Already enabled via sandbox, but verify these options:
 - [ ] Update `CURRENT_PROJECT_VERSION` (increment build number)
 - [ ] Test all features
 - [ ] Archive with Release configuration
+- [ ] Upload build to App Store Connect
+- [ ] Submit for review
+
+**Direct distribution only:**
 - [ ] Notarize
 - [ ] Create DMG
 - [ ] Test DMG installation on clean Mac
-- [ ] Update release notes
-- [ ] Tag release in git
 
 ---
 
