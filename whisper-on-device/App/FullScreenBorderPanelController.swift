@@ -14,6 +14,7 @@ final class FullScreenBorderPanelController {
     private var panel: NSPanel?
     private var hostingView: NSHostingView<FullScreenBorderOverlayView>?
     private var cancellables = Set<AnyCancellable>()
+    private var hideRequestID: UInt = 0
 
     /// Shared observable state for the SwiftUI view
     private let overlayState = OverlayState()
@@ -57,7 +58,7 @@ final class FullScreenBorderPanelController {
     }
 
     private func createPanel() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = screenForOverlay() else { return }
 
         // Create full-screen borderless panel
         let panel = NSPanel(
@@ -101,6 +102,14 @@ final class FullScreenBorderPanelController {
         panel.alphaValue = 0
     }
 
+    private func screenForOverlay() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) {
+            return screen
+        }
+        return NSScreen.main ?? NSScreen.screens.first
+    }
+
     private func handleStateChange(_ state: DictationState) {
         guard isEnabled else { return }
 
@@ -126,13 +135,14 @@ final class FullScreenBorderPanelController {
 
     private func showPanel() {
         guard let panel = panel else { return }
+        hideRequestID &+= 1
 
         // Reposition to fill main screen in case it changed
-        if let screen = NSScreen.main {
+        if let screen = screenForOverlay() {
             panel.setFrame(screen.frame, display: false)
         }
 
-        panel.orderFront(nil)
+        panel.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25
@@ -143,6 +153,8 @@ final class FullScreenBorderPanelController {
 
     private func hidePanel() {
         guard let panel = panel else { return }
+        hideRequestID &+= 1
+        let requestID = hideRequestID
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
@@ -151,6 +163,7 @@ final class FullScreenBorderPanelController {
         }, completionHandler: {
             // Ensure orderOut is called on MainActor
             Task { @MainActor [weak panel] in
+                guard requestID == self.hideRequestID else { return }
                 panel?.orderOut(nil)
             }
         })

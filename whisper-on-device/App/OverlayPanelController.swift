@@ -14,6 +14,7 @@ final class OverlayPanelController {
     private var panel: NSPanel?
     private var hostingView: NSHostingView<GlobalOverlayHUD>?
     private var cancellables = Set<AnyCancellable>()
+    private var hideRequestID: UInt = 0
 
     /// Shared observable state for the SwiftUI view
     private let overlayState = OverlayState()
@@ -101,7 +102,7 @@ final class OverlayPanelController {
 
     private func positionPanel() {
         guard let panel = panel,
-              let screen = NSScreen.main else { return }
+              let screen = screenForOverlay() else { return }
 
         let screenFrame = screen.visibleFrame
         let panelSize = panel.frame.size
@@ -111,6 +112,14 @@ final class OverlayPanelController {
         let y = screenFrame.minY + 60  // 60pt from bottom
 
         panel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    private func screenForOverlay() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) {
+            return screen
+        }
+        return NSScreen.main ?? NSScreen.screens.first
     }
 
     private func handleStateChange(_ state: DictationState) {
@@ -136,11 +145,12 @@ final class OverlayPanelController {
 
     private func showPanel() {
         guard let panel = panel else { return }
+        hideRequestID &+= 1
 
         // Reposition in case screen changed
         positionPanel()
 
-        panel.orderFront(nil)
+        panel.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25
@@ -151,6 +161,8 @@ final class OverlayPanelController {
 
     private func hidePanel() {
         guard let panel = panel else { return }
+        hideRequestID &+= 1
+        let requestID = hideRequestID
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
@@ -159,6 +171,7 @@ final class OverlayPanelController {
         }, completionHandler: {
             // Ensure orderOut is called on MainActor
             Task { @MainActor [weak panel] in
+                guard requestID == self.hideRequestID else { return }
                 panel?.orderOut(nil)
             }
         })
