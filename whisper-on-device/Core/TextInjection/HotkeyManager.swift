@@ -98,8 +98,7 @@ final class HotkeyManager: ObservableObject {
                 let hotkeyKeyCode = manager.currentHotkey.keyCode
                 let hotkeyModifiers = NSEvent.ModifierFlags(rawValue: manager.currentHotkey.modifiers)
 
-                // Filter to only relevant modifiers for comparison (consistent on both sides)
-                let relevantModifiers: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+                let relevantModifiers = manager.relevantModifiers()
                 let currentRelevant = modifiers.intersection(relevantModifiers)
                 let hotkeyRelevant = hotkeyModifiers.intersection(relevantModifiers)
 
@@ -231,7 +230,8 @@ final class HotkeyManager: ObservableObject {
         let keyCode = event.keyCode
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift, .function])
         let targetModifiers = NSEvent.ModifierFlags(rawValue: currentHotkey.modifiers)
-        let relevantTargetModifiers = targetModifiers.intersection([.command, .option, .control, .shift])
+        let relevantModifiers = relevantModifiers()
+        let relevantTargetModifiers = targetModifiers.intersection(relevantModifiers)
 
         // When engaged, check for any release that should stop recording
         if isHotkeyPressed {
@@ -244,7 +244,7 @@ final class HotkeyManager: ObservableObject {
 
             // Modifier released (via flagsChanged)
             if event.type == .flagsChanged {
-                let currentRelevant = modifiers.intersection([.command, .option, .control, .shift])
+                let currentRelevant = modifiers.intersection(relevantModifiers)
                 if !currentRelevant.contains(relevantTargetModifiers) {
                     isHotkeyPressed = false
                     onHotkeyUp?()
@@ -267,7 +267,7 @@ final class HotkeyManager: ObservableObject {
 
         // Hotkey down detection (requires exact match)
         guard keyCode == currentHotkey.keyCode,
-              modifiers.rawValue == currentHotkey.modifiers else {
+              modifiers.intersection(relevantModifiers) == relevantTargetModifiers else {
             return
         }
 
@@ -296,12 +296,22 @@ final class HotkeyManager: ObservableObject {
         return await withCheckedContinuation { continuation in
             var hasResumed = false
             var monitor: Any?
+            let shouldResumeListening = isListening
+
+            if shouldResumeListening {
+                stopListening()
+            }
 
             func finish(_ result: KeyCombo?) {
                 guard !hasResumed else { return }
                 hasResumed = true
                 if let monitor {
                     NSEvent.removeMonitor(monitor)
+                }
+                if shouldResumeListening {
+                    Task { @MainActor in
+                        self.startListening()
+                    }
                 }
                 continuation.resume(returning: result)
             }
@@ -326,5 +336,14 @@ final class HotkeyManager: ObservableObject {
                 finish(nil)
             }
         }
+    }
+
+    func updateHotkey(_ combo: KeyCombo) {
+        currentHotkey = combo
+        isHotkeyPressed = false
+    }
+
+    private func relevantModifiers() -> NSEvent.ModifierFlags {
+        [.command, .option, .control, .shift, .function]
     }
 }

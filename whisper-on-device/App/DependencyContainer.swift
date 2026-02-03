@@ -29,7 +29,7 @@ final class DependencyContainer: ObservableObject {
     // Overlays
     lazy var overlayPanelController = OverlayPanelController()
     lazy var fullScreenBorderController = FullScreenBorderPanelController()
-    private var overlayCancellables = Set<AnyCancellable>()
+    private var settingsCancellables = Set<AnyCancellable>()
 
     // Coordinator
     lazy var dictationCoordinator: DictationCoordinator = {
@@ -59,6 +59,7 @@ final class DependencyContainer: ObservableObject {
             self?.dictationCoordinator.onHotkeyUp()
         }
         hotkeyManager.startListening()
+        startSettingsObservation()
 
         // Setup overlay panels
         overlayPanelController.setup(
@@ -81,7 +82,7 @@ final class DependencyContainer: ObservableObject {
             .sink { [weak self] _ in
                 self?.updateActiveOverlay()
             }
-            .store(in: &overlayCancellables)
+            .store(in: &settingsCancellables)
 
         // Load bundled model
         if let modelPath = modelManager.getBundledModelPath() {
@@ -106,5 +107,18 @@ final class DependencyContainer: ObservableObject {
             overlayPanelController.setEnabled(false)
             fullScreenBorderController.setEnabled(true)
         }
+    }
+
+    private func startSettingsObservation() {
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                let newHotkey = settingsManager.hotkey
+                if newHotkey != hotkeyManager.currentHotkey {
+                    hotkeyManager.updateHotkey(newHotkey)
+                }
+            }
+            .store(in: &settingsCancellables)
     }
 }

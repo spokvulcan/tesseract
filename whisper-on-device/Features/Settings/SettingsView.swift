@@ -250,6 +250,13 @@ struct RecordingSettingsSection: View {
                     .buttonStyle(.bordered)
                     .accessibilityHint(isRecordingHotkey ? "Cancel recording new hotkey" : "Record a new push-to-talk hotkey")
                 }
+
+                if settings.hotkey.modifierFlags.contains(.function) {
+                    Text("Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section("Duration") {
