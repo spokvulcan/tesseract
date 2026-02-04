@@ -16,6 +16,7 @@ final class FullScreenBorderPanelController {
     private var cancellables = Set<AnyCancellable>()
     private var hideRequestID: UInt = 0
     private var lastState: DictationState = .idle
+    private var visibilityCheckTask: Task<Void, Never>?
 
     /// Shared observable state for the SwiftUI view
     private let overlayState = OverlayState()
@@ -32,6 +33,7 @@ final class FullScreenBorderPanelController {
         audioLevelPublisher: Published<Float>.Publisher
     ) {
         createPanel()
+        startScreenObservation()
 
         // Subscribe to state changes
         statePublisher
@@ -61,7 +63,7 @@ final class FullScreenBorderPanelController {
     }
 
     private func createPanel() {
-        guard let screen = screenForOverlay() else { return }
+        guard let screen = OverlayScreenLocator.preferredScreen() else { return }
 
         // Create full-screen borderless panel
         let panel = NSPanel(
@@ -72,13 +74,13 @@ final class FullScreenBorderPanelController {
         )
 
         // Configure for global overlay behavior
-        panel.level = .floating
+        panel.level = .statusBar
         panel.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
-            .stationary,
             .ignoresCycle
         ]
+        panel.isReleasedWhenClosed = false
 
         // Non-interactive, transparent (click-through)
         panel.ignoresMouseEvents = true
@@ -105,14 +107,6 @@ final class FullScreenBorderPanelController {
         panel.alphaValue = 0
     }
 
-    private func screenForOverlay() -> NSScreen? {
-        let mouseLocation = NSEvent.mouseLocation
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) {
-            return screen
-        }
-        return NSScreen.main ?? NSScreen.screens.first
-    }
-
     private func handleStateChange(_ state: DictationState) {
         // Update observable state (SwiftUI view will react automatically)
         lastState = state
@@ -132,6 +126,15 @@ final class FullScreenBorderPanelController {
         }
     }
 
+    private func shouldBeVisible(for state: DictationState) -> Bool {
+        switch state {
+        case .recording, .processing, .error:
+            return true
+        default:
+            return false
+        }
+    }
+
     private func handleAudioLevelChange(_ level: Float) {
         guard isEnabled else { return }
 
@@ -144,7 +147,7 @@ final class FullScreenBorderPanelController {
         hideRequestID &+= 1
 
         // Reposition to fill main screen in case it changed
-        if let screen = screenForOverlay() {
+        if let screen = OverlayScreenLocator.preferredScreen() {
             panel.setFrame(screen.frame, display: false)
         }
 
@@ -155,6 +158,8 @@ final class FullScreenBorderPanelController {
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
         }
+
+        scheduleVisibilityCheck()
     }
 
     private func hidePanel() {
@@ -173,5 +178,67 @@ final class FullScreenBorderPanelController {
                 panel?.orderOut(nil)
             }
         })
+    }
+
+    private func startScreenObservation() {
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshPanelLayout()
+            }
+            .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshPanelLayout()
+            }
+            .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshPanelLayout()
+            }
+            .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidWakeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshPanelLayout()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func refreshPanelLayout() {
+        guard isEnabled else { return }
+        guard let panel = panel else { return }
+        if let screen = OverlayScreenLocator.preferredScreen() {
+            panel.setFrame(screen.frame, display: false)
+        }
+        if shouldBeVisible(for: lastState) {
+            panel.orderFrontRegardless()
+        }
+        ensureVisibleIfNeeded()
+    }
+
+    private func scheduleVisibilityCheck() {
+        visibilityCheckTask?.cancel()
+        visibilityCheckTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            self?.ensureVisibleIfNeeded()
+        }
+    }
+
+    private func ensureVisibleIfNeeded() {
+        guard isEnabled else { return }
+        guard shouldBeVisible(for: lastState) else { return }
+        guard let panel = panel else { return }
+        if !panel.isVisible || !panel.occlusionState.contains(.visible) {
+            panel.orderFrontRegardless()
+        }
+        if panel.alphaValue < 0.95 {
+            panel.alphaValue = 1
+        }
     }
 }

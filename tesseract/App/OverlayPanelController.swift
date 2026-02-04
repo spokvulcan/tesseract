@@ -17,6 +17,7 @@ final class OverlayPanelController {
     private var hideRequestID: UInt = 0
     private var lastState: DictationState = .idle
     private let bottomInset: CGFloat = 60
+    private var visibilityCheckTask: Task<Void, Never>?
 
     /// Shared observable state for the SwiftUI view
     private let overlayState = OverlayState()
@@ -43,6 +44,7 @@ final class OverlayPanelController {
         audioLevelPublisher: Published<Float>.Publisher
     ) {
         createPanel()
+        startScreenObservation()
 
         // Subscribe to state changes
         statePublisher
@@ -73,13 +75,13 @@ final class OverlayPanelController {
         )
 
         // Configure for global overlay behavior
-        panel.level = .floating
+        panel.level = .statusBar
         panel.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,
-            .stationary,
             .ignoresCycle
         ]
+        panel.isReleasedWhenClosed = false
 
         // Non-interactive, transparent
         panel.ignoresMouseEvents = true
@@ -108,7 +110,7 @@ final class OverlayPanelController {
 
     private func updatePanelFrame(for state: DictationState, animated: Bool) {
         guard let panel = panel,
-              let screen = screenForOverlay() else { return }
+              let screen = OverlayScreenLocator.preferredScreen() else { return }
 
         let screenFrame = screen.visibleFrame
         let size = panelSize(for: state)
@@ -121,14 +123,6 @@ final class OverlayPanelController {
         } else {
             panel.setFrame(frame, display: false)
         }
-    }
-
-    private func screenForOverlay() -> NSScreen? {
-        let mouseLocation = NSEvent.mouseLocation
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) {
-            return screen
-        }
-        return NSScreen.main ?? NSScreen.screens.first
     }
 
     private func handleStateChange(_ state: DictationState) {
@@ -145,6 +139,15 @@ final class OverlayPanelController {
             showPanel()
         default:
             hidePanel()
+        }
+    }
+
+    private func shouldBeVisible(for state: DictationState) -> Bool {
+        switch state {
+        case .recording, .processing, .error:
+            return true
+        default:
+            return false
         }
     }
 
@@ -169,6 +172,8 @@ final class OverlayPanelController {
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
         }
+
+        scheduleVisibilityCheck()
     }
 
     private func hidePanel() {
@@ -187,6 +192,66 @@ final class OverlayPanelController {
                 panel?.orderOut(nil)
             }
         })
+    }
+
+    private func startScreenObservation() {
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshPanelLayout()
+            }
+            .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshPanelLayout()
+            }
+            .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshPanelLayout()
+            }
+            .store(in: &cancellables)
+
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidWakeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshPanelLayout()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func refreshPanelLayout() {
+        guard isEnabled else { return }
+        guard let panel = panel else { return }
+        updatePanelFrame(for: lastState, animated: false)
+        if shouldBeVisible(for: lastState) {
+            panel.orderFrontRegardless()
+        }
+        ensureVisibleIfNeeded()
+    }
+
+    private func scheduleVisibilityCheck() {
+        visibilityCheckTask?.cancel()
+        visibilityCheckTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            self?.ensureVisibleIfNeeded()
+        }
+    }
+
+    private func ensureVisibleIfNeeded() {
+        guard isEnabled else { return }
+        guard shouldBeVisible(for: lastState) else { return }
+        guard let panel = panel else { return }
+        if !panel.isVisible || !panel.occlusionState.contains(.visible) {
+            panel.orderFrontRegardless()
+        }
+        if panel.alphaValue < 0.95 {
+            panel.alphaValue = 1
+        }
     }
 
     private func panelSize(for state: DictationState) -> CGSize {
