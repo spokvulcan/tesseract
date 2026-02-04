@@ -223,6 +223,7 @@ struct RecordingButtonView: View {
 
 struct TranscriptionHistoryView: View {
     @ObservedObject var history: TranscriptionHistory
+    @ObservedObject private var settings = SettingsManager.shared
 
     // Layout constants for header alignment
     private let timeColumnWidth: CGFloat = 70
@@ -233,8 +234,9 @@ struct TranscriptionHistoryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if history.flattenedItems.isEmpty {
-                // Empty state - minimal
-                Spacer()
+                HistoryEmptyStateView(hotkey: settings.hotkey.displayString)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .padding(.vertical, 16)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -246,7 +248,12 @@ struct TranscriptionHistoryView: View {
                                     leadingPadding: timeColumnWidth + timeToConnectorSpacing + connectorWidth + connectorToContentSpacing
                                 )
                             case .entry(let entry, let isFirst, let isLast):
-                                TimelineEntryRow(entry: entry, isFirst: isFirst, isLast: isLast)
+                                TimelineEntryRow(
+                                    entry: entry,
+                                    isFirst: isFirst,
+                                    isLast: isLast,
+                                    onDelete: { history.delete(entry) }
+                                )
                                     .equatable()
                             }
                         }
@@ -260,6 +267,39 @@ struct TranscriptionHistoryView: View {
         }
         .frame(maxHeight: .infinity)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - History Empty State
+
+private struct HistoryEmptyStateView: View {
+    let hotkey: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(Color.secondary.opacity(0.12))
+                    .frame(width: 44, height: 44)
+
+                Image(systemName: "waveform")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("No transcriptions yet")
+                .font(.headline)
+                .fontWeight(.semibold)
+                .foregroundStyle(.primary)
+
+            Text("Press \(hotkey) to start dictating.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: 300)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("No transcriptions yet. Press \(hotkey) to start dictating.")
     }
 }
 
@@ -290,6 +330,7 @@ struct TimelineEntryRow: View, Equatable {
     let entry: TranscriptionEntry
     let isFirst: Bool
     let isLast: Bool
+    let onDelete: () -> Void
 
     @State private var isHovered = false
 
@@ -326,34 +367,61 @@ struct TimelineEntryRow: View, Equatable {
                 }
 
                 Spacer(minLength: 8)
-
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(entry.text, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .help("Copy to clipboard")
-                .opacity(isHovered ? 1 : 0)
-                .allowsHitTesting(isHovered)
-                .accessibilityLabel("Copy transcription")
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 10)
+            .padding(.trailing, 28)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10)
                     .fill(isHovered ? Color.primary.opacity(0.04) : Color.clear)
             )
             .contentShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(alignment: .topTrailing) {
+                if isHovered {
+                    Menu {
+                        actionMenuItems
+                    } label: {
+                        Label("More actions", systemImage: "ellipsis")
+                            .labelStyle(.iconOnly)
+                    }
+                    .menuIndicator(.hidden)
+                    .controlSize(.small)
+                    .help("More actions")
+                    .accessibilityLabel("More actions")
+                    .padding(.top, 6)
+                    .padding(.trailing, 8)
+                }
+            }
         }
         .contentShape(RoundedRectangle(cornerRadius: 10))
         .onHover { isHovered = $0 }  // No animation - instant state change
+        .contextMenu {
+            actionMenuItems
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(entry.text), recorded at \(timeString), duration \(String(format: "%.1f", entry.duration)) seconds")
-        .accessibilityHint("Copy button appears on hover")
+        .accessibilityHint("Actions menu appears on hover")
+    }
+
+    @ViewBuilder
+    private var actionMenuItems: some View {
+        Button {
+            copyEntry()
+        } label: {
+            Label("Copy", systemImage: "doc.on.doc")
+        }
+
+        Button(role: .destructive) {
+            onDelete()
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+    }
+
+    private func copyEntry() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(entry.text, forType: .string)
     }
 
     // Equatable conformance for efficient diffing

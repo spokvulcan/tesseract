@@ -6,6 +6,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import AppKit
 
 // MARK: - History Item for Flattened List
 
@@ -139,6 +140,12 @@ final class TranscriptionHistory: ObservableObject {
         entries.removeAll()
         saveToDisk()
         updateFlattenedItems()
+    }
+
+    func copyLatestToPasteboard() {
+        guard let entry = entries.first else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(entry.text, forType: .string)
     }
 
     func entries(from startDate: Date, to endDate: Date) -> [TranscriptionEntry] {

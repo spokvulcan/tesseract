@@ -12,10 +12,13 @@ import Combine
 final class MenuBarManager: ObservableObject {
     private var statusItem: NSStatusItem?
     private var cancellables = Set<AnyCancellable>()
+    private weak var copyLastItem: NSMenuItem?
 
     @Published var isRecording = false
+    @Published var hasHistory = false
 
     weak var coordinator: DictationCoordinator?
+    weak var history: TranscriptionHistory?
 
     var onShowMainWindow: (() -> Void)?
     var onShowSettings: (() -> Void)?
@@ -41,6 +44,16 @@ final class MenuBarManager: ObservableObject {
         )
         toggleItem.target = self
         menu.addItem(toggleItem)
+
+        let copyItem = NSMenuItem(
+            title: "Copy Last Dictation",
+            action: #selector(copyLastTranscription),
+            keyEquivalent: ""
+        )
+        copyItem.target = self
+        copyItem.isEnabled = hasHistory
+        menu.addItem(copyItem)
+        copyLastItem = copyItem
 
         menu.addItem(NSMenuItem.separator())
 
@@ -76,6 +89,14 @@ final class MenuBarManager: ObservableObject {
         $isRecording
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
+                self?.updateMenuItems()
+            }
+            .store(in: &cancellables)
+
+        history?.$entries
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] entries in
+                self?.hasHistory = !entries.isEmpty
                 self?.updateMenuItems()
             }
             .store(in: &cancellables)
@@ -118,10 +139,16 @@ final class MenuBarManager: ObservableObject {
         toggleItem.title = isRecording
             ? "Stop Dictation (\(hotkeyDisplay))"
             : "Start Dictation (\(hotkeyDisplay))"
+
+        copyLastItem?.isEnabled = hasHistory
     }
 
     @objc private func toggleDictation() {
         coordinator?.toggleRecording()
+    }
+
+    @objc private func copyLastTranscription() {
+        history?.copyLatestToPasteboard()
     }
 
     @objc private func showMainWindow() {

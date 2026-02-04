@@ -70,6 +70,9 @@ struct TesseractApp: App {
                 clearHistory: { [weak container] in
                     container?.transcriptionHistory.clear()
                 },
+                copyLastTranscription: { [weak container] in
+                    container?.transcriptionHistory.copyLatestToPasteboard()
+                },
                 isRecording: container.dictationCoordinator.state == .recording ||
                              container.dictationCoordinator.state == .listening,
                 isModelLoaded: container.transcriptionEngine.isModelLoaded,
@@ -120,6 +123,7 @@ struct TesseractApp: App {
 struct DictationActions {
     var toggleRecording: () -> Void
     var clearHistory: () -> Void
+    var copyLastTranscription: () -> Void
     var isRecording: Bool
     var isModelLoaded: Bool
     var hasHistory: Bool
@@ -150,6 +154,11 @@ struct DictationCommands: Commands {
             .disabled(actions?.isModelLoaded != true)
 
             Divider()
+
+            Button("Copy Last Transcription") {
+                actions?.copyLastTranscription()
+            }
+            .disabled(actions?.hasHistory != true)
 
             Button("Clear History") {
                 actions?.clearHistory()
