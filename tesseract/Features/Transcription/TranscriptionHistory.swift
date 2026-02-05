@@ -7,6 +7,7 @@ import Foundation
 import Combine
 import SwiftUI
 import AppKit
+import os
 
 // MARK: - History Item for Flattened List
 
@@ -73,7 +74,13 @@ private enum DateFormatters {
 }
 
 @MainActor
-final class TranscriptionHistory: ObservableObject {
+protocol TranscriptionStoring: AnyObject {
+    func add(text: String, duration: TimeInterval, model: String)
+    func copyLatestToPasteboard()
+}
+
+@MainActor
+final class TranscriptionHistory: ObservableObject, TranscriptionStoring {
     @Published private(set) var entries: [TranscriptionEntry] = []
 
     /// Flattened list of items for efficient lazy rendering.
@@ -213,7 +220,7 @@ final class TranscriptionHistory: ObservableObject {
             let data = try Data(contentsOf: storageURL)
             entries = try JSONDecoder().decode([TranscriptionEntry].self, from: data)
         } catch {
-            print("Failed to load transcription history: \(error)")
+            Log.general.error("Failed to load transcription history: \(error)")
         }
     }
 
@@ -222,7 +229,7 @@ final class TranscriptionHistory: ObservableObject {
             let data = try JSONEncoder().encode(entries)
             try data.write(to: storageURL, options: .atomic)
         } catch {
-            print("Failed to save transcription history: \(error)")
+            Log.general.error("Failed to save transcription history: \(error)")
         }
     }
 }

@@ -7,6 +7,7 @@ import Foundation
 import Combine
 import SwiftUI
 import ServiceManagement
+import os
 
 @MainActor
 final class SettingsManager: ObservableObject {
@@ -114,7 +115,7 @@ final class SettingsManager: ObservableObject {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            print("Failed to update launch at login: \(error)")
+            Log.general.error("Failed to update launch at login: \(error)")
         }
     }
 

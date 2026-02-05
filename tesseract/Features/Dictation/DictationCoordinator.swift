@@ -9,25 +9,30 @@ import AppKit
 
 @MainActor
 final class DictationCoordinator: ObservableObject {
+    private enum Defaults {
+        static let minimumRecordingDuration: TimeInterval = 0.5
+        static let errorAutoResetDelay: Duration = .seconds(3)
+    }
+
     @Published private(set) var state: DictationState = .idle
     @Published private(set) var lastTranscription: String = ""
     @Published private(set) var lastError: DictationError?
 
-    private let audioCapture: AudioCaptureEngine
-    private let transcriptionEngine: TranscriptionEngine
-    private let textInjector: TextInjector
+    private let audioCapture: any AudioCapturing
+    private let transcriptionEngine: any Transcribing
+    private let textInjector: any TextInjecting
     private let postProcessor: TranscriptionPostProcessor
-    private let history: TranscriptionHistory
+    private let history: any TranscriptionStoring
     private let settings: SettingsManager
 
     private var recordingTask: Task<Void, Never>?
     private var recordingStartTime: Date?
 
     init(
-        audioCapture: AudioCaptureEngine,
-        transcriptionEngine: TranscriptionEngine,
-        textInjector: TextInjector,
-        history: TranscriptionHistory,
+        audioCapture: any AudioCapturing,
+        transcriptionEngine: any Transcribing,
+        textInjector: any TextInjecting,
+        history: any TranscriptionStoring,
         settings: SettingsManager = .shared
     ) {
         self.audioCapture = audioCapture
@@ -118,7 +123,7 @@ final class DictationCoordinator: ObservableObject {
         }
 
         // Check minimum duration
-        if audioData.duration < 0.5 {
+        if audioData.duration < Defaults.minimumRecordingDuration {
             handleError(.recordingTooShort)
             return
         }
@@ -181,7 +186,7 @@ final class DictationCoordinator: ObservableObject {
 
         // Auto-reset after a delay
         Task {
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: Defaults.errorAutoResetDelay)
             if case .error = state {
                 state = .idle
             }

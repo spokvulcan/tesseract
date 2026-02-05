@@ -9,7 +9,18 @@ import AppKit
 import Carbon.HIToolbox
 
 @MainActor
-final class TextInjector: ObservableObject {
+protocol TextInjecting: AnyObject {
+    var restoreClipboard: Bool { get set }
+    func inject(_ text: String) async throws
+}
+
+@MainActor
+final class TextInjector: ObservableObject, TextInjecting {
+    private enum Defaults {
+        static let clipboardSettleDelay: Duration = .milliseconds(50)
+        static let clipboardRestoreDelay: Duration = .milliseconds(100)
+    }
+
     @Published private(set) var lastInjectionSucceeded = false
 
     private var savedClipboardContents: [NSPasteboard.PasteboardType: Data]?
@@ -34,13 +45,13 @@ final class TextInjector: ObservableObject {
 
         if !isOwnAppFocused {
             // Small delay to ensure clipboard is updated
-            try await Task.sleep(for: .milliseconds(50))
+            try await Task.sleep(for: Defaults.clipboardSettleDelay)
 
             // Simulate Cmd+V paste
             simulatePaste()
 
             // Small delay before restoring clipboard
-            try await Task.sleep(for: .milliseconds(100))
+            try await Task.sleep(for: Defaults.clipboardRestoreDelay)
 
             // Restore original clipboard contents
             if restoreClipboard {

@@ -6,6 +6,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import os
 
 @MainActor
 final class DependencyContainer: ObservableObject {
@@ -88,12 +89,12 @@ final class DependencyContainer: ObservableObject {
         if let modelPath = modelManager.getBundledModelPath() {
             do {
                 try await transcriptionEngine.loadModel(from: modelPath)
-                print("Loaded bundled model from: \(modelPath.path)")
+                Log.general.info("Loaded bundled model from: \(modelPath.path)")
             } catch {
-                print("Failed to load bundled model: \(error)")
+                Log.general.error("Failed to load bundled model: \(error)")
             }
         } else {
-            print("Warning: Bundled model not found")
+            Log.general.warning("Bundled model not found")
         }
     }
 

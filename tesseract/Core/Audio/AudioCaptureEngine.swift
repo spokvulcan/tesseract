@@ -60,7 +60,22 @@ nonisolated final class AudioLevelRelay: @unchecked Sendable {
 }
 
 @MainActor
-final class AudioCaptureEngine: ObservableObject {
+protocol AudioCapturing: AnyObject {
+    var isCapturing: Bool { get }
+    func startCapture() throws
+    func stopCapture() -> AudioData?
+}
+
+@MainActor
+final class AudioCaptureEngine: ObservableObject, AudioCapturing {
+    private enum Defaults {
+        static let targetSampleRate: Double = 16_000  // WhisperKit requirement
+        static let defaultInputSampleRate: Double = 48_000
+        static let bufferSize: AVAudioFrameCount = 1024
+        static let meterInterval: TimeInterval = 0.05
+        static let reserveSeconds: Int = 60
+    }
+
     @Published private(set) var isCapturing = false
     @Published private(set) var audioLevel: Float = 0
 
@@ -70,9 +85,9 @@ final class AudioCaptureEngine: ObservableObject {
     private let levelRelay = AudioLevelRelay()
     private var levelUpdateTimer: Timer?
 
-    private let targetSampleRate: Double = 16000  // WhisperKit requirement
-    private var inputSampleRate: Double = 48000
-    private let bufferSize: AVAudioFrameCount = 1024
+    private let targetSampleRate: Double = Defaults.targetSampleRate
+    private var inputSampleRate: Double = Defaults.defaultInputSampleRate
+    private let bufferSize: AVAudioFrameCount = Defaults.bufferSize
 
     init() {}
 
@@ -105,7 +120,7 @@ final class AudioCaptureEngine: ObservableObject {
         }
 
         sampleBuffer.clear()
-        sampleBuffer.reserveCapacity(Int(targetSampleRate * 60))  // Reserve for 60 seconds
+        sampleBuffer.reserveCapacity(Int(targetSampleRate) * Defaults.reserveSeconds)
 
         captureStartTime = Date()
 
@@ -120,7 +135,7 @@ final class AudioCaptureEngine: ObservableObject {
         )
 
         // Start timer to poll audio level on main thread
-        levelUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        levelUpdateTimer = Timer.scheduledTimer(withTimeInterval: Defaults.meterInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.audioLevel = self.levelRelay.level

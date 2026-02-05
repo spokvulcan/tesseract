@@ -6,10 +6,24 @@
 import Foundation
 import Combine
 import CoreML
+import os
 @preconcurrency import WhisperKit
 
 @MainActor
-final class TranscriptionEngine: ObservableObject {
+protocol Transcribing: AnyObject {
+    func transcribe(_ audioData: AudioData, language: String) async throws -> TranscriptionResult
+    func cancelTranscription()
+}
+
+@MainActor
+final class TranscriptionEngine: ObservableObject, Transcribing {
+    private enum Defaults {
+        static let minimumTranscriptionTimeout: TimeInterval = 30
+        static let maximumTranscriptionTimeout: TimeInterval = 240
+        static let transcriptionTimeoutMultiplier: Double = 3.0
+        static let transcriptionTimeoutOverhead: TimeInterval = 10
+    }
+
     @Published private(set) var isModelLoaded = false
     @Published private(set) var isTranscribing = false
 
@@ -32,9 +46,9 @@ final class TranscriptionEngine: ObservableObject {
 
         guard fileManager.fileExists(atPath: encoderPath.path),
               fileManager.fileExists(atPath: decoderPath.path) else {
-            print("Model files not found at: \(modelPath.path)")
-            print("Looking for AudioEncoder at: \(encoderPath.path) - exists: \(fileManager.fileExists(atPath: encoderPath.path))")
-            print("Looking for TextDecoder at: \(decoderPath.path) - exists: \(fileManager.fileExists(atPath: decoderPath.path))")
+            Log.transcription.error("Model files not found at: \(modelPath.path)")
+            Log.transcription.error("AudioEncoder at: \(encoderPath.path) - exists: \(fileManager.fileExists(atPath: encoderPath.path))")
+            Log.transcription.error("TextDecoder at: \(decoderPath.path) - exists: \(fileManager.fileExists(atPath: decoderPath.path))")
             throw DictationError.modelNotLoaded
         }
 
@@ -65,7 +79,21 @@ final class TranscriptionEngine: ObservableObject {
 
         // Pass nil for auto-detect, otherwise pass the language code
         let languageCode = language == "auto" ? nil : language
-        return try await whisperActor.transcribe(audioData, language: languageCode)
+        let timeout = transcriptionTimeout(for: audioData.duration)
+
+        // Race transcription against a timeout to prevent stuck processing state
+        return try await withThrowingTaskGroup(of: TranscriptionResult.self) { group in
+            group.addTask {
+                try await whisperActor.transcribe(audioData, language: languageCode)
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw DictationError.transcriptionFailed("Transcription timed out")
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
     }
 
     func cancelTranscription() {
@@ -73,18 +101,32 @@ final class TranscriptionEngine: ObservableObject {
         transcriptionTask = nil
         isTranscribing = false
     }
+
+    private func transcriptionTimeout(for audioDuration: TimeInterval) -> Duration {
+        let estimatedTimeout = (audioDuration * Defaults.transcriptionTimeoutMultiplier)
+            + Defaults.transcriptionTimeoutOverhead
+        let clampedTimeout = min(
+            Defaults.maximumTranscriptionTimeout,
+            max(Defaults.minimumTranscriptionTimeout, estimatedTimeout)
+        )
+        return .seconds(clampedTimeout)
+    }
 }
 
 // Actor to isolate WhisperKit usage
 actor WhisperActor {
+    enum Defaults {
+        static let noSpeechThreshold: Float = 0.6
+    }
     private var whisperKit: WhisperKit?
 
     func loadModel(from modelPath: URL) async throws {
-        print("Loading model from path: \(modelPath.path)")
+        let logger = Logger(subsystem: "com.tesseract.app", category: "transcription")
+        logger.info("Loading model from path: \(modelPath.path)")
 
         // List contents of model folder for debugging
         if let contents = try? FileManager.default.contentsOfDirectory(atPath: modelPath.path) {
-            print("Model folder contents: \(contents)")
+            logger.debug("Model folder contents: \(contents)")
         }
 
         // Configure compute units for each model component
@@ -124,7 +166,7 @@ actor WhisperActor {
             skipSpecialTokens: true,
             withoutTimestamps: false,
             clipTimestamps: [],
-            noSpeechThreshold: 0.6               // Standard silence detection threshold
+            noSpeechThreshold: Defaults.noSpeechThreshold
         )
 
         // Capture whisperKit in a local constant to satisfy concurrency checking
