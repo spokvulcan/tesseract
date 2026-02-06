@@ -1,3 +1,6 @@
 # Research
 research/
 reasearch/
+
+# WhisperKit model weights (too large for git)
+tesseract/Resources/Models/
