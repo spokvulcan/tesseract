@@ -54,6 +54,24 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .overlay(alignment: .top) {
+            VisualEffectView(material: .hudWindow, blendingMode: .withinWindow, state: .active)
+                .frame(height: 52)
+                .mask(alignment: .top) {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black, location: 0.5),
+                            .init(color: .black.opacity(0.95), location: 0.7),
+                            .init(color: .black.opacity(0.5), location: 0.85),
+                            .init(color: .clear, location: 1.0),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+        }
         // Silently consume paste commands to prevent system alert sound
         // when text is injected while the app window is focused
         .onPasteCommand(of: [.plainText]) { _ in }
