@@ -19,6 +19,7 @@ final class MenuBarManager: ObservableObject {
 
     weak var coordinator: DictationCoordinator?
     weak var history: TranscriptionHistory?
+    weak var speechCoordinator: SpeechCoordinator?
 
     var onShowMainWindow: (() -> Void)?
     var onShowSettings: (() -> Void)?
@@ -54,6 +55,17 @@ final class MenuBarManager: ObservableObject {
         copyItem.isEnabled = hasHistory
         menu.addItem(copyItem)
         copyLastItem = copyItem
+
+        menu.addItem(NSMenuItem.separator())
+
+        let ttsHotkeyDisplay = SettingsManager.shared.ttsHotkey.displayString
+        let speakItem = NSMenuItem(
+            title: "Speak Selected Text (\(ttsHotkeyDisplay))",
+            action: #selector(speakSelectedText),
+            keyEquivalent: ""
+        )
+        speakItem.target = self
+        menu.addItem(speakItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -149,6 +161,10 @@ final class MenuBarManager: ObservableObject {
 
     @objc private func copyLastTranscription() {
         history?.copyLatestToPasteboard()
+    }
+
+    @objc private func speakSelectedText() {
+        speechCoordinator?.onHotkeyPressed()
     }
 
     @objc private func showMainWindow() {

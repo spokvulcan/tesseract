@@ -83,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarManager = MenuBarManager()
         menuBarManager?.coordinator = container.dictationCoordinator
         menuBarManager?.history = container.transcriptionHistory
+        menuBarManager?.speechCoordinator = container.speechCoordinator
         menuBarManager?.onShowMainWindow = { [weak self] in
             self?.showMainWindow()
         }

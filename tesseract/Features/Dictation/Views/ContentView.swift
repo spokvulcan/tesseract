@@ -12,6 +12,8 @@ struct ContentView: View {
     @ObservedObject var history: TranscriptionHistory
     @ObservedObject var permissionsManager: PermissionsManager
     @ObservedObject var audioCapture: AudioCaptureEngine
+    @ObservedObject var speechCoordinator: SpeechCoordinator
+    @ObservedObject var speechEngine: SpeechEngine
 
     @Binding var selectedNavigation: NavigationItem?
 
@@ -27,7 +29,9 @@ struct ContentView: View {
                         transcriptionEngine: transcriptionEngine,
                         history: history,
                         permissionsManager: permissionsManager,
-                        audioCapture: audioCapture
+                        audioCapture: audioCapture,
+                        speechCoordinator: speechCoordinator,
+                        speechEngine: speechEngine
                     )
                 }
         } detail: {
@@ -37,7 +41,9 @@ struct ContentView: View {
                     transcriptionEngine: transcriptionEngine,
                     history: history,
                     permissionsManager: permissionsManager,
-                    audioCapture: audioCapture
+                    audioCapture: audioCapture,
+                    speechCoordinator: speechCoordinator,
+                    speechEngine: speechEngine
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.clear)
@@ -47,7 +53,9 @@ struct ContentView: View {
                     transcriptionEngine: transcriptionEngine,
                     history: history,
                     permissionsManager: permissionsManager,
-                    audioCapture: audioCapture
+                    audioCapture: audioCapture,
+                    speechCoordinator: speechCoordinator,
+                    speechEngine: speechEngine
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.clear)
@@ -76,22 +84,4 @@ struct ContentView: View {
         // when text is injected while the app window is focused
         .onPasteCommand(of: [.plainText]) { _ in }
     }
-}
-
-#Preview {
-    @Previewable @State var selection: NavigationItem? = .dictation
-    let audioCapture = AudioCaptureEngine()
-    return ContentView(
-        coordinator: DictationCoordinator(
-            audioCapture: audioCapture,
-            transcriptionEngine: TranscriptionEngine(),
-            textInjector: TextInjector(),
-            history: TranscriptionHistory()
-        ),
-        transcriptionEngine: TranscriptionEngine(),
-        history: TranscriptionHistory(),
-        permissionsManager: PermissionsManager(),
-        audioCapture: audioCapture,
-        selectedNavigation: $selection
-    )
 }

@@ -8,18 +8,44 @@ import AppKit
 import Combine
 import Carbon.HIToolbox
 
+struct HotkeyRegistration {
+    let id: String
+    let combo: KeyCombo
+    let onDown: () -> Void
+    let onUp: (() -> Void)?
+}
+
 @MainActor
 final class HotkeyManager: ObservableObject {
-    @Published var currentHotkey: KeyCombo = .optionSpace
+    @Published var currentHotkey: KeyCombo = .optionSpace {
+        didSet {
+            // Keep backward compat: updating currentHotkey updates the "dictation" registration
+            if var reg = registrations["dictation"] {
+                reg = HotkeyRegistration(id: "dictation", combo: currentHotkey, onDown: reg.onDown, onUp: reg.onUp)
+                registrations["dictation"] = reg
+            }
+        }
+    }
     @Published private(set) var isListening = false
     @Published private(set) var isUsingEventTap = false
 
-    var onHotkeyDown: (() -> Void)?
-    var onHotkeyUp: (() -> Void)?
+    var onHotkeyDown: (() -> Void)? {
+        didSet {
+            // Backward compat: sync to dictation registration
+            syncDictationRegistration()
+        }
+    }
+    var onHotkeyUp: (() -> Void)? {
+        didSet {
+            syncDictationRegistration()
+        }
+    }
+
+    private var registrations: [String: HotkeyRegistration] = [:]
+    private var pressedHotkeys: Set<String> = []
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var isHotkeyPressed = false
 
     // Fallback monitors for when Accessibility permission is denied
     private var globalMonitor: Any?
@@ -32,6 +58,26 @@ final class HotkeyManager: ObservableObject {
             stopListening()
         }
     }
+
+    // MARK: - Multi-Hotkey Registration
+
+    func registerHotkey(id: String, combo: KeyCombo, onDown: @escaping () -> Void, onUp: (() -> Void)? = nil) {
+        registrations[id] = HotkeyRegistration(id: id, combo: combo, onDown: onDown, onUp: onUp)
+    }
+
+    func unregisterHotkey(id: String) {
+        registrations.removeValue(forKey: id)
+        pressedHotkeys.remove(id)
+    }
+
+    func updateRegisteredHotkey(id: String, combo: KeyCombo) {
+        guard var reg = registrations[id] else { return }
+        reg = HotkeyRegistration(id: id, combo: combo, onDown: reg.onDown, onUp: reg.onUp)
+        registrations[id] = reg
+        pressedHotkeys.remove(id)
+    }
+
+    // MARK: - Listening
 
     func startListening() {
         guard !isListening else { return }
@@ -52,7 +98,7 @@ final class HotkeyManager: ObservableObject {
         stopNSEventMonitors()
 
         isListening = false
-        isHotkeyPressed = false
+        pressedHotkeys.removeAll()
         isUsingEventTap = false
     }
 
@@ -95,67 +141,59 @@ final class HotkeyManager: ObservableObject {
                 if flags.contains(.maskShift) { modifiers.insert(.shift) }
                 if flags.contains(.maskSecondaryFn) { modifiers.insert(.function) }
 
-                let hotkeyKeyCode = manager.currentHotkey.keyCode
-                let hotkeyModifiers = NSEvent.ModifierFlags(rawValue: manager.currentHotkey.modifiers)
+                let relevantMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
+                let currentRelevant = modifiers.intersection(relevantMods)
 
-                let relevantModifiers = manager.relevantModifiers()
-                let currentRelevant = modifiers.intersection(relevantModifiers)
-                let hotkeyRelevant = hotkeyModifiers.intersection(relevantModifiers)
-
-                // EARLY EXIT: If this is NOT our hotkey's key code, pass through immediately
-                // This ensures Cmd+Space and other shortcuts work normally
-                if type == .keyDown || type == .keyUp {
-                    if keyCode != hotkeyKeyCode {
-                        return Unmanaged.passUnretained(event)
-                    }
-                }
-
-                // Handle flagsChanged - ALWAYS pass through, but track modifier state for release detection
+                // Handle flagsChanged - check for released modifiers on pressed hotkeys
                 if type == .flagsChanged {
-                    // Check if our hotkey's modifier was released while hotkey was engaged
-                    if manager.isHotkeyPressed && !currentRelevant.contains(hotkeyRelevant) {
-                        DispatchQueue.main.async {
-                            guard manager.isHotkeyPressed else { return }
-                            manager.isHotkeyPressed = false
-                            manager.onHotkeyUp?()
-                        }
-                    }
-                    // ALWAYS pass through flagsChanged events - never suppress modifier changes
-                    return Unmanaged.passUnretained(event)
-                }
-
-                // At this point: type is keyDown or keyUp, and keyCode matches our hotkey's key
-
-                // Handle key up - only suppress if it's our hotkey being released
-                if type == .keyUp {
-                    if manager.isHotkeyPressed {
-                        DispatchQueue.main.async {
-                            manager.isHotkeyPressed = false
-                            manager.onHotkeyUp?()
-                        }
-                        return nil  // Suppress our hotkey's key up
-                    }
-                    // Key up but we weren't tracking it as pressed - pass through
-                    return Unmanaged.passUnretained(event)
-                }
-
-                // Handle key down - suppress if modifiers match (including key repeats)
-                if type == .keyDown {
-                    if currentRelevant == hotkeyRelevant {
-                        // Only trigger onHotkeyDown on first press, not repeats
-                        if !manager.isHotkeyPressed {
+                    for id in manager.pressedHotkeys {
+                        guard let reg = manager.registrations[id] else { continue }
+                        let hotkeyRelevant = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers).intersection(relevantMods)
+                        if !currentRelevant.contains(hotkeyRelevant) {
                             DispatchQueue.main.async {
-                                manager.isHotkeyPressed = true
-                                manager.onHotkeyDown?()
+                                guard manager.pressedHotkeys.contains(id) else { return }
+                                manager.pressedHotkeys.remove(id)
+                                reg.onUp?()
                             }
                         }
-                        return nil  // Suppress our hotkey's key down (and all repeats)
                     }
-                    // Key matches but modifiers don't (e.g., Cmd+Space when hotkey is Option+Space)
+                    // ALWAYS pass through flagsChanged events
                     return Unmanaged.passUnretained(event)
                 }
 
-                // Unknown event type - pass through
+                // For keyDown/keyUp, find matching registration(s)
+                var matched = false
+                for (id, reg) in manager.registrations {
+                    let hotkeyRelevant = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers).intersection(relevantMods)
+
+                    guard keyCode == reg.combo.keyCode else { continue }
+
+                    if type == .keyUp {
+                        if manager.pressedHotkeys.contains(id) {
+                            DispatchQueue.main.async {
+                                manager.pressedHotkeys.remove(id)
+                                reg.onUp?()
+                            }
+                            matched = true
+                        }
+                    } else if type == .keyDown {
+                        if currentRelevant == hotkeyRelevant {
+                            if !manager.pressedHotkeys.contains(id) {
+                                DispatchQueue.main.async {
+                                    manager.pressedHotkeys.insert(id)
+                                    reg.onDown()
+                                }
+                            }
+                            matched = true
+                        }
+                    }
+                }
+
+                // Suppress the event if any registration matched
+                if matched {
+                    return nil
+                }
+
                 return Unmanaged.passUnretained(event)
             },
             userInfo: refcon
@@ -191,8 +229,6 @@ final class HotkeyManager: ObservableObject {
 
     private func startNSEventMonitors() {
         // Global monitor for when app is not focused
-        // Note: This uses NSEvent.addGlobalMonitorForEvents which works in sandbox
-        // but cannot suppress/intercept keys (only observe)
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.keyDown, .keyUp, .flagsChanged]
         ) { [weak self] event in
@@ -229,61 +265,70 @@ final class HotkeyManager: ObservableObject {
     private func handleKeyEvent(_ event: NSEvent) {
         let keyCode = event.keyCode
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift, .function])
-        let targetModifiers = NSEvent.ModifierFlags(rawValue: currentHotkey.modifiers)
-        let relevantModifiers = relevantModifiers()
-        let relevantTargetModifiers = targetModifiers.intersection(relevantModifiers)
+        let relevantMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
 
-        // When engaged, check for any release that should stop recording
-        if isHotkeyPressed {
-            // Main key released (regardless of modifier state)
-            if event.type == .keyUp && keyCode == currentHotkey.keyCode {
-                isHotkeyPressed = false
-                onHotkeyUp?()
-                return
+        // Check for releases on pressed hotkeys
+        for id in pressedHotkeys {
+            guard let reg = registrations[id] else { continue }
+            let targetModifiers = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
+            let relevantTargetModifiers = targetModifiers.intersection(relevantMods)
+
+            // Main key released
+            if event.type == .keyUp && keyCode == reg.combo.keyCode {
+                pressedHotkeys.remove(id)
+                reg.onUp?()
+                continue
             }
 
-            // Modifier released (via flagsChanged)
+            // Modifier released
             if event.type == .flagsChanged {
-                let currentRelevant = modifiers.intersection(relevantModifiers)
+                let currentRelevant = modifiers.intersection(relevantMods)
                 if !currentRelevant.contains(relevantTargetModifiers) {
-                    isHotkeyPressed = false
-                    onHotkeyUp?()
-                    return
+                    pressedHotkeys.remove(id)
+                    reg.onUp?()
+                    continue
                 }
             }
         }
 
-        // Handle modifier-only hotkeys (like Option key alone)
-        if currentHotkey.keyCode == 0 && event.type == .flagsChanged {
-            if modifiers == targetModifiers && !isHotkeyPressed {
-                isHotkeyPressed = true
-                onHotkeyDown?()
-            } else if modifiers != targetModifiers && isHotkeyPressed {
-                isHotkeyPressed = false
-                onHotkeyUp?()
+        // Handle modifier-only hotkeys
+        if event.type == .flagsChanged {
+            for (id, reg) in registrations where reg.combo.keyCode == 0 {
+                let targetModifiers = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
+                if modifiers == targetModifiers && !pressedHotkeys.contains(id) {
+                    pressedHotkeys.insert(id)
+                    reg.onDown()
+                } else if modifiers != targetModifiers && pressedHotkeys.contains(id) {
+                    pressedHotkeys.remove(id)
+                    reg.onUp?()
+                }
             }
             return
         }
 
-        // Hotkey down detection (requires exact match)
-        guard keyCode == currentHotkey.keyCode,
-              modifiers.intersection(relevantModifiers) == relevantTargetModifiers else {
-            return
-        }
+        // Hotkey down detection for each registration
+        for (id, reg) in registrations {
+            guard reg.combo.keyCode != 0 else { continue }
+            let targetModifiers = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
+            let relevantTargetModifiers = targetModifiers.intersection(relevantMods)
 
-        if event.type == .keyDown && !isHotkeyPressed {
-            isHotkeyPressed = true
-            onHotkeyDown?()
+            guard keyCode == reg.combo.keyCode,
+                  modifiers.intersection(relevantMods) == relevantTargetModifiers else {
+                continue
+            }
+
+            if event.type == .keyDown && !pressedHotkeys.contains(id) {
+                pressedHotkeys.insert(id)
+                reg.onDown()
+            }
         }
     }
 
     // MARK: - Permission Handling
 
-    /// Restarts listening with event tap if Accessibility permission was granted
     func refreshForAccessibilityPermission() {
         guard isListening else { return }
 
-        // If we're not using event tap but now have permission, upgrade
         if !isUsingEventTap && AXIsProcessTrusted() {
             stopNSEventMonitors()
             startEventTap()
@@ -340,10 +385,19 @@ final class HotkeyManager: ObservableObject {
 
     func updateHotkey(_ combo: KeyCombo) {
         currentHotkey = combo
-        isHotkeyPressed = false
+        pressedHotkeys.removeAll()
     }
 
-    private func relevantModifiers() -> NSEvent.ModifierFlags {
-        [.command, .option, .control, .shift, .function]
+    // MARK: - Private
+
+    private func syncDictationRegistration() {
+        if let onDown = onHotkeyDown {
+            registrations["dictation"] = HotkeyRegistration(
+                id: "dictation",
+                combo: currentHotkey,
+                onDown: onDown,
+                onUp: onHotkeyUp
+            )
+        }
     }
 }

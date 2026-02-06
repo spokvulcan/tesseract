@@ -74,6 +74,51 @@ final class SettingsManager: ObservableObject {
         }
     }
 
+    // MARK: - TTS Settings
+
+    @AppStorage("ttsHotkeyKeyCode") var ttsHotkeyKeyCode: Int = Int(KeyCombo.functionSpace.keyCode)
+    @AppStorage("ttsHotkeyModifiers") var ttsHotkeyModifiers: Int = Int(KeyCombo.functionSpace.modifiers)
+
+    var ttsHotkey: KeyCombo {
+        get {
+            KeyCombo(
+                keyCode: UInt16(ttsHotkeyKeyCode),
+                modifiers: NSEvent.ModifierFlags(rawValue: UInt(ttsHotkeyModifiers))
+            )
+        }
+        set {
+            ttsHotkeyKeyCode = Int(newValue.keyCode)
+            ttsHotkeyModifiers = Int(newValue.modifiers)
+        }
+    }
+
+    @AppStorage("ttsTemperature") var ttsTemperature: Double = 0.6
+    @AppStorage("ttsTopP") var ttsTopP: Double = 0.8
+    @AppStorage("ttsRepetitionPenalty") var ttsRepetitionPenalty: Double = 1.3
+    @AppStorage("ttsRepetitionContextSize") var ttsRepetitionContextSize: Int = 20
+    @AppStorage("ttsMaxTokens") var ttsMaxTokens: Int = 4096
+    @AppStorage("ttsVoiceDescription") var ttsVoiceDescription: String = ""
+    @AppStorage("ttsLanguage") var ttsLanguage: String = "English"
+
+    var ttsParameters: TTSParameters {
+        get {
+            TTSParameters(
+                temperature: Float(ttsTemperature),
+                topP: Float(ttsTopP),
+                repetitionPenalty: Float(ttsRepetitionPenalty),
+                repetitionContextSize: ttsRepetitionContextSize,
+                maxTokens: ttsMaxTokens
+            )
+        }
+        set {
+            ttsTemperature = Double(newValue.temperature)
+            ttsTopP = Double(newValue.topP)
+            ttsRepetitionPenalty = Double(newValue.repetitionPenalty)
+            ttsRepetitionContextSize = newValue.repetitionContextSize
+            ttsMaxTokens = newValue.maxTokens
+        }
+    }
+
     // MARK: - Advanced Settings
 
     @AppStorage("maxRecordingDuration") var maxRecordingDuration: Double = 60.0
@@ -103,6 +148,15 @@ final class SettingsManager: ObservableObject {
         maxRecordingDuration = 60.0
         playSounds = true
         showNotifications = true
+        ttsHotkeyKeyCode = Int(KeyCombo.functionSpace.keyCode)
+        ttsHotkeyModifiers = Int(KeyCombo.functionSpace.modifiers)
+        ttsTemperature = 0.6
+        ttsTopP = 0.8
+        ttsRepetitionPenalty = 1.3
+        ttsRepetitionContextSize = 20
+        ttsMaxTokens = 4096
+        ttsVoiceDescription = ""
+        ttsLanguage = "English"
     }
 
     // MARK: - Private

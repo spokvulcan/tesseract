@@ -27,6 +27,19 @@ final class DependencyContainer: ObservableObject {
     lazy var textInjector = TextInjector()
     lazy var hotkeyManager = HotkeyManager()
 
+    // Speech (TTS)
+    lazy var textExtractor = TextExtractor()
+    lazy var speechEngine = SpeechEngine()
+    lazy var audioPlaybackManager = AudioPlaybackManager()
+    lazy var speechCoordinator: SpeechCoordinator = {
+        SpeechCoordinator(
+            textExtractor: textExtractor,
+            speechEngine: speechEngine,
+            playbackManager: audioPlaybackManager,
+            settings: settingsManager
+        )
+    }()
+
     // Overlays
     lazy var overlayPanelController = OverlayPanelController()
     lazy var fullScreenBorderController = FullScreenBorderPanelController()
@@ -59,6 +72,15 @@ final class DependencyContainer: ObservableObject {
         hotkeyManager.onHotkeyUp = { [weak self] in
             self?.dictationCoordinator.onHotkeyUp()
         }
+        // Register TTS hotkey
+        hotkeyManager.registerHotkey(
+            id: "tts",
+            combo: settingsManager.ttsHotkey,
+            onDown: { [weak self] in
+                self?.speechCoordinator.onHotkeyPressed()
+            }
+        )
+
         hotkeyManager.startListening()
         startSettingsObservation()
 
@@ -110,7 +132,11 @@ final class DependencyContainer: ObservableObject {
         }
     }
 
+    private var lastTTSHotkey: KeyCombo?
+
     private func startSettingsObservation() {
+        lastTTSHotkey = settingsManager.ttsHotkey
+
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -118,6 +144,12 @@ final class DependencyContainer: ObservableObject {
                 let newHotkey = settingsManager.hotkey
                 if newHotkey != hotkeyManager.currentHotkey {
                     hotkeyManager.updateHotkey(newHotkey)
+                }
+
+                let newTTSHotkey = settingsManager.ttsHotkey
+                if newTTSHotkey != lastTTSHotkey {
+                    lastTTSHotkey = newTTSHotkey
+                    hotkeyManager.updateRegisteredHotkey(id: "tts", combo: newTTSHotkey)
                 }
             }
             .store(in: &settingsCancellables)

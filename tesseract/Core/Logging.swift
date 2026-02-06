@@ -9,4 +9,5 @@ enum Log {
     static let audio = Logger(subsystem: "com.tesseract.app", category: "audio")
     static let transcription = Logger(subsystem: "com.tesseract.app", category: "transcription")
     static let general = Logger(subsystem: "com.tesseract.app", category: "general")
+    static let speech = Logger(subsystem: "com.tesseract.app", category: "speech")
 }
