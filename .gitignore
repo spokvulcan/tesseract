@@ -2,5 +2,8 @@
 research/
 reasearch/
 
+# Python virtual environments
+scripts/.venv/
+
 # WhisperKit model weights (too large for git)
 tesseract/Resources/Models/

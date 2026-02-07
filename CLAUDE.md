@@ -29,6 +29,20 @@ Tests use Swift's `Testing` framework (not XCTest). Test files are in `tesseract
 
 **Note**: Tests are not required during the current MVP development phase. Focus on build verification only.
 
+## Development Workflow
+
+Use `scripts/dev.sh` for the edit-build-run loop without manual Xcode interaction:
+
+```bash
+scripts/dev.sh dev     # Build, kill running app, launch new build
+scripts/dev.sh build   # Build only
+scripts/dev.sh run     # Kill + relaunch (skip build)
+scripts/dev.sh log     # Tail app logs
+scripts/dev.sh clean   # Clean build artifacts
+```
+
+After making code changes, run `scripts/dev.sh dev` to build and test immediately.
+
 ## Architecture
 
 ### Code Organization
@@ -75,6 +89,42 @@ Uses clipboard-based injection (copy → simulate Cmd+V → restore) instead of 
 
 ### Audio Format
 WhisperKit requires 16kHz mono float32. `AudioCaptureEngine` handles resampling from device sample rate.
+
+## Logging
+
+**Never use `print()` for logging** — stdout is not captured when the app is launched via `open` (which is how `scripts/dev.sh` works). All logs must go through the unified logging system so they appear in `scripts/dev.sh log`.
+
+### App code (`tesseract/`)
+
+Use the `Log` enum from `tesseract/Core/Logging.swift`:
+
+```swift
+import os
+
+Log.speech.info("Playing \(sampleCount) samples at \(rate)Hz")
+Log.audio.error("Device not found: \(deviceId)")
+Log.general.debug("State changed to \(newState)")
+```
+
+Available categories: `Log.audio`, `Log.transcription`, `Log.speech`, `Log.general`.
+
+`Log` uses `PublicLogger` — a wrapper around `os.Logger` that marks all interpolated values as `.public` so they show real values in `log stream` instead of `<private>`.
+
+### Vendored library code (`Vendor/`)
+
+Vendor code doesn't have access to the `Log` enum. Use `NSLog` instead:
+
+```swift
+NSLog("[MyLib] Generated %d tokens in %.2fs", tokenCount, elapsed)
+```
+
+`NSLog` output is captured by `scripts/dev.sh log` (it filters `process == "tesseract" AND subsystem == ""`). It shows without a category tag but is still visible.
+
+### Viewing logs
+
+```bash
+scripts/dev.sh log    # Tail formatted app logs (Ctrl-C to stop)
+```
 
 ## Skills
 

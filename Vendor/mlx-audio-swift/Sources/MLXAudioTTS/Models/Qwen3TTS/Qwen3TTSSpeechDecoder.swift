@@ -751,6 +751,20 @@ final class Qwen3TTSSpeechTokenizer: Module {
         return chunks
     }
 
+    /// Decode a single chunk of codes with optional left context, in one decoder call.
+    /// Unlike `streamingDecode`, this never sub-chunks internally.
+    func decodeSingleChunk(_ audioCodes: MLXArray, leftContextTokens: Int = 0) -> MLXArray {
+        let codes = audioCodes.transposed(0, 2, 1)  // [B, groups, time]
+        var wav = decoder(codes)  // [B, 1, samples]
+        if leftContextTokens > 0 {
+            wav = wav[0..., 0..., (leftContextTokens * decoder.totalUpsample)...]
+        }
+        wav = wav.squeezed(axis: 1)  // [B, samples]
+        eval(wav)
+        GPU.clearCache()
+        return wav
+    }
+
     static func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
         var sanitized = [String: MLXArray]()
         var codebookData = [String: [String: MLXArray]]()

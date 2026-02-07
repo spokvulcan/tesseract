@@ -114,12 +114,19 @@ final class SpeechCoordinator: ObservableObject {
                 return
             }
 
+            guard !samples.isEmpty else {
+                state = .idle
+                return
+            }
+
             state = .playing
             playbackManager.play(samples: samples, sampleRate: sampleRate)
         } catch is CancellationError {
+            playbackManager.stop()
             state = .idle
         } catch {
             Log.speech.error("Speech generation failed: \(error)")
+            playbackManager.stop()
             state = .error(error.localizedDescription)
             try? await Task.sleep(for: .seconds(3))
             if !Task.isCancelled { state = .idle }
