@@ -41,6 +41,43 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         ProcessInfo.processInfo.environment["QWEN3TTS_PROFILE"] == "1"
     }()
 
+    /// Experimental: cache prefill + single-token first code predictor pass.
+    /// Disabled by default (direct 2-token first pass benchmarks faster overall).
+    /// Set QWEN3TTS_CP_PREFILL=1 to enable.
+    static let codePredictorPrefillEnabled: Bool = {
+        ProcessInfo.processInfo.environment["QWEN3TTS_CP_PREFILL"] == "1"
+    }()
+
+    /// Use lightweight sampler for code predictor passes.
+    /// Set QWEN3TTS_CODE_SAMPLER=0 to force legacy sampleToken() path.
+    static let optimizedCodeSamplerEnabled: Bool = {
+        ProcessInfo.processInfo.environment["QWEN3TTS_CODE_SAMPLER"] != "0"
+    }()
+
+    /// Clear temporary GPU cache every N generation steps.
+    /// Set `QWEN3TTS_CLEAR_CACHE_EVERY` to tune; default is 4.
+    static let clearCacheEverySteps: Int = {
+        let raw = ProcessInfo.processInfo.environment["QWEN3TTS_CLEAR_CACHE_EVERY"] ?? ""
+        return max(1, Int(raw) ?? 4)
+    }()
+
+    /// Mirror perf logs to stdout (useful for headless CLI benchmarking).
+    static let stdoutPerfLogsEnabled: Bool = {
+        ProcessInfo.processInfo.environment["QWEN3TTS_STDOUT_LOG"] == "1"
+    }()
+
+    /// Final decode strategy:
+    /// - `chunked` (default): tokenizer `decode()` with larger internal chunks
+    /// - `stream`: tokenizer `streamingDecode()` with chunkTokens=100
+    /// - `single`: one decoder pass via `decodeSingleChunk()` (highest memory)
+    static let finalDecodeMode: String = {
+        let mode = (ProcessInfo.processInfo.environment["QWEN3TTS_DECODE_MODE"] ?? "chunked").lowercased()
+        if mode == "stream" || mode == "single" {
+            return mode
+        }
+        return "chunked"
+    }()
+
     public var sampleRate: Int { config.sampleRate }
 
     init(config: Qwen3TTSModelConfig) {
@@ -151,7 +188,27 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         }
 
         let talkerConfig = config.talkerConfig!
+        let inputEmbedding = talker.getInputEmbeddings()
+        let codePredictor = talker.codePredictor
+        let codeEmbeddings = codePredictor.codecEmbedding
+        let codePassCount = talkerConfig.numCodeGroups - 1
+        let lastCodeEmbeddingIndex = talkerConfig.numCodeGroups - 2
+        let codePredictorPrefillEnabled = Qwen3TTSFullModel.codePredictorPrefillEnabled
+        let optimizedCodeSamplerEnabled = Qwen3TTSFullModel.optimizedCodeSamplerEnabled
+        let clearCacheEverySteps = Qwen3TTSFullModel.clearCacheEverySteps
+        let codeSamplerGreedy = temperature <= 0
+        let codeSamplerInvTemperature: Float = codeSamplerGreedy ? 0 : (1 / temperature)
         let genStartTime = CFAbsoluteTimeGetCurrent()
+        let emitPerf: (String) -> Void = { msg in
+            logger.info("\(msg, privacy: .public)")
+            if Qwen3TTSFullModel.stdoutPerfLogsEnabled {
+                NSLog("[Qwen3TTS] %@", msg)
+            }
+        }
+
+        let metalFastSynch = ProcessInfo.processInfo.environment["MLX_METAL_FAST_SYNCH"] ?? "0"
+        let settingsMsg = "Runtime knobs: cpPrefill=\(codePredictorPrefillEnabled), codeSampler=\(optimizedCodeSamplerEnabled), clearCacheEvery=\(clearCacheEverySteps), profiling=\(Qwen3TTSFullModel.profilingEnabled), metalFastSynch=\(metalFastSynch)"
+        emitPerf(settingsMsg)
 
         // Prepare inputs
         let (inputEmbedsInit, trailingTextHidden, ttsPadEmbed) = prepareGenerationInputs(
@@ -166,6 +223,8 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         let cache = talker.makeCache()
         var generatedCodes = [MLXArray]()
         var generatedTokenIds = [Int]()  // Host-side token IDs for repetition penalty (avoids per-step .item() calls)
+        generatedCodes.reserveCapacity(effectiveMaxTokens)
+        generatedTokenIds.reserveCapacity(effectiveMaxTokens)
         let eosTokenId = talkerConfig.codecEosTokenId
 
         // Suppress special tokens
@@ -180,9 +239,9 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
 
         // Pre-allocate code predictor KV caches once; reuse via trim() each step.
         // step=16 matches the exact number of positions needed (vs default 256).
-        let codePredictorCache = talker.codePredictor.makeCache()
+        let codePredictorCache = codePredictor.makeCache()
         for c in codePredictorCache {
-            (c as? KVCacheSimple)?.step = talkerConfig.numCodeGroups
+            c.step = talkerConfig.numCodeGroups
         }
 
         for step in 0 ..< effectiveMaxTokens {
@@ -229,34 +288,96 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
             // Reset pre-allocated caches to reuse buffers (avoids allocation per step)
             for c in codePredictorCache { c.trim(c.offset) }
             var codeTokens = [nextToken]
-            let codeHidden = hidden[0..., (-1)..., 0...]
-            let code0Embed = talker.getInputEmbeddings()(nextToken)
+            codeTokens.reserveCapacity(talkerConfig.numCodeGroups)
+            let codeHidden = hidden.dim(1) == 1 ? hidden : hidden[0..., (-1)..., 0...]
+            let code0Embed = inputEmbedding(nextToken)
+            var codecEmbed = code0Embed
 
             let cpStart = CFAbsoluteTimeGetCurrent()
-            for codeIdx in 0 ..< talkerConfig.numCodeGroups - 1 {
-                let passStart = CFAbsoluteTimeGetCurrent()
+            if codePredictorPrefillEnabled {
+                // Prime KV cache with talker hidden state so all sampled passes run at seqLen=1.
+                codePredictor.prefill(codeHidden, cache: codePredictorCache)
 
-                let codeInput: MLXArray
-                if codeIdx == 0 {
-                    codeInput = concatenated([codeHidden, code0Embed], axis: 1)
-                } else {
-                    codeInput = talker.codePredictor.codecEmbedding[codeIdx - 1](codeTokens.last!)
+                for codeIdx in 0 ..< codePassCount {
+                    let passStart = CFAbsoluteTimeGetCurrent()
+
+                    let codeInput: MLXArray
+                    if codeIdx == 0 {
+                        codeInput = code0Embed
+                    } else {
+                        let nextEmbed = codeEmbeddings[codeIdx - 1](codeTokens.last!)
+                        codecEmbed = codecEmbed + nextEmbed
+                        codeInput = nextEmbed
+                    }
+
+                    let codeLogits = codePredictor.predictStepSingleToken(
+                        codeInput, cache: codePredictorCache, generationStep: codeIdx
+                    )
+
+                    let nextCode: MLXArray
+                    if optimizedCodeSamplerEnabled {
+                        nextCode = sampleCodeToken(
+                            codeLogits,
+                            greedy: codeSamplerGreedy,
+                            invTemperature: codeSamplerInvTemperature
+                        )
+                    } else {
+                        nextCode = sampleToken(codeLogits, temperature: temperature, topP: 1.0)
+                    }
+                    if profiling { eval(nextCode) }
+                    codeTokens.append(nextCode)
+
+                    if profiling {
+                        timings.codePredictorPasses += CFAbsoluteTimeGetCurrent() - passStart
+                        timings.codePredictorPassCount += 1
+                    }
                 }
+            } else {
+                for codeIdx in 0 ..< codePassCount {
+                    let passStart = CFAbsoluteTimeGetCurrent()
 
-                let (codeLogits, _, _) = talker.codePredictor(
-                    codeInput, cache: codePredictorCache, generationStep: codeIdx
-                )
+                    let codeInput: MLXArray
+                    if codeIdx == 0 {
+                        codeInput = concatenated([codeHidden, code0Embed], axis: 1)
+                    } else {
+                        let nextEmbed = codeEmbeddings[codeIdx - 1](codeTokens.last!)
+                        codecEmbed = codecEmbed + nextEmbed
+                        codeInput = nextEmbed
+                    }
 
-                let nextCode = sampleToken(codeLogits, temperature: temperature, topP: 1.0)
-                if profiling { eval(nextCode) }
-                codeTokens.append(nextCode)
+                    let codeLogits = if codeIdx == 0 {
+                        codePredictor.predictStep(
+                            codeInput, cache: codePredictorCache, generationStep: codeIdx
+                        )
+                    } else {
+                        codePredictor.predictStepSingleToken(
+                            codeInput, cache: codePredictorCache, generationStep: codeIdx
+                        )
+                    }
 
-                if profiling {
-                    timings.codePredictorPasses += CFAbsoluteTimeGetCurrent() - passStart
-                    timings.codePredictorPassCount += 1
+                    let nextCode: MLXArray
+                    if optimizedCodeSamplerEnabled {
+                        nextCode = sampleCodeToken(
+                            codeLogits,
+                            greedy: codeSamplerGreedy,
+                            invTemperature: codeSamplerInvTemperature
+                        )
+                    } else {
+                        nextCode = sampleToken(codeLogits, temperature: temperature, topP: 1.0)
+                    }
+                    if profiling { eval(nextCode) }
+                    codeTokens.append(nextCode)
+
+                    if profiling {
+                        timings.codePredictorPasses += CFAbsoluteTimeGetCurrent() - passStart
+                        timings.codePredictorPassCount += 1
+                    }
                 }
             }
             let cpTime = CFAbsoluteTimeGetCurrent() - cpStart
+
+            // Final codebook token embedding (index numCodeGroups-2) is not reused as a next-pass input.
+            codecEmbed = codecEmbed + codeEmbeddings[lastCodeEmbeddingIndex](codeTokens.last!)
 
             let allCodes = concatenated(codeTokens, axis: 1)  // [1, num_code_groups]
             generatedCodes.append(allCodes)
@@ -271,17 +392,15 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                 textEmbed = ttsPadEmbed
             }
 
-            // Sum all code embeddings for next step (reuse code0Embed from above)
-            var codecEmbed = code0Embed
-            for (i, code) in codeTokens.dropFirst().enumerated() {
-                codecEmbed = codecEmbed + talker.codePredictor.codecEmbedding[i](code)
-            }
-
             // Sync eval the full lazy graph (code predictor 15 passes + embedding prep),
             // then free temporary GPU memory so the next step's talker gets clean GPU state.
             inputEmbeds = textEmbed + codecEmbed
-            eval(inputEmbeds)
-            GPU.clearCache()
+            // Co-evaluate `allCodes` so stored per-step codes are materialized tensors,
+            // not references to the full lazy step graph.
+            eval(inputEmbeds, allCodes)
+            if (step + 1) % clearCacheEverySteps == 0 {
+                Memory.clearCache()
+            }
             let embedTime = CFAbsoluteTimeGetCurrent() - t0
 
             if profiling {
@@ -301,7 +420,7 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         let audioSeconds = Double(tokenCount) / 12.0  // 12Hz token rate
         let rtf = tokenGenTime / max(audioSeconds, 0.001)
         let tokenMsg = "Token generation: \(tokenCount) tokens in \(String(format: "%.2f", tokenGenTime))s (\(String(format: "%.1f", tokensPerSec)) tok/s, RTF=\(String(format: "%.2f", rtf))x)"
-        logger.info("\(tokenMsg, privacy: .public)")
+        emitPerf(tokenMsg)
 
         // Log per-component profiling summary
         if profiling && timings.stepCount > 0 {
@@ -327,10 +446,11 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                 embedPrep=\(avg(timings.embeddingPrep)) (\(pct(timings.embeddingPrep))), \
                 stepAvg=\(avg(timings.stepTotal))
                 """
-            logger.info("\(summary, privacy: .public)")
+            emitPerf(summary)
         }
 
         guard !generatedCodes.isEmpty else {
+            Memory.clearCache()
             return MLXArray.zeros([1])
         }
 
@@ -338,25 +458,42 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         let decodeStartTime = CFAbsoluteTimeGetCurrent()
         let codes = stacked(generatedCodes, axis: 1)  // [1, seq_len, num_code_groups]
 
-        // Streaming decode for memory efficiency
-        var audioChunks = [MLXArray]()
-        for chunk in speechTokenizer.streamingDecode(codes, chunkTokens: 100) {
-            audioChunks.append(chunk)
+        let decodeMode = Qwen3TTSFullModel.finalDecodeMode
+        var audio: MLXArray
+        let validLen: Int
+        switch decodeMode {
+        case "stream":
+            // Streaming decode for lower peak memory.
+            var audioChunks = [MLXArray]()
+            for chunk in speechTokenizer.streamingDecode(codes, chunkTokens: 100) {
+                audioChunks.append(chunk)
+            }
+            audio = concatenated(audioChunks, axis: -1)[0]  // Remove batch dim
+            validLen = Int((codes[0..., 0..., 0] .> 0).sum().item(Int32.self)) * speechTokenizer.decodeUpsampleRate
+        case "single":
+            // One decoder call on the full code sequence (fastest if memory allows).
+            let wav = speechTokenizer.decodeSingleChunk(codes, leftContextTokens: 0)
+            audio = wav[0]
+            validLen = Int((codes[0..., 0..., 0] .> 0).sum().item(Int32.self)) * speechTokenizer.decodeUpsampleRate
+        default:
+            // Lower-overhead path with larger internal chunks.
+            let (wav, audioLengths) = speechTokenizer.decode(codes)
+            audio = wav[0]
+            validLen = Int(audioLengths[0].item(Int32.self))
         }
-        var audio = concatenated(audioChunks, axis: -1)[0]  // Remove batch dim
 
-        // Trim to valid length
-        let validLen = Int((codes[0..., 0..., 0] .> 0).sum().item(Int32.self)) * speechTokenizer.decodeUpsampleRate
+        // Trim to valid length.
         if validLen > 0 && validLen < audio.dim(0) {
             audio = audio[..<validLen]
         }
 
         eval(audio)
+        Memory.clearCache()
 
         let decodeTime = CFAbsoluteTimeGetCurrent() - decodeStartTime
         let totalTime = CFAbsoluteTimeGetCurrent() - genStartTime
         let decodeMsg = "Decode: \(String(format: "%.2f", decodeTime))s | Total: \(String(format: "%.2f", totalTime))s for \(String(format: "%.1f", audioSeconds))s audio (overall RTF=\(String(format: "%.2f", totalTime / max(audioSeconds, 0.001)))x)"
-        logger.info("\(decodeMsg, privacy: .public)")
+        emitPerf(decodeMsg)
 
         return audio
     }
@@ -380,6 +517,16 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         guard let speechTokenizer, let tokenizer else { return }
 
         let talkerConfig = config.talkerConfig!
+        let inputEmbedding = talker.getInputEmbeddings()
+        let codePredictor = talker.codePredictor
+        let codeEmbeddings = codePredictor.codecEmbedding
+        let codePassCount = talkerConfig.numCodeGroups - 1
+        let lastCodeEmbeddingIndex = talkerConfig.numCodeGroups - 2
+        let codePredictorPrefillEnabled = Qwen3TTSFullModel.codePredictorPrefillEnabled
+        let optimizedCodeSamplerEnabled = Qwen3TTSFullModel.optimizedCodeSamplerEnabled
+        let clearCacheEverySteps = Qwen3TTSFullModel.clearCacheEverySteps
+        let codeSamplerGreedy = temperature <= 0
+        let codeSamplerInvTemperature: Float = codeSamplerGreedy ? 0 : (1 / temperature)
 
         let (inputEmbedsInit, trailingTextHidden, ttsPadEmbed) = prepareGenerationInputs(
             text: text, language: language, instruct: instruct
@@ -391,6 +538,8 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         let cache = talker.makeCache()
         var generatedCodes = [MLXArray]()
         var generatedTokenIds = [Int]()
+        generatedCodes.reserveCapacity(effectiveMaxTokens)
+        generatedTokenIds.reserveCapacity(effectiveMaxTokens)
         let eosTokenId = talkerConfig.codecEosTokenId
 
         let suppressTokens = (talkerConfig.vocabSize - 1024 ..< talkerConfig.vocabSize)
@@ -401,9 +550,9 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         var totalEmitted = 0  // Number of tokens whose audio has been emitted
 
         // Pre-allocate code predictor KV caches once; reuse via trim() each step.
-        let codePredictorCache = talker.codePredictor.makeCache()
+        let codePredictorCache = codePredictor.makeCache()
         for c in codePredictorCache {
-            (c as? KVCacheSimple)?.step = talkerConfig.numCodeGroups
+            c.step = talkerConfig.numCodeGroups
         }
 
         for step in 0 ..< effectiveMaxTokens {
@@ -426,27 +575,96 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
 
             for c in codePredictorCache { c.trim(c.offset) }
             var codeTokens = [nextToken]
-            let codeHidden = hidden[0..., (-1)..., 0...]
-            let code0Embed = talker.getInputEmbeddings()(nextToken)
+            codeTokens.reserveCapacity(talkerConfig.numCodeGroups)
+            let codeHidden = hidden.dim(1) == 1 ? hidden : hidden[0..., (-1)..., 0...]
+            let code0Embed = inputEmbedding(nextToken)
+            var codecEmbed = code0Embed
 
-            for codeIdx in 0 ..< talkerConfig.numCodeGroups - 1 {
-                let codeInput: MLXArray
-                if codeIdx == 0 {
-                    codeInput = concatenated([codeHidden, code0Embed], axis: 1)
-                } else {
-                    codeInput = talker.codePredictor.codecEmbedding[codeIdx - 1](codeTokens.last!)
+            if codePredictorPrefillEnabled {
+                codePredictor.prefill(codeHidden, cache: codePredictorCache)
+
+                for codeIdx in 0 ..< codePassCount {
+                    let codeInput: MLXArray
+                    if codeIdx == 0 {
+                        codeInput = code0Embed
+                    } else {
+                        let nextEmbed = codeEmbeddings[codeIdx - 1](codeTokens.last!)
+                        codecEmbed = codecEmbed + nextEmbed
+                        codeInput = nextEmbed
+                    }
+
+                    let codeLogits = codePredictor.predictStepSingleToken(
+                        codeInput, cache: codePredictorCache, generationStep: codeIdx
+                    )
+
+                    let nextCode: MLXArray
+                    if optimizedCodeSamplerEnabled {
+                        nextCode = sampleCodeToken(
+                            codeLogits,
+                            greedy: codeSamplerGreedy,
+                            invTemperature: codeSamplerInvTemperature
+                        )
+                    } else {
+                        nextCode = sampleToken(codeLogits, temperature: temperature, topP: 1.0)
+                    }
+                    codeTokens.append(nextCode)
                 }
+            } else {
+                for codeIdx in 0 ..< codePassCount {
+                    let codeInput: MLXArray
+                    if codeIdx == 0 {
+                        codeInput = concatenated([codeHidden, code0Embed], axis: 1)
+                    } else {
+                        let nextEmbed = codeEmbeddings[codeIdx - 1](codeTokens.last!)
+                        codecEmbed = codecEmbed + nextEmbed
+                        codeInput = nextEmbed
+                    }
 
-                let (codeLogits, _, _) = talker.codePredictor(
-                    codeInput, cache: codePredictorCache, generationStep: codeIdx
-                )
+                    let codeLogits = if codeIdx == 0 {
+                        codePredictor.predictStep(
+                            codeInput, cache: codePredictorCache, generationStep: codeIdx
+                        )
+                    } else {
+                        codePredictor.predictStepSingleToken(
+                            codeInput, cache: codePredictorCache, generationStep: codeIdx
+                        )
+                    }
 
-                let nextCode = sampleToken(codeLogits, temperature: temperature, topP: 1.0)
-                codeTokens.append(nextCode)
+                    let nextCode: MLXArray
+                    if optimizedCodeSamplerEnabled {
+                        nextCode = sampleCodeToken(
+                            codeLogits,
+                            greedy: codeSamplerGreedy,
+                            invTemperature: codeSamplerInvTemperature
+                        )
+                    } else {
+                        nextCode = sampleToken(codeLogits, temperature: temperature, topP: 1.0)
+                    }
+                    codeTokens.append(nextCode)
+                }
             }
+
+            codecEmbed = codecEmbed + codeEmbeddings[lastCodeEmbeddingIndex](codeTokens.last!)
 
             let allCodes = concatenated(codeTokens, axis: 1)
             generatedCodes.append(allCodes)
+
+            // Prepare next input
+            let textEmbed: MLXArray
+            if trailingIdx < trailingTextHidden.dim(1) {
+                textEmbed = trailingTextHidden[0..., trailingIdx ..< (trailingIdx + 1), 0...]
+                trailingIdx += 1
+            } else {
+                textEmbed = ttsPadEmbed
+            }
+
+            inputEmbeds = textEmbed + codecEmbed
+            // Co-evaluate `allCodes` so stored per-step codes are materialized tensors,
+            // not references to the full lazy step graph.
+            eval(inputEmbeds, allCodes)
+            if (step + 1) % clearCacheEverySteps == 0 {
+                Memory.clearCache()
+            }
 
             // Sliding window decode: emit audio every `emitEvery` tokens
             let pendingCount = generatedCodes.count - totalEmitted
@@ -471,24 +689,6 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                 }
                 totalEmitted += emitEvery
             }
-
-            // Prepare next input
-            let textEmbed: MLXArray
-            if trailingIdx < trailingTextHidden.dim(1) {
-                textEmbed = trailingTextHidden[0..., trailingIdx ..< (trailingIdx + 1), 0...]
-                trailingIdx += 1
-            } else {
-                textEmbed = ttsPadEmbed
-            }
-
-            var codecEmbed = code0Embed
-            for (i, code) in codeTokens.dropFirst().enumerated() {
-                codecEmbed = codecEmbed + talker.codePredictor.codecEmbedding[i](code)
-            }
-
-            inputEmbeds = textEmbed + codecEmbed
-            eval(inputEmbeds)
-            GPU.clearCache()
         }
 
         // Decode and yield any remaining tokens
@@ -518,6 +718,8 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                 onAudioChunk(chunk)
             }
         }
+
+        Memory.clearCache()
     }
 
     // MARK: - Prepare generation inputs
@@ -674,6 +876,16 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         // Simple temperature sampling
         let token = categorical(logitsSlice / temperature)
         return token.reshaped(1, 1)
+    }
+
+    /// Hot path for code predictor sampling: equivalent to sampleToken(topP=1, no penalties/suppression).
+    @inline(__always)
+    func sampleCodeToken(_ logits: MLXArray, greedy: Bool, invTemperature: Float) -> MLXArray {
+        let logitsSlice = logits[0..., (-1)..., 0...].squeezed(axis: 1)
+        if greedy {
+            return argMax(logitsSlice, axis: -1, keepDims: true)
+        }
+        return categorical(logitsSlice * invTemperature).reshaped(1, 1)
     }
 
     // MARK: - fromPretrained

@@ -36,7 +36,10 @@ final class DependencyContainer: ObservableObject {
             textExtractor: textExtractor,
             speechEngine: speechEngine,
             playbackManager: audioPlaybackManager,
-            settings: settingsManager
+            settings: settingsManager,
+            prepareForSpeech: { [weak self] in
+                self?.transcriptionEngine.releaseModelForTTSIfIdle()
+            }
         )
     }()
 

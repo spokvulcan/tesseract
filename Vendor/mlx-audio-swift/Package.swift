@@ -80,7 +80,12 @@ let package = Package(
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Transformers", package: "swift-transformers"),
             ],
-            path: "Sources/MLXAudioTTS"
+            path: "Sources/MLXAudioTTS",
+            swiftSettings: [
+                // TTS generation is CPU-bound on graph construction in debug.
+                // Compile this target optimized while preserving debug workflow.
+                .unsafeFlags(["-O"], .when(configuration: .debug))
+            ]
         ),
 
         // MARK: - MLXAudioSTT

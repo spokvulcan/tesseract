@@ -1,6 +1,129 @@
 # TTS Performance Investigation
 
-## Current State (2026-02-07)
+## Update (2026-02-08): Release, build mode, and runtime findings
+
+### Memory regression fix (2026-02-08)
+
+- **Symptom in app (release run):** process resident memory could climb to ~34 GB after repeated TTS usage.
+- **Main causes addressed:**
+  1. App TTS path did not set an explicit MLX cache cap (headless CLI already used one).
+  2. Per-step `allCodes` tensors were stored without explicit co-evaluation, allowing lazy graph retention risk.
+  3. Fused QKV concat tensors were cached lazily; now materialized once to avoid repeated concat graph buildup.
+- **Fixes applied:**
+  - `tesseract/Features/Speech/SpeechEngine.swift`
+    - Added `QWEN3TTS_CACHE_LIMIT_MB` (default `100`) and apply via `Memory.cacheLimit` before generation.
+    - Added post-generate `Memory.clearCache()`.
+  - `Vendor/mlx-audio-swift/.../Qwen3TTSModel.swift`
+    - Co-evaluate `eval(inputEmbeds, allCodes)` in generation loops.
+    - Added end-of-generation/end-of-stream `Memory.clearCache()`.
+  - `Vendor/mlx-audio-swift/.../Qwen3TTSCodePredictor.swift` and `.../Qwen3TTSTalker.swift`
+    - Materialize fused QKV tensors once (`eval(weight[, bias])`) when first built.
+- **Post-fix release headless check (same prompt/settings):**
+  - `36.8 tok/s`, generation `RTF=0.33x`, overall `RTF=0.36x`
+  - MLX snapshot after run: `Active ~4.6 GB`, `Cache ~210 MB` (no quality regression observed)
+
+### Goal status
+
+- Target: overall `RTF=0.50x`.
+- Current best in this session: **overall `RTF=0.56x`** (release build + `QWEN3TTS_DECODE_MODE=single`).
+- Generation-only target was reached: **`24.1 tok/s`, generation `RTF=0.50x`**.
+
+### Key measured results (same benchmark text, M3 Max)
+
+| Mode | Token generation | Decode | Overall |
+| --- | --- | --- | --- |
+| Debug (`scripts/tts-headless.sh run`) | 14.6 tok/s, gen RTF 0.82x | 2.26s | **RTF 0.90x** |
+| Release + `decode_mode=chunked` | 23.4 tok/s, gen RTF 0.51x | 2.19s | **RTF 0.59x** |
+| Release + `decode_mode=stream` | 19.4 tok/s, gen RTF 0.62x | 2.39s | **RTF 0.70x** |
+| Release + `decode_mode=single` | 24.1 tok/s, gen RTF 0.50x | 1.81s | **RTF 0.56x** |
+
+### Main conclusions
+
+1. **Build configuration is the largest lever.**  
+   Release build provides the biggest jump (debug ~14-15 tok/s -> release ~23-24 tok/s).
+2. **Runtime knobs matter more in debug than release.**  
+   `cpPrefill` / `clearCacheEvery` tuning gave noticeable debug gains; release gains are smaller.
+3. **Final decode strategy affects end-to-end RTF.**  
+   `single` is fastest (best overall RTF) but uses highest peak memory.
+4. **`MLX_METAL_FAST_SYNCH=1` is currently unusable here.**  
+   It crashes with: `Unable to load kernel input_coherent`.
+
+### Code changes applied in this session
+
+1. **Q/K/V projection fusion (graph/node reduction)**
+   - `Qwen3TTSCodePredictor.swift`: fused q/k/v linear projection into one matmul + split.
+   - `Qwen3TTSTalker.swift`: same fused q/k/v projection path.
+2. **Runtime default tuning**
+   - `QWEN3TTS_CP_PREFILL` default changed to disabled (`false` unless explicitly `1`).
+   - `QWEN3TTS_CLEAR_CACHE_EVERY` default changed from `1` to `4`.
+3. **Headless perf logging support**
+   - `QWEN3TTS_STDOUT_LOG=1` mirrors perf lines to stdout (`NSLog`) for CLI benchmarking.
+4. **Final decode mode control**
+   - `QWEN3TTS_DECODE_MODE` added:
+     - `chunked` (default)
+     - `stream`
+     - `single`
+5. **Debug compilation tuning for TTS target**
+   - `Vendor/mlx-audio-swift/Package.swift`: `MLXAudioTTS` debug target now uses `-O`.
+
+### Recommended settings right now
+
+- **For app/dev workflows (debug)**:
+  - keep defaults (cpPrefill off, clear cache every 4, decode mode chunked)
+- **For max speed benchmarking**:
+  - use release build
+  - set `QWEN3TTS_DECODE_MODE=single`
+  - set `QWEN3TTS_STDOUT_LOG=1` for easy capture
+
+### Repro commands
+
+Debug (headless wrapper):
+
+```bash
+scripts/tts-headless.sh build
+QWEN3TTS_STDOUT_LOG=1 scripts/tts-headless.sh run \
+  --text "..." --output /tmp/debug.wav --max_tokens 800 --temperature 0 --top_p 1.0
+```
+
+Release (direct binary):
+
+```bash
+swift build --package-path Vendor/mlx-audio-swift -c release --product mlx-audio-swift-tts
+RELEASE_DIR=$(swift build --package-path Vendor/mlx-audio-swift -c release --product mlx-audio-swift-tts --show-bin-path)
+cp ~/Library/Developer/Xcode/DerivedData/tesseract-*/Build/Products/Debug/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib "$RELEASE_DIR/default.metallib"
+cd "$RELEASE_DIR"
+QWEN3TTS_STDOUT_LOG=1 QWEN3TTS_DECODE_MODE=single ./mlx-audio-swift-tts \
+  --model mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16 \
+  --text "..." --output /tmp/release.wav --max_tokens 800 --temperature 0 --top_p 1.0
+```
+
+### Release/build findings and pitfalls
+
+- **Always separate debug vs release numbers in notes.**  
+  Debug under-reports max performance by a large margin (about 14-15 tok/s debug vs 23-24 tok/s release in this session).
+- **Project build verification command (required after code changes):**
+
+```bash
+xcodebuild build -project tesseract.xcodeproj -scheme tesseract
+```
+
+- **Release app build (for realistic app-level perf checks):**
+
+```bash
+xcodebuild build -project tesseract.xcodeproj -scheme tesseract -configuration Release
+```
+
+- **SwiftPM release runner requires `default.metallib` present next to binary.**  
+  If missing, the release benchmark is not valid; copy it from DerivedData as shown in the repro commands.
+- **`MLX_METAL_FAST_SYNCH=1` currently crashes in this environment** with `Unable to load kernel input_coherent`; keep it unset.
+- **Debug tuning in `Package.swift`**: `-O` for `MLXAudioTTS` debug target helped; adding debug WMO caused an index-store build error and is not used.
+
+### Remaining gap to target
+
+- Best observed overall RTF in this session: `0.56x`.
+- Needed for goal: additional ~10-12% end-to-end speedup to hit `0.50x` overall.
+
+## Historical State (2026-02-07 snapshot)
 
 ### Playback: SOLVED
 
@@ -8,14 +131,14 @@ Audio playback quality is perfect. `AudioPlaybackManager` accumulates all chunks
 
 ### Generation Speed
 
-**Latest benchmarks (MLXFast.RoPE + code0Embed reuse):**
+**Historical debug benchmarks (MLXFast.RoPE + code0Embed reuse):**
 
 ```
 Token generation: 112 tokens in 5.78s (19.4 tok/s, RTF=0.62x)
 Token generation: 312 tokens in 16.38s (19.0 tok/s, RTF=0.63x)
 ```
 
-- **Current**: 18.2-19.4 tok/s → RTF 0.62-0.66x (well above real-time)
+- **Historical (debug)**: 18.2-19.4 tok/s → RTF 0.62-0.66x (well above real-time)
 - **Target**: ~22-26 tok/s → RTF ~0.5x (Python mlx-audio)
 - **Gap**: ~1.3x slower than Python (down from 2.2x original baseline)
 
@@ -35,7 +158,7 @@ Embedding prep:     1.34ms ( 1.1%)
 Total step avg:   122.63ms
 ```
 
-**Note**: Profiling data above is from session 1 baseline (10.6 tok/s). Should be re-profiled after optimizations.
+**Note**: Profiling data above is a baseline snapshot from session 1 (10.6 tok/s) kept for historical comparison.
 
 ## Optimizations Applied
 
@@ -87,7 +210,7 @@ Long text (113 tokens): 20.1 tok/s, RTF=1.60x, progress bar stabilizes at 22-25 
 ```
 
 **Python steady-state: ~22-26 tok/s** on this exact machine.
-**Swift current: ~18.2-19.4 tok/s** (pending quality fix confirmation).
+**Swift latest observed:** ~14-15 tok/s in debug headless runs, and ~23-24 tok/s in release package runs.
 
 Python mlx-audio does NOT use `mx.compile()`. Generation loop structure is identical to Swift.
 Python creates fresh `code_cache` each step (vs Swift pre-allocate + trim — our approach should be faster).

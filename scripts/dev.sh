@@ -3,9 +3,9 @@
 # Usage: scripts/dev.sh <command>
 #
 # Commands:
-#   build   Build the project (shows errors/warnings only)
-#   run     Kill running app + launch the built app
-#   dev     Build + kill + run (the main workflow)
+#   build   Build the project (Debug; shows errors/warnings only)
+#   run     Kill running app + launch the built app (Debug)
+#   dev     Build + kill + run using Release (main perf workflow)
 #   clean   Clean build artifacts and derived data
 #   log     Tail system log filtered to tesseract
 
@@ -20,10 +20,11 @@ DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
 # --- Helpers ---------------------------------------------------------------
 
 find_app() {
+    local configuration="${1:-Debug}"
     local app_path
-    app_path=$(find $DERIVED_DATA_GLOB -path "*/Build/Products/Debug/tesseract.app" -not -path "*/Index.noindex/*" -maxdepth 5 2>/dev/null | head -1)
+    app_path=$(find $DERIVED_DATA_GLOB -path "*/Build/Products/$configuration/tesseract.app" -not -path "*/Index.noindex/*" -maxdepth 5 2>/dev/null | head -1)
     if [ -z "$app_path" ]; then
-        echo "Error: tesseract.app not found in DerivedData. Run 'scripts/dev.sh build' first." >&2
+        echo "Error: tesseract.app ($configuration) not found in DerivedData. Run a matching build first." >&2
         return 1
     fi
     echo "$app_path"
@@ -39,10 +40,11 @@ kill_app() {
 # --- Commands --------------------------------------------------------------
 
 cmd_build() {
-    echo "Building tesseract..."
+    local configuration="${1:-Debug}"
+    echo "Building tesseract ($configuration)..."
     local build_output
     local exit_code=0
-    build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" 2>&1) || exit_code=$?
+    build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" -configuration "$configuration" 2>&1) || exit_code=$?
 
     # Show errors, warnings, and the final BUILD result
     echo "$build_output" | grep -E "^(error:|warning:|Build |BUILD |\*\*)" || true
@@ -60,8 +62,9 @@ cmd_build() {
 }
 
 cmd_run() {
+    local configuration="${1:-Debug}"
     local app_path
-    app_path=$(find_app) || return 1
+    app_path=$(find_app "$configuration") || return 1
 
     kill_app
     echo "Launching $app_path ..."
@@ -70,9 +73,10 @@ cmd_run() {
 }
 
 cmd_dev() {
-    cmd_build
+    local configuration="Release"
+    cmd_build "$configuration"
     echo ""
-    cmd_run
+    cmd_run "$configuration"
 }
 
 cmd_clean() {
@@ -137,9 +141,9 @@ usage() {
     echo "Usage: scripts/dev.sh <command>"
     echo ""
     echo "Commands:"
-    echo "  build   Build the project (shows errors/warnings only)"
-    echo "  run     Kill running app + launch the built app"
-    echo "  dev     Build + kill + run (the main workflow)"
+    echo "  build   Build the project (Debug; shows errors/warnings only)"
+    echo "  run     Kill running app + launch the built app (Debug)"
+    echo "  dev     Build + kill + run using Release (the main perf workflow)"
     echo "  clean   Clean build artifacts and derived data"
     echo "  log     Tail system log filtered to tesseract"
 }

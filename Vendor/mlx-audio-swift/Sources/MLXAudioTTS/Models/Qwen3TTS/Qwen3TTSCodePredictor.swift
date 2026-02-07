@@ -6,6 +6,16 @@ import MLXNN
 @preconcurrency import MLXLMCommon
 import Foundation
 
+private let compiledSiluMul: @Sendable (MLXArray, MLXArray) -> MLXArray = compile(shapeless: true) { gate, up in
+    silu(gate) * up
+}
+
+private func computeRopeFreqs(dim: Int, base: Float) -> MLXArray {
+    let indices = MLXArray(stride(from: 0, to: dim, by: 2)).asType(.float32)
+    let exponent = indices / Float(dim)
+    return MLX.pow(MLXArray(base), exponent)
+}
+
 // MARK: - Code Predictor Attention
 
 final class CodePredictorAttention: Module {
@@ -13,7 +23,7 @@ final class CodePredictorAttention: Module {
     let numKvHeads: Int
     let headDim: Int
     let scale: Float
-    let ropeBase: Float
+    let ropeFreqs: MLXArray
 
     @ModuleInfo(key: "q_proj") var qProj: Linear
     @ModuleInfo(key: "k_proj") var kProj: Linear
@@ -21,13 +31,16 @@ final class CodePredictorAttention: Module {
     @ModuleInfo(key: "o_proj") var oProj: Linear
     @ModuleInfo(key: "q_norm") var qNorm: RMSNorm
     @ModuleInfo(key: "k_norm") var kNorm: RMSNorm
+    private var fusedQKVReady = false
+    private var fusedQKVWeight: MLXArray?
+    private var fusedQKVBias: MLXArray?
 
     init(config: Qwen3TTSTalkerCodePredictorConfig, layerIdx: Int) {
         self.numHeads = config.numAttentionHeads
         self.numKvHeads = config.numKeyValueHeads
         self.headDim = config.headDim
         self.scale = 1.0 / Foundation.sqrt(Float(headDim))
-        self.ropeBase = config.ropeTheta
+        self.ropeFreqs = computeRopeFreqs(dim: config.headDim, base: config.ropeTheta)
 
         self._qProj.wrappedValue = Linear(config.hiddenSize, numHeads * headDim, bias: config.attentionBias)
         self._kProj.wrappedValue = Linear(config.hiddenSize, numKvHeads * headDim, bias: config.attentionBias)
@@ -37,16 +50,61 @@ final class CodePredictorAttention: Module {
         self._kNorm.wrappedValue = RMSNorm(dimensions: headDim, eps: config.rmsNormEps)
     }
 
+    @inline(__always)
+    private func ensureFusedQKV() {
+        if fusedQKVReady { return }
+        fusedQKVWeight = concatenated([qProj.weight, kProj.weight, vProj.weight], axis: 0)
+        if let qBias = qProj.bias, let kBias = kProj.bias, let vBias = vProj.bias {
+            fusedQKVBias = concatenated([qBias, kBias, vBias], axis: 0)
+        } else {
+            fusedQKVBias = nil
+        }
+        // Materialize once to avoid rebuilding/retaining large concat graphs on hot path.
+        if let weight = fusedQKVWeight, let bias = fusedQKVBias {
+            eval(weight, bias)
+        } else if let weight = fusedQKVWeight {
+            eval(weight)
+        }
+        fusedQKVReady = true
+    }
+
+    @inline(__always)
+    private func projectQKV(_ x: MLXArray, batch: Int, seqLen: Int) -> (MLXArray, MLXArray, MLXArray) {
+        ensureFusedQKV()
+
+        let qkv: MLXArray
+        if let bias = fusedQKVBias, let weight = fusedQKVWeight {
+            qkv = addMM(bias, x, weight.T)
+        } else if let weight = fusedQKVWeight {
+            qkv = matmul(x, weight.T)
+        } else {
+            let q = qProj(x).reshaped(batch, seqLen, numHeads, headDim)
+            let k = kProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
+            let v = vProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
+            return (q, k, v)
+        }
+
+        let qSize = numHeads * headDim
+        let kSize = numKvHeads * headDim
+        let parts = split(qkv, indices: [qSize, qSize + kSize], axis: -1)
+        let q = parts[0].reshaped(batch, seqLen, numHeads, headDim)
+        let k = parts[1].reshaped(batch, seqLen, numKvHeads, headDim)
+        let v = parts[2].reshaped(batch, seqLen, numKvHeads, headDim)
+        return (q, k, v)
+    }
+
     func callAsFunction(
         _ x: MLXArray,
-        mask: MLXArray? = nil,
-        cache: (any KVCache)? = nil
+        mask: MLXFast.ScaledDotProductAttentionMaskMode = .none,
+        cache: KVCacheSimple? = nil
     ) -> MLXArray {
+        if let cache {
+            return callAsFunction(x, mask: mask, cache: cache)
+        }
+
         let (batch, seqLen, _) = (x.dim(0), x.dim(1), x.dim(2))
 
-        var q = qProj(x).reshaped(batch, seqLen, numHeads, headDim)
-        var k = kProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
-        let v = vProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
+        var (q, k, v) = projectQKV(x, batch: batch, seqLen: seqLen)
 
         q = qNorm(q)
         k = kNorm(k)
@@ -57,21 +115,73 @@ final class CodePredictorAttention: Module {
 
         // Fused RoPE AFTER transpose — x.shape[-2] must be seqLen, not numHeads
         let offset = cache?.offset ?? 0
-        q = MLXFast.RoPE(q, dimensions: headDim, traditional: false, base: ropeBase, scale: 1.0, offset: offset)
-        k = MLXFast.RoPE(k, dimensions: headDim, traditional: false, base: ropeBase, scale: 1.0, offset: offset)
+        q = MLXFast.RoPE(
+            q,
+            dimensions: headDim,
+            traditional: false,
+            base: nil,
+            scale: 1.0,
+            offset: offset,
+            freqs: ropeFreqs
+        )
+        k = MLXFast.RoPE(
+            k,
+            dimensions: headDim,
+            traditional: false,
+            base: nil,
+            scale: 1.0,
+            offset: offset,
+            freqs: ropeFreqs
+        )
 
-        if let cache {
-            let (ck, cv) = cache.update(keys: k, values: vt)
-            let output = MLXFast.scaledDotProductAttention(
-                queries: q, keys: ck, values: cv, scale: scale, mask: mask
-            )
-            return oProj(output.transposed(0, 2, 1, 3).reshaped(batch, seqLen, -1))
-        } else {
-            let output = MLXFast.scaledDotProductAttention(
-                queries: q, keys: k, values: vt, scale: scale, mask: mask
-            )
-            return oProj(output.transposed(0, 2, 1, 3).reshaped(batch, seqLen, -1))
-        }
+        let output = MLXFast.scaledDotProductAttention(
+            queries: q, keys: k, values: vt, scale: scale, mask: mask
+        )
+        return oProj(output.transposed(0, 2, 1, 3).reshaped(batch, seqLen, -1))
+    }
+
+    @inline(__always)
+    func callAsFunction(
+        _ x: MLXArray,
+        mask: MLXFast.ScaledDotProductAttentionMaskMode = .none,
+        cache: KVCacheSimple
+    ) -> MLXArray {
+        let (batch, seqLen, _) = (x.dim(0), x.dim(1), x.dim(2))
+
+        var (q, k, v) = projectQKV(x, batch: batch, seqLen: seqLen)
+
+        q = qNorm(q)
+        k = kNorm(k)
+
+        q = q.transposed(0, 2, 1, 3)
+        k = k.transposed(0, 2, 1, 3)
+        let vt = v.transposed(0, 2, 1, 3)
+
+        let offset = cache.offset
+        q = MLXFast.RoPE(
+            q,
+            dimensions: headDim,
+            traditional: false,
+            base: nil,
+            scale: 1.0,
+            offset: offset,
+            freqs: ropeFreqs
+        )
+        k = MLXFast.RoPE(
+            k,
+            dimensions: headDim,
+            traditional: false,
+            base: nil,
+            scale: 1.0,
+            offset: offset,
+            freqs: ropeFreqs
+        )
+
+        let (ck, cv) = cache.update(keys: k, values: vt)
+        let output = MLXFast.scaledDotProductAttention(
+            queries: q, keys: ck, values: cv, scale: scale, mask: mask
+        )
+        return oProj(output.transposed(0, 2, 1, 3).reshaped(batch, seqLen, -1))
     }
 }
 
@@ -89,7 +199,7 @@ final class CodePredictorMLP: Module {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        downProj(silu(gateProj(x)) * upProj(x))
+        downProj(compiledSiluMul(gateProj(x), upProj(x)))
     }
 }
 
@@ -110,8 +220,23 @@ final class CodePredictorDecoderLayer: Module {
 
     func callAsFunction(
         _ x: MLXArray,
-        mask: MLXArray? = nil,
-        cache: (any KVCache)? = nil
+        mask: MLXFast.ScaledDotProductAttentionMaskMode = .none,
+        cache: KVCacheSimple? = nil
+    ) -> MLXArray {
+        if let cache {
+            return callAsFunction(x, mask: mask, cache: cache)
+        }
+
+        var out = x + selfAttn(inputLayernorm(x), mask: mask, cache: cache)
+        out = out + mlp(postAttentionLayernorm(out))
+        return out
+    }
+
+    @inline(__always)
+    func callAsFunction(
+        _ x: MLXArray,
+        mask: MLXFast.ScaledDotProductAttentionMaskMode = .none,
+        cache: KVCacheSimple
     ) -> MLXArray {
         var out = x + selfAttn(inputLayernorm(x), mask: mask, cache: cache)
         out = out + mlp(postAttentionLayernorm(out))
@@ -146,23 +271,39 @@ final class CodePredictorModel: Module {
     func callAsFunction(
         _ inputsEmbeds: MLXArray,
         mask: MLXArray? = nil,
-        cache: [any KVCache]? = nil
+        cache: [KVCacheSimple]? = nil
     ) -> MLXArray {
-        let seqLen = inputsEmbeds.dim(1)
-
-        var causalMask = mask
-        if causalMask == nil && seqLen > 1 {
-            causalMask = MultiHeadAttention.createAdditiveCausalMask(seqLen).asType(inputsEmbeds.dtype)
-        }
+        let attentionMask: MLXFast.ScaledDotProductAttentionMaskMode =
+            if let mask {
+                .array(mask)
+            } else {
+                inputsEmbeds.dim(1) > 1 ? .causal : .none
+            }
 
         var x = inputsEmbeds
-        for (i, layer) in layers.enumerated() {
-            x = layer(x, mask: causalMask, cache: cache?[i])
+        if let cache {
+            for i in layers.indices {
+                x = layers[i](x, mask: attentionMask, cache: cache[i])
+            }
+        } else {
+            for layer in layers {
+                x = layer(x, mask: attentionMask, cache: nil)
+            }
         }
         return norm(x)
     }
 
-    func makeCache() -> [any KVCache] {
+    /// Specialized path for seqLen=1 autoregressive decoding.
+    @inline(__always)
+    func callAsFunctionSingleToken(_ inputsEmbeds: MLXArray, cache: [KVCacheSimple]) -> MLXArray {
+        var x = inputsEmbeds
+        for i in layers.indices {
+            x = layers[i](x, mask: .none, cache: cache[i])
+        }
+        return norm(x)
+    }
+
+    func makeCache() -> [KVCacheSimple] {
         layers.map { _ in KVCacheSimple() }
     }
 }
@@ -199,9 +340,9 @@ final class Qwen3TTSCodePredictor: Module {
 
     func callAsFunction(
         _ inputsEmbeds: MLXArray,
-        cache: [any KVCache]? = nil,
+        cache: [KVCacheSimple]? = nil,
         generationStep: Int = 0
-    ) -> (MLXArray, [any KVCache]?, Int) {
+    ) -> (MLXArray, [KVCacheSimple]?, Int) {
         var embeds = inputsEmbeds
         if let proj = projection {
             embeds = proj(embeds)
@@ -212,7 +353,49 @@ final class Qwen3TTSCodePredictor: Module {
         return (logits, cache, generationStep + 1)
     }
 
-    func makeCache() -> [any KVCache] {
+    /// Fast path for autoregressive codebook generation loops.
+    /// Returns logits for the configured codebook head.
+    @inline(__always)
+    func predictStep(
+        _ inputsEmbeds: MLXArray,
+        cache: [KVCacheSimple],
+        generationStep: Int
+    ) -> MLXArray {
+        var embeds = inputsEmbeds
+        if let proj = projection {
+            embeds = proj(embeds)
+        }
+        let x = model(embeds, cache: cache)
+        let lastHidden = x[0..., (-1)..., 0...]
+        return lmHead[generationStep](lastHidden)
+    }
+
+    /// Fast path when the predictor input is a single token (`seqLen=1`).
+    @inline(__always)
+    func predictStepSingleToken(
+        _ inputsEmbeds: MLXArray,
+        cache: [KVCacheSimple],
+        generationStep: Int
+    ) -> MLXArray {
+        var embeds = inputsEmbeds
+        if let proj = projection {
+            embeds = proj(embeds)
+        }
+        let x = model.callAsFunctionSingleToken(embeds, cache: cache)
+        return lmHead[generationStep](x)
+    }
+
+    /// Prime code predictor KV cache with context embeddings (no sampling/logits needed).
+    /// This enables subsequent autoregressive passes to run as single-token (`seqLen=1`) steps.
+    func prefill(_ inputsEmbeds: MLXArray, cache: [KVCacheSimple]) {
+        var embeds = inputsEmbeds
+        if let proj = projection {
+            embeds = proj(embeds)
+        }
+        _ = model(embeds, cache: cache)
+    }
+
+    func makeCache() -> [KVCacheSimple] {
         model.makeCache()
     }
 }

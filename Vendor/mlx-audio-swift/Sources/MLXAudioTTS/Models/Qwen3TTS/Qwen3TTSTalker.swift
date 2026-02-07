@@ -6,12 +6,22 @@ import MLXNN
 @preconcurrency import MLXLMCommon
 import Foundation
 
+private let compiledSiluMul: @Sendable (MLXArray, MLXArray) -> MLXArray = compile(shapeless: true) { gate, up in
+    silu(gate) * up
+}
+
 // MARK: - Compute inv_freq for RoPE
 
 private func computeInvFreq(dim: Int, base: Float) -> MLXArray {
     let arange = MLXArray(stride(from: 0, to: dim, by: 2)).asType(.float32)
     let exponent = arange / Float(dim)
     return 1.0 / MLXArray(base).pow(exponent)
+}
+
+private func computeRopeFreqs(dim: Int, base: Float) -> MLXArray {
+    let indices = MLXArray(stride(from: 0, to: dim, by: 2)).asType(.float32)
+    let exponent = indices / Float(dim)
+    return MLX.pow(MLXArray(base), exponent)
 }
 
 // MARK: - Multimodal Rotary Embedding (3D MRoPE)
@@ -107,7 +117,7 @@ final class TalkerAttention: Module {
     let numKvHeads: Int
     let headDim: Int
     let scale: Float
-    let ropeBase: Float
+    let ropeFreqs: MLXArray
 
     @ModuleInfo(key: "q_proj") var qProj: Linear
     @ModuleInfo(key: "k_proj") var kProj: Linear
@@ -115,13 +125,16 @@ final class TalkerAttention: Module {
     @ModuleInfo(key: "o_proj") var oProj: Linear
     @ModuleInfo(key: "q_norm") var qNorm: RMSNorm
     @ModuleInfo(key: "k_norm") var kNorm: RMSNorm
+    private var fusedQKVReady = false
+    private var fusedQKVWeight: MLXArray?
+    private var fusedQKVBias: MLXArray?
 
     init(config: Qwen3TTSTalkerConfig, layerIdx: Int) {
         self.numHeads = config.numAttentionHeads
         self.numKvHeads = config.numKeyValueHeads
         self.headDim = config.headDim
         self.scale = 1.0 / Foundation.sqrt(Float(headDim))
-        self.ropeBase = config.ropeTheta
+        self.ropeFreqs = computeRopeFreqs(dim: config.headDim, base: config.ropeTheta)
 
         self._qProj.wrappedValue = Linear(config.hiddenSize, numHeads * headDim, bias: config.attentionBias)
         self._kProj.wrappedValue = Linear(config.hiddenSize, numKvHeads * headDim, bias: config.attentionBias)
@@ -131,16 +144,61 @@ final class TalkerAttention: Module {
         self._kNorm.wrappedValue = RMSNorm(dimensions: headDim, eps: config.rmsNormEps)
     }
 
+    @inline(__always)
+    private func ensureFusedQKV() {
+        if fusedQKVReady { return }
+        fusedQKVWeight = concatenated([qProj.weight, kProj.weight, vProj.weight], axis: 0)
+        if let qBias = qProj.bias, let kBias = kProj.bias, let vBias = vProj.bias {
+            fusedQKVBias = concatenated([qBias, kBias, vBias], axis: 0)
+        } else {
+            fusedQKVBias = nil
+        }
+        // Materialize once to avoid rebuilding/retaining large concat graphs on hot path.
+        if let weight = fusedQKVWeight, let bias = fusedQKVBias {
+            eval(weight, bias)
+        } else if let weight = fusedQKVWeight {
+            eval(weight)
+        }
+        fusedQKVReady = true
+    }
+
+    @inline(__always)
+    private func projectQKV(_ x: MLXArray, batch: Int, seqLen: Int) -> (MLXArray, MLXArray, MLXArray) {
+        ensureFusedQKV()
+
+        let qkv: MLXArray
+        if let bias = fusedQKVBias, let weight = fusedQKVWeight {
+            qkv = addMM(bias, x, weight.T)
+        } else if let weight = fusedQKVWeight {
+            qkv = matmul(x, weight.T)
+        } else {
+            let q = qProj(x).reshaped(batch, seqLen, numHeads, headDim)
+            let k = kProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
+            let v = vProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
+            return (q, k, v)
+        }
+
+        let qSize = numHeads * headDim
+        let kSize = numKvHeads * headDim
+        let parts = split(qkv, indices: [qSize, qSize + kSize], axis: -1)
+        let q = parts[0].reshaped(batch, seqLen, numHeads, headDim)
+        let k = parts[1].reshaped(batch, seqLen, numKvHeads, headDim)
+        let v = parts[2].reshaped(batch, seqLen, numKvHeads, headDim)
+        return (q, k, v)
+    }
+
     func callAsFunction(
         _ x: MLXArray,
-        mask: MLXArray? = nil,
-        cache: (any KVCache)? = nil
+        mask: MLXFast.ScaledDotProductAttentionMaskMode = .none,
+        cache: KVCacheSimple? = nil
     ) -> MLXArray {
+        if let cache {
+            return callAsFunction(x, mask: mask, cache: cache)
+        }
+
         let (batch, seqLen, _) = (x.dim(0), x.dim(1), x.dim(2))
 
-        var q = qProj(x).reshaped(batch, seqLen, numHeads, headDim)
-        var k = kProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
-        var v = vProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
+        var (q, k, v) = projectQKV(x, batch: batch, seqLen: seqLen)
 
         q = qNorm(q)
         k = kNorm(k)
@@ -153,12 +211,70 @@ final class TalkerAttention: Module {
 
         // Fused RoPE AFTER transpose — x.shape[-2] must be seqLen, not numHeads
         let offset = cache?.offset ?? 0
-        q = MLXFast.RoPE(q, dimensions: headDim, traditional: false, base: ropeBase, scale: 1.0, offset: offset)
-        k = MLXFast.RoPE(k, dimensions: headDim, traditional: false, base: ropeBase, scale: 1.0, offset: offset)
+        q = MLXFast.RoPE(
+            q,
+            dimensions: headDim,
+            traditional: false,
+            base: nil,
+            scale: 1.0,
+            offset: offset,
+            freqs: ropeFreqs
+        )
+        k = MLXFast.RoPE(
+            k,
+            dimensions: headDim,
+            traditional: false,
+            base: nil,
+            scale: 1.0,
+            offset: offset,
+            freqs: ropeFreqs
+        )
 
-        if let cache {
-            (k, v) = cache.update(keys: k, values: v)
-        }
+        let output = MLXFast.scaledDotProductAttention(
+            queries: q, keys: k, values: v, scale: scale, mask: mask
+        )
+
+        return oProj(output.transposed(0, 2, 1, 3).reshaped(batch, seqLen, -1))
+    }
+
+    @inline(__always)
+    func callAsFunction(
+        _ x: MLXArray,
+        mask: MLXFast.ScaledDotProductAttentionMaskMode = .none,
+        cache: KVCacheSimple
+    ) -> MLXArray {
+        let (batch, seqLen, _) = (x.dim(0), x.dim(1), x.dim(2))
+
+        var (q, k, v) = projectQKV(x, batch: batch, seqLen: seqLen)
+
+        q = qNorm(q)
+        k = kNorm(k)
+
+        q = q.transposed(0, 2, 1, 3)
+        k = k.transposed(0, 2, 1, 3)
+        v = v.transposed(0, 2, 1, 3)
+
+        let offset = cache.offset
+        q = MLXFast.RoPE(
+            q,
+            dimensions: headDim,
+            traditional: false,
+            base: nil,
+            scale: 1.0,
+            offset: offset,
+            freqs: ropeFreqs
+        )
+        k = MLXFast.RoPE(
+            k,
+            dimensions: headDim,
+            traditional: false,
+            base: nil,
+            scale: 1.0,
+            offset: offset,
+            freqs: ropeFreqs
+        )
+
+        (k, v) = cache.update(keys: k, values: v)
 
         let output = MLXFast.scaledDotProductAttention(
             queries: q, keys: k, values: v, scale: scale, mask: mask
@@ -182,7 +298,7 @@ final class TalkerMLP: Module {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        downProj(silu(gateProj(x)) * upProj(x))
+        downProj(compiledSiluMul(gateProj(x), upProj(x)))
     }
 }
 
@@ -219,8 +335,23 @@ final class TalkerDecoderLayer: Module {
 
     func callAsFunction(
         _ x: MLXArray,
-        mask: MLXArray? = nil,
-        cache: (any KVCache)? = nil
+        mask: MLXFast.ScaledDotProductAttentionMaskMode = .none,
+        cache: KVCacheSimple? = nil
+    ) -> MLXArray {
+        if let cache {
+            return callAsFunction(x, mask: mask, cache: cache)
+        }
+
+        var out = x + selfAttn(inputLayernorm(x), mask: mask, cache: cache)
+        out = out + mlp(postAttentionLayernorm(out))
+        return out
+    }
+
+    @inline(__always)
+    func callAsFunction(
+        _ x: MLXArray,
+        mask: MLXFast.ScaledDotProductAttentionMaskMode = .none,
+        cache: KVCacheSimple
     ) -> MLXArray {
         var out = x + selfAttn(inputLayernorm(x), mask: mask, cache: cache)
         out = out + mlp(postAttentionLayernorm(out))
@@ -256,23 +387,29 @@ final class Qwen3TTSTalkerModel: Module {
     func callAsFunction(
         _ inputsEmbeds: MLXArray,
         mask: MLXArray? = nil,
-        cache: [any KVCache]? = nil
+        cache: [KVCacheSimple]? = nil
     ) -> MLXArray {
-        let seqLen = inputsEmbeds.dim(1)
-
-        var causalMask = mask
-        if causalMask == nil && seqLen > 1 {
-            causalMask = MultiHeadAttention.createAdditiveCausalMask(seqLen).asType(inputsEmbeds.dtype)
-        }
+        let attentionMask: MLXFast.ScaledDotProductAttentionMaskMode =
+            if let mask {
+                .array(mask)
+            } else {
+                inputsEmbeds.dim(1) > 1 ? .causal : .none
+            }
 
         var x = inputsEmbeds
-        for (i, layer) in layers.enumerated() {
-            x = layer(x, mask: causalMask, cache: cache?[i])
+        if let cache {
+            for i in layers.indices {
+                x = layers[i](x, mask: attentionMask, cache: cache[i])
+            }
+        } else {
+            for layer in layers {
+                x = layer(x, mask: attentionMask, cache: nil)
+            }
         }
         return norm(x)
     }
 
-    func makeCache() -> [any KVCache] {
+    func makeCache() -> [KVCacheSimple] {
         layers.map { _ in KVCacheSimple() }
     }
 }
@@ -310,14 +447,28 @@ final class Qwen3TTSTalkerForConditionalGeneration: Module {
     func callAsFunction(
         _ inputsEmbeds: MLXArray,
         mask: MLXArray? = nil,
-        cache: [any KVCache]? = nil
+        cache: [KVCacheSimple]? = nil
     ) -> (MLXArray, MLXArray) {
+        if let cache, mask == nil {
+            return callAsFunction(inputsEmbeds, cache: cache)
+        }
+
         let hiddenStates = model(inputsEmbeds, mask: mask, cache: cache)
         let logits = codecHead(hiddenStates)
         return (logits, hiddenStates)
     }
 
-    func makeCache() -> [any KVCache] {
+    @inline(__always)
+    func callAsFunction(
+        _ inputsEmbeds: MLXArray,
+        cache: [KVCacheSimple]
+    ) -> (MLXArray, MLXArray) {
+        let hiddenStates = model(inputsEmbeds, cache: cache)
+        let logits = codecHead(hiddenStates)
+        return (logits, hiddenStates)
+    }
+
+    func makeCache() -> [KVCacheSimple] {
         model.makeCache()
     }
 

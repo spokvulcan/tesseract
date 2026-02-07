@@ -33,3 +33,15 @@ scripts/dev.sh run
 - Editing the storyboard or asset catalog
 - Debugging with breakpoints or Instruments
 - Resolving Swift package dependency issues
+
+## Headless TTS Workflow
+
+For console-only Qwen3-TTS generation, use:
+
+```bash
+scripts/tts-headless.sh build
+scripts/tts-headless.sh run --text "Hello from terminal" --output /tmp/tts.wav
+scripts/tts-headless.sh smoke
+```
+
+Detailed guide: `docs/headless-tts.md`

@@ -92,10 +92,18 @@ final class SpeechEngine: ObservableObject {
 
 actor TTSActor {
     private nonisolated(unsafe) var model: (any SpeechGenerationModel)?
+    private static let ttsCacheLimitMB: Int = {
+        let raw = ProcessInfo.processInfo.environment["QWEN3TTS_CACHE_LIMIT_MB"] ?? ""
+        return max(16, Int(raw) ?? 100)
+    }()
 
     func loadModel(repo: String) async throws {
         let loadedModel = try await TTSModelUtils.loadModel(modelRepo: repo)
         model = loadedModel
+    }
+
+    private func configureTTSMemoryCacheLimit() {
+        Memory.cacheLimit = Self.ttsCacheLimitMB * 1024 * 1024
     }
 
     func generate(
@@ -116,6 +124,7 @@ actor TTSActor {
             repetitionContextSize: parameters.repetitionContextSize
         )
 
+        configureTTSMemoryCacheLimit()
         let audioArray = try await model.generate(
             text: text,
             voice: voice,
@@ -126,6 +135,7 @@ actor TTSActor {
         )
 
         let samples = audioArray.asArray(Float.self)
+        Memory.clearCache()
         return (samples, model.sampleRate)
     }
 
@@ -147,6 +157,7 @@ actor TTSActor {
             repetitionContextSize: parameters.repetitionContextSize
         )
 
+        configureTTSMemoryCacheLimit()
         let sampleRate = model.sampleRate
         let modelStream = model.generateStream(
             text: text,

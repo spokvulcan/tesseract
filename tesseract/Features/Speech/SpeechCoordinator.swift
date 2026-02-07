@@ -16,6 +16,7 @@ final class SpeechCoordinator: ObservableObject {
     private let speechEngine: SpeechEngine
     private let playbackManager: AudioPlaybackManager
     private let settings: SettingsManager
+    private let prepareForSpeech: (@MainActor () async -> Void)?
 
     private var activeTask: Task<Void, Never>?
 
@@ -23,12 +24,14 @@ final class SpeechCoordinator: ObservableObject {
         textExtractor: any TextExtracting,
         speechEngine: SpeechEngine,
         playbackManager: AudioPlaybackManager,
-        settings: SettingsManager
+        settings: SettingsManager,
+        prepareForSpeech: (@MainActor () async -> Void)? = nil
     ) {
         self.textExtractor = textExtractor
         self.speechEngine = speechEngine
         self.playbackManager = playbackManager
         self.settings = settings
+        self.prepareForSpeech = prepareForSpeech
 
         playbackManager.onPlaybackFinished = { [weak self] in
             self?.state = .idle
@@ -86,6 +89,10 @@ final class SpeechCoordinator: ObservableObject {
 
     private func generateAndPlay(text: String) async {
         do {
+            if let prepareForSpeech {
+                await prepareForSpeech()
+            }
+
             // Load model if needed
             if !speechEngine.isModelLoaded {
                 state = .loadingModel
