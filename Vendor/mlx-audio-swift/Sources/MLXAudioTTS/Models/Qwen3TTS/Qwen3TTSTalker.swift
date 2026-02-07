@@ -1,29 +1,10 @@
 // Port of mlx_audio/tts/models/qwen3_tts/talker.py
-// Talker transformer with multimodal 3D RoPE for Qwen3-TTS
+// Talker transformer for Qwen3-TTS (uses fused MLXFast.RoPE)
 
 @preconcurrency import MLX
 import MLXNN
 @preconcurrency import MLXLMCommon
 import Foundation
-
-// MARK: - RoPE helpers
-
-private func rotateHalf(_ x: MLXArray) -> MLXArray {
-    let half = x.dim(-1) / 2
-    let x1 = x[.ellipsis, ..<half]
-    let x2 = x[.ellipsis, half...]
-    return concatenated([-x2, x1], axis: -1)
-}
-
-private func applyRotaryPosEmb(
-    _ q: MLXArray, _ k: MLXArray, cos cosVal: MLXArray, sin sinVal: MLXArray
-) -> (MLXArray, MLXArray) {
-    let cosE = expandedDimensions(cosVal, axis: 1)
-    let sinE = expandedDimensions(sinVal, axis: 1)
-    let qEmbed = q * cosE + rotateHalf(q) * sinE
-    let kEmbed = k * cosE + rotateHalf(k) * sinE
-    return (qEmbed, kEmbed)
-}
 
 // MARK: - Compute inv_freq for RoPE
 
@@ -126,6 +107,7 @@ final class TalkerAttention: Module {
     let numKvHeads: Int
     let headDim: Int
     let scale: Float
+    let ropeBase: Float
 
     @ModuleInfo(key: "q_proj") var qProj: Linear
     @ModuleInfo(key: "k_proj") var kProj: Linear
@@ -139,6 +121,7 @@ final class TalkerAttention: Module {
         self.numKvHeads = config.numKeyValueHeads
         self.headDim = config.headDim
         self.scale = 1.0 / Foundation.sqrt(Float(headDim))
+        self.ropeBase = config.ropeTheta
 
         self._qProj.wrappedValue = Linear(config.hiddenSize, numHeads * headDim, bias: config.attentionBias)
         self._kProj.wrappedValue = Linear(config.hiddenSize, numKvHeads * headDim, bias: config.attentionBias)
@@ -150,7 +133,6 @@ final class TalkerAttention: Module {
 
     func callAsFunction(
         _ x: MLXArray,
-        positionEmbeddings: (MLXArray, MLXArray),
         mask: MLXArray? = nil,
         cache: (any KVCache)? = nil
     ) -> MLXArray {
@@ -163,12 +145,16 @@ final class TalkerAttention: Module {
         q = qNorm(q)
         k = kNorm(k)
 
+        // Transpose to [batch, heads, seqLen, headDim] BEFORE RoPE
+        // MLXFast.RoPE uses x.shape[-2] as sequence dimension
         q = q.transposed(0, 2, 1, 3)
         k = k.transposed(0, 2, 1, 3)
         v = v.transposed(0, 2, 1, 3)
 
-        let (cosVal, sinVal) = positionEmbeddings
-        (q, k) = applyRotaryPosEmb(q, k, cos: cosVal, sin: sinVal)
+        // Fused RoPE AFTER transpose — x.shape[-2] must be seqLen, not numHeads
+        let offset = cache?.offset ?? 0
+        q = MLXFast.RoPE(q, dimensions: headDim, traditional: false, base: ropeBase, scale: 1.0, offset: offset)
+        k = MLXFast.RoPE(k, dimensions: headDim, traditional: false, base: ropeBase, scale: 1.0, offset: offset)
 
         if let cache {
             (k, v) = cache.update(keys: k, values: v)
@@ -233,11 +219,10 @@ final class TalkerDecoderLayer: Module {
 
     func callAsFunction(
         _ x: MLXArray,
-        positionEmbeddings: (MLXArray, MLXArray),
         mask: MLXArray? = nil,
         cache: (any KVCache)? = nil
     ) -> MLXArray {
-        var out = x + selfAttn(inputLayernorm(x), positionEmbeddings: positionEmbeddings, mask: mask, cache: cache)
+        var out = x + selfAttn(inputLayernorm(x), mask: mask, cache: cache)
         out = out + mlp(postAttentionLayernorm(out))
         return out
     }
@@ -270,24 +255,10 @@ final class Qwen3TTSTalkerModel: Module {
 
     func callAsFunction(
         _ inputsEmbeds: MLXArray,
-        positionIds: MLXArray? = nil,
         mask: MLXArray? = nil,
         cache: [any KVCache]? = nil
     ) -> MLXArray {
-        let (batch, seqLen, _) = (inputsEmbeds.dim(0), inputsEmbeds.dim(1), inputsEmbeds.dim(2))
-
-        let offset: Int = cache?.first?.offset ?? 0
-
-        let posIds: MLXArray
-        if let positionIds {
-            posIds = positionIds
-        } else {
-            let pos = MLXArray(Int32(offset) ..< Int32(offset + seqLen)).reshaped(1, seqLen)
-            let bpos = broadcast(pos, to: [batch, seqLen])
-            posIds = stacked([bpos, bpos, bpos], axis: 0)
-        }
-
-        let posEmbeddings = rotaryEmb(inputsEmbeds, positionIds: posIds)
+        let seqLen = inputsEmbeds.dim(1)
 
         var causalMask = mask
         if causalMask == nil && seqLen > 1 {
@@ -296,7 +267,7 @@ final class Qwen3TTSTalkerModel: Module {
 
         var x = inputsEmbeds
         for (i, layer) in layers.enumerated() {
-            x = layer(x, positionEmbeddings: posEmbeddings, mask: causalMask, cache: cache?[i])
+            x = layer(x, mask: causalMask, cache: cache?[i])
         }
         return norm(x)
     }
@@ -338,11 +309,10 @@ final class Qwen3TTSTalkerForConditionalGeneration: Module {
 
     func callAsFunction(
         _ inputsEmbeds: MLXArray,
-        positionIds: MLXArray? = nil,
         mask: MLXArray? = nil,
         cache: [any KVCache]? = nil
     ) -> (MLXArray, MLXArray) {
-        let hiddenStates = model(inputsEmbeds, positionIds: positionIds, mask: mask, cache: cache)
+        let hiddenStates = model(inputsEmbeds, mask: mask, cache: cache)
         let logits = codecHead(hiddenStates)
         return (logits, hiddenStates)
     }
