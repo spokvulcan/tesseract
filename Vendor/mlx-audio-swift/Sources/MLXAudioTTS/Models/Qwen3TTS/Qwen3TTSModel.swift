@@ -230,6 +230,7 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
             for c in codePredictorCache { c.trim(c.offset) }
             var codeTokens = [nextToken]
             let codeHidden = hidden[0..., (-1)..., 0...]
+            let code0Embed = talker.getInputEmbeddings()(nextToken)
 
             let cpStart = CFAbsoluteTimeGetCurrent()
             for codeIdx in 0 ..< talkerConfig.numCodeGroups - 1 {
@@ -237,7 +238,6 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
 
                 let codeInput: MLXArray
                 if codeIdx == 0 {
-                    let code0Embed = talker.getInputEmbeddings()(nextToken)
                     codeInput = concatenated([codeHidden, code0Embed], axis: 1)
                 } else {
                     codeInput = talker.codePredictor.codecEmbedding[codeIdx - 1](codeTokens.last!)
@@ -247,7 +247,6 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                     codeInput, cache: codePredictorCache, generationStep: codeIdx
                 )
 
-                // Simple temperature sampling for code predictor (no top-p sort needed)
                 let nextCode = sampleToken(codeLogits, temperature: temperature, topP: 1.0)
                 if profiling { eval(nextCode) }
                 codeTokens.append(nextCode)
@@ -272,8 +271,8 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                 textEmbed = ttsPadEmbed
             }
 
-            // Sum all code embeddings for next step
-            var codecEmbed = talker.getInputEmbeddings()(nextToken)
+            // Sum all code embeddings for next step (reuse code0Embed from above)
+            var codecEmbed = code0Embed
             for (i, code) in codeTokens.dropFirst().enumerated() {
                 codecEmbed = codecEmbed + talker.codePredictor.codecEmbedding[i](code)
             }
@@ -428,11 +427,11 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
             for c in codePredictorCache { c.trim(c.offset) }
             var codeTokens = [nextToken]
             let codeHidden = hidden[0..., (-1)..., 0...]
+            let code0Embed = talker.getInputEmbeddings()(nextToken)
 
             for codeIdx in 0 ..< talkerConfig.numCodeGroups - 1 {
                 let codeInput: MLXArray
                 if codeIdx == 0 {
-                    let code0Embed = talker.getInputEmbeddings()(nextToken)
                     codeInput = concatenated([codeHidden, code0Embed], axis: 1)
                 } else {
                     codeInput = talker.codePredictor.codecEmbedding[codeIdx - 1](codeTokens.last!)
@@ -442,7 +441,6 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                     codeInput, cache: codePredictorCache, generationStep: codeIdx
                 )
 
-                // Simple temperature sampling for code predictor (no top-p sort needed)
                 let nextCode = sampleToken(codeLogits, temperature: temperature, topP: 1.0)
                 codeTokens.append(nextCode)
             }
@@ -483,7 +481,7 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                 textEmbed = ttsPadEmbed
             }
 
-            var codecEmbed = talker.getInputEmbeddings()(nextToken)
+            var codecEmbed = code0Embed
             for (i, code) in codeTokens.dropFirst().enumerated() {
                 codecEmbed = codecEmbed + talker.codePredictor.codecEmbedding[i](code)
             }

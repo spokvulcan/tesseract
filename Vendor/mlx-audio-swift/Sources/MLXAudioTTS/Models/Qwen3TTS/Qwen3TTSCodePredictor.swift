@@ -13,6 +13,7 @@ final class CodePredictorAttention: Module {
     let numKvHeads: Int
     let headDim: Int
     let scale: Float
+    let ropeBase: Float
 
     @ModuleInfo(key: "q_proj") var qProj: Linear
     @ModuleInfo(key: "k_proj") var kProj: Linear
@@ -26,6 +27,7 @@ final class CodePredictorAttention: Module {
         self.numKvHeads = config.numKeyValueHeads
         self.headDim = config.headDim
         self.scale = 1.0 / Foundation.sqrt(Float(headDim))
+        self.ropeBase = config.ropeTheta
 
         self._qProj.wrappedValue = Linear(config.hiddenSize, numHeads * headDim, bias: config.attentionBias)
         self._kProj.wrappedValue = Linear(config.hiddenSize, numKvHeads * headDim, bias: config.attentionBias)
@@ -37,7 +39,6 @@ final class CodePredictorAttention: Module {
 
     func callAsFunction(
         _ x: MLXArray,
-        positionEmbeddings: (MLXArray, MLXArray),
         mask: MLXArray? = nil,
         cache: (any KVCache)? = nil
     ) -> MLXArray {
@@ -45,37 +46,33 @@ final class CodePredictorAttention: Module {
 
         var q = qProj(x).reshaped(batch, seqLen, numHeads, headDim)
         var k = kProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
-        var v = vProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
+        let v = vProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
 
         q = qNorm(q)
         k = kNorm(k)
 
-        q = q.transposed(0, 2, 1, 3)
+        q = q.transposed(0, 2, 1, 3)  // [batch, numHeads, seqLen, headDim]
         k = k.transposed(0, 2, 1, 3)
-        v = v.transposed(0, 2, 1, 3)
+        let vt = v.transposed(0, 2, 1, 3)
 
-        let (cosVal, sinVal) = positionEmbeddings
-        let cosE = expandedDimensions(cosVal, axis: 1)
-        let sinE = expandedDimensions(sinVal, axis: 1)
-        q = q * cosE + cpRotateHalf(q) * sinE
-        k = k * cosE + cpRotateHalf(k) * sinE
+        // Fused RoPE AFTER transpose — x.shape[-2] must be seqLen, not numHeads
+        let offset = cache?.offset ?? 0
+        q = MLXFast.RoPE(q, dimensions: headDim, traditional: false, base: ropeBase, scale: 1.0, offset: offset)
+        k = MLXFast.RoPE(k, dimensions: headDim, traditional: false, base: ropeBase, scale: 1.0, offset: offset)
 
         if let cache {
-            (k, v) = cache.update(keys: k, values: v)
+            let (ck, cv) = cache.update(keys: k, values: vt)
+            let output = MLXFast.scaledDotProductAttention(
+                queries: q, keys: ck, values: cv, scale: scale, mask: mask
+            )
+            return oProj(output.transposed(0, 2, 1, 3).reshaped(batch, seqLen, -1))
+        } else {
+            let output = MLXFast.scaledDotProductAttention(
+                queries: q, keys: k, values: vt, scale: scale, mask: mask
+            )
+            return oProj(output.transposed(0, 2, 1, 3).reshaped(batch, seqLen, -1))
         }
-
-        let output = MLXFast.scaledDotProductAttention(
-            queries: q, keys: k, values: v, scale: scale, mask: mask
-        )
-        return oProj(output.transposed(0, 2, 1, 3).reshaped(batch, seqLen, -1))
     }
-}
-
-func cpRotateHalf(_ x: MLXArray) -> MLXArray {
-    let half = x.dim(-1) / 2
-    let x1 = x[.ellipsis, ..<half]
-    let x2 = x[.ellipsis, half...]
-    return concatenated([-x2, x1], axis: -1)
 }
 
 // MARK: - Code Predictor MLP
@@ -113,11 +110,10 @@ final class CodePredictorDecoderLayer: Module {
 
     func callAsFunction(
         _ x: MLXArray,
-        positionEmbeddings: (MLXArray, MLXArray),
         mask: MLXArray? = nil,
         cache: (any KVCache)? = nil
     ) -> MLXArray {
-        var out = x + selfAttn(inputLayernorm(x), positionEmbeddings: positionEmbeddings, mask: mask, cache: cache)
+        var out = x + selfAttn(inputLayernorm(x), mask: mask, cache: cache)
         out = out + mlp(postAttentionLayernorm(out))
         return out
     }
@@ -130,6 +126,7 @@ final class CodePredictorModel: Module {
     @ModuleInfo(key: "codec_embedding") var codecEmbedding: [Embedding]
     let layers: [CodePredictorDecoderLayer]
     @ModuleInfo var norm: RMSNorm
+    // rotaryEmb kept for weight loading compatibility (weights reference it)
     let rotaryEmb: Qwen3TTSRotaryEmbedding
 
     init(config: Qwen3TTSTalkerCodePredictorConfig, talkerHiddenSize: Int) {
@@ -148,28 +145,10 @@ final class CodePredictorModel: Module {
 
     func callAsFunction(
         _ inputsEmbeds: MLXArray,
-        positionIds: MLXArray? = nil,
         mask: MLXArray? = nil,
         cache: [any KVCache]? = nil
     ) -> MLXArray {
-        let (batch, seqLen, _) = (inputsEmbeds.dim(0), inputsEmbeds.dim(1), inputsEmbeds.dim(2))
-
-        let offset: Int
-        if let firstCache = cache?.first {
-            offset = firstCache.offset
-        } else {
-            offset = 0
-        }
-
-        let posIds: MLXArray
-        if let positionIds {
-            posIds = positionIds
-        } else {
-            let pos = MLXArray(Int32(offset) ..< Int32(offset + seqLen)).reshaped(1, seqLen)
-            posIds = broadcast(pos, to: [batch, seqLen])
-        }
-
-        let posEmbeddings = rotaryEmb(inputsEmbeds, positionIds: posIds)
+        let seqLen = inputsEmbeds.dim(1)
 
         var causalMask = mask
         if causalMask == nil && seqLen > 1 {
@@ -178,7 +157,7 @@ final class CodePredictorModel: Module {
 
         var x = inputsEmbeds
         for (i, layer) in layers.enumerated() {
-            x = layer(x, positionEmbeddings: posEmbeddings, mask: causalMask, cache: cache?[i])
+            x = layer(x, mask: causalMask, cache: cache?[i])
         }
         return norm(x)
     }
@@ -220,8 +199,6 @@ final class Qwen3TTSCodePredictor: Module {
 
     func callAsFunction(
         _ inputsEmbeds: MLXArray,
-        positionIds: MLXArray? = nil,
-        mask: MLXArray? = nil,
         cache: [any KVCache]? = nil,
         generationStep: Int = 0
     ) -> (MLXArray, [any KVCache]?, Int) {
@@ -230,7 +207,7 @@ final class Qwen3TTSCodePredictor: Module {
             embeds = proj(embeds)
         }
 
-        let x = model(embeds, positionIds: positionIds, mask: mask, cache: cache)
+        let x = model(embeds, cache: cache)
         let logits = lmHead[generationStep](x)
         return (logits, cache, generationStep + 1)
     }
