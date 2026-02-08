@@ -82,7 +82,10 @@ final class SpeechCoordinator: ObservableObject {
         totalSegments = 0
         state = .idle
         currentText = ""
-        Task { await speechEngine.clearVoiceAnchor() }
+        Task {
+            await speechEngine.cancelGeneration()
+            await speechEngine.clearVoiceAnchor()
+        }
     }
 
     func pause() {

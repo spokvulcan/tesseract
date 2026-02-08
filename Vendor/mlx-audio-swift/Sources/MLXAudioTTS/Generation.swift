@@ -49,6 +49,9 @@ public protocol SpeechGenerationModel: AnyObject {
 
     /// Clear the voice anchor KV cache and associated state.
     func clearVoiceAnchor()
+
+    /// Cancel any in-progress generation immediately.
+    func cancelGeneration()
 }
 
 extension SpeechGenerationModel {
@@ -78,4 +81,5 @@ extension SpeechGenerationModel {
 
     public func buildVoiceAnchor(referenceCount: Int, instruct: String?, language: String?) {}
     public func clearVoiceAnchor() {}
+    public func cancelGeneration() {}
 }

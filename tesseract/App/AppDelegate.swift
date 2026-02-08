@@ -7,6 +7,7 @@ import Foundation
 import AppKit
 import SwiftUI
 import Combine
+import MLX
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -141,7 +142,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Cleanup
+        // Stop TTS generation and unload the model before exit() destroys MLX's
+        // Metal device singleton. Pending GPU completion handlers would otherwise
+        // crash trying to lock the destroyed mutex in Device::end_encoding.
+        container?.speechCoordinator.stop()
+        container?.speechEngine.unloadModel()
+
+        // Drain any in-flight Metal command buffers so no completion handlers fire
+        // after exit() destroys C++ static objects (including MLX's device mutex).
+        Stream.gpu.synchronize()
+
         container?.hotkeyManager.stopListening()
         menuBarManager?.teardownMenuBar()
     }

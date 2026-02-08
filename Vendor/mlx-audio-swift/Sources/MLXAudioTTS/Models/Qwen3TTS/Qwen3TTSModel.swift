@@ -47,6 +47,9 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
     /// Codec codes from the most recent generation, used to build voice anchor.
     public private(set) var lastGeneratedCodes: [MLXArray]?
 
+    /// Active generation task, stored so it can be cancelled externally.
+    private var activeGenerationTask: Task<Void, Never>?
+
     /// Random seed for deterministic generation. Set by caller before generate/generateStream.
     public var seed: UInt64 = 0
 
@@ -274,7 +277,7 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
     ) -> AsyncThrowingStream<AudioGeneration, Error> {
         let (stream, continuation) = AsyncThrowingStream<AudioGeneration, Error>.makeStream()
         let capturedSeed = self.seed
-        Task { @Sendable [weak self] in
+        let task = Task { @Sendable [weak self] in
             guard let self else { return }
             do {
                 guard self.speechTokenizer != nil else {
@@ -314,7 +317,13 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                 continuation.finish(throwing: error)
             }
         }
+        activeGenerationTask = task
         return stream
+    }
+
+    public func cancelGeneration() {
+        activeGenerationTask?.cancel()
+        activeGenerationTask = nil
     }
 
     // MARK: - VoiceDesign generation
@@ -412,6 +421,7 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         MLXRandom.seed(self.seed)
 
         for step in 0 ..< effectiveMaxTokens {
+            if Task.isCancelled { break }
             let stepStart = CFAbsoluteTimeGetCurrent()
 
             // Forward pass through talker
@@ -780,6 +790,8 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         MLXRandom.seed(self.seed)
 
         for step in 0 ..< effectiveMaxTokens {
+            if Task.isCancelled { break }
+
             let (logits, hidden) = talker(inputEmbeds, cache: cache)
 
             let nextToken = sampleToken(

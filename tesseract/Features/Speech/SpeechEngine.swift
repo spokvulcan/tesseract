@@ -108,6 +108,11 @@ final class SpeechEngine: ObservableObject {
         guard let actor = ttsActor else { return }
         await actor.clearVoiceAnchor()
     }
+
+    func cancelGeneration() async {
+        guard let actor = ttsActor else { return }
+        await actor.cancelGeneration()
+    }
 }
 
 actor TTSActor {
@@ -212,6 +217,11 @@ actor TTSActor {
     func clearVoiceAnchor() {
         guard let model else { return }
         model.clearVoiceAnchor()
+    }
+
+    func cancelGeneration() {
+        guard let model else { return }
+        model.cancelGeneration()
     }
 
     private func convertAudioStream(
