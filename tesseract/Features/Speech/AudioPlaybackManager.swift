@@ -18,16 +18,19 @@ final class AudioPlaybackManager: ObservableObject {
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
 
-    // Streaming state — accumulate all chunks, play on finish
+    // Streaming state — progressive chunk scheduling
     private var streamingFormat: AVAudioFormat?
     private var streamFinished = false
     private var accumulatedSamples: [Float] = []
+    private var pendingBufferCount = 0
+    private var playerStarted = false
 
     var onPlaybackFinished: (() -> Void)?
 
     // MARK: - Debug dump
 
-    private var debugDumpEnabled = true
+    var debugDumpDisabled = false
+    private var debugDumpEnabled: Bool { !debugDumpDisabled }
     private var debugRawChunks: [[Float]] = []
     private var debugScheduledSamples: [Float] = []
     private var debugChunkTimestamps: [CFAbsoluteTime] = []
@@ -123,6 +126,8 @@ final class AudioPlaybackManager: ObservableObject {
         streamingFormat = format
         streamFinished = false
         accumulatedSamples = []
+        pendingBufferCount = 0
+        playerStarted = false
         isPlaying = true
 
         if debugDumpEnabled {
@@ -150,65 +155,61 @@ final class AudioPlaybackManager: ObservableObject {
     }
 
     func appendChunk(samples: [Float]) {
-        guard streamingFormat != nil else { return }
+        guard let node = playerNode, let format = streamingFormat else { return }
         guard !samples.isEmpty else { return }
 
         if debugDumpEnabled {
             debugRawChunks.append(samples)
             debugChunkTimestamps.append(CFAbsoluteTimeGetCurrent() - debugStreamStartTime)
+            accumulatedSamples.append(contentsOf: samples)
         }
 
-        // Just accumulate — playback happens in finishStreaming()
-        accumulatedSamples.append(contentsOf: samples)
-    }
-
-    func finishStreaming() {
-        guard let node = playerNode, let format = streamingFormat else { return }
-        guard !accumulatedSamples.isEmpty else {
-            isPlaying = false
-            onPlaybackFinished?()
+        // Create and schedule a buffer for this chunk
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else {
+            Log.speech.error("Failed to create PCM buffer for chunk")
             return
         }
 
-        streamFinished = true
-
-        // 5ms fade-in to prevent initial pop from silence → audio
-        let fadeLen = min(Int(format.sampleRate * 0.005), accumulatedSamples.count)
-        for i in 0..<fadeLen {
-            accumulatedSamples[i] *= Float(i) / Float(fadeLen)
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        if let channelData = buffer.floatChannelData {
+            samples.withUnsafeBufferPointer { src in
+                channelData[0].update(from: src.baseAddress!, count: samples.count)
+            }
         }
+
+        pendingBufferCount += 1
+        node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.pendingBufferCount -= 1
+                if self.streamFinished && self.pendingBufferCount <= 0 {
+                    self.isPlaying = false
+                    self.onPlaybackFinished?()
+                }
+            }
+        }
+
+        // Start playback on first chunk
+        if !playerStarted {
+            node.play()
+            playerStarted = true
+        }
+    }
+
+    func finishStreaming() {
+        streamFinished = true
 
         if debugDumpEnabled {
             debugScheduledSamples = accumulatedSamples
             writeDebugDump()
         }
 
-        // Schedule the complete audio as a single buffer — identical to the WAV file
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(accumulatedSamples.count)) else {
-            Log.speech.error("Failed to create PCM buffer for accumulated audio")
+        // If all buffers already drained, finish now
+        if pendingBufferCount <= 0 {
             isPlaying = false
             onPlaybackFinished?()
-            return
         }
-
-        buffer.frameLength = AVAudioFrameCount(accumulatedSamples.count)
-        if let channelData = buffer.floatChannelData {
-            accumulatedSamples.withUnsafeBufferPointer { src in
-                channelData[0].update(from: src.baseAddress!, count: accumulatedSamples.count)
-            }
-        }
-
-        node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.isPlaying = false
-                self.onPlaybackFinished?()
-            }
-        }
-
-        node.play()
-
-        Log.speech.info("Playing \(self.accumulatedSamples.count) accumulated samples (~\(Double(self.accumulatedSamples.count) / format.sampleRate)s)")
+        // Otherwise the last buffer's completion callback handles it
     }
 
     // MARK: - Stop
@@ -221,6 +222,8 @@ final class AudioPlaybackManager: ObservableObject {
         streamingFormat = nil
         streamFinished = false
         accumulatedSamples = []
+        pendingBufferCount = 0
+        playerStarted = false
         isPlaying = false
         debugOutputDir = nil
     }

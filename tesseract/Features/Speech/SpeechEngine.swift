@@ -75,7 +75,8 @@ final class SpeechEngine: ObservableObject {
         text: String,
         voice: String?,
         language: String?,
-        parameters: TTSParameters
+        parameters: TTSParameters,
+        useVoiceAnchor: Bool = false
     ) async throws -> (stream: AsyncThrowingStream<[Float], Error>, sampleRate: Int) {
         guard let actor = ttsActor else {
             throw SpeechError.modelNotLoaded
@@ -85,8 +86,27 @@ final class SpeechEngine: ObservableObject {
             text: text,
             voice: voice,
             language: language,
-            parameters: parameters
+            parameters: parameters,
+            useVoiceAnchor: useVoiceAnchor
         )
+    }
+
+    func buildVoiceAnchor(
+        referenceCount: Int,
+        voice: String?,
+        language: String?
+    ) async {
+        guard let actor = ttsActor else { return }
+        await actor.buildVoiceAnchor(
+            referenceCount: referenceCount,
+            voice: voice,
+            language: language
+        )
+    }
+
+    func clearVoiceAnchor() async {
+        guard let actor = ttsActor else { return }
+        await actor.clearVoiceAnchor()
     }
 }
 
@@ -120,11 +140,12 @@ actor TTSActor {
             maxTokens: parameters.maxTokens,
             temperature: parameters.temperature,
             topP: parameters.topP,
-            repetitionPenalty: parameters.repetitionPenalty,
-            repetitionContextSize: parameters.repetitionContextSize
+            repetitionPenalty: parameters.repetitionPenalty
         )
 
         configureTTSMemoryCacheLimit()
+        model.seed = parameters.seed
+        MLXRandom.seed(parameters.seed)
         let audioArray = try await model.generate(
             text: text,
             voice: voice,
@@ -143,7 +164,8 @@ actor TTSActor {
         text: String,
         voice: String?,
         language: String?,
-        parameters: TTSParameters
+        parameters: TTSParameters,
+        useVoiceAnchor: Bool = false
     ) async throws -> (stream: AsyncThrowingStream<[Float], Error>, sampleRate: Int) {
         guard let model else {
             throw SpeechError.modelNotLoaded
@@ -153,11 +175,12 @@ actor TTSActor {
             maxTokens: parameters.maxTokens,
             temperature: parameters.temperature,
             topP: parameters.topP,
-            repetitionPenalty: parameters.repetitionPenalty,
-            repetitionContextSize: parameters.repetitionContextSize
+            repetitionPenalty: parameters.repetitionPenalty
         )
 
         configureTTSMemoryCacheLimit()
+        model.seed = parameters.seed
+        MLXRandom.seed(parameters.seed)
         let sampleRate = model.sampleRate
         let modelStream = model.generateStream(
             text: text,
@@ -165,11 +188,30 @@ actor TTSActor {
             refAudio: nil,
             refText: nil,
             language: language,
-            generationParameters: genParams
+            generationParameters: genParams,
+            useVoiceAnchor: useVoiceAnchor
         )
 
         let outputStream = convertAudioStream(modelStream)
         return (outputStream, sampleRate)
+    }
+
+    func buildVoiceAnchor(
+        referenceCount: Int,
+        voice: String?,
+        language: String?
+    ) {
+        guard let model else { return }
+        model.buildVoiceAnchor(
+            referenceCount: referenceCount,
+            instruct: voice,
+            language: language
+        )
+    }
+
+    func clearVoiceAnchor() {
+        guard let model else { return }
+        model.clearVoiceAnchor()
     }
 
     private func convertAudioStream(

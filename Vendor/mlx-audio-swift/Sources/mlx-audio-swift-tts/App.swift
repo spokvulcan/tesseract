@@ -43,7 +43,8 @@ enum App {
                 refText: args.refText,
                 maxTokens: args.maxTokens,
                 temperature: args.temperature,
-                topP: args.topP
+                topP: args.topP,
+                streaming: args.streaming
             )
         } catch {
             fputs("Error: \(error)\n", stderr)
@@ -62,6 +63,7 @@ enum App {
         maxTokens: Int,
         temperature: Float,
         topP: Float,
+        streaming: Bool,
         hfToken: String? = nil
     ) async throws {
         Memory.cacheLimit = 100 * 1024 * 1024
@@ -83,7 +85,7 @@ enum App {
             }
         }
 
-        print("Generating")
+        print("Generating\(streaming ? " (streaming)" : "")")
         let started = CFAbsoluteTimeGetCurrent()
 
         let refAudio: MLXArray?
@@ -94,18 +96,53 @@ enum App {
             refAudio = nil
         }
 
-        let audioData = try await loadedModel.generate(
-            text: text,
-            voice: voice,
-            refAudio: refAudio,
-            refText: refText,
-            language: nil,
-            generationParameters: GenerateParameters(
-                maxTokens: maxTokens,
-                temperature: temperature,
-                topP: topP
+        let genParams = GenerateParameters(
+            maxTokens: maxTokens,
+            temperature: temperature,
+            topP: topP
+        )
+
+        let audioData: [Float]
+
+        if streaming {
+            // Streaming decode: accumulate crossfaded chunks, write WAV
+            let stream = loadedModel.generateStream(
+                text: text,
+                voice: voice,
+                refAudio: refAudio,
+                refText: refText,
+                language: nil,
+                generationParameters: genParams
             )
-        ).asArray(Float.self)
+
+            var accumulated = [Float]()
+            var chunkCount = 0
+            for try await event in stream {
+                switch event {
+                case .audioChunk(let chunk):
+                    let samples = chunk.asArray(Float.self)
+                    accumulated.append(contentsOf: samples)
+                    chunkCount += 1
+                case .audio(let audio):
+                    let samples = audio.asArray(Float.self)
+                    accumulated.append(contentsOf: samples)
+                    chunkCount += 1
+                case .token, .info:
+                    break
+                }
+            }
+            print("Received \(chunkCount) chunks, \(accumulated.count) total samples")
+            audioData = accumulated
+        } else {
+            audioData = try await loadedModel.generate(
+                text: text,
+                voice: voice,
+                refAudio: refAudio,
+                refText: refText,
+                language: nil,
+                generationParameters: genParams
+            ).asArray(Float.self)
+        }
 
         let outputURL = makeOutputURL(outputPath: outputPath)
         let sampleRate = Double(loadedModel.sampleRate)
@@ -180,6 +217,7 @@ struct CLI {
     let maxTokens: Int
     let temperature: Float
     let topP: Float
+    let streaming: Bool
 
     static func parse() throws -> CLI {
         var text: String?
@@ -191,6 +229,7 @@ struct CLI {
         var maxTokens: Int = 1200
         var temperature: Float = 0.7
         var topP: Float = 0.9
+        var streaming = ProcessInfo.processInfo.environment["QWEN3TTS_STREAMING"] == "1"
 
         var it = CommandLine.arguments.dropFirst().makeIterator()
         while let arg = it.next() {
@@ -225,6 +264,8 @@ struct CLI {
                 guard let v = it.next() else { throw CLIError.missingValue(arg) }
                 guard let value = Float(v) else { throw CLIError.invalidValue(arg, v) }
                 topP = value
+            case "--streaming":
+                streaming = true
             case "--help", "-h":
                 printUsage()
                 exit(0)
@@ -250,7 +291,8 @@ struct CLI {
             refText: refText,
             maxTokens: maxTokens,
             temperature: temperature,
-            topP: topP
+            topP: topP,
+            streaming: streaming
         )
     }
 
@@ -258,7 +300,7 @@ struct CLI {
         let exe = (CommandLine.arguments.first as NSString?)?.lastPathComponent ?? "marvis-tts-cli"
         print("""
         Usage:
-          \(exe) --text "Hello world" [--voice conversational_b] [--model <hf-repo>] [--output <path>] [--ref_audio <path>] [--ref_text <string>] [--max_tokens <int>] [--temperature <float>] [--top_p <float>]
+          \(exe) --text "Hello world" [--voice conversational_b] [--model <hf-repo>] [--output <path>] [--ref_audio <path>] [--ref_text <string>] [--max_tokens <int>] [--temperature <float>] [--top_p <float>] [--streaming]
 
         Options:
           -t, --text <string>           Text to synthesize (required if not passed as trailing arg)
@@ -270,6 +312,7 @@ struct CLI {
               --max_tokens <int>       Maximum number of tokens to generate. Default: 1200
               --temperature <float>    Sampling temperature. Default: 0.7
               --top_p <float>          Top-p sampling. Default: 0.9
+              --streaming              Use streaming decode (crossfaded chunks). Also: QWEN3TTS_STREAMING=1
           -h, --help                    Show this help
         """)
     }

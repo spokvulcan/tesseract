@@ -95,10 +95,11 @@ final class SettingsManager: ObservableObject {
     @AppStorage("ttsTemperature") var ttsTemperature: Double = 0.6
     @AppStorage("ttsTopP") var ttsTopP: Double = 0.8
     @AppStorage("ttsRepetitionPenalty") var ttsRepetitionPenalty: Double = 1.3
-    @AppStorage("ttsRepetitionContextSize") var ttsRepetitionContextSize: Int = 20
     @AppStorage("ttsMaxTokens") var ttsMaxTokens: Int = 4096
+    @AppStorage("ttsSeed") var ttsSeed: Int = 0
     @AppStorage("ttsVoiceDescription") var ttsVoiceDescription: String = ""
     @AppStorage("ttsLanguage") var ttsLanguage: String = "English"
+    @AppStorage("ttsStreamingEnabled") var ttsStreamingEnabled = true
 
     var ttsParameters: TTSParameters {
         get {
@@ -106,16 +107,16 @@ final class SettingsManager: ObservableObject {
                 temperature: Float(ttsTemperature),
                 topP: Float(ttsTopP),
                 repetitionPenalty: Float(ttsRepetitionPenalty),
-                repetitionContextSize: ttsRepetitionContextSize,
-                maxTokens: ttsMaxTokens
+                maxTokens: ttsMaxTokens,
+                seed: UInt64(ttsSeed)
             )
         }
         set {
             ttsTemperature = Double(newValue.temperature)
             ttsTopP = Double(newValue.topP)
             ttsRepetitionPenalty = Double(newValue.repetitionPenalty)
-            ttsRepetitionContextSize = newValue.repetitionContextSize
             ttsMaxTokens = newValue.maxTokens
+            ttsSeed = Int(newValue.seed)
         }
     }
 
@@ -153,10 +154,11 @@ final class SettingsManager: ObservableObject {
         ttsTemperature = 0.6
         ttsTopP = 0.8
         ttsRepetitionPenalty = 1.3
-        ttsRepetitionContextSize = 20
         ttsMaxTokens = 4096
+        ttsSeed = 0
         ttsVoiceDescription = ""
         ttsLanguage = "English"
+        ttsStreamingEnabled = true
     }
 
     // MARK: - Private

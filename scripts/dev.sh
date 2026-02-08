@@ -21,10 +21,12 @@ DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
 
 find_app() {
     local configuration="${1:-Debug}"
-    local app_path
-    app_path=$(find $DERIVED_DATA_GLOB -path "*/Build/Products/$configuration/tesseract.app" -not -path "*/Index.noindex/*" -maxdepth 5 2>/dev/null | head -1)
-    if [ -z "$app_path" ]; then
-        echo "Error: tesseract.app ($configuration) not found in DerivedData. Run a matching build first." >&2
+    local products_dir
+    products_dir=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$configuration" -showBuildSettings 2>/dev/null \
+        | grep '^\s*BUILT_PRODUCTS_DIR' | awk '{print $3}')
+    local app_path="$products_dir/tesseract.app"
+    if [ -z "$products_dir" ] || [ ! -d "$app_path" ]; then
+        echo "Error: tesseract.app ($configuration) not found at $app_path. Run a matching build first." >&2
         return 1
     fi
     echo "$app_path"

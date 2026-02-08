@@ -12,6 +12,15 @@ struct SpeechContentView: View {
 
     @State private var inputText: String = ""
 
+    private var isActiveState: Bool {
+        switch speechCoordinator.state {
+        case .playing, .streaming, .streamingLongForm, .paused:
+            true
+        default:
+            false
+        }
+    }
+
     var body: some View {
         HSplitView {
             // Main content area
@@ -78,24 +87,62 @@ struct SpeechContentView: View {
             }
             .layoutPriority(1)
 
+            // Long-form progress
+            if case .streamingLongForm(let segment, let total) = speechCoordinator.state {
+                VStack(spacing: 4) {
+                    ProgressView(value: Double(segment), total: Double(total))
+                    Text("Segment \(segment) of \(total)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if case .paused(let segment, let total) = speechCoordinator.state {
+                VStack(spacing: 4) {
+                    ProgressView(value: Double(segment), total: Double(total))
+                    Text("Paused at segment \(segment) of \(total)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             // Controls
             HStack(spacing: 12) {
                 Button {
-                    if speechCoordinator.state == .playing {
+                    if isActiveState {
                         speechCoordinator.stop()
                     } else {
                         speechCoordinator.speakText(inputText)
                     }
                 } label: {
                     Label(
-                        speechCoordinator.state == .playing ? "Stop" : "Speak",
-                        systemImage: speechCoordinator.state == .playing ? "stop.fill" : "play.fill"
+                        isActiveState ? "Stop" : "Speak",
+                        systemImage: isActiveState ? "stop.fill" : "play.fill"
                     )
                     .frame(minWidth: 80)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(inputText.isEmpty && speechCoordinator.state != .playing)
+                .disabled(inputText.isEmpty && !isActiveState)
                 .disabled(!speechEngine.isModelLoaded && !speechEngine.isLoading && speechCoordinator.state == .idle)
+
+                if case .streamingLongForm = speechCoordinator.state {
+                    Button {
+                        speechCoordinator.pause()
+                    } label: {
+                        Label("Pause", systemImage: "pause.fill")
+                            .frame(minWidth: 70)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if case .paused = speechCoordinator.state {
+                    Button {
+                        speechCoordinator.resume()
+                    } label: {
+                        Label("Resume", systemImage: "play.fill")
+                            .frame(minWidth: 70)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
+                }
 
                 if !speechEngine.isModelLoaded && !speechEngine.isLoading {
                     Button {
@@ -140,13 +187,22 @@ private struct SpeechStatusView: View {
                 .font(.subheadline)
                 .fontWeight(.medium)
 
-            if isLoading {
+            if isLoading || isStreamingState {
                 ProgressView()
                     .controlSize(.small)
             }
         }
         .frame(height: 24)
         .animation(.easeInOut(duration: 0.2), value: statusText)
+    }
+
+    private var isStreamingState: Bool {
+        switch state {
+        case .streaming, .streamingLongForm:
+            true
+        default:
+            false
+        }
     }
 
     private var statusColor: Color {
@@ -157,6 +213,10 @@ private struct SpeechStatusView: View {
             .orange
         case .generating:
             .blue
+        case .streaming, .streamingLongForm:
+            .cyan
+        case .paused:
+            .yellow
         case .playing:
             .green
         case .error:
@@ -177,6 +237,12 @@ private struct SpeechStatusView: View {
             return "Loading model..."
         case .generating(let progress):
             return progress.isEmpty ? "Generating speech..." : progress
+        case .streaming:
+            return "Streaming..."
+        case .streamingLongForm(let segment, let total):
+            return "Streaming segment \(segment)/\(total)..."
+        case .paused(let segment, let total):
+            return "Paused (\(segment)/\(total))"
         case .playing:
             return "Playing"
         case .error(let message):

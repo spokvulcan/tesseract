@@ -34,6 +34,22 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
     var speechTokenizer: Qwen3TTSSpeechTokenizer?
     var tokenizer: Tokenizer?
 
+    // Voice prefix KV cache: instruct tokens are text-independent under causal attention,
+    // so we cache them once per voice description and restore for each new text.
+    private var voicePrefixKVState: [[MLXArray]]?
+    private var cachedVoiceDescription: String?
+
+    // Voice anchor KV cache: extends instruct cache with codec-level voice examples
+    // from a previously generated segment, anchoring subsequent segments to the same voice.
+    private var voiceAnchorKVState: [[MLXArray]]?
+    private var voiceAnchorCodecCount: Int = 0
+
+    /// Codec codes from the most recent generation, used to build voice anchor.
+    public private(set) var lastGeneratedCodes: [MLXArray]?
+
+    /// Random seed for deterministic generation. Set by caller before generate/generateStream.
+    public var seed: UInt64 = 0
+
     /// Enable per-component profiling. Set env QWEN3TTS_PROFILE=1 to enable.
     /// Profiling forces sync eval() at every sub-step, preventing lazy graph fusion
     /// and adding ~18 GPU sync points per step (vs 2 normally). Expect ~2-3x slowdown.
@@ -79,6 +95,111 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
     }()
 
     public var sampleRate: Int { config.sampleRate }
+
+    // MARK: - Voice prefix cache helpers
+
+    private func saveVoicePrefixCache(_ cache: [KVCacheSimple]) {
+        voicePrefixKVState = cache.map { $0.state }
+        eval(voicePrefixKVState!.flatMap { $0 })  // Materialize, detach from lazy graph
+    }
+
+    private func restoreVoicePrefixCache(into cache: [KVCacheSimple]) {
+        guard let saved = voicePrefixKVState else { return }
+        for (i, layerState) in saved.enumerated() {
+            cache[i].state = layerState  // .state setter auto-sets offset from keys.dim(2)
+        }
+    }
+
+    // MARK: - Voice anchor cache helpers
+
+    private func saveVoiceAnchorCache(_ cache: [KVCacheSimple]) {
+        voiceAnchorKVState = cache.map { $0.state }
+        eval(voiceAnchorKVState!.flatMap { $0 })
+    }
+
+    private func restoreVoiceAnchorCache(into cache: [KVCacheSimple]) {
+        guard let saved = voiceAnchorKVState else { return }
+        for (i, layerState) in saved.enumerated() {
+            cache[i].state = layerState
+        }
+    }
+
+    public func buildVoiceAnchor(
+        referenceCount: Int,
+        instruct: String?,
+        language: String?
+    ) {
+        guard let codes = lastGeneratedCodes, !codes.isEmpty else {
+            logger.info("No generated codes available for voice anchor")
+            return
+        }
+
+        let refCount = min(referenceCount, codes.count)
+        guard refCount > 0 else { return }
+
+        let talkerConfig = config.talkerConfig!
+        let inputEmbedding = talker.getInputEmbeddings()
+        let codeEmbeddings = talker.codePredictor.codecEmbedding
+
+        // Start from instruct-only KV cache
+        let cache = talker.makeCache()
+
+        // Ensure instruct prefix is cached
+        if cachedVoiceDescription != instruct || voicePrefixKVState == nil {
+            let prepared = prepareGenerationInputs(
+                text: ".", language: language ?? "auto", instruct: instruct
+            )
+            if let instructEmbed = prepared.instructEmbed {
+                let _ = talker(instructEmbed, cache: cache)
+                saveVoicePrefixCache(cache)
+                cachedVoiceDescription = instruct
+            }
+        } else {
+            restoreVoicePrefixCache(into: cache)
+        }
+
+        // Build codec prompt embeddings from reference codes
+        // Each code step has shape [1, numCodeGroups], we embed all codebooks and sum
+        let refCodes = Array(codes.prefix(refCount))
+        let ttsPadEmbed: MLXArray = {
+            let padTokens = MLXArray([Int32(config.ttsPadTokenId)]).reshaped(1, 1)
+            return talker.textProjection(talker.getTextEmbeddings()(padTokens))
+        }()
+
+        var codecPromptEmbeds = [MLXArray]()
+        codecPromptEmbeds.reserveCapacity(refCount)
+
+        for stepCodes in refCodes {
+            // stepCodes: [1, numCodeGroups]
+            // Embed code0 with talker input embedding, remaining with code predictor embeddings
+            var embed = inputEmbedding(stepCodes[0..., 0..<1])  // code0
+            for codeIdx in 0..<(talkerConfig.numCodeGroups - 1) {
+                let codeToken = stepCodes[0..., (codeIdx + 1)..<(codeIdx + 2)]
+                embed = embed + codeEmbeddings[codeIdx](codeToken)
+            }
+            // Add ttsPadEmbed (same as during generation when text is exhausted)
+            embed = embed + ttsPadEmbed
+            codecPromptEmbeds.append(embed)
+        }
+
+        // Concatenate all codec prompt steps and forward through talker
+        let codecPrompt = concatenated(codecPromptEmbeds, axis: 1)  // [1, refCount, hidden]
+        let _ = talker(codecPrompt, cache: cache)
+
+        // Save the extended KV state (instruct + codec prompt)
+        saveVoiceAnchorCache(cache)
+        voiceAnchorCodecCount = refCount
+
+        let audioSeconds = String(format: "%.1f", Double(refCount) / 12.0)
+        logger.info("Voice anchor built: \(refCount, privacy: .public) codec steps (\(audioSeconds, privacy: .public)s) from first segment")
+    }
+
+    public func clearVoiceAnchor() {
+        voiceAnchorKVState = nil
+        voiceAnchorCodecCount = 0
+        lastGeneratedCodes = nil
+        logger.info("Voice anchor cleared")
+    }
 
     init(config: Qwen3TTSModelConfig) {
         let talkerConfig = config.talkerConfig ?? {
@@ -134,7 +255,25 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         language: String?,
         generationParameters: GenerateParameters
     ) -> AsyncThrowingStream<AudioGeneration, Error> {
+        generateStream(
+            text: text, voice: voice, refAudio: refAudio,
+            refText: refText, language: language,
+            generationParameters: generationParameters,
+            useVoiceAnchor: false
+        )
+    }
+
+    public func generateStream(
+        text: String,
+        voice: String?,
+        refAudio: MLXArray?,
+        refText: String?,
+        language: String?,
+        generationParameters: GenerateParameters,
+        useVoiceAnchor: Bool
+    ) -> AsyncThrowingStream<AudioGeneration, Error> {
         let (stream, continuation) = AsyncThrowingStream<AudioGeneration, Error>.makeStream()
+        let capturedSeed = self.seed
         Task { @Sendable [weak self] in
             guard let self else { return }
             do {
@@ -144,6 +283,10 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                 guard self.tokenizer != nil else {
                     throw AudioGenerationError.modelNotInitialized("Text tokenizer not loaded")
                 }
+
+                // Set seed inside Task to guarantee deterministic sampling
+                // (unstructured Tasks don't inherit caller's random state)
+                MLXRandom.seed(capturedSeed)
 
                 let instruct = voice
                 let lang = language ?? "auto"
@@ -160,8 +303,10 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
                     topP: topP,
                     repetitionPenalty: repPenalty,
                     maxTokens: maxTokens,
-                    onAudioChunk: { chunk in
-                        continuation.yield(.audioChunk(chunk))
+                    useVoiceAnchor: useVoiceAnchor,
+                    onAudioChunk: { chunkSamples in
+                        let arr = MLXArray(chunkSamples)
+                        continuation.yield(.audioChunk(arr))
                     }
                 )
                 continuation.finish()
@@ -210,17 +355,34 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         let settingsMsg = "Runtime knobs: cpPrefill=\(codePredictorPrefillEnabled), codeSampler=\(optimizedCodeSamplerEnabled), clearCacheEvery=\(clearCacheEverySteps), profiling=\(Qwen3TTSFullModel.profilingEnabled), metalFastSynch=\(metalFastSynch)"
         emitPerf(settingsMsg)
 
-        // Prepare inputs
-        let (inputEmbedsInit, trailingTextHidden, ttsPadEmbed) = prepareGenerationInputs(
+        // Prepare inputs (instruct embed split from text part for KV caching)
+        let prepared = prepareGenerationInputs(
             text: text, language: language, instruct: instruct
         )
+        let trailingTextHidden = prepared.trailingTextHidden
+        let ttsPadEmbed = prepared.ttsPadEmbed
 
         // Cap max tokens based on text length
         let targetTokenCount = tokenizer.encode(text: text).count
         let effectiveMaxTokens = min(maxTokens, max(75, targetTokenCount * 6))
 
-        // Initialize cache
+        // Initialize cache and run instruct prefill (cached across calls with same voice)
         let cache = talker.makeCache()
+
+        if let instructEmbed = prepared.instructEmbed {
+            if cachedVoiceDescription == instruct, voicePrefixKVState != nil {
+                // Cache HIT — restore saved instruct KV state
+                restoreVoicePrefixCache(into: cache)
+                logger.info("Voice prefix cache HIT (\(instruct?.prefix(40) ?? "", privacy: .public))")
+            } else {
+                // Cache MISS — run instruct forward pass and save KV state
+                let _ = talker(instructEmbed, cache: cache)
+                saveVoicePrefixCache(cache)
+                cachedVoiceDescription = instruct
+                logger.info("Voice prefix cache MISS — computed and saved (\(instruct?.prefix(40) ?? "", privacy: .public))")
+            }
+        }
+
         var generatedCodes = [MLXArray]()
         var generatedTokenIds = [Int]()  // Host-side token IDs for repetition penalty (avoids per-step .item() calls)
         generatedCodes.reserveCapacity(effectiveMaxTokens)
@@ -232,7 +394,7 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
             .filter { $0 != eosTokenId }
 
         var trailingIdx = 0
-        var inputEmbeds = inputEmbedsInit
+        var inputEmbeds = prepared.textPartEmbed
 
         let profiling = Qwen3TTSFullModel.profilingEnabled
         var timings = StepTimings()
@@ -243,6 +405,11 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         for c in codePredictorCache {
             c.step = talkerConfig.numCodeGroups
         }
+
+        // Seed random state right before generation loop to ensure deterministic sampling.
+        // This is set here (after prefill, before first categorical()) rather than relying
+        // on the caller's MLXRandom.seed() surviving across Task/thread boundaries.
+        MLXRandom.seed(self.seed)
 
         for step in 0 ..< effectiveMaxTokens {
             let stepStart = CFAbsoluteTimeGetCurrent()
@@ -449,6 +616,9 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
             emitPerf(summary)
         }
 
+        // Save generated codes for voice anchor building
+        self.lastGeneratedCodes = generatedCodes.isEmpty ? nil : generatedCodes
+
         guard !generatedCodes.isEmpty else {
             Memory.clearCache()
             return MLXArray.zeros([1])
@@ -501,7 +671,13 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
     // MARK: - Streaming VoiceDesign generation
 
     /// Generates speech tokens and progressively decodes/yields audio chunks.
-    /// Each chunk is a 1D MLXArray of float32 audio samples at `sampleRate` Hz.
+    /// Each chunk is a `[Float]` array of audio samples at `sampleRate` Hz.
+    ///
+    /// Uses a two-phase strategy for low first-chunk latency:
+    /// - Phase 1: emit after `firstChunkEmitEvery` tokens with a shorter decode window
+    /// - Phase 2: switch to `emitEvery` tokens with full `decodeWindow`
+    ///
+    /// Adjacent chunks are Hann-crossfaded over `blendSamples` to eliminate boundary artifacts.
     func generateStreamingVoiceDesign(
         text: String,
         instruct: String?,
@@ -510,9 +686,14 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         topP: Float,
         repetitionPenalty: Float,
         maxTokens: Int,
+        firstChunkEmitEvery: Int = 5,
+        firstChunkDecodeWindow: Int = 48,
+        firstChunkFrames: Int = 48,
         emitEvery: Int = 8,
         decodeWindow: Int = 80,
-        onAudioChunk: (MLXArray) -> Void
+        blendSamples: Int = 512,
+        useVoiceAnchor: Bool = false,
+        onAudioChunk: ([Float]) -> Void
     ) {
         guard let speechTokenizer, let tokenizer else { return }
 
@@ -527,15 +708,43 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         let clearCacheEverySteps = Qwen3TTSFullModel.clearCacheEverySteps
         let codeSamplerGreedy = temperature <= 0
         let codeSamplerInvTemperature: Float = codeSamplerGreedy ? 0 : (1 / temperature)
+        let genStartTime = CFAbsoluteTimeGetCurrent()
+        let emitPerf: (String) -> Void = { msg in
+            logger.info("\(msg, privacy: .public)")
+            if Qwen3TTSFullModel.stdoutPerfLogsEnabled {
+                NSLog("[Qwen3TTS] %@", msg)
+            }
+        }
 
-        let (inputEmbedsInit, trailingTextHidden, ttsPadEmbed) = prepareGenerationInputs(
+        let prepared = prepareGenerationInputs(
             text: text, language: language, instruct: instruct
         )
+        let trailingTextHidden = prepared.trailingTextHidden
+        let ttsPadEmbed = prepared.ttsPadEmbed
 
         let targetTokenCount = tokenizer.encode(text: text).count
         let effectiveMaxTokens = min(maxTokens, max(75, targetTokenCount * 6))
 
+        // Initialize cache and restore voice state
         let cache = talker.makeCache()
+
+        if useVoiceAnchor, voiceAnchorKVState != nil {
+            // Restore voice anchor: instruct + codec voice examples
+            restoreVoiceAnchorCache(into: cache)
+            let anchorCount = self.voiceAnchorCodecCount
+            logger.info("Voice anchor cache restored (\(anchorCount, privacy: .public) codec steps)")
+        } else if let instructEmbed = prepared.instructEmbed {
+            if cachedVoiceDescription == instruct, voicePrefixKVState != nil {
+                restoreVoicePrefixCache(into: cache)
+                logger.info("Voice prefix cache HIT (\(instruct?.prefix(40) ?? "", privacy: .public))")
+            } else {
+                let _ = talker(instructEmbed, cache: cache)
+                saveVoicePrefixCache(cache)
+                cachedVoiceDescription = instruct
+                logger.info("Voice prefix cache MISS — computed and saved (\(instruct?.prefix(40) ?? "", privacy: .public))")
+            }
+        }
+
         var generatedCodes = [MLXArray]()
         var generatedTokenIds = [Int]()
         generatedCodes.reserveCapacity(effectiveMaxTokens)
@@ -546,14 +755,29 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
             .filter { $0 != eosTokenId }
 
         var trailingIdx = 0
-        var inputEmbeds = inputEmbedsInit
+        var inputEmbeds = prepared.textPartEmbed
         var totalEmitted = 0  // Number of tokens whose audio has been emitted
+        var prevChunkTail: [Float]? = nil  // Last `blendSamples` from previous chunk for crossfade
+        var isFirstChunk = true
+        var phase = 1  // 1 = aggressive first chunk, 2 = steady state
+        let sampleRate = config.sampleRate
+
+        // Pre-compute Hann window tables
+        let hannFadeIn = (0..<blendSamples).map { i -> Float in
+            0.5 * (1 - cos(Float.pi * Float(i) / Float(blendSamples)))
+        }
+        let hannFadeOut = (0..<blendSamples).map { i -> Float in
+            0.5 * (1 + cos(Float.pi * Float(i) / Float(blendSamples)))
+        }
 
         // Pre-allocate code predictor KV caches once; reuse via trim() each step.
         let codePredictorCache = codePredictor.makeCache()
         for c in codePredictorCache {
             c.step = talkerConfig.numCodeGroups
         }
+
+        // Seed random state right before generation loop (see generateVoiceDesign for rationale)
+        MLXRandom.seed(self.seed)
 
         for step in 0 ..< effectiveMaxTokens {
             let (logits, hidden) = talker(inputEmbeds, cache: cache)
@@ -659,35 +883,43 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
             }
 
             inputEmbeds = textEmbed + codecEmbed
-            // Co-evaluate `allCodes` so stored per-step codes are materialized tensors,
-            // not references to the full lazy step graph.
             eval(inputEmbeds, allCodes)
             if (step + 1) % clearCacheEverySteps == 0 {
                 Memory.clearCache()
             }
 
-            // Sliding window decode: emit audio every `emitEvery` tokens
+            // Phase transition
+            if phase == 1 && generatedCodes.count >= firstChunkFrames {
+                phase = 2
+            }
+
+            // Sliding window decode: emit audio using phase-appropriate intervals
+            let currentEmitEvery = phase == 1 ? firstChunkEmitEvery : emitEvery
+            let currentDecodeWindow = phase == 1 ? firstChunkDecodeWindow : decodeWindow
             let pendingCount = generatedCodes.count - totalEmitted
-            if pendingCount >= emitEvery {
-                let samplesPerToken = speechTokenizer.decodeUpsampleRate  // 1920
-                let stepSamples = emitEvery * samplesPerToken
+            if pendingCount >= currentEmitEvery {
+                let rawSamples = decodeWindowTail(
+                    generatedCodes: generatedCodes,
+                    speechTokenizer: speechTokenizer,
+                    emitTokens: currentEmitEvery,
+                    decodeWindow: currentDecodeWindow,
+                    totalEmitted: totalEmitted
+                )
 
-                // Decode last min(decodeWindow, total) tokens — 85% context ratio
-                let windowSize = min(decodeWindow, generatedCodes.count)
-                let windowStart = generatedCodes.count - windowSize
-                let windowCodes = stacked(Array(generatedCodes[windowStart..<generatedCodes.count]), axis: 1)
-
-                // One decoder call on full window, no context trimming
-                let wav = speechTokenizer.decodeSingleChunk(windowCodes, leftContextTokens: 0)
-                let allSamples = wav[0]
-
-                // Extract only the tail (newly emitted audio)
-                let startSample = max(0, allSamples.dim(0) - stepSamples)
-                let chunk = allSamples[startSample...]
-                if chunk.dim(0) > 0 {
-                    onAudioChunk(chunk)
+                let emitted = crossfadeAndEmit(
+                    rawSamples: rawSamples,
+                    prevChunkTail: &prevChunkTail,
+                    isFirstChunk: isFirstChunk,
+                    blendSamples: blendSamples,
+                    hannFadeIn: hannFadeIn,
+                    hannFadeOut: hannFadeOut,
+                    sampleRate: sampleRate
+                )
+                if !emitted.isEmpty {
+                    onAudioChunk(emitted)
+                    isFirstChunk = false
                 }
-                totalEmitted += emitEvery
+                totalEmitted += currentEmitEvery
             }
         }
 
@@ -702,24 +934,132 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
             let wav = speechTokenizer.decodeSingleChunk(windowCodes, leftContextTokens: 0)
             let allSamples = wav[0]
 
-            // Extract un-emitted tail
             let remainingSamples = remaining * samplesPerToken
             let startSample = max(0, allSamples.dim(0) - remainingSamples)
-            var chunk = allSamples[startSample...]
+            var tailSlice = allSamples[startSample...]
 
-            // Trim padding tokens (valid-length check)
+            // Trim padding tokens
             let newTokenCodes = stacked(Array(generatedCodes[totalEmitted...]), axis: 1)
             let validTokens = Int((newTokenCodes[0..., 0..., 0] .> 0).sum().item(Int32.self))
             let validSamples = validTokens * samplesPerToken
-            if validSamples > 0 && validSamples < chunk.dim(0) {
-                chunk = chunk[..<validSamples]
+            if validSamples > 0 && validSamples < tailSlice.dim(0) {
+                tailSlice = tailSlice[..<validSamples]
             }
-            if chunk.dim(0) > 0 {
-                onAudioChunk(chunk)
+
+            let rawSamples = tailSlice.asArray(Float.self)
+            if !rawSamples.isEmpty {
+                let emitted = crossfadeAndEmit(
+                    rawSamples: rawSamples,
+                    prevChunkTail: &prevChunkTail,
+                    isFirstChunk: isFirstChunk,
+                    blendSamples: blendSamples,
+                    hannFadeIn: hannFadeIn,
+                    hannFadeOut: hannFadeOut,
+                    sampleRate: sampleRate
+                )
+                if !emitted.isEmpty {
+                    onAudioChunk(emitted)
+                    isFirstChunk = false
+                }
             }
         }
 
+        // Flush held-back overlap tail with fade-out
+        if var tail = prevChunkTail, !tail.isEmpty {
+            let fadeLen = min(Int(Float(sampleRate) * 0.005), tail.count)
+            for i in 0..<fadeLen {
+                tail[tail.count - fadeLen + i] *= Float(fadeLen - 1 - i) / Float(fadeLen)
+            }
+            onAudioChunk(tail)
+        }
+
+        let tokenGenTime = CFAbsoluteTimeGetCurrent() - genStartTime
+        let tokenCount = generatedCodes.count
+        let tokensPerSec = tokenCount > 0 ? Double(tokenCount) / tokenGenTime : 0
+        let audioSeconds = Double(tokenCount) / 12.0
+        let rtf = tokenGenTime / max(audioSeconds, 0.001)
+        emitPerf("Streaming generation: \(tokenCount) tokens in \(String(format: "%.2f", tokenGenTime))s (\(String(format: "%.1f", tokensPerSec)) tok/s, RTF=\(String(format: "%.2f", rtf))x)")
+
+        // Save generated codes for voice anchor building
+        self.lastGeneratedCodes = generatedCodes.isEmpty ? nil : generatedCodes
+
         Memory.clearCache()
+    }
+
+    // MARK: - Streaming helpers
+
+    /// Decode a window of tokens and extract the tail samples for the newly emitted tokens.
+    private func decodeWindowTail(
+        generatedCodes: [MLXArray],
+        speechTokenizer: Qwen3TTSSpeechTokenizer,
+        emitTokens: Int,
+        decodeWindow: Int,
+        totalEmitted: Int
+    ) -> [Float] {
+        let samplesPerToken = speechTokenizer.decodeUpsampleRate
+        let stepSamples = emitTokens * samplesPerToken
+
+        let windowSize = min(decodeWindow, generatedCodes.count)
+        let windowStart = generatedCodes.count - windowSize
+        let windowCodes = stacked(Array(generatedCodes[windowStart..<generatedCodes.count]), axis: 1)
+
+        let wav = speechTokenizer.decodeSingleChunk(windowCodes, leftContextTokens: 0)
+        let allSamples = wav[0]
+
+        let startSample = max(0, allSamples.dim(0) - stepSamples)
+        let chunk = allSamples[startSample...]
+        return chunk.asArray(Float.self)
+    }
+
+    /// Apply Hann crossfade between previous chunk's tail and new chunk's head, emit the result.
+    /// Holds back the last `blendSamples` of each chunk for the next crossfade.
+    private func crossfadeAndEmit(
+        rawSamples: [Float],
+        prevChunkTail: inout [Float]?,
+        isFirstChunk: Bool,
+        blendSamples: Int,
+        hannFadeIn: [Float],
+        hannFadeOut: [Float],
+        sampleRate: Int
+    ) -> [Float] {
+        guard !rawSamples.isEmpty else { return [] }
+
+        var output = [Float]()
+        output.reserveCapacity(rawSamples.count)
+
+        if let prevTail = prevChunkTail, !prevTail.isEmpty {
+            // Crossfade: blend prevTail with first blendSamples of rawSamples
+            let overlapLen = min(blendSamples, prevTail.count, rawSamples.count)
+            for i in 0..<overlapLen {
+                output.append(prevTail[i] * hannFadeOut[i] + rawSamples[i] * hannFadeIn[i])
+            }
+            // Append remainder after overlap
+            if rawSamples.count > overlapLen {
+                output.append(contentsOf: rawSamples[overlapLen...])
+            }
+        } else {
+            // First chunk — apply 5ms linear fade-in
+            output.append(contentsOf: rawSamples)
+            if isFirstChunk {
+                let fadeLen = min(Int(Float(sampleRate) * 0.005), output.count)
+                for i in 0..<fadeLen {
+                    output[i] *= Float(i) / Float(fadeLen)
+                }
+            }
+        }
+
+        // Hold back last blendSamples for next crossfade
+        if output.count > blendSamples {
+            let holdStart = output.count - blendSamples
+            prevChunkTail = Array(output[holdStart...])
+            output.removeLast(blendSamples)
+        } else {
+            // Chunk too small to split — hold entire thing
+            prevChunkTail = output
+            output = []
+        }
+
+        return output
     }
 
     // MARK: - Prepare generation inputs
@@ -728,7 +1068,7 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         text: String,
         language: String,
         instruct: String?
-    ) -> (MLXArray, MLXArray, MLXArray) {
+    ) -> (instructEmbed: MLXArray?, textPartEmbed: MLXArray, trailingTextHidden: MLXArray, ttsPadEmbed: MLXArray) {
         guard let tokenizer, let talkerConfig = config.talkerConfig else {
             fatalError("Tokenizer/config not loaded")
         }
@@ -795,17 +1135,9 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         var combinedEmbed = concatenated([padEmbeds, ttsBosEmbed], axis: 1)
         combinedEmbed = combinedEmbed + codecEmbed[0..., ..<(-1), 0...]
 
-        // Full input embedding
-        var inputEmbeds: MLXArray
-        if let instructEmbed {
-            inputEmbeds = concatenated([instructEmbed, roleEmbed, combinedEmbed], axis: 1)
-        } else {
-            inputEmbeds = concatenated([roleEmbed, combinedEmbed], axis: 1)
-        }
-
-        // Add first text token (index 3) + last codec embed
+        // Build text-part embedding (everything after instruct)
         let firstTextEmbed = textEmbed[0..., 3 ..< 4, 0...] + codecEmbed[0..., (-1)..., 0...]
-        inputEmbeds = concatenated([inputEmbeds, firstTextEmbed], axis: 1)
+        let textPartEmbed = concatenated([roleEmbed, combinedEmbed, firstTextEmbed], axis: 1)
 
         // Trailing text (tokens 4 to -5, plus EOS)
         let trailingTextHidden = concatenated(
@@ -813,7 +1145,7 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
             axis: 1
         )
 
-        return (inputEmbeds, trailingTextHidden, ttsPadEmbed)
+        return (instructEmbed, textPartEmbed, trailingTextHidden, ttsPadEmbed)
     }
 
     // MARK: - Token sampling
