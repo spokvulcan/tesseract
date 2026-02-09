@@ -31,12 +31,14 @@ final class DependencyContainer: ObservableObject {
     lazy var textExtractor = TextExtractor()
     lazy var speechEngine = SpeechEngine()
     lazy var audioPlaybackManager = AudioPlaybackManager()
+    lazy var ttsNotchPanelController = TTSNotchPanelController()
     lazy var speechCoordinator: SpeechCoordinator = {
         SpeechCoordinator(
             textExtractor: textExtractor,
             speechEngine: speechEngine,
             playbackManager: audioPlaybackManager,
             settings: settingsManager,
+            notchOverlay: ttsNotchPanelController,
             prepareForSpeech: { [weak self] in
                 self?.transcriptionEngine.releaseModelForTTSIfIdle()
             }

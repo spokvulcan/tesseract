@@ -113,6 +113,11 @@ final class SpeechEngine: ObservableObject {
         guard let actor = ttsActor else { return }
         await actor.cancelGeneration()
     }
+
+    func computeTokenCharOffsets(text: String) async -> [Int] {
+        guard let actor = ttsActor else { return [] }
+        return await actor.computeTokenCharOffsets(text: text)
+    }
 }
 
 actor TTSActor {
@@ -222,6 +227,11 @@ actor TTSActor {
     func cancelGeneration() {
         guard let model else { return }
         model.cancelGeneration()
+    }
+
+    func computeTokenCharOffsets(text: String) -> [Int] {
+        guard let model else { return [] }
+        return model.tokenizeForAlignment(text: text)
     }
 
     private func convertAudioStream(

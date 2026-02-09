@@ -25,6 +25,9 @@ final class AudioPlaybackManager: ObservableObject {
     private var pendingBufferCount = 0
     private var playerStarted = false
 
+    private(set) var totalScheduledSamples: Int = 0
+    private var streamingSampleRate: Int = 0
+
     var onPlaybackFinished: (() -> Void)?
 
     // MARK: - Debug dump
@@ -37,6 +40,22 @@ final class AudioPlaybackManager: ObservableObject {
     private var debugStreamStartTime: CFAbsoluteTime = 0
     private var debugSampleRate: Int = 0
     private var debugOutputDir: URL?
+
+    // MARK: - Playback time tracking
+
+    var totalScheduledDuration: TimeInterval {
+        guard streamingSampleRate > 0 else { return 0 }
+        return Double(totalScheduledSamples) / Double(streamingSampleRate)
+    }
+
+    func currentPlaybackTime() -> TimeInterval {
+        guard let node = playerNode,
+              let nodeTime = node.lastRenderTime,
+              let playerTime = node.playerTime(forNodeTime: nodeTime) else {
+            return 0
+        }
+        return Double(playerTime.sampleTime) / playerTime.sampleRate
+    }
 
     // MARK: - One-shot playback (existing API)
 
@@ -128,6 +147,8 @@ final class AudioPlaybackManager: ObservableObject {
         accumulatedSamples = []
         pendingBufferCount = 0
         playerStarted = false
+        totalScheduledSamples = 0
+        streamingSampleRate = sampleRate
         isPlaying = true
 
         if debugDumpEnabled {
@@ -177,6 +198,7 @@ final class AudioPlaybackManager: ObservableObject {
             }
         }
 
+        totalScheduledSamples += samples.count
         pendingBufferCount += 1
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in
@@ -224,6 +246,8 @@ final class AudioPlaybackManager: ObservableObject {
         accumulatedSamples = []
         pendingBufferCount = 0
         playerStarted = false
+        totalScheduledSamples = 0
+        streamingSampleRate = 0
         isPlaying = false
         debugOutputDir = nil
     }

@@ -1232,6 +1232,22 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
         return categorical(logitsSlice * invTemperature).reshaped(1, 1)
     }
 
+    // MARK: - Token alignment
+
+    public func tokenizeForAlignment(text: String) -> [Int] {
+        guard let tokenizer else { return [] }
+        let tokens = tokenizer.encode(text: text)
+        guard !tokens.isEmpty else { return [] }
+
+        // Decode increasing prefixes to find the character boundary of each token
+        var offsets: [Int] = [0]
+        for i in 1..<tokens.count {
+            let prefix = tokenizer.decode(tokens: Array(tokens[0..<i]))
+            offsets.append(min(prefix.count, text.count))
+        }
+        return offsets
+    }
+
     // MARK: - fromPretrained
 
     public static func fromPretrained(_ modelRepo: String) async throws -> Qwen3TTSFullModel {

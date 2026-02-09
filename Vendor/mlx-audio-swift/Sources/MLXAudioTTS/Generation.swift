@@ -52,6 +52,10 @@ public protocol SpeechGenerationModel: AnyObject {
 
     /// Cancel any in-progress generation immediately.
     func cancelGeneration()
+
+    /// Tokenize text and return per-token character offsets for word-level alignment.
+    /// Each token maps to one codec step (~80ms of audio).
+    func tokenizeForAlignment(text: String) -> [Int]
 }
 
 extension SpeechGenerationModel {
@@ -82,4 +86,5 @@ extension SpeechGenerationModel {
     public func buildVoiceAnchor(referenceCount: Int, instruct: String?, language: String?) {}
     public func clearVoiceAnchor() {}
     public func cancelGeneration() {}
+    public func tokenizeForAlignment(text: String) -> [Int] { [] }
 }
