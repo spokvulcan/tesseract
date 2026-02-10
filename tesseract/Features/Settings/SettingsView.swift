@@ -92,7 +92,7 @@ struct GeneralSettingsSection: View {
             }
         }
         .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
+
         .navigationTitle("General")
     }
 }
@@ -196,7 +196,7 @@ struct ModelSettingsSection: View {
             }
         }
         .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
+
         .navigationTitle("Model")
     }
 }
@@ -316,7 +316,7 @@ struct RecordingSettingsSection: View {
             }
         }
         .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
+
         .navigationTitle("Recording")
     }
 

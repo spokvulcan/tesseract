@@ -62,8 +62,6 @@ struct TesseractApp: App {
             .background {
                 WindowOpenerView(appDelegate: appDelegate)
             }
-            .containerBackground(.thickMaterial, for: .window)
-            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .environmentObject(container)
             .focusedSceneValue(\.dictationActions, DictationActions(
                 toggleRecording: { [weak container] in
@@ -101,7 +99,6 @@ struct TesseractApp: App {
         }
         // Prevent WindowGroup from creating multiple windows via external events
         .handlesExternalEvents(matching: Set<String>())
-        .windowStyle(.titleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 800, height: 700)
         .commands {
