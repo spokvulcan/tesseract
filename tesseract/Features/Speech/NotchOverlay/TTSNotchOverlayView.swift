@@ -35,8 +35,6 @@ final class NotchFrameTracker {
 // MARK: - TTSNotchOverlayView
 
 struct TTSNotchOverlayView: View {
-    let words: [String]
-    let totalCharCount: Int
     @Bindable var wordTracker: TTSWordTracker
     let menuBarHeight: CGFloat
     let baseTextHeight: CGFloat
@@ -120,7 +118,7 @@ struct TTSNotchOverlayView: View {
         }
         .onChange(of: extraHeight) { _, _ in updateFrameTracker() }
         .onAppear {
-            Log.speech.info("[NotchView] onAppear — words=\(self.words.count), totalCharCount=\(self.totalCharCount), expansion=\(self.expansion)")
+            Log.speech.info("[NotchView] onAppear — words=\(self.wordTracker.words.count), totalCharCount=\(self.wordTracker.totalCharCount), expansion=\(self.expansion)")
             withAnimation(.easeOut(duration: 0.4)) {
                 expansion = 1
             }
@@ -147,7 +145,7 @@ struct TTSNotchOverlayView: View {
             }
         }
         .onChange(of: wordTracker.recognizedCharCount) { _, charCount in
-            if wordTracker.isGenerationComplete && totalCharCount > 0 && charCount >= totalCharCount && !wordTracker.shouldDismiss {
+            if wordTracker.isGenerationComplete && wordTracker.totalCharCount > 0 && charCount >= wordTracker.totalCharCount && !wordTracker.shouldDismiss {
                 Log.speech.info("[NotchView] all text highlighted, scheduling auto-dismiss in 0.5s")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     guard !wordTracker.shouldDismiss else { return }
@@ -156,7 +154,7 @@ struct TTSNotchOverlayView: View {
             }
         }
         .onChange(of: wordTracker.isGenerationComplete) { _, complete in
-            if complete && totalCharCount > 0 && wordTracker.recognizedCharCount >= totalCharCount && !wordTracker.shouldDismiss {
+            if complete && wordTracker.totalCharCount > 0 && wordTracker.recognizedCharCount >= wordTracker.totalCharCount && !wordTracker.shouldDismiss {
                 Log.speech.info("[NotchView] generation complete with all text highlighted, scheduling auto-dismiss in 0.5s")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     guard !wordTracker.shouldDismiss else { return }
@@ -183,7 +181,7 @@ struct TTSNotchOverlayView: View {
     private var prompterView: some View {
         VStack(spacing: 0) {
             SpeechScrollView(
-                words: words,
+                words: wordTracker.words,
                 highlightedCharCount: wordTracker.recognizedCharCount,
                 font: font,
                 highlightColor: highlightColor,
