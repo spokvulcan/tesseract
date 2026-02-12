@@ -81,16 +81,7 @@ struct ModelCardView: View {
                 actionButton
             }
         }
-        .padding(16)
-        .background(
-            .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(.white.opacity(0.15), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
