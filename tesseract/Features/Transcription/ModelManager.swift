@@ -5,19 +5,24 @@
 
 import Foundation
 
-/// Manages the bundled Whisper model.
-/// The model is bundled with the app, so no downloads are needed.
+/// Manages the Whisper model path resolution.
+/// The model is downloaded via the Models page and cached locally.
 @MainActor
 final class ModelManager {
-    /// Returns the URL to the bundled model folder.
-    /// The model is always available since it's bundled with the app.
-    func getBundledModelPath() -> URL? {
-        WhisperModel.bundledModelURL
+    private let modelDownloadManager: ModelDownloadManager
+
+    init(modelDownloadManager: ModelDownloadManager) {
+        self.modelDownloadManager = modelDownloadManager
     }
 
-    /// Validates that the bundled model exists and has required files.
+    /// Returns the URL to the downloaded model folder, or nil if not downloaded.
+    func getModelPath() -> URL? {
+        modelDownloadManager.modelPath(for: WhisperModel.modelID)
+    }
+
+    /// Validates that the downloaded model exists and has required files.
     func isModelAvailable() -> Bool {
-        guard let modelPath = getBundledModelPath() else { return false }
+        guard let modelPath = getModelPath() else { return false }
 
         let fileManager = FileManager.default
         let encoderPath = modelPath.appendingPathComponent("AudioEncoder.mlmodelc")

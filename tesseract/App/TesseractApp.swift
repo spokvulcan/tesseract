@@ -63,6 +63,7 @@ struct TesseractApp: App {
                 WindowOpenerView(appDelegate: appDelegate)
             }
             .environmentObject(container)
+            .environmentObject(container.modelDownloadManager)
             .focusedSceneValue(\.dictationActions, DictationActions(
                 toggleRecording: { [weak container] in
                     container?.dictationCoordinator.toggleRecording()
