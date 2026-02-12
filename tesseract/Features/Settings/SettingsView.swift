@@ -207,6 +207,7 @@ struct RecordingSettingsSection: View {
     @ObservedObject private var settings = SettingsManager.shared
     @EnvironmentObject private var container: DependencyContainer
     @State private var isRecordingHotkey = false
+    @State private var isRecordingTTSHotkey = false
 
     var body: some View {
         Form {
@@ -222,7 +223,7 @@ struct RecordingSettingsSection: View {
                     .frame(height: 20)
             }
 
-            Section("Global Hotkey") {
+            Section("Dictation Hotkey") {
                 HStack {
                     Text("Push-to-Talk Key:")
                     Spacer()
@@ -252,6 +253,43 @@ struct RecordingSettingsSection: View {
                 }
 
                 if settings.hotkey.modifierFlags.contains(.function) {
+                    Text("Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Section("Speech Hotkey") {
+                HStack {
+                    Text("Speak Selected Text:")
+                    Spacer()
+
+                    if isRecordingTTSHotkey {
+                        Text("Press a key...")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Waiting for key press")
+                    } else {
+                        Text(settings.ttsHotkey.displayString)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.2))
+                            .cornerRadius(4)
+                            .accessibilityLabel("Current TTS hotkey: \(settings.ttsHotkey.displayString)")
+                    }
+
+                    Button(isRecordingTTSHotkey ? "Cancel" : "Change") {
+                        if isRecordingTTSHotkey {
+                            isRecordingTTSHotkey = false
+                        } else {
+                            recordNewTTSHotkey()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityHint(isRecordingTTSHotkey ? "Cancel recording new hotkey" : "Record a new speech hotkey")
+                }
+
+                if settings.ttsHotkey.modifierFlags.contains(.function) {
                     Text("Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -290,6 +328,17 @@ struct RecordingSettingsSection: View {
                 settings.hotkey = combo
             }
             isRecordingHotkey = false
+        }
+    }
+
+    private func recordNewTTSHotkey() {
+        isRecordingTTSHotkey = true
+
+        Task {
+            if let combo = await container.hotkeyManager.recordHotkey() {
+                settings.ttsHotkey = combo
+            }
+            isRecordingTTSHotkey = false
         }
     }
 }

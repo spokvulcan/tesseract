@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
+		E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */,
+				E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +120,7 @@
 			name = tesseract;
 			packageProductDependencies = (
 				E0C655412F2EA000003C1B55 /* WhisperKit */,
+				E0C655512F3BA000003C1B55 /* MLXAudio */,
 			);
 			productName = tesseract;
 			productReference = E0C654902F2E946A003C1B55 /* tesseract.app */;
@@ -203,6 +206,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */,
+				E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E0C654912F2E946A003C1B55 /* Products */;
@@ -626,6 +630,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Vendor/mlx-audio-swift";
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -642,6 +653,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */;
 			productName = WhisperKit;
+		};
+		E0C655512F3BA000003C1B55 /* MLXAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */;
+			productName = MLXAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

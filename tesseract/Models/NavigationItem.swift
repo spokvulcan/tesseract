@@ -7,18 +7,20 @@ import SwiftUI
 
 enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case dictation
+    case speech
     case general
     case model
     case recording
 
     var id: String { rawValue }
 
-    static let mainPages: [NavigationItem] = [.dictation]
+    static let mainPages: [NavigationItem] = [.dictation, .speech]
     static let settingsPages: [NavigationItem] = [.general, .recording]
 
     var name: LocalizedStringResource {
         switch self {
         case .dictation: "Dictation"
+        case .speech: "Speech"
         case .general: "General"
         case .model: "Model"
         case .recording: "Recording"
@@ -28,6 +30,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     var symbolName: String {
         switch self {
         case .dictation: "mic.fill"
+        case .speech: "speaker.wave.3.fill"
         case .general: "gear"
         case .model: "brain"
         case .recording: "waveform"
@@ -40,7 +43,9 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         transcriptionEngine: TranscriptionEngine,
         history: TranscriptionHistory,
         permissionsManager: PermissionsManager,
-        audioCapture: AudioCaptureEngine
+        audioCapture: AudioCaptureEngine,
+        speechCoordinator: SpeechCoordinator,
+        speechEngine: SpeechEngine
     ) -> some View {
         switch self {
         case .dictation:
@@ -50,6 +55,11 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
                 history: history,
                 permissionsManager: permissionsManager,
                 audioCapture: audioCapture
+            )
+        case .speech:
+            SpeechContentView(
+                speechCoordinator: speechCoordinator,
+                speechEngine: speechEngine
             )
         case .general:
             GeneralSettingsSection()

@@ -29,11 +29,14 @@ final class TranscriptionEngine: ObservableObject, Transcribing {
 
     private var whisperActor: WhisperActor?
     private var transcriptionTask: Task<TranscriptionResult, Error>?
+    private var configuredModelPath: URL?
 
     init() {}
 
     /// Loads the bundled Whisper model from the specified path.
     func loadModel(from modelPath: URL) async throws {
+        configuredModelPath = modelPath
+
         // Unload existing model first
         if whisperActor != nil {
             unloadModel()
@@ -65,7 +68,17 @@ final class TranscriptionEngine: ObservableObject, Transcribing {
         isModelLoaded = false
     }
 
+    /// Release Whisper model memory when prioritizing TTS performance.
+    func releaseModelForTTSIfIdle() {
+        guard !isTranscribing else { return }
+        guard whisperActor != nil else { return }
+        unloadModel()
+        Log.transcription.info("Unloaded Whisper model to prioritize TTS performance")
+    }
+
     func transcribe(_ audioData: AudioData, language: String = "auto") async throws -> TranscriptionResult {
+        try await ensureModelLoaded()
+
         guard let whisperActor else {
             throw DictationError.modelNotLoaded
         }
@@ -94,6 +107,16 @@ final class TranscriptionEngine: ObservableObject, Transcribing {
             group.cancelAll()
             return result
         }
+    }
+
+    private func ensureModelLoaded() async throws {
+        guard whisperActor == nil else { return }
+        guard let modelPath = configuredModelPath else {
+            throw DictationError.modelNotLoaded
+        }
+
+        Log.transcription.info("Whisper model not loaded, loading on demand...")
+        try await loadModel(from: modelPath)
     }
 
     func cancelTranscription() {

@@ -55,6 +55,8 @@ struct TesseractApp: App {
                 history: container.transcriptionHistory,
                 permissionsManager: container.permissionsManager,
                 audioCapture: container.audioCaptureEngine,
+                speechCoordinator: container.speechCoordinator,
+                speechEngine: container.speechEngine,
                 selectedNavigation: $selectedNavigation
             )
             .background {
