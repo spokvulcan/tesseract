@@ -10,31 +10,27 @@ struct ModelsPageView: View {
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                ForEach(ModelDefinition.byCategory(), id: \.0) { category, models in
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label(category.rawValue, systemImage: category.symbolName)
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.primary)
-
-                        ForEach(models) { model in
-                            ModelCardView(
-                                model: model,
-                                status: downloadManager.statuses[model.id] ?? .notDownloaded,
-                                isMemoryLoaded: isModelLoadedInMemory(model),
-                                onDownload: { downloadManager.download(modelID: model.id) },
-                                onCancel: { downloadManager.cancelDownload(modelID: model.id) },
-                                onDelete: { downloadManager.deleteModel(modelID: model.id) }
-                            )
-                        }
+        Form {
+            ForEach(ModelDefinition.byCategory(), id: \.0) { category, models in
+                Section(category.rawValue) {
+                    ForEach(models) { model in
+                        ModelCardView(
+                            model: model,
+                            status: downloadManager.statuses[model.id] ?? .notDownloaded,
+                            isMemoryLoaded: isModelLoadedInMemory(model),
+                            onDownload: { downloadManager.download(modelID: model.id) },
+                            onCancel: { downloadManager.cancelDownload(modelID: model.id) },
+                            onDelete: { downloadManager.deleteModel(modelID: model.id) }
+                        )
                     }
                 }
+            }
 
+            Section {
                 CacheSummaryView(totalSize: downloadManager.totalCacheSize)
             }
-            .padding(24)
         }
+        .formStyle(.grouped)
         .navigationTitle("Models")
         .onAppear {
             downloadManager.refreshAllStatuses()
@@ -80,10 +76,5 @@ struct CacheSummaryView: View {
             .font(.caption)
             .buttonStyle(.bordered)
         }
-        .padding(12)
-        .background(
-            .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
     }
 }

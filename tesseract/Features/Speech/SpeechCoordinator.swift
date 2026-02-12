@@ -199,6 +199,9 @@ final class SpeechCoordinator: ObservableObject {
                 notchOverlay?.updateTotalDuration(playbackManager.totalScheduledDuration)
             }
 
+            // Align duration estimate so segment 1 highlighting converges to 100%
+            notchOverlay?.markSegmentComplete()
+
             Log.speech.info("Segment \(startIndex + 1)/\(segmentCount) complete")
 
             // Build voice anchor from first segment's generated codes
@@ -226,9 +229,12 @@ final class SpeechCoordinator: ObservableObject {
                 state = .streamingLongForm(segment: i + 1, of: segmentCount)
                 Log.speech.info("Starting segment \(i + 1)/\(segmentCount) (with voice anchor)")
 
-                // Update overlay with new segment text
+                // Record where previous segment's audio ends in cumulative playback time.
+                // The overlay stays on the previous segment's text until playback reaches this point.
+                let prevSegEndDuration = playbackManager.totalScheduledDuration
+
+                // Start generation immediately for throughput (don't wait for playback)
                 let segOffsets = await speechEngine.computeTokenCharOffsets(text: localSegments[i].text)
-                notchOverlay?.updateText(localSegments[i].text, tokenCharOffsets: segOffsets)
 
                 let (segStream, _) = try await speechEngine.generateStreaming(
                     text: localSegments[i].text,
@@ -238,14 +244,55 @@ final class SpeechCoordinator: ObservableObject {
                     useVoiceAnchor: true
                 )
 
+                var overlayUpdated = false
+
                 for try await chunk in segStream {
                     guard !Task.isCancelled else {
                         cleanupLongForm()
                         return
                     }
                     playbackManager.appendChunk(samples: chunk)
-                    notchOverlay?.updateTotalDuration(playbackManager.totalScheduledDuration)
+
+                    // Switch overlay text when playback reaches the previous segment boundary
+                    if !overlayUpdated && playbackManager.currentPlaybackTime() >= prevSegEndDuration - 0.1 {
+                        notchOverlay?.updateText(
+                            localSegments[i].text,
+                            tokenCharOffsets: segOffsets,
+                            segmentTimeBase: prevSegEndDuration,
+                            segmentDurationBase: prevSegEndDuration
+                        )
+                        overlayUpdated = true
+                    }
+
+                    // Only update duration tracking after overlay has switched to this segment
+                    // (otherwise cumulative duration would corrupt the previous segment's pacing)
+                    if overlayUpdated {
+                        notchOverlay?.updateTotalDuration(playbackManager.totalScheduledDuration)
+                    }
                 }
+
+                // If generation finished before playback caught up, wait for the boundary
+                if !overlayUpdated {
+                    Log.speech.info("Segment \(i + 1) generated, waiting for playback (prevEnd=\(String(format: "%.1f", prevSegEndDuration))s, playback=\(String(format: "%.1f", self.playbackManager.currentPlaybackTime()))s)")
+                    while playbackManager.currentPlaybackTime() < prevSegEndDuration - 0.1 {
+                        guard !Task.isCancelled else {
+                            cleanupLongForm()
+                            return
+                        }
+                        if pausedSegmentIndex != nil { return }
+                        try await Task.sleep(for: .milliseconds(50))
+                    }
+                    notchOverlay?.updateText(
+                        localSegments[i].text,
+                        tokenCharOffsets: segOffsets,
+                        segmentTimeBase: prevSegEndDuration,
+                        segmentDurationBase: prevSegEndDuration
+                    )
+                }
+
+                // Final duration update and mark segment generation complete
+                notchOverlay?.updateTotalDuration(playbackManager.totalScheduledDuration)
+                notchOverlay?.markSegmentComplete()
 
                 Log.speech.info("Segment \(i + 1)/\(segmentCount) complete")
 

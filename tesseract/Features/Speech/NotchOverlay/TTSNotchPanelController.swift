@@ -39,22 +39,13 @@ final class TTSNotchPanelController {
         let visibleFrame = screen.visibleFrame
         let menuBarHeight = screenFrame.maxY - visibleFrame.maxY
 
-        let normalized = text
-            .replacingOccurrences(of: "\n", with: " ")
-            .split(omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
-            .map { String($0) }
-        let words = normalized
-        let totalCharCount = normalized.joined(separator: " ").count
-
-        Log.speech.info("[NotchPanel] words=\(words.count), totalCharCount=\(totalCharCount), menuBarHeight=\(menuBarHeight)")
+        Log.speech.info("[NotchPanel] menuBarHeight=\(menuBarHeight)")
 
         let frameTracker = NotchFrameTracker()
         frameTracker.screenMidX = screenFrame.midX
         frameTracker.screenMaxY = screenFrame.maxY
 
         let overlayView = TTSNotchOverlayView(
-            words: words,
-            totalCharCount: totalCharCount,
             wordTracker: wordTracker,
             menuBarHeight: menuBarHeight,
             baseTextHeight: Defaults.textAreaHeight,
@@ -100,9 +91,13 @@ final class TTSNotchPanelController {
         wordTracker.updateTotalDuration(duration)
     }
 
-    func updateText(_ text: String, tokenCharOffsets: [Int] = []) {
-        Log.speech.info("[NotchPanel] updateText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count)")
-        wordTracker.updateText(text, tokenCharOffsets: tokenCharOffsets)
+    func updateText(_ text: String, tokenCharOffsets: [Int] = [], segmentTimeBase: TimeInterval = 0, segmentDurationBase: TimeInterval = 0) {
+        Log.speech.info("[NotchPanel] updateText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), timeBase=\(String(format: "%.2f", segmentTimeBase)), durBase=\(String(format: "%.2f", segmentDurationBase))")
+        wordTracker.updateText(text, tokenCharOffsets: tokenCharOffsets, segmentTimeBase: segmentTimeBase, segmentDurationBase: segmentDurationBase)
+    }
+
+    func markSegmentComplete() {
+        wordTracker.markSegmentComplete()
     }
 
     func markGenerationComplete() {
