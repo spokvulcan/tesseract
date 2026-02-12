@@ -126,6 +126,24 @@ NSLog("[MyLib] Generated %d tokens in %.2fs", tokenCount, elapsed)
 scripts/dev.sh log    # Tail formatted app logs (Ctrl-C to stop)
 ```
 
+## Commit Convention
+
+Use [Conventional Commits](https://www.conventionalcommits.org/). Format:
+
+```
+<type>(<scope>): <short summary>
+```
+
+Types: `feat`, `fix`, `refactor`, `style`, `perf`, `docs`, `test`, `build`, `ci`, `chore`.
+
+Scope is optional but encouraged (e.g., `tts`, `ui`, `audio`, `models`).
+
+Examples:
+- `feat(tts): add voice anchor for long-form consistency`
+- `fix(audio): handle device disconnection during recording`
+- `refactor(ui): unify models page with grouped form style`
+- `perf(tts): reuse code0 embeddings across predictor steps`
+
 ## Skills
 
 Invoke the `/macos-development` skill before writing or reviewing macOS/Swift/SwiftUI code.
