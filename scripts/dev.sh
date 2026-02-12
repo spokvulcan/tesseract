@@ -43,10 +43,12 @@ kill_app() {
 
 cmd_build() {
     local configuration="${1:-Debug}"
+    shift || true
     echo "Building tesseract ($configuration)..."
     local build_output
     local exit_code=0
-    build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" -configuration "$configuration" 2>&1) || exit_code=$?
+    build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
+        -configuration "$configuration" "$@" 2>&1) || exit_code=$?
 
     # Show errors, warnings, and the final BUILD result
     echo "$build_output" | grep -E "^(error:|warning:|Build |BUILD |\*\*)" || true
@@ -76,7 +78,10 @@ cmd_run() {
 
 cmd_dev() {
     local configuration="Release"
-    cmd_build "$configuration"
+    cmd_build "$configuration" \
+        SWIFT_COMPILATION_MODE=incremental \
+        DEBUG_INFORMATION_FORMAT=dwarf \
+        ONLY_ACTIVE_ARCH=YES
     echo ""
     cmd_run "$configuration"
 }

@@ -48,6 +48,7 @@ struct TTSNotchOverlayView: View {
     @State private var extraHeight: CGFloat = 0
     @State private var dragStartHeight: CGFloat = -1
     @State private var isHovering: Bool = false
+    @State private var swipeOffset: CGFloat = 0
 
     private let topInset: CGFloat = 16
     private let collapsedInset: CGFloat = 8
@@ -56,10 +57,6 @@ struct TTSNotchOverlayView: View {
 
     private let highlightColor: Color = .yellow
     private let font: NSFont = .systemFont(ofSize: 20, weight: .semibold)
-
-    var isDone: Bool {
-        wordTracker.isGenerationComplete && totalCharCount > 0 && wordTracker.recognizedCharCount >= totalCharCount
-    }
 
     private var currentTopInset: CGFloat {
         collapsedInset + (topInset - collapsedInset) * expansion
@@ -86,12 +83,7 @@ struct TTSNotchOverlayView: View {
                 if contentVisible {
                     VStack(spacing: 0) {
                         Spacer().frame(height: menuBarHeight)
-
-                        if isDone {
-                            doneView
-                        } else {
-                            prompterView
-                        }
+                        prompterView
                     }
                     .padding(.horizontal, topInset)
                     .frame(width: geo.size.width, height: targetHeight)
@@ -99,7 +91,32 @@ struct TTSNotchOverlayView: View {
                 }
             }
             .frame(width: currentWidth, height: currentHeight, alignment: .top)
+            .offset(y: swipeOffset)
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { value in
+                        let dy = value.translation.height
+                        if dy < 0 {
+                            swipeOffset = dy
+                        } else {
+                            // Resist downward drag with rubber-band effect
+                            swipeOffset = dy * 0.15
+                        }
+                    }
+                    .onEnded { value in
+                        let dy = value.translation.height
+                        let velocity = value.predictedEndTranslation.height - dy
+                        if dy < -30 || velocity < -100 {
+                            Log.speech.info("[NotchView] swipe-up dismiss (dy=\(String(format: "%.0f", dy)), vel=\(String(format: "%.0f", velocity)))")
+                            wordTracker.shouldDismiss = true
+                        } else {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                swipeOffset = 0
+                            }
+                        }
+                    }
+            )
         }
         .onChange(of: extraHeight) { _, _ in updateFrameTracker() }
         .onAppear {
@@ -124,17 +141,25 @@ struct TTSNotchOverlayView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     withAnimation(.easeIn(duration: 0.3)) {
                         expansion = 0
+                        swipeOffset = -60
                     }
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.5), value: isDone)
-        .onChange(of: isDone) { oldVal, done in
-            Log.speech.info("[NotchView] isDone changed: \(oldVal) → \(done) (genComplete=\(self.wordTracker.isGenerationComplete), charCount=\(self.wordTracker.recognizedCharCount)/\(self.totalCharCount))")
-            if done {
-                Log.speech.info("[NotchView] scheduling dismiss in 1.0s")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    Log.speech.info("[NotchView] setting shouldDismiss=true (1.0s after isDone)")
+        .onChange(of: wordTracker.recognizedCharCount) { _, charCount in
+            if wordTracker.isGenerationComplete && totalCharCount > 0 && charCount >= totalCharCount && !wordTracker.shouldDismiss {
+                Log.speech.info("[NotchView] all text highlighted, scheduling auto-dismiss in 0.5s")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    guard !wordTracker.shouldDismiss else { return }
+                    wordTracker.shouldDismiss = true
+                }
+            }
+        }
+        .onChange(of: wordTracker.isGenerationComplete) { _, complete in
+            if complete && totalCharCount > 0 && wordTracker.recognizedCharCount >= totalCharCount && !wordTracker.shouldDismiss {
+                Log.speech.info("[NotchView] generation complete with all text highlighted, scheduling auto-dismiss in 0.5s")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    guard !wordTracker.shouldDismiss else { return }
                     wordTracker.shouldDismiss = true
                 }
             }
@@ -171,25 +196,7 @@ struct TTSNotchOverlayView: View {
             .transition(.move(edge: .top).combined(with: .opacity))
 
             Group {
-                HStack(alignment: .center, spacing: 8) {
-                    Spacer()
-
-                    Button {
-                        Log.speech.info("[NotchView] close button pressed")
-                        wordTracker.shouldDismiss = true
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.6))
-                            .frame(width: 24, height: 24)
-                            .background(.white.opacity(0.15))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .frame(height: 24)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 10)
+                Spacer().frame(height: 10)
 
                 // Resize handle
                 if isHovering {
@@ -233,20 +240,5 @@ struct TTSNotchOverlayView: View {
             }
             .transition(.opacity)
         }
-    }
-
-    private var doneView: some View {
-        VStack {
-            Spacer()
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("Done!")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-            Spacer()
-        }
-        .transition(.scale.combined(with: .opacity))
     }
 }

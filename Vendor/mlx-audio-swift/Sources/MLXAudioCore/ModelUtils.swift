@@ -22,7 +22,8 @@ public struct ModelUtils {
     public static func resolveOrDownloadModel(
         repoID: Repo.ID,
         requiredExtension: String,
-        hfToken: String? = nil
+        hfToken: String? = nil,
+        progressHandler: (@Sendable (Progress) -> Void)? = nil
     ) async throws -> URL {
         let client: HubClient
         if let token = hfToken, !token.isEmpty {
@@ -32,7 +33,7 @@ public struct ModelUtils {
             client = HubClient.default
         }
         let cache = client.cache ?? HubCache.default
-        return try await resolveOrDownloadModel(client: client, cache: cache, repoID: repoID, requiredExtension: requiredExtension)
+        return try await resolveOrDownloadModel(client: client, cache: cache, repoID: repoID, requiredExtension: requiredExtension, progressHandler: progressHandler)
     }
     
     /// Resolves a model from cache or downloads it if not cached.
@@ -46,7 +47,8 @@ public struct ModelUtils {
         client: HubClient,
         cache: HubCache,
         repoID: Repo.ID,
-        requiredExtension: String
+        requiredExtension: String,
+        progressHandler: (@Sendable (Progress) -> Void)? = nil
     ) async throws -> URL {
         // Use a persistent cache directory based on repo ID
         let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
@@ -83,6 +85,7 @@ public struct ModelUtils {
             to: modelDir,
             revision: "main",
             progressHandler: { progress in
+                progressHandler?(progress)
                 print("\(progress.completedUnitCount)/\(progress.totalUnitCount) files")
             }
         )

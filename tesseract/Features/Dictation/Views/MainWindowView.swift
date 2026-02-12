@@ -270,6 +270,48 @@ struct TranscriptionHistoryView: View {
     }
 }
 
+// MARK: - Inline History View (no ScrollView, for embedding in parent ScrollView)
+
+struct TranscriptionHistoryInlineView: View {
+    @ObservedObject var history: TranscriptionHistory
+    @ObservedObject private var settings = SettingsManager.shared
+
+    private let timeColumnWidth: CGFloat = 70
+    private let timeToConnectorSpacing: CGFloat = 12
+    private let connectorWidth: CGFloat = 8
+    private let connectorToContentSpacing: CGFloat = 12
+
+    var body: some View {
+        if history.flattenedItems.isEmpty {
+            HistoryEmptyStateView(hotkey: settings.hotkey.displayString)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 16)
+        } else {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(history.flattenedItems) { item in
+                    switch item {
+                    case .header(let label, _):
+                        HistorySectionHeader(
+                            label: label,
+                            leadingPadding: timeColumnWidth + timeToConnectorSpacing + connectorWidth + connectorToContentSpacing
+                        )
+                    case .entry(let entry, let isFirst, let isLast):
+                        TimelineEntryRow(
+                            entry: entry,
+                            isFirst: isFirst,
+                            isLast: isLast,
+                            onDelete: { history.delete(entry) }
+                        )
+                            .equatable()
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
+            .accessibilityLabel("Transcription history, \(history.entries.count) items")
+        }
+    }
+}
+
 // MARK: - History Empty State
 
 private struct HistoryEmptyStateView: View {

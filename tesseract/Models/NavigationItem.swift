@@ -15,14 +15,14 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     var id: String { rawValue }
 
     static let mainPages: [NavigationItem] = [.dictation, .speech]
-    static let settingsPages: [NavigationItem] = [.general, .recording]
+    static let settingsPages: [NavigationItem] = [.general, .model, .recording]
 
     var name: LocalizedStringResource {
         switch self {
         case .dictation: "Dictation"
         case .speech: "Speech"
         case .general: "General"
-        case .model: "Model"
+        case .model: "Models"
         case .recording: "Recording"
         }
     }
@@ -64,7 +64,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .general:
             GeneralSettingsSection()
         case .model:
-            ModelSettingsSection()
+            ModelsPageView()
         case .recording:
             RecordingSettingsSection()
         }

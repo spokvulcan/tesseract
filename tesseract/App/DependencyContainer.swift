@@ -19,13 +19,16 @@ final class DependencyContainer: ObservableObject {
     lazy var audioCaptureEngine = AudioCaptureEngine()
 
     // Transcription
-    lazy var modelManager = ModelManager()
+    lazy var modelManager = ModelManager(modelDownloadManager: modelDownloadManager)
     lazy var transcriptionEngine = TranscriptionEngine()
     lazy var transcriptionHistory = TranscriptionHistory()
 
     // Text Injection
     lazy var textInjector = TextInjector()
     lazy var hotkeyManager = HotkeyManager()
+
+    // Model Downloads
+    lazy var modelDownloadManager = ModelDownloadManager()
 
     // Speech (TTS)
     lazy var textExtractor = TextExtractor()
@@ -112,16 +115,33 @@ final class DependencyContainer: ObservableObject {
             }
             .store(in: &settingsCancellables)
 
-        // Load bundled model
-        if let modelPath = modelManager.getBundledModelPath() {
+        // Load Whisper model from cache if already downloaded
+        await loadWhisperModelIfAvailable()
+
+        // Auto-load Whisper model when download completes
+        modelDownloadManager.$statuses
+            .compactMap { $0[WhisperModel.modelID] }
+            .removeDuplicates()
+            .sink { [weak self] status in
+                guard case .downloaded = status else { return }
+                guard let self, !self.transcriptionEngine.isModelLoaded else { return }
+                Task {
+                    await self.loadWhisperModelIfAvailable()
+                }
+            }
+            .store(in: &settingsCancellables)
+    }
+
+    private func loadWhisperModelIfAvailable() async {
+        if modelManager.isModelAvailable(), let modelPath = modelManager.getModelPath() {
             do {
                 try await transcriptionEngine.loadModel(from: modelPath)
-                Log.general.info("Loaded bundled model from: \(modelPath.path)")
+                Log.general.info("Loaded Whisper model from: \(modelPath.path)")
             } catch {
-                Log.general.error("Failed to load bundled model: \(error)")
+                Log.general.error("Failed to load Whisper model: \(error)")
             }
         } else {
-            Log.general.warning("Bundled model not found")
+            Log.general.warning("Whisper model not downloaded — download it from the Models page")
         }
     }
 

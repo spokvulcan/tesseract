@@ -92,7 +92,7 @@ struct GeneralSettingsSection: View {
             }
         }
         .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
+
         .navigationTitle("General")
     }
 }
@@ -152,52 +152,6 @@ struct AudioLevelMeter: View {
                 print("Failed to start mic test: \(error)")
             }
         }
-    }
-}
-
-// MARK: - Model Settings Section
-
-struct ModelSettingsSection: View {
-    @EnvironmentObject private var container: DependencyContainer
-
-    var body: some View {
-        Form {
-            Section("Transcription Model") {
-                HStack {
-                    Text("Model")
-                    Spacer()
-                    Text(WhisperModel.displayName)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text(WhisperModel.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack {
-                    Text("Size: \(String(format: "%.1f", WhisperModel.sizeGB)) GB")
-                    Spacer()
-                    Text("RAM: \(WhisperModel.recommendedRAMGB) GB+")
-                    Spacer()
-                    Label("\(WhisperModel.languageCount) languages", systemImage: "globe")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-                if container.transcriptionEngine.isModelLoaded {
-                    Label("Model loaded and ready", systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                } else {
-                    Label("Model not loaded", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Model")
     }
 }
 
@@ -316,7 +270,7 @@ struct RecordingSettingsSection: View {
             }
         }
         .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
+
         .navigationTitle("Recording")
     }
 
