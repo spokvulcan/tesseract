@@ -164,16 +164,17 @@ struct WelcomeStepContent: View {
                 .fontWeight(.bold)
                 .multilineTextAlignment(.center)
 
-            Text("A privacy-focused voice-to-text app that runs entirely on your device. Your voice never leaves your Mac.")
+            Text("On-device intelligence that keeps your data private.\nNothing ever leaves your Mac.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 20)
 
             VStack(alignment: .leading, spacing: 16) {
-                FeatureRow(icon: "lock.shield", title: "100% Private", description: "All processing happens locally")
-                FeatureRow(icon: "bolt", title: "Fast & Accurate", description: "Powered by Whisper Large V3 Turbo")
-                FeatureRow(icon: "keyboard", title: "Push-to-Talk", description: "Simple hotkey to start dictating")
+                FeatureRow(icon: "lock.shield", title: "100% Private", description: "All intelligence runs locally on your Mac")
+                FeatureRow(icon: "mic.fill", title: "Voice to Text", description: "Push-to-talk dictation in any app")
+                FeatureRow(icon: "speaker.wave.2", title: "Text to Speech", description: "Natural voice synthesis, entirely on-device")
+                FeatureRow(icon: "bolt", title: "Apple Silicon Optimized", description: "Built for your Mac's neural engine")
             }
             .padding(.top, 12)
         }

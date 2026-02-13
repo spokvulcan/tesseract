@@ -1,6 +1,6 @@
-# Tesseract Distribution Checklist
+# tesse-ract Distribution Checklist
 
-This document tracks what needs to be done to prepare the application for distribution.
+Tracks what needs to be done to publish tesse-ract on the Mac App Store.
 
 ---
 
@@ -8,21 +8,33 @@ This document tracks what needs to be done to prepare the application for distri
 
 | Setting | Value |
 |---------|-------|
+| App Name (display) | tesse-ract (`CFBundleDisplayName`) |
 | Bundle Identifier | `com.tesseract.app` |
 | Version | 1.0 |
 | Build | 1 |
-| Development Team | Configured |
+| Development Team | Configured (`5RBTC2MNY8`) |
 | Code Signing | Automatic (Apple Development) |
 | Minimum macOS | 26 (Tahoe) |
-| Entitlements | App Sandbox, Audio Input (Microphone) |
-| Privacy Usage Strings | NSMicrophoneUsageDescription |
+| Category | Productivity |
 
----
+### Entitlements (per-configuration)
 
-## Entitlements and Privacy Notes
+| Configuration | File | Extra |
+|---|---|---|
+| Debug | `tesseract/tesseract.entitlements` | `/private/tmp/tesseract-debug/` write access |
+| Release | `tesseract/tesseractRelease.entitlements` | Clean — no temporary exceptions |
 
-- The app does not currently use Apple Events, so no Apple Events usage string or automation entitlements are included.
-- The app does not use outbound networking or user-selected file access. If those are added later, update entitlements accordingly.
+Both share:
+- `com.apple.security.app-sandbox` — sandboxed
+- `com.apple.security.device.audio-input` — microphone access
+- `com.apple.security.network.client` — outbound network for model downloads
+
+### Privacy Manifest (`tesseract/PrivacyInfo.xcprivacy`)
+
+- `NSPrivacyTracking` = false
+- `NSPrivacyCollectedDataTypes` = none (all processing is on-device)
+- `NSPrivacyAccessedAPITypes`:
+  - `NSPrivacyAccessedAPICategoryUserDefaults` — reason `CA92.1` (app-own `@AppStorage` preferences)
 
 ---
 
@@ -30,167 +42,141 @@ This document tracks what needs to be done to prepare the application for distri
 
 - [x] Bundle identifier set
 - [x] Development team configured
-- [x] Entitlements configured (sandbox, microphone)
-- [x] Privacy description set (microphone)
-- [x] Version/build numbers set
-- [x] Whisper model bundled
-- [x] App icon added (all required sizes)
+- [x] Entitlements configured (sandbox, microphone, network)
+- [x] Separate Release entitlements (no debug exceptions)
+- [x] Privacy manifest (`PrivacyInfo.xcprivacy`)
+- [x] Privacy usage description (`NSMicrophoneUsageDescription`)
+- [x] `CFBundleDisplayName` set to "tesse-ract" (Debug + Release)
+- [x] App icon added (all required macOS sizes)
 - [x] App category set (`public.app-category.productivity`)
+- [x] Version/build numbers set (1.0 / 1)
+- [x] App Store metadata drafted (`APP_STORE_METADATA.md`)
+- [x] All user-facing strings updated to "tesse-ract"
+- [x] Onboarding wizard updated for current feature set
 
 ---
 
-## Needs to Be Done
+## Remaining Steps
 
-### Required for Mac App Store
+### 1. Code Signing for App Store
 
-#### 1. Code Signing for App Store
+Current signing identity is "Apple Development" (local testing only).
 
-Current signing identity is "Apple Development" which only works for local testing.
+- [ ] Create an **Apple Distribution** certificate at developer.apple.com
+- [ ] Create a **Mac App Store** provisioning profile
+- [ ] Xcode Automatic signing will pick these up once they exist
 
-- Create an **Apple Distribution** certificate
-- Create a **Mac App Store** provisioning profile
-- Update target signing to use Apple Distribution (Automatic is OK once the cert/profile exist)
+### 2. App Store Connect Setup
 
-#### 2. App Store Connect Setup
+- [ ] Create the app record (bundle ID `com.tesseract.app`, SKU, name "tesse-ract")
+- [ ] Configure pricing and availability
+- [ ] Complete age rating questionnaire
+- [ ] Complete App Privacy questionnaire (no data collected — strong story)
+- [ ] Complete Export Compliance (no non-standard encryption)
 
-- Create the app record (bundle ID, SKU, name, primary language)
-- Configure pricing, availability, and age rating
-- Complete App Privacy (data collection/usage) and Export Compliance
+### 3. Metadata and Assets
 
-#### 3. App Store Metadata and Assets
+Draft copy is in `APP_STORE_METADATA.md`. Still needed:
 
-- Fill in description, subtitle, keywords, and promotional text
-- Provide support URL and privacy policy URL
-- Add screenshots and app preview if desired
+- [ ] Support URL
+- [ ] Privacy Policy URL
+- [ ] Marketing URL (optional)
+- [ ] Screenshots (at least one set)
+- [ ] App preview video (optional)
 
-Draft copy lives in `APP_STORE_METADATA.md`.
-
-#### 4. Archive and Upload
-
-- Archive with **Release** configuration
-- Upload from Xcode Organizer to App Store Connect
-- Confirm the build appears in App Store Connect
-
-#### 5. TestFlight (Recommended)
-
-- Run an internal TestFlight build to verify entitlements, permissions, and onboarding
-
-#### 6. App Review Submission
-
-- Provide review notes (permissions + hotkey flow)
-- Submit once metadata and build are complete
-
-#### 7. Pre-Submission Testing
-
-- [ ] Test on a Mac without Xcode installed
-- [ ] Verify Accessibility permission prompt appears
-- [ ] Verify Microphone permission prompt appears
-- [ ] Verify model loads correctly from bundle
-- [ ] Test push-to-talk recording flow
-- [ ] Test text injection into various apps (Notes, TextEdit, browser)
-- [ ] Test menu bar functionality
-- [ ] Test settings persistence
-
-### Direct Distribution (Optional)
-
-#### 1. Developer ID Signing
-
-- Create "Developer ID Application" certificate
-- Requires paid Apple Developer Program
-
-#### 2. Notarization
-
-Required for direct distribution. Apple must notarize the app for it to run on other Macs without Gatekeeper warnings.
+### 4. Archive and Upload
 
 ```bash
-# 1. Archive the app
+# Archive with Release configuration
 xcodebuild archive \
   -project tesseract.xcodeproj \
   -scheme tesseract \
-  -archivePath build/Tesseract.xcarchive
+  -archivePath build/tesse-ract.xcarchive
 
-# 2. Export the archive
+# Or use Xcode: Product → Archive → Distribute App → App Store Connect
+```
+
+- [ ] Archive with Release configuration
+- [ ] Upload from Xcode Organizer to App Store Connect
+- [ ] Confirm the build appears in App Store Connect
+
+### 5. TestFlight (Recommended)
+
+- [ ] Run an internal TestFlight build on a clean Mac (no Xcode)
+- [ ] Verify all permission prompts appear (Microphone, Accessibility)
+- [ ] Verify model downloads work from sandbox
+- [ ] Verify push-to-talk dictation works
+- [ ] Verify TTS playback works
+- [ ] Verify text injection into various apps (Notes, TextEdit, browser)
+- [ ] Verify menu bar icon and quit menu
+- [ ] Verify settings persistence across launches
+
+### 6. App Review Submission
+
+- [ ] Add review notes explaining permissions and hotkey flow (draft in `APP_STORE_METADATA.md`)
+- [ ] Submit for review
+
+---
+
+## Direct Distribution (Alternative)
+
+If App Store review is problematic (Accessibility permission usage can get scrutiny), distribute directly:
+
+### 1. Developer ID Signing
+
+- Create "Developer ID Application" certificate (requires paid Apple Developer Program)
+
+### 2. Notarization
+
+```bash
+# 1. Archive
+xcodebuild archive \
+  -project tesseract.xcodeproj \
+  -scheme tesseract \
+  -archivePath build/tesse-ract.xcarchive
+
+# 2. Export
 xcodebuild -exportArchive \
-  -archivePath build/Tesseract.xcarchive \
+  -archivePath build/tesse-ract.xcarchive \
   -exportPath build/export \
   -exportOptionsPlist ExportOptions.plist
 
 # 3. Notarize
-xcrun notarytool submit build/export/Tesseract.app.zip \
+xcrun notarytool submit build/export/tesse-ract.app.zip \
   --apple-id YOUR_APPLE_ID \
-  --team-id YOUR_TEAM_ID \
+  --team-id 5RBTC2MNY8 \
   --password APP_SPECIFIC_PASSWORD \
   --wait
 
-# 4. Staple the notarization ticket
-xcrun stapler staple build/export/Tesseract.app
+# 4. Staple
+xcrun stapler staple build/export/tesse-ract.app
 ```
 
-#### 3. Create Distribution Package
+### 3. Create DMG
 
-**DMG (recommended for direct distribution):**
 ```bash
 # Using create-dmg (brew install create-dmg)
 create-dmg \
-  --volname "Tesseract" \
+  --volname "tesse-ract" \
   --volicon "path/to/icon.icns" \
   --window-pos 200 120 \
   --window-size 600 400 \
   --icon-size 100 \
-  --icon "Tesseract.app" 150 190 \
+  --icon "tesse-ract.app" 150 190 \
   --app-drop-link 450 190 \
-  "Tesseract-1.0.dmg" \
+  "tesse-ract-1.0.dmg" \
   "build/export/"
 ```
 
 ---
 
-### Optional / Nice-to-Have
-
-#### App Display Name
-
-Current product name: `tesseract`
-
-Set in Xcode: Target → General → Display Name
-
-#### Hardened Runtime
-
-Already enabled via sandbox, but verify these options:
-- Allow Unsigned Executable Memory: NO
-- Allow DYLD Environment Variables: NO
-- Disable Library Validation: NO (unless needed for plugins)
-
----
-
-## Distribution Channels
-
-### Option A: Direct Distribution (Recommended for MVP)
-
-1. Sign with Developer ID
-2. Notarize with Apple
-3. Distribute via website/GitHub Releases as DMG
-
-**Pros:** Full control, no review process, can update anytime
-**Cons:** Users see "downloaded from internet" warning on first launch
-
-### Option B: Mac App Store
-
-1. Sign with Apple Distribution certificate
-2. Upload build to App Store Connect
-3. Submit for App Store review
-
-**Pros:** Trusted source, automatic updates, wider reach
-**Cons:** Review delays, revenue share (15-30%), stricter sandboxing
-
----
-
 ## Version Checklist (Before Each Release)
 
-- [ ] Update `MARKETING_VERSION` (e.g., 1.0 → 1.1)
-- [ ] Update `CURRENT_PROJECT_VERSION` (increment build number)
-- [ ] Test all features
+- [ ] Update `MARKETING_VERSION` in Xcode (e.g., 1.0 → 1.1)
+- [ ] Increment `CURRENT_PROJECT_VERSION` (build number)
+- [ ] Test all features end-to-end
 - [ ] Archive with Release configuration
-- [ ] Upload build to App Store Connect
+- [ ] Upload to App Store Connect
 - [ ] Submit for review
 
 **Direct distribution only:**
@@ -203,6 +189,8 @@ Already enabled via sandbox, but verify these options:
 ## Resources
 
 - [Apple Developer Program](https://developer.apple.com/programs/)
+- [App Store Product Page](https://developer.apple.com/app-store/product-page/)
 - [Notarizing macOS Software](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)
-- [Creating a DMG](https://github.com/create-dmg/create-dmg)
 - [App Sandbox Documentation](https://developer.apple.com/documentation/security/app_sandbox)
+- [Privacy Manifest Files](https://developer.apple.com/documentation/bundleresources/privacy_manifest_files)
+- [Creating a DMG](https://github.com/create-dmg/create-dmg)
