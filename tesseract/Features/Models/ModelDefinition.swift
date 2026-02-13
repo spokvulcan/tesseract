@@ -78,18 +78,6 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~3.6 GB",
-            dependencies: ["snac-24khz"]
-        ),
-        ModelDefinition(
-            id: "snac-24khz",
-            displayName: "SNAC 24kHz Codec",
-            description: "Neural audio codec for decoding TTS output. Required by Qwen3-TTS.",
-            category: .textToSpeech,
-            source: .huggingFace(
-                repo: "mlx-community/snac_24khz",
-                requiredExtension: "safetensors"
-            ),
-            sizeDescription: "~87 MB",
             dependencies: []
         ),
     ]
