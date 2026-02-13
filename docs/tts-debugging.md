@@ -35,7 +35,7 @@ In `AudioPlaybackManager.swift`, the flag is:
 private var debugDumpEnabled = true  // set to false in production
 ```
 
-When enabled, each streaming session writes a timestamped directory to `/tmp/tesseract-debug/`. The app sandbox entitlement includes `/private/tmp/tesseract-debug/` as a writable path.
+When enabled, each streaming session writes a timestamped directory to `/tmp/tesseract-debug/`. The **Debug** entitlements file (`tesseract.entitlements`) includes `/private/tmp/tesseract-debug/` as a writable path via a temporary sandbox exception. The **Release** entitlements (`tesseractRelease.entitlements`) do not include this exception, so debug dumps are sandbox-blocked in App Store builds.
 
 ## Debug Output Structure
 

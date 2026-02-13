@@ -82,10 +82,28 @@ Uses clipboard-based injection (copy → simulate Cmd+V → restore) instead of 
 
 ## Key Configuration
 
-### Entitlements (`tesseract.entitlements`)
-- `com.apple.security.app-sandbox` - sandboxed app
-- `com.apple.security.device.audio-input` - microphone access
-- `com.apple.security.network.client` - model downloads
+### Entitlements (per-configuration)
+
+The project uses **separate entitlements files** for Debug and Release builds:
+
+| Configuration | File | Notes |
+|---|---|---|
+| Debug | `tesseract/tesseract.entitlements` | Includes `/private/tmp/tesseract-debug/` write access for audio debug dumps |
+| Release | `tesseract/tesseractRelease.entitlements` | Clean — no temporary exceptions (App Store safe) |
+
+Both share these base entitlements:
+- `com.apple.security.app-sandbox` — sandboxed app
+- `com.apple.security.device.audio-input` — microphone access
+- `com.apple.security.network.client` — model downloads
+
+When adding new entitlements, update **both** files (unless the entitlement is debug-only).
+
+### Privacy Manifest (`PrivacyInfo.xcprivacy`)
+
+Required for App Store submission. Declares:
+- No tracking, no tracking domains
+- No data collection (all processing is on-device)
+- UserDefaults access (reason `CA92.1`) — used via `@AppStorage` for app settings
 
 ### Audio Format
 WhisperKit requires 16kHz mono float32. `AudioCaptureEngine` handles resampling from device sample rate.
@@ -147,6 +165,14 @@ Examples:
 ## Skills
 
 Invoke the `/macos-development` skill before writing or reviewing macOS/Swift/SwiftUI code.
+
+## App Store
+
+- **Metadata draft**: `APP_STORE_METADATA.md`
+- **Privacy manifest**: `tesseract/PrivacyInfo.xcprivacy`
+- **Release entitlements**: `tesseract/tesseractRelease.entitlements` (no debug exceptions)
+- Build for App Store uses Release configuration (automatic in Archive)
+- See `APP_STORE_METADATA.md` for review notes, test instructions, and export compliance
 
 ## Documentation
 
