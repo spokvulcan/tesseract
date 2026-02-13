@@ -122,7 +122,7 @@ final class SettingsManager: ObservableObject {
 
     // MARK: - Advanced Settings
 
-    @AppStorage("maxRecordingDuration") var maxRecordingDuration: Double = 60.0
+    @AppStorage("maxRecordingDuration") var maxRecordingDuration: Double = 300.0
 
     @AppStorage("playSounds") var playSounds = true
 
@@ -146,7 +146,7 @@ final class SettingsManager: ObservableObject {
         language = "en"
         hotkeyKeyCode = Int(KeyCombo.optionSpace.keyCode)
         hotkeyModifiers = Int(KeyCombo.optionSpace.modifiers)
-        maxRecordingDuration = 60.0
+        maxRecordingDuration = 300.0
         playSounds = true
         showNotifications = true
         ttsHotkeyKeyCode = Int(KeyCombo.functionSpace.keyCode)

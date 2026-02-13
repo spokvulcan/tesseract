@@ -3,6 +3,7 @@
 //  tesseract
 //
 
+import AppKit
 import SwiftUI
 
 struct TTSParametersSidebar: View {
@@ -116,7 +117,29 @@ struct TTSParametersSidebar: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .frame(width: sidebarWidth)
-        .background(.ultraThinMaterial)
+        .frame(maxHeight: .infinity)
+        .background {
+            SidebarMaterial()
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.2), radius: 16, x: -2, y: 4)
     }
+}
+
+// MARK: - Sidebar Material (NSVisualEffectView bridge)
+
+/// Uses AppKit's NSVisualEffectView with `.sidebar` material to get the exact same
+/// translucent background as NavigationSplitView's left sidebar.
+private struct SidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }

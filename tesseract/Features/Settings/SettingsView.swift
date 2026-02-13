@@ -253,8 +253,14 @@ struct RecordingSettingsSection: View {
 
             Section("Duration") {
                 VStack(alignment: .leading) {
-                    Text("Maximum duration: \(Int(settings.maxRecordingDuration))s")
-                    Slider(value: $settings.maxRecordingDuration, in: 10...120, step: 10)
+                    let minutes = Int(settings.maxRecordingDuration) / 60
+                    let seconds = Int(settings.maxRecordingDuration) % 60
+                    if seconds == 0 {
+                        Text("Maximum duration: \(minutes) min")
+                    } else {
+                        Text("Maximum duration: \(minutes) min \(seconds)s")
+                    }
+                    Slider(value: $settings.maxRecordingDuration, in: 30...1800, step: 30)
                 }
             }
 

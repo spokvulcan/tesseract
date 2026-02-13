@@ -159,7 +159,7 @@ final class DictationCoordinator: ObservableObject {
                 // Inject text if enabled
                 if settings.autoInsertText {
                     textInjector.restoreClipboard = settings.restoreClipboard
-                    try await textInjector.inject(processedText)
+                    try await textInjector.inject(processedText + " ")
                 }
 
                 if settings.playSounds {

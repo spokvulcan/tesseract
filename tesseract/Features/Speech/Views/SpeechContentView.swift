@@ -10,6 +10,7 @@ struct SpeechContentView: View {
     @ObservedObject var speechEngine: SpeechEngine
     @ObservedObject private var settings = SettingsManager.shared
 
+    @AppStorage("ttsParametersPanelVisible") private var isParametersPanelVisible: Bool = true
     @State private var inputText: String = ""
 
     private var isActiveState: Bool {
@@ -22,15 +23,28 @@ struct SpeechContentView: View {
     }
 
     var body: some View {
-        HSplitView {
-            // Main content area
-            mainContent
-                .frame(minWidth: 400)
-
-            // Parameters sidebar
-            TTSParametersSidebar()
-        }
-        .navigationTitle("Speech")
+        mainContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .trailing) {
+                if isParametersPanelVisible {
+                    TTSParametersSidebar()
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .padding(12)
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            isParametersPanelVisible.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .help("Toggle Parameters")
+                }
+            }
+            .navigationTitle("Speech")
     }
 
     // MARK: - Main Content
