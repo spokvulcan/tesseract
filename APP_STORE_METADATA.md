@@ -1,75 +1,68 @@
-# App Store Metadata (Draft)
+# App Store Metadata
 
 ## App Name
 
-Tesseract
+tesse-ract
 
-### Name Research: tesse-ract (Alternative)
-
-**Proposed Name:** tesse-ract (lowercase with hyphen)
+### Name Research
 
 **Rationale:**
-- "Tesseract" may conflict with existing App Store apps or trademarks
-- "Tess" can serve as the name for a future local AI assistant
-- Wordplay: tesse-ract = "Tess" + "ract" (evokes the mathematical tesseract concept)
+- "Tesseract" is taken by multiple apps on the Mac App Store (VM manager, puzzle games, journal app, workforce management)
+- The hyphen makes it unique, distinctive, and avoids naming conflicts
+- Lowercase style fits modern app branding (bear, craft, things)
+- "Tess" can serve as the name for the future local AI assistant
 
-**Availability Research (Feb 2026):**
+**Availability (Feb 2026):**
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| tesse-ract.com | Available | All major TLDs available (.app, .ai, .io, .dev, etc.) |
-| tessract.com (no hyphen) | Available | All TLDs available |
-| Mac App Store | No conflicts | No apps named "tesse-ract" exist |
+| Mac App Store | Clear | No apps named "tesse-ract" |
+| tesse-ract.com | Available | All major TLDs available (.app, .ai, .io, .dev) |
+| tessract.com | Available | All TLDs available |
 | GitHub | Clear | No repositories named "tesse-ract" |
 | USPTO Trademark | Needs manual check | Search at uspto.gov/trademarks |
-
-**Existing "Tess" Brands (Potential Conflicts):**
-- [Tess AI](https://tess.im/) - AI platform with 250+ models (1M+ users)
-- [Tess Mouse](https://tessmouse.com/) - AI voice mouse device
-- [Tess Design](https://www.tess.design/) - AI image generator
-- X2AI Tess - Mental health chatbot
-
-**Existing "Tesseract" Apps on Mac App Store:**
-- Tesseract! (4D puzzle game)
-- Tesseract Apps (workforce management)
-- Tesseract One LITE (business app)
-- Tesseract OCR (open-source, via Homebrew)
-
-**Recommendation:**
-"tesse-ract" is unique and available across domains. The hyphen differentiates it from Tesseract OCR and existing App Store apps. However, "Tess" as a standalone AI assistant name may face competition from existing Tess AI platforms. Consider whether the assistant will be called "Tess" (common) or "tesse-ract" (unique).
-
-**Next Steps:**
-1. Perform USPTO trademark search for "tesse-ract" and "tessract"
-2. Check X/Twitter handle availability (@tesseract, @tessract, @tesse_ract)
-3. Decide on domain strategy (recommend: tessract.app or tesse-ract.app)
-4. Update all marketing materials if name is confirmed
 
 ---
 
 ## Subtitle (30 chars max)
 
-Offline push-to-talk dictation
+On-Device Intelligence
 
 ## Promotional Text (170 chars max)
 
-Dictate anywhere on your Mac. Tesseract transcribes on-device with Whisper and types into your active app. No accounts. No cloud. Just press the hotkey and speak.
+AI that lives on your Mac. Dictation, text-to-speech, image generation, and more — powered by open models, processed entirely on-device. No cloud. No accounts. Just you.
 
 ## Description
 
-Tesseract is a privacy-first dictation app for macOS. Press and hold a hotkey, speak, and release to transcribe. Your words are processed entirely on-device with Whisper and typed directly into whatever app you're using.
+tesse-ract brings intelligence to your Mac without sending a single byte to the cloud. Every model runs locally on Apple Silicon — your data never leaves your device.
 
-Features:
-- 100% offline transcription with WhisperKit (Core ML)
-- Push-to-talk global hotkey (press and hold to record, release to transcribe)
-- Works in any app by typing into the focused text field
-- Clipboard-safe paste with optional restore
-- Apple Silicon optimized for fast, efficient transcription
+Voice
 
-No accounts, no cloud processing, and no data leaves your Mac.
+Press a hotkey, speak, release. Your words are transcribed with Whisper and typed directly into whatever app you're using. Push-to-talk means it only listens when you ask it to.
+
+Speech
+
+Natural text-to-speech powered by Qwen3-TTS. Hear any text read aloud with consistent, high-quality voice synthesis — generated in real time, entirely on-device.
+
+Image Generation
+
+Create images from text descriptions using on-device diffusion models. No waiting for a server, no usage limits, no content filtering by a third party.
+
+What's Next
+
+Local LLM chat and a general-purpose AI agent — all running privately on your Mac.
+
+Built Different
+
+- 100% offline — works without internet after model download
+- No accounts, no subscriptions, no telemetry
+- Apple Silicon optimized with Core ML and MLX
+- Open models you can inspect and replace
+- Your data stays on your Mac. Period.
 
 ## Keywords (100 chars max)
 
-dictation,voice,transcription,offline,privacy,whisper,hotkey,productivity,mac
+dictation,voice,tts,speech,ai,offline,privacy,whisper,image,generation,local,llm,productivity,mac
 
 ## Category
 
@@ -90,11 +83,12 @@ Secondary (optional): Utilities
 
 ## App Review Notes
 
-Tesseract uses:
-- Microphone access for recording dictation.
+tesse-ract uses:
+- Microphone access for recording voice dictation.
 - Accessibility permission to capture the global hotkey and to simulate paste into the active app.
+- Network access for one-time model downloads from Hugging Face.
 
-There is no account login.
+All AI inference runs locally on-device. There is no account login, no telemetry, and no data collection.
 
 ## App Review Test Instructions
 

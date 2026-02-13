@@ -159,7 +159,7 @@ struct WelcomeStepContent: View {
         VStack(spacing: 24) {
             AppIconView(size: 84)
 
-            Text("Welcome to Tesseract")
+            Text("Welcome to tesse-ract")
                 .font(.largeTitle)
                 .fontWeight(.bold)
                 .multilineTextAlignment(.center)
@@ -258,7 +258,7 @@ struct MicrophonePermissionStepContent: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("Tesseract needs microphone access to hear your voice for transcription.")
+            Text("tesse-ract needs microphone access to hear your voice for transcription.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -333,7 +333,7 @@ struct AccessibilityPermissionStepContent: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("Tesseract needs Accessibility access to capture your hotkey without typing unwanted characters.")
+            Text("tesse-ract needs Accessibility access to capture your hotkey without typing unwanted characters.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -417,7 +417,7 @@ struct ReadyStepContent: View {
                 .font(.largeTitle)
                 .fontWeight(.bold)
 
-            Text("Here's how to use Tesseract:")
+            Text("Here's how to use tesse-ract:")
                 .font(.body)
                 .foregroundStyle(.secondary)
 
