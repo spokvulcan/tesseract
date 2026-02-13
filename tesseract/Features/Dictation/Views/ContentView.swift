@@ -46,6 +46,7 @@ struct ContentView: View {
                     speechEngine: speechEngine
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .scrollEdgeEffectStyle(.soft, for: .top)
             } else {
                 NavigationItem.dictation.viewForPage(
                     coordinator: coordinator,
@@ -57,9 +58,11 @@ struct ContentView: View {
                     speechEngine: speechEngine
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .scrollEdgeEffectStyle(.soft, for: .top)
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .scrollEdgeEffectStyle(.soft, for: .top)
         // Silently consume paste commands to prevent system alert sound
         // when text is injected while the app window is focused
         .onPasteCommand(of: [.plainText]) { _ in }
