@@ -12,6 +12,7 @@ struct SpeechContentView: View {
 
     @AppStorage("ttsParametersPanelVisible") private var isParametersPanelVisible: Bool = true
     @State private var inputText: String = ""
+    @Namespace private var glassNamespace
 
     private var isActiveState: Bool {
         switch speechCoordinator.state {
@@ -85,19 +86,18 @@ struct SpeechContentView: View {
                         .font(.body)
                         .scrollContentBackground(.hidden)
                         .frame(minHeight: 80, maxHeight: .infinity)
-                        .padding(8)
-                        .background(.fill.quaternary)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
 
                     if inputText.isEmpty {
                         Text("Enter text to speak, or use \(settings.ttsHotkey.displayString) to speak selected text from any app")
                             .font(.body)
                             .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 13)
-                            .padding(.vertical, 16)
+                            .padding(.leading, 5)
                             .allowsHitTesting(false)
                     }
                 }
+                .padding(8)
+                .background(.fill.quaternary)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             .layoutPriority(1)
 
@@ -120,53 +120,47 @@ struct SpeechContentView: View {
 
             // Controls
             HStack(spacing: 12) {
-                Button {
-                    if isActiveState {
-                        speechCoordinator.stop()
-                    } else {
-                        speechCoordinator.speakText(inputText)
-                    }
-                } label: {
-                    Label(
-                        isActiveState ? "Stop" : "Speak",
-                        systemImage: isActiveState ? "stop.fill" : "play.fill"
-                    )
-                    .frame(minWidth: 80)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(inputText.isEmpty && !isActiveState)
-                .disabled(!speechEngine.isModelLoaded && !speechEngine.isLoading && speechCoordinator.state == .idle)
-
-                if case .streamingLongForm = speechCoordinator.state {
+                GlassEffectContainer(spacing: 12) {
                     Button {
-                        speechCoordinator.pause()
-                    } label: {
-                        Label("Pause", systemImage: "pause.fill")
-                            .frame(minWidth: 70)
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                if case .paused = speechCoordinator.state {
-                    Button {
-                        speechCoordinator.resume()
-                    } label: {
-                        Label("Resume", systemImage: "play.fill")
-                            .frame(minWidth: 70)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.green)
-                }
-
-                if !speechEngine.isModelLoaded && !speechEngine.isLoading {
-                    Button {
-                        Task {
-                            try? await speechEngine.loadModel()
+                        if isActiveState {
+                            speechCoordinator.stop()
+                        } else {
+                            speechCoordinator.speakText(inputText)
                         }
                     } label: {
-                        Label("Download Model", systemImage: "arrow.down.circle")
+                        Label(
+                            isActiveState ? "Stop" : "Speak",
+                            systemImage: isActiveState ? "stop.fill" : "play.fill"
+                        )
+                        .frame(minWidth: 80)
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glassProminent)
+                    .tint(isActiveState ? .red : .accentColor)
+                    .disabled(inputText.isEmpty && !isActiveState)
+                    .glassEffectID("primary", in: glassNamespace)
+
+                    if case .streamingLongForm = speechCoordinator.state {
+                        Button {
+                            speechCoordinator.pause()
+                        } label: {
+                            Label("Pause", systemImage: "pause.fill")
+                                .frame(minWidth: 70)
+                        }
+                        .buttonStyle(.glass)
+                        .glassEffectID("pauseResume", in: glassNamespace)
+                    }
+
+                    if case .paused = speechCoordinator.state {
+                        Button {
+                            speechCoordinator.resume()
+                        } label: {
+                            Label("Resume", systemImage: "play.fill")
+                                .frame(minWidth: 70)
+                        }
+                        .buttonStyle(.glass)
+                        .tint(.green)
+                        .glassEffectID("pauseResume", in: glassNamespace)
+                    }
                 }
 
                 Spacer()
@@ -222,7 +216,7 @@ private struct SpeechStatusView: View {
     private var statusColor: Color {
         switch state {
         case .idle:
-            isModelLoaded ? .green : .secondary
+            isLoading ? .orange : .green
         case .capturingText, .loadingModel:
             .orange
         case .generating:
@@ -244,7 +238,7 @@ private struct SpeechStatusView: View {
             if isLoading {
                 return loadingStatus.isEmpty ? "Loading model..." : loadingStatus
             }
-            return isModelLoaded ? "Ready" : "Model not loaded"
+            return "Ready"
         case .capturingText:
             return "Capturing text..."
         case .loadingModel:

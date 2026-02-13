@@ -27,19 +27,18 @@ struct VoiceDesignView: View {
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .frame(minHeight: 80, maxHeight: 120)
-                    .padding(8)
-                    .background(.fill.quaternary)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 if voiceDescription.isEmpty {
                     Text("Describe the voice you want... e.g. \"A warm, friendly voice with a gentle tone\"")
                         .font(.body)
                         .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 16)
+                        .padding(.leading, 5)
                         .allowsHitTesting(false)
                 }
             }
+            .padding(8)
+            .background(.fill.quaternary)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
 
             HStack {
                 // Preset pills
@@ -47,7 +46,7 @@ struct VoiceDesignView: View {
                     Button(preset.label) {
                         voiceDescription = preset.description
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .controlSize(.small)
                 }
 

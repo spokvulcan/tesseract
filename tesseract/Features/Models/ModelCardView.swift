@@ -82,6 +82,7 @@ struct ModelCardView: View {
             }
         }
         .padding(.vertical, 4)
+        .textSelection(.enabled)
     }
 
     @ViewBuilder
