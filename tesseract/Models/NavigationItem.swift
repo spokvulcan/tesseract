@@ -9,13 +9,14 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case dictation
     case speech
     case image
+    case zimage
     case general
     case model
     case recording
 
     var id: String { rawValue }
 
-    static let mainPages: [NavigationItem] = [.dictation, .speech, .image]
+    static let mainPages: [NavigationItem] = [.dictation, .speech, .image, .zimage]
     static let settingsPages: [NavigationItem] = [.general, .model, .recording]
 
     var name: LocalizedStringResource {
@@ -23,6 +24,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .dictation: "Dictation"
         case .speech: "Speech"
         case .image: "Image"
+        case .zimage: "Z-Image"
         case .general: "General"
         case .model: "Models"
         case .recording: "Recording"
@@ -34,6 +36,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .dictation: "mic.fill"
         case .speech: "speaker.wave.3.fill"
         case .image: "photo.fill"
+        case .zimage: "photo.artframe"
         case .general: "gear"
         case .model: "brain"
         case .recording: "waveform"
@@ -49,7 +52,8 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         audioCapture: AudioCaptureEngine,
         speechCoordinator: SpeechCoordinator,
         speechEngine: SpeechEngine,
-        imageGenEngine: ImageGenEngine
+        imageGenEngine: ImageGenEngine,
+        zimageGenEngine: ZImageGenEngine
     ) -> some View {
         switch self {
         case .dictation:
@@ -68,6 +72,10 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .image:
             ImageGenContentView(
                 imageGenEngine: imageGenEngine
+            )
+        case .zimage:
+            ZImageGenContentView(
+                zimageGenEngine: zimageGenEngine
             )
         case .general:
             GeneralSettingsSection()

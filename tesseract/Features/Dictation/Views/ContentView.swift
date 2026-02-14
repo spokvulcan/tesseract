@@ -15,6 +15,7 @@ struct ContentView: View {
     @ObservedObject var speechCoordinator: SpeechCoordinator
     @ObservedObject var speechEngine: SpeechEngine
     @ObservedObject var imageGenEngine: ImageGenEngine
+    @ObservedObject var zimageGenEngine: ZImageGenEngine
 
     @Binding var selectedNavigation: NavigationItem?
 
@@ -33,7 +34,8 @@ struct ContentView: View {
                         audioCapture: audioCapture,
                         speechCoordinator: speechCoordinator,
                         speechEngine: speechEngine,
-                        imageGenEngine: imageGenEngine
+                        imageGenEngine: imageGenEngine,
+                        zimageGenEngine: zimageGenEngine
                     )
                 }
         } detail: {
@@ -46,7 +48,8 @@ struct ContentView: View {
                     audioCapture: audioCapture,
                     speechCoordinator: speechCoordinator,
                     speechEngine: speechEngine,
-                    imageGenEngine: imageGenEngine
+                    imageGenEngine: imageGenEngine,
+                    zimageGenEngine: zimageGenEngine
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .scrollEdgeEffectStyle(.soft, for: .top)
@@ -59,7 +62,8 @@ struct ContentView: View {
                     audioCapture: audioCapture,
                     speechCoordinator: speechCoordinator,
                     speechEngine: speechEngine,
-                    imageGenEngine: imageGenEngine
+                    imageGenEngine: imageGenEngine,
+                    zimageGenEngine: zimageGenEngine
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .scrollEdgeEffectStyle(.soft, for: .top)

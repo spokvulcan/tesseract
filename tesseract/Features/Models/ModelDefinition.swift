@@ -94,6 +94,18 @@ extension ModelDefinition {
             sizeDescription: "~8 GB",
             dependencies: []
         ),
+        ModelDefinition(
+            id: "z-image",
+            displayName: "Z-Image",
+            description: "6B parameter image generation from Tongyi Lab. 50-step inference, CFG guidance, excellent text rendering.",
+            category: .imageGeneration,
+            source: .huggingFace(
+                repo: "Tongyi-MAI/Z-Image",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~12 GB",
+            dependencies: []
+        ),
     ]
 
     static func byCategory() -> [(ModelCategory, [ModelDefinition])] {

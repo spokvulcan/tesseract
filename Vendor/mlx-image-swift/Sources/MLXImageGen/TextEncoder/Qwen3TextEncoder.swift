@@ -329,4 +329,23 @@ final class Qwen3TextEncoder: Module {
         let transposed = stacked.transposed(0, 2, 1, 3)
         return transposed.reshaped(batchSize, seqLen, numLayers * hiddenDim)
     }
+
+    /// Get the second-to-last hidden state (output of layer N-2, 0-indexed).
+    /// Used by Z-Image for text encoding.
+    func getSecondToLastHiddenState(
+        inputIds: MLXArray,
+        attentionMask: MLXArray? = nil
+    ) -> MLXArray {
+        let targetLayer = config.numHiddenLayers - 2  // layer 34 for 36-layer model
+        let targetSet: Set<Int> = [targetLayer]
+        let (_, hiddenStatesMap) = self(
+            inputIds: inputIds,
+            attentionMask: attentionMask,
+            targetHiddenStateLayers: targetSet
+        )
+        guard let hsMap = hiddenStatesMap, let hs = hsMap[targetLayer] else {
+            fatalError("Hidden state not available for layer \(targetLayer)")
+        }
+        return hs.asType(.bfloat16)
+    }
 }

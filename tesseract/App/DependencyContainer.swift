@@ -32,6 +32,7 @@ final class DependencyContainer: ObservableObject {
 
     // Image Generation
     lazy var imageGenEngine = ImageGenEngine()
+    lazy var zimageGenEngine = ZImageGenEngine()
 
     // Speech (TTS)
     lazy var textExtractor = TextExtractor()
