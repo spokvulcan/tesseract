@@ -49,6 +49,11 @@ public actor Flux2Pipeline {
         let actualSeed = seed == 0 ? UInt64.random(in: 1...UInt64.max) : seed
         NSLog("[MLXImageGen] Generating %dx%d image, %d steps, seed=%llu", width, height, numSteps, actualSeed)
 
+        // Cap MLX buffer cache to prevent unbounded memory growth
+        Memory.cacheLimit = 256 * 1024 * 1024  // 256 MB
+        NSLog("[MLXImageGen] Memory before generation: active=%.1fMB cache=%.1fMB",
+              Float(Memory.activeMemory) / 1e6, Float(Memory.cacheMemory) / 1e6)
+
         // 1. Encode prompt
         NSLog("[MLXImageGen] Encoding prompt...")
         let (promptEmbeds, textIds) = try Flux2PromptEncoder.encodePrompt(
@@ -59,7 +64,9 @@ public actor Flux2Pipeline {
             hiddenStateLayers: config.textEncoder.hiddenStateLayers
         )
         eval(promptEmbeds, textIds)
-        GPU.clearCache()
+        Memory.clearCache()
+        NSLog("[MLXImageGen] After text encoding: active=%.1fMB cache=%.1fMB",
+              Float(Memory.activeMemory) / 1e6, Float(Memory.cacheMemory) / 1e6)
 
         // 2. Create latents
         NSLog("[MLXImageGen] Creating latents...")
@@ -98,11 +105,13 @@ public actor Flux2Pipeline {
             latents = scheduler.step(noise: noisePred, timestepIndex: i, latents: latents)
             eval(latents)
 
+            Memory.clearCache()
             onProgress?(i + 1, numSteps)
-            NSLog("[MLXImageGen] Step %d/%d complete", i + 1, numSteps)
+            NSLog("[MLXImageGen] Step %d/%d complete, active=%.1fMB cache=%.1fMB",
+                  i + 1, numSteps, Float(Memory.activeMemory) / 1e6, Float(Memory.cacheMemory) / 1e6)
         }
 
-        GPU.clearCache()
+        Memory.clearCache()
 
         // 5. VAE decode (BN denorm → unpatchify → post_quant_conv → decoder)
         NSLog("[MLXImageGen] Decoding with VAE...")
@@ -110,12 +119,19 @@ public actor Flux2Pipeline {
 
         var decoded = vae.decodePacked(unpackedLatents)
         eval(decoded)
+        Memory.clearCache()
+        NSLog("[MLXImageGen] After VAE decode: active=%.1fMB cache=%.1fMB",
+              Float(Memory.activeMemory) / 1e6, Float(Memory.cacheMemory) / 1e6)
 
         // 6. Convert to image
         NSLog("[MLXImageGen] Converting to CGImage...")
         // VAE outputs [-1, 1] — denormalize to [0, 1]
         decoded = MLX.clip(decoded / 2 + 0.5, min: 0, max: 1)
-        return try arrayToCGImage(decoded)
+        let image = try arrayToCGImage(decoded)
+        Memory.clearCache()
+        NSLog("[MLXImageGen] Generation complete: active=%.1fMB cache=%.1fMB peak=%.1fMB",
+              Float(Memory.activeMemory) / 1e6, Float(Memory.cacheMemory) / 1e6, Float(Memory.peakMemory) / 1e6)
+        return image
     }
 
     private func arrayToCGImage(_ array: MLXArray) -> CGImage {

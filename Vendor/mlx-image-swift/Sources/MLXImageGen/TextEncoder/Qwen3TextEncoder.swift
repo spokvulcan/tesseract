@@ -246,8 +246,8 @@ final class Qwen3TextEncoder: Module {
     func callAsFunction(
         inputIds: MLXArray,
         attentionMask: MLXArray? = nil,
-        outputHiddenStates: Bool = false
-    ) -> (MLXArray, [MLXArray]?) {
+        targetHiddenStateLayers: Set<Int>? = nil
+    ) -> (MLXArray, [Int: MLXArray]?) {
         let (batchSize, seqLen) = (inputIds.dim(0), inputIds.dim(1))
         NSLog("[MLXImageGen] TextEncoder input: batch=%d, seqLen=%d", batchSize, seqLen)
 
@@ -301,15 +301,15 @@ final class Qwen3TextEncoder: Module {
         NSLog("[MLXImageGen] RoPE cos shape: %@, sin shape: %@", "\(positionEmbeddings.cos.shape)", "\(positionEmbeddings.sin.shape)")
 
         NSLog("[MLXImageGen] Running %d transformer layers...", layers.count)
-        var hiddenStatesList: [MLXArray]? = outputHiddenStates ? [hiddenStates] : nil
+        var hiddenStatesMap: [Int: MLXArray]? = targetHiddenStateLayers != nil ? [:] : nil
         for (idx, layer) in layers.enumerated() {
             hiddenStates = layer(
                 hiddenStates: hiddenStates,
                 attentionMask: attentionMask4D,
                 positionEmbeddings: positionEmbeddings
             )
-            if outputHiddenStates {
-                hiddenStatesList?.append(hiddenStates)
+            if let targets = targetHiddenStateLayers, targets.contains(idx) {
+                hiddenStatesMap?[idx] = hiddenStates
             }
             if idx == 0 || (idx + 1) % 6 == 0 || idx == layers.count - 1 {
                 NSLog("[MLXImageGen] Layer %d/%d done, hiddenStates shape: %@", idx + 1, layers.count, "\(hiddenStates.shape)")
@@ -318,10 +318,10 @@ final class Qwen3TextEncoder: Module {
 
         hiddenStates = norm(hiddenStates)
         NSLog("[MLXImageGen] After final norm: shape=%@", "\(hiddenStates.shape)")
-        if let list = hiddenStatesList {
-            NSLog("[MLXImageGen] hiddenStatesList count: %d", list.count)
+        if let map = hiddenStatesMap {
+            NSLog("[MLXImageGen] hiddenStatesMap count: %d", map.count)
         }
-        return (hiddenStates, hiddenStatesList)
+        return (hiddenStates, hiddenStatesMap)
     }
 
     func getPromptEmbeds(
@@ -330,19 +330,23 @@ final class Qwen3TextEncoder: Module {
         hiddenStateLayers: [Int] = [9, 18, 27]
     ) -> MLXArray {
         NSLog("[MLXImageGen] getPromptEmbeds: running forward pass...")
-        let (_, hiddenStatesList) = self(
+        // hiddenStateLayers uses 0-indexed layer numbers (output of layer N, not including initial embed)
+        let targetSet = Set(hiddenStateLayers)
+        let (_, hiddenStatesMap) = self(
             inputIds: inputIds,
             attentionMask: attentionMask,
-            outputHiddenStates: true
+            targetHiddenStateLayers: targetSet
         )
-        guard let hsList = hiddenStatesList else {
+        guard let hsMap = hiddenStatesMap else {
             fatalError("Hidden states not available for prompt embedding")
         }
-        NSLog("[MLXImageGen] getPromptEmbeds: %d hidden states, picking layers %@", hsList.count, "\(hiddenStateLayers)")
+        NSLog("[MLXImageGen] getPromptEmbeds: %d hidden states stored, picking layers %@", hsMap.count, "\(hiddenStateLayers)")
         for layerIdx in hiddenStateLayers {
-            NSLog("[MLXImageGen]   hsList[%d] shape: %@", layerIdx, "\(hsList[layerIdx].shape)")
+            if let hs = hsMap[layerIdx] {
+                NSLog("[MLXImageGen]   hsMap[%d] shape: %@", layerIdx, "\(hs.shape)")
+            }
         }
-        let stacked = MLX.stacked(hiddenStateLayers.map { hsList[$0] }, axis: 1)
+        let stacked = MLX.stacked(hiddenStateLayers.map { hsMap[$0]! }, axis: 1)
         NSLog("[MLXImageGen] getPromptEmbeds: stacked shape: %@", "\(stacked.shape)")
         let (batchSize, numLayers, seqLen, hiddenDim) = (
             stacked.dim(0), stacked.dim(1), stacked.dim(2), stacked.dim(3)
