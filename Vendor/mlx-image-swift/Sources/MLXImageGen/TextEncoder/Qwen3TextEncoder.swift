@@ -40,17 +40,12 @@ final class Qwen3RotaryEmbedding: Module {
         if posIds.ndim == 1 {
             posIds = posIds.expandedDimensions(axis: 0)
         }
-        NSLog("[MLXImageGen] RoPE: invFreq shape=%@, posIds shape=%@", "\(invFreq.shape)", "\(posIds.shape)")
         let invF = invFreq.expandedDimensions(axes: [0, 1])
-        NSLog("[MLXImageGen] RoPE: invF expanded shape=%@", "\(invF.shape)")
         let pos = posIds.asType(.float32).expandedDimensions(axis: -1)
-        NSLog("[MLXImageGen] RoPE: pos shape=%@", "\(pos.shape)")
         let freqs = pos * invF
-        NSLog("[MLXImageGen] RoPE: freqs shape=%@", "\(freqs.shape)")
         let emb = MLX.concatenated([freqs, freqs], axis: -1)
         let cosEmb = MLX.cos(emb) * MLXArray(scalingFactor)
         let sinEmb = MLX.sin(emb) * MLXArray(scalingFactor)
-        NSLog("[MLXImageGen] RoPE: output cos shape=%@, sin shape=%@", "\(cosEmb.shape)", "\(sinEmb.shape)")
         return (cosEmb.asType(x.dtype), sinEmb.asType(x.dtype))
     }
 }
@@ -249,10 +244,11 @@ final class Qwen3TextEncoder: Module {
         targetHiddenStateLayers: Set<Int>? = nil
     ) -> (MLXArray, [Int: MLXArray]?) {
         let (batchSize, seqLen) = (inputIds.dim(0), inputIds.dim(1))
-        NSLog("[MLXImageGen] TextEncoder input: batch=%d, seqLen=%d", batchSize, seqLen)
+        if flux2Profiling {
+            NSLog("[MLXImageGen] TextEncoder input: batch=%d, seqLen=%d", batchSize, seqLen)
+        }
 
         var hiddenStates = embedTokens(inputIds)
-        NSLog("[MLXImageGen] After embedTokens: shape=%@, dtype=%@", "\(hiddenStates.shape)", "\(hiddenStates.dtype)")
 
         let mask: MLXArray
         if let attentionMask {
@@ -260,18 +256,14 @@ final class Qwen3TextEncoder: Module {
         } else {
             mask = MLXArray.ones([batchSize, seqLen], type: Int32.self)
         }
-        NSLog("[MLXImageGen] mask shape: %@", "\(mask.shape)")
 
         // Build 4D attention mask: padding + causal
-        NSLog("[MLXImageGen] Building padding mask...")
         let paddingMask = MLX.where(
             mask .== 1,
             MLXArray.zeros([batchSize, seqLen]).asType(hiddenStates.dtype),
             MLXArray.full([batchSize, seqLen], values: MLXArray(-Float.infinity)).asType(hiddenStates.dtype)
         ).expandedDimensions(axes: [1, 2])
-        NSLog("[MLXImageGen] paddingMask shape: %@", "\(paddingMask.shape)")
 
-        NSLog("[MLXImageGen] Building causal mask...")
         let causalMask: MLXArray
         if seqLen == 1 {
             causalMask = MLXArray.zeros([batchSize, 1, 1, 1]).asType(hiddenStates.dtype)
@@ -286,21 +278,16 @@ final class Qwen3TextEncoder: Module {
                 .expandedDimensions(axes: [0, 1])
             causalMask = MLX.broadcast(triMask, to: [batchSize, 1, seqLen, seqLen])
         }
-        NSLog("[MLXImageGen] causalMask shape: %@", "\(causalMask.shape)")
 
         let attentionMask4D = causalMask + paddingMask
-        NSLog("[MLXImageGen] attentionMask4D shape: %@", "\(attentionMask4D.shape)")
 
         // Position IDs
         let positionIds = MLX.broadcast(
             MLXArray(0..<Int32(seqLen)).expandedDimensions(axis: 0),
             to: [batchSize, seqLen]
         )
-        NSLog("[MLXImageGen] Computing rotary embeddings...")
         let positionEmbeddings = rotaryEmb(hiddenStates, positionIds: positionIds)
-        NSLog("[MLXImageGen] RoPE cos shape: %@, sin shape: %@", "\(positionEmbeddings.cos.shape)", "\(positionEmbeddings.sin.shape)")
 
-        NSLog("[MLXImageGen] Running %d transformer layers...", layers.count)
         var hiddenStatesMap: [Int: MLXArray]? = targetHiddenStateLayers != nil ? [:] : nil
         for (idx, layer) in layers.enumerated() {
             hiddenStates = layer(
@@ -311,16 +298,12 @@ final class Qwen3TextEncoder: Module {
             if let targets = targetHiddenStateLayers, targets.contains(idx) {
                 hiddenStatesMap?[idx] = hiddenStates
             }
-            if idx == 0 || (idx + 1) % 6 == 0 || idx == layers.count - 1 {
-                NSLog("[MLXImageGen] Layer %d/%d done, hiddenStates shape: %@", idx + 1, layers.count, "\(hiddenStates.shape)")
+            if flux2Profiling && (idx == 0 || (idx + 1) % 6 == 0 || idx == layers.count - 1) {
+                NSLog("[MLXImageGen] [PROFILE] Layer %d/%d done", idx + 1, layers.count)
             }
         }
 
         hiddenStates = norm(hiddenStates)
-        NSLog("[MLXImageGen] After final norm: shape=%@", "\(hiddenStates.shape)")
-        if let map = hiddenStatesMap {
-            NSLog("[MLXImageGen] hiddenStatesMap count: %d", map.count)
-        }
         return (hiddenStates, hiddenStatesMap)
     }
 
@@ -329,7 +312,6 @@ final class Qwen3TextEncoder: Module {
         attentionMask: MLXArray? = nil,
         hiddenStateLayers: [Int] = [9, 18, 27]
     ) -> MLXArray {
-        NSLog("[MLXImageGen] getPromptEmbeds: running forward pass...")
         // hiddenStateLayers uses 0-indexed layer numbers (output of layer N, not including initial embed)
         let targetSet = Set(hiddenStateLayers)
         let (_, hiddenStatesMap) = self(
@@ -340,19 +322,11 @@ final class Qwen3TextEncoder: Module {
         guard let hsMap = hiddenStatesMap else {
             fatalError("Hidden states not available for prompt embedding")
         }
-        NSLog("[MLXImageGen] getPromptEmbeds: %d hidden states stored, picking layers %@", hsMap.count, "\(hiddenStateLayers)")
-        for layerIdx in hiddenStateLayers {
-            if let hs = hsMap[layerIdx] {
-                NSLog("[MLXImageGen]   hsMap[%d] shape: %@", layerIdx, "\(hs.shape)")
-            }
-        }
         let stacked = MLX.stacked(hiddenStateLayers.map { hsMap[$0]! }, axis: 1)
-        NSLog("[MLXImageGen] getPromptEmbeds: stacked shape: %@", "\(stacked.shape)")
         let (batchSize, numLayers, seqLen, hiddenDim) = (
             stacked.dim(0), stacked.dim(1), stacked.dim(2), stacked.dim(3)
         )
         let transposed = stacked.transposed(0, 2, 1, 3)
-        NSLog("[MLXImageGen] getPromptEmbeds: transposed shape: %@, reshaping to [%d, %d, %d]", "\(transposed.shape)", batchSize, seqLen, numLayers * hiddenDim)
         return transposed.reshaped(batchSize, seqLen, numLayers * hiddenDim)
     }
 }

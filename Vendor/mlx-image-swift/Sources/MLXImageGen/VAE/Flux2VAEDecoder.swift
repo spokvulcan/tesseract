@@ -148,7 +148,10 @@ final class Flux2VAE: Module {
     @ModuleInfo(key: "post_quant_conv") var postQuantConv: Conv2d
     @ModuleInfo var bn: Flux2BatchNormStats
 
+    let config: Flux2Configuration.VAE
+
     init(config: Flux2Configuration.VAE) {
+        self.config = config
         self._decoder.wrappedValue = Flux2VAEDecoder(config: config)
         self._postQuantConv.wrappedValue = Conv2d(
             inputChannels: config.latentChannels,
@@ -177,5 +180,48 @@ final class Flux2VAE: Module {
 
         // 4. Decode
         return decoder(latents)
+    }
+}
+
+// MARK: - Standalone VAE encoder container (loaded separately from decoder)
+
+/// Wraps the VAE encoder + quant_conv as a standalone Module for independent weight loading.
+/// Kept separate from Flux2VAE to avoid nil Optional @ModuleInfo issues during decoder weight loading.
+final class Flux2VAEEncoderContainer: Module {
+    @ModuleInfo var encoder: Flux2VAEEncoder
+    @ModuleInfo(key: "quant_conv") var quantConv: Conv2d
+
+    init(config: Flux2Configuration.VAE) {
+        self._encoder.wrappedValue = Flux2VAEEncoder(config: config)
+        self._quantConv.wrappedValue = Conv2d(
+            inputChannels: config.latentChannels * 2,
+            outputChannels: config.latentChannels * 2,
+            kernelSize: IntOrPair(1), stride: IntOrPair(1), padding: IntOrPair(0)
+        )
+    }
+
+    /// Encode image [B, 3, H, W] → packed+normalized latents [B, 128, H/16, W/16]
+    func encode(_ image: MLXArray, bn: Flux2BatchNormStats) -> MLXArray {
+        // 1. Encoder forward: [B, 3, H, W] → [B, 64, H/8, W/8]
+        var latents = encoder(image)
+
+        // 2. quant_conv: [B, 64, H/8, W/8] → [B, 64, H/8, W/8]
+        latents = latents.transposed(0, 2, 3, 1) // NCHW → NHWC
+        latents = quantConv(latents)
+        latents = latents.transposed(0, 3, 1, 2) // NHWC → NCHW
+
+        // 3. Take mean (first half of channels) — discard logvar
+        let numLatentChannels = latents.dim(1) / 2
+        latents = latents[0..., ..<numLatentChannels, 0..., 0...]
+
+        // 4. Patchify: [B, 32, H/8, W/8] → [B, 128, H/16, W/16]
+        latents = Flux2LatentCreator.patchifyLatents(latents)
+
+        // 5. BN normalize: (x - mean) / std
+        let bnMean = bn.running_mean.reshaped(1, -1, 1, 1)
+        let bnStd = MLX.sqrt(bn.running_var.reshaped(1, -1, 1, 1) + MLXArray(bn.eps))
+        latents = (latents - bnMean) / bnStd
+
+        return latents
     }
 }

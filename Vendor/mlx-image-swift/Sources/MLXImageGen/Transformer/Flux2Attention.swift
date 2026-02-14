@@ -71,7 +71,10 @@ final class Flux2Attention: Module {
         }
 
         if let (cos, sin) = imageRotaryEmb {
-            (query, key) = AttentionUtils.applyRopeBSHD(xq: query, xk: key, cos: cos, sin: sin)
+            (query, key) = AttentionUtils.applyRopeBSHD(
+                xq: query, xk: key, cos: cos, sin: sin,
+                outputDtype: hiddenStates.dtype
+            )
         }
 
         var result = AttentionUtils.computeAttention(

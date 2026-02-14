@@ -58,13 +58,26 @@ final class Flux2Transformer: Module {
         )
     }
 
+    /// Compute rotary embeddings from position IDs. Call once before the denoising loop.
+    func computeRotaryEmb(imgIds: MLXArray, txtIds: MLXArray) -> (cos: MLXArray, sin: MLXArray) {
+        let imgIdsFlat = imgIds.ndim == 3 ? imgIds[0] : imgIds
+        let txtIdsFlat = txtIds.ndim == 3 ? txtIds[0] : txtIds
+        let imageRotaryEmb = posEmbed(imgIdsFlat)
+        let textRotaryEmb = posEmbed(txtIdsFlat)
+        return (
+            cos: MLX.concatenated([textRotaryEmb.cos, imageRotaryEmb.cos], axis: 0),
+            sin: MLX.concatenated([textRotaryEmb.sin, imageRotaryEmb.sin], axis: 0)
+        )
+    }
+
     func callAsFunction(
         hiddenStates: MLXArray,
         encoderHiddenStates: MLXArray,
         timestep: MLXArray,
         imgIds: MLXArray,
         txtIds: MLXArray,
-        guidance: MLXArray?
+        guidance: MLXArray?,
+        precomputedRotaryEmb: (cos: MLXArray, sin: MLXArray)? = nil
     ) -> MLXArray {
         // Prepare timestep
         var ts = timestep
@@ -95,16 +108,13 @@ final class Flux2Transformer: Module {
         var hs = xEmbedder(hiddenStates)
         var ehs = contextEmbedder(encoderHiddenStates)
 
-        // Strip batch dim from IDs if present
-        let imgIdsFlat = imgIds.ndim == 3 ? imgIds[0] : imgIds
-        let txtIdsFlat = txtIds.ndim == 3 ? txtIds[0] : txtIds
-
-        let imageRotaryEmb = posEmbed(imgIdsFlat)
-        let textRotaryEmb = posEmbed(txtIdsFlat)
-        let concatRotaryEmb = (
-            cos: MLX.concatenated([textRotaryEmb.cos, imageRotaryEmb.cos], axis: 0),
-            sin: MLX.concatenated([textRotaryEmb.sin, imageRotaryEmb.sin], axis: 0)
-        )
+        // Use precomputed RoPE if available, otherwise compute
+        let concatRotaryEmb: (cos: MLXArray, sin: MLXArray)
+        if let precomputed = precomputedRotaryEmb {
+            concatRotaryEmb = precomputed
+        } else {
+            concatRotaryEmb = computeRotaryEmb(imgIds: imgIds, txtIds: txtIds)
+        }
 
         let tembModParamsImg = doubleStreamModulationImg(temb)
         let tembModParamsTxt = doubleStreamModulationTxt(temb)

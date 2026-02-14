@@ -5,14 +5,18 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import MLXImageGen
 
 struct ImageGenContentView: View {
     @ObservedObject var imageGenEngine: ImageGenEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var prompt: String = ""
-    @State private var selectedSize: ImageSize = .medium
+    @State private var selectedSize: ImageSize = .large
     @State private var seedText: String = ""
+    @State private var numSteps: Int = 4
+    @State private var zeroInit: Bool = true
+    @State private var enableGlyphInjection: Bool = true
     @State private var generatedImage: NSImage?
     @State private var errorMessage: String?
 
@@ -137,6 +141,16 @@ struct ImageGenContentView: View {
                 }
                 .frame(width: 120)
 
+                Stepper("Steps: \(numSteps)", value: $numSteps, in: 2...8)
+                    .frame(width: 120)
+
+                Toggle("Zero-init", isOn: $zeroInit)
+                    .toggleStyle(.checkbox)
+
+                Toggle("Text enhance", isOn: $enableGlyphInjection)
+                    .toggleStyle(.checkbox)
+                    .help("Inject glyph structure for quoted 'text' in prompt")
+
                 TextField("Seed", text: $seedText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 80)
@@ -176,6 +190,29 @@ struct ImageGenContentView: View {
         errorMessage = nil
         let seed = UInt64(seedText) ?? 0
 
+        // Auto-detect quoted text for glyph injection
+        var glyphConfig: GlyphInjectionConfig? = nil
+        if enableGlyphInjection {
+            let glyphTexts = GlyphTextExtractor.extractQuotedText(from: prompt)
+            if !glyphTexts.isEmpty {
+                // More text → inject at more steps with higher strength
+                let steps: [Int]
+                let strength: Float
+                if glyphTexts.count >= 3 {
+                    steps = Array(1..<numSteps)  // all non-zero-init steps
+                    strength = 0.65
+                } else {
+                    steps = [1, 2]
+                    strength = 0.5
+                }
+                glyphConfig = GlyphInjectionConfig(
+                    glyphTexts: glyphTexts,
+                    injectAtSteps: steps,
+                    strength: strength
+                )
+            }
+        }
+
         Task {
             do {
                 // Load model on first generation
@@ -187,6 +224,9 @@ struct ImageGenContentView: View {
                     prompt: prompt,
                     width: selectedSize.width,
                     height: selectedSize.height,
+                    numSteps: numSteps,
+                    zeroInitSteps: zeroInit ? 1 : 0,
+                    glyphInjection: glyphConfig,
                     seed: seed
                 )
             } catch {

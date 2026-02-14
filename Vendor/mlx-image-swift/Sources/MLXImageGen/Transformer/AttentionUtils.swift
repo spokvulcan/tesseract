@@ -26,11 +26,9 @@ enum AttentionUtils {
         let keyR = key.reshaped(batchSize, seqLen, numHeads, headDim).transposed(0, 2, 1, 3)
         let valueR = value.reshaped(batchSize, seqLen, numHeads, headDim).transposed(0, 2, 1, 3)
 
-        // Apply normalization in float32 for stability
-        let qDtype = queryR.dtype
-        let kDtype = keyR.dtype
-        query = normQ(queryR.asType(.float32)).asType(qDtype)
-        key = normK(keyR.asType(.float32)).asType(kDtype)
+        // Apply normalization in float32 for stability — stays f32 for RoPE
+        query = normQ(queryR.asType(.float32))
+        key = normK(keyR.asType(.float32))
 
         return (query, key, valueR)
     }
@@ -53,11 +51,12 @@ enum AttentionUtils {
     }
 
     static func applyRopeBSHD(
-        xq: MLXArray, xk: MLXArray, cos: MLXArray, sin: MLXArray
+        xq: MLXArray, xk: MLXArray, cos: MLXArray, sin: MLXArray,
+        outputDtype: DType? = nil
     ) -> (MLXArray, MLXArray) {
-        let outDtype = xq.dtype
-        let xqF = xq.asType(.float32)
-        let xkF = xk.asType(.float32)
+        let outDtype = outputDtype ?? xq.dtype
+        let xqF = xq.dtype == .float32 ? xq : xq.asType(.float32)
+        let xkF = xk.dtype == .float32 ? xk : xk.asType(.float32)
         // cos/sin shape: [seqLen, dim] -> [1, 1, seqLen, dim]
         let cosB = cos.reshaped(1, 1, cos.dim(0), cos.dim(1))
         let sinB = sin.reshaped(1, 1, sin.dim(0), sin.dim(1))

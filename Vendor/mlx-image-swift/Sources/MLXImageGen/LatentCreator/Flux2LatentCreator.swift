@@ -64,6 +64,19 @@ public enum Flux2LatentCreator {
         return (packed, latentIds, latentHeight, latentWidth)
     }
 
+    /// Patchify: [B, C, H, W] -> [B, C*4, H/2, W/2] (inverse of unpatchify)
+    public static func patchifyLatents(_ latents: MLXArray) -> MLXArray {
+        let (batchSize, channels, height, width) = (
+            latents.dim(0), latents.dim(1), latents.dim(2), latents.dim(3)
+        )
+        let halfH = height / 2
+        let halfW = width / 2
+        // [B, C, H, W] -> [B, C, H/2, 2, W/2, 2] -> [B, C, 2, 2, H/2, W/2] -> [B, C*4, H/2, W/2]
+        let reshaped = latents.reshaped(batchSize, channels, halfH, 2, halfW, 2)
+        let transposed = reshaped.transposed(0, 1, 3, 5, 2, 4)
+        return transposed.reshaped(batchSize, channels * 4, halfH, halfW)
+    }
+
     /// Unpatchify: [B, C*4, H/2, W/2] -> [B, C, H, W]
     public static func unpatchifyLatents(_ latents: MLXArray) -> MLXArray {
         let (batchSize, channels4, halfH, halfW) = (

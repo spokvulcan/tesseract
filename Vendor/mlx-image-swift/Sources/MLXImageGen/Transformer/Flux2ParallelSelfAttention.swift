@@ -42,13 +42,16 @@ final class Flux2ParallelSelfAttention: Module {
         var key = qkvParts[1].reshaped(batch, seqLen, heads, dimHead).transposed(0, 2, 1, 3)
         let value = qkvParts[2].reshaped(batch, seqLen, heads, dimHead).transposed(0, 2, 1, 3)
 
-        let qDtype = query.dtype
-        let kDtype = key.dtype
-        query = normQ(query.asType(.float32)).asType(qDtype)
-        key = normK(key.asType(.float32)).asType(kDtype)
+        let inputDtype = query.dtype
+        // Normalize in f32, stay in f32 for RoPE
+        query = normQ(query.asType(.float32))
+        key = normK(key.asType(.float32))
 
         if let (cos, sin) = imageRotaryEmb {
-            (query, key) = AttentionUtils.applyRopeBSHD(xq: query, xk: key, cos: cos, sin: sin)
+            (query, key) = AttentionUtils.applyRopeBSHD(
+                xq: query, xk: key, cos: cos, sin: sin,
+                outputDtype: inputDtype
+            )
         }
 
         var result = AttentionUtils.computeAttention(

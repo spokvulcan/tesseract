@@ -42,7 +42,9 @@ enum Flux2PromptEncoder {
             tools: nil,
             additionalContext: ["enable_thinking": false]
         )
-        NSLog("[MLXImageGen] Chat template produced %d tokens (max %d)", rawIds.count, maxSequenceLength)
+        if flux2Profiling {
+            NSLog("[MLXImageGen] [PROFILE] Chat template produced %d tokens (max %d)", rawIds.count, maxSequenceLength)
+        }
 
         // Pad to maxSequenceLength with proper attention mask
         let padId = Int32(tokenizer.convertTokenToId(padTokenString) ?? Int(fallbackPadTokenId))
@@ -57,8 +59,6 @@ enum Flux2PromptEncoder {
 
         let inputIds = MLXArray(tokenIds).expandedDimensions(axis: 0)
         let attentionMask = MLXArray(maskValues).expandedDimensions(axis: 0)
-        NSLog("[MLXImageGen] inputIds shape: %@, attentionMask shape: %@ (%d real, %d pad)",
-              "\(inputIds.shape)", "\(attentionMask.shape)", seqLen, maxSequenceLength - seqLen)
 
         return textEncoder.getPromptEmbeds(
             inputIds: inputIds,

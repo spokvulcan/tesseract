@@ -39,6 +39,33 @@ final class NCHWGroupNorm: Module {
     }
 }
 
+/// Stride-2 conv downsample with asymmetric padding (NCHW)
+final class Downsample2D: Module {
+    @ModuleInfo var conv: Conv2d
+
+    init(channels: Int, outChannels: Int? = nil) {
+        let oc = outChannels ?? channels
+        // Conv with stride=2, no built-in padding (we pad manually for asymmetric)
+        self._conv.wrappedValue = Conv2d(
+            inputChannels: channels,
+            outputChannels: oc,
+            kernelSize: IntOrPair(3),
+            stride: IntOrPair(2),
+            padding: IntOrPair(0)
+        )
+    }
+
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
+        // Asymmetric padding: pad right+1, bottom+1 (matches diffusers Downsample2D)
+        // Input is NCHW → pad H (axis 2) and W (axis 3) on the high side only
+        let padded = MLX.padded(x, widths: [IntOrPair(0), IntOrPair(0), IntOrPair((0, 1)), IntOrPair((0, 1))])
+        // NCHW -> NHWC for conv
+        let nhwc = padded.transposed(0, 2, 3, 1)
+        let out = conv(nhwc)
+        return out.transposed(0, 3, 1, 2)
+    }
+}
+
 /// Nearest-neighbor 2x upsample + Conv (NCHW)
 final class Upsample2D: Module {
     @ModuleInfo var conv: Conv2d

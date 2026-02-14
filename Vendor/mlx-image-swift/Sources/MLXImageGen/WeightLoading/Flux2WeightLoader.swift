@@ -40,6 +40,18 @@ public enum Flux2WeightLoader {
         try model.update(parameters: ModuleParameters.unflattened(remapped), verify: .noUnusedKeys)
     }
 
+    /// Load VAE encoder weights (encoder + quant_conv) into an already-initialized Flux2VAE
+    public static func loadVAEEncoderWeights(
+        from directory: URL,
+        into model: Module
+    ) throws {
+        let weights = try loadSafetensors(from: directory, prefix: "vae")
+        NSLog("[MLXImageGen] Loaded %d raw VAE weights for encoder", weights.count)
+        let remapped = remapVAEEncoderWeights(weights)
+        NSLog("[MLXImageGen] Remapped to %d encoder weights", remapped.count)
+        try model.update(parameters: ModuleParameters.unflattened(remapped), verify: .noUnusedKeys)
+    }
+
     // MARK: - Private helpers
 
     private static func loadSafetensors(from directory: URL, prefix: String) throws -> [String: MLXArray] {
@@ -58,7 +70,7 @@ public enum Flux2WeightLoader {
                 if key.hasPrefix(prefix + ".") {
                     let strippedKey = String(key.dropFirst(prefix.count + 1))
                     allWeights[strippedKey] = value
-                } else if prefix == "vae" && (key.hasPrefix("decoder.") || key.hasPrefix("post_quant_conv.") || key.hasPrefix("bn.")) {
+                } else if prefix == "vae" && (key.hasPrefix("decoder.") || key.hasPrefix("encoder.") || key.hasPrefix("post_quant_conv.") || key.hasPrefix("quant_conv.") || key.hasPrefix("bn.")) {
                     allWeights[key] = value
                 }
             }
@@ -114,6 +126,28 @@ public enum Flux2WeightLoader {
             var newKey = key
             // Remap to_out.0. → to_out. (only in decoder)
             if newKey.hasPrefix("decoder.") {
+                newKey = newKey.replacingOccurrences(of: "to_out.0.", with: "to_out.")
+            }
+
+            // Transpose conv2d weights from PyTorch [out, in, kH, kW] to MLX [out, kH, kW, in]
+            if newKey.contains("conv") && newKey.hasSuffix(".weight") && value.ndim == 4 {
+                result[newKey] = value.transposed(0, 2, 3, 1)
+            } else {
+                result[newKey] = value
+            }
+        }
+        return result
+    }
+
+    private static func remapVAEEncoderWeights(_ weights: [String: MLXArray]) -> [String: MLXArray] {
+        var result = [String: MLXArray]()
+        for (key, value) in weights {
+            // Only keep encoder and quant_conv weights
+            guard key.hasPrefix("encoder.") || key.hasPrefix("quant_conv.") else { continue }
+
+            var newKey = key
+            // Remap to_out.0. → to_out. (attention output projection)
+            if newKey.hasPrefix("encoder.") {
                 newKey = newKey.replacingOccurrences(of: "to_out.0.", with: "to_out.")
             }
 

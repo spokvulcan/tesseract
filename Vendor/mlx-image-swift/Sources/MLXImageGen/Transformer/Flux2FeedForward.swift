@@ -1,10 +1,14 @@
 import MLX
+import MLXFast
 import MLXNN
+
+private let compiledSwiGLU: @Sendable (MLXArray, MLXArray) -> MLXArray =
+    compile(shapeless: true) { gate, up in silu(gate) * up }
 
 final class Flux2SwiGLU: Module {
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let parts = x.split(parts: 2, axis: -1)
-        return silu(parts[0]) * parts[1]
+        return compiledSwiGLU(parts[0], parts[1])
     }
 }
 

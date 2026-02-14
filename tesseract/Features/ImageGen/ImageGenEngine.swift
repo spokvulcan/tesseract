@@ -52,7 +52,8 @@ final class ImageGenEngine: ObservableObject {
         width: Int = 1024,
         height: Int = 1024,
         numSteps: Int = 4,
-        guidanceScale: Float = 3.5,
+        zeroInitSteps: Int = 1,
+        glyphInjection: GlyphInjectionConfig? = nil,
         seed: UInt64 = 0
     ) async throws -> NSImage {
         guard let pipeline else {
@@ -74,7 +75,8 @@ final class ImageGenEngine: ObservableObject {
             width: width,
             height: height,
             numSteps: numSteps,
-            guidanceScale: guidanceScale,
+            zeroInitSteps: zeroInitSteps,
+            glyphInjection: glyphInjection,
             seed: seed,
             onProgress: { [weak self] step, total in
                 Task { @MainActor in
