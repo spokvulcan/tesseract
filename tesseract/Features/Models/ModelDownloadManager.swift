@@ -13,6 +13,7 @@ enum ModelStatus: Equatable, Sendable {
     case notDownloaded
     case downloading(progress: Double)
     case downloaded(sizeOnDisk: Int64)
+    case verifying(progress: Double)
     case error(String)
 }
 
@@ -34,6 +35,15 @@ final class ModelDownloadManager: ObservableObject {
 
     func refreshAllStatuses() {
         for model in ModelDefinition.all {
+            // Don't overwrite in-progress download or error states
+            if let existing = statuses[model.id] {
+                switch existing {
+                case .downloading, .verifying, .error:
+                    continue
+                case .notDownloaded, .downloaded:
+                    break
+                }
+            }
             statuses[model.id] = Self.computeStatus(for: model)
         }
     }
@@ -53,15 +63,27 @@ final class ModelDownloadManager: ObservableObject {
             return .notDownloaded
         }
 
-        let items = (try? FileManager.default.contentsOfDirectory(
-            at: checkDir, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey]
-        )) ?? []
-
-        let hasRequired = items.contains { $0.pathExtension == requiredExtension }
+        // Search recursively for required files (handles nested dirs like transformer/)
+        let hasRequired = hasFileRecursively(in: checkDir, withExtension: requiredExtension)
         guard hasRequired else { return .notDownloaded }
 
         let totalSize = directorySize(at: checkDir)
         return .downloaded(sizeOnDisk: totalSize)
+    }
+
+    private static func hasFileRecursively(in directory: URL, withExtension ext: String) -> Bool {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return false }
+
+        for case let fileURL as URL in enumerator {
+            if fileURL.pathExtension == ext {
+                return true
+            }
+        }
+        return false
     }
 
     private static func directorySize(at url: URL) -> Int64 {
@@ -108,10 +130,19 @@ final class ModelDownloadManager: ObservableObject {
                 }
 
                 if let pathPrefix {
-                    try await self?.downloadWithPrefix(
+                    try await self?.downloadFileByFile(
                         modelID: modelID,
                         repoID: repoID,
                         pathPrefix: pathPrefix
+                    )
+                } else if requiredExtension == "safetensors" {
+                    // Repos with nested directories (e.g. FLUX with transformer/, vae/,
+                    // scheduler/ subdirs) fail with downloadSnapshot due to file/directory
+                    // naming conflicts. Download files individually instead.
+                    try await self?.downloadFileByFile(
+                        modelID: modelID,
+                        repoID: repoID,
+                        pathPrefix: nil
                     )
                 } else {
                     let weakSelf = self
@@ -142,44 +173,94 @@ final class ModelDownloadManager: ObservableObject {
         downloadTasks[modelID] = task
     }
 
-    private func downloadWithPrefix(
+    // MARK: - File Check
+
+    private struct FileCheckResult {
+        let filtered: [Git.TreeEntry]
+        let pending: [(index: Int, entry: Git.TreeEntry)]
+        let modelDir: URL
+
+        var totalFiles: Int { filtered.count }
+        var validFiles: Int { totalFiles - pending.count }
+        var needsRepair: Bool { !pending.isEmpty }
+    }
+
+    private func checkFiles(
         modelID: String,
         repoID: Repo.ID,
-        pathPrefix: String
-    ) async throws {
+        pathPrefix: String?
+    ) async throws -> FileCheckResult {
         let client = HubClient.default
 
         let allEntries = try await client.listFiles(in: repoID, recursive: true)
-        let filtered = allEntries.filter { entry in
-            entry.path.hasPrefix(pathPrefix + "/") && entry.type == .file
+        let filtered: [Git.TreeEntry]
+        if let pathPrefix {
+            filtered = allEntries.filter { entry in
+                entry.path.hasPrefix(pathPrefix + "/") && entry.type == .file
+            }
+        } else {
+            filtered = allEntries.filter { $0.type == .file }
         }
 
         guard !filtered.isEmpty else {
+            let desc = pathPrefix.map { "No files found for prefix '\($0)' in \(repoID)" }
+                ?? "No files found in \(repoID)"
             throw NSError(
                 domain: "ModelDownload", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "No files found for prefix '\(pathPrefix)' in \(repoID)"]
+                userInfo: [NSLocalizedDescriptionKey: desc]
             )
         }
 
         guard let subdir = ModelDefinition.all.first(where: { $0.id == modelID })?.cacheSubdirectory else {
-            return
+            throw NSError(
+                domain: "ModelDownload", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "No cache subdirectory for \(modelID)"]
+            )
         }
         let modelDir = Self.cacheBaseURL.appendingPathComponent(subdir)
 
-        // Clean up stale file left by a previous failed download
-        // (downloadFile may have replaced the directory with a regular file)
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: modelDir.path, isDirectory: &isDir), !isDir.boolValue {
-            try? FileManager.default.removeItem(at: modelDir)
+        var pending = [(index: Int, entry: Git.TreeEntry)]()
+        for (index, entry) in filtered.enumerated() {
+            let targetFile = modelDir.appendingPathComponent(entry.path)
+            if FileManager.default.fileExists(atPath: targetFile.path) {
+                if let expectedSize = entry.size {
+                    let attrs = try? FileManager.default.attributesOfItem(atPath: targetFile.path)
+                    let localSize = (attrs?[.size] as? Int64) ?? 0
+                    if localSize >= Int64(expectedSize) {
+                        continue
+                    }
+                } else {
+                    continue
+                }
+            }
+            pending.append((index, entry))
         }
 
-        let totalFiles = filtered.count
+        return FileCheckResult(filtered: filtered, pending: pending, modelDir: modelDir)
+    }
 
-        for (index, entry) in filtered.enumerated() {
+    private func downloadPendingFiles(
+        modelID: String,
+        repoID: Repo.ID,
+        result: FileCheckResult
+    ) async throws {
+        let client = HubClient.default
+        let totalFiles = result.totalFiles
+        let alreadyDone = result.validFiles
+
+        if alreadyDone > 0 {
+            statuses[modelID] = .downloading(progress: Double(alreadyDone) / Double(totalFiles))
+        }
+
+        for (i, (_, entry)) in result.pending.enumerated() {
             try Task.checkCancellation()
 
-            // downloadFile expects the exact file path, not a directory
-            let targetFile = modelDir.appendingPathComponent(entry.path)
+            let targetFile = result.modelDir.appendingPathComponent(entry.path)
+
+            let parentDir = targetFile.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: parentDir.path) {
+                try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+            }
 
             _ = try await client.downloadFile(
                 at: entry.path,
@@ -187,8 +268,94 @@ final class ModelDownloadManager: ObservableObject {
                 to: targetFile
             )
 
-            statuses[modelID] = .downloading(progress: Double(index + 1) / Double(totalFiles))
+            statuses[modelID] = .downloading(
+                progress: Double(alreadyDone + i + 1) / Double(totalFiles)
+            )
         }
+    }
+
+    private func downloadFileByFile(
+        modelID: String,
+        repoID: Repo.ID,
+        pathPrefix: String?
+    ) async throws {
+        let result = try await checkFiles(modelID: modelID, repoID: repoID, pathPrefix: pathPrefix)
+
+        // Clean up stale file left by a previous failed download
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: result.modelDir.path, isDirectory: &isDir), !isDir.boolValue {
+            try? FileManager.default.removeItem(at: result.modelDir)
+        }
+
+        if result.pending.isEmpty {
+            statuses[modelID] = .downloading(progress: 1.0)
+            return
+        }
+
+        try await downloadPendingFiles(modelID: modelID, repoID: repoID, result: result)
+    }
+
+    // MARK: - Verify & Repair
+
+    func verifyAndRepair(modelID: String) {
+        guard let model = ModelDefinition.all.first(where: { $0.id == modelID }) else { return }
+        guard case .huggingFace(let repo, _, let pathPrefix) = model.source else { return }
+
+        // Don't verify if already verifying or downloading
+        if let existing = statuses[modelID] {
+            switch existing {
+            case .downloading, .verifying:
+                return
+            default:
+                break
+            }
+        }
+
+        statuses[modelID] = .verifying(progress: 0)
+
+        let task = Task { [weak self] in
+            do {
+                guard let repoID = Repo.ID(rawValue: repo) else {
+                    self?.statuses[modelID] = .error("Invalid repository ID")
+                    return
+                }
+
+                let result = try await self?.checkFiles(
+                    modelID: modelID,
+                    repoID: repoID,
+                    pathPrefix: pathPrefix
+                )
+
+                guard let result else { return }
+
+                self?.statuses[modelID] = .verifying(progress: 1.0)
+
+                if !result.needsRepair {
+                    let status = Self.computeStatus(for: model)
+                    self?.statuses[modelID] = status
+                    Log.general.info("Verify OK: \(model.displayName) — \(result.totalFiles) files valid")
+                } else {
+                    Log.general.info("Verify: \(model.displayName) — \(result.pending.count)/\(result.totalFiles) files need repair")
+                    try await self?.downloadPendingFiles(
+                        modelID: modelID,
+                        repoID: repoID,
+                        result: result
+                    )
+                    let status = Self.computeStatus(for: model)
+                    self?.statuses[modelID] = status
+                    Log.general.info("Repair complete: \(model.displayName)")
+                }
+            } catch is CancellationError {
+                let status = Self.computeStatus(for: model)
+                self?.statuses[modelID] = status
+            } catch {
+                self?.statuses[modelID] = .error(error.localizedDescription)
+                Log.general.error("Verify failed for \(model.displayName): \(error)")
+            }
+
+            self?.downloadTasks.removeValue(forKey: modelID)
+        }
+        downloadTasks[modelID] = task
     }
 
     // MARK: - Cancel
