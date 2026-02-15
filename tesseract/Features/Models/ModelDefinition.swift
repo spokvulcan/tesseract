@@ -56,6 +56,7 @@ struct ModelDefinition: Identifiable, Sendable {
 }
 
 extension ModelDefinition {
+    // Image generation models are kept here but excluded from `all` until the feature is ready.
     static let all: [ModelDefinition] = [
         ModelDefinition(
             id: "whisper-large-v3-turbo",
@@ -82,6 +83,9 @@ extension ModelDefinition {
             sizeDescription: "~3.6 GB",
             dependencies: []
         ),
+    ]
+
+    static let imageGenerationModels: [ModelDefinition] = [
         ModelDefinition(
             id: "flux2-klein-4b",
             displayName: "FLUX.2-klein-4B",

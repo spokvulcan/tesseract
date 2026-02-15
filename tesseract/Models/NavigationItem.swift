@@ -16,7 +16,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
 
     var id: String { rawValue }
 
-    static let mainPages: [NavigationItem] = [.dictation, .speech, .image, .zimage]
+    static let mainPages: [NavigationItem] = [.dictation, .speech]
     static let settingsPages: [NavigationItem] = [.general, .model, .recording]
 
     var name: LocalizedStringResource {
