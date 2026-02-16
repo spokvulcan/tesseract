@@ -4,6 +4,24 @@ import MLXLLM
 import MLXLMCommon
 import os
 
+/// Errors thrown by ``AgentEngine`` during generation.
+enum AgentEngineError: LocalizedError {
+    case modelNotLoaded
+    case alreadyGenerating
+    case generationFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .modelNotLoaded:
+            "No model is loaded"
+        case .alreadyGenerating:
+            "Generation is already in progress"
+        case .generationFailed(let description):
+            "Generation failed: \(description)"
+        }
+    }
+}
+
 /// Loads Nanbeige4.1-3B from a local directory and prepares it for inference.
 ///
 /// Model downloading is handled by ``ModelDownloadManager``. This engine loads
@@ -14,9 +32,11 @@ final class AgentEngine: ObservableObject {
     @Published private(set) var isModelLoaded = false
     @Published private(set) var isLoading = false
     @Published private(set) var loadingStatus: String = ""
+    @Published private(set) var isGenerating = false
 
     private(set) var agentTokenizer: AgentTokenizer?
     private var modelContainer: ModelContainer?
+    private var generationTask: Task<Void, Never>?
 
     /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
     ///
@@ -66,8 +86,106 @@ final class AgentEngine: ObservableObject {
         isLoading = false
     }
 
+    /// Streams text generation from the loaded model.
+    ///
+    /// - Parameters:
+    ///   - prompt: The full prompt string (caller is responsible for ChatML formatting).
+    ///   - parameters: Generation parameters (temperature, maxTokens, etc.).
+    /// - Returns: An async stream of ``AgentGeneration`` events.
+    func generate(
+        prompt: String,
+        parameters: AgentGenerateParameters = .default
+    ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
+        guard let container = modelContainer else {
+            throw AgentEngineError.modelNotLoaded
+        }
+        guard !isGenerating else {
+            throw AgentEngineError.alreadyGenerating
+        }
+
+        isGenerating = true
+
+        let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+
+        let task = Task { [weak self] in
+            defer {
+                Task { @MainActor [weak self] in
+                    self?.isGenerating = false
+                    self?.generationTask = nil
+                }
+            }
+
+            do {
+                try Task.checkCancellation()
+
+                let input = try await container.prepare(
+                    input: UserInput(prompt: prompt)
+                )
+
+                let genParams = GenerateParameters(
+                    maxTokens: parameters.maxTokens,
+                    temperature: parameters.temperature,
+                    topP: parameters.topP,
+                    repetitionPenalty: parameters.repetitionPenalty,
+                    repetitionContextSize: parameters.repetitionContextSize
+                )
+
+                let genStream = try await container.generate(
+                    input: input, parameters: genParams
+                )
+
+                for await generation in genStream {
+                    try Task.checkCancellation()
+
+                    switch generation {
+                    case .chunk(let text):
+                        continuation.yield(.text(text))
+
+                    case .info(let completionInfo):
+                        let info = AgentGeneration.Info(
+                            promptTokenCount: completionInfo.promptTokenCount,
+                            generationTokenCount: completionInfo.generationTokenCount,
+                            promptTime: completionInfo.promptTime,
+                            generateTime: completionInfo.generateTime
+                        )
+                        continuation.yield(.info(info))
+                        Log.agent.info(
+                            "Generation complete — \(completionInfo.generationTokenCount) tokens, "
+                            + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s"
+                        )
+
+                    case .toolCall(let call):
+                        // Stringify tool calls as text for now (task 2.2 handles proper parsing)
+                        let text = "<tool_call>\(call.function.name)(\(call.function.arguments))</tool_call>"
+                        continuation.yield(.text(text))
+                    }
+                }
+
+                continuation.finish()
+            } catch is CancellationError {
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: AgentEngineError.generationFailed(
+                    error.localizedDescription
+                ))
+            }
+        }
+
+        generationTask = task
+        continuation.onTermination = { _ in task.cancel() }
+
+        return stream
+    }
+
+    /// Cancels any in-progress generation.
+    func cancelGeneration() {
+        generationTask?.cancel()
+        generationTask = nil
+    }
+
     /// Releases the model from memory.
     func unloadModel() {
+        cancelGeneration()
         modelContainer = nil
         agentTokenizer = nil
         isModelLoaded = false
