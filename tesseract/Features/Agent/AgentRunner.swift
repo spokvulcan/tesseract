@@ -1,0 +1,194 @@
+import Foundation
+import MLXLMCommon
+import os
+
+/// Events emitted by ``AgentRunner`` during a multi-round agent loop.
+enum AgentRunnerEvent: Sendable {
+    /// A text chunk for streaming display.
+    case text(String)
+    /// A tool is about to execute.
+    case toolStart(name: String)
+    /// A tool finished executing.
+    case toolResult(name: String, result: String)
+    /// A malformed tool call was detected.
+    case toolError(String)
+    /// Generation metrics for one round.
+    case info(AgentGeneration.Info)
+    /// All new messages to append to history (emitted once at the end).
+    case completed([AgentChatMessage])
+}
+
+/// Orchestrates the generate → execute tools → re-generate loop.
+///
+/// Sits between ``AgentCoordinator`` (UI state) and ``AgentEngine`` (inference).
+/// Pure logic — takes messages in, yields ``AgentRunnerEvent``s out.
+@MainActor
+final class AgentRunner {
+
+    private let engine: AgentEngine
+    private let toolRegistry: ToolRegistry
+    let maxToolRounds: Int
+
+    private var runTask: Task<Void, Never>?
+
+    init(engine: AgentEngine, toolRegistry: ToolRegistry, maxToolRounds: Int = 5) {
+        self.engine = engine
+        self.toolRegistry = toolRegistry
+        self.maxToolRounds = maxToolRounds
+    }
+
+    /// Runs the agent loop: generate, optionally execute tool calls, re-generate.
+    ///
+    /// - Parameters:
+    ///   - messages: Full conversation history (including system prompt).
+    ///   - parameters: Generation parameters forwarded to the engine.
+    /// - Returns: An async stream of ``AgentRunnerEvent``s.
+    func run(
+        messages: [AgentChatMessage],
+        parameters: AgentGenerateParameters = .default
+    ) throws -> AsyncThrowingStream<AgentRunnerEvent, Error> {
+        let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentRunnerEvent.self)
+
+        let engine = self.engine
+        let registry = self.toolRegistry
+        let maxRounds = self.maxToolRounds
+        let toolSpecs = registry.toolSpecs
+
+        let task = Task { @MainActor [weak self] in
+            do {
+                var workingMessages = messages
+                var newMessages: [AgentChatMessage] = []
+
+                for round in 0..<maxRounds {
+                    try Task.checkCancellation()
+
+                    Log.agent.info("Agent round \(round + 1)/\(maxRounds)")
+
+                    let genStream = try engine.generate(
+                        messages: workingMessages,
+                        tools: toolSpecs,
+                        parameters: parameters
+                    )
+
+                    var responseText = ""
+                    var toolCalls: [ToolCall] = []
+                    var malformedCalls: [String] = []
+
+                    for try await event in genStream {
+                        switch event {
+                        case .text(let chunk):
+                            responseText += chunk
+                            continuation.yield(.text(chunk))
+                        case .toolCall(let call):
+                            toolCalls.append(call)
+                        case .malformedToolCall(let raw):
+                            malformedCalls.append(raw)
+                        case .info(let info):
+                            continuation.yield(.info(info))
+                        }
+                    }
+
+                    // No tool calls and no malformed calls — final response
+                    if toolCalls.isEmpty && malformedCalls.isEmpty {
+                        newMessages.append(.assistant(responseText))
+                        continuation.yield(.completed(newMessages))
+                        continuation.finish()
+                        return
+                    }
+
+                    // Process valid tool calls
+                    if !toolCalls.isEmpty {
+                        let assistantContent = Self.reconstructAssistantMessage(
+                            text: responseText, toolCalls: toolCalls
+                        )
+                        let assistantMsg = AgentChatMessage.assistant(assistantContent)
+                        workingMessages.append(assistantMsg)
+                        newMessages.append(assistantMsg)
+
+                        for call in toolCalls {
+                            try Task.checkCancellation()
+
+                            continuation.yield(.toolStart(name: call.function.name))
+
+                            let result: String
+                            do {
+                                result = try await registry.execute(call: call)
+                            } catch {
+                                result = "Error: \(error.localizedDescription)"
+                            }
+
+                            continuation.yield(.toolResult(name: call.function.name, result: result))
+                            Log.agent.info("Tool \(call.function.name) → \(result.prefix(200))")
+
+                            let toolMsg = AgentChatMessage.tool(result)
+                            workingMessages.append(toolMsg)
+                            newMessages.append(toolMsg)
+                        }
+
+                        continue
+                    }
+
+                    // Malformed tool calls — send error back so model can retry
+                    if !malformedCalls.isEmpty {
+                        let assistantMsg = AgentChatMessage.assistant(responseText)
+                        workingMessages.append(assistantMsg)
+                        newMessages.append(assistantMsg)
+
+                        for raw in malformedCalls {
+                            continuation.yield(.toolError(raw))
+                            Log.agent.warning("Malformed tool call: \(raw.prefix(200))")
+
+                            let errorMsg = AgentChatMessage.tool(
+                                "Error: malformed tool call JSON. Please retry with valid JSON inside <tool_call> tags."
+                            )
+                            workingMessages.append(errorMsg)
+                            newMessages.append(errorMsg)
+                        }
+
+                        continue
+                    }
+                }
+
+                // Exhausted all rounds — emit what we have
+                Log.agent.warning("Agent loop exhausted \(maxRounds) rounds")
+                continuation.yield(.completed(newMessages))
+                continuation.finish()
+            } catch is CancellationError {
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+
+            self?.runTask = nil
+        }
+
+        runTask = task
+        continuation.onTermination = { _ in task.cancel() }
+
+        return stream
+    }
+
+    /// Cancels any in-progress agent loop and underlying generation.
+    func cancelGeneration() {
+        runTask?.cancel()
+        runTask = nil
+        engine.cancelGeneration()
+    }
+
+    // MARK: - Private
+
+    /// Reconstructs the assistant message content with tool call tags for conversation history.
+    private static func reconstructAssistantMessage(
+        text: String, toolCalls: [ToolCall]
+    ) -> String {
+        var content = text
+        for call in toolCalls {
+            if let data = try? JSONEncoder().encode(call.function),
+               let json = String(data: data, encoding: .utf8)
+            {
+                content += "\n<tool_call>\n\(json)\n</tool_call>"
+            }
+        }
+        return content
+    }
+}

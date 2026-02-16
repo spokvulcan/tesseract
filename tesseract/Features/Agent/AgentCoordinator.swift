@@ -5,7 +5,8 @@ import os
 /// Manages agent chat state — message history, streaming generation, and cancellation.
 ///
 /// Mirrors the `SpeechCoordinator` pattern: owns a `[AgentChatMessage]` conversation,
-/// delegates inference to ``AgentEngine``, and publishes streaming text for the view.
+/// delegates inference to ``AgentRunner`` (which handles tool loops internally),
+/// and publishes streaming text for the view.
 @MainActor
 final class AgentCoordinator: ObservableObject {
 
@@ -14,15 +15,15 @@ final class AgentCoordinator: ObservableObject {
     @Published private(set) var isGenerating: Bool = false
     @Published var error: String?
 
-    private let agentEngine: AgentEngine
+    private let agentRunner: AgentRunner
     private let debugLogger = AgentDebugLogger()
     private var generationTask: Task<Void, Never>?
 
-    init(agentEngine: AgentEngine) {
-        self.agentEngine = agentEngine
+    init(agentRunner: AgentRunner) {
+        self.agentRunner = agentRunner
     }
 
-    /// Sends a user message and streams the assistant response.
+    /// Sends a user message and streams the assistant response (with tool loops).
     func sendMessage(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -50,31 +51,37 @@ final class AgentCoordinator: ObservableObject {
             guard let self else { return }
 
             do {
-                let stream = try agentEngine.generate(messages: prompt)
-                Log.agent.debug("Generation stream started")
+                let stream = try agentRunner.run(messages: prompt)
+                Log.agent.debug("Agent runner stream started")
 
                 for try await event in stream {
                     switch event {
                     case .text(let chunk):
                         streamingText += chunk
-                    case .toolCall, .malformedToolCall:
-                        // Tool execution handled by the agent loop (task 2.3)
-                        break
+                    case .toolStart(let name):
+                        Log.agent.info("Tool start: \(name)")
+                    case .toolResult(let name, let result):
+                        Log.agent.info("Tool result [\(name)]: \(result.prefix(200))")
+                        // Clear streaming text between rounds so the next
+                        // generation round starts fresh in the UI
+                        streamingText = ""
+                    case .toolError(let raw):
+                        Log.agent.warning("Tool error: \(raw.prefix(200))")
                     case .info(let info):
                         generationInfo = info
+                    case .completed(let newMessages):
+                        messages.append(contentsOf: newMessages)
+
+                        let lastResponse = newMessages.last { $0.role == .assistant }?.content ?? ""
+                        debugLogger.logResponse(
+                            rawOutput: lastResponse,
+                            displayOutput: lastResponse,
+                            info: generationInfo
+                        )
                     }
                 }
 
-                let response = streamingText
-                Log.agent.info("Generation complete — \(response.count) chars")
-
-                debugLogger.logResponse(
-                    rawOutput: response,
-                    displayOutput: response,
-                    info: generationInfo
-                )
-
-                messages.append(.assistant(response))
+                Log.agent.info("Agent run complete — \(self.messages.count) total messages")
                 streamingText = ""
                 isGenerating = false
             } catch is CancellationError {
@@ -103,7 +110,7 @@ final class AgentCoordinator: ObservableObject {
     func cancelGeneration() {
         generationTask?.cancel()
         generationTask = nil
-        agentEngine.cancelGeneration()
+        agentRunner.cancelGeneration()
     }
 
     /// Clears conversation history and cancels any in-progress generation.

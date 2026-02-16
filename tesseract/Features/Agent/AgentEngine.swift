@@ -8,15 +8,12 @@ import os
 /// Errors thrown by ``AgentEngine`` during generation.
 enum AgentEngineError: LocalizedError {
     case modelNotLoaded
-    case alreadyGenerating
     case generationFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .modelNotLoaded:
             "No model is loaded"
-        case .alreadyGenerating:
-            "Generation is already in progress"
         case .generationFailed(let description):
             "Generation failed: \(description)"
         }
@@ -132,21 +129,16 @@ final class AgentEngine: ObservableObject {
         guard isModelLoaded else {
             throw AgentEngineError.modelNotLoaded
         }
-        guard !isGenerating else {
-            throw AgentEngineError.alreadyGenerating
-        }
 
         isGenerating = true
 
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
         let actor = llmActor
 
-        let task = Task { [weak self] in
+        let task = Task { @MainActor [weak self] in
             defer {
-                Task { @MainActor [weak self] in
-                    self?.isGenerating = false
-                    self?.generationTask = nil
-                }
+                self?.isGenerating = false
+                self?.generationTask = nil
             }
 
             do {

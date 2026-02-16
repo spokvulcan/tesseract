@@ -32,8 +32,16 @@ final class DependencyContainer: ObservableObject {
 
     // Agent (LLM)
     lazy var agentEngine = AgentEngine()
+    lazy var toolRegistry: ToolRegistry = {
+        ToolRegistry(tools: [
+            GetCurrentTimeTool(),
+        ])
+    }()
+    lazy var agentRunner: AgentRunner = {
+        AgentRunner(engine: agentEngine, toolRegistry: toolRegistry)
+    }()
     lazy var agentCoordinator: AgentCoordinator = {
-        AgentCoordinator(agentEngine: agentEngine)
+        AgentCoordinator(agentRunner: agentRunner)
     }()
 
     // Image Generation
