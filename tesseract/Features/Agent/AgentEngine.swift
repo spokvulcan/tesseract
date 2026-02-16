@@ -155,15 +155,22 @@ final class AgentEngine: ObservableObject {
                 let genStream = try await actor.generate(
                     input: input, parameters: parameters
                 )
+                let parser = ToolCallParser()
 
                 for await generation in genStream {
                     try Task.checkCancellation()
 
                     switch generation {
                     case .chunk(let text):
-                        continuation.yield(.text(text))
+                        for event in parser.processChunk(text) {
+                            continuation.yield(AgentGeneration(parserEvent: event))
+                        }
 
                     case .info(let completionInfo):
+                        // Flush any buffered text before emitting info
+                        for event in parser.finalize() {
+                            continuation.yield(AgentGeneration(parserEvent: event))
+                        }
                         let info = AgentGeneration.Info(
                             promptTokenCount: completionInfo.promptTokenCount,
                             generationTokenCount: completionInfo.generationTokenCount,
@@ -177,10 +184,14 @@ final class AgentEngine: ObservableObject {
                         )
 
                     case .toolCall(let call):
-                        // Stringify tool calls as text for now (task 2.2 handles proper parsing)
-                        let text = "<tool_call>\(call.function.name)(\(call.function.arguments))</tool_call>"
-                        continuation.yield(.text(text))
+                        // Vendor already parsed it — yield directly
+                        continuation.yield(.toolCall(call))
                     }
+                }
+
+                // Flush any remaining buffered text
+                for event in parser.finalize() {
+                    continuation.yield(AgentGeneration(parserEvent: event))
                 }
 
                 continuation.finish()

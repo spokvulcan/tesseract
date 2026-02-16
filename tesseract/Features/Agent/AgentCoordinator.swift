@@ -57,6 +57,9 @@ final class AgentCoordinator: ObservableObject {
                     switch event {
                     case .text(let chunk):
                         streamingText += chunk
+                    case .toolCall, .malformedToolCall:
+                        // Tool execution handled by the agent loop (task 2.3)
+                        break
                     case .info(let info):
                         generationInfo = info
                     }

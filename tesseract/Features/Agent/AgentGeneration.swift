@@ -1,4 +1,5 @@
 import Foundation
+import MLXLMCommon
 
 /// Parameters controlling text generation behavior.
 struct AgentGenerateParameters: Sendable {
@@ -16,6 +17,13 @@ enum AgentGeneration: Sendable {
     /// A chunk of decoded text from the model.
     case text(String)
 
+    /// A parsed tool call extracted from `<tool_call>` tags.
+    case toolCall(ToolCall)
+
+    /// A `<tool_call>` tag was found but contained malformed JSON.
+    /// The associated string is the raw content between the tags.
+    case malformedToolCall(String)
+
     /// Completion metrics emitted once generation finishes.
     case info(Info)
 
@@ -28,6 +36,15 @@ enum AgentGeneration: Sendable {
         var tokensPerSecond: Double {
             guard generateTime > 0 else { return 0 }
             return Double(generationTokenCount) / generateTime
+        }
+    }
+
+    /// Bridge from ``ToolCallParser/Event`` to ``AgentGeneration``.
+    init(parserEvent: ToolCallParser.Event) {
+        switch parserEvent {
+        case .text(let text): self = .text(text)
+        case .toolCall(let call): self = .toolCall(call)
+        case .malformedToolCall(let raw): self = .malformedToolCall(raw)
         }
     }
 }
