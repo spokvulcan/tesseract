@@ -13,6 +13,7 @@ final class AgentEngine: ObservableObject {
     @Published private(set) var loadProgress: Double = 0
     @Published private(set) var loadingStatus: String = ""
 
+    private(set) var agentTokenizer: AgentTokenizer?
     private var modelContainer: ModelContainer?
 
     private enum Defaults {
@@ -55,7 +56,18 @@ final class AgentEngine: ObservableObject {
             let stream = try await container.generate(input: input, parameters: parameters)
             for await _ in stream {}
 
+            // Resolve special tokens from the tokenizer vocabulary
+            loadingStatus = "Resolving tokenizer…"
+            let tokenizer = try await AgentTokenizer(container: container)
+            let st = tokenizer.specialTokens
+            Log.agent.info(
+                "Special tokens resolved — imStart=\(st.imStart) imEnd=\(st.imEnd) "
+                + "endOfText=\(st.endOfText) thinkStart=\(st.thinkStart) thinkEnd=\(st.thinkEnd) "
+                + "toolCallStart=\(st.toolCallStart) toolCallEnd=\(st.toolCallEnd)"
+            )
+
             modelContainer = container
+            agentTokenizer = tokenizer
             isModelLoaded = true
             loadingStatus = ""
             Log.agent.info("Model loaded and verified successfully")
@@ -72,6 +84,7 @@ final class AgentEngine: ObservableObject {
     /// Releases the model from memory.
     func unloadModel() {
         modelContainer = nil
+        agentTokenizer = nil
         isModelLoaded = false
         loadingStatus = ""
         loadProgress = 0
