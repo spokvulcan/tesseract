@@ -32,6 +32,9 @@ final class DependencyContainer: ObservableObject {
 
     // Agent (LLM)
     lazy var agentEngine = AgentEngine()
+    lazy var agentCoordinator: AgentCoordinator = {
+        AgentCoordinator(agentEngine: agentEngine)
+    }()
 
     // Image Generation
     lazy var imageGenEngine = ImageGenEngine()

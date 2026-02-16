@@ -2,6 +2,7 @@ import Combine
 import Foundation
 import MLXLLM
 import MLXLMCommon
+import Tokenizers
 import os
 
 /// Errors thrown by ``AgentEngine`` during generation.
@@ -86,7 +87,7 @@ final class AgentEngine: ObservableObject {
         isLoading = false
     }
 
-    /// Streams text generation from the loaded model.
+    /// Streams text generation from a raw prompt string.
     ///
     /// - Parameters:
     ///   - prompt: The full prompt string (caller is responsible for ChatML formatting).
@@ -95,6 +96,34 @@ final class AgentEngine: ObservableObject {
     func generate(
         prompt: String,
         parameters: AgentGenerateParameters = .default
+    ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
+        try startGeneration(input: UserInput(prompt: prompt), parameters: parameters)
+    }
+
+    /// Streams text generation from a structured conversation history.
+    ///
+    /// The messages are formatted into ChatML via the model's Jinja template pipeline.
+    ///
+    /// - Parameters:
+    ///   - messages: Conversation history in chronological order.
+    ///   - tools: Optional tool schemas for the Jinja template's `<tools>` block.
+    ///   - parameters: Generation parameters (temperature, maxTokens, etc.).
+    /// - Returns: An async stream of ``AgentGeneration`` events.
+    func generate(
+        messages: [AgentChatMessage],
+        tools: [ToolSpec]? = nil,
+        parameters: AgentGenerateParameters = .default
+    ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
+        let input = AgentChatFormatter.makeUserInput(from: messages, tools: tools)
+        return try startGeneration(input: input, parameters: parameters)
+    }
+
+    // MARK: - Private
+
+    /// Shared generation logic for both prompt-based and message-based entry points.
+    private func startGeneration(
+        input: UserInput,
+        parameters: AgentGenerateParameters
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
         guard let container = modelContainer else {
             throw AgentEngineError.modelNotLoaded
@@ -118,9 +147,7 @@ final class AgentEngine: ObservableObject {
             do {
                 try Task.checkCancellation()
 
-                let input = try await container.prepare(
-                    input: UserInput(prompt: prompt)
-                )
+                let prepared = try await container.prepare(input: input)
 
                 let genParams = GenerateParameters(
                     maxTokens: parameters.maxTokens,
@@ -131,7 +158,7 @@ final class AgentEngine: ObservableObject {
                 )
 
                 let genStream = try await container.generate(
-                    input: input, parameters: genParams
+                    input: prepared, parameters: genParams
                 )
 
                 for await generation in genStream {

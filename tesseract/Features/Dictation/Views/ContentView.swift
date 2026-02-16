@@ -14,6 +14,8 @@ struct ContentView: View {
     @ObservedObject var audioCapture: AudioCaptureEngine
     @ObservedObject var speechCoordinator: SpeechCoordinator
     @ObservedObject var speechEngine: SpeechEngine
+    @ObservedObject var agentCoordinator: AgentCoordinator
+    @ObservedObject var agentEngine: AgentEngine
     @ObservedObject var imageGenEngine: ImageGenEngine
     @ObservedObject var zimageGenEngine: ZImageGenEngine
 
@@ -34,6 +36,8 @@ struct ContentView: View {
                         audioCapture: audioCapture,
                         speechCoordinator: speechCoordinator,
                         speechEngine: speechEngine,
+                        agentCoordinator: agentCoordinator,
+                        agentEngine: agentEngine,
                         imageGenEngine: imageGenEngine,
                         zimageGenEngine: zimageGenEngine
                     )
@@ -48,6 +52,8 @@ struct ContentView: View {
                     audioCapture: audioCapture,
                     speechCoordinator: speechCoordinator,
                     speechEngine: speechEngine,
+                    agentCoordinator: agentCoordinator,
+                    agentEngine: agentEngine,
                     imageGenEngine: imageGenEngine,
                     zimageGenEngine: zimageGenEngine
                 )
@@ -62,6 +68,8 @@ struct ContentView: View {
                     audioCapture: audioCapture,
                     speechCoordinator: speechCoordinator,
                     speechEngine: speechEngine,
+                    agentCoordinator: agentCoordinator,
+                    agentEngine: agentEngine,
                     imageGenEngine: imageGenEngine,
                     zimageGenEngine: zimageGenEngine
                 )

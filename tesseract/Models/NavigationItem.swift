@@ -8,6 +8,7 @@ import SwiftUI
 enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case dictation
     case speech
+    case agent
     case image
     case zimage
     case general
@@ -16,13 +17,14 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
 
     var id: String { rawValue }
 
-    static let mainPages: [NavigationItem] = [.dictation, .speech]
+    static let mainPages: [NavigationItem] = [.dictation, .speech, .agent]
     static let settingsPages: [NavigationItem] = [.general, .model, .recording]
 
     var name: LocalizedStringResource {
         switch self {
         case .dictation: "Dictation"
         case .speech: "Speech"
+        case .agent: "Agent"
         case .image: "Image"
         case .zimage: "Z-Image"
         case .general: "General"
@@ -35,6 +37,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         switch self {
         case .dictation: "mic.fill"
         case .speech: "speaker.wave.3.fill"
+        case .agent: "brain.head.profile"
         case .image: "photo.fill"
         case .zimage: "photo.artframe"
         case .general: "gear"
@@ -52,6 +55,8 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         audioCapture: AudioCaptureEngine,
         speechCoordinator: SpeechCoordinator,
         speechEngine: SpeechEngine,
+        agentCoordinator: AgentCoordinator,
+        agentEngine: AgentEngine,
         imageGenEngine: ImageGenEngine,
         zimageGenEngine: ZImageGenEngine
     ) -> some View {
@@ -68,6 +73,11 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
             SpeechContentView(
                 speechCoordinator: speechCoordinator,
                 speechEngine: speechEngine
+            )
+        case .agent:
+            AgentContentView(
+                coordinator: agentCoordinator,
+                agentEngine: agentEngine
             )
         case .image:
             ImageGenContentView(
