@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111012F41A000003C1B55 /* MLXLLM */; };
+		E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111032F41A000003C1B55 /* MLXLMCommon */; };
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
 		E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudio */; };
 		E0DF77002F3FC000003C1B55 /* MLXImageGen in Frameworks */ = {isa = PBXBuildFile; productRef = E0DF77012F3FC000003C1B55 /* MLXImageGen */; };
@@ -61,6 +63,8 @@
 				E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */,
 				E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */,
 				E0DF77002F3FC000003C1B55 /* MLXImageGen in Frameworks */,
+				E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */,
+				E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -124,6 +128,8 @@
 				E0C655412F2EA000003C1B55 /* WhisperKit */,
 				E0C655512F3BA000003C1B55 /* MLXAudio */,
 				E0DF77012F3FC000003C1B55 /* MLXImageGen */,
+				E0A111012F41A000003C1B55 /* MLXLLM */,
+				E0A111032F41A000003C1B55 /* MLXLMCommon */,
 			);
 			productName = tesseract;
 			productReference = E0C654902F2E946A003C1B55 /* tesseract.app */;
@@ -659,6 +665,14 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		E0A111012F41A000003C1B55 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLXLLM;
+		};
+		E0A111032F41A000003C1B55 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLXLMCommon;
+		};
 		E0C655412F2EA000003C1B55 /* WhisperKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */;
