@@ -49,4 +49,5 @@ enum Log {
     static let general = PublicLogger(subsystem: "com.tesseract.app", category: "general")
     static let speech = PublicLogger(subsystem: "com.tesseract.app", category: "speech")
     static let image = PublicLogger(subsystem: "com.tesseract.app", category: "image")
+    static let agent = PublicLogger(subsystem: "com.tesseract.app", category: "agent")
 }
