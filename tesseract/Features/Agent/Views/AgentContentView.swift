@@ -103,25 +103,33 @@ struct AgentContentView: View {
                         messageBubble(message, id: "msg-\(index)")
                     }
 
-                    if coordinator.isGenerating && !coordinator.streamingText.isEmpty {
+                    if coordinator.isGenerating &&
+                        (!coordinator.streamingText.isEmpty || !coordinator.streamingThinking.isEmpty) {
                         streamingBubble
                     }
 
-                    if coordinator.isGenerating && coordinator.streamingText.isEmpty {
+                    if coordinator.isGenerating
+                        && coordinator.streamingText.isEmpty
+                        && coordinator.streamingThinking.isEmpty {
                         HStack(spacing: 6) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Thinking…")
+                            Text("Generating…")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 12)
-                        .id("thinking")
+                        .id("generating")
                     }
                 }
                 .padding()
             }
             .onChange(of: coordinator.streamingText) {
+                withAnimation(.easeOut(duration: 0.1)) {
+                    proxy.scrollTo("streaming", anchor: .bottom)
+                }
+            }
+            .onChange(of: coordinator.streamingThinking) {
                 withAnimation(.easeOut(duration: 0.1)) {
                     proxy.scrollTo("streaming", anchor: .bottom)
                 }
@@ -149,34 +157,63 @@ struct AgentContentView: View {
         .padding(.top, 80)
     }
 
+    @ViewBuilder
     private func messageBubble(_ message: AgentChatMessage, id: String) -> some View {
-        HStack {
-            if message.role == .user { Spacer(minLength: 60) }
+        if message.role == .assistant {
+            AssistantMessageBubble(message: message)
+                .id(id)
+        } else {
+            HStack {
+                if message.role == .user { Spacer(minLength: 60) }
 
-            Text(message.content)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    message.role == .user
-                        ? AnyShapeStyle(.tint.opacity(0.15))
-                        : AnyShapeStyle(.fill.quaternary)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                Text(message.content)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        message.role == .user
+                            ? AnyShapeStyle(.tint.opacity(0.15))
+                            : AnyShapeStyle(.fill.quaternary)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
 
-            if message.role != .user { Spacer(minLength: 60) }
+                if message.role != .user { Spacer(minLength: 60) }
+            }
+            .id(id)
         }
-        .id(id)
     }
 
     private var streamingBubble: some View {
         HStack {
-            Text(coordinator.streamingText)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.fill.quaternary)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 0) {
+                if !coordinator.streamingThinking.isEmpty {
+                    DisclosureGroup(isExpanded: .constant(true)) {
+                        Text(coordinator.streamingThinking)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .padding(.top, 4)
+                    } label: {
+                        Label(
+                            coordinator.isThinking ? "Thinking…" : "Thinking",
+                            systemImage: "brain.head.profile"
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
+                    .padding(.bottom, 6)
+                }
+
+                if !coordinator.streamingText.isEmpty {
+                    Text(coordinator.streamingText)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.fill.quaternary)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+
             Spacer(minLength: 60)
         }
         .id("streaming")
@@ -247,5 +284,47 @@ struct AgentContentView: View {
         } catch {
             coordinator.error = "Failed to load model: \(error.localizedDescription)"
         }
+    }
+}
+
+// MARK: - Assistant Message Bubble
+
+private struct AssistantMessageBubble: View {
+    let message: AgentChatMessage
+    @State private var isThinkingExpanded = false
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 0) {
+                if let thinking = message.thinking, !thinking.isEmpty {
+                    thinkingSection(thinking)
+                }
+                if !message.content.isEmpty {
+                    Text(message.content)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.fill.quaternary)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+
+            Spacer(minLength: 60)
+        }
+    }
+
+    private func thinkingSection(_ thinking: String) -> some View {
+        DisclosureGroup(isExpanded: $isThinkingExpanded) {
+            Text(thinking)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .padding(.top, 4)
+        } label: {
+            Label("Thinking", systemImage: "brain.head.profile")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.bottom, 6)
     }
 }

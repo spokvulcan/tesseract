@@ -24,6 +24,13 @@ enum AgentGeneration: Sendable {
     /// The associated string is the raw content between the tags.
     case malformedToolCall(String)
 
+    /// The model started a `<think>` block.
+    case thinkStart
+    /// A streaming chunk of thinking content.
+    case thinking(String)
+    /// The model finished its `<think>` block.
+    case thinkEnd
+
     /// Completion metrics emitted once generation finishes.
     case info(Info)
 
@@ -45,6 +52,9 @@ enum AgentGeneration: Sendable {
         case .text(let text): self = .text(text)
         case .toolCall(let call): self = .toolCall(call)
         case .malformedToolCall(let raw): self = .malformedToolCall(raw)
+        case .thinkStart: self = .thinkStart
+        case .thinking(let text): self = .thinking(text)
+        case .thinkEnd: self = .thinkEnd
         }
     }
 }

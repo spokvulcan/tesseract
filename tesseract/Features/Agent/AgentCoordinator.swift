@@ -12,6 +12,8 @@ final class AgentCoordinator: ObservableObject {
 
     @Published private(set) var messages: [AgentChatMessage] = []
     @Published private(set) var streamingText: String = ""
+    @Published private(set) var streamingThinking: String = ""
+    @Published private(set) var isThinking: Bool = false
     @Published private(set) var isGenerating: Bool = false
     @Published var error: String?
 
@@ -34,6 +36,8 @@ final class AgentCoordinator: ObservableObject {
         error = nil
         isGenerating = true
         streamingText = ""
+        streamingThinking = ""
+        isThinking = false
 
         let prompt: [AgentChatMessage] = [.system("You are a helpful assistant.")] + messages
 
@@ -58,6 +62,13 @@ final class AgentCoordinator: ObservableObject {
                     switch event {
                     case .text(let chunk):
                         streamingText += chunk
+                    case .thinkStart:
+                        isThinking = true
+                    case .thinking(let chunk):
+                        streamingThinking += chunk
+                    case .thinkEnd:
+                        isThinking = false
+                        Log.agent.debug("Think block (\(self.streamingThinking.count) chars)")
                     case .toolStart(let name):
                         Log.agent.info("Tool start: \(name)")
                     case .toolResult(let name, let result):
@@ -65,6 +76,8 @@ final class AgentCoordinator: ObservableObject {
                         // Clear streaming text between rounds so the next
                         // generation round starts fresh in the UI
                         streamingText = ""
+                        streamingThinking = ""
+                        isThinking = false
                     case .toolError(let raw):
                         Log.agent.warning("Tool error: \(raw.prefix(200))")
                     case .info(let info):
@@ -72,10 +85,11 @@ final class AgentCoordinator: ObservableObject {
                     case .completed(let newMessages):
                         messages.append(contentsOf: newMessages)
 
-                        let lastResponse = newMessages.last { $0.role == .assistant }?.content ?? ""
+                        let lastAssistant = newMessages.last { $0.role == .assistant }
                         debugLogger.logResponse(
-                            rawOutput: lastResponse,
-                            displayOutput: lastResponse,
+                            rawOutput: lastAssistant?.content ?? "",
+                            displayOutput: lastAssistant?.content ?? "",
+                            thinking: lastAssistant?.thinking,
                             info: generationInfo
                         )
                     }
@@ -83,22 +97,34 @@ final class AgentCoordinator: ObservableObject {
 
                 Log.agent.info("Agent run complete — \(self.messages.count) total messages")
                 streamingText = ""
+                streamingThinking = ""
+                isThinking = false
                 isGenerating = false
             } catch is CancellationError {
                 Log.agent.info("Generation cancelled — \(self.streamingText.count) chars generated")
-                if !streamingText.isEmpty {
-                    messages.append(.assistant(streamingText))
+                if !streamingText.isEmpty || !streamingThinking.isEmpty {
+                    messages.append(.assistant(
+                        streamingText,
+                        thinking: streamingThinking.isEmpty ? nil : streamingThinking
+                    ))
                 }
                 streamingText = ""
+                streamingThinking = ""
+                isThinking = false
                 isGenerating = false
             } catch {
                 Log.agent.error("Generation failed: \(error)")
                 debugLogger.logError(error.localizedDescription)
                 self.error = error.localizedDescription
-                if !streamingText.isEmpty {
-                    messages.append(.assistant(streamingText))
+                if !streamingText.isEmpty || !streamingThinking.isEmpty {
+                    messages.append(.assistant(
+                        streamingText,
+                        thinking: streamingThinking.isEmpty ? nil : streamingThinking
+                    ))
                 }
                 streamingText = ""
+                streamingThinking = ""
+                isThinking = false
                 isGenerating = false
             }
 
@@ -118,6 +144,8 @@ final class AgentCoordinator: ObservableObject {
         cancelGeneration()
         messages = []
         streamingText = ""
+        streamingThinking = ""
+        isThinking = false
         error = nil
         debugLogger.reset()
         Log.agent.info("Conversation cleared")

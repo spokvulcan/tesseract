@@ -61,6 +61,7 @@ final class AgentDebugLogger {
     func logResponse(
         rawOutput: String,
         displayOutput: String,
+        thinking: String? = nil,
         info: AgentGeneration.Info?
     ) {
         guard let dir = sessionDir else { return }
@@ -72,6 +73,10 @@ final class AgentDebugLogger {
             "rawOutput": rawOutput,
             "displayOutput": displayOutput,
         ]
+
+        if let thinking, !thinking.isEmpty {
+            entry["thinkingContent"] = thinking
+        }
 
         if let info {
             entry["metrics"] = [

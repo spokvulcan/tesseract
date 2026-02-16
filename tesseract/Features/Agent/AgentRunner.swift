@@ -6,6 +6,12 @@ import os
 enum AgentRunnerEvent: Sendable {
     /// A text chunk for streaming display.
     case text(String)
+    /// The model started a `<think>` block.
+    case thinkStart
+    /// A streaming chunk of thinking content.
+    case thinking(String)
+    /// The model finished its `<think>` block.
+    case thinkEnd
     /// A tool is about to execute.
     case toolStart(name: String)
     /// A tool finished executing.
@@ -71,6 +77,7 @@ final class AgentRunner {
                     )
 
                     var responseText = ""
+                    var thinkingText = ""
                     var toolCalls: [ToolCall] = []
                     var malformedCalls: [String] = []
 
@@ -79,6 +86,13 @@ final class AgentRunner {
                         case .text(let chunk):
                             responseText += chunk
                             continuation.yield(.text(chunk))
+                        case .thinkStart:
+                            continuation.yield(.thinkStart)
+                        case .thinking(let chunk):
+                            thinkingText += chunk
+                            continuation.yield(.thinking(chunk))
+                        case .thinkEnd:
+                            continuation.yield(.thinkEnd)
                         case .toolCall(let call):
                             toolCalls.append(call)
                         case .malformedToolCall(let raw):
@@ -88,9 +102,11 @@ final class AgentRunner {
                         }
                     }
 
+                    let thinking = thinkingText.isEmpty ? nil : thinkingText
+
                     // No tool calls and no malformed calls — final response
                     if toolCalls.isEmpty && malformedCalls.isEmpty {
-                        newMessages.append(.assistant(responseText))
+                        newMessages.append(.assistant(responseText, thinking: thinking))
                         continuation.yield(.completed(newMessages))
                         continuation.finish()
                         return
@@ -98,12 +114,11 @@ final class AgentRunner {
 
                     // Process valid tool calls
                     if !toolCalls.isEmpty {
-                        let assistantContent = Self.reconstructAssistantMessage(
-                            text: responseText, toolCalls: toolCalls
+                        let workingContent = Self.reconstructAssistantMessage(
+                            text: responseText, toolCalls: toolCalls, thinking: thinking
                         )
-                        let assistantMsg = AgentChatMessage.assistant(assistantContent)
-                        workingMessages.append(assistantMsg)
-                        newMessages.append(assistantMsg)
+                        workingMessages.append(.assistant(workingContent))
+                        newMessages.append(.assistant(responseText, thinking: thinking))
 
                         for call in toolCalls {
                             try Task.checkCancellation()
@@ -130,9 +145,8 @@ final class AgentRunner {
 
                     // Malformed tool calls — send error back so model can retry
                     if !malformedCalls.isEmpty {
-                        let assistantMsg = AgentChatMessage.assistant(responseText)
-                        workingMessages.append(assistantMsg)
-                        newMessages.append(assistantMsg)
+                        workingMessages.append(.assistant(responseText))
+                        newMessages.append(.assistant(responseText, thinking: thinking))
 
                         for raw in malformedCalls {
                             continuation.yield(.toolError(raw))
@@ -177,11 +191,18 @@ final class AgentRunner {
 
     // MARK: - Private
 
-    /// Reconstructs the assistant message content with tool call tags for conversation history.
+    /// Reconstructs the assistant message content with think/tool_call tags for conversation history.
+    ///
+    /// The reconstructed message preserves `<think>` tags so the model sees its own reasoning
+    /// when continuing a multi-round tool loop.
     private static func reconstructAssistantMessage(
-        text: String, toolCalls: [ToolCall]
+        text: String, toolCalls: [ToolCall], thinking: String? = nil
     ) -> String {
-        var content = text
+        var content = ""
+        if let thinking, !thinking.isEmpty {
+            content += "<think>\(thinking)</think>\n"
+        }
+        content += text
         for call in toolCalls {
             if let data = try? JSONEncoder().encode(call.function),
                let json = String(data: data, encoding: .utf8)

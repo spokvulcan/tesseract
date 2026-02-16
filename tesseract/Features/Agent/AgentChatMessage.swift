@@ -13,20 +13,21 @@ struct AgentChatMessage: Sendable {
 
     let role: Role
     let content: String
+    let thinking: String?
 
     static func system(_ content: String) -> Self {
-        Self(role: .system, content: content)
+        Self(role: .system, content: content, thinking: nil)
     }
 
     static func user(_ content: String) -> Self {
-        Self(role: .user, content: content)
+        Self(role: .user, content: content, thinking: nil)
     }
 
-    static func assistant(_ content: String) -> Self {
-        Self(role: .assistant, content: content)
+    static func assistant(_ content: String, thinking: String? = nil) -> Self {
+        Self(role: .assistant, content: content, thinking: thinking)
     }
 
     static func tool(_ content: String) -> Self {
-        Self(role: .tool, content: content)
+        Self(role: .tool, content: content, thinking: nil)
     }
 }
