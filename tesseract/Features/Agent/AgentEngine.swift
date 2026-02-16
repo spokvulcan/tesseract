@@ -4,48 +4,34 @@ import MLXLLM
 import MLXLMCommon
 import os
 
-/// Downloads and loads Nanbeige4.1-3B for local LLM inference.
+/// Loads Nanbeige4.1-3B from a local directory and prepares it for inference.
+///
+/// Model downloading is handled by ``ModelDownloadManager``. This engine loads
+/// the already-downloaded weights into memory and verifies them.
 @MainActor
 final class AgentEngine: ObservableObject {
 
     @Published private(set) var isModelLoaded = false
     @Published private(set) var isLoading = false
-    @Published private(set) var loadProgress: Double = 0
     @Published private(set) var loadingStatus: String = ""
 
     private(set) var agentTokenizer: AgentTokenizer?
     private var modelContainer: ModelContainer?
 
-    private enum Defaults {
-        static let modelId = "mlx-community/Nanbeige4.1-3B-8bit"
-    }
-
-    /// Downloads (if needed) and loads the model, then verifies with a 1-token generation.
-    func loadModel() async throws {
+    /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
+    ///
+    /// - Parameter directory: Local path containing model weights, config, and tokenizer files
+    ///   (as downloaded by ``ModelDownloadManager``).
+    func loadModel(from directory: URL) async throws {
         guard !isModelLoaded, !isLoading else { return }
 
         isLoading = true
-        loadProgress = 0
-        loadingStatus = "Downloading model…"
+        loadingStatus = "Loading model…"
 
         do {
-            let configuration = ModelConfiguration(id: Defaults.modelId)
+            let container = try await loadModelContainer(directory: directory)
 
-            let container = try await loadModelContainer(
-                configuration: configuration
-            ) { [weak self] progress in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.loadProgress = progress.fractionCompleted
-                    if progress.fractionCompleted < 1.0 {
-                        self.loadingStatus = "Downloading model… \(Int(progress.fractionCompleted * 100))%"
-                    } else {
-                        self.loadingStatus = "Loading model…"
-                    }
-                }
-            }
-
-            Log.agent.info("Model downloaded and loaded, verifying…")
+            Log.agent.info("Model loaded into memory, verifying…")
             loadingStatus = "Verifying model…"
 
             // Verify with a 1-token generation
@@ -73,7 +59,6 @@ final class AgentEngine: ObservableObject {
             Log.agent.info("Model loaded and verified successfully")
         } catch {
             loadingStatus = ""
-            loadProgress = 0
             Log.agent.error("Failed to load model: \(error)")
             throw error
         }
@@ -87,7 +72,6 @@ final class AgentEngine: ObservableObject {
         agentTokenizer = nil
         isModelLoaded = false
         loadingStatus = ""
-        loadProgress = 0
         Log.agent.info("Model unloaded")
     }
 }

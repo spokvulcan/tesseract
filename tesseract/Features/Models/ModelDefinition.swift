@@ -8,6 +8,7 @@ import Foundation
 enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
     case speechToText = "Speech-to-Text"
     case textToSpeech = "Text-to-Speech"
+    case agent = "Agent"
     case imageGeneration = "Image Generation"
 
     var id: String { rawValue }
@@ -16,6 +17,7 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .speechToText: "mic.fill"
         case .textToSpeech: "speaker.wave.3.fill"
+        case .agent: "brain"
         case .imageGeneration: "photo.fill"
         }
     }
@@ -81,6 +83,18 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~3.6 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "nanbeige4.1-3b",
+            displayName: "Nanbeige4.1-3B",
+            description: "3B parameter bilingual agent model with tool calling and reasoning.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "mlx-community/Nanbeige4.1-3B-8bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~4.2 GB",
             dependencies: []
         ),
     ]

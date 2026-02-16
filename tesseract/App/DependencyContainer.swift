@@ -30,6 +30,9 @@ final class DependencyContainer: ObservableObject {
     // Model Downloads
     lazy var modelDownloadManager = ModelDownloadManager()
 
+    // Agent (LLM)
+    lazy var agentEngine = AgentEngine()
+
     // Image Generation
     lazy var imageGenEngine = ImageGenEngine()
     lazy var zimageGenEngine = ZImageGenEngine()

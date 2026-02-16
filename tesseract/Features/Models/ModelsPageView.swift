@@ -46,6 +46,8 @@ struct ModelsPageView: View {
             return container.speechEngine.isModelLoaded
         case "flux2-klein-4b":
             return container.imageGenEngine.isModelLoaded
+        case "nanbeige4.1-3b":
+            return container.agentEngine.isModelLoaded
         default:
             return false
         }
