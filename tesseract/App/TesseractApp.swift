@@ -59,6 +59,7 @@ struct TesseractApp: App {
                 speechEngine: container.speechEngine,
                 agentCoordinator: container.agentCoordinator,
                 agentEngine: container.agentEngine,
+                agentConversationStore: container.agentConversationStore,
                 imageGenEngine: container.imageGenEngine,
                 zimageGenEngine: container.zimageGenEngine,
                 selectedNavigation: $selectedNavigation

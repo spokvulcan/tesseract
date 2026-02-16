@@ -16,6 +16,7 @@ struct ContentView: View {
     @ObservedObject var speechEngine: SpeechEngine
     @ObservedObject var agentCoordinator: AgentCoordinator
     @ObservedObject var agentEngine: AgentEngine
+    @ObservedObject var agentConversationStore: AgentConversationStore
     @ObservedObject var imageGenEngine: ImageGenEngine
     @ObservedObject var zimageGenEngine: ZImageGenEngine
 
@@ -38,6 +39,7 @@ struct ContentView: View {
                         speechEngine: speechEngine,
                         agentCoordinator: agentCoordinator,
                         agentEngine: agentEngine,
+                        agentConversationStore: agentConversationStore,
                         imageGenEngine: imageGenEngine,
                         zimageGenEngine: zimageGenEngine
                     )
@@ -54,6 +56,7 @@ struct ContentView: View {
                     speechEngine: speechEngine,
                     agentCoordinator: agentCoordinator,
                     agentEngine: agentEngine,
+                    agentConversationStore: agentConversationStore,
                     imageGenEngine: imageGenEngine,
                     zimageGenEngine: zimageGenEngine
                 )
@@ -70,6 +73,7 @@ struct ContentView: View {
                     speechEngine: speechEngine,
                     agentCoordinator: agentCoordinator,
                     agentEngine: agentEngine,
+                    agentConversationStore: agentConversationStore,
                     imageGenEngine: imageGenEngine,
                     zimageGenEngine: zimageGenEngine
                 )

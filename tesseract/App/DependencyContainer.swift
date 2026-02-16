@@ -40,8 +40,9 @@ final class DependencyContainer: ObservableObject {
     lazy var agentRunner: AgentRunner = {
         AgentRunner(engine: agentEngine, toolRegistry: toolRegistry)
     }()
+    lazy var agentConversationStore = AgentConversationStore()
     lazy var agentCoordinator: AgentCoordinator = {
-        AgentCoordinator(agentRunner: agentRunner)
+        AgentCoordinator(agentRunner: agentRunner, conversationStore: agentConversationStore)
     }()
 
     // Image Generation

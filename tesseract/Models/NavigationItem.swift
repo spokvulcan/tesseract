@@ -57,6 +57,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         speechEngine: SpeechEngine,
         agentCoordinator: AgentCoordinator,
         agentEngine: AgentEngine,
+        agentConversationStore: AgentConversationStore,
         imageGenEngine: ImageGenEngine,
         zimageGenEngine: ZImageGenEngine
     ) -> some View {
@@ -77,7 +78,8 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .agent:
             AgentContentView(
                 coordinator: agentCoordinator,
-                agentEngine: agentEngine
+                agentEngine: agentEngine,
+                conversationStore: agentConversationStore
             )
         case .image:
             ImageGenContentView(

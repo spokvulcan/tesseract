@@ -4,9 +4,11 @@ import os
 struct AgentContentView: View {
     @ObservedObject var coordinator: AgentCoordinator
     @ObservedObject var agentEngine: AgentEngine
+    @ObservedObject var conversationStore: AgentConversationStore
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var inputText = ""
+    @State private var showingHistory = false
 
     private let agentModelID = "nanbeige4.1-3b"
 
@@ -36,6 +38,83 @@ struct AgentContentView: View {
             inputBar
         }
         .navigationTitle("Agent")
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    coordinator.newConversation()
+                } label: {
+                    Image(systemName: "plus.message")
+                }
+                .help("New conversation")
+                .disabled(coordinator.isGenerating)
+
+                Button {
+                    showingHistory.toggle()
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .help("Conversation history")
+                .popover(isPresented: $showingHistory) {
+                    conversationHistoryPopover
+                }
+            }
+        }
+    }
+
+    // MARK: - Conversation History
+
+    private var conversationHistoryPopover: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if conversationStore.conversations.isEmpty {
+                    Text("No past conversations")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                } else {
+                    ForEach(conversationStore.conversations) { summary in
+                        conversationRow(summary)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: 280, maxHeight: 360)
+    }
+
+    private func conversationRow(_ summary: AgentConversationSummary) -> some View {
+        let isCurrent = conversationStore.currentConversation?.id == summary.id
+        return Button {
+            coordinator.loadConversation(summary.id)
+            showingHistory = false
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(summary.title)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .foregroundStyle(isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                    Text(summary.updatedAt.formatted(.relative(presentation: .named)))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(summary.messageCount)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                coordinator.deleteConversation(summary.id)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
     }
 
     // MARK: - Model Status
@@ -99,8 +178,8 @@ struct AgentContentView: View {
                         emptyState
                     }
 
-                    ForEach(Array(coordinator.messages.enumerated()), id: \.offset) { index, message in
-                        messageBubble(message, id: "msg-\(index)")
+                    ForEach(coordinator.messages) { message in
+                        messageBubble(message)
                     }
 
                     if coordinator.isGenerating &&
@@ -135,9 +214,11 @@ struct AgentContentView: View {
                 }
             }
             .onChange(of: coordinator.messages.count) {
-                let target = coordinator.isGenerating ? "streaming" : "msg-\(coordinator.messages.count - 1)"
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo(target, anchor: .bottom)
+                if let lastID = coordinator.messages.last?.id {
+                    let target: AnyHashable = coordinator.isGenerating ? "streaming" : lastID
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(target, anchor: .bottom)
+                    }
                 }
             }
         }
@@ -158,10 +239,10 @@ struct AgentContentView: View {
     }
 
     @ViewBuilder
-    private func messageBubble(_ message: AgentChatMessage, id: String) -> some View {
+    private func messageBubble(_ message: AgentChatMessage) -> some View {
         if message.role == .assistant {
             AssistantMessageBubble(message: message)
-                .id(id)
+                .id(message.id)
         } else {
             HStack {
                 if message.role == .user { Spacer(minLength: 60) }
@@ -179,7 +260,7 @@ struct AgentContentView: View {
 
                 if message.role != .user { Spacer(minLength: 60) }
             }
-            .id(id)
+            .id(message.id)
         }
     }
 

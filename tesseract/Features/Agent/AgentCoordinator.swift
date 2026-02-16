@@ -18,11 +18,23 @@ final class AgentCoordinator: ObservableObject {
     @Published var error: String?
 
     private let agentRunner: AgentRunner
+    private let conversationStore: AgentConversationStore
     private let debugLogger = AgentDebugLogger()
     private var generationTask: Task<Void, Never>?
 
-    init(agentRunner: AgentRunner) {
+    private enum Defaults {
+        static let contextLimit = 20
+    }
+
+    init(agentRunner: AgentRunner, conversationStore: AgentConversationStore) {
         self.agentRunner = agentRunner
+        self.conversationStore = conversationStore
+
+        // Load the most recent conversation (or create a fresh one)
+        conversationStore.loadMostRecent()
+        if let current = conversationStore.currentConversation {
+            messages = current.messages
+        }
     }
 
     /// Sends a user message and streams the assistant response (with tool loops).
@@ -39,10 +51,12 @@ final class AgentCoordinator: ObservableObject {
         streamingThinking = ""
         isThinking = false
 
+        // Context window: send system prompt + only the most recent messages to LLM
         let systemPrompt = SystemPromptBuilder.build()
-        let prompt: [AgentChatMessage] = [.system(systemPrompt)] + messages
+        let recentMessages = Array(messages.suffix(Defaults.contextLimit))
+        let prompt: [AgentChatMessage] = [.system(systemPrompt)] + recentMessages
 
-        Log.agent.info("Sending \(prompt.count) messages to model (system + \(self.messages.count) history)")
+        Log.agent.info("Sending \(prompt.count) messages to model (\(recentMessages.count) of \(self.messages.count) history)")
 
         // Start debug session on first turn
         if messages.count == 1 {
@@ -101,6 +115,7 @@ final class AgentCoordinator: ObservableObject {
                 streamingThinking = ""
                 isThinking = false
                 isGenerating = false
+                persistCurrentConversation()
             } catch is CancellationError {
                 Log.agent.info("Generation cancelled — \(self.streamingText.count) chars generated")
                 if !streamingText.isEmpty || !streamingThinking.isEmpty {
@@ -113,6 +128,7 @@ final class AgentCoordinator: ObservableObject {
                 streamingThinking = ""
                 isThinking = false
                 isGenerating = false
+                persistCurrentConversation()
             } catch {
                 Log.agent.error("Generation failed: \(error)")
                 debugLogger.logError(error.localizedDescription)
@@ -127,6 +143,7 @@ final class AgentCoordinator: ObservableObject {
                 streamingThinking = ""
                 isThinking = false
                 isGenerating = false
+                persistCurrentConversation()
             }
 
             generationTask = nil
@@ -140,15 +157,51 @@ final class AgentCoordinator: ObservableObject {
         agentRunner.cancelGeneration()
     }
 
-    /// Clears conversation history and cancels any in-progress generation.
-    func clearConversation() {
+    /// Creates a new conversation, saving the current one first.
+    func newConversation() {
         cancelGeneration()
+        conversationStore.createNew()
         messages = []
         streamingText = ""
         streamingThinking = ""
         isThinking = false
         error = nil
         debugLogger.reset()
-        Log.agent.info("Conversation cleared")
+        Log.agent.info("New conversation created")
+    }
+
+    /// Loads a past conversation by ID.
+    func loadConversation(_ id: UUID) {
+        cancelGeneration()
+        conversationStore.load(id: id)
+        messages = conversationStore.currentConversation?.messages ?? []
+        streamingText = ""
+        streamingThinking = ""
+        isThinking = false
+        error = nil
+        debugLogger.reset()
+        Log.agent.info("Loaded conversation \(id) with \(self.messages.count) messages")
+    }
+
+    /// Deletes a conversation. If it's the current one, switches to a new conversation.
+    func deleteConversation(_ id: UUID) {
+        let wasCurrent = conversationStore.currentConversation?.id == id
+        conversationStore.delete(id: id)
+        if wasCurrent {
+            messages = conversationStore.currentConversation?.messages ?? []
+            debugLogger.reset()
+        }
+    }
+
+    /// Clears conversation history and cancels any in-progress generation.
+    func clearConversation() {
+        newConversation()
+    }
+
+    // MARK: - Private
+
+    private func persistCurrentConversation() {
+        conversationStore.updateCurrentMessages(messages)
+        conversationStore.saveCurrent()
     }
 }
