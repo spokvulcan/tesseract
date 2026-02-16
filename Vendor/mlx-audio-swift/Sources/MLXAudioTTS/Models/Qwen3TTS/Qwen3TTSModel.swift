@@ -53,11 +53,12 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
     /// Random seed for deterministic generation. Set by caller before generate/generateStream.
     public var seed: UInt64 = 0
 
-    /// Enable per-component profiling. Set env QWEN3TTS_PROFILE=1 to enable.
+    /// Enable per-component profiling. Use --qwen3tts-profile launch arg or QWEN3TTS_PROFILE=1 env var.
     /// Profiling forces sync eval() at every sub-step, preventing lazy graph fusion
     /// and adding ~18 GPU sync points per step (vs 2 normally). Expect ~2-3x slowdown.
     static let profilingEnabled: Bool = {
-        ProcessInfo.processInfo.environment["QWEN3TTS_PROFILE"] == "1"
+        ProcessInfo.processInfo.arguments.contains("--qwen3tts-profile")
+            || ProcessInfo.processInfo.environment["QWEN3TTS_PROFILE"] == "1"
     }()
 
     /// Experimental: cache prefill + single-token first code predictor pass.

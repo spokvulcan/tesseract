@@ -20,7 +20,8 @@ struct ModelsPageView: View {
                             isMemoryLoaded: isModelLoadedInMemory(model),
                             onDownload: { downloadManager.download(modelID: model.id) },
                             onCancel: { downloadManager.cancelDownload(modelID: model.id) },
-                            onDelete: { downloadManager.deleteModel(modelID: model.id) }
+                            onDelete: { downloadManager.deleteModel(modelID: model.id) },
+                            onVerify: { downloadManager.verifyAndRepair(modelID: model.id) }
                         )
                     }
                 }
@@ -43,6 +44,8 @@ struct ModelsPageView: View {
             return container.transcriptionEngine.isModelLoaded
         case "qwen3-tts-voicedesign":
             return container.speechEngine.isModelLoaded
+        case "flux2-klein-4b":
+            return container.imageGenEngine.isModelLoaded
         default:
             return false
         }

@@ -8,6 +8,7 @@ import Foundation
 enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
     case speechToText = "Speech-to-Text"
     case textToSpeech = "Text-to-Speech"
+    case imageGeneration = "Image Generation"
 
     var id: String { rawValue }
 
@@ -15,6 +16,7 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .speechToText: "mic.fill"
         case .textToSpeech: "speaker.wave.3.fill"
+        case .imageGeneration: "photo.fill"
         }
     }
 }
@@ -54,6 +56,7 @@ struct ModelDefinition: Identifiable, Sendable {
 }
 
 extension ModelDefinition {
+    // Image generation models are kept here but excluded from `all` until the feature is ready.
     static let all: [ModelDefinition] = [
         ModelDefinition(
             id: "whisper-large-v3-turbo",
@@ -78,6 +81,33 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~3.6 GB",
+            dependencies: []
+        ),
+    ]
+
+    static let imageGenerationModels: [ModelDefinition] = [
+        ModelDefinition(
+            id: "flux2-klein-4b",
+            displayName: "FLUX.2-klein-4B",
+            description: "4B parameter distilled image generation. 4-step inference, 1024×1024.",
+            category: .imageGeneration,
+            source: .huggingFace(
+                repo: "black-forest-labs/FLUX.2-klein-4B",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~8 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "z-image",
+            displayName: "Z-Image",
+            description: "6B parameter image generation from Tongyi Lab. 50-step inference, CFG guidance, excellent text rendering.",
+            category: .imageGeneration,
+            source: .huggingFace(
+                repo: "Tongyi-MAI/Z-Image",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~12 GB",
             dependencies: []
         ),
     ]

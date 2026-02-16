@@ -3,11 +3,12 @@
 # Usage: scripts/dev.sh <command>
 #
 # Commands:
-#   build   Build the project (Debug; shows errors/warnings only)
-#   run     Kill running app + launch the built app (Debug)
-#   dev     Build + kill + run using Release (main perf workflow)
-#   clean   Clean build artifacts and derived data
-#   log     Tail system log filtered to tesseract
+#   build       Build the project (Debug; shows errors/warnings only)
+#   run         Kill running app + launch the built app (Debug)
+#   dev         Build + kill + run using Release (main perf workflow)
+#   dev-profile Build + kill + run with profiling env vars enabled
+#   clean       Clean build artifacts and derived data
+#   log         Tail system log filtered to tesseract
 
 set -euo pipefail
 
@@ -86,6 +87,22 @@ cmd_dev() {
     cmd_run "$configuration"
 }
 
+cmd_dev_profile() {
+    local configuration="Release"
+    cmd_build "$configuration" \
+        SWIFT_COMPILATION_MODE=incremental \
+        DEBUG_INFORMATION_FORMAT=dwarf \
+        ONLY_ACTIVE_ARCH=YES
+    echo ""
+
+    local app_path
+    app_path=$(find_app "$configuration") || return 1
+    kill_app
+    echo "Launching $app_path with profiling..."
+    open "$app_path" --args --flux2-profile --qwen3tts-profile
+    echo "App launched with profiling enabled."
+}
+
 cmd_clean() {
     echo "Cleaning build..."
     xcodebuild clean -project "$PROJECT" -scheme "$SCHEME" 2>&1 | tail -1
@@ -148,20 +165,22 @@ usage() {
     echo "Usage: scripts/dev.sh <command>"
     echo ""
     echo "Commands:"
-    echo "  build   Build the project (Debug; shows errors/warnings only)"
-    echo "  run     Kill running app + launch the built app (Debug)"
-    echo "  dev     Build + kill + run using Release (the main perf workflow)"
-    echo "  clean   Clean build artifacts and derived data"
-    echo "  log     Tail system log filtered to tesseract"
+    echo "  build       Build the project (Debug; shows errors/warnings only)"
+    echo "  run         Kill running app + launch the built app (Debug)"
+    echo "  dev         Build + kill + run using Release (the main perf workflow)"
+    echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
+    echo "  clean       Clean build artifacts and derived data"
+    echo "  log         Tail system log filtered to tesseract"
 }
 
 # --- Main ------------------------------------------------------------------
 
 case "${1:-}" in
-    build) cmd_build ;;
-    run)   cmd_run ;;
-    dev)   cmd_dev ;;
-    clean) cmd_clean ;;
-    log)   cmd_log ;;
-    *)     usage ;;
+    build)       cmd_build ;;
+    run)         cmd_run ;;
+    dev)         cmd_dev ;;
+    dev-profile) cmd_dev_profile ;;
+    clean)       cmd_clean ;;
+    log)         cmd_log ;;
+    *)           usage ;;
 esac

@@ -30,6 +30,10 @@ final class DependencyContainer: ObservableObject {
     // Model Downloads
     lazy var modelDownloadManager = ModelDownloadManager()
 
+    // Image Generation
+    lazy var imageGenEngine = ImageGenEngine()
+    lazy var zimageGenEngine = ZImageGenEngine()
+
     // Speech (TTS)
     lazy var textExtractor = TextExtractor()
     lazy var speechEngine = SpeechEngine()

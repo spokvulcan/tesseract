@@ -12,6 +12,7 @@ struct ModelCardView: View {
     let onDownload: () -> Void
     let onCancel: () -> Void
     let onDelete: () -> Void
+    let onVerify: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -63,6 +64,16 @@ struct ModelCardView: View {
                 }
             }
 
+            if case .verifying(let progress) = status {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                    Text("Verifying\u{2026} \(Int(progress * 100))%")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             // Action button
             HStack {
                 if !model.dependencies.isEmpty, case .notDownloaded = status {
@@ -97,6 +108,11 @@ struct ModelCardView: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.orange)
                 .symbolEffect(.pulse)
+        case .verifying:
+            Label("Verifying", systemImage: "checkmark.shield")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.blue)
+                .symbolEffect(.pulse)
         case .notDownloaded:
             Label("Not Downloaded", systemImage: "arrow.down.to.line")
                 .font(.caption.weight(.medium))
@@ -128,12 +144,29 @@ struct ModelCardView: View {
             .buttonStyle(.bordered)
             .tint(.red)
         case .downloaded:
-            Button(role: .destructive) {
-                onDelete()
+            HStack(spacing: 8) {
+                Button {
+                    onVerify()
+                } label: {
+                    Label("Verify", systemImage: "checkmark.shield")
+                }
+                .buttonStyle(.bordered)
+
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+            }
+        case .verifying:
+            Button {
+                onCancel()
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label("Cancel", systemImage: "xmark.circle")
             }
             .buttonStyle(.bordered)
+            .tint(.red)
         case .error:
             Button {
                 onDownload()

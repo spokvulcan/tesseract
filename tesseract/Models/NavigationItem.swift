@@ -8,6 +8,8 @@ import SwiftUI
 enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case dictation
     case speech
+    case image
+    case zimage
     case general
     case model
     case recording
@@ -21,6 +23,8 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         switch self {
         case .dictation: "Dictation"
         case .speech: "Speech"
+        case .image: "Image"
+        case .zimage: "Z-Image"
         case .general: "General"
         case .model: "Models"
         case .recording: "Recording"
@@ -31,6 +35,8 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         switch self {
         case .dictation: "mic.fill"
         case .speech: "speaker.wave.3.fill"
+        case .image: "photo.fill"
+        case .zimage: "photo.artframe"
         case .general: "gear"
         case .model: "brain"
         case .recording: "waveform"
@@ -45,7 +51,9 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         permissionsManager: PermissionsManager,
         audioCapture: AudioCaptureEngine,
         speechCoordinator: SpeechCoordinator,
-        speechEngine: SpeechEngine
+        speechEngine: SpeechEngine,
+        imageGenEngine: ImageGenEngine,
+        zimageGenEngine: ZImageGenEngine
     ) -> some View {
         switch self {
         case .dictation:
@@ -60,6 +68,14 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
             SpeechContentView(
                 speechCoordinator: speechCoordinator,
                 speechEngine: speechEngine
+            )
+        case .image:
+            ImageGenContentView(
+                imageGenEngine: imageGenEngine
+            )
+        case .zimage:
+            ZImageGenContentView(
+                zimageGenEngine: zimageGenEngine
             )
         case .general:
             GeneralSettingsSection()
