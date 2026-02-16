@@ -39,7 +39,8 @@ final class AgentCoordinator: ObservableObject {
         streamingThinking = ""
         isThinking = false
 
-        let prompt: [AgentChatMessage] = [.system("You are a helpful assistant.")] + messages
+        let systemPrompt = SystemPromptBuilder.build()
+        let prompt: [AgentChatMessage] = [.system(systemPrompt)] + messages
 
         Log.agent.info("Sending \(prompt.count) messages to model (system + \(self.messages.count) history)")
 
