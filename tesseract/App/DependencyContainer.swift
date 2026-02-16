@@ -32,9 +32,25 @@ final class DependencyContainer: ObservableObject {
 
     // Agent (LLM)
     lazy var agentEngine = AgentEngine()
+    lazy var agentDataStore = AgentDataStore()
     lazy var toolRegistry: ToolRegistry = {
-        ToolRegistry(tools: [
+        let store = agentDataStore
+        return ToolRegistry(tools: [
             GetCurrentTimeTool(),
+            RememberTool(store: store),
+            RecallTool(store: store),
+            CreateGoalTool(store: store),
+            ListGoalsTool(store: store),
+            UpdateGoalTool(store: store),
+            CreateTaskTool(store: store),
+            ListTasksTool(store: store),
+            CompleteTaskTool(store: store),
+            CreateHabitTool(store: store),
+            LogHabitTool(store: store),
+            HabitStatusTool(store: store),
+            MoodLogTool(store: store),
+            ListMoodsTool(store: store),
+            SetReminderTool(store: store),
         ])
     }()
     lazy var agentRunner: AgentRunner = {
