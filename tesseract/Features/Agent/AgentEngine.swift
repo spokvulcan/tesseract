@@ -23,10 +23,11 @@ enum AgentEngineError: LocalizedError {
     }
 }
 
-/// Loads Nanbeige4.1-3B from a local directory and prepares it for inference.
+/// Thin MainActor wrapper that publishes UI state and delegates heavy model
+/// operations to ``LLMActor``.
 ///
 /// Model downloading is handled by ``ModelDownloadManager``. This engine loads
-/// the already-downloaded weights into memory and verifies them.
+/// the already-downloaded weights into memory via the actor and verifies them.
 @MainActor
 final class AgentEngine: ObservableObject {
 
@@ -36,7 +37,8 @@ final class AgentEngine: ObservableObject {
     @Published private(set) var isGenerating = false
 
     private(set) var agentTokenizer: AgentTokenizer?
-    private var modelContainer: ModelContainer?
+
+    private let llmActor = LLMActor()
     private var generationTask: Task<Void, Never>?
 
     /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
@@ -50,22 +52,8 @@ final class AgentEngine: ObservableObject {
         loadingStatus = "Loading model…"
 
         do {
-            let container = try await loadModelContainer(directory: directory)
+            let tokenizer = try await llmActor.loadModel(from: directory)
 
-            Log.agent.info("Model loaded into memory, verifying…")
-            loadingStatus = "Verifying model…"
-
-            // Verify with a 1-token generation
-            let input = try await container.prepare(
-                input: UserInput(prompt: "Hello")
-            )
-            let parameters = GenerateParameters(maxTokens: 1)
-            let stream = try await container.generate(input: input, parameters: parameters)
-            for await _ in stream {}
-
-            // Resolve special tokens from the tokenizer vocabulary
-            loadingStatus = "Resolving tokenizer…"
-            let tokenizer = try await AgentTokenizer(container: container)
             let st = tokenizer.specialTokens
             Log.agent.info(
                 "Special tokens resolved — imStart=\(st.imStart) imEnd=\(st.imEnd) "
@@ -73,7 +61,6 @@ final class AgentEngine: ObservableObject {
                 + "toolCallStart=\(st.toolCallStart) toolCallEnd=\(st.toolCallEnd)"
             )
 
-            modelContainer = container
             agentTokenizer = tokenizer
             isModelLoaded = true
             loadingStatus = ""
@@ -114,8 +101,25 @@ final class AgentEngine: ObservableObject {
         tools: [ToolSpec]? = nil,
         parameters: AgentGenerateParameters = .default
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
+        Log.agent.debug("generate(messages:) — \(messages.count) messages, maxTokens=\(parameters.maxTokens), temp=\(parameters.temperature)")
         let input = AgentChatFormatter.makeUserInput(from: messages, tools: tools)
         return try startGeneration(input: input, parameters: parameters)
+    }
+
+    /// Cancels any in-progress generation.
+    func cancelGeneration() {
+        generationTask?.cancel()
+        generationTask = nil
+    }
+
+    /// Releases the model from memory.
+    func unloadModel() {
+        cancelGeneration()
+        agentTokenizer = nil
+        isModelLoaded = false
+        loadingStatus = ""
+        Task { await llmActor.unloadModel() }
+        Log.agent.info("Model unloaded")
     }
 
     // MARK: - Private
@@ -125,7 +129,7 @@ final class AgentEngine: ObservableObject {
         input: UserInput,
         parameters: AgentGenerateParameters
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
-        guard let container = modelContainer else {
+        guard isModelLoaded else {
             throw AgentEngineError.modelNotLoaded
         }
         guard !isGenerating else {
@@ -135,6 +139,7 @@ final class AgentEngine: ObservableObject {
         isGenerating = true
 
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+        let actor = llmActor
 
         let task = Task { [weak self] in
             defer {
@@ -147,18 +152,8 @@ final class AgentEngine: ObservableObject {
             do {
                 try Task.checkCancellation()
 
-                let prepared = try await container.prepare(input: input)
-
-                let genParams = GenerateParameters(
-                    maxTokens: parameters.maxTokens,
-                    temperature: parameters.temperature,
-                    topP: parameters.topP,
-                    repetitionPenalty: parameters.repetitionPenalty,
-                    repetitionContextSize: parameters.repetitionContextSize
-                )
-
-                let genStream = try await container.generate(
-                    input: prepared, parameters: genParams
+                let genStream = try await actor.generate(
+                    input: input, parameters: parameters
                 )
 
                 for await generation in genStream {
@@ -202,21 +197,5 @@ final class AgentEngine: ObservableObject {
         continuation.onTermination = { _ in task.cancel() }
 
         return stream
-    }
-
-    /// Cancels any in-progress generation.
-    func cancelGeneration() {
-        generationTask?.cancel()
-        generationTask = nil
-    }
-
-    /// Releases the model from memory.
-    func unloadModel() {
-        cancelGeneration()
-        modelContainer = nil
-        agentTokenizer = nil
-        isModelLoaded = false
-        loadingStatus = ""
-        Log.agent.info("Model unloaded")
     }
 }
