@@ -109,6 +109,16 @@ final class AgentEngine: ObservableObject {
         generationTask = nil
     }
 
+    /// Frees unreferenced MLX buffers (safe to call between tool rounds).
+    func clearMemoryCache() async {
+        await llmActor.clearMemoryCache()
+    }
+
+    /// Returns current MLX memory usage in MB.
+    func memoryStats() async -> (activeMB: Float, peakMB: Float) {
+        await llmActor.memoryStats()
+    }
+
     /// Releases the model from memory.
     func unloadModel() {
         cancelGeneration()

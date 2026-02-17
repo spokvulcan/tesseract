@@ -58,7 +58,21 @@ final class DependencyContainer: ObservableObject {
     }()
     lazy var agentConversationStore = AgentConversationStore()
     lazy var agentCoordinator: AgentCoordinator = {
-        AgentCoordinator(agentRunner: agentRunner, conversationStore: agentConversationStore)
+        AgentCoordinator(
+            agentRunner: agentRunner,
+            conversationStore: agentConversationStore,
+            prepareForInference: { [weak self] in
+                guard let self else { return }
+                if imageGenEngine.isModelLoaded {
+                    imageGenEngine.releaseModel()
+                    Log.general.info("Released image gen model for agent inference")
+                }
+                if zimageGenEngine.isModelLoaded {
+                    zimageGenEngine.releaseModel()
+                    Log.general.info("Released Z-image gen model for agent inference")
+                }
+            }
+        )
     }()
 
     // Image Generation

@@ -19,6 +19,7 @@ final class AgentCoordinator: ObservableObject {
 
     private let agentRunner: AgentRunner
     private let conversationStore: AgentConversationStore
+    private let prepareForInference: (@MainActor () -> Void)?
     private let debugLogger = AgentDebugLogger()
     private var generationTask: Task<Void, Never>?
 
@@ -26,9 +27,14 @@ final class AgentCoordinator: ObservableObject {
         static let contextLimit = 20
     }
 
-    init(agentRunner: AgentRunner, conversationStore: AgentConversationStore) {
+    init(
+        agentRunner: AgentRunner,
+        conversationStore: AgentConversationStore,
+        prepareForInference: (@MainActor () -> Void)? = nil
+    ) {
         self.agentRunner = agentRunner
         self.conversationStore = conversationStore
+        self.prepareForInference = prepareForInference
 
         // Load the most recent conversation (or create a fresh one)
         conversationStore.loadMostRecent()
@@ -57,6 +63,9 @@ final class AgentCoordinator: ObservableObject {
         let prompt: [AgentChatMessage] = [.system(systemPrompt)] + recentMessages
 
         Log.agent.info("Sending \(prompt.count) messages to model (\(recentMessages.count) of \(self.messages.count) history)")
+
+        // Free memory from other engines before inference
+        prepareForInference?()
 
         // Start debug session on first turn
         if messages.count == 1 {

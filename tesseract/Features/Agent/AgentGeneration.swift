@@ -13,6 +13,11 @@ struct AgentGenerateParameters: Sendable {
     var repetitionPenalty: Float? = nil
     var repetitionContextSize: Int = 20
 
+    // KV cache quantization — 4-bit reduces memory ~4x
+    var kvBits: Int? = 4
+    var kvGroupSize: Int = 64
+    var quantizedKVStart: Int = 512  // first 512 tokens stay bf16
+
     static let `default` = AgentGenerateParameters()
 }
 

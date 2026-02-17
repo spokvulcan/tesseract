@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import MLXLMCommon
 import os
 
@@ -8,6 +9,10 @@ import os
 /// the `@MainActor` ``AgentEngine`` publishes UI state while delegating
 /// heavy model operations to this actor.
 actor LLMActor {
+
+    private enum Defaults {
+        static let cacheLimitMB = 128
+    }
 
     private var modelContainer: ModelContainer?
     private(set) var agentTokenizer: AgentTokenizer?
@@ -46,10 +51,15 @@ actor LLMActor {
             throw AgentEngineError.modelNotLoaded
         }
 
+        Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
+
         let prepared = try await container.prepare(input: input)
 
         let genParams = GenerateParameters(
             maxTokens: parameters.maxTokens,
+            kvBits: parameters.kvBits,
+            kvGroupSize: parameters.kvGroupSize,
+            quantizedKVStart: parameters.quantizedKVStart,
             temperature: parameters.temperature,
             topP: parameters.topP,
             repetitionPenalty: parameters.repetitionPenalty,
@@ -63,5 +73,15 @@ actor LLMActor {
     func unloadModel() {
         modelContainer = nil
         agentTokenizer = nil
+    }
+
+    /// Frees unreferenced MLX buffers between tool rounds.
+    func clearMemoryCache() {
+        Memory.clearCache()
+    }
+
+    /// Returns current MLX memory usage in MB.
+    func memoryStats() -> (activeMB: Float, peakMB: Float) {
+        (Float(Memory.activeMemory) / 1e6, Float(Memory.peakMemory) / 1e6)
     }
 }

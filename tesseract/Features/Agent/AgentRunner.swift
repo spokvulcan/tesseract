@@ -68,7 +68,8 @@ final class AgentRunner {
                 for round in 0..<maxRounds {
                     try Task.checkCancellation()
 
-                    Log.agent.info("Agent round \(round + 1)/\(maxRounds)")
+                    let stats = await engine.memoryStats()
+                    Log.agent.info("Round \(round + 1)/\(maxRounds) — MLX active: \(String(format: "%.0f", stats.activeMB))MB, peak: \(String(format: "%.0f", stats.peakMB))MB")
 
                     let genStream = try engine.generate(
                         messages: workingMessages,
@@ -101,6 +102,9 @@ final class AgentRunner {
                             continuation.yield(.info(info))
                         }
                     }
+
+                    // Free stale MLX buffers from this generation round
+                    await engine.clearMemoryCache()
 
                     let thinking = thinkingText.isEmpty ? nil : thinkingText
 
