@@ -79,7 +79,9 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
             AgentContentView(
                 coordinator: agentCoordinator,
                 agentEngine: agentEngine,
-                conversationStore: agentConversationStore
+                conversationStore: agentConversationStore,
+                transcriptionEngine: transcriptionEngine,
+                audioCapture: audioCapture
             )
         case .image:
             ImageGenContentView(

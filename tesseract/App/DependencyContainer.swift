@@ -61,6 +61,9 @@ final class DependencyContainer: ObservableObject {
         AgentCoordinator(
             agentRunner: agentRunner,
             conversationStore: agentConversationStore,
+            audioCapture: audioCaptureEngine,
+            transcriptionEngine: transcriptionEngine,
+            settings: settingsManager,
             prepareForInference: { [weak self] in
                 guard let self else { return }
                 if imageGenEngine.isModelLoaded {
@@ -71,6 +74,16 @@ final class DependencyContainer: ObservableObject {
                     zimageGenEngine.releaseModel()
                     Log.general.info("Released Z-image gen model for agent inference")
                 }
+            },
+            loadAgentModel: { [weak self] in
+                guard let self else { return }
+                let modelID = "nanbeige4.1-3b"
+                guard case .downloaded = modelDownloadManager.statuses[modelID],
+                      !agentEngine.isModelLoaded,
+                      !agentEngine.isLoading,
+                      let path = modelDownloadManager.modelPath(for: modelID)
+                else { return }
+                try await agentEngine.loadModel(from: path)
             }
         )
     }()

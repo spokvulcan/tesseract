@@ -15,26 +15,43 @@ final class AgentCoordinator: ObservableObject {
     @Published private(set) var streamingThinking: String = ""
     @Published private(set) var isThinking: Bool = false
     @Published private(set) var isGenerating: Bool = false
+    @Published private(set) var voiceState: AgentVoiceState = .idle
     @Published var error: String?
 
     private let agentRunner: AgentRunner
     private let conversationStore: AgentConversationStore
+    private let audioCapture: (any AudioCapturing)?
+    private let transcriptionEngine: (any Transcribing)?
+    private let settings: SettingsManager?
+    private let postProcessor = TranscriptionPostProcessor()
     private let prepareForInference: (@MainActor () -> Void)?
+    private let loadAgentModel: (@MainActor () async throws -> Void)?
     private let debugLogger = AgentDebugLogger()
     private var generationTask: Task<Void, Never>?
+    private var voiceErrorResetTask: Task<Void, Never>?
 
     private enum Defaults {
         static let contextLimit = 20
+        static let minimumRecordingDuration: TimeInterval = 0.5
+        static let errorAutoResetDelay: Duration = .seconds(3)
     }
 
     init(
         agentRunner: AgentRunner,
         conversationStore: AgentConversationStore,
-        prepareForInference: (@MainActor () -> Void)? = nil
+        audioCapture: (any AudioCapturing)? = nil,
+        transcriptionEngine: (any Transcribing)? = nil,
+        settings: SettingsManager? = nil,
+        prepareForInference: (@MainActor () -> Void)? = nil,
+        loadAgentModel: (@MainActor () async throws -> Void)? = nil
     ) {
         self.agentRunner = agentRunner
         self.conversationStore = conversationStore
+        self.audioCapture = audioCapture
+        self.transcriptionEngine = transcriptionEngine
+        self.settings = settings
         self.prepareForInference = prepareForInference
+        self.loadAgentModel = loadAgentModel
 
         // Load the most recent conversation (or create a fresh one)
         conversationStore.loadMostRecent()
@@ -205,6 +222,91 @@ final class AgentCoordinator: ObservableObject {
     /// Clears conversation history and cancels any in-progress generation.
     func clearConversation() {
         newConversation()
+    }
+
+    // MARK: - Voice Input
+
+    func startVoiceInput() {
+        guard voiceState == .idle else { return }
+        guard let audioCapture else {
+            setVoiceError("Voice input not available")
+            return
+        }
+        guard !audioCapture.isCapturing else {
+            setVoiceError("Microphone in use")
+            return
+        }
+
+        do {
+            try audioCapture.startCapture()
+            voiceState = .recording
+            Log.agent.info("Voice input started")
+        } catch {
+            setVoiceError("Mic error: \(error.localizedDescription)")
+        }
+    }
+
+    func stopVoiceInputAndSend() {
+        guard voiceState == .recording else { return }
+        guard let audioCapture, let transcriptionEngine else {
+            cancelVoiceInput()
+            return
+        }
+
+        let audioData = audioCapture.stopCapture()
+
+        guard let audioData, audioData.duration >= Defaults.minimumRecordingDuration else {
+            setVoiceError("Recording too short")
+            return
+        }
+
+        voiceState = .transcribing
+        Log.agent.info("Voice input stopped, transcribing \(String(format: "%.1f", audioData.duration))s audio")
+
+        Task {
+            do {
+                let language = settings?.language ?? "en"
+                let result = try await transcriptionEngine.transcribe(audioData, language: language)
+                let processedText = postProcessor.process(result.text)
+
+                guard !processedText.isEmpty else {
+                    setVoiceError("No speech detected")
+                    return
+                }
+
+                Log.agent.info("Voice transcribed: \(processedText)")
+                voiceState = .idle
+
+                // Ensure agent LLM is loaded before sending
+                try await loadAgentModel?()
+                sendMessage(processedText)
+            } catch {
+                setVoiceError("Transcription failed")
+                Log.agent.error("Voice transcription error: \(error)")
+            }
+        }
+    }
+
+    func cancelVoiceInput() {
+        if let audioCapture, audioCapture.isCapturing {
+            _ = audioCapture.stopCapture()
+        }
+        transcriptionEngine?.cancelTranscription()
+        voiceState = .idle
+        Log.agent.info("Voice input cancelled")
+    }
+
+    private func setVoiceError(_ message: String) {
+        voiceState = .error(message)
+        Log.agent.warning("Voice error: \(message)")
+
+        voiceErrorResetTask?.cancel()
+        voiceErrorResetTask = Task {
+            try? await Task.sleep(for: Defaults.errorAutoResetDelay)
+            if case .error = voiceState {
+                voiceState = .idle
+            }
+        }
     }
 
     // MARK: - Private

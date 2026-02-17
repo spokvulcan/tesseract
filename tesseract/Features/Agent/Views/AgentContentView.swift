@@ -5,10 +5,13 @@ struct AgentContentView: View {
     @ObservedObject var coordinator: AgentCoordinator
     @ObservedObject var agentEngine: AgentEngine
     @ObservedObject var conversationStore: AgentConversationStore
+    @ObservedObject var transcriptionEngine: TranscriptionEngine
+    @ObservedObject var audioCapture: AudioCaptureEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var inputText = ""
     @State private var showingHistory = false
+    @State private var isHoldingMic = false
 
     private let agentModelID = "nanbeige4.1-3b"
 
@@ -31,6 +34,10 @@ struct AgentContentView: View {
                 errorBanner(error)
             }
 
+            if case .error(let message) = coordinator.voiceState {
+                voiceErrorBanner(message)
+            }
+
             messageList
 
             Divider()
@@ -38,6 +45,11 @@ struct AgentContentView: View {
             inputBar
         }
         .navigationTitle("Agent")
+        .onExitCommand {
+            if coordinator.voiceState == .recording {
+                coordinator.cancelVoiceInput()
+            }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -166,6 +178,20 @@ struct AgentContentView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.red.opacity(0.1))
+    }
+
+    private func voiceErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "mic.slash.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(.orange.opacity(0.1))
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     // MARK: - Messages
@@ -308,6 +334,9 @@ struct AgentContentView: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .onSubmit { send() }
+                .disabled(coordinator.voiceState == .recording || coordinator.voiceState == .transcribing)
+
+            micButton
 
             if coordinator.isGenerating {
                 Button {
@@ -333,6 +362,72 @@ struct AgentContentView: View {
             }
         }
         .padding(12)
+    }
+
+    private var micButton: some View {
+        let state = coordinator.voiceState
+
+        return micIcon(for: state)
+            .font(.title2)
+            .frame(width: 28, height: 28)
+            .contentShape(Circle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard !isHoldingMic else { return }
+                        isHoldingMic = true
+                        coordinator.startVoiceInput()
+                    }
+                    .onEnded { _ in
+                        isHoldingMic = false
+                        if coordinator.voiceState == .recording {
+                            coordinator.stopVoiceInputAndSend()
+                        }
+                    }
+            )
+            .disabled(!canUseVoice)
+            .help(voiceButtonHelp)
+    }
+
+    @ViewBuilder
+    private func micIcon(for state: AgentVoiceState) -> some View {
+        switch state {
+        case .idle:
+            Image(systemName: "mic.fill")
+                .foregroundStyle(canUseVoice ? AnyShapeStyle(.secondary) : AnyShapeStyle(.quaternary))
+        case .recording:
+            Image(systemName: "stop.fill")
+                .foregroundStyle(.red)
+                .symbolEffect(.pulse, options: .repeating)
+        case .transcribing:
+            Image(systemName: "waveform")
+                .foregroundStyle(.tint)
+                .symbolEffect(.variableColor.iterative, options: .repeating)
+        case .error:
+            Image(systemName: "mic.slash.fill")
+                .foregroundStyle(.red)
+        }
+    }
+
+    private var canUseVoice: Bool {
+        !coordinator.isGenerating
+            && coordinator.voiceState != .transcribing
+            && transcriptionEngine.isModelLoaded
+    }
+
+    private var voiceButtonHelp: String {
+        if !transcriptionEngine.isModelLoaded {
+            return "Download Whisper model to use voice input"
+        }
+        if coordinator.isGenerating {
+            return "Voice input unavailable during generation"
+        }
+        switch coordinator.voiceState {
+        case .recording: return "Release to send"
+        case .transcribing: return "Transcribing…"
+        case .error(let msg): return msg
+        default: return "Hold to speak"
+        }
     }
 
     private var canSend: Bool {
