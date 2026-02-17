@@ -7,11 +7,14 @@ struct AgentContentView: View {
     @ObservedObject var conversationStore: AgentConversationStore
     @ObservedObject var transcriptionEngine: TranscriptionEngine
     @ObservedObject var audioCapture: AudioCaptureEngine
+    @ObservedObject var speechCoordinator: SpeechCoordinator
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var inputText = ""
     @State private var showingHistory = false
     @State private var isHoldingMic = false
+    @State private var speakingMessageID: UUID?
+    @AppStorage("agentAutoSpeak") private var autoSpeakEnabled = false
 
     private let agentModelID = "nanbeige4.1-3b"
 
@@ -20,6 +23,12 @@ struct AgentContentView: View {
             return true
         }
         return false
+    }
+
+    private var isSpeechActive: Bool {
+        if case .idle = speechCoordinator.state { return false }
+        if case .error = speechCoordinator.state { return false }
+        return true
     }
 
     var body: some View {
@@ -40,11 +49,19 @@ struct AgentContentView: View {
 
             messageList
 
+            if isSpeechActive {
+                speechIndicatorBar
+            }
+
             Divider()
 
             inputBar
         }
         .navigationTitle("Agent")
+        .onChange(of: speechCoordinator.state) { _, newState in
+            if case .idle = newState { speakingMessageID = nil }
+        }
+        .animation(.easeInOut(duration: 0.2), value: isSpeechActive)
         .onExitCommand {
             if coordinator.voiceState == .recording {
                 coordinator.cancelVoiceInput()
@@ -69,6 +86,13 @@ struct AgentContentView: View {
                 .popover(isPresented: $showingHistory) {
                     conversationHistoryPopover
                 }
+
+                Button {
+                    autoSpeakEnabled.toggle()
+                } label: {
+                    Image(systemName: autoSpeakEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                }
+                .help(autoSpeakEnabled ? "Auto-speak responses (on)" : "Auto-speak responses (off)")
             }
         }
     }
@@ -267,8 +291,19 @@ struct AgentContentView: View {
     @ViewBuilder
     private func messageBubble(_ message: AgentChatMessage) -> some View {
         if message.role == .assistant {
-            AssistantMessageBubble(message: message)
-                .id(message.id)
+            AssistantMessageBubble(
+                message: message,
+                isSpeaking: speakingMessageID == message.id && isSpeechActive,
+                onPlay: {
+                    speakingMessageID = message.id
+                    coordinator.speakMessage(message)
+                },
+                onStop: {
+                    coordinator.stopSpeaking()
+                    speakingMessageID = nil
+                }
+            )
+            .id(message.id)
         } else {
             HStack {
                 if message.role == .user { Spacer(minLength: 60) }
@@ -324,6 +359,31 @@ struct AgentContentView: View {
             Spacer(minLength: 60)
         }
         .id("streaming")
+    }
+
+    // MARK: - Speech Indicator
+
+    private var speechIndicatorBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "speaker.wave.2.fill")
+                .foregroundStyle(.tint)
+                .symbolEffect(.variableColor.iterative, options: .repeating)
+            Text("Speaking\u{2026}")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                coordinator.stopSpeaking()
+                speakingMessageID = nil
+            } label: {
+                Image(systemName: "stop.circle.fill")
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.tint.opacity(0.08))
     }
 
     // MARK: - Input
@@ -409,14 +469,20 @@ struct AgentContentView: View {
         }
     }
 
+    private var isWhisperAvailable: Bool {
+        if transcriptionEngine.isModelLoaded { return true }
+        if case .downloaded = downloadManager.statuses[WhisperModel.modelID] { return true }
+        return false
+    }
+
     private var canUseVoice: Bool {
         !coordinator.isGenerating
             && coordinator.voiceState != .transcribing
-            && transcriptionEngine.isModelLoaded
+            && isWhisperAvailable
     }
 
     private var voiceButtonHelp: String {
-        if !transcriptionEngine.isModelLoaded {
+        if !isWhisperAvailable {
             return "Download Whisper model to use voice input"
         }
         if coordinator.isGenerating {
@@ -467,10 +533,14 @@ struct AgentContentView: View {
 
 private struct AssistantMessageBubble: View {
     let message: AgentChatMessage
+    var isSpeaking: Bool = false
+    var onPlay: (() -> Void)? = nil
+    var onStop: (() -> Void)? = nil
     @State private var isThinkingExpanded = false
+    @State private var isHovering = false
 
     var body: some View {
-        HStack {
+        HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 0) {
                 if let thinking = message.thinking, !thinking.isEmpty {
                     thinkingSection(thinking)
@@ -485,7 +555,23 @@ private struct AssistantMessageBubble: View {
             .background(.fill.quaternary)
             .clipShape(RoundedRectangle(cornerRadius: 12))
 
+            if isHovering || isSpeaking {
+                Button {
+                    isSpeaking ? onStop?() : onPlay?()
+                } label: {
+                    Image(systemName: isSpeaking ? "stop.circle.fill" : "play.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(isSpeaking ? .red : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(isSpeaking ? "Stop speaking" : "Speak this message")
+                .transition(.opacity)
+            }
+
             Spacer(minLength: 60)
+        }
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) { isHovering = hovering }
         }
     }
 

@@ -100,6 +100,7 @@ final class SettingsManager: ObservableObject {
     @AppStorage("ttsVoiceDescription") var ttsVoiceDescription: String = ""
     @AppStorage("ttsLanguage") var ttsLanguage: String = "English"
     @AppStorage("ttsStreamingEnabled") var ttsStreamingEnabled = true
+    @AppStorage("agentAutoSpeak") var agentAutoSpeak = false
 
     var ttsParameters: TTSParameters {
         get {
@@ -159,6 +160,7 @@ final class SettingsManager: ObservableObject {
         ttsVoiceDescription = ""
         ttsLanguage = "English"
         ttsStreamingEnabled = true
+        agentAutoSpeak = false
     }
 
     // MARK: - Private

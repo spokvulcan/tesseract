@@ -24,6 +24,7 @@ final class AgentCoordinator: ObservableObject {
     private let transcriptionEngine: (any Transcribing)?
     private let settings: SettingsManager?
     private let postProcessor = TranscriptionPostProcessor()
+    private let speechCoordinator: SpeechCoordinator?
     private let prepareForInference: (@MainActor () -> Void)?
     private let loadAgentModel: (@MainActor () async throws -> Void)?
     private let debugLogger = AgentDebugLogger()
@@ -43,7 +44,8 @@ final class AgentCoordinator: ObservableObject {
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
         prepareForInference: (@MainActor () -> Void)? = nil,
-        loadAgentModel: (@MainActor () async throws -> Void)? = nil
+        loadAgentModel: (@MainActor () async throws -> Void)? = nil,
+        speechCoordinator: SpeechCoordinator? = nil
     ) {
         self.agentRunner = agentRunner
         self.conversationStore = conversationStore
@@ -52,6 +54,7 @@ final class AgentCoordinator: ObservableObject {
         self.settings = settings
         self.prepareForInference = prepareForInference
         self.loadAgentModel = loadAgentModel
+        self.speechCoordinator = speechCoordinator
 
         // Load the most recent conversation (or create a fresh one)
         conversationStore.loadMostRecent()
@@ -142,6 +145,14 @@ final class AgentCoordinator: ObservableObject {
                 isThinking = false
                 isGenerating = false
                 persistCurrentConversation()
+
+                // Auto-speak the final assistant response if enabled
+                if let settings, settings.agentAutoSpeak,
+                   let lastAssistant = self.messages.last(where: { $0.role == .assistant }),
+                   !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Log.agent.info("Auto-speaking response (\(lastAssistant.content.count) chars)")
+                    speechCoordinator?.speakText(lastAssistant.content)
+                }
             } catch is CancellationError {
                 Log.agent.info("Generation cancelled — \(self.streamingText.count) chars generated")
                 if !streamingText.isEmpty || !streamingThinking.isEmpty {
@@ -307,6 +318,19 @@ final class AgentCoordinator: ObservableObject {
                 voiceState = .idle
             }
         }
+    }
+
+    // MARK: - Voice Output
+
+    func speakMessage(_ message: AgentChatMessage) {
+        guard message.role == .assistant,
+              !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        speechCoordinator?.speakText(message.content)
+    }
+
+    func stopSpeaking() {
+        speechCoordinator?.stop()
     }
 
     // MARK: - Private

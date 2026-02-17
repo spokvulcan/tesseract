@@ -84,7 +84,8 @@ final class DependencyContainer: ObservableObject {
                       let path = modelDownloadManager.modelPath(for: modelID)
                 else { return }
                 try await agentEngine.loadModel(from: path)
-            }
+            },
+            speechCoordinator: speechCoordinator
         )
     }()
 
@@ -103,10 +104,7 @@ final class DependencyContainer: ObservableObject {
             speechEngine: speechEngine,
             playbackManager: audioPlaybackManager,
             settings: settingsManager,
-            notchOverlay: ttsNotchPanelController,
-            prepareForSpeech: { [weak self] in
-                self?.transcriptionEngine.releaseModelForTTSIfIdle()
-            }
+            notchOverlay: ttsNotchPanelController
         )
     }()
 
