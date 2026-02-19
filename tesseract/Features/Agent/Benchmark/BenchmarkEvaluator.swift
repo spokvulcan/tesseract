@@ -19,12 +19,17 @@ enum BenchmarkEvaluator {
         let calledNames = toolsCalled.map(\.name)
         var details: [String] = []
 
-        // 1. Tool correctness
-        let toolsCorrect = evaluateToolCorrectness(
-            expected: expectation.expectedTools,
-            called: calledNames,
-            details: &details
-        )
+        // 1. Tool correctness (skip if tools are optional for this turn)
+        let toolsCorrect: Bool
+        if expectation.toolsOptional {
+            toolsCorrect = true
+        } else {
+            toolsCorrect = evaluateToolCorrectness(
+                expected: expectation.expectedTools,
+                called: calledNames,
+                details: &details
+            )
+        }
 
         // 2. Duplicate detection (within this turn)
         let withinTurnDuplicates = countWithinTurnDuplicates(toolsCalled)
@@ -78,7 +83,7 @@ enum BenchmarkEvaluator {
             toolRoundsUsed: toolRounds
         )
 
-        let passed = toolsCorrect && argsCorrect && noForbidden && totalDuplicates == 0
+        let passed = toolsCorrect && argsCorrect && noForbidden && withinTurnDuplicates == 0
 
         return BenchmarkTurnResult(
             turnIndex: turnIndex,

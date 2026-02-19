@@ -11,6 +11,9 @@ struct BenchmarkConfig {
     let scenarioIDs: [String]?  // nil = all
     let outputDir: URL
     let modelDir: URL?  // nil = auto-detect
+    /// Max tokens per generation round. Prevents runaway generation where the model
+    /// fails to emit a stop token and generates thousands of tokens per round.
+    let maxTokensPerRound: Int
 
     /// Parameter configurations to sweep over.
     var parameterConfigs: [AgentGenerateParameters] {
@@ -98,11 +101,20 @@ struct BenchmarkConfig {
             return nil
         }()
 
+        let maxTokensPerRound: Int = {
+            if let idx = args.firstIndex(of: "--bench-max-tokens"), idx + 1 < args.count,
+               let val = Int(args[idx + 1]) {
+                return val
+            }
+            return 2048
+        }()
+
         return BenchmarkConfig(
             sweep: sweep,
             scenarioIDs: scenarioIDs,
             outputDir: outputDir,
-            modelDir: modelDir
+            modelDir: modelDir,
+            maxTokensPerRound: maxTokensPerRound
         )
     }
 }

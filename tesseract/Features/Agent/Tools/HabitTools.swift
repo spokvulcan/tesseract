@@ -45,11 +45,10 @@ struct HabitLogEntry: Codable, Sendable {
 
 struct CreateHabitTool: AgentTool {
     let name = "create_habit"
-    let description = "Create a new habit to track"
+    let description = "Create a new habit to track. Returns an error if the habit already exists — do not retry."
     let parameters: [ToolParameter] = [
         .required("name", type: .string, description: "Name of the habit"),
         .required("frequency", type: .string, description: "Frequency: daily, weekdays, or weekly"),
-        .optional("time_of_day", type: .string, description: "Preferred time (e.g. morning, evening, 7am)"),
     ]
 
     let store: AgentDataStore
@@ -70,13 +69,10 @@ struct CreateHabitTool: AgentTool {
             return "A habit named \"\(name)\" already exists."
         }
 
-        let timeOfDay = arguments.string(for: "time_of_day")
-        let habit = Habit(name: name, frequency: frequency, timeOfDay: timeOfDay)
+        let habit = Habit(name: name, frequency: frequency)
         await store.append(habit, to: "habits.json")
 
-        var result = "Created habit: \"\(name)\" (\(frequency.rawValue))"
-        if let time = timeOfDay { result += " — \(time)" }
-        return result
+        return "Done. Created habit \"\(name)\" (\(frequency.rawValue))."
     }
 }
 
@@ -84,18 +80,17 @@ struct CreateHabitTool: AgentTool {
 
 struct LogHabitTool: AgentTool {
     let name = "log_habit"
-    let description = "Log completion of a habit for today (or a specific date)"
+    let description = "Log a habit as done for today. Returns an error if already logged today — do not retry."
     let parameters: [ToolParameter] = [
-        .required("habit_name", type: .string, description: "Name of the habit (case-insensitive)"),
-        .optional("date", type: .string, description: "Date to log for (default: today, format: YYYY-MM-DD)"),
+        .required("name", type: .string, description: "Name of the habit (case-insensitive)"),
         .optional("note", type: .string, description: "Optional note about the session"),
     ]
 
     let store: AgentDataStore
 
     func execute(arguments: [String: JSONValue]) async throws -> String {
-        guard let habitName = arguments.string(for: "habit_name") else {
-            throw AgentToolError.missingArgument("habit_name")
+        guard let habitName = arguments.string(for: "name") else {
+            throw AgentToolError.missingArgument("name")
         }
 
         let habits: [Habit] = await store.loadArray(Habit.self, from: "habits.json")
@@ -103,14 +98,9 @@ struct LogHabitTool: AgentTool {
             return "No active habit named \"\(habitName)\". Use create_habit first."
         }
 
-        let dateStr: String
-        if let providedDate = arguments.string(for: "date") {
-            dateStr = providedDate
-        } else {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd"
-            dateStr = formatter.string(from: Date())
-        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let dateStr = formatter.string(from: Date())
 
         // Check for duplicate log on same day
         let logs: [HabitLogEntry] = await store.loadArray(HabitLogEntry.self, from: "habit_logs.json")
@@ -122,7 +112,7 @@ struct LogHabitTool: AgentTool {
         let entry = HabitLogEntry(habitId: habit.id, date: dateStr, note: note)
         await store.append(entry, to: "habit_logs.json")
 
-        return "Logged \"\(habit.name)\" for \(dateStr)."
+        return "Done. Logged \"\(habit.name)\" for today (\(dateStr))."
     }
 }
 
@@ -130,9 +120,9 @@ struct LogHabitTool: AgentTool {
 
 struct HabitStatusTool: AgentTool {
     let name = "habit_status"
-    let description = "Get habit tracking statistics including streaks and completion rates"
+    let description = "Get habit streaks and completion rates. Returns all habits if no name given. Only call once per response."
     let parameters: [ToolParameter] = [
-        .optional("habit_name", type: .string, description: "Specific habit name (shows all if omitted)"),
+        .optional("name", type: .string, description: "Specific habit name (shows all if omitted)"),
     ]
 
     let store: AgentDataStore
@@ -143,7 +133,7 @@ struct HabitStatusTool: AgentTool {
         let allLogs: [HabitLogEntry] = await store.loadArray(HabitLogEntry.self, from: "habit_logs.json")
 
         let targetHabits: [Habit]
-        if let name = arguments.string(for: "habit_name") {
+        if let name = arguments.string(for: "name") {
             targetHabits = habits.filter { $0.name.lowercased() == name.lowercased() }
             if targetHabits.isEmpty {
                 return "No active habit named \"\(name)\"."

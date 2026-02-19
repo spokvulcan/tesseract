@@ -129,7 +129,17 @@ final class AgentEngine: ObservableObject {
         tools: [ToolSpec]?
     ) async throws -> String {
         let messageDicts: [[String: any Sendable]] = messages.map { msg in
-            ["role": msg.role.rawValue, "content": msg.content]
+            var content = msg.content
+            if !msg.toolCalls.isEmpty {
+                for call in msg.toolCalls {
+                    if let data = try? JSONEncoder().encode(call.function),
+                       let json = String(data: data, encoding: .utf8)
+                    {
+                        content += "\n<tool_call>\n\(json)\n</tool_call>"
+                    }
+                }
+            }
+            return ["role": msg.role.rawValue, "content": content]
         }
         return try await llmActor.formatRawPrompt(messages: messageDicts, tools: tools)
     }

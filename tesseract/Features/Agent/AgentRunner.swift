@@ -64,6 +64,7 @@ final class AgentRunner {
             do {
                 var workingMessages = messages
                 var newMessages: [AgentChatMessage] = []
+                var executedKeys: Set<String> = []
 
                 for round in 0..<maxRounds {
                     try Task.checkCancellation()
@@ -81,6 +82,7 @@ final class AgentRunner {
                     var thinkingText = ""
                     var toolCalls: [ToolCall] = []
                     var malformedCalls: [String] = []
+                    var hadThinkStart = false
 
                     for try await event in genStream {
                         switch event {
@@ -88,11 +90,18 @@ final class AgentRunner {
                             responseText += chunk
                             continuation.yield(.text(chunk))
                         case .thinkStart:
+                            hadThinkStart = true
                             continuation.yield(.thinkStart)
                         case .thinking(let chunk):
                             thinkingText += chunk
                             continuation.yield(.thinking(chunk))
                         case .thinkEnd:
+                            if !hadThinkStart {
+                                // Model omitted <think> but included </think> —
+                                // text accumulated so far is actually thinking
+                                thinkingText = responseText
+                                responseText = ""
+                            }
                             continuation.yield(.thinkEnd)
                         case .toolCall(let call):
                             toolCalls.append(call)
@@ -110,7 +119,7 @@ final class AgentRunner {
 
                     // No tool calls and no malformed calls — final response
                     if toolCalls.isEmpty && malformedCalls.isEmpty {
-                        newMessages.append(.assistant(responseText, thinking: thinking))
+                        newMessages.append(.assistant(responseText, thinking: thinking, toolCalls: toolCalls))
                         continuation.yield(.completed(newMessages))
                         continuation.finish()
                         return
@@ -122,10 +131,20 @@ final class AgentRunner {
                             text: responseText, toolCalls: toolCalls, thinking: thinking
                         )
                         workingMessages.append(.assistant(workingContent))
-                        newMessages.append(.assistant(responseText, thinking: thinking))
+                        newMessages.append(.assistant(responseText, thinking: thinking, toolCalls: toolCalls))
 
                         for call in toolCalls {
                             try Task.checkCancellation()
+
+                            // Within-turn dedup: skip if same tool+args already executed
+                            let callKey = Self.canonicalKey(call)
+                            if executedKeys.contains(callKey) {
+                                Log.agent.info("Skipping duplicate: \(call.function.name)")
+                                let toolMsg = AgentChatMessage.tool("[Already called — see result above]")
+                                workingMessages.append(toolMsg)
+                                newMessages.append(toolMsg)
+                                continue
+                            }
 
                             continuation.yield(.toolStart(name: call.function.name, arguments: call.function.arguments))
 
@@ -135,6 +154,8 @@ final class AgentRunner {
                             } catch {
                                 result = "Error: \(error.localizedDescription)"
                             }
+
+                            executedKeys.insert(callKey)
 
                             continuation.yield(.toolResult(name: call.function.name, result: result))
                             Log.agent.info("Tool \(call.function.name) → \(result.prefix(200))")
@@ -194,6 +215,25 @@ final class AgentRunner {
     }
 
     // MARK: - Private
+
+    /// Produces a canonical string key for a tool call (name + sorted args) for dedup.
+    private static func canonicalKey(_ call: ToolCall) -> String {
+        let sortedArgs = call.function.arguments.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\(argString($0.value))" }
+            .joined(separator: ",")
+        return "\(call.function.name)(\(sortedArgs))"
+    }
+
+    private static func argString(_ value: JSONValue) -> String {
+        switch value {
+        case .string(let s): return s.lowercased()
+        case .int(let i): return String(i)
+        case .double(let d): return String(d)
+        case .bool(let b): return String(b)
+        case .null: return "null"
+        default: return "?"
+        }
+    }
 
     /// Reconstructs the assistant message content with think/tool_call tags for conversation history.
     ///

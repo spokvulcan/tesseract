@@ -21,10 +21,9 @@ struct AgentMemory: Codable, Sendable {
 
 struct RememberTool: AgentTool {
     let name = "remember"
-    let description = "Store a fact or preference about the user for future recall"
+    let description = "Store a fact or preference about the user. Returns existing memory if already stored — do not retry."
     let parameters: [ToolParameter] = [
         .required("fact", type: .string, description: "The fact or preference to remember"),
-        .optional("category", type: .string, description: "Category for organization (e.g. health, work, preferences)"),
     ]
 
     let store: AgentDataStore
@@ -33,11 +32,17 @@ struct RememberTool: AgentTool {
         guard let fact = arguments.string(for: "fact") else {
             throw AgentToolError.missingArgument("fact")
         }
-        let category = arguments.string(for: "category")
-        let memory = AgentMemory(fact: fact, category: category)
+
+        // Check for duplicate/similar fact
+        let memories: [AgentMemory] = await store.loadArray(AgentMemory.self, from: "memories.json")
+        let factLower = fact.lowercased()
+        if let existing = memories.first(where: { $0.fact.lowercased() == factLower }) {
+            return "Already remembered: \"\(existing.fact)\""
+        }
+
+        let memory = AgentMemory(fact: fact)
         await store.append(memory, to: "memories.json")
-        let categoryNote = category.map { " (category: \($0))" } ?? ""
-        return "Remembered: \"\(fact)\"\(categoryNote)"
+        return "Done. Remembered: \"\(fact)\""
     }
 }
 
@@ -45,7 +50,7 @@ struct RememberTool: AgentTool {
 
 struct RecallTool: AgentTool {
     let name = "recall"
-    let description = "Search stored memories by keyword"
+    let description = "Search stored memories by keyword. Only call once per response."
     let parameters: [ToolParameter] = [
         .required("query", type: .string, description: "Keywords to search for in memories"),
     ]

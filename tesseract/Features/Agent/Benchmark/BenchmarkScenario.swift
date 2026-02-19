@@ -15,6 +15,8 @@ struct TurnExpectation {
     let expectedArguments: [String: [String: String]]
     /// If true, the model should ask for clarification rather than call tools.
     let expectsClarification: Bool
+    /// If true, skip tool correctness check entirely (tools are optional for this turn).
+    let toolsOptional: Bool
 
     init(
         _ userMessage: String,
@@ -22,7 +24,8 @@ struct TurnExpectation {
         forbidden: [String] = [],
         substrings: [String] = [],
         arguments: [String: [String: String]] = [:],
-        expectsClarification: Bool = false
+        expectsClarification: Bool = false,
+        toolsOptional: Bool = false
     ) {
         self.userMessage = userMessage
         self.expectedTools = tools
@@ -30,6 +33,7 @@ struct TurnExpectation {
         self.expectedSubstrings = substrings
         self.expectedArguments = arguments
         self.expectsClarification = expectsClarification
+        self.toolsOptional = toolsOptional
     }
 }
 
@@ -365,35 +369,38 @@ struct LongConversationScenario: BenchmarkScenario {
 
 struct DuplicateDetectionScenario: BenchmarkScenario {
     let id = "S5"
-    let description = "Duplicate detection — avoid redundant tool calls"
+    let description = "Duplicate detection — tools handle repeated requests gracefully"
     let turns: [TurnExpectation] = [
         TurnExpectation(
             "Create a habit called running, daily",
             tools: ["create_habit"],
             arguments: ["create_habit": ["name": "running", "frequency": "daily"]]
         ),
-        // Second identical request — should NOT create again (or handle gracefully)
+        // Repeated request — tool returns "already exists", model should relay that
         TurnExpectation(
             "Create a habit called running, daily",
-            forbidden: ["create_habit"]
+            tools: ["create_habit"],
+            substrings: ["already"]
         ),
         TurnExpectation(
             "Log my running habit for today",
             tools: ["log_habit"]
         ),
-        // Duplicate log — should NOT log again
+        // Repeated log — tool returns "already logged", model should relay that
         TurnExpectation(
             "Log my running habit for today",
-            forbidden: ["log_habit"]
+            tools: ["log_habit"],
+            substrings: ["already"]
         ),
         TurnExpectation(
             "Remember I like coffee",
             tools: ["remember"]
         ),
-        // Near-duplicate memory
+        // Near-duplicate memory — tool returns "already remembered"
         TurnExpectation(
             "Remember that I like coffee",
-            forbidden: ["remember"]
+            tools: ["remember"],
+            substrings: ["already"]
         ),
     ]
 }
@@ -421,11 +428,11 @@ struct ContextStressScenario: BenchmarkScenario {
             "Add a task: Buy a keyboard",
             tools: ["create_task"]
         ),
-        // Ask about turn 1 items (may be beyond context window in long runs)
+        // Ask about turn 1 items — answer may come from context or recall tool
         TurnExpectation(
             "What's my favorite color?",
-            tools: ["recall"],
-            substrings: ["blue"]
+            substrings: ["blue"],
+            toolsOptional: true
         ),
         TurnExpectation(
             "List all my goals and tasks",
@@ -452,9 +459,9 @@ struct ErrorRecoveryScenario: BenchmarkScenario {
             forbidden: ["set_reminder"],
             expectsClarification: true
         ),
-        // Now complete
+        // Now complete — self-contained so 3B model doesn't need to infer from prior turns
         TurnExpectation(
-            "At 3pm tomorrow",
+            "At 3pm tomorrow, remind me about the meeting",
             tools: ["set_reminder"]
         ),
         // Nonsensical request

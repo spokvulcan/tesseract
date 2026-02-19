@@ -43,12 +43,9 @@ struct ProgressNote: Codable, Sendable {
 
 struct CreateGoalTool: AgentTool {
     let name = "create_goal"
-    let description = "Create a new goal to track"
+    let description = "Create a new goal to track."
     let parameters: [ToolParameter] = [
         .required("name", type: .string, description: "Name of the goal"),
-        .optional("description", type: .string, description: "Detailed description"),
-        .optional("target_date", type: .string, description: "Target completion date (ISO8601 or natural language)"),
-        .optional("category", type: .string, description: "Category (e.g. health, career, personal)"),
     ]
 
     let store: AgentDataStore
@@ -57,20 +54,11 @@ struct CreateGoalTool: AgentTool {
         guard let name = arguments.string(for: "name") else {
             throw AgentToolError.missingArgument("name")
         }
-        let description = arguments.string(for: "description")
-        let category = arguments.string(for: "category")
-        let targetDate = arguments.string(for: "target_date").flatMap { DateParsingUtility.parse($0) }
 
-        let goal = Goal(name: name, description: description, category: category, targetDate: targetDate)
+        let goal = Goal(name: name)
         await store.append(goal, to: "goals.json")
 
-        var result = "Created goal: \"\(name)\" (id: \(goal.id.uuidString.prefix(8)))"
-        if let targetDate {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            result += " — target: \(formatter.string(from: targetDate))"
-        }
-        return result
+        return "Done. Created goal \"\(name)\" [id: \(goal.id.uuidString.prefix(8))]."
     }
 }
 
@@ -78,36 +66,21 @@ struct CreateGoalTool: AgentTool {
 
 struct ListGoalsTool: AgentTool {
     let name = "list_goals"
-    let description = "List goals, optionally filtered by category or status"
-    let parameters: [ToolParameter] = [
-        .optional("category", type: .string, description: "Filter by category"),
-        .optional("status", type: .string, description: "Filter by status: active, completed, or archived"),
-    ]
+    let description = "List all goals. Only call once per response."
+    let parameters: [ToolParameter] = []
 
     let store: AgentDataStore
 
     func execute(arguments: [String: JSONValue]) async throws -> String {
-        var goals: [Goal] = await store.loadArray(Goal.self, from: "goals.json")
-
-        if let category = arguments.string(for: "category") {
-            goals = goals.filter { ($0.category ?? "").lowercased() == category.lowercased() }
-        }
-        if let statusStr = arguments.string(for: "status"), let status = GoalStatus(rawValue: statusStr.lowercased()) {
-            goals = goals.filter { $0.status == status }
-        }
+        let goals: [Goal] = await store.loadArray(Goal.self, from: "goals.json")
 
         guard !goals.isEmpty else {
             return "No goals found."
         }
 
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-
         var lines: [String] = ["\(goals.count) goal(s):"]
         for goal in goals {
-            var line = "- [\(goal.status.rawValue.uppercased())] \(goal.name) (id: \(goal.id.uuidString.prefix(8)))"
-            if let cat = goal.category { line += " [\(cat)]" }
-            if let target = goal.targetDate { line += " — due: \(formatter.string(from: target))" }
+            var line = "- [\(goal.status.rawValue.uppercased())] \(goal.name) [id: \(goal.id.uuidString.prefix(8))]"
             if !goal.progressNotes.isEmpty {
                 line += " — \(goal.progressNotes.count) update(s)"
             }
@@ -157,6 +130,6 @@ struct UpdateGoalTool: AgentTool {
         }
 
         await store.save(goals, to: "goals.json")
-        return "Updated goal \"\(goals[idx].name)\": \(updates.joined(separator: ", "))"
+        return "Done. Updated goal \"\(goals[idx].name)\": \(updates.joined(separator: ", "))."
     }
 }

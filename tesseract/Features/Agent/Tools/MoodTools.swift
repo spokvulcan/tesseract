@@ -21,7 +21,7 @@ struct MoodEntry: Codable, Sendable {
 
 struct MoodLogTool: AgentTool {
     let name = "mood_log"
-    let description = "Log the user's current mood on a 1-10 scale"
+    let description = "Log the user's current mood on a 1-10 scale."
     let parameters: [ToolParameter] = [
         .required("score", type: .int, description: "Mood score from 1 (very low) to 10 (excellent)"),
         .optional("note", type: .string, description: "Optional note about what's affecting mood"),
@@ -42,7 +42,7 @@ struct MoodLogTool: AgentTool {
         await store.append(entry, to: "moods.json")
 
         let emoji = moodEmoji(score)
-        var result = "Logged mood: \(score)/10 \(emoji)"
+        var result = "Done. Logged mood: \(score)/10 \(emoji)"
         if let note { result += " — \(note)" }
         return result
     }
@@ -62,15 +62,13 @@ struct MoodLogTool: AgentTool {
 
 struct ListMoodsTool: AgentTool {
     let name = "list_moods"
-    let description = "Show recent mood entries and average"
-    let parameters: [ToolParameter] = [
-        .optional("days", type: .int, description: "Number of days to look back (default: 7)"),
-    ]
+    let description = "Show recent mood entries and average. Only call once per response."
+    let parameters: [ToolParameter] = []
 
     let store: AgentDataStore
 
     func execute(arguments: [String: JSONValue]) async throws -> String {
-        let days = arguments.int(for: "days") ?? 7
+        let days = 7
         let cutoff = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
 
         let allMoods: [MoodEntry] = await store.loadArray(MoodEntry.self, from: "moods.json")

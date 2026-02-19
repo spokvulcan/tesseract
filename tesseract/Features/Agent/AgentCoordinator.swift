@@ -111,6 +111,11 @@ final class AgentCoordinator: ObservableObject {
                     case .thinking(let chunk):
                         streamingThinking += chunk
                     case .thinkEnd:
+                        if !isThinking {
+                            // Model omitted <think> tag — text streamed so far is thinking
+                            streamingThinking = streamingText
+                            streamingText = ""
+                        }
                         isThinking = false
                         Log.agent.debug("Think block (\(self.streamingThinking.count) chars)")
                     case .toolStart(let name, _):

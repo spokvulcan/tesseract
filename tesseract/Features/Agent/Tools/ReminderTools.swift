@@ -77,6 +77,6 @@ struct SetReminderTool: AgentTool {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-        return "Reminder set: \"\(message)\" at \(formatter.string(from: triggerDate))"
+        return "Done. Reminder set: \"\(message)\" at \(formatter.string(from: triggerDate))."
     }
 }

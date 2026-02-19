@@ -104,28 +104,38 @@ final class ToolCallParser {
                 break
             }
 
-            // Not inside a think block — find whichever start tag comes first
-            let thinkRange = buffer.range(of: Self.thinkStartTag)
+            // Not inside a think block — find whichever tag comes first
+            let thinkStartRange = buffer.range(of: Self.thinkStartTag)
+            let thinkEndRange = buffer.range(of: Self.thinkEndTag)
             let toolRange = buffer.range(of: Self.toolStartTag)
 
-            // Determine which tag appears first
-            let useThink: Bool
-            if let tr = thinkRange, let tlr = toolRange {
-                useThink = tr.lowerBound < tlr.lowerBound
-            } else if thinkRange != nil {
-                useThink = true
-            } else {
-                useThink = false
+            // Find the earliest tag
+            var earliest: (kind: Int, lower: String.Index)? // kind: 0=thinkStart, 1=thinkEnd, 2=tool
+            for (kind, range) in [(0, thinkStartRange), (1, thinkEndRange), (2, toolRange)] {
+                guard let r = range else { continue }
+                if earliest == nil || r.lowerBound < earliest!.lower {
+                    earliest = (kind, r.lowerBound)
+                }
             }
 
-            if useThink, let thinkRange {
-                // Emit text before <think>
-                let before = String(buffer[..<thinkRange.lowerBound])
+            if let earliest, earliest.kind == 0, let thinkStartRange {
+                // <think> — enter think block
+                let before = String(buffer[..<thinkStartRange.lowerBound])
                 if !before.isEmpty { events.append(.text(before)) }
 
                 events.append(.thinkStart)
                 insideThinkBlock = true
-                buffer = String(buffer[thinkRange.upperBound...])
+                buffer = String(buffer[thinkStartRange.upperBound...])
+                continue
+            }
+
+            if let earliest, earliest.kind == 1, let thinkEndRange {
+                // Stray </think> without opening <think> — model omitted the start tag.
+                // Emit text before it (this is leaked thinking content), signal transition.
+                let before = String(buffer[..<thinkEndRange.lowerBound])
+                if !before.isEmpty { events.append(.text(before)) }
+                events.append(.thinkEnd)
+                buffer = String(buffer[thinkEndRange.upperBound...])
                 continue
             }
 

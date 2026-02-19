@@ -34,7 +34,7 @@ private struct MockSetReminderTool: AgentTool {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-        return "Reminder set: \"\(message)\" at \(formatter.string(from: triggerDate))"
+        return "Done. Reminder set: \"\(message)\" at \(formatter.string(from: triggerDate))."
     }
 }
 
@@ -72,9 +72,13 @@ final class BenchmarkRunner {
         let resultsDir = resolveResultsDirectory()
         try FileManager.default.createDirectory(at: resultsDir, withIntermediateDirectories: true)
 
-        for (configIdx, params) in paramConfigs.enumerated() {
+        for (configIdx, baseParams) in paramConfigs.enumerated() {
+            // Cap maxTokens per round to prevent runaway generation
+            var params = baseParams
+            params.maxTokens = min(params.maxTokens, config.maxTokensPerRound)
+
             let paramLabel = BenchmarkConfig.label(for: params)
-            log("\n━━━ Config \(configIdx + 1)/\(paramConfigs.count): \(paramLabel) ━━━")
+            log("\n━━━ Config \(configIdx + 1)/\(paramConfigs.count): \(paramLabel) (maxTokens=\(params.maxTokens)) ━━━")
 
             var scenarioResults: [BenchmarkScenarioResult] = []
             var peakMemoryMB: Float = 0
@@ -178,16 +182,11 @@ final class BenchmarkRunner {
             let recentMessages = Array(messages.suffix(contextLimit))
             let prompt: [AgentChatMessage] = [.system(systemPrompt)] + recentMessages
 
-            // Write turn start + exact raw prompt to transcript
+            // Write turn start to transcript (skip raw prompt formatting — it's expensive)
             transcript.writeTurnStart(
                 index: turnIdx, total: scenario.turns.count,
                 userMessage: expectation.userMessage
             )
-            if let rawPrompt = try? await engine.formatRawPrompt(
-                messages: prompt, tools: registry.toolSpecs
-            ) {
-                transcript.writeRawPrompt(rawPrompt)
-            }
 
             // Run agent — track per-round output for transcript
             var responseText = ""

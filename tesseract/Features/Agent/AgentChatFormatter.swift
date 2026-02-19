@@ -1,3 +1,4 @@
+import Foundation
 import MLXLMCommon
 import Tokenizers
 
@@ -22,10 +23,29 @@ enum AgentChatFormatter {
             switch message.role {
             case .system: .system(message.content)
             case .user: .user(message.content)
-            case .assistant: .assistant(message.content)
+            case .assistant:
+                if message.toolCalls.isEmpty {
+                    .assistant(message.content)
+                } else {
+                    // Reconstruct inline <tool_call> tags so the model sees what it called
+                    .assistant(reconstructContent(message))
+                }
             case .tool: .tool(message.content)
             }
         }
         return UserInput(chat: chatMessages, tools: tools)
+    }
+
+    /// Appends `<tool_call>` tags to assistant content for model context.
+    private static func reconstructContent(_ message: AgentChatMessage) -> String {
+        var content = message.content
+        for call in message.toolCalls {
+            if let data = try? JSONEncoder().encode(call.function),
+               let json = String(data: data, encoding: .utf8)
+            {
+                content += "\n<tool_call>\n\(json)\n</tool_call>"
+            }
+        }
+        return content
     }
 }
