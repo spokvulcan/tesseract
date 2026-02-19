@@ -16,6 +16,12 @@ actor AgentDataStore {
         try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
     }
 
+    /// Creates a store rooted at a custom directory (for benchmarks / testing).
+    init(baseDirectory: URL) {
+        baseDir = baseDirectory
+        try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+    }
+
     // MARK: - Generic Load / Save
 
     func load<T: Decodable>(_ type: T.Type, from filename: String) -> T? {

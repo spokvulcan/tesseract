@@ -119,6 +119,21 @@ final class AgentEngine: ObservableObject {
         await llmActor.memoryStats()
     }
 
+    /// Returns the exact ChatML string the model receives as input, including
+    /// `<|im_start|>`, `<|im_end|>`, tool definitions, and generation prompt.
+    ///
+    /// Renders messages and tools through the same Jinja template used during generation,
+    /// so the output matches what the model tokenizer produces token-for-token.
+    func formatRawPrompt(
+        messages: [AgentChatMessage],
+        tools: [ToolSpec]?
+    ) async throws -> String {
+        let messageDicts: [[String: any Sendable]] = messages.map { msg in
+            ["role": msg.role.rawValue, "content": msg.content]
+        }
+        return try await llmActor.formatRawPrompt(messages: messageDicts, tools: tools)
+    }
+
     /// Releases the model from memory.
     func unloadModel() {
         cancelGeneration()

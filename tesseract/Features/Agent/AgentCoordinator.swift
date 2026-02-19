@@ -113,7 +113,7 @@ final class AgentCoordinator: ObservableObject {
                     case .thinkEnd:
                         isThinking = false
                         Log.agent.debug("Think block (\(self.streamingThinking.count) chars)")
-                    case .toolStart(let name):
+                    case .toolStart(let name, _):
                         Log.agent.info("Tool start: \(name)")
                     case .toolResult(let name, let result):
                         Log.agent.info("Tool result [\(name)]: \(result.prefix(200))")

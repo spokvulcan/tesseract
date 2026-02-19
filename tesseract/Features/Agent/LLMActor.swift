@@ -1,6 +1,7 @@
 import Foundation
 import MLX
 import MLXLMCommon
+import Tokenizers
 import os
 
 /// Actor-isolated wrapper that owns the LLM model and runs inference off the MainActor.
@@ -57,9 +58,6 @@ actor LLMActor {
 
         let genParams = GenerateParameters(
             maxTokens: parameters.maxTokens,
-            kvBits: parameters.kvBits,
-            kvGroupSize: parameters.kvGroupSize,
-            quantizedKVStart: parameters.quantizedKVStart,
             temperature: parameters.temperature,
             topP: parameters.topP,
             repetitionPenalty: parameters.repetitionPenalty,
@@ -67,6 +65,23 @@ actor LLMActor {
         )
 
         return try await container.generate(input: prepared, parameters: genParams)
+    }
+
+    /// Renders messages and tools through the Jinja chat template, returning the exact
+    /// ChatML string the model receives as input (including `<|im_start|>`, tool definitions, etc.).
+    func formatRawPrompt(
+        messages: [[String: any Sendable]],
+        tools: [ToolSpec]?
+    ) async throws -> String {
+        guard let container = modelContainer else {
+            throw AgentEngineError.modelNotLoaded
+        }
+        return try await container.perform { context in
+            let tokens = try context.tokenizer.applyChatTemplate(
+                messages: messages, tools: tools
+            )
+            return context.tokenizer.decode(tokens: tokens, skipSpecialTokens: false)
+        }
     }
 
     /// Releases the model from memory.

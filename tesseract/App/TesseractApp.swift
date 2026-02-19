@@ -47,6 +47,20 @@ struct TesseractApp: App {
     @State private var showOnboarding = false
     @State private var selectedNavigation: NavigationItem? = .dictation
 
+    init() {
+        if CommandLine.arguments.contains("--benchmark") {
+            Task { @MainActor in
+                let runner = BenchmarkRunner()
+                do {
+                    try await runner.run()
+                } catch {
+                    Log.agent.error("Benchmark failed: \(error)")
+                }
+                exit(0)
+            }
+        }
+    }
+
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView(

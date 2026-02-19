@@ -13,7 +13,7 @@ enum AgentRunnerEvent: Sendable {
     /// The model finished its `<think>` block.
     case thinkEnd
     /// A tool is about to execute.
-    case toolStart(name: String)
+    case toolStart(name: String, arguments: [String: JSONValue])
     /// A tool finished executing.
     case toolResult(name: String, result: String)
     /// A malformed tool call was detected.
@@ -127,7 +127,7 @@ final class AgentRunner {
                         for call in toolCalls {
                             try Task.checkCancellation()
 
-                            continuation.yield(.toolStart(name: call.function.name))
+                            continuation.yield(.toolStart(name: call.function.name, arguments: call.function.arguments))
 
                             let result: String
                             do {

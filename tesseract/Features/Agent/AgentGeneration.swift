@@ -6,17 +6,12 @@ import MLXLMCommon
 /// Defaults match the official Nanbeige4.1-3B recommendations:
 /// temperature=0.6, top_p=0.95, repeat_penalty=1.0 (disabled), max_tokens=131072.
 /// See: https://huggingface.co/Nanbeige/Nanbeige4.1-3B
-struct AgentGenerateParameters: Sendable {
+struct AgentGenerateParameters: Sendable, Codable {
     var maxTokens: Int = 131_072
     var temperature: Float = 0.6
     var topP: Float = 0.95
     var repetitionPenalty: Float? = nil
     var repetitionContextSize: Int = 20
-
-    // KV cache quantization — 4-bit reduces memory ~4x
-    var kvBits: Int? = 4
-    var kvGroupSize: Int = 64
-    var quantizedKVStart: Int = 512  // first 512 tokens stay bf16
 
     static let `default` = AgentGenerateParameters()
 }
