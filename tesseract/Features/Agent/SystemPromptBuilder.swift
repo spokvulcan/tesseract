@@ -31,7 +31,8 @@ enum SystemPromptBuilder {
     static func build(
         instructions: String? = nil,
         memories: [String]? = nil,
-        conversationSummaries: [String]? = nil
+        conversationSummaries: [String]? = nil,
+        voiceMode: Bool = false
     ) -> String {
         var sections: [String] = []
 
@@ -57,6 +58,11 @@ enum SystemPromptBuilder {
         formatter.timeStyle = .short
         formatter.locale = Locale.current
         sections.append("Current date and time: \(formatter.string(from: Date()))")
+
+        // 5. Voice mode
+        if voiceMode {
+            sections.append("[Voice mode: keep responses to 1-3 sentences. Be conversational and natural for spoken delivery.]")
+        }
 
         return sections.joined(separator: "\n\n")
     }

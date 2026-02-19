@@ -57,6 +57,7 @@ final class DependencyContainer: ObservableObject {
         AgentRunner(engine: agentEngine, toolRegistry: toolRegistry)
     }()
     lazy var agentConversationStore = AgentConversationStore()
+    lazy var agentNotchController = AgentNotchPanelController()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
             agentRunner: agentRunner,
@@ -85,7 +86,8 @@ final class DependencyContainer: ObservableObject {
                 else { return }
                 try await agentEngine.loadModel(from: path)
             },
-            speechCoordinator: speechCoordinator
+            speechCoordinator: speechCoordinator,
+            notchController: agentNotchController
         )
     }()
 
@@ -148,6 +150,19 @@ final class DependencyContainer: ObservableObject {
                 self?.speechCoordinator.onHotkeyPressed()
             }
         )
+        // Register Agent hotkey
+        hotkeyManager.registerHotkey(
+            id: "agent",
+            combo: settingsManager.agentHotkey,
+            onDown: { [weak self] in self?.onAgentHotkeyDown() },
+            onUp: { [weak self] in self?.onAgentHotkeyUp() }
+        )
+
+        // Wire agent notch tap to navigate to agent window
+        agentNotchController.onTap = {
+            guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+            appDelegate.navigateToAgent()
+        }
 
         hotkeyManager.startListening()
         startSettingsObservation()
@@ -217,10 +232,38 @@ final class DependencyContainer: ObservableObject {
         }
     }
 
+    private func onAgentHotkeyDown() {
+        agentCoordinator.startVoiceInput()
+        startAgentAudioLevelForwarding()
+    }
+
+    private func onAgentHotkeyUp() {
+        stopAgentAudioLevelForwarding()
+        agentCoordinator.stopVoiceInputAndSend()
+    }
+
+    private var agentAudioLevelCancellable: AnyCancellable?
+
+    private func startAgentAudioLevelForwarding() {
+        agentAudioLevelCancellable = audioCaptureEngine.$audioLevel
+            .receive(on: RunLoop.main)
+            .sink { [weak self] level in
+                guard let self else { return }
+                self.agentNotchController.state.phase = .listening(audioLevel: level)
+            }
+    }
+
+    private func stopAgentAudioLevelForwarding() {
+        agentAudioLevelCancellable?.cancel()
+        agentAudioLevelCancellable = nil
+    }
+
     private var lastTTSHotkey: KeyCombo?
+    private var lastAgentHotkey: KeyCombo?
 
     private func startSettingsObservation() {
         lastTTSHotkey = settingsManager.ttsHotkey
+        lastAgentHotkey = settingsManager.agentHotkey
 
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
             .receive(on: RunLoop.main)
@@ -235,6 +278,12 @@ final class DependencyContainer: ObservableObject {
                 if newTTSHotkey != lastTTSHotkey {
                     lastTTSHotkey = newTTSHotkey
                     hotkeyManager.updateRegisteredHotkey(id: "tts", combo: newTTSHotkey)
+                }
+
+                let newAgentHotkey = settingsManager.agentHotkey
+                if newAgentHotkey != lastAgentHotkey {
+                    lastAgentHotkey = newAgentHotkey
+                    hotkeyManager.updateRegisteredHotkey(id: "agent", combo: newAgentHotkey)
                 }
             }
             .store(in: &settingsCancellables)

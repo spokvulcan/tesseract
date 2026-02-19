@@ -25,6 +25,7 @@ final class AgentCoordinator: ObservableObject {
     private let settings: SettingsManager?
     private let postProcessor = TranscriptionPostProcessor()
     private let speechCoordinator: SpeechCoordinator?
+    private let notchController: AgentNotchPanelController?
     private let prepareForInference: (@MainActor () -> Void)?
     private let loadAgentModel: (@MainActor () async throws -> Void)?
     private let debugLogger = AgentDebugLogger()
@@ -45,7 +46,8 @@ final class AgentCoordinator: ObservableObject {
         settings: SettingsManager? = nil,
         prepareForInference: (@MainActor () -> Void)? = nil,
         loadAgentModel: (@MainActor () async throws -> Void)? = nil,
-        speechCoordinator: SpeechCoordinator? = nil
+        speechCoordinator: SpeechCoordinator? = nil,
+        notchController: AgentNotchPanelController? = nil
     ) {
         self.agentRunner = agentRunner
         self.conversationStore = conversationStore
@@ -55,6 +57,7 @@ final class AgentCoordinator: ObservableObject {
         self.prepareForInference = prepareForInference
         self.loadAgentModel = loadAgentModel
         self.speechCoordinator = speechCoordinator
+        self.notchController = notchController
 
         // Load the most recent conversation (or create a fresh one)
         conversationStore.loadMostRecent()
@@ -78,7 +81,8 @@ final class AgentCoordinator: ObservableObject {
         isThinking = false
 
         // Context window: send system prompt + only the most recent messages to LLM
-        let systemPrompt = SystemPromptBuilder.build()
+        let voiceMode = settings?.agentAutoSpeak ?? false
+        let systemPrompt = SystemPromptBuilder.build(voiceMode: voiceMode)
         let recentMessages = Array(messages.suffix(Defaults.contextLimit))
         let prompt: [AgentChatMessage] = [.system(systemPrompt)] + recentMessages
 
@@ -95,8 +99,12 @@ final class AgentCoordinator: ObservableObject {
 
         var generationInfo: AgentGeneration.Info?
 
+        // Show thinking in notch if it's visible (voice-initiated)
+        notchController?.updatePhase(.thinking)
+
         generationTask = Task { [weak self] in
             guard let self else { return }
+            var notchTextLength = 0
 
             do {
                 let stream = try agentRunner.run(messages: prompt)
@@ -106,8 +114,14 @@ final class AgentCoordinator: ObservableObject {
                     switch event {
                     case .text(let chunk):
                         streamingText += chunk
+                        // Throttle notch updates — every 10 chars
+                        if notchController?.isShowing == true && streamingText.count - notchTextLength >= 10 {
+                            notchTextLength = streamingText.count
+                            notchController?.updatePhase(.responding(text: streamingText))
+                        }
                     case .thinkStart:
                         isThinking = true
+                        notchController?.updatePhase(.thinking)
                     case .thinking(let chunk):
                         streamingThinking += chunk
                     case .thinkEnd:
@@ -120,6 +134,7 @@ final class AgentCoordinator: ObservableObject {
                         Log.agent.debug("Think block (\(self.streamingThinking.count) chars)")
                     case .toolStart(let name, _):
                         Log.agent.info("Tool start: \(name)")
+                        notchController?.updatePhase(.toolCall(name: name))
                     case .toolResult(let name, let result):
                         Log.agent.info("Tool result [\(name)]: \(result.prefix(200))")
                         // Clear streaming text between rounds so the next
@@ -127,6 +142,8 @@ final class AgentCoordinator: ObservableObject {
                         streamingText = ""
                         streamingThinking = ""
                         isThinking = false
+                        notchTextLength = 0
+                        notchController?.updatePhase(.thinking)
                     case .toolError(let raw):
                         Log.agent.warning("Tool error: \(raw.prefix(200))")
                     case .info(let info):
@@ -145,6 +162,13 @@ final class AgentCoordinator: ObservableObject {
                 }
 
                 Log.agent.info("Agent run complete — \(self.messages.count) total messages")
+
+                // Show complete state in notch with response preview
+                if let notchController, notchController.isShowing,
+                   let lastAssistant = self.messages.last(where: { $0.role == .assistant }) {
+                    notchController.updatePhase(.complete(text: lastAssistant.content))
+                }
+
                 streamingText = ""
                 streamingThinking = ""
                 isThinking = false
@@ -171,6 +195,7 @@ final class AgentCoordinator: ObservableObject {
                 isThinking = false
                 isGenerating = false
                 persistCurrentConversation()
+                notchController?.dismiss()
             } catch {
                 Log.agent.error("Generation failed: \(error)")
                 debugLogger.logError(error.localizedDescription)
@@ -186,6 +211,7 @@ final class AgentCoordinator: ObservableObject {
                 isThinking = false
                 isGenerating = false
                 persistCurrentConversation()
+                notchController?.updatePhase(.error(error.localizedDescription))
             }
 
             generationTask = nil
@@ -256,6 +282,7 @@ final class AgentCoordinator: ObservableObject {
         do {
             try audioCapture.startCapture()
             voiceState = .recording
+            notchController?.show()
             Log.agent.info("Voice input started")
         } catch {
             setVoiceError("Mic error: \(error.localizedDescription)")
@@ -277,6 +304,7 @@ final class AgentCoordinator: ObservableObject {
         }
 
         voiceState = .transcribing
+        notchController?.updatePhase(.transcribing(preview: ""))
         Log.agent.info("Voice input stopped, transcribing \(String(format: "%.1f", audioData.duration))s audio")
 
         Task {
@@ -291,6 +319,7 @@ final class AgentCoordinator: ObservableObject {
                 }
 
                 Log.agent.info("Voice transcribed: \(processedText)")
+                notchController?.updatePhase(.transcribing(preview: processedText))
                 voiceState = .idle
 
                 // Ensure agent LLM is loaded before sending
@@ -309,12 +338,17 @@ final class AgentCoordinator: ObservableObject {
         }
         transcriptionEngine?.cancelTranscription()
         voiceState = .idle
+        notchController?.dismiss()
         Log.agent.info("Voice input cancelled")
     }
 
     private func setVoiceError(_ message: String) {
         voiceState = .error(message)
         Log.agent.warning("Voice error: \(message)")
+
+        if notchController?.isShowing == true {
+            notchController?.updatePhase(.error(message))
+        }
 
         voiceErrorResetTask?.cancel()
         voiceErrorResetTask = Task {

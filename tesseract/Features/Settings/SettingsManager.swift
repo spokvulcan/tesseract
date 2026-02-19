@@ -92,6 +92,24 @@ final class SettingsManager: ObservableObject {
         }
     }
 
+    // MARK: - Agent Hotkey
+
+    @AppStorage("agentHotkeyKeyCode") var agentHotkeyKeyCode: Int = Int(KeyCombo.controlSpace.keyCode)
+    @AppStorage("agentHotkeyModifiers") var agentHotkeyModifiers: Int = Int(KeyCombo.controlSpace.modifiers)
+
+    var agentHotkey: KeyCombo {
+        get {
+            KeyCombo(
+                keyCode: UInt16(agentHotkeyKeyCode),
+                modifiers: NSEvent.ModifierFlags(rawValue: UInt(agentHotkeyModifiers))
+            )
+        }
+        set {
+            agentHotkeyKeyCode = Int(newValue.keyCode)
+            agentHotkeyModifiers = Int(newValue.modifiers)
+        }
+    }
+
     @AppStorage("ttsTemperature") var ttsTemperature: Double = 0.6
     @AppStorage("ttsTopP") var ttsTopP: Double = 0.8
     @AppStorage("ttsRepetitionPenalty") var ttsRepetitionPenalty: Double = 1.3
@@ -152,6 +170,8 @@ final class SettingsManager: ObservableObject {
         showNotifications = true
         ttsHotkeyKeyCode = Int(KeyCombo.functionSpace.keyCode)
         ttsHotkeyModifiers = Int(KeyCombo.functionSpace.modifiers)
+        agentHotkeyKeyCode = Int(KeyCombo.controlSpace.keyCode)
+        agentHotkeyModifiers = Int(KeyCombo.controlSpace.modifiers)
         ttsTemperature = 0.6
         ttsTopP = 0.8
         ttsRepetitionPenalty = 1.3

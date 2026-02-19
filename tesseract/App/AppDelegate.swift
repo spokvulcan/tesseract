@@ -91,6 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarManager?.onShowSettings = { [weak self] in
             self?.navigateToSettings()
         }
+        menuBarManager?.onTalkToAgent = { [weak self] in
+            self?.navigateToAgent()
+        }
         menuBarManager?.onQuit = {
             NSApp.terminate(nil)
         }
@@ -186,6 +189,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func navigateToSettings() {
         navigationSelection?.wrappedValue = .general
+        showMainWindow()
+    }
+
+    func navigateToAgent() {
+        navigationSelection?.wrappedValue = .agent
         showMainWindow()
     }
 

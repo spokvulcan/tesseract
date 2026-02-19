@@ -23,6 +23,7 @@ final class MenuBarManager: ObservableObject {
 
     var onShowMainWindow: (() -> Void)?
     var onShowSettings: (() -> Void)?
+    var onTalkToAgent: (() -> Void)?
     var onQuit: (() -> Void)?
 
     init() {}
@@ -66,6 +67,15 @@ final class MenuBarManager: ObservableObject {
         )
         speakItem.target = self
         menu.addItem(speakItem)
+
+        let agentHotkeyDisplay = SettingsManager.shared.agentHotkey.displayString
+        let talkItem = NSMenuItem(
+            title: "Talk to Tesse (\(agentHotkeyDisplay))",
+            action: #selector(talkToAgent),
+            keyEquivalent: ""
+        )
+        talkItem.target = self
+        menu.addItem(talkItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -165,6 +175,10 @@ final class MenuBarManager: ObservableObject {
 
     @objc private func speakSelectedText() {
         speechCoordinator?.onHotkeyPressed()
+    }
+
+    @objc private func talkToAgent() {
+        onTalkToAgent?()
     }
 
     @objc private func showMainWindow() {
