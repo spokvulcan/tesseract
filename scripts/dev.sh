@@ -40,6 +40,35 @@ kill_app() {
     fi
 }
 
+# Print data directory paths after launching the app.
+# Uses OSC 8 escape sequences for clickable file:// links in supported terminals.
+print_data_paths() {
+    local container="$HOME/Library/Containers/com.tesseract.app/Data"
+    local agent_data="$container/Library/Application Support/tesse-ract/agent"
+    local conversations="$agent_data/conversations"
+    local bench_output="/private/tmp/tesseract-debug/benchmark"
+
+    local ESC
+    ESC=$(printf '\033')
+
+    echo ""
+    echo "Data:"
+    for label_path in \
+        "agent:          |$agent_data" \
+        "conversations:  |$conversations" \
+        "benchmarks:     |$bench_output"; do
+        local label="${label_path%%|*}"
+        local path="${label_path#*|}"
+        if [ -d "$path" ]; then
+            local uri
+            uri="file://$(echo "$path" | sed 's/ /%20/g')"
+            printf '  %s%s]8;;%s%s\\%s%s]8;;%s\\\n' "$label" "$ESC" "$uri" "$ESC" "$path" "$ESC" "$ESC"
+        else
+            printf '  %s%s (not created yet)\n' "$label" "$path"
+        fi
+    done
+}
+
 # --- Commands --------------------------------------------------------------
 
 cmd_build() {
@@ -85,6 +114,7 @@ cmd_dev() {
         ONLY_ACTIVE_ARCH=YES
     echo ""
     cmd_run "$configuration"
+    print_data_paths
 }
 
 cmd_dev_profile() {
@@ -101,6 +131,7 @@ cmd_dev_profile() {
     echo "Launching $app_path with profiling..."
     open "$app_path" --args --flux2-profile --qwen3tts-profile
     echo "App launched with profiling enabled."
+    print_data_paths
 }
 
 cmd_clean() {

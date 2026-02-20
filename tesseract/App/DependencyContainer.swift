@@ -36,21 +36,21 @@ final class DependencyContainer: ObservableObject {
     lazy var toolRegistry: ToolRegistry = {
         let store = agentDataStore
         return ToolRegistry(tools: [
-            GetCurrentTimeTool(),
-            RememberTool(store: store),
-            RecallTool(store: store),
-            CreateGoalTool(store: store),
-            ListGoalsTool(store: store),
-            UpdateGoalTool(store: store),
-            CreateTaskTool(store: store),
-            ListTasksTool(store: store),
-            CompleteTaskTool(store: store),
-            CreateHabitTool(store: store),
-            LogHabitTool(store: store),
+            TimeGetTool(),
+            MemorySaveTool(store: store),
+            MemorySearchTool(store: store),
+            GoalCreateTool(store: store),
+            GoalListTool(store: store),
+            GoalUpdateTool(store: store),
+            TaskCreateTool(store: store),
+            TaskListTool(store: store),
+            TaskCompleteTool(store: store),
+            HabitCreateTool(store: store),
+            HabitLogTool(store: store),
             HabitStatusTool(store: store),
             MoodLogTool(store: store),
-            ListMoodsTool(store: store),
-            SetReminderTool(store: store),
+            MoodListTool(store: store),
+            ReminderSetTool(store: store),
         ])
     }()
     lazy var agentRunner: AgentRunner = {

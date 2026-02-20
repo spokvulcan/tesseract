@@ -3,9 +3,9 @@ import MLX
 import MLXLMCommon
 import os
 
-/// Mock replacement for SetReminderTool that validates arguments but skips UNUserNotificationCenter.
-private struct MockSetReminderTool: AgentTool {
-    let name = "set_reminder"
+/// Mock replacement for ReminderSetTool that validates arguments but skips UNUserNotificationCenter.
+private struct MockReminderSetTool: AgentTool {
+    let name = "reminder_set"
     let description = "Set a reminder that will show as a system notification at the specified time"
     let parameters: [ToolParameter] = [
         .required("message", type: .string, description: "Reminder message"),
@@ -117,7 +117,7 @@ final class BenchmarkRunner {
                     hardware: hardwareString(),
                     parameters: params,
                     contextLimit: 20,
-                    maxToolRounds: 5,
+                    maxToolRounds: 3,
                     sweepLabel: paramLabel
                 ),
                 scenarios: scenarioResults,
@@ -154,9 +154,9 @@ final class BenchmarkRunner {
             .appendingPathComponent("data_\(scenario.id)_\(UUID().uuidString.prefix(8))")
         let store = AgentDataStore(baseDirectory: tempDir)
 
-        // Build tool registry with mock SetReminderTool
+        // Build tool registry with mock ReminderSetTool
         let registry = buildToolRegistry(store: store)
-        let runner = AgentRunner(engine: engine, toolRegistry: registry, maxToolRounds: 5)
+        let runner = AgentRunner(engine: engine, toolRegistry: registry, maxToolRounds: 3)
 
         // Transcript for full I/O debugging
         let transcript = BenchmarkTranscript()
@@ -345,21 +345,21 @@ final class BenchmarkRunner {
 
     private func buildToolRegistry(store: AgentDataStore) -> ToolRegistry {
         ToolRegistry(tools: [
-            GetCurrentTimeTool(),
-            RememberTool(store: store),
-            RecallTool(store: store),
-            CreateGoalTool(store: store),
-            ListGoalsTool(store: store),
-            UpdateGoalTool(store: store),
-            CreateTaskTool(store: store),
-            ListTasksTool(store: store),
-            CompleteTaskTool(store: store),
-            CreateHabitTool(store: store),
-            LogHabitTool(store: store),
+            TimeGetTool(),
+            MemorySaveTool(store: store),
+            MemorySearchTool(store: store),
+            GoalCreateTool(store: store),
+            GoalListTool(store: store),
+            GoalUpdateTool(store: store),
+            TaskCreateTool(store: store),
+            TaskListTool(store: store),
+            TaskCompleteTool(store: store),
+            HabitCreateTool(store: store),
+            HabitLogTool(store: store),
             HabitStatusTool(store: store),
             MoodLogTool(store: store),
-            ListMoodsTool(store: store),
-            MockSetReminderTool(store: store),
+            MoodListTool(store: store),
+            MockReminderSetTool(store: store),
         ])
     }
 

@@ -33,9 +33,9 @@ enum TaskPriority: String, Codable, Sendable {
 
 // MARK: - Create Task Tool
 
-struct CreateTaskTool: AgentTool {
-    let name = "create_task"
-    let description = "Create a new task. Do not call complete_task in the same response."
+struct TaskCreateTool: AgentTool {
+    let name = "task_create"
+    let description = "Create a new task. Do not call task_complete in the same response."
     let parameters: [ToolParameter] = [
         .required("title", type: .string, description: "Task title"),
     ]
@@ -56,8 +56,8 @@ struct CreateTaskTool: AgentTool {
 
 // MARK: - List Tasks Tool
 
-struct ListTasksTool: AgentTool {
-    let name = "list_tasks"
+struct TaskListTool: AgentTool {
+    let name = "task_list"
     let description = "List all pending tasks. Only call once per response."
     let parameters: [ToolParameter] = []
 
@@ -81,9 +81,9 @@ struct ListTasksTool: AgentTool {
 
 // MARK: - Complete Task Tool
 
-struct CompleteTaskTool: AgentTool {
-    let name = "complete_task"
-    let description = "Mark one task as completed by ID. Do not call create_task in the same response."
+struct TaskCompleteTool: AgentTool {
+    let name = "task_complete"
+    let description = "Mark one task as completed by ID. Do not call task_create in the same response."
     let parameters: [ToolParameter] = [
         .required("task_id", type: .string, description: "Task ID (first 8 characters suffice)"),
     ]

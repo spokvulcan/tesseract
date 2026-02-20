@@ -41,8 +41,8 @@ struct ProgressNote: Codable, Sendable {
 
 // MARK: - Create Goal Tool
 
-struct CreateGoalTool: AgentTool {
-    let name = "create_goal"
+struct GoalCreateTool: AgentTool {
+    let name = "goal_create"
     let description = "Create a new goal to track."
     let parameters: [ToolParameter] = [
         .required("name", type: .string, description: "Name of the goal"),
@@ -64,8 +64,8 @@ struct CreateGoalTool: AgentTool {
 
 // MARK: - List Goals Tool
 
-struct ListGoalsTool: AgentTool {
-    let name = "list_goals"
+struct GoalListTool: AgentTool {
+    let name = "goal_list"
     let description = "List all goals. Only call once per response."
     let parameters: [ToolParameter] = []
 
@@ -92,8 +92,8 @@ struct ListGoalsTool: AgentTool {
 
 // MARK: - Update Goal Tool
 
-struct UpdateGoalTool: AgentTool {
-    let name = "update_goal"
+struct GoalUpdateTool: AgentTool {
+    let name = "goal_update"
     let description = "Add a progress note or change the status of a goal"
     let parameters: [ToolParameter] = [
         .required("goal_id", type: .string, description: "Goal ID (first 8 characters suffice)"),

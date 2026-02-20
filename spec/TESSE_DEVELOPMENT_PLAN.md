@@ -233,48 +233,48 @@ As conversation grows, keep only the last N messages in the LLM context (configu
 
 > The actual tools that make Tesse useful. Each tool is a self-contained struct — add or remove without touching the core.
 
-### 5.1 — `get_current_time` tool
+### 5.1 — `time_get` tool
 
 The simplest possible tool. Returns the current date, time, and day of week. Proves the tool system works end-to-end.
 
-**Acceptance**: User asks "what time is it?" → model calls `get_current_time` → returns correct time → model formats response.
+**Acceptance**: User asks "what time is it?" → model calls `time_get` → returns correct time → model formats response.
 
-### 5.2 — `remember` / `recall` tools
+### 5.2 — `memory_save` / `memory_search` tools
 
-`remember`: Store a key-value fact to `~/Library/Application Support/Tesseract/agent/memories.json`.
-`recall`: Search stored facts by keyword match and return relevant ones.
+`memory_save`: Save a fact, preference, or important information to `~/Library/Application Support/tesse-ract/agent/memories.json`. Accepts an optional `category` parameter (e.g. preference, health, work, personal). Deduplicates on exact fact text.
+`memory_search`: Search stored memories by keyword overlap scoring. Returns top 10 matches with dates and categories.
 
-Simple JSON array of `{ "fact": "...", "category": "...", "date": "..." }` entries.
+Simple JSON array of `{ "id": "...", "fact": "...", "category": "...", "createdAt": "..." }` entries.
 
-**Acceptance**: "Remember that I prefer morning workouts" → stored. Next session: "What do you know about my exercise preferences?" → recalls the fact.
+**Acceptance**: "Remember that I prefer morning workouts" → stored. Next session: "What do you know about my exercise preferences?" → searches and returns the fact.
 
 ### 5.3 — Goal management tools
 
-`create_goal`, `list_goals`, `update_goal`. Stored in `goals.json`. Each goal has: id, name, description, status (active/completed/archived), created date, target date (optional), progress notes.
+`goal_create`, `goal_list`, `goal_update`. Stored in `goals.json`. Each goal has: id, name, description, status (active/completed/archived), created date, target date (optional), progress notes.
 
 **Acceptance**: User creates a goal through conversation, lists goals, marks progress — all via natural language that triggers tool calls.
 
 ### 5.4 — Task management tools
 
-`create_task`, `list_tasks`, `complete_task`. Stored in `tasks.json`. Each task has: id, title, status (pending/done), due date (optional), goal_id (optional link to a goal), priority (optional).
+`task_create`, `task_list`, `task_complete`. Stored in `tasks.json`. Each task has: id, title, status (pending/done), due date (optional), goal_id (optional link to a goal), priority (optional).
 
-**Acceptance**: User asks to break a goal into steps → model calls `create_task` for each step. User asks "what should I do today?" → model calls `list_tasks` with today filter.
+**Acceptance**: User asks to break a goal into steps → model calls `task_create` for each step. User asks "what should I do today?" → model calls `task_list` with today filter.
 
 ### 5.5 — Habit tracking tools
 
-`create_habit`, `log_habit`, `habit_status`. Stored in `habits.json`. Each habit has: name, frequency (daily/weekdays/weekly), log entries (dates completed), created date. `habit_status` calculates current streak and completion rate.
+`habit_create`, `habit_log`, `habit_status`. Stored in `habits.json`. Each habit has: name, frequency (daily/weekdays/weekly), log entries (dates completed), created date. `habit_status` calculates current streak and completion rate.
 
 **Acceptance**: User creates a habit, logs it daily, asks for status → sees streak count and completion percentage.
 
 ### 5.6 — Mood logging tool
 
-`mood_log`: Record mood score (1-10) with optional note. Stored in `moods.json` with timestamp. `list_moods`: Show recent mood entries.
+`mood_log`: Record mood score (1-10) with optional note. Stored in `moods.json` with timestamp. `mood_list`: Show recent mood entries.
 
 **Acceptance**: "I'm feeling about a 7 today, pretty good" → logged. "How has my mood been this week?" → shows recent entries.
 
 ### 5.7 — Reminder tool
 
-`set_reminder`: Schedule a macOS notification for a future time. Uses `UNUserNotificationCenter` for delivery. Parse relative times ("in 30 minutes") and absolute times ("at 3pm").
+`reminder_set`: Schedule a macOS notification for a future time. Uses `UNUserNotificationCenter` for delivery. Parse relative times ("in 30 minutes") and absolute times ("at 3pm").
 
 **Acceptance**: "Remind me to stretch in 20 minutes" → notification fires 20 minutes later with "Time to stretch" message.
 
@@ -322,7 +322,7 @@ When voice output is enabled, add `[Voice mode: keep responses to 1-3 sentences]
 
 ### 7.1 — Fact memory store
 
-A persistent JSON store for user facts. Tools write to it (via `remember`), context builder reads from it. Each fact: `{ fact, category, date, source }`. Simple keyword search for retrieval.
+A persistent JSON store for user facts. Tools write to it (via `memory_save`), context builder reads from it. Each fact: `{ id, fact, category, createdAt }`. Keyword-scored search for retrieval (via `memory_search`).
 
 **Acceptance**: Facts persist across conversations and app restarts. Retrieved facts are injected into context.
 

@@ -1,8 +1,8 @@
 import Foundation
 import MLXLMCommon
 
-struct GetCurrentTimeTool: AgentTool {
-    let name = "get_current_time"
+struct TimeGetTool: AgentTool {
+    let name = "time_get"
     let description = "Get the current date and time. Only call once per response."
     let parameters: [ToolParameter] = []
 

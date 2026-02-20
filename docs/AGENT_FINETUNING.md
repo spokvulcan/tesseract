@@ -4,7 +4,7 @@
 
 - **Nanbeige4.1-3B-8bit** (8-bit quantized, ~3.8GB)
 - ChatML format with `<|im_start|>`, `<|im_end|>`, `<think>`, `<tool_call>` special tokens
-- 15 tools: get_current_time, remember, recall, create_goal, list_goals, update_goal, create_task, list_tasks, complete_task, create_habit, log_habit, habit_status, mood_log, list_moods, set_reminder
+- 15 tools: time_get, memory_save, memory_search, goal_create, goal_list, goal_update, task_create, task_list, task_complete, habit_create, habit_log, habit_status, mood_log, mood_list, reminder_set
 
 ## Benchmark System
 
@@ -78,19 +78,19 @@ Per-turn evaluation:
 
 ### 1. Tool Call Looping (Critical — 34% duplicate rate)
 
-**Affected**: S2-T2 (remember 3x), S2-T5 (list_moods 2x), S3-T8 (list_tasks 2x), S4-T38 (mood_log 4x), S5-T1 (create_habit 2x)
+**Affected**: S2-T2 (memory_save 3x), S2-T5 (mood_list 2x), S3-T8 (task_list 2x), S4-T38 (mood_log 4x), S5-T1 (habit_create 2x)
 
 **Pattern**: After a successful tool call, the model re-enters the thinking phase and generates the exact same tool call again instead of proceeding to the response. The cycle repeats 2-4 times.
 
-**Transcript evidence (S2-T2 — `remember` called 3x)**:
+**Transcript evidence (S2-T2 — `memory_save` called 3x)**:
 ```
 Round 1: <think>The user wants to remember an allergy...</think>
-         <tool_call>{"name":"remember","arguments":{"fact":"Allergic to peanuts","category":"health"}}</tool_call>
+         <tool_call>{"name":"memory_save","arguments":{"fact":"Allergic to peanuts","category":"health"}}</tool_call>
          → Tool returns: "Remembered: Allergic to peanuts (category: health)"
 
 Round 2: <think>Okay, let me see. The user said, 'Remember that I'm allergic to peanuts'.
          I need to figure out which tool to use here.</think>
-         <tool_call>{"name":"remember","arguments":{"fact":"Allergic to peanuts","category":"health"}}</tool_call>
+         <tool_call>{"name":"memory_save","arguments":{"fact":"Allergic to peanuts","category":"health"}}</tool_call>
          → Tool returns: "Remembered: Allergic to peanuts (category: health)"
 
 Round 3: <think>[identical thinking repeated]</think>
@@ -120,7 +120,7 @@ Round 5: "Okay, let me try to figure out what's going on here..."
 
 ### 2. Over-Eager Tool Use (S1 — false positive tool calls)
 
-**Affected**: S1-T2 (called `create_habit` on "How do you make scrambled eggs?")
+**Affected**: S1-T2 (called `habit_create` on "How do you make scrambled eggs?")
 
 **Transcript evidence**:
 ```
@@ -131,7 +131,7 @@ I should answer directly and clearly.
 ...
 Would you like me to help you track this as a habit or set a reminder for cooking?
 </think>
-<tool_call>{"name":"create_habit",...}</tool_call>
+<tool_call>{"name":"habit_create",...}</tool_call>
 ```
 
 **Root cause**: The model's thinking correctly identifies no tools are needed, but then proactively offers to create a habit and actually calls it. The `<tools>` block in the prompt may be too prominent, biasing the model toward tool use even when its reasoning says otherwise.
@@ -147,14 +147,14 @@ Would you like me to help you track this as a habit or set a reminder for cookin
 **Transcript evidence (S3-T1 — 392 lines of thinking!)**:
 ```
 <think>
-The create_goal tool requires 'name' (provided), others are optional...
+The goal_create tool requires 'name' (provided), others are optional...
 But a goal without target date is not useful...
 Instructions say: 'Ask clarifying questions when ambiguous'...
 [debates for 392 lines whether to call tool or ask for clarification]
 ...
 The assistant should respond with a question to the user.
 </think>
-[Asks for target date, category, and focus instead of calling create_goal]
+[Asks for target date, category, and focus instead of calling goal_create]
 ```
 
 **Root cause**: The system prompt instruction "Ask clarifying questions when the user's request is ambiguous" is interpreted too broadly. Requests like "Create a goal: Learn Spanish" have a clear name — the model should create the goal with required fields and let optional fields default, not ask about every optional parameter.
@@ -165,18 +165,18 @@ The assistant should respond with a question to the user.
 
 ### 4. Parameter Confusion (S5 — wrong parameter name)
 
-**Affected**: S5-T1 (used `habit_name` instead of `name` for create_habit)
+**Affected**: S5-T1 (used `habit_name` instead of `name` for habit_create)
 
 **Transcript evidence**:
 ```
-Round 1: <tool_call>{"name":"create_habit","arguments":{"habit_name":"running","frequency":"daily"}}</tool_call>
+Round 1: <tool_call>{"name":"habit_create","arguments":{"habit_name":"running","frequency":"daily"}}</tool_call>
          → Error: Missing required argument: name
 Round 2: "Wait, the parameters should be 'name', not 'habit_name'."
-         <tool_call>{"name":"create_habit","arguments":{"name":"running","frequency":"daily"}}</tool_call>
+         <tool_call>{"name":"habit_create","arguments":{"name":"running","frequency":"daily"}}</tool_call>
          → Success
 ```
 
-**Root cause**: The model confuses parameter names across tools. `log_habit` uses `habit_name` while `create_habit` uses `name`. The model mixes them up, especially when both habit tools appear in the same conversation.
+**Root cause**: The model confuses parameter names across tools. `habit_log` uses `habit_name` while `habit_create` uses `name`. The model mixes them up, especially when both habit tools appear in the same conversation.
 
 **Possible mitigations**:
 - Normalize parameter names across tools (use `name` everywhere, or `habit_name` everywhere)
@@ -241,6 +241,38 @@ Run `scripts/bench.sh full` to test:
 - Add scenarios for multi-tool calls in a single round (model should batch)
 - Add scenarios testing tool result comprehension (use tool output in response)
 - Run full parameter sweep and analyze with `scripts/bench_viz.py`
+
+---
+
+## Optimizations Applied — 2026-02-20
+
+### Changes (targeting 7/7 pass rate)
+
+**1. Strip `<think>` blocks from conversation history** (`AgentRunner.swift`)
+- `reconstructAssistantMessage` no longer includes `<think>...</think>` in `workingMessages`
+- Thinking is still stored in `newMessages` for transcript/UI display
+- Impact: Reduces context consumption by 50-80%, removes the "example" of long deliberation that the model copies, fixes S4 degradation (turns 25-50 all fail when context is full of thinking)
+
+**2. Rewrite system prompt with decision framework** (`SystemPromptBuilder.swift`)
+- Action-word triggers: "CREATE → call tool", "LIST → call listing tool"
+- 7 few-shot examples covering common failure patterns (tool calls, greetings, general questions)
+- Explicit thinking budget: "2-3 sentences maximum"
+- Follow-up context rule: "combine info from previous messages"
+- Replaces vague "ask clarifying questions when ambiguous" that caused over-clarification
+
+**3. Reduce maxToolRounds from 5 to 3** (`AgentRunner.swift`, `BenchmarkRunner.swift`)
+- Transcript evidence shows rounds 3-5 are always duplicate attempts
+- Limits damage from any remaining looping behavior
+
+**4. Add repetitionPenalty=1.05** (`AgentGeneration.swift`)
+- Discourages repeating exact `<tool_call>` token sequences
+- Qwen team recommends 1.05 as starting point for tool-calling models
+
+### Expected Impact
+- S3 (multi-tool): 62% → ~85%+ (few-shot examples fix paralysis on "Create a goal")
+- S4 (long conversation): 66% → ~80%+ (stripped thinking prevents context rot)
+- S5 (duplicate detection): 83% → ~90%+ (decision framework + rep penalty)
+- S7 (error recovery): 75% → ~90%+ (follow-up context rule + few-shot for "Set a reminder")
 
 ---
 

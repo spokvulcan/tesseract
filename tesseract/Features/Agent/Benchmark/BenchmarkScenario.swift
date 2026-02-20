@@ -72,12 +72,12 @@ struct SingleToolScenario: BenchmarkScenario {
     let turns: [TurnExpectation] = [
         TurnExpectation(
             "What time is it?",
-            tools: ["get_current_time"]
+            tools: ["time_get"]
         ),
         TurnExpectation(
             "Remember that I'm allergic to peanuts",
-            tools: ["remember"],
-            arguments: ["remember": ["fact": "peanut"]]
+            tools: ["memory_save"],
+            arguments: ["memory_save": ["fact": "peanut"]]
         ),
         TurnExpectation(
             "Log my mood as 7",
@@ -86,12 +86,12 @@ struct SingleToolScenario: BenchmarkScenario {
         ),
         TurnExpectation(
             "Create a habit called meditation, daily",
-            tools: ["create_habit"],
-            arguments: ["create_habit": ["name": "meditation", "frequency": "daily"]]
+            tools: ["habit_create"],
+            arguments: ["habit_create": ["name": "meditation", "frequency": "daily"]]
         ),
         TurnExpectation(
             "Show my mood history",
-            tools: ["list_moods"]
+            tools: ["mood_list"]
         ),
     ]
 }
@@ -104,36 +104,36 @@ struct MultiToolScenario: BenchmarkScenario {
     let turns: [TurnExpectation] = [
         TurnExpectation(
             "Create a goal: Learn Spanish",
-            tools: ["create_goal"],
-            arguments: ["create_goal": ["name": "Spanish"]]
+            tools: ["goal_create"],
+            arguments: ["goal_create": ["name": "Spanish"]]
         ),
         TurnExpectation(
             "Add tasks: buy textbook and download a language app",
-            tools: ["create_task", "create_task"]
+            tools: ["task_create", "task_create"]
         ),
         TurnExpectation(
             "List my goals",
-            tools: ["list_goals"]
+            tools: ["goal_list"]
         ),
         TurnExpectation(
             "List my tasks",
-            tools: ["list_tasks"]
+            tools: ["task_list"]
         ),
         TurnExpectation(
             "I bought the textbook, mark it complete",
-            tools: ["complete_task"]
+            tools: ["task_complete"]
         ),
         TurnExpectation(
             "Update my Spanish goal with a note that I started studying",
-            tools: ["update_goal"]
+            tools: ["goal_update"]
         ),
         TurnExpectation(
             "How are my goals looking?",
-            tools: ["list_goals"]
+            tools: ["goal_list"]
         ),
         TurnExpectation(
             "What tasks are still pending?",
-            tools: ["list_tasks"]
+            tools: ["task_list"]
         ),
     ]
 }
@@ -151,60 +151,60 @@ struct LongConversationScenario: BenchmarkScenario {
         // Phase 1: Setup (turns 1-10)
         turns.append(TurnExpectation(
             "Create a goal: Run a marathon",
-            tools: ["create_goal"],
-            arguments: ["create_goal": ["name": "marathon"]]
+            tools: ["goal_create"],
+            arguments: ["goal_create": ["name": "marathon"]]
         ))
         turns.append(TurnExpectation(
             "Create a goal: Read 20 books this year",
-            tools: ["create_goal"]
+            tools: ["goal_create"]
         ))
         turns.append(TurnExpectation(
             "Create a goal: Learn to cook Italian food",
-            tools: ["create_goal"]
+            tools: ["goal_create"]
         ))
         turns.append(TurnExpectation(
             "Add a task: Sign up for a running club",
-            tools: ["create_task"]
+            tools: ["task_create"]
         ))
         turns.append(TurnExpectation(
             "Add a task: Buy running shoes",
-            tools: ["create_task"]
+            tools: ["task_create"]
         ))
         turns.append(TurnExpectation(
             "Add a task: Pick up a library card",
-            tools: ["create_task"]
+            tools: ["task_create"]
         ))
         turns.append(TurnExpectation(
             "Add a task: Order an Italian cookbook",
-            tools: ["create_task"]
+            tools: ["task_create"]
         ))
         turns.append(TurnExpectation(
             "Add a task: Research marathon training plans",
-            tools: ["create_task"]
+            tools: ["task_create"]
         ))
         turns.append(TurnExpectation(
             "Create a habit called running, daily",
-            tools: ["create_habit"],
-            arguments: ["create_habit": ["name": "running", "frequency": "daily"]]
+            tools: ["habit_create"],
+            arguments: ["habit_create": ["name": "running", "frequency": "daily"]]
         ))
         turns.append(TurnExpectation(
             "Create a habit called reading, daily",
-            tools: ["create_habit"],
-            arguments: ["create_habit": ["name": "reading", "frequency": "daily"]]
+            tools: ["habit_create"],
+            arguments: ["habit_create": ["name": "reading", "frequency": "daily"]]
         ))
 
         // Phase 2: Daily routine (turns 11-30)
         turns.append(TurnExpectation(
             "Remember that my favorite Italian dish is carbonara",
-            tools: ["remember"]
+            tools: ["memory_save"]
         ))
         turns.append(TurnExpectation(
             "Log my running habit for today",
-            tools: ["log_habit"]
+            tools: ["habit_log"]
         ))
         turns.append(TurnExpectation(
             "Log my reading habit for today",
-            tools: ["log_habit"]
+            tools: ["habit_log"]
         ))
         turns.append(TurnExpectation(
             "Log my mood as 8, feeling motivated",
@@ -212,7 +212,7 @@ struct LongConversationScenario: BenchmarkScenario {
         ))
         turns.append(TurnExpectation(
             "I signed up for a running club, mark that task complete",
-            tools: ["complete_task"]
+            tools: ["task_complete"]
         ))
         turns.append(TurnExpectation(
             "How are my habits going?",
@@ -220,11 +220,11 @@ struct LongConversationScenario: BenchmarkScenario {
         ))
         turns.append(TurnExpectation(
             "What tasks do I still need to do?",
-            tools: ["list_tasks"]
+            tools: ["task_list"]
         ))
         turns.append(TurnExpectation(
             "Update my marathon goal — signed up for the club and started training",
-            tools: ["update_goal"]
+            tools: ["goal_update"]
         ))
         turns.append(TurnExpectation(
             "Log my mood as 7",
@@ -232,23 +232,23 @@ struct LongConversationScenario: BenchmarkScenario {
         ))
         turns.append(TurnExpectation(
             "Show my mood history",
-            tools: ["list_moods"]
+            tools: ["mood_list"]
         ))
         turns.append(TurnExpectation(
             "I bought the running shoes, mark complete",
-            tools: ["complete_task"]
+            tools: ["task_complete"]
         ))
         turns.append(TurnExpectation(
             "I got my library card too",
-            tools: ["complete_task"]
+            tools: ["task_complete"]
         ))
         turns.append(TurnExpectation(
             "Remember that I run best in the morning before 8am",
-            tools: ["remember"]
+            tools: ["memory_save"]
         ))
         turns.append(TurnExpectation(
             "What are my goals?",
-            tools: ["list_goals"]
+            tools: ["goal_list"]
         ))
         turns.append(TurnExpectation(
             "Log my mood as 6, feeling a bit tired",
@@ -256,7 +256,7 @@ struct LongConversationScenario: BenchmarkScenario {
         ))
         turns.append(TurnExpectation(
             "Log my running habit for today",
-            tools: ["log_habit"]
+            tools: ["habit_log"]
         ))
         turns.append(TurnExpectation(
             "How's my running streak?",
@@ -264,21 +264,21 @@ struct LongConversationScenario: BenchmarkScenario {
         ))
         turns.append(TurnExpectation(
             "Update my reading goal — picked up the library card and started my first book",
-            tools: ["update_goal"]
+            tools: ["goal_update"]
         ))
         turns.append(TurnExpectation(
             "Log my reading habit for today",
-            tools: ["log_habit"]
+            tools: ["habit_log"]
         ))
         turns.append(TurnExpectation(
             "What's the current time?",
-            tools: ["get_current_time"]
+            tools: ["time_get"]
         ))
 
         // Phase 3: Past context window boundary (turns 31-40)
         turns.append(TurnExpectation(
             "I ordered the Italian cookbook, mark it done",
-            tools: ["complete_task"]
+            tools: ["task_complete"]
         ))
         turns.append(TurnExpectation(
             "Log my mood as 9, had a great run today",
@@ -286,23 +286,23 @@ struct LongConversationScenario: BenchmarkScenario {
         ))
         turns.append(TurnExpectation(
             "Remember I prefer to read fiction before bed",
-            tools: ["remember"]
+            tools: ["memory_save"]
         ))
         turns.append(TurnExpectation(
             "Update my Italian cooking goal — the cookbook arrived, trying first recipe this weekend",
-            tools: ["update_goal"]
+            tools: ["goal_update"]
         ))
         turns.append(TurnExpectation(
             "Log my running habit for today",
-            tools: ["log_habit"]
+            tools: ["habit_log"]
         ))
         turns.append(TurnExpectation(
             "Log my reading habit for today",
-            tools: ["log_habit"]
+            tools: ["habit_log"]
         ))
         turns.append(TurnExpectation(
             "What tasks are still pending?",
-            tools: ["list_tasks"]
+            tools: ["task_list"]
         ))
         turns.append(TurnExpectation(
             "Log my mood as 8",
@@ -314,27 +314,27 @@ struct LongConversationScenario: BenchmarkScenario {
         ))
         turns.append(TurnExpectation(
             "Show my mood trends",
-            tools: ["list_moods"]
+            tools: ["mood_list"]
         ))
 
         // Phase 4: Reference early items, test graceful context loss (turns 41-50)
         turns.append(TurnExpectation(
             "What do you know about my food preferences?",
-            tools: ["recall"],
+            tools: ["memory_search"],
             substrings: ["carbonara"]
         ))
         turns.append(TurnExpectation(
             "When do I like to run?",
-            tools: ["recall"],
+            tools: ["memory_search"],
             substrings: ["morning"]
         ))
         turns.append(TurnExpectation(
             "Update my marathon goal with a progress note — completed first 10K run",
-            tools: ["update_goal"]
+            tools: ["goal_update"]
         ))
         turns.append(TurnExpectation(
             "How are my goals looking overall?",
-            tools: ["list_goals"]
+            tools: ["goal_list"]
         ))
         turns.append(TurnExpectation(
             "Log my mood as 9, feeling accomplished",
@@ -342,19 +342,19 @@ struct LongConversationScenario: BenchmarkScenario {
         ))
         turns.append(TurnExpectation(
             "What's my average mood been?",
-            tools: ["list_moods"]
+            tools: ["mood_list"]
         ))
         turns.append(TurnExpectation(
             "Log my running habit",
-            tools: ["log_habit"]
+            tools: ["habit_log"]
         ))
         turns.append(TurnExpectation(
             "Log my reading habit",
-            tools: ["log_habit"]
+            tools: ["habit_log"]
         ))
         turns.append(TurnExpectation(
             "Give me a summary of everything I'm working on",
-            tools: ["list_goals", "list_tasks"]
+            tools: ["goal_list", "task_list"]
         ))
         turns.append(TurnExpectation(
             "Thanks for keeping track of everything!",
@@ -373,33 +373,33 @@ struct DuplicateDetectionScenario: BenchmarkScenario {
     let turns: [TurnExpectation] = [
         TurnExpectation(
             "Create a habit called running, daily",
-            tools: ["create_habit"],
-            arguments: ["create_habit": ["name": "running", "frequency": "daily"]]
+            tools: ["habit_create"],
+            arguments: ["habit_create": ["name": "running", "frequency": "daily"]]
         ),
         // Repeated request — tool returns "already exists", model should relay that
         TurnExpectation(
             "Create a habit called running, daily",
-            tools: ["create_habit"],
+            tools: ["habit_create"],
             substrings: ["already"]
         ),
         TurnExpectation(
             "Log my running habit for today",
-            tools: ["log_habit"]
+            tools: ["habit_log"]
         ),
         // Repeated log — tool returns "already logged", model should relay that
         TurnExpectation(
             "Log my running habit for today",
-            tools: ["log_habit"],
+            tools: ["habit_log"],
             substrings: ["already"]
         ),
         TurnExpectation(
             "Remember I like coffee",
-            tools: ["remember"]
+            tools: ["memory_save"]
         ),
-        // Near-duplicate memory — tool returns "already remembered"
+        // Near-duplicate memory — tool returns "already saved"
         TurnExpectation(
             "Remember that I like coffee",
-            tools: ["remember"],
+            tools: ["memory_save"],
             substrings: ["already"]
         ),
     ]
@@ -414,19 +414,19 @@ struct ContextStressScenario: BenchmarkScenario {
         // Create many items to fill context
         TurnExpectation(
             "Remember my favorite color is blue",
-            tools: ["remember"]
+            tools: ["memory_save"]
         ),
         TurnExpectation(
             "Create a goal: Learn piano",
-            tools: ["create_goal"]
+            tools: ["goal_create"]
         ),
         TurnExpectation(
             "Create a habit called piano practice, daily",
-            tools: ["create_habit"]
+            tools: ["habit_create"]
         ),
         TurnExpectation(
             "Add a task: Buy a keyboard",
-            tools: ["create_task"]
+            tools: ["task_create"]
         ),
         // Ask about turn 1 items — answer may come from context or recall tool
         TurnExpectation(
@@ -436,7 +436,7 @@ struct ContextStressScenario: BenchmarkScenario {
         ),
         TurnExpectation(
             "List all my goals and tasks",
-            tools: ["list_goals", "list_tasks"]
+            tools: ["goal_list", "task_list"]
         ),
     ]
 }
@@ -450,19 +450,19 @@ struct ErrorRecoveryScenario: BenchmarkScenario {
         // Ambiguous — should ask what/when, not hallucinate
         TurnExpectation(
             "Set a reminder",
-            forbidden: ["set_reminder"],
+            forbidden: ["reminder_set"],
             expectsClarification: true
         ),
         // Still missing time
         TurnExpectation(
             "Remind me about the meeting",
-            forbidden: ["set_reminder"],
+            forbidden: ["reminder_set"],
             expectsClarification: true
         ),
         // Now complete — self-contained so 3B model doesn't need to infer from prior turns
         TurnExpectation(
             "At 3pm tomorrow, remind me about the meeting",
-            tools: ["set_reminder"]
+            tools: ["reminder_set"]
         ),
         // Nonsensical request
         TurnExpectation(

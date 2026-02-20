@@ -37,7 +37,7 @@ final class AgentRunner {
 
     private var runTask: Task<Void, Never>?
 
-    init(engine: AgentEngine, toolRegistry: ToolRegistry, maxToolRounds: Int = 5) {
+    init(engine: AgentEngine, toolRegistry: ToolRegistry, maxToolRounds: Int = 3) {
         self.engine = engine
         self.toolRegistry = toolRegistry
         self.maxToolRounds = maxToolRounds
@@ -119,6 +119,16 @@ final class AgentRunner {
 
                     // No tool calls and no malformed calls — final response
                     if toolCalls.isEmpty && malformedCalls.isEmpty {
+                        // Model produced thinking but no text response — stalled.
+                        // Continue the loop to give it another chance to respond.
+                        if responseText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && !thinkingText.isEmpty
+                        {
+                            Log.agent.info("Think-only round \(round + 1) — no text or tools, retrying")
+                            workingMessages.append(.assistant(""))
+                            newMessages.append(.assistant("", thinking: thinking))
+                            continue
+                        }
                         newMessages.append(.assistant(responseText, thinking: thinking, toolCalls: toolCalls))
                         continuation.yield(.completed(newMessages))
                         continuation.finish()
@@ -235,18 +245,15 @@ final class AgentRunner {
         }
     }
 
-    /// Reconstructs the assistant message content with think/tool_call tags for conversation history.
+    /// Reconstructs the assistant message content with tool_call tags for conversation history.
     ///
-    /// The reconstructed message preserves `<think>` tags so the model sees its own reasoning
-    /// when continuing a multi-round tool loop.
+    /// Thinking is intentionally **omitted** from working messages — the model only needs to see
+    /// its prior actions (tool calls + text responses), not its prior reasoning. This prevents
+    /// context bloat and removes the "example" of long deliberation that the model tends to copy.
     private static func reconstructAssistantMessage(
         text: String, toolCalls: [ToolCall], thinking: String? = nil
     ) -> String {
-        var content = ""
-        if let thinking, !thinking.isEmpty {
-            content += "<think>\(thinking)</think>\n"
-        }
-        content += text
+        var content = text
         for call in toolCalls {
             if let data = try? JSONEncoder().encode(call.function),
                let json = String(data: data, encoding: .utf8)

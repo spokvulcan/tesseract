@@ -49,7 +49,7 @@
 
 | # | Task | Status | Date | Notes |
 |---|------|--------|------|-------|
-| 5.1 | `get_current_time` tool | [ ] | | |
+| 5.1 | `time_get` tool | [ ] | | |
 | 5.2 | `remember` / `recall` tools | [ ] | | |
 | 5.3 | Goal management tools | [ ] | | |
 | 5.4 | Task management tools | [ ] | | |

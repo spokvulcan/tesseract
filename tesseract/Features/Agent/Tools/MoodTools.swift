@@ -60,8 +60,8 @@ struct MoodLogTool: AgentTool {
 
 // MARK: - List Moods Tool
 
-struct ListMoodsTool: AgentTool {
-    let name = "list_moods"
+struct MoodListTool: AgentTool {
+    let name = "mood_list"
     let description = "Show recent mood entries and average. Only call once per response."
     let parameters: [ToolParameter] = []
 

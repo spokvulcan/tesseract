@@ -194,16 +194,16 @@ Tesse is:
 - System prompt establishing Tesse's personality and role
 
 #### 6.2 Goal & Task Management
-- **Tool: `create_goal`** — Set goals with name, description, target date
-- **Tool: `list_goals`** — View active goals and progress
-- **Tool: `update_goal`** — Mark progress, add notes
-- **Tool: `create_task`** — Break goals into actionable tasks
-- **Tool: `complete_task`** — Check off completed tasks
-- **Tool: `list_tasks`** — View today's tasks, upcoming, overdue
+- **Tool: `goal_create`** — Set goals with name, description, target date
+- **Tool: `goal_list`** — View active goals and progress
+- **Tool: `goal_update`** — Mark progress, add notes
+- **Tool: `task_create`** — Break goals into actionable tasks
+- **Tool: `task_complete`** — Check off completed tasks
+- **Tool: `task_list`** — View today's tasks, upcoming, overdue
 
 #### 6.3 Habit Tracking
-- **Tool: `create_habit`** — Define habits with frequency (daily, weekdays, weekly)
-- **Tool: `log_habit`** — Record habit completion
+- **Tool: `habit_create`** — Define habits with frequency (daily, weekdays, weekly)
+- **Tool: `habit_log`** — Record habit completion
 - **Tool: `habit_status`** — View streaks, completion rates, trends
 
 #### 6.4 Daily Check-ins
@@ -218,7 +218,7 @@ Tesse is:
 - Conversation summarization for long-term context
 
 #### 6.6 Reminders & Nudges
-- **Tool: `set_reminder`** — Schedule a reminder for a specific time
+- **Tool: `reminder_set`** — Schedule a reminder for a specific time
 - **Tool: `set_recurring_reminder`** — Daily/weekly recurring nudges
 - macOS notification integration for delivery
 
@@ -292,7 +292,7 @@ The user wants to build an exercise habit. I should ask about their current acti
 </think>
 
 <tool_call>
-{"name": "list_goals", "arguments": {"category": "health"}}
+{"name": "goal_list", "arguments": {"category": "health"}}
 </tool_call><|im_end|>
 ```
 
@@ -306,7 +306,7 @@ Tools are defined in `<tools>` tags in the system prompt:
   {
     "type": "function",
     "function": {
-      "name": "create_habit",
+      "name": "habit_create",
       "description": "Create a new habit to track",
       "parameters": {
         "type": "object",
@@ -469,19 +469,19 @@ protocol AgentTool {
 
 | Tool | Description | Arguments |
 |------|-------------|-----------|
-| `create_goal` | Create a new goal | `name`, `description`, `target_date?`, `category?` |
-| `list_goals` | List active goals | `category?`, `status?` |
-| `update_goal` | Update goal progress | `goal_id`, `progress_note?`, `status?` |
-| `create_task` | Create a task (optionally linked to a goal) | `title`, `due_date?`, `goal_id?`, `priority?` |
-| `list_tasks` | List tasks | `filter?` (today/upcoming/overdue/all) |
-| `complete_task` | Mark task as done | `task_id` |
+| `goal_create` | Create a new goal | `name`, `description`, `target_date?`, `category?` |
+| `goal_list` | List active goals | `category?`, `status?` |
+| `goal_update` | Update goal progress | `goal_id`, `progress_note?`, `status?` |
+| `task_create` | Create a task (optionally linked to a goal) | `title`, `due_date?`, `goal_id?`, `priority?` |
+| `task_list` | List tasks | `filter?` (today/upcoming/overdue/all) |
+| `task_complete` | Mark task as done | `task_id` |
 
 #### Habits
 
 | Tool | Description | Arguments |
 |------|-------------|-----------|
-| `create_habit` | Define a new habit | `name`, `frequency`, `time_of_day?` |
-| `log_habit` | Record habit completion | `habit_name`, `date?`, `note?` |
+| `habit_create` | Define a new habit | `name`, `frequency`, `time_of_day?` |
+| `habit_log` | Record habit completion | `habit_name`, `date?`, `note?` |
 | `habit_status` | View habit streaks and stats | `habit_name?` (all if omitted) |
 
 #### Memory & Self
@@ -496,8 +496,8 @@ protocol AgentTool {
 | Tool | Description | Arguments |
 |------|-------------|-----------|
 | `mood_log` | Log current mood | `score` (1-10), `note?` |
-| `set_reminder` | Set a one-time reminder | `message`, `time` |
-| `get_current_time` | Get current date and time | (none) |
+| `reminder_set` | Set a one-time reminder | `message`, `time` |
+| `time_get` | Get current date and time | (none) |
 
 ### Tool Result Format
 
@@ -720,8 +720,8 @@ tesseract/
 │       │   ├── TaskTools.swift         # create/list/complete task
 │       │   ├── HabitTools.swift        # create/log/status habit
 │       │   ├── MemoryTools.swift       # remember/recall
-│       │   ├── DailyTools.swift        # mood_log, get_current_time
-│       │   └── ReminderTools.swift     # set_reminder
+│       │   ├── DailyTools.swift        # mood_log, time_get
+│       │   └── ReminderTools.swift     # reminder_set
 │       ├── Memory/
 │       │   ├── FactMemory.swift        # Key-value fact store
 │       │   ├── NarrativeMemory.swift   # Conversation summaries

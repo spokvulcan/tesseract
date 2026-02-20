@@ -43,8 +43,8 @@ struct HabitLogEntry: Codable, Sendable {
 
 // MARK: - Create Habit Tool
 
-struct CreateHabitTool: AgentTool {
-    let name = "create_habit"
+struct HabitCreateTool: AgentTool {
+    let name = "habit_create"
     let description = "Create a new habit to track. Returns an error if the habit already exists — do not retry."
     let parameters: [ToolParameter] = [
         .required("name", type: .string, description: "Name of the habit"),
@@ -78,8 +78,8 @@ struct CreateHabitTool: AgentTool {
 
 // MARK: - Log Habit Tool
 
-struct LogHabitTool: AgentTool {
-    let name = "log_habit"
+struct HabitLogTool: AgentTool {
+    let name = "habit_log"
     let description = "Log a habit as done for today. Returns an error if already logged today — do not retry."
     let parameters: [ToolParameter] = [
         .required("name", type: .string, description: "Name of the habit (case-insensitive)"),
@@ -95,7 +95,7 @@ struct LogHabitTool: AgentTool {
 
         let habits: [Habit] = await store.loadArray(Habit.self, from: "habits.json")
         guard let habit = habits.first(where: { $0.name.lowercased() == habitName.lowercased() && !$0.archived }) else {
-            return "No active habit named \"\(habitName)\". Use create_habit first."
+            return "No active habit named \"\(habitName)\". Use habit_create first."
         }
 
         let formatter = DateFormatter()

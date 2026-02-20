@@ -22,8 +22,8 @@ struct Reminder: Codable, Sendable {
 
 // MARK: - Set Reminder Tool
 
-struct SetReminderTool: AgentTool {
-    let name = "set_reminder"
+struct ReminderSetTool: AgentTool {
+    let name = "reminder_set"
     let description = "Set a reminder that will show as a system notification at the specified time"
     let parameters: [ToolParameter] = [
         .required("message", type: .string, description: "Reminder message"),

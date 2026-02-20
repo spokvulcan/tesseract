@@ -49,21 +49,21 @@ enum AgentNotchPhase: Equatable {
     /// Human-readable tool name for display.
     static func toolDisplayName(_ rawName: String) -> String {
         switch rawName {
-        case "get_current_time": return "Checking time"
-        case "remember": return "Remembering"
-        case "recall": return "Recalling"
-        case "create_goal": return "Creating goal"
-        case "list_goals": return "Listing goals"
-        case "update_goal": return "Updating goal"
-        case "create_task": return "Creating task"
-        case "list_tasks": return "Listing tasks"
-        case "complete_task": return "Completing task"
-        case "create_habit": return "Creating habit"
-        case "log_habit": return "Logging habit"
+        case "time_get": return "Checking time"
+        case "memory_save": return "Saving memory"
+        case "memory_search": return "Searching memory"
+        case "goal_create": return "Creating goal"
+        case "goal_list": return "Listing goals"
+        case "goal_update": return "Updating goal"
+        case "task_create": return "Creating task"
+        case "task_list": return "Listing tasks"
+        case "task_complete": return "Completing task"
+        case "habit_create": return "Creating habit"
+        case "habit_log": return "Logging habit"
         case "habit_status": return "Checking habits"
         case "mood_log": return "Logging mood"
-        case "list_moods": return "Listing moods"
-        case "set_reminder": return "Setting reminder"
+        case "mood_list": return "Listing moods"
+        case "reminder_set": return "Setting reminder"
         default:
             // Convert snake_case to title case
             return rawName.split(separator: "_").map { $0.capitalized }.joined(separator: " ")
