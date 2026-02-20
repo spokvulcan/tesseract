@@ -289,6 +289,34 @@ struct RecordingSettingsSection: View {
                 }
             }
 
+            Section("Agent Model") {
+                let agentModels = ModelDefinition.all.filter { $0.category == .agent }
+                let downloadedAgentModels = agentModels.filter { model in
+                    if case .downloaded = container.modelDownloadManager.statuses[model.id] {
+                        return true
+                    }
+                    return false
+                }
+
+                if downloadedAgentModels.isEmpty {
+                    Text("No agent models downloaded. Download one from the Models page.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Model", selection: $settings.selectedAgentModelID) {
+                        ForEach(downloadedAgentModels) { model in
+                            Text(model.displayName).tag(model.id)
+                        }
+                    }
+
+                    if let selected = agentModels.first(where: { $0.id == settings.selectedAgentModelID }) {
+                        Text(selected.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section("Duration") {
                 VStack(alignment: .leading) {
                     let minutes = Int(settings.maxRecordingDuration) / 60

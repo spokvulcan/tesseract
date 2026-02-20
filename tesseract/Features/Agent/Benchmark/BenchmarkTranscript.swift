@@ -39,8 +39,8 @@ final class BenchmarkTranscript {
 
     /// Writes the exact raw ChatML prompt the model sees, rendered through the Jinja
     /// template (includes `<|im_start|>`, `<|im_end|>`, tool definitions, etc.).
-    func writeRawPrompt(_ rawPrompt: String) {
-        lines.append("╌╌╌ RAW PROMPT (\(rawPrompt.count) chars) ╌╌╌")
+    func writeRawPrompt(round: Int, rawPrompt: String, messageCount: Int) {
+        lines.append("╌╌╌ ROUND \(round) — MODEL INPUT (\(messageCount) messages, \(rawPrompt.count) chars) ╌╌╌")
         lines.append("")
         lines.append(rawPrompt)
         lines.append("")
@@ -49,8 +49,14 @@ final class BenchmarkTranscript {
     // MARK: - Round Output
 
     /// Writes the reconstructed raw model output for one generation round.
-    func writeRoundOutput(round: Int, rawOutput: String, thinkingContent: String?) {
-        lines.append("╌╌╌ ROUND \(round) — RAW OUTPUT ╌╌╌")
+    func writeRoundOutput(round: Int, rawOutput: String, thinkingContent: String?,
+                          promptTokens: Int? = nil, genTokens: Int? = nil) {
+        var header = "╌╌╌ ROUND \(round) — RAW OUTPUT"
+        if let pt = promptTokens, let gt = genTokens {
+            header += " (\(pt) prompt → \(gt) gen tokens)"
+        }
+        header += " ╌╌╌"
+        lines.append(header)
         lines.append("")
 
         var reconstructed = ""

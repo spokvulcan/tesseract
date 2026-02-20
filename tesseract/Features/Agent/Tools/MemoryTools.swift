@@ -21,7 +21,7 @@ struct AgentMemory: Codable, Sendable {
 
 struct MemorySaveTool: AgentTool {
     let name = "memory_save"
-    let description = "Save a fact, preference, or important information about the user to long-term memory. Returns existing memory if already stored — do not retry."
+    let description = "Save a fact, preference, or important information about the user to long-term memory. Reports if a similar memory already exists."
     let parameters: [ToolParameter] = [
         .required("fact", type: .string, description: "The fact or preference to save"),
         .optional("category", type: .string, description: "Category for organization (e.g. preference, health, work, personal)"),

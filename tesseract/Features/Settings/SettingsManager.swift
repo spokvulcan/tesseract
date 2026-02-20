@@ -119,6 +119,7 @@ final class SettingsManager: ObservableObject {
     @AppStorage("ttsLanguage") var ttsLanguage: String = "English"
     @AppStorage("ttsStreamingEnabled") var ttsStreamingEnabled = true
     @AppStorage("agentAutoSpeak") var agentAutoSpeak = false
+    @AppStorage("selectedAgentModelID") var selectedAgentModelID: String = "qwen3-4b-instruct-2507"
 
     var ttsParameters: TTSParameters {
         get {
@@ -181,6 +182,7 @@ final class SettingsManager: ObservableObject {
         ttsLanguage = "English"
         ttsStreamingEnabled = true
         agentAutoSpeak = false
+        selectedAgentModelID = "qwen3-4b-instruct-2507"
     }
 
     // MARK: - Private

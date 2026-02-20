@@ -15,8 +15,7 @@ struct AgentContentView: View {
     @State private var isHoldingMic = false
     @State private var speakingMessageID: UUID?
     @AppStorage("agentAutoSpeak") private var autoSpeakEnabled = false
-
-    private let agentModelID = "nanbeige4.1-3b"
+    @AppStorage("selectedAgentModelID") private var agentModelID: String = "qwen3-4b-instruct-2507"
 
     private var isModelDownloaded: Bool {
         if case .downloaded = downloadManager.statuses[agentModelID] {
@@ -172,7 +171,7 @@ struct AgentContentView: View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.yellow)
-            Text("Download Nanbeige4.1-3B from the Models page to use the agent.")
+            Text("Download an agent model from the Models page to use the agent.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

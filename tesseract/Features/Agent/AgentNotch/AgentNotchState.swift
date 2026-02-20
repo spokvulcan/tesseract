@@ -49,7 +49,6 @@ enum AgentNotchPhase: Equatable {
     /// Human-readable tool name for display.
     static func toolDisplayName(_ rawName: String) -> String {
         switch rawName {
-        case "time_get": return "Checking time"
         case "memory_save": return "Saving memory"
         case "memory_search": return "Searching memory"
         case "goal_create": return "Creating goal"

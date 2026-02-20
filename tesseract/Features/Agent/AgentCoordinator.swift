@@ -86,7 +86,11 @@ final class AgentCoordinator: ObservableObject {
         let recentMessages = Array(messages.suffix(Defaults.contextLimit))
         let prompt: [AgentChatMessage] = [.system(systemPrompt)] + recentMessages
 
-        Log.agent.info("Sending \(prompt.count) messages to model (\(recentMessages.count) of \(self.messages.count) history)")
+        // Select model-specific generation parameters
+        let modelID = settings?.selectedAgentModelID ?? "qwen3-4b-instruct-2507"
+        let generateParams = AgentGenerateParameters.forModel(modelID)
+
+        Log.agent.info("Sending \(prompt.count) messages to model \(modelID) (\(recentMessages.count) of \(self.messages.count) history)")
 
         // Free memory from other engines before inference
         prepareForInference?()
@@ -95,7 +99,7 @@ final class AgentCoordinator: ObservableObject {
         if messages.count == 1 {
             debugLogger.startSession()
         }
-        debugLogger.logPrompt(messages: prompt, parameters: .default)
+        debugLogger.logPrompt(messages: prompt, parameters: generateParams)
 
         var generationInfo: AgentGeneration.Info?
 
@@ -107,7 +111,7 @@ final class AgentCoordinator: ObservableObject {
             var notchTextLength = 0
 
             do {
-                let stream = try agentRunner.run(messages: prompt)
+                let stream = try agentRunner.run(messages: prompt, parameters: generateParams)
                 Log.agent.debug("Agent runner stream started")
 
                 for try await event in stream {
@@ -146,6 +150,8 @@ final class AgentCoordinator: ObservableObject {
                         notchController?.updatePhase(.thinking)
                     case .toolError(let raw):
                         Log.agent.warning("Tool error: \(raw.prefix(200))")
+                    case .roundStart:
+                        break
                     case .info(let info):
                         generationInfo = info
                     case .completed(let newMessages):

@@ -36,7 +36,6 @@ final class DependencyContainer: ObservableObject {
     lazy var toolRegistry: ToolRegistry = {
         let store = agentDataStore
         return ToolRegistry(tools: [
-            TimeGetTool(),
             MemorySaveTool(store: store),
             MemorySearchTool(store: store),
             GoalCreateTool(store: store),
@@ -78,13 +77,15 @@ final class DependencyContainer: ObservableObject {
             },
             loadAgentModel: { [weak self] in
                 guard let self else { return }
-                let modelID = "nanbeige4.1-3b"
-                guard case .downloaded = modelDownloadManager.statuses[modelID],
-                      !agentEngine.isModelLoaded,
-                      !agentEngine.isLoading,
-                      let path = modelDownloadManager.modelPath(for: modelID)
+                let modelID = self.settingsManager.selectedAgentModelID
+                guard case .downloaded = self.modelDownloadManager.statuses[modelID],
+                      !self.agentEngine.isLoading,
+                      let path = self.modelDownloadManager.modelPath(for: modelID)
                 else { return }
-                try await agentEngine.loadModel(from: path)
+                if self.agentEngine.isModelLoaded {
+                    self.agentEngine.unloadModel()
+                }
+                try await self.agentEngine.loadModel(from: path)
             },
             speechCoordinator: speechCoordinator,
             notchController: agentNotchController

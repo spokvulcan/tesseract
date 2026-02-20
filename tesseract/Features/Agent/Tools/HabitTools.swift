@@ -80,7 +80,7 @@ struct HabitCreateTool: AgentTool {
 
 struct HabitLogTool: AgentTool {
     let name = "habit_log"
-    let description = "Log a habit as done for today. Returns an error if already logged today — do not retry."
+    let description = "Log a habit as done for today. Returns an error if already logged today."
     let parameters: [ToolParameter] = [
         .required("name", type: .string, description: "Name of the habit (case-insensitive)"),
         .optional("note", type: .string, description: "Optional note about the session"),

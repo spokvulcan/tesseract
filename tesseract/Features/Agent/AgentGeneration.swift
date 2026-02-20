@@ -14,6 +14,19 @@ struct AgentGenerateParameters: Sendable, Codable {
     var repetitionContextSize: Int = 20
 
     static let `default` = AgentGenerateParameters()
+
+    /// Qwen3-4B-Instruct-2507 recommended parameters for non-thinking mode.
+    /// See: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507
+    static let qwen3 = AgentGenerateParameters(
+        temperature: 0.7,
+        topP: 0.8
+    )
+
+    /// Returns the recommended parameters for a given model ID.
+    static func forModel(_ modelID: String) -> AgentGenerateParameters {
+        if modelID.hasPrefix("qwen3") { return .qwen3 }
+        return .default
+    }
 }
 
 /// Events emitted during streaming text generation.

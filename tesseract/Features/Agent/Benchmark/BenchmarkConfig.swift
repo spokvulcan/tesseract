@@ -11,6 +11,7 @@ struct BenchmarkConfig {
     let scenarioIDs: [String]?  // nil = all
     let outputDir: URL
     let modelDir: URL?  // nil = auto-detect
+    let modelID: String?  // nil = default (qwen3-4b-instruct-2507)
     /// Max tokens per generation round. Prevents runaway generation where the model
     /// fails to emit a stop token and generates thousands of tokens per round.
     let maxTokensPerRound: Int
@@ -101,6 +102,13 @@ struct BenchmarkConfig {
             return nil
         }()
 
+        let modelID: String? = {
+            if let idx = args.firstIndex(of: "--bench-model-id"), idx + 1 < args.count {
+                return args[idx + 1]
+            }
+            return nil
+        }()
+
         let maxTokensPerRound: Int = {
             if let idx = args.firstIndex(of: "--bench-max-tokens"), idx + 1 < args.count,
                let val = Int(args[idx + 1]) {
@@ -114,6 +122,7 @@ struct BenchmarkConfig {
             scenarioIDs: scenarioIDs,
             outputDir: outputDir,
             modelDir: modelDir,
+            modelID: modelID,
             maxTokensPerRound: maxTokensPerRound
         )
     }

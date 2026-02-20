@@ -72,9 +72,14 @@ final class BenchmarkRunner {
         let resultsDir = resolveResultsDirectory()
         try FileManager.default.createDirectory(at: resultsDir, withIntermediateDirectories: true)
 
+        // Determine model-specific base parameters
+        let targetID = config.modelID ?? "qwen3-4b-instruct-2507"
+        let modelBaseParams = AgentGenerateParameters.forModel(targetID)
+
         for (configIdx, baseParams) in paramConfigs.enumerated() {
             // Cap maxTokens per round to prevent runaway generation
-            var params = baseParams
+            // For quick sweep, use model-specific params; for full sweep, use the sweep config
+            var params = config.sweep == .quick ? modelBaseParams : baseParams
             params.maxTokens = min(params.maxTokens, config.maxTokensPerRound)
 
             let paramLabel = BenchmarkConfig.label(for: params)
@@ -113,7 +118,7 @@ final class BenchmarkRunner {
             let report = BenchmarkReport(
                 metadata: BenchmarkMetadata(
                     date: ISO8601DateFormatter().string(from: Date()),
-                    modelName: "Nanbeige4.1-3B-8bit",
+                    modelName: resolvedModelName,
                     hardware: hardwareString(),
                     parameters: params,
                     contextLimit: 20,
@@ -201,8 +206,10 @@ final class BenchmarkRunner {
             var roundToolCalls: [(name: String, arguments: [String: JSONValue])] = []
             var currentRound = 1
             var inThinking = false
+            var roundPromptTokens: Int? = nil
+            var roundGenTokens: Int? = nil
 
-            let stream = try runner.run(messages: prompt, parameters: parameters)
+            let stream = try runner.run(messages: prompt, parameters: parameters, emitRawPrompts: true)
             for try await event in stream {
                 switch event {
                 case .text(let chunk):
@@ -231,7 +238,9 @@ final class BenchmarkRunner {
                     transcript.writeRoundOutput(
                         round: currentRound,
                         rawOutput: roundText,
-                        thinkingContent: roundThinking
+                        thinkingContent: roundThinking,
+                        promptTokens: roundPromptTokens,
+                        genTokens: roundGenTokens
                     )
                     if !roundToolCalls.isEmpty {
                         transcript.writeToolCalls(calls: roundToolCalls)
@@ -250,9 +259,16 @@ final class BenchmarkRunner {
                     roundText = ""
                     roundThinking = nil
                     roundToolCalls = []
+                    roundPromptTokens = nil
+                    roundGenTokens = nil
+
+                case .roundStart(let round, let rawPrompt, let msgCount):
+                    transcript.writeRawPrompt(round: round, rawPrompt: rawPrompt, messageCount: msgCount)
 
                 case .info(let i):
                     info = i
+                    roundPromptTokens = i.promptTokenCount
+                    roundGenTokens = i.generationTokenCount
 
                 case .completed(let newMessages):
                     // Get the final assistant text (last assistant message)
@@ -261,14 +277,15 @@ final class BenchmarkRunner {
                     }
                     messages.append(contentsOf: newMessages)
 
-                    // Write final round output (the text-only response after all tools)
-                    if !roundText.isEmpty || roundThinking != nil {
-                        transcript.writeRoundOutput(
-                            round: currentRound,
-                            rawOutput: roundText,
-                            thinkingContent: roundThinking
-                        )
-                    }
+                    // Always write final round output — even for text-only responses
+                    // (an empty response is itself diagnostic)
+                    transcript.writeRoundOutput(
+                        round: currentRound,
+                        rawOutput: roundText,
+                        thinkingContent: roundThinking,
+                        promptTokens: roundPromptTokens,
+                        genTokens: roundGenTokens
+                    )
 
                 default:
                     break
@@ -345,7 +362,6 @@ final class BenchmarkRunner {
 
     private func buildToolRegistry(store: AgentDataStore) -> ToolRegistry {
         ToolRegistry(tools: [
-            TimeGetTool(),
             MemorySaveTool(store: store),
             MemorySearchTool(store: store),
             GoalCreateTool(store: store),
@@ -370,16 +386,29 @@ final class BenchmarkRunner {
             return dir
         }
 
-        // Auto-detect from MLX cache
+        // Resolve model ID to cache subdirectory
+        let targetID = config.modelID ?? "qwen3-4b-instruct-2507"
+        guard let definition = ModelDefinition.all.first(where: { $0.id == targetID }),
+              let cacheSub = definition.cacheSubdirectory else {
+            throw BenchmarkError.modelNotFound(
+                "Unknown model ID '\(targetID)'. Available: \(ModelDefinition.all.filter { $0.category == .agent }.map(\.id))"
+            )
+        }
+
         let cacheBase = URL.cachesDirectory.appendingPathComponent("mlx-audio")
-        let modelDir = cacheBase.appendingPathComponent("mlx-community_Nanbeige4.1-3B-8bit")
+        let modelDir = cacheBase.appendingPathComponent(cacheSub)
 
         guard FileManager.default.fileExists(atPath: modelDir.path) else {
             throw BenchmarkError.modelNotFound(
-                "Model not found at \(modelDir.path). Download Nanbeige4.1-3B from the Models page first."
+                "Model not found at \(modelDir.path). Download \(definition.displayName) from the Models page first."
             )
         }
         return modelDir
+    }
+
+    private var resolvedModelName: String {
+        let targetID = config.modelID ?? "qwen3-4b-instruct-2507"
+        return ModelDefinition.all.first(where: { $0.id == targetID })?.displayName ?? targetID
     }
 
     // MARK: - Logging

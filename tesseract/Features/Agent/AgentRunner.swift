@@ -20,6 +20,8 @@ enum AgentRunnerEvent: Sendable {
     case toolError(String)
     /// Generation metrics for one round.
     case info(AgentGeneration.Info)
+    /// Raw ChatML prompt for a generation round (for benchmark transcripts).
+    case roundStart(round: Int, rawPrompt: String, messageCount: Int)
     /// All new messages to append to history (emitted once at the end).
     case completed([AgentChatMessage])
 }
@@ -51,7 +53,8 @@ final class AgentRunner {
     /// - Returns: An async stream of ``AgentRunnerEvent``s.
     func run(
         messages: [AgentChatMessage],
-        parameters: AgentGenerateParameters = .default
+        parameters: AgentGenerateParameters = .default,
+        emitRawPrompts: Bool = false
     ) throws -> AsyncThrowingStream<AgentRunnerEvent, Error> {
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentRunnerEvent.self)
 
@@ -71,6 +74,17 @@ final class AgentRunner {
 
                     let stats = await engine.memoryStats()
                     Log.agent.info("Round \(round + 1)/\(maxRounds) — MLX active: \(String(format: "%.0f", stats.activeMB))MB, peak: \(String(format: "%.0f", stats.peakMB))MB")
+
+                    if emitRawPrompts {
+                        let rawPrompt = try await engine.formatRawPrompt(
+                            messages: workingMessages, tools: toolSpecs
+                        )
+                        continuation.yield(.roundStart(
+                            round: round + 1,
+                            rawPrompt: rawPrompt,
+                            messageCount: workingMessages.count
+                        ))
+                    }
 
                     let genStream = try engine.generate(
                         messages: workingMessages,
@@ -119,13 +133,13 @@ final class AgentRunner {
 
                     // No tool calls and no malformed calls — final response
                     if toolCalls.isEmpty && malformedCalls.isEmpty {
-                        // Model produced thinking but no text response — stalled.
-                        // Continue the loop to give it another chance to respond.
+                        // Model produced no visible text or tools — stalled.
+                        // Retry with the same messages (don't append empty assistant to
+                        // workingMessages — Qwen3 template wraps it in <think></think>
+                        // which poisons the context and prevents tool calls on retry).
                         if responseText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            && !thinkingText.isEmpty
                         {
-                            Log.agent.info("Think-only round \(round + 1) — no text or tools, retrying")
-                            workingMessages.append(.assistant(""))
+                            Log.agent.info("Empty response round \(round + 1) — no text or tools, retrying")
                             newMessages.append(.assistant("", thinking: thinking))
                             continue
                         }

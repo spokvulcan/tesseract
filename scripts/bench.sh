@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: scripts/bench.sh [quick|full] [extra args...]
+# Usage: scripts/bench.sh [quick|full] [--model <model-id>] [extra args...]
 # Builds Release (for real inference speed), then runs the benchmark headless.
+# Example: scripts/bench.sh quick --model qwen3-4b-instruct-2507
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -44,6 +45,23 @@ fi
 SWEEP="${1:-quick}"
 shift 2>/dev/null || true
 
+# Parse --model flag (converts to --bench-model-id for the app)
+MODEL_ARGS=()
+REMAINING_ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --model)
+            MODEL_ARGS=(--bench-model-id "$2")
+            shift 2
+            ;;
+        *)
+            REMAINING_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+set -- "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
+
 echo "Running benchmark (sweep: $SWEEP)..."
 echo "App: $APP"
 
@@ -56,7 +74,7 @@ mkdir -p "$BENCH_DIR"
 rm -f "$LOG_FILE"
 
 # Launch with -W (wait for app to exit), backgrounded so we can tail
-open -W "$APP" --args --benchmark --bench-sweep "$SWEEP" "$@" &
+open -W "$APP" --args --benchmark --bench-sweep "$SWEEP" "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" "$@" &
 OPEN_PID=$!
 
 # Wait for log file to appear (up to 30s for model loading)
