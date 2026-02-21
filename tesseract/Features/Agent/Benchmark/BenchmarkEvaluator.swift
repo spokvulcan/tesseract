@@ -16,7 +16,9 @@ enum BenchmarkEvaluator {
         latencyMs: Double,
         conversationToolHistory: [(name: String, arguments: [String: JSONValue], result: String)]
     ) -> BenchmarkTurnResult {
-        let calledNames = toolsCalled.map(\.name)
+        // Filter out `respond` — it's infrastructure, not a data tool.
+        // Benchmark expectations only care about data tools.
+        let calledNames = toolsCalled.map(\.name).filter { $0 != "respond" }
         var details: [String] = []
 
         // 1. Tool correctness (skip if tools are optional for this turn)
@@ -66,12 +68,20 @@ enum BenchmarkEvaluator {
             details: &details
         )
 
+        // 7. Hallucinated actions — model claims it did something without calling a tool
+        let noHallucinated = evaluateNoHallucinatedActions(
+            response: assistantResponse,
+            toolsCalled: calledNames,
+            details: &details
+        )
+
         let checks = BenchmarkTurnChecks(
             toolsCorrect: toolsCorrect,
             duplicateToolCalls: totalDuplicates,
             argumentsCorrect: argsCorrect,
             responseRelevant: responseRelevant,
             noForbiddenTools: noForbidden,
+            noHallucinatedActions: noHallucinated,
             details: details.isEmpty ? nil : details.joined(separator: "; ")
         )
 
@@ -83,7 +93,7 @@ enum BenchmarkEvaluator {
             toolRoundsUsed: toolRounds
         )
 
-        let passed = toolsCorrect && argsCorrect && noForbidden && withinTurnDuplicates == 0
+        let passed = toolsCorrect && argsCorrect && noForbidden && noHallucinated && withinTurnDuplicates == 0
 
         return BenchmarkTurnResult(
             turnIndex: turnIndex,
@@ -153,7 +163,15 @@ enum BenchmarkEvaluator {
         return duplicates
     }
 
+    /// Read-only tools whose results change as data is mutated.
+    /// Re-calling these is expected behavior, not a duplicate.
+    private static let readOnlyTools: Set<String> = [
+        "goal_list", "task_list", "mood_list", "habit_status",
+    ]
+
     /// Counts tool calls that duplicate a previous successful call in conversation history.
+    /// Read-only listing/status tools are excluded — their results change after mutations,
+    /// so re-calling them is correct behavior, not waste.
     private static func countCrossTurnDuplicates(
         _ calls: [(name: String, arguments: [String: JSONValue])],
         conversationHistory: [(name: String, arguments: [String: JSONValue], result: String)]
@@ -161,11 +179,14 @@ enum BenchmarkEvaluator {
         let historyKeys = Set(conversationHistory.compactMap { entry -> String? in
             // Only count successful past calls (not errors)
             guard !entry.result.hasPrefix("Error:") else { return nil }
+            // Skip read-only tools — re-querying is expected
+            guard !readOnlyTools.contains(entry.name) else { return nil }
             return canonicalKey(name: entry.name, arguments: entry.arguments)
         })
 
         var duplicates = 0
         for call in calls {
+            guard !readOnlyTools.contains(call.name) else { continue }
             let key = canonicalKey(name: call.name, arguments: call.arguments)
             if historyKeys.contains(key) {
                 duplicates += 1
@@ -264,6 +285,80 @@ enum BenchmarkEvaluator {
         let violating = called.filter { forbiddenSet.contains($0) }
         if !violating.isEmpty {
             details.append("Forbidden tool(s) called: \(violating.joined(separator: ", "))")
+            return false
+        }
+        return true
+    }
+
+    // MARK: - Hallucinated Action Detection
+
+    /// Past-tense action phrases that indicate the model claims it completed a tool action.
+    /// Patterns must be specific enough to avoid matching offers ("Would you like me to set a reminder?").
+    private static let actionClaims: [(pattern: String, tool: String)] = [
+        // habit_create — past-tense claims
+        ("habit created", "habit_create"),
+        ("created a habit", "habit_create"),
+        ("created habit", "habit_create"),
+        // goal_create
+        ("goal created", "goal_create"),
+        ("created a goal", "goal_create"),
+        ("created goal", "goal_create"),
+        // task_create
+        ("task created", "task_create"),
+        ("created a task", "task_create"),
+        ("created task", "task_create"),
+        // reminder_set — only past-tense; "set a reminder" is ambiguous (offer vs claim)
+        ("reminder is set", "reminder_set"),
+        ("reminder has been set", "reminder_set"),
+        ("i've set a reminder", "reminder_set"),
+        ("i set a reminder", "reminder_set"),
+        // memory_save
+        ("saved to memory", "memory_save"),
+        ("i've saved", "memory_save"),
+        ("i saved", "memory_save"),
+        // mood_log
+        ("logged your mood", "mood_log"),
+        ("mood logged", "mood_log"),
+        // habit_log
+        ("logged your habit", "habit_log"),
+        ("habit logged", "habit_log"),
+        // task_complete
+        ("marked as complete", "task_complete"),
+        ("task completed", "task_complete"),
+    ]
+
+    /// Phrases that signal the model is offering/suggesting rather than claiming completion.
+    private static let offerPrefixes = [
+        "would you like me to",
+        "want me to",
+        "shall i",
+        "i can ",
+        "i could ",
+        "like me to",
+    ]
+
+    /// Detects when the model claims it performed an action without calling the tool.
+    private static func evaluateNoHallucinatedActions(
+        response: String,
+        toolsCalled: [String],
+        details: inout [String]
+    ) -> Bool {
+        let lower = response.lowercased()
+        let calledSet = Set(toolsCalled)
+
+        for claim in actionClaims {
+            guard lower.contains(claim.pattern) && !calledSet.contains(claim.tool) else { continue }
+
+            // Check if the pattern appears inside an offer/suggestion context
+            if let range = lower.range(of: claim.pattern) {
+                let lineStart = lower[..<range.lowerBound].lastIndex(of: "\n").map { lower.index(after: $0) } ?? lower.startIndex
+                let prefix = String(lower[lineStart..<range.lowerBound])
+                if offerPrefixes.contains(where: { prefix.contains($0) }) {
+                    continue  // This is an offer, not a claim
+                }
+            }
+
+            details.append("Hallucinated action: response says '\(claim.pattern)' but \(claim.tool) was never called")
             return false
         }
         return true

@@ -35,7 +35,7 @@ enum TaskPriority: String, Codable, Sendable {
 
 struct TaskCreateTool: AgentTool {
     let name = "task_create"
-    let description = "Create a new task. Do not call task_complete in the same response."
+    let description = "Create a new task."
     let parameters: [ToolParameter] = [
         .required("title", type: .string, description: "Task title"),
     ]
@@ -58,7 +58,7 @@ struct TaskCreateTool: AgentTool {
 
 struct TaskListTool: AgentTool {
     let name = "task_list"
-    let description = "List all pending tasks. Only call once per response."
+    let description = "List all pending tasks."
     let parameters: [ToolParameter] = []
 
     let store: AgentDataStore
@@ -83,7 +83,7 @@ struct TaskListTool: AgentTool {
 
 struct TaskCompleteTool: AgentTool {
     let name = "task_complete"
-    let description = "Mark one task as completed by ID. Do not call task_create in the same response."
+    let description = "Mark one task as completed by ID."
     let parameters: [ToolParameter] = [
         .required("task_id", type: .string, description: "Task ID (first 8 characters suffice)"),
     ]

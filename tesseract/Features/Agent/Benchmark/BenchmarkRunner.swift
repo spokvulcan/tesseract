@@ -182,10 +182,14 @@ final class BenchmarkRunner {
             messages.append(.user(expectation.userMessage))
 
             // Build prompt with system prompt + context window
-            let systemPrompt = SystemPromptBuilder.build()
-            let contextLimit = 20
+            let memories: [AgentMemory] = await store.loadArray(AgentMemory.self, from: "memories.json")
+            let memoryTexts: [String]? = memories.isEmpty ? nil : memories.enumerated().map { "\($0.offset + 1). \($0.element.text)" }
+            let targetModelID = config.modelID ?? "qwen3-4b-instruct-2507"
+            let systemPrompt = SystemPromptBuilder.build(modelID: targetModelID, memories: memoryTexts)
+            let contextLimit = 60
             let recentMessages = Array(messages.suffix(contextLimit))
-            let prompt: [AgentChatMessage] = [.system(systemPrompt)] + recentMessages
+            let maskedMessages = AgentChatMessage.withObservationMasking(recentMessages)
+            let prompt: [AgentChatMessage] = [.system(systemPrompt)] + maskedMessages
 
             // Write turn start to transcript (skip raw prompt formatting — it's expensive)
             transcript.writeTurnStart(
@@ -308,18 +312,19 @@ final class BenchmarkRunner {
             )
             turnResults.append(turnResult)
 
-            // Write turn result to transcript
+            // Write turn result to transcript (exclude `respond` — it's infrastructure)
+            let dataToolsCalled = toolsCalled.filter { $0.name != "respond" }
             transcript.writeTurnResult(
                 passed: turnResult.passed,
-                toolsCalled: toolsCalled.map(\.name),
+                toolsCalled: dataToolsCalled.map(\.name),
                 expectedTools: expectation.expectedTools,
                 tokPerSec: info?.tokensPerSecond,
                 latencyMs: latencyMs,
-                duplicateCount: turnResult.checks.duplicateToolCalls
+                checks: turnResult.checks
             )
 
-            // Update conversation tool history
-            for (i, call) in toolsCalled.enumerated() {
+            // Update conversation tool history (exclude respond — it's infrastructure)
+            for (i, call) in dataToolsCalled.enumerated() {
                 let result = i < toolResults.count ? toolResults[i] : ""
                 conversationToolHistory.append((name: call.name, arguments: call.arguments, result: result))
             }
@@ -327,7 +332,7 @@ final class BenchmarkRunner {
             let status = turnResult.passed ? "ok" : "FAIL"
             let tokSec = info.map { String(format: "%.1f", $0.tokensPerSecond) } ?? "?"
             log("    Turn \(turnIdx + 1)/\(scenario.turns.count) [\(status)] — " +
-                "tools: \(toolsCalled.map(\.name)) — \(tokSec) tok/s — \(String(format: "%.0f", latencyMs))ms")
+                "tools: \(dataToolsCalled.map(\.name)) — \(tokSec) tok/s — \(String(format: "%.0f", latencyMs))ms")
         }
 
         // Write scenario footer and save transcript
@@ -363,7 +368,8 @@ final class BenchmarkRunner {
     private func buildToolRegistry(store: AgentDataStore) -> ToolRegistry {
         ToolRegistry(tools: [
             MemorySaveTool(store: store),
-            MemorySearchTool(store: store),
+            MemoryUpdateTool(store: store),
+            MemoryDeleteTool(store: store),
             GoalCreateTool(store: store),
             GoalListTool(store: store),
             GoalUpdateTool(store: store),
@@ -376,6 +382,7 @@ final class BenchmarkRunner {
             MoodLogTool(store: store),
             MoodListTool(store: store),
             MockReminderSetTool(store: store),
+            RespondTool(),
         ])
     }
 

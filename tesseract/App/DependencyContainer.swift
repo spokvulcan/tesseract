@@ -37,7 +37,8 @@ final class DependencyContainer: ObservableObject {
         let store = agentDataStore
         return ToolRegistry(tools: [
             MemorySaveTool(store: store),
-            MemorySearchTool(store: store),
+            MemoryUpdateTool(store: store),
+            MemoryDeleteTool(store: store),
             GoalCreateTool(store: store),
             GoalListTool(store: store),
             GoalUpdateTool(store: store),
@@ -50,6 +51,7 @@ final class DependencyContainer: ObservableObject {
             MoodLogTool(store: store),
             MoodListTool(store: store),
             ReminderSetTool(store: store),
+            RespondTool(),
         ])
     }()
     lazy var agentRunner: AgentRunner = {
@@ -61,6 +63,7 @@ final class DependencyContainer: ObservableObject {
         AgentCoordinator(
             agentRunner: agentRunner,
             conversationStore: agentConversationStore,
+            dataStore: agentDataStore,
             audioCapture: audioCaptureEngine,
             transcriptionEngine: transcriptionEngine,
             settings: settingsManager,

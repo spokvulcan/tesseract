@@ -50,7 +50,8 @@ enum AgentNotchPhase: Equatable {
     static func toolDisplayName(_ rawName: String) -> String {
         switch rawName {
         case "memory_save": return "Saving memory"
-        case "memory_search": return "Searching memory"
+        case "memory_update": return "Updating memory"
+        case "memory_delete": return "Deleting memory"
         case "goal_create": return "Creating goal"
         case "goal_list": return "Listing goals"
         case "goal_update": return "Updating goal"

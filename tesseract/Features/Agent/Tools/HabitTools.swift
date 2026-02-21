@@ -45,7 +45,7 @@ struct HabitLogEntry: Codable, Sendable {
 
 struct HabitCreateTool: AgentTool {
     let name = "habit_create"
-    let description = "Create a new habit to track. Returns an error if the habit already exists — do not retry."
+    let description = "Create a new habit to track."
     let parameters: [ToolParameter] = [
         .required("name", type: .string, description: "Name of the habit"),
         .required("frequency", type: .string, description: "Frequency: daily, weekdays, or weekly"),
@@ -120,7 +120,7 @@ struct HabitLogTool: AgentTool {
 
 struct HabitStatusTool: AgentTool {
     let name = "habit_status"
-    let description = "Get habit streaks and completion rates. Returns all habits if no name given. Only call once per response."
+    let description = "Get habit streaks and completion rates. Returns all habits if no name given."
     let parameters: [ToolParameter] = [
         .optional("name", type: .string, description: "Specific habit name (shows all if omitted)"),
     ]

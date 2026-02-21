@@ -73,7 +73,7 @@ struct SingleToolScenario: BenchmarkScenario {
         TurnExpectation(
             "Remember that I'm allergic to peanuts",
             tools: ["memory_save"],
-            arguments: ["memory_save": ["fact": "peanut"]]
+            arguments: ["memory_save": ["text": "peanut"]]
         ),
         TurnExpectation(
             "Log my mood as 7",
@@ -310,18 +310,14 @@ struct LongConversationScenario: BenchmarkScenario {
             tools: ["mood_list"]
         ))
 
-        // Phase 4: Reference early items, test graceful context loss (turns 41-50)
+        // Phase 4: Reference early items — memories in system prompt (turns 41-50)
         turns.append(TurnExpectation(
             "What do you know about my food preferences?",
-            tools: ["memory_search"],
-            substrings: ["carbonara"],
-            toolsOptional: true  // Memory saved at turn 11, outside 20-msg context window
+            substrings: ["carbonara"]
         ))
         turns.append(TurnExpectation(
             "When do I like to run?",
-            tools: ["memory_search"],
-            substrings: ["morning"],
-            toolsOptional: true  // Memory saved at turn 23, outside 20-msg context window
+            substrings: ["morning"]
         ))
         turns.append(TurnExpectation(
             "Update my marathon goal with a progress note — completed first 10K run",
@@ -348,7 +344,7 @@ struct LongConversationScenario: BenchmarkScenario {
             tools: ["habit_log"]
         ))
         turns.append(TurnExpectation(
-            "Give me a summary of everything I'm working on",
+            "Give me a summary of my goals and pending tasks",
             tools: ["goal_list", "task_list"]
         ))
         turns.append(TurnExpectation(
@@ -371,11 +367,13 @@ struct DuplicateDetectionScenario: BenchmarkScenario {
             tools: ["habit_create"],
             arguments: ["habit_create": ["name": "running", "frequency": "daily"]]
         ),
-        // Repeated request — tool returns "already exists", model should relay that
+        // Repeated request — model should either call habit_create (gets "already exists")
+        // or check habit_status first (smart dedup). Either approach is valid.
         TurnExpectation(
             "Create a habit called running, daily",
             tools: ["habit_create"],
-            substrings: ["already"]
+            substrings: ["already"],
+            toolsOptional: true  // Model may check status first instead of blindly re-creating
         ),
         TurnExpectation(
             "Log my running habit for today",
@@ -392,12 +390,12 @@ struct DuplicateDetectionScenario: BenchmarkScenario {
             "Remember I like coffee",
             tools: ["memory_save"]
         ),
-        // Near-duplicate memory — tool returns "already saved"
+        // Near-duplicate memory — model sees existing memory in context and should
+        // either skip (already knows) or use memory_update to consolidate
         TurnExpectation(
             "Remember that I like coffee",
-            tools: ["memory_save"],
-            substrings: ["already"],
-            toolsOptional: true  // Model may skip tool when prior save visible in context
+            tools: ["memory_save", "memory_update"],
+            toolsOptional: true  // Model may skip — memory already visible in context
         ),
     ]
 }

@@ -39,7 +39,7 @@ final class AgentRunner {
 
     private var runTask: Task<Void, Never>?
 
-    init(engine: AgentEngine, toolRegistry: ToolRegistry, maxToolRounds: Int = 3) {
+    init(engine: AgentEngine, toolRegistry: ToolRegistry, maxToolRounds: Int = 5) {
         self.engine = engine
         self.toolRegistry = toolRegistry
         self.maxToolRounds = maxToolRounds
@@ -68,6 +68,7 @@ final class AgentRunner {
                 var workingMessages = messages
                 var newMessages: [AgentChatMessage] = []
                 var executedKeys: Set<String> = []
+                var consecutiveEmptyRounds = 0
 
                 for round in 0..<maxRounds {
                     try Task.checkCancellation()
@@ -134,15 +135,75 @@ final class AgentRunner {
                     // No tool calls and no malformed calls — final response
                     if toolCalls.isEmpty && malformedCalls.isEmpty {
                         // Model produced no visible text or tools — stalled.
-                        // Retry with the same messages (don't append empty assistant to
-                        // workingMessages — Qwen3 template wraps it in <think></think>
-                        // which poisons the context and prevents tool calls on retry).
                         if responseText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         {
-                            Log.agent.info("Empty response round \(round + 1) — no text or tools, retrying")
-                            newMessages.append(.assistant("", thinking: thinking))
+                            consecutiveEmptyRounds += 1
+                            Log.agent.info("Empty response round \(round + 1) (consecutive: \(consecutiveEmptyRounds)) — no text or tools, retrying")
+
+                            // Scan thinking for a tool name the model wanted to call
+                            let mentionedTool = registry.toolNames.first {
+                                thinkingText.localizedCaseInsensitiveContains($0)
+                            }
+
+                            // Stage 2: If this is a repeated failure and the model mentioned
+                            // a zero-arg tool, bypass generation entirely — construct and
+                            // execute the tool call synthetically.
+                            if consecutiveEmptyRounds >= 2,
+                               let toolName = mentionedTool,
+                               registry.hasNoRequiredParameters(toolName)
+                            {
+                                Log.agent.info("Synthetic injection: calling \(toolName) (zero-arg, \(consecutiveEmptyRounds) consecutive empties)")
+
+                                let syntheticCall = ToolCall(
+                                    function: .init(name: toolName, arguments: [:] as [String: any Sendable])
+                                )
+
+                                // Build assistant message with the synthetic tool call
+                                let assistantContent = Self.reconstructAssistantMessage(
+                                    text: "", toolCalls: [syntheticCall], thinking: thinking
+                                )
+                                workingMessages.append(.assistant(assistantContent))
+                                newMessages.append(.assistant("", thinking: thinking, toolCalls: [syntheticCall]))
+
+                                continuation.yield(.toolStart(name: toolName, arguments: [:]))
+
+                                let result: String
+                                do {
+                                    result = try await registry.execute(call: syntheticCall)
+                                } catch {
+                                    result = "Error: \(error.localizedDescription)"
+                                }
+
+                                let callKey = Self.canonicalKey(syntheticCall)
+                                executedKeys.insert(callKey)
+
+                                continuation.yield(.toolResult(name: toolName, result: result))
+                                Log.agent.info("Synthetic \(toolName) → \(result.prefix(200))")
+
+                                let toolMsg = AgentChatMessage.tool(result)
+                                workingMessages.append(toolMsg)
+                                newMessages.append(toolMsg)
+
+                                consecutiveEmptyRounds = 0
+                                continue
+                            }
+
+                            // Stage 1: Insert a placeholder assistant message before the
+                            // nudge to maintain proper ChatML alternation (user/assistant/user).
+                            workingMessages.append(.assistant("I need to call a tool."))
+
+                            if let tool = mentionedTool {
+                                workingMessages.append(
+                                    .user("You did not produce a tool call. You MUST respond with a <tool_call> block now. Call \(tool). Example format:\n<tool_call>\n{\"name\": \"\(tool)\", \"arguments\": {}}\n</tool_call>\nDo not deliberate — output the <tool_call> immediately.")
+                                )
+                            } else {
+                                workingMessages.append(
+                                    .user("You did not produce any output. You MUST either call a tool using <tool_call> tags or write a text response. Do it now.")
+                                )
+                            }
                             continue
                         }
+                        consecutiveEmptyRounds = 0
                         newMessages.append(.assistant(responseText, thinking: thinking, toolCalls: toolCalls))
                         continuation.yield(.completed(newMessages))
                         continuation.finish()
@@ -151,13 +212,21 @@ final class AgentRunner {
 
                     // Process valid tool calls
                     if !toolCalls.isEmpty {
+                        consecutiveEmptyRounds = 0
+                        // Check for `respond` — the "final answer" tool.
+                        // If present, extract its text as the response and end the loop.
+                        // Other tools in the same response are still executed first.
+                        let respondCall = toolCalls.first { $0.function.name == "respond" }
+                        let dataToolCalls = toolCalls.filter { $0.function.name != "respond" }
+
+                        // Reconstruct message with ALL tool calls (including respond) for history
                         let workingContent = Self.reconstructAssistantMessage(
                             text: responseText, toolCalls: toolCalls, thinking: thinking
                         )
                         workingMessages.append(.assistant(workingContent))
                         newMessages.append(.assistant(responseText, thinking: thinking, toolCalls: toolCalls))
 
-                        for call in toolCalls {
+                        for call in dataToolCalls {
                             try Task.checkCancellation()
 
                             // Within-turn dedup: skip if same tool+args already executed
@@ -187,6 +256,21 @@ final class AgentRunner {
                             let toolMsg = AgentChatMessage.tool(result)
                             workingMessages.append(toolMsg)
                             newMessages.append(toolMsg)
+                        }
+
+                        // If `respond` was called, use its text as the final response
+                        if let respondCall {
+                            let respondText = respondCall.function.arguments.string(for: "text") ?? responseText
+                            if !respondText.isEmpty {
+                                // Replace the last assistant message with the respond text
+                                if let lastIdx = newMessages.lastIndex(where: { $0.role == .assistant }) {
+                                    newMessages[lastIdx] = .assistant(respondText, thinking: thinking, toolCalls: toolCalls)
+                                }
+                            }
+                            Log.agent.info("Respond tool → ending loop (\(respondText.count) chars)")
+                            continuation.yield(.completed(newMessages))
+                            continuation.finish()
+                            return
                         }
 
                         continue

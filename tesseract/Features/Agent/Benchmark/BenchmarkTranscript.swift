@@ -102,19 +102,44 @@ final class BenchmarkTranscript {
         expectedTools: [String],
         tokPerSec: Double?,
         latencyMs: Double,
-        duplicateCount: Int
+        checks: BenchmarkTurnChecks
     ) {
         let status = passed ? "PASS" : "FAIL"
         lines.append("── RESULT: [\(status)] ──")
         lines.append("  Tools called:  \(toolsCalled)")
         lines.append("  Expected:      \(expectedTools)")
-        if duplicateCount > 0 {
-            lines.append("  Duplicates:    \(duplicateCount)")
+        if checks.duplicateToolCalls > 0 {
+            lines.append("  Duplicates:    \(checks.duplicateToolCalls)")
         }
         if let tps = tokPerSec {
             lines.append("  Token/s:       \(String(format: "%.1f", tps))")
         }
         lines.append("  Latency:       \(String(format: "%.0f", latencyMs))ms")
+
+        // Show failure reasons when the turn fails
+        if !passed {
+            lines.append("")
+            lines.append("  ⚠ FAILURE REASONS:")
+            if !checks.toolsCorrect {
+                lines.append("    ✗ Tools incorrect — expected \(expectedTools), got \(toolsCalled)")
+            }
+            if !checks.argumentsCorrect {
+                lines.append("    ✗ Arguments incorrect")
+            }
+            if !checks.noForbiddenTools {
+                lines.append("    ✗ Forbidden tool called")
+            }
+            if !checks.noHallucinatedActions {
+                lines.append("    ✗ Hallucinated action — claimed completion without calling tool")
+            }
+            if checks.duplicateToolCalls > 0 {
+                lines.append("    ✗ Within-turn duplicate tool calls: \(checks.duplicateToolCalls)")
+            }
+            if let details = checks.details {
+                lines.append("    Details: \(details)")
+            }
+        }
+
         lines.append("")
         lines.append("")
     }

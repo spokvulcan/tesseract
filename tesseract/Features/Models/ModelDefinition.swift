@@ -109,6 +109,30 @@ extension ModelDefinition {
             sizeDescription: "~4.5 GB",
             dependencies: []
         ),
+        ModelDefinition(
+            id: "qwen3-4b-thinking-2507",
+            displayName: "Qwen3-4B Thinking",
+            description: "4B parameter thinking agent model. Always-on reasoning, higher tool accuracy.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "lmstudio-community/Qwen3-4B-Thinking-2507-MLX-8bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~4.5 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3-4b-thinking-opus-distill",
+            displayName: "Qwen3-4B Opus Distill",
+            description: "4B thinking model distilled from Claude 4.5 Opus high-reasoning. 8-bit MLX.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "nightmedia/Qwen3-4B-Thinking-2507-Claude-4.5-Opus-High-Reasoning-Distill-qx86-hi-mlx",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~3.8 GB",
+            dependencies: []
+        ),
     ]
 
     static let imageGenerationModels: [ModelDefinition] = [

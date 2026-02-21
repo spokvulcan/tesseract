@@ -12,12 +12,21 @@ struct ToolRegistry: Sendable {
         self.tools = dict
     }
 
+    var toolNames: [String] {
+        Array(tools.keys)
+    }
+
     var toolSpecs: [ToolSpec] {
         tools.values.map(\.toolSpec)
     }
 
     func tool(named name: String) -> (any AgentTool)? {
         tools[name]
+    }
+
+    func hasNoRequiredParameters(_ name: String) -> Bool {
+        guard let tool = tools[name] else { return false }
+        return tool.parameters.allSatisfy { !$0.isRequired }
     }
 
     func execute(call: ToolCall) async throws -> String {

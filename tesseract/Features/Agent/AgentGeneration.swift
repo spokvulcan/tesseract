@@ -22,8 +22,26 @@ struct AgentGenerateParameters: Sendable, Codable {
         topP: 0.8
     )
 
+    /// Qwen3-4B-Thinking-2507 recommended parameters for thinking mode.
+    /// No repetition penalty — it causes premature EOS in think blocks,
+    /// making think-loops worse (model stops mid-think instead of transitioning to tool call).
+    /// See: https://huggingface.co/Qwen/Qwen3-4B-Thinking-2507
+    static let qwen3Thinking = AgentGenerateParameters(
+        temperature: 0.6,
+        topP: 0.95
+    )
+
+    /// Qwen3-4B distilled from Claude 4.5 Opus — no repetition penalty needed.
+    /// The distilled model was trained to be well-behaved without guardrails.
+    static let qwen3OpusDistill = AgentGenerateParameters(
+        temperature: 0.6,
+        topP: 0.95
+    )
+
     /// Returns the recommended parameters for a given model ID.
     static func forModel(_ modelID: String) -> AgentGenerateParameters {
+        if modelID.contains("opus-distill") { return .qwen3OpusDistill }
+        if modelID.contains("thinking") { return .qwen3Thinking }
         if modelID.hasPrefix("qwen3") { return .qwen3 }
         return .default
     }

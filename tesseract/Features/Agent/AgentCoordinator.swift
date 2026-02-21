@@ -20,6 +20,7 @@ final class AgentCoordinator: ObservableObject {
 
     private let agentRunner: AgentRunner
     private let conversationStore: AgentConversationStore
+    private let dataStore: AgentDataStore?
     private let audioCapture: (any AudioCapturing)?
     private let transcriptionEngine: (any Transcribing)?
     private let settings: SettingsManager?
@@ -33,7 +34,7 @@ final class AgentCoordinator: ObservableObject {
     private var voiceErrorResetTask: Task<Void, Never>?
 
     private enum Defaults {
-        static let contextLimit = 20
+        static let contextLimit = 60
         static let minimumRecordingDuration: TimeInterval = 0.5
         static let errorAutoResetDelay: Duration = .seconds(3)
     }
@@ -41,6 +42,7 @@ final class AgentCoordinator: ObservableObject {
     init(
         agentRunner: AgentRunner,
         conversationStore: AgentConversationStore,
+        dataStore: AgentDataStore? = nil,
         audioCapture: (any AudioCapturing)? = nil,
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
@@ -51,6 +53,7 @@ final class AgentCoordinator: ObservableObject {
     ) {
         self.agentRunner = agentRunner
         self.conversationStore = conversationStore
+        self.dataStore = dataStore
         self.audioCapture = audioCapture
         self.transcriptionEngine = transcriptionEngine
         self.settings = settings
@@ -80,17 +83,9 @@ final class AgentCoordinator: ObservableObject {
         streamingThinking = ""
         isThinking = false
 
-        // Context window: send system prompt + only the most recent messages to LLM
-        let voiceMode = settings?.agentAutoSpeak ?? false
-        let systemPrompt = SystemPromptBuilder.build(voiceMode: voiceMode)
-        let recentMessages = Array(messages.suffix(Defaults.contextLimit))
-        let prompt: [AgentChatMessage] = [.system(systemPrompt)] + recentMessages
-
         // Select model-specific generation parameters
         let modelID = settings?.selectedAgentModelID ?? "qwen3-4b-instruct-2507"
         let generateParams = AgentGenerateParameters.forModel(modelID)
-
-        Log.agent.info("Sending \(prompt.count) messages to model \(modelID) (\(recentMessages.count) of \(self.messages.count) history)")
 
         // Free memory from other engines before inference
         prepareForInference?()
@@ -99,7 +94,6 @@ final class AgentCoordinator: ObservableObject {
         if messages.count == 1 {
             debugLogger.startSession()
         }
-        debugLogger.logPrompt(messages: prompt, parameters: generateParams)
 
         var generationInfo: AgentGeneration.Info?
 
@@ -108,6 +102,17 @@ final class AgentCoordinator: ObservableObject {
 
         generationTask = Task { [weak self] in
             guard let self else { return }
+
+            // Load memories and build system prompt (async — needs actor access)
+            let voiceMode = settings?.agentAutoSpeak ?? false
+            let memoryTexts = await loadMemoryTexts()
+            let systemPrompt = SystemPromptBuilder.build(modelID: modelID, memories: memoryTexts, voiceMode: voiceMode)
+            let recentMessages = Array(messages.suffix(Defaults.contextLimit))
+            let maskedMessages = AgentChatMessage.withObservationMasking(recentMessages)
+            let prompt: [AgentChatMessage] = [.system(systemPrompt)] + maskedMessages
+
+            Log.agent.info("Sending \(prompt.count) messages to model \(modelID) (\(recentMessages.count) of \(self.messages.count) history)")
+            debugLogger.logPrompt(messages: prompt, parameters: generateParams)
             var notchTextLength = 0
 
             do {
@@ -379,6 +384,13 @@ final class AgentCoordinator: ObservableObject {
     }
 
     // MARK: - Private
+
+    private func loadMemoryTexts() async -> [String]? {
+        guard let dataStore else { return nil }
+        let memories: [AgentMemory] = await dataStore.loadArray(AgentMemory.self, from: "memories.json")
+        guard !memories.isEmpty else { return nil }
+        return memories.enumerated().map { "\($0.offset + 1). \($0.element.text)" }
+    }
 
     private func persistCurrentConversation() {
         conversationStore.updateCurrentMessages(messages)

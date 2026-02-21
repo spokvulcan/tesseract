@@ -66,7 +66,7 @@ struct GoalCreateTool: AgentTool {
 
 struct GoalListTool: AgentTool {
     let name = "goal_list"
-    let description = "List all goals. Only call once per response."
+    let description = "List all goals with their current status."
     let parameters: [ToolParameter] = []
 
     let store: AgentDataStore
