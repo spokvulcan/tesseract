@@ -45,7 +45,7 @@ struct TesseractApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var container = DependencyContainer()
     @State private var showOnboarding = false
-    @State private var selectedNavigation: NavigationItem? = .dictation
+    @State private var selectedNavigation: NavigationItem? = .agent
 
     init() {
         if CommandLine.arguments.contains("--benchmark") {
