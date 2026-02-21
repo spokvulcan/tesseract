@@ -32,7 +32,7 @@ enum SystemPromptBuilder {
         - General knowledge / greeting / thanks → respond conversationally, no tools
 
         When saving a memory, check if a similar fact already exists and use memory_update to consolidate instead of creating a duplicate.
-        NEVER guess or recall IDs from memory. Before calling update/complete/delete tools, call the corresponding list tool first to get current IDs.
+        Before calling update/complete tools, call the list tool first to see current numbers
         NEVER claim you performed an action (created, saved, logged, set, updated, completed) unless you actually called the tool and it succeeded.
         When in doubt, prefer calling a tool over skipping it. /no_think
         """
@@ -63,10 +63,6 @@ enum SystemPromptBuilder {
         - If it does, use memory_update to consolidate instead of creating a duplicate
         - Use memory_delete when the user asks to forget something
         - For recall questions, answer directly from "What I Know About You"
-
-        ### ID Rules
-        - NEVER guess or recall IDs from memory — they change between sessions
-        - Before calling update/complete/delete tools, call the corresponding list tool first to get current IDs (e.g., goal_list before goal_update, task_list before task_complete)
 
         ### Honesty
         - NEVER claim you performed an action (created, saved, logged, set, updated, completed) unless you actually called the tool and it succeeded
@@ -103,11 +99,8 @@ enum SystemPromptBuilder {
         - Use memory_delete when the user asks you to forget something
         - For recall questions ("what's my favorite food?"), answer directly from "What I Know About You"
 
-        ### ID Rules
-        - NEVER guess or recall IDs from memory — they change between sessions
-        - Before calling update/complete/delete tools, call the corresponding list tool first to get current IDs (e.g., goal_list before goal_update, task_list before task_complete)
-
         ### Tool Call Rules
+        - Before calling update/complete tools, call the list tool first to see current numbers
         - When in doubt about WHICH tool fits a request, prefer calling one over skipping
         - If the request is unclear, nonsensical, or doesn't map to any tool, ask for clarification or respond conversationally
         - If a tool returns "already exists/logged", relay that result to the user

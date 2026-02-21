@@ -50,7 +50,7 @@ struct TaskCreateTool: AgentTool {
         let task = AgentTask(title: title)
         await store.append(task, to: "tasks.json")
 
-        return "Done. Created task \"\(title)\" [id: \(task.id.uuidString.prefix(8))]."
+        return "Done. Created task \"\(title)\"."
     }
 }
 
@@ -71,9 +71,9 @@ struct TaskListTool: AgentTool {
             return "No pending tasks."
         }
 
-        var lines: [String] = ["\(pending.count) task(s):"]
-        for task in pending {
-            lines.append("- \(task.title) [id: \(task.id.uuidString.prefix(8))]")
+        var lines: [String] = ["\(pending.count) pending task(s):"]
+        for (i, task) in pending.enumerated() {
+            lines.append("\(i + 1). \(task.title)")
         }
         return lines.joined(separator: "\n")
     }
@@ -83,30 +83,28 @@ struct TaskListTool: AgentTool {
 
 struct TaskCompleteTool: AgentTool {
     let name = "task_complete"
-    let description = "Mark one task as completed by ID."
+    let description = "Mark a pending task as completed by its number (as shown by task_list)."
     let parameters: [ToolParameter] = [
-        .required("task_id", type: .string, description: "Task ID (first 8 characters suffice)"),
+        .required("index", type: .int, description: "The 1-based task number from task_list"),
     ]
 
     let store: AgentDataStore
 
     func execute(arguments: [String: JSONValue]) async throws -> String {
-        guard let taskId = arguments.string(for: "task_id") else {
-            throw AgentToolError.missingArgument("task_id")
+        guard let index = arguments.int(for: "index") else {
+            throw AgentToolError.missingArgument("index")
         }
 
         var tasks: [AgentTask] = await store.loadArray(AgentTask.self, from: "tasks.json")
-        let prefix = taskId.lowercased()
-        guard let idx = tasks.firstIndex(where: { $0.id.uuidString.lowercased().hasPrefix(prefix) }) else {
-            return "No task found with ID starting with \"\(taskId)\"."
+        let pending = tasks.enumerated().filter { $0.element.status == .pending }
+
+        guard index >= 1 && index <= pending.count else {
+            return "Invalid task number \(index). You have \(pending.count) pending tasks."
         }
 
-        if tasks[idx].status == .completed {
-            return "Task \"\(tasks[idx].title)\" is already completed."
-        }
-
-        tasks[idx].status = .completed
+        let targetIndex = pending[index - 1].offset
+        tasks[targetIndex].status = .completed
         await store.save(tasks, to: "tasks.json")
-        return "Done. Completed task \"\(tasks[idx].title)\"."
+        return "Done. Completed task \"\(tasks[targetIndex].title)\"."
     }
 }

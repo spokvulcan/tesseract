@@ -58,7 +58,7 @@ struct GoalCreateTool: AgentTool {
         let goal = Goal(name: name)
         await store.append(goal, to: "goals.json")
 
-        return "Done. Created goal \"\(name)\" [id: \(goal.id.uuidString.prefix(8))]."
+        return "Done. Created goal \"\(name)\"."
     }
 }
 
@@ -79,8 +79,8 @@ struct GoalListTool: AgentTool {
         }
 
         var lines: [String] = ["\(goals.count) goal(s):"]
-        for goal in goals {
-            var line = "- [\(goal.status.rawValue.uppercased())] \(goal.name) [id: \(goal.id.uuidString.prefix(8))]"
+        for (i, goal) in goals.enumerated() {
+            var line = "\(i + 1). [\(goal.status.rawValue.uppercased())] \(goal.name)"
             if !goal.progressNotes.isEmpty {
                 line += " — \(goal.progressNotes.count) update(s)"
             }
@@ -94,9 +94,9 @@ struct GoalListTool: AgentTool {
 
 struct GoalUpdateTool: AgentTool {
     let name = "goal_update"
-    let description = "Add a progress note or change the status of a goal"
+    let description = "Add a progress note or change the status of a goal by its number (as shown by goal_list)."
     let parameters: [ToolParameter] = [
-        .required("goal_id", type: .string, description: "Goal ID (first 8 characters suffice)"),
+        .required("index", type: .int, description: "The 1-based goal number from goal_list"),
         .optional("progress_note", type: .string, description: "Progress update to add"),
         .optional("status", type: .string, description: "New status: active, completed, or archived"),
     ]
@@ -104,16 +104,16 @@ struct GoalUpdateTool: AgentTool {
     let store: AgentDataStore
 
     func execute(arguments: [String: JSONValue]) async throws -> String {
-        guard let goalId = arguments.string(for: "goal_id") else {
-            throw AgentToolError.missingArgument("goal_id")
+        guard let index = arguments.int(for: "index") else {
+            throw AgentToolError.missingArgument("index")
         }
 
         var goals: [Goal] = await store.loadArray(Goal.self, from: "goals.json")
-        let prefix = goalId.lowercased()
-        guard let idx = goals.firstIndex(where: { $0.id.uuidString.lowercased().hasPrefix(prefix) }) else {
-            return "No goal found with ID starting with \"\(goalId)\"."
+        guard index >= 1 && index <= goals.count else {
+            return "Invalid goal number \(index). You have \(goals.count) goals."
         }
 
+        let idx = index - 1
         var updates: [String] = []
 
         if let note = arguments.string(for: "progress_note") {
