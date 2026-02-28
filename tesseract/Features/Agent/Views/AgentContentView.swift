@@ -2,17 +2,14 @@ import SwiftUI
 import os
 
 struct AgentContentView: View {
-    @ObservedObject var coordinator: AgentCoordinator
-    @ObservedObject var agentEngine: AgentEngine
-    @ObservedObject var conversationStore: AgentConversationStore
-    @ObservedObject var transcriptionEngine: TranscriptionEngine
-    @ObservedObject var audioCapture: AudioCaptureEngine
-    @ObservedObject var speechCoordinator: SpeechCoordinator
+    @EnvironmentObject private var coordinator: AgentCoordinator
+    @EnvironmentObject private var agentEngine: AgentEngine
+    @EnvironmentObject private var conversationStore: AgentConversationStore
+    @EnvironmentObject private var speechCoordinator: SpeechCoordinator
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var inputText = ""
     @State private var showingHistory = false
-    @State private var isHoldingMic = false
     @State private var speakingMessageID: UUID?
     @AppStorage("agentAutoSpeak") private var autoSpeakEnabled = false
     @AppStorage("selectedAgentModelID") private var agentModelID: String = "qwen3-4b-instruct-2507"
@@ -33,28 +30,34 @@ struct AgentContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             if agentEngine.isLoading {
-                modelLoadingBanner
+                AgentModelLoadingBanner()
             } else if !agentEngine.isModelLoaded && !isModelDownloaded {
-                modelNotDownloadedBanner
+                AgentModelNotDownloadedBanner()
             }
 
             if let error = coordinator.error {
-                errorBanner(error)
+                AgentErrorBanner(message: error, onDismiss: { coordinator.error = nil })
             }
 
             if case .error(let message) = coordinator.voiceState {
-                voiceErrorBanner(message)
+                AgentVoiceErrorBanner(message: message)
             }
 
-            messageList
+            AgentConversationListView(
+                speakingMessageID: $speakingMessageID,
+                isSpeechActive: isSpeechActive
+            )
 
             if isSpeechActive {
-                speechIndicatorBar
+                AgentSpeechIndicatorBar(onStop: {
+                    coordinator.stopSpeaking()
+                    speakingMessageID = nil
+                })
             }
 
             Divider()
 
-            inputBar
+            AgentInputBarView(inputText: $inputText)
         }
         .navigationTitle("Agent")
         .onChange(of: speechCoordinator.state) { _, newState in
@@ -96,7 +99,7 @@ struct AgentContentView: View {
         }
     }
 
-    // MARK: - Conversation History
+    // MARK: - Conversation History Popover
 
     private var conversationHistoryPopover: some View {
         ScrollView {
@@ -150,442 +153,5 @@ struct AgentContentView: View {
                 Label("Delete", systemImage: "trash")
             }
         }
-    }
-
-    // MARK: - Model Status
-
-    private var modelLoadingBanner: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text(agentEngine.loadingStatus.isEmpty ? "Loading model…" : agentEngine.loadingStatus)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-
-    private var modelNotDownloadedBanner: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            Text("Download an agent model from the Models page to use the agent.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-
-    // MARK: - Error
-
-    private func errorBanner(_ message: String) -> some View {
-        HStack {
-            Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(.red)
-            Text(message)
-                .font(.callout)
-                .lineLimit(2)
-            Spacer()
-            Button {
-                coordinator.error = nil
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.red.opacity(0.1))
-    }
-
-    private func voiceErrorBanner(_ message: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "mic.slash.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 6)
-        .background(.orange.opacity(0.1))
-        .transition(.move(edge: .top).combined(with: .opacity))
-    }
-
-    // MARK: - Messages
-
-    private var messageList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    if coordinator.messages.isEmpty && !coordinator.isGenerating {
-                        emptyState
-                    }
-
-                    ForEach(coordinator.messages) { message in
-                        messageBubble(message)
-                    }
-
-                    if coordinator.isGenerating &&
-                        (!coordinator.streamingText.isEmpty || !coordinator.streamingThinking.isEmpty) {
-                        streamingBubble
-                    }
-
-                    if coordinator.isGenerating
-                        && coordinator.streamingText.isEmpty
-                        && coordinator.streamingThinking.isEmpty {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Generating…")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .id("generating")
-                    }
-                }
-                .padding()
-            }
-            .onChange(of: coordinator.streamingText) {
-                withAnimation(.easeOut(duration: 0.1)) {
-                    proxy.scrollTo("streaming", anchor: .bottom)
-                }
-            }
-            .onChange(of: coordinator.streamingThinking) {
-                withAnimation(.easeOut(duration: 0.1)) {
-                    proxy.scrollTo("streaming", anchor: .bottom)
-                }
-            }
-            .onChange(of: coordinator.messages.count) {
-                if let lastID = coordinator.messages.last?.id {
-                    let target: AnyHashable = coordinator.isGenerating ? "streaming" : lastID
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(target, anchor: .bottom)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 40))
-                .foregroundStyle(.quaternary)
-            Text("Start a conversation")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 80)
-    }
-
-    @ViewBuilder
-    private func messageBubble(_ message: AgentChatMessage) -> some View {
-        if message.role == .assistant {
-            AssistantMessageBubble(
-                message: message,
-                isSpeaking: speakingMessageID == message.id && isSpeechActive,
-                onPlay: {
-                    speakingMessageID = message.id
-                    coordinator.speakMessage(message)
-                },
-                onStop: {
-                    coordinator.stopSpeaking()
-                    speakingMessageID = nil
-                }
-            )
-            .id(message.id)
-        } else {
-            HStack {
-                if message.role == .user { Spacer(minLength: 60) }
-
-                Text(message.content)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        message.role == .user
-                            ? AnyShapeStyle(.tint.opacity(0.15))
-                            : AnyShapeStyle(.fill.quaternary)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                if message.role != .user { Spacer(minLength: 60) }
-            }
-            .id(message.id)
-        }
-    }
-
-    private var streamingBubble: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 0) {
-                if !coordinator.streamingThinking.isEmpty {
-                    DisclosureGroup(isExpanded: .constant(true)) {
-                        Text(coordinator.streamingThinking)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .padding(.top, 4)
-                    } label: {
-                        Label(
-                            coordinator.isThinking ? "Thinking…" : "Thinking",
-                            systemImage: "brain.head.profile"
-                        )
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    }
-                    .padding(.bottom, 6)
-                }
-
-                if !coordinator.streamingText.isEmpty {
-                    Text(coordinator.streamingText)
-                        .textSelection(.enabled)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.fill.quaternary)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-            Spacer(minLength: 60)
-        }
-        .id("streaming")
-    }
-
-    // MARK: - Speech Indicator
-
-    private var speechIndicatorBar: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "speaker.wave.2.fill")
-                .foregroundStyle(.tint)
-                .symbolEffect(.variableColor.iterative, options: .repeating)
-            Text("Speaking\u{2026}")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button {
-                coordinator.stopSpeaking()
-                speakingMessageID = nil
-            } label: {
-                Image(systemName: "stop.circle.fill")
-                    .foregroundStyle(.red)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.tint.opacity(0.08))
-    }
-
-    // MARK: - Input
-
-    private var inputBar: some View {
-        HStack(spacing: 8) {
-            TextField("Message…", text: $inputText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .onSubmit { send() }
-                .disabled(coordinator.voiceState == .recording || coordinator.voiceState == .transcribing)
-
-            micButton
-
-            if coordinator.isGenerating {
-                Button {
-                    coordinator.cancelGeneration()
-                } label: {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.red)
-                }
-                .buttonStyle(.plain)
-                .help("Cancel generation")
-            } else {
-                Button {
-                    send()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(canSend ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .help("Send message")
-            }
-        }
-        .padding(12)
-    }
-
-    private var micButton: some View {
-        let state = coordinator.voiceState
-
-        return micIcon(for: state)
-            .font(.title2)
-            .frame(width: 28, height: 28)
-            .contentShape(Circle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard !isHoldingMic else { return }
-                        isHoldingMic = true
-                        coordinator.startVoiceInput()
-                    }
-                    .onEnded { _ in
-                        isHoldingMic = false
-                        if coordinator.voiceState == .recording {
-                            coordinator.stopVoiceInputAndSend()
-                        }
-                    }
-            )
-            .disabled(!canUseVoice)
-            .help(voiceButtonHelp)
-    }
-
-    @ViewBuilder
-    private func micIcon(for state: AgentVoiceState) -> some View {
-        switch state {
-        case .idle:
-            Image(systemName: "mic.fill")
-                .foregroundStyle(canUseVoice ? AnyShapeStyle(.secondary) : AnyShapeStyle(.quaternary))
-        case .recording:
-            Image(systemName: "stop.fill")
-                .foregroundStyle(.red)
-                .symbolEffect(.pulse, options: .repeating)
-        case .transcribing:
-            Image(systemName: "waveform")
-                .foregroundStyle(.tint)
-                .symbolEffect(.variableColor.iterative, options: .repeating)
-        case .error:
-            Image(systemName: "mic.slash.fill")
-                .foregroundStyle(.red)
-        }
-    }
-
-    private var isWhisperAvailable: Bool {
-        if transcriptionEngine.isModelLoaded { return true }
-        if case .downloaded = downloadManager.statuses[WhisperModel.modelID] { return true }
-        return false
-    }
-
-    private var canUseVoice: Bool {
-        !coordinator.isGenerating
-            && coordinator.voiceState != .transcribing
-            && isWhisperAvailable
-    }
-
-    private var voiceButtonHelp: String {
-        if !isWhisperAvailable {
-            return "Download Whisper model to use voice input"
-        }
-        if coordinator.isGenerating {
-            return "Voice input unavailable during generation"
-        }
-        switch coordinator.voiceState {
-        case .recording: return "Release to send"
-        case .transcribing: return "Transcribing…"
-        case .error(let msg): return msg
-        default: return "Hold to speak"
-        }
-    }
-
-    private var canSend: Bool {
-        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !coordinator.isGenerating
-    }
-
-    // MARK: - Actions
-
-    private func send() {
-        let text = inputText
-        inputText = ""
-
-        Task {
-            await loadModelIfNeeded()
-            guard agentEngine.isModelLoaded else { return }
-            coordinator.sendMessage(text)
-        }
-    }
-
-    private func loadModelIfNeeded() async {
-        guard isModelDownloaded,
-              !agentEngine.isModelLoaded,
-              !agentEngine.isLoading,
-              let path = downloadManager.modelPath(for: agentModelID)
-        else { return }
-
-        do {
-            try await agentEngine.loadModel(from: path)
-        } catch {
-            coordinator.error = "Failed to load model: \(error.localizedDescription)"
-        }
-    }
-}
-
-// MARK: - Assistant Message Bubble
-
-private struct AssistantMessageBubble: View {
-    let message: AgentChatMessage
-    var isSpeaking: Bool = false
-    var onPlay: (() -> Void)? = nil
-    var onStop: (() -> Void)? = nil
-    @State private var isThinkingExpanded = false
-    @State private var isHovering = false
-
-    var body: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 0) {
-                if let thinking = message.thinking, !thinking.isEmpty {
-                    thinkingSection(thinking)
-                }
-                if !message.content.isEmpty {
-                    Text(message.content)
-                        .textSelection(.enabled)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.fill.quaternary)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-            if isHovering || isSpeaking {
-                Button {
-                    isSpeaking ? onStop?() : onPlay?()
-                } label: {
-                    Image(systemName: isSpeaking ? "stop.circle.fill" : "play.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(isSpeaking ? .red : .secondary)
-                }
-                .buttonStyle(.plain)
-                .help(isSpeaking ? "Stop speaking" : "Speak this message")
-                .transition(.opacity)
-            }
-
-            Spacer(minLength: 60)
-        }
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) { isHovering = hovering }
-        }
-    }
-
-    private func thinkingSection(_ thinking: String) -> some View {
-        DisclosureGroup(isExpanded: $isThinkingExpanded) {
-            Text(thinking)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .padding(.top, 4)
-        } label: {
-            Label("Thinking", systemImage: "brain.head.profile")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.bottom, 6)
     }
 }

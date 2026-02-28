@@ -7,7 +7,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ZImageGenContentView: View {
-    @ObservedObject var zimageGenEngine: ZImageGenEngine
+    @EnvironmentObject private var zimageGenEngine: ZImageGenEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var prompt: String = ""

@@ -6,8 +6,8 @@
 import SwiftUI
 
 struct SpeechContentView: View {
-    @ObservedObject var speechCoordinator: SpeechCoordinator
-    @ObservedObject var speechEngine: SpeechEngine
+    @EnvironmentObject private var speechCoordinator: SpeechCoordinator
+    @EnvironmentObject private var speechEngine: SpeechEngine
     @ObservedObject private var settings = SettingsManager.shared
 
     @AppStorage("ttsParametersPanelVisible") private var isParametersPanelVisible: Bool = true

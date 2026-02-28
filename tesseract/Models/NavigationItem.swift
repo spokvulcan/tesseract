@@ -47,51 +47,18 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     }
 
     @MainActor @ViewBuilder
-    func viewForPage(
-        coordinator: DictationCoordinator,
-        transcriptionEngine: TranscriptionEngine,
-        history: TranscriptionHistory,
-        permissionsManager: PermissionsManager,
-        audioCapture: AudioCaptureEngine,
-        speechCoordinator: SpeechCoordinator,
-        speechEngine: SpeechEngine,
-        agentCoordinator: AgentCoordinator,
-        agentEngine: AgentEngine,
-        agentConversationStore: AgentConversationStore,
-        imageGenEngine: ImageGenEngine,
-        zimageGenEngine: ZImageGenEngine
-    ) -> some View {
+    var destinationView: some View {
         switch self {
         case .dictation:
-            DictationContentView(
-                coordinator: coordinator,
-                transcriptionEngine: transcriptionEngine,
-                history: history,
-                permissionsManager: permissionsManager,
-                audioCapture: audioCapture
-            )
+            DictationContentView()
         case .speech:
-            SpeechContentView(
-                speechCoordinator: speechCoordinator,
-                speechEngine: speechEngine
-            )
+            SpeechContentView()
         case .agent:
-            AgentContentView(
-                coordinator: agentCoordinator,
-                agentEngine: agentEngine,
-                conversationStore: agentConversationStore,
-                transcriptionEngine: transcriptionEngine,
-                audioCapture: audioCapture,
-                speechCoordinator: speechCoordinator
-            )
+            AgentContentView()
         case .image:
-            ImageGenContentView(
-                imageGenEngine: imageGenEngine
-            )
+            ImageGenContentView()
         case .zimage:
-            ZImageGenContentView(
-                zimageGenEngine: zimageGenEngine
-            )
+            ZImageGenContentView()
         case .general:
             GeneralSettingsSection()
         case .model:

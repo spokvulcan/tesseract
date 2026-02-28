@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 import MLXImageGen
 
 struct ImageGenContentView: View {
-    @ObservedObject var imageGenEngine: ImageGenEngine
+    @EnvironmentObject private var imageGenEngine: ImageGenEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var prompt: String = ""

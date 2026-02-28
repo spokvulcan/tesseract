@@ -6,14 +6,14 @@
 import SwiftUI
 
 struct DictationContentView: View {
-    @ObservedObject var coordinator: DictationCoordinator
-    @ObservedObject var transcriptionEngine: TranscriptionEngine
-    @ObservedObject var history: TranscriptionHistory
-    @ObservedObject var permissionsManager: PermissionsManager
-    @ObservedObject var audioCapture: AudioCaptureEngine
+    @EnvironmentObject private var coordinator: DictationCoordinator
+    @EnvironmentObject private var transcriptionEngine: TranscriptionEngine
+    @EnvironmentObject private var history: TranscriptionHistory
+    @EnvironmentObject private var permissionsManager: PermissionsManager
+    @EnvironmentObject private var audioCapture: AudioCaptureEngine
     @ObservedObject private var settings = SettingsManager.shared
 
-    private let contentMaxWidth: CGFloat = 820
+    private let contentMaxWidth: CGFloat = Theme.Layout.contentMaxWidth
 
     var body: some View {
         ScrollView {
@@ -50,20 +50,4 @@ struct DictationContentView: View {
         }
         .navigationTitle("Dictation")
     }
-}
-
-#Preview {
-    let audioCapture = AudioCaptureEngine()
-    return DictationContentView(
-        coordinator: DictationCoordinator(
-            audioCapture: audioCapture,
-            transcriptionEngine: TranscriptionEngine(),
-            textInjector: TextInjector(),
-            history: TranscriptionHistory()
-        ),
-        transcriptionEngine: TranscriptionEngine(),
-        history: TranscriptionHistory(),
-        permissionsManager: PermissionsManager(),
-        audioCapture: audioCapture
-    )
 }

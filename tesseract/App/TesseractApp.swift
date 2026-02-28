@@ -63,25 +63,23 @@ struct TesseractApp: App {
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            ContentView(
-                coordinator: container.dictationCoordinator,
-                transcriptionEngine: container.transcriptionEngine,
-                history: container.transcriptionHistory,
-                permissionsManager: container.permissionsManager,
-                audioCapture: container.audioCaptureEngine,
-                speechCoordinator: container.speechCoordinator,
-                speechEngine: container.speechEngine,
-                agentCoordinator: container.agentCoordinator,
-                agentEngine: container.agentEngine,
-                agentConversationStore: container.agentConversationStore,
-                imageGenEngine: container.imageGenEngine,
-                zimageGenEngine: container.zimageGenEngine,
-                selectedNavigation: $selectedNavigation
-            )
+            ContentView(selectedNavigation: $selectedNavigation)
             .background {
                 WindowOpenerView(appDelegate: appDelegate)
             }
             .environmentObject(container)
+            .environmentObject(container.dictationCoordinator)
+            .environmentObject(container.transcriptionEngine)
+            .environmentObject(container.transcriptionHistory)
+            .environmentObject(container.permissionsManager)
+            .environmentObject(container.audioCaptureEngine)
+            .environmentObject(container.speechCoordinator)
+            .environmentObject(container.speechEngine)
+            .environmentObject(container.agentCoordinator)
+            .environmentObject(container.agentEngine)
+            .environmentObject(container.agentConversationStore)
+            .environmentObject(container.imageGenEngine)
+            .environmentObject(container.zimageGenEngine)
             .environmentObject(container.modelDownloadManager)
             .focusedSceneValue(\.dictationActions, DictationActions(
                 toggleRecording: { [weak container] in
@@ -108,10 +106,7 @@ struct TesseractApp: App {
                 }
             }
             .sheet(isPresented: $showOnboarding) {
-                OnboardingView(
-                    permissionsManager: container.permissionsManager,
-                    isPresented: $showOnboarding
-                )
+                OnboardingView(isPresented: $showOnboarding)
             }
             .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
                 showOnboarding = true
