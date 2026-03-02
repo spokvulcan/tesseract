@@ -56,3 +56,28 @@ extension View {
         modifier(BubbleBackgroundModifier(style: style, cornerRadius: cornerRadius))
     }
 }
+
+// MARK: - Dependency Injection
+
+extension View {
+    /// Injects all required environment objects from the DependencyContainer.
+    /// Use this single modifier instead of chaining multiple .environmentObject() calls.
+    @MainActor
+    func injectDependencies(from container: DependencyContainer) -> some View {
+        self
+            .environmentObject(container)
+            .environmentObject(container.dictationCoordinator)
+            .environmentObject(container.transcriptionEngine)
+            .environmentObject(container.transcriptionHistory)
+            .environmentObject(container.permissionsManager)
+            .environmentObject(container.audioCaptureEngine)
+            .environmentObject(container.speechCoordinator)
+            .environmentObject(container.speechEngine)
+            .environmentObject(container.agentCoordinator)
+            .environmentObject(container.agentEngine)
+            .environmentObject(container.agentConversationStore)
+            .environmentObject(container.imageGenEngine)
+            .environmentObject(container.zimageGenEngine)
+            .environmentObject(container.modelDownloadManager)
+    }
+}

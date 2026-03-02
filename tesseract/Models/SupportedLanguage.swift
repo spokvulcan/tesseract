@@ -140,19 +140,7 @@ struct SupportedLanguage: Identifiable, Hashable {
         all.first { $0.code == code }
     }
 
-    /// Common languages shown at the top of pickers
-    static let common: [SupportedLanguage] = [
-        language(forCode: "en")!,
-        language(forCode: "es")!,
-        language(forCode: "fr")!,
-        language(forCode: "de")!,
-        language(forCode: "it")!,
-        language(forCode: "pt")!,
-        language(forCode: "ru")!,
-        language(forCode: "ja")!,
-        language(forCode: "zh")!,
-        language(forCode: "ko")!,
-        language(forCode: "ar")!,
-        language(forCode: "hi")!,
-    ]
+    /// Common languages shown at the top of pickers (order is intentional)
+    static let common: [SupportedLanguage] = ["en", "es", "fr", "de", "it", "pt", "ru", "ja", "zh", "ko", "ar", "hi"]
+        .compactMap { code in language(forCode: code) }
 }
