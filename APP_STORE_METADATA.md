@@ -2,11 +2,12 @@
 
 ## App Name
 
-tesse-ract
+Tesseract
 
 ### Name Research
 
 **Rationale:**
+
 - "Tesseract" is taken by multiple apps on the Mac App Store (VM manager, puzzle games, journal app, workforce management)
 - The hyphen makes it unique, distinctive, and avoids naming conflicts
 - Lowercase style fits modern app branding (bear, craft, things)
@@ -14,13 +15,11 @@ tesse-ract
 
 **Availability (Feb 2026):**
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| Mac App Store | Clear | No apps named "tesse-ract" |
-| tesse-ract.com | Available | All major TLDs available (.app, .ai, .io, .dev) |
-| tessract.com | Available | All TLDs available |
-| GitHub | Clear | No repositories named "tesse-ract" |
-| USPTO Trademark | Needs manual check | Search at uspto.gov/trademarks |
+| Platform         | Status             | Notes                          |
+| ---------------- | ------------------ | ------------------------------ |
+| Mac App Store    | Clear              | No apps named "tesse-ract"     |
+| thetesseract.app | owned by me        | and will be used for the app   |
+| USPTO Trademark  | Needs manual check | Search at uspto.gov/trademarks |
 
 ---
 
@@ -34,7 +33,7 @@ AI that lives on your Mac. Dictation, text-to-speech, image generation, and more
 
 ## Description
 
-tesse-ract brings intelligence to your Mac without sending a single byte to the cloud. Every model runs locally on Apple Silicon — your data never leaves your device.
+Tesseract brings intelligence to your Mac without sending a single byte to the cloud. Every model runs locally on Apple Silicon — your data never leaves your device.
 
 Voice
 
@@ -83,7 +82,8 @@ Secondary (optional): Utilities
 
 ## App Review Notes
 
-tesse-ract uses:
+Tesseract uses:
+
 - Microphone access for recording voice dictation.
 - Accessibility permission to capture the global hotkey and to simulate paste into the active app.
 - Network access for one-time model downloads from Hugging Face.
