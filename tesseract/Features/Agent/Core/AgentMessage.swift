@@ -3,7 +3,7 @@ import Foundation
 // MARK: - ToolCallInfo
 
 /// Parsed tool call extracted from an assistant response.
-struct ToolCallInfo: Sendable, Codable, Hashable, Identifiable {
+nonisolated struct ToolCallInfo: Sendable, Codable, Hashable, Identifiable {
     let id: String
     let name: String
     let argumentsJSON: String
@@ -13,7 +13,7 @@ struct ToolCallInfo: Sendable, Codable, Hashable, Identifiable {
 
 /// Low-level message representation for the LLM context window.
 /// Transient — not persisted. Built from higher-level message types via `toLLMMessage()`.
-enum LLMMessage: Sendable, Equatable {
+nonisolated enum LLMMessage: Sendable, Equatable {
     case system(content: String)
     case user(content: String)
     case assistant(content: String, toolCalls: [ToolCallInfo]?)
@@ -32,7 +32,7 @@ protocol AgentMessageProtocol: Sendable {
 // MARK: - UserMessage
 
 /// A message from the user (text input or transcribed voice).
-struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Sendable {
+nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let content: String
     let timestamp: Date
@@ -51,7 +51,7 @@ struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Send
 // MARK: - AssistantMessage
 
 /// A response from the LLM, optionally containing thinking and tool calls.
-struct AssistantMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Sendable {
+nonisolated struct AssistantMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let content: String
     let thinking: String?
@@ -80,7 +80,7 @@ struct AssistantMessage: AgentMessageProtocol, Codable, Equatable, Identifiable,
 // MARK: - ToolResultMessage
 
 /// The result of executing a tool call.
-struct ToolResultMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Sendable {
+nonisolated struct ToolResultMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let toolCallId: String
     let toolName: String
@@ -116,7 +116,7 @@ struct ToolResultMessage: AgentMessageProtocol, Codable, Equatable, Identifiable
 // MARK: - CoreMessage
 
 /// Unified wrapper for the three core message types in a conversation.
-enum CoreMessage: AgentMessageProtocol, Sendable, Equatable, Identifiable {
+nonisolated enum CoreMessage: AgentMessageProtocol, Sendable, Equatable, Identifiable {
     case user(UserMessage)
     case assistant(AssistantMessage)
     case toolResult(ToolResultMessage)

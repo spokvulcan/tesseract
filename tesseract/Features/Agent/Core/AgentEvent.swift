@@ -49,7 +49,11 @@ enum AgentEvent: Sendable {
 
     // -- Context transform lifecycle --
     case contextTransformStart(reason: ContextTransformReason)
-    case contextTransformEnd(reason: ContextTransformReason, didMutate: Bool)
+    case contextTransformEnd(
+        reason: ContextTransformReason,
+        didMutate: Bool,
+        messages: [any AgentMessageProtocol & Sendable]?
+    )
 
     // -- Message lifecycle --
     case messageStart(message: any AgentMessageProtocol & Sendable)

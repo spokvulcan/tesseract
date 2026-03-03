@@ -103,6 +103,37 @@ final class AgentEngine: ObservableObject {
         return try startGeneration(input: input, parameters: parameters)
     }
 
+    /// Streams text generation from the new `LLMMessage`-based conversation format.
+    ///
+    /// Bridges the new agent loop's message types to the existing MLX inference pipeline.
+    /// The system prompt is prepended as a `.system` chat message.
+    ///
+    /// - Parameters:
+    ///   - systemPrompt: The system prompt (prepended as the first message).
+    ///   - messages: Conversation history as `LLMMessage` values.
+    ///   - tools: Optional tool definitions for the Jinja template's `<tools>` block.
+    ///   - parameters: Generation parameters (temperature, maxTokens, etc.).
+    /// - Returns: An async stream of ``AgentGeneration`` events.
+    func generate(
+        systemPrompt: String,
+        messages: [LLMMessage],
+        tools: [AgentToolDefinition]?,
+        parameters: AgentGenerateParameters = .default
+    ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
+        Log.agent.debug("generate(llmMessages:) — \(messages.count) messages, \(tools?.count ?? 0) tools")
+
+        // 1. Convert LLMMessage → Chat.Message, prepending the system prompt
+        var chatMessages = [Chat.Message.system(systemPrompt)]
+        chatMessages.append(contentsOf: toLLMCommonMessages(messages))
+
+        // 2. Convert AgentToolDefinition → ToolSpec ([String: any Sendable])
+        let toolSpecs: [ToolSpec]? = tools?.map { $0.toolSpec }
+
+        // 3. Build UserInput and delegate to shared generation logic
+        let input = UserInput(chat: chatMessages, tools: toolSpecs)
+        return try startGeneration(input: input, parameters: parameters)
+    }
+
     /// Cancels any in-progress generation.
     func cancelGeneration() {
         generationTask?.cancel()

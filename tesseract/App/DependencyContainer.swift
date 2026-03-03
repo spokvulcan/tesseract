@@ -168,6 +168,9 @@ final class DependencyContainer: ObservableObject {
             appDelegate.navigateToAgent()
         }
 
+        // Register message codecs for the new persistence layer (Epic 2)
+        await registerCoreMessageCodecs()
+
         hotkeyManager.startListening()
         startSettingsObservation()
 

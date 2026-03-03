@@ -11,7 +11,7 @@ import Foundation
 /// doubles (e.g. `.double(3.14)`) round-trip correctly. The `init(_ value: Any)`
 /// factory (from `JSONSerialization`) does NOT have this limitation because
 /// `NSNumber` preserves the original type via `objCType`.
-enum AnyCodableValue: Sendable, Hashable {
+nonisolated enum AnyCodableValue: Sendable, Hashable {
     case null
     case bool(Bool)
     case int(Int)
