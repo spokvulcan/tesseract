@@ -13,7 +13,7 @@ struct AgentInputBarView: View {
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var isHoldingMic = false
-    @AppStorage("selectedAgentModelID") private var agentModelID: String = "qwen3-4b-instruct-2507"
+    @AppStorage("selectedAgentModelID") private var agentModelID: String = ModelDefinition.defaultAgentModelID
 
     private var isModelDownloaded: Bool {
         if case .downloaded = downloadManager.statuses[agentModelID] {

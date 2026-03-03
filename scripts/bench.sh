@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Usage: scripts/bench.sh [quick|full] [--model <model-id>] [extra args...]
 # Builds Release (for real inference speed), then runs the benchmark headless.
-# Example: scripts/bench.sh quick --model qwen3-4b-instruct-2507
+# Example: scripts/bench.sh quick --model qwen3.5-4b
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"

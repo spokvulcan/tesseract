@@ -38,10 +38,17 @@ struct AgentGenerateParameters: Sendable, Codable {
         topP: 0.95
     )
 
+    /// Qwen3.5-4B recommended parameters.
+    static let qwen35 = AgentGenerateParameters(
+        temperature: 0.6,
+        topP: 0.95
+    )
+
     /// Returns the recommended parameters for a given model ID.
     static func forModel(_ modelID: String) -> AgentGenerateParameters {
         if modelID.contains("opus-distill") { return .qwen3OpusDistill }
         if modelID.contains("thinking") { return .qwen3Thinking }
+        if modelID.hasPrefix("qwen3.5") { return .qwen35 }
         if modelID.hasPrefix("qwen3") { return .qwen3 }
         return .default
     }

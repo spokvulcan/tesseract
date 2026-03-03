@@ -58,6 +58,8 @@ struct ModelDefinition: Identifiable, Sendable {
 }
 
 extension ModelDefinition {
+    static let defaultAgentModelID = "qwen3.5-4b"
+
     // Image generation models are kept here but excluded from `all` until the feature is ready.
     static let all: [ModelDefinition] = [
         ModelDefinition(
@@ -131,6 +133,18 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~3.8 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3.5-4b",
+            displayName: "Qwen3.5-4B",
+            description: "4B hybrid-attention model with 256K context. Tool calling with think blocks.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "mlx-community/Qwen3.5-4B-MLX-8bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~5 GB",
             dependencies: []
         ),
     ]

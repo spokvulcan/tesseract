@@ -11,7 +11,11 @@ struct BenchmarkConfig {
     let scenarioIDs: [String]?  // nil = all
     let outputDir: URL
     let modelDir: URL?  // nil = auto-detect
-    let modelID: String?  // nil = default (qwen3-4b-instruct-2507)
+    let modelID: String?  // nil = default (see ModelDefinition.defaultAgentModelID)
+
+    var resolvedModelID: String {
+        modelID ?? ModelDefinition.defaultAgentModelID
+    }
     /// Max tokens per generation round. Prevents runaway generation where the model
     /// fails to emit a stop token and generates thousands of tokens per round.
     let maxTokensPerRound: Int

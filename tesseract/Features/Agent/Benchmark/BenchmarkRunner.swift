@@ -42,7 +42,7 @@ final class BenchmarkRunner {
         try FileManager.default.createDirectory(at: resultsDir, withIntermediateDirectories: true)
 
         // Determine model-specific base parameters
-        let targetID = config.modelID ?? "qwen3-4b-instruct-2507"
+        let targetID = config.resolvedModelID
         let modelBaseParams = AgentGenerateParameters.forModel(targetID)
 
         for (configIdx, baseParams) in paramConfigs.enumerated() {
@@ -150,7 +150,7 @@ final class BenchmarkRunner {
             messages.append(.user(expectation.userMessage))
 
             // Build prompt with system prompt (memories are now read via file tools)
-            let targetModelID = config.modelID ?? "qwen3-4b-instruct-2507"
+            let targetModelID = config.resolvedModelID
             let systemPrompt = SystemPromptBuilder.build(modelID: targetModelID)
             let contextLimit = 60
             let recentMessages = Array(messages.suffix(contextLimit))
@@ -337,7 +337,7 @@ final class BenchmarkRunner {
         }
 
         // Resolve model ID to cache subdirectory
-        let targetID = config.modelID ?? "qwen3-4b-instruct-2507"
+        let targetID = config.resolvedModelID
         guard let definition = ModelDefinition.all.first(where: { $0.id == targetID }),
               let cacheSub = definition.cacheSubdirectory else {
             throw BenchmarkError.modelNotFound(
@@ -357,7 +357,7 @@ final class BenchmarkRunner {
     }
 
     private var resolvedModelName: String {
-        let targetID = config.modelID ?? "qwen3-4b-instruct-2507"
+        let targetID = config.resolvedModelID
         return ModelDefinition.all.first(where: { $0.id == targetID })?.displayName ?? targetID
     }
 
