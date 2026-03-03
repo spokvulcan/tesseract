@@ -3,7 +3,7 @@ import Foundation
 // MARK: - ContentBlock
 
 /// A block of content within a tool result or message.
-enum ContentBlock: Sendable, Codable, Hashable {
+nonisolated enum ContentBlock: Sendable, Codable, Hashable {
     case text(String)
     case image(data: Data, mimeType: String)
 
@@ -48,7 +48,7 @@ enum ContentBlock: Sendable, Codable, Hashable {
 // MARK: - AgentToolResult
 
 /// Structured result returned by a tool execution.
-struct AgentToolResult: Sendable {
+nonisolated struct AgentToolResult: Sendable {
     let content: [ContentBlock]
     let details: (any Sendable & Hashable)?
 

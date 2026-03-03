@@ -6,7 +6,7 @@ import os
 
 /// Cooperative cancellation token for long-running tool executions.
 /// Thread-safe — can be checked from any isolation domain.
-final class CancellationToken: Sendable {
+nonisolated final class CancellationToken: Sendable {
     private let _state = OSAllocatedUnfairLock(initialState: false)
 
     var isCancelled: Bool { _state.withLock { $0 } }
@@ -16,7 +16,7 @@ final class CancellationToken: Sendable {
 // MARK: - JSONSchema
 
 /// Simple JSON Schema representation for tool parameter validation.
-struct JSONSchema: Sendable {
+nonisolated struct JSONSchema: Sendable {
     let type: String // "object"
     let properties: [String: PropertySchema]
     let required: [String]
@@ -24,7 +24,7 @@ struct JSONSchema: Sendable {
 
 /// Schema for a single tool parameter.
 /// Uses a `Box` wrapper for `items` to break the recursive value-type cycle.
-struct PropertySchema: Sendable {
+nonisolated struct PropertySchema: Sendable {
     let type: String // "string", "integer", "boolean", "array"
     let description: String
     let enumValues: [String]?
@@ -46,7 +46,7 @@ struct PropertySchema: Sendable {
 }
 
 /// Heap-allocated box to break recursive value-type layouts.
-private final class Box<T: Sendable>: @unchecked Sendable {
+private nonisolated final class Box<T: Sendable>: @unchecked Sendable {
     let value: T
     init(_ value: T) { self.value = value }
 }
@@ -56,7 +56,7 @@ private final class Box<T: Sendable>: @unchecked Sendable {
 /// Concrete tool definition using closures. Replaces the `AgentTool` protocol.
 /// Named `AgentToolDefinition` to avoid collision with the existing `AgentTool` protocol
 /// until Epic 6 removes it.
-struct AgentToolDefinition: Sendable {
+nonisolated struct AgentToolDefinition: Sendable {
     let name: String
     let label: String
     let description: String
@@ -95,7 +95,7 @@ struct AgentToolDefinition: Sendable {
 
 extension PropertySchema {
     /// Converts to the `[String: any Sendable]` format expected by MLXLMCommon's tokenizer.
-    func toSchemaDictionary() -> [String: any Sendable] {
+    nonisolated func toSchemaDictionary() -> [String: any Sendable] {
         var dict: [String: any Sendable] = [
             "type": type,
             "description": description,
