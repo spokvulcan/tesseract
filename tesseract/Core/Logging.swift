@@ -11,7 +11,7 @@ import os
 /// Swift resolves `\(path)` as standard `String` interpolation first, then the
 /// wrapper passes the entire string to `os.Logger` with `privacy: .public`.
 /// This means `log stream` shows real values instead of `<private>`.
-struct PublicLogger {
+nonisolated struct PublicLogger: Sendable {
     private let logger: Logger
 
     init(subsystem: String, category: String) {
@@ -43,7 +43,7 @@ struct PublicLogger {
     }
 }
 
-enum Log {
+nonisolated enum Log: Sendable {
     static let audio = PublicLogger(subsystem: "com.tesseract.app", category: "audio")
     static let transcription = PublicLogger(subsystem: "com.tesseract.app", category: "transcription")
     static let general = PublicLogger(subsystem: "com.tesseract.app", category: "general")
