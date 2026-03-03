@@ -95,8 +95,7 @@ struct BenchmarkConfig {
             if let idx = args.firstIndex(of: "--bench-output"), idx + 1 < args.count {
                 return URL(fileURLWithPath: args[idx + 1])
             }
-            // Must be under /private/tmp/tesseract-debug/ for App Sandbox access
-            return URL(fileURLWithPath: "/private/tmp/tesseract-debug/benchmark")
+            return DebugPaths.benchmark
         }()
 
         let modelDir: URL? = {

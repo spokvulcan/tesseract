@@ -397,9 +397,7 @@ final class BenchmarkRunner {
     }
 
     private func dateString() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd_HHmmss"
-        return f.string(from: Date())
+        DebugPaths.timestamp()
     }
 }
 

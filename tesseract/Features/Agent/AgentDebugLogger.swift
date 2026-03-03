@@ -3,11 +3,10 @@ import os
 
 /// Writes agent conversation turns to disk as JSON for post-hoc debugging.
 ///
-/// Each conversation gets a timestamped directory under `/tmp/tesseract-debug/agent/`.
+/// Each conversation gets a timestamped directory under the sandbox-safe temp dir.
 /// Each generation turn writes a JSON file with the full prompt, parameters,
 /// raw output (including think blocks), and performance metrics.
 ///
-/// Only works in Debug builds (Release entitlements block `/tmp` writes).
 /// Follows the same pattern as `AudioPlaybackManager`'s debug dump.
 @MainActor
 final class AgentDebugLogger {
@@ -17,10 +16,8 @@ final class AgentDebugLogger {
 
     /// Starts a new debug session with a timestamped directory.
     func startSession() {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HHmmss"
-        let dir = URL(fileURLWithPath: "/tmp/tesseract-debug/agent")
-            .appendingPathComponent(formatter.string(from: Date()))
+        let dir = DebugPaths.agent
+            .appendingPathComponent(DebugPaths.timestamp())
 
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

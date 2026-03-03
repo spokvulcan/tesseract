@@ -46,7 +46,10 @@ print_data_paths() {
     local container="$HOME/Library/Containers/com.tesseract.app/Data"
     local agent_data="$container/Library/Application Support/tesse-ract/agent"
     local conversations="$agent_data/conversations"
-    local bench_output="/private/tmp/tesseract-debug/benchmark"
+    local debug_root="$container/tmp/tesseract-debug"
+    local bench_output="$debug_root/benchmark"
+    local agent_debug="$debug_root/agent"
+    local tts_debug="$debug_root"
 
     local ESC
     ESC=$(printf '\033')
@@ -56,7 +59,9 @@ print_data_paths() {
     for label_path in \
         "agent:          |$agent_data" \
         "conversations:  |$conversations" \
-        "benchmarks:     |$bench_output"; do
+        "benchmarks:     |$bench_output" \
+        "agent debug:    |$agent_debug" \
+        "tts debug:      |$tts_debug"; do
         local label="${label_path%%|*}"
         local path="${label_path#*|}"
         if [ -d "$path" ]; then
