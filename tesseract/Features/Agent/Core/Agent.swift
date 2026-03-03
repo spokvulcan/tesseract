@@ -88,6 +88,26 @@ final class Agent {
         state.tools = tools
     }
 
+    // MARK: - Message State Management
+
+    /// Load persisted messages into the agent's context and state.
+    /// Used when restoring a conversation from disk.
+    func loadMessages(_ messages: [any AgentMessageProtocol & Sendable]) {
+        guard state.phase == .idle else { return }
+        context.messages = messages
+        state.messages = messages.map { $0 as any AgentMessageProtocol }
+    }
+
+    /// Reset agent messages (e.g. when creating a new conversation).
+    func resetMessages(_ messages: [any AgentMessageProtocol & Sendable] = []) {
+        guard state.phase == .idle else { return }
+        context.messages = messages
+        state.messages = messages.map { $0 as any AgentMessageProtocol }
+        state.streamMessage = nil
+        state.pendingToolCalls.removeAll()
+        state.error = nil
+    }
+
     // MARK: - Public API
 
     /// Start a new agent loop with the given message.
@@ -177,15 +197,17 @@ final class Agent {
         }
     }
 
-    /// Called on MainActor after the loop returns. Drains any remaining buffered
-    /// events first, then copies the authoritative context back and resets state.
+    /// Called on MainActor after the loop returns. Copies the authoritative context
+    /// back, drains any remaining buffered events, then sets idle.
     private func finishRun(_ finalContext: AgentContext) {
+        // Copy context back first so state.messages is current when events drain.
+        context = finalContext
+        state.messages = finalContext.messages.map { $0 as any AgentMessageProtocol }
+
         // Process any events that haven't been drained yet. This guarantees
         // subscribers see all events before the idle transition.
         drainPendingEvents()
 
-        context = finalContext
-        state.messages = finalContext.messages.map { $0 as any AgentMessageProtocol }
         state.phase = .idle
         state.streamMessage = nil
         state.pendingToolCalls.removeAll()
@@ -243,12 +265,24 @@ final class Agent {
 
     /// Process a single agent event: update observable state and notify subscribers.
     private func handleEvent(_ event: AgentEvent) {
+        // Sync messages BEFORE notifying subscribers so they see current state.
+        // The loop mutates its own context copy; these events carry snapshots.
+        switch event {
+        case .turnEnd(_, _, let contextMessages):
+            state.messages = contextMessages.map { $0 as any AgentMessageProtocol }
+        case .agentEnd:
+            // finishRun sets state.messages from finalContext; no need to duplicate here.
+            break
+        default:
+            break
+        }
+
         // Notify all subscribers
         for handler in subscribers.values {
             handler(event)
         }
 
-        // Update observable state
+        // Update other observable state
         switch event {
         case .agentStart:
             state.phase = .streaming
@@ -275,7 +309,7 @@ final class Agent {
                 state.phase = .streaming
             }
 
-        case .agentEnd, .turnStart, .turnEnd, .messageStart, .messageEnd,
+        case .turnStart, .turnEnd, .agentEnd, .messageStart, .messageEnd,
              .toolExecutionUpdate:
             break
         }

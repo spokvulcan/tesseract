@@ -2,14 +2,17 @@ import Combine
 import Foundation
 import os
 
-/// Manages agent chat state — message history, streaming generation, and cancellation.
+/// Thin UI bridge that delegates to ``Agent`` (new core loop).
 ///
-/// Mirrors the `SpeechCoordinator` pattern: owns a `[AgentChatMessage]` conversation,
-/// delegates inference to ``AgentRunner`` (which handles tool loops internally),
-/// and publishes streaming text for the view.
+/// `agent.state.messages` is the **single source of truth**. The coordinator
+/// derives `messages: [AgentChatMessage]` for view consumption — it never
+/// appends to this array directly.
 @MainActor
 final class AgentCoordinator: ObservableObject {
 
+    // MARK: - Published UI State
+
+    /// Derived display messages. Refreshed from `agent.state.messages`.
     @Published private(set) var messages: [AgentChatMessage] = []
     @Published private(set) var streamingText: String = ""
     @Published private(set) var streamingThinking: String = ""
@@ -18,9 +21,10 @@ final class AgentCoordinator: ObservableObject {
     @Published private(set) var voiceState: AgentVoiceState = .idle
     @Published var error: String?
 
-    private let agentRunner: AgentRunner
+    // MARK: - Dependencies
+
+    private let agent: Agent
     private let conversationStore: AgentConversationStore
-    private let dataStore: AgentDataStore?
     private let audioCapture: (any AudioCapturing)?
     private let transcriptionEngine: (any Transcribing)?
     private let settings: SettingsManager?
@@ -30,19 +34,22 @@ final class AgentCoordinator: ObservableObject {
     private let prepareForInference: (@MainActor () -> Void)?
     private let loadAgentModel: (@MainActor () async throws -> Void)?
     private let debugLogger = AgentDebugLogger()
-    private var generationTask: Task<Void, Never>?
     private var voiceErrorResetTask: Task<Void, Never>?
+    private var notchTextLength: Int = 0
+
+    /// Unsubscribe closure for agent event subscription.
+    private var unsubscribe: (@MainActor () -> Void)?
 
     private enum Defaults {
-        static let contextLimit = 60
-        static let minimumRecordingDuration: TimeInterval = 0.5
-        static let errorAutoResetDelay: Duration = .seconds(3)
+        nonisolated static let minimumRecordingDuration: TimeInterval = 0.5
+        nonisolated static let errorAutoResetDelay: Duration = .seconds(3)
     }
 
+    // MARK: - Init
+
     init(
-        agentRunner: AgentRunner,
+        agent: Agent,
         conversationStore: AgentConversationStore,
-        dataStore: AgentDataStore? = nil,
         audioCapture: (any AudioCapturing)? = nil,
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
@@ -51,9 +58,8 @@ final class AgentCoordinator: ObservableObject {
         speechCoordinator: SpeechCoordinator? = nil,
         notchController: AgentNotchPanelController? = nil
     ) {
-        self.agentRunner = agentRunner
+        self.agent = agent
         self.conversationStore = conversationStore
-        self.dataStore = dataStore
         self.audioCapture = audioCapture
         self.transcriptionEngine = transcriptionEngine
         self.settings = settings
@@ -62,184 +68,70 @@ final class AgentCoordinator: ObservableObject {
         self.speechCoordinator = speechCoordinator
         self.notchController = notchController
 
+        // Subscribe to agent events
+        subscribeToAgentEvents()
+
         // Load the most recent conversation (or create a fresh one)
         conversationStore.loadMostRecent()
         if let current = conversationStore.currentConversation {
-            messages = current.messages
+            // Restore agent state from persisted messages
+            agent.loadMessages(current.messages)
+            refreshDisplayMessages()
         }
     }
 
-    /// Sends a user message and streams the assistant response (with tool loops).
+    deinit {
+        // Capture the closure to call from nonisolated deinit via MainActor.
+        let unsub = unsubscribe
+        if let unsub {
+            MainActor.assumeIsolated { unsub() }
+        }
+    }
+
+    // MARK: - Send Message
+
+    /// Sends a user message via the Agent. The agent owns the message lifecycle.
     func sendMessage(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
         Log.agent.info("User message (\(trimmed.count) chars): \(trimmed)")
 
-        messages.append(.user(trimmed))
         error = nil
         isGenerating = true
         streamingText = ""
         streamingThinking = ""
         isThinking = false
 
-        // Select model-specific generation parameters
-        let modelID = settings?.selectedAgentModelID ?? "qwen3-4b-instruct-2507"
-        let generateParams = AgentGenerateParameters.forModel(modelID)
-
         // Free memory from other engines before inference
         prepareForInference?()
 
         // Start debug session on first turn
-        if messages.count == 1 {
+        if agent.state.messages.isEmpty {
             debugLogger.startSession()
         }
-
-        var generationInfo: AgentGeneration.Info?
 
         // Show thinking in notch if it's visible (voice-initiated)
         notchController?.updatePhase(.thinking)
 
-        generationTask = Task { [weak self] in
-            guard let self else { return }
-
-            // Load memories and build system prompt (async — needs actor access)
-            let voiceMode = settings?.agentAutoSpeak ?? false
-            let memoryTexts = await loadMemoryTexts()
-            let systemPrompt = SystemPromptBuilder.build(modelID: modelID, memories: memoryTexts, voiceMode: voiceMode)
-            let recentMessages = Array(messages.suffix(Defaults.contextLimit))
-            let maskedMessages = AgentChatMessage.withObservationMasking(recentMessages)
-            let prompt: [AgentChatMessage] = [.system(systemPrompt)] + maskedMessages
-
-            Log.agent.info("Sending \(prompt.count) messages to model \(modelID) (\(recentMessages.count) of \(self.messages.count) history)")
-            debugLogger.logPrompt(messages: prompt, parameters: generateParams)
-            var notchTextLength = 0
-
-            do {
-                let stream = try agentRunner.run(messages: prompt, parameters: generateParams)
-                Log.agent.debug("Agent runner stream started")
-
-                for try await event in stream {
-                    switch event {
-                    case .text(let chunk):
-                        streamingText += chunk
-                        // Throttle notch updates — every 10 chars
-                        if notchController?.isShowing == true && streamingText.count - notchTextLength >= 10 {
-                            notchTextLength = streamingText.count
-                            notchController?.updatePhase(.responding(text: streamingText))
-                        }
-                    case .thinkStart:
-                        isThinking = true
-                        notchController?.updatePhase(.thinking)
-                    case .thinking(let chunk):
-                        streamingThinking += chunk
-                    case .thinkEnd:
-                        if !isThinking {
-                            // Model omitted <think> tag — text streamed so far is thinking
-                            streamingThinking = streamingText
-                            streamingText = ""
-                        }
-                        isThinking = false
-                        Log.agent.debug("Think block (\(self.streamingThinking.count) chars)")
-                    case .toolStart(let name, _):
-                        Log.agent.info("Tool start: \(name)")
-                        notchController?.updatePhase(.toolCall(name: name))
-                    case .toolResult(let name, let result):
-                        Log.agent.info("Tool result [\(name)]: \(result.prefix(200))")
-                        // Clear streaming text between rounds so the next
-                        // generation round starts fresh in the UI
-                        streamingText = ""
-                        streamingThinking = ""
-                        isThinking = false
-                        notchTextLength = 0
-                        notchController?.updatePhase(.thinking)
-                    case .toolError(let raw):
-                        Log.agent.warning("Tool error: \(raw.prefix(200))")
-                    case .roundStart:
-                        break
-                    case .info(let info):
-                        generationInfo = info
-                    case .completed(let newMessages):
-                        messages.append(contentsOf: newMessages)
-
-                        let lastAssistant = newMessages.last { $0.role == .assistant }
-                        debugLogger.logResponse(
-                            rawOutput: lastAssistant?.content ?? "",
-                            displayOutput: lastAssistant?.content ?? "",
-                            thinking: lastAssistant?.thinking,
-                            info: generationInfo
-                        )
-                    }
-                }
-
-                Log.agent.info("Agent run complete — \(self.messages.count) total messages")
-
-                // Show complete state in notch with response preview
-                if let notchController, notchController.isShowing,
-                   let lastAssistant = self.messages.last(where: { $0.role == .assistant }) {
-                    notchController.updatePhase(.complete(text: lastAssistant.content))
-                }
-
-                streamingText = ""
-                streamingThinking = ""
-                isThinking = false
-                isGenerating = false
-                persistCurrentConversation()
-
-                // Auto-speak the final assistant response if enabled
-                if let settings, settings.agentAutoSpeak,
-                   let lastAssistant = self.messages.last(where: { $0.role == .assistant }),
-                   !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Log.agent.info("Auto-speaking response (\(lastAssistant.content.count) chars)")
-                    speechCoordinator?.speakText(lastAssistant.content)
-                }
-            } catch is CancellationError {
-                Log.agent.info("Generation cancelled — \(self.streamingText.count) chars generated")
-                if !streamingText.isEmpty || !streamingThinking.isEmpty {
-                    messages.append(.assistant(
-                        streamingText,
-                        thinking: streamingThinking.isEmpty ? nil : streamingThinking
-                    ))
-                }
-                streamingText = ""
-                streamingThinking = ""
-                isThinking = false
-                isGenerating = false
-                persistCurrentConversation()
-                notchController?.dismiss()
-            } catch {
-                Log.agent.error("Generation failed: \(error)")
-                debugLogger.logError(error.localizedDescription)
-                self.error = error.localizedDescription
-                if !streamingText.isEmpty || !streamingThinking.isEmpty {
-                    messages.append(.assistant(
-                        streamingText,
-                        thinking: streamingThinking.isEmpty ? nil : streamingThinking
-                    ))
-                }
-                streamingText = ""
-                streamingThinking = ""
-                isThinking = false
-                isGenerating = false
-                persistCurrentConversation()
-                notchController?.updatePhase(.error(error.localizedDescription))
-            }
-
-            generationTask = nil
-        }
+        // Create user message and prompt the agent — the agent appends it to context
+        let userMessage = CoreMessage.user(UserMessage.create(trimmed))
+        agent.prompt(userMessage)
     }
 
     /// Cancels in-progress generation.
     func cancelGeneration() {
-        generationTask?.cancel()
-        generationTask = nil
-        agentRunner.cancelGeneration()
+        agent.abort()
     }
+
+    // MARK: - Conversation Management
 
     /// Creates a new conversation, saving the current one first.
     func newConversation() {
         cancelGeneration()
+        persistCurrentConversation()
         conversationStore.createNew()
+        agent.resetMessages([])
         messages = []
         streamingText = ""
         streamingThinking = ""
@@ -252,8 +144,14 @@ final class AgentCoordinator: ObservableObject {
     /// Loads a past conversation by ID.
     func loadConversation(_ id: UUID) {
         cancelGeneration()
+        persistCurrentConversation()
         conversationStore.load(id: id)
-        messages = conversationStore.currentConversation?.messages ?? []
+        if let current = conversationStore.currentConversation {
+            agent.loadMessages(current.messages)
+        } else {
+            agent.resetMessages([])
+        }
+        refreshDisplayMessages()
         streamingText = ""
         streamingThinking = ""
         isThinking = false
@@ -267,7 +165,12 @@ final class AgentCoordinator: ObservableObject {
         let wasCurrent = conversationStore.currentConversation?.id == id
         conversationStore.delete(id: id)
         if wasCurrent {
-            messages = conversationStore.currentConversation?.messages ?? []
+            if let current = conversationStore.currentConversation {
+                agent.loadMessages(current.messages)
+            } else {
+                agent.resetMessages([])
+            }
+            refreshDisplayMessages()
             debugLogger.reset()
         }
     }
@@ -383,17 +286,123 @@ final class AgentCoordinator: ObservableObject {
         speechCoordinator?.stop()
     }
 
-    // MARK: - Private
+    // MARK: - Event Subscription
 
-    private func loadMemoryTexts() async -> [String]? {
-        guard let dataStore else { return nil }
-        let memories: [AgentMemory] = await dataStore.loadArray(AgentMemory.self, from: "memories.json")
-        guard !memories.isEmpty else { return nil }
-        return memories.enumerated().map { "\($0.offset + 1). \($0.element.text)" }
+    private func subscribeToAgentEvents() {
+        unsubscribe = agent.subscribe { [weak self] event in
+            Task { @MainActor in
+                self?.handleAgentEvent(event)
+            }
+        }
+    }
+
+    private func handleAgentEvent(_ event: AgentEvent) {
+        switch event {
+        case .agentStart:
+            isGenerating = true
+            refreshDisplayMessages()
+
+        case .contextTransformStart(let reason):
+            updatePhaseIndicator(reason)
+
+        case .contextTransformEnd(_, let didMutate, _):
+            clearPhaseIndicator()
+            if didMutate { refreshDisplayMessages() }
+
+        case .messageUpdate(_, let delta):
+            if let text = delta.textDelta {
+                streamingText += text
+                // Throttle notch updates — every 10 chars
+                if notchController?.isShowing == true,
+                   streamingText.count - notchTextLength >= 10 {
+                    notchTextLength = streamingText.count
+                    notchController?.updatePhase(.responding(text: streamingText))
+                }
+            }
+            if let thinking = delta.thinkingDelta {
+                if !isThinking {
+                    isThinking = true
+                    notchController?.updatePhase(.thinking)
+                }
+                streamingThinking += thinking
+            }
+
+        case .toolExecutionStart(_, let toolName, _):
+            Log.agent.info("Tool start: \(toolName)")
+            notchController?.updatePhase(.toolCall(name: toolName))
+            // Clear streaming state between tool rounds
+            streamingText = ""
+            streamingThinking = ""
+            isThinking = false
+            notchTextLength = 0
+
+        case .toolExecutionEnd(_, let toolName, let result, _):
+            let text = result.content.textContent
+            Log.agent.info("Tool result [\(toolName)]: \(text.prefix(200))")
+            notchController?.updatePhase(.thinking)
+
+        case .turnEnd(_, _, _):
+            // Save after each turn for crash resilience
+            refreshDisplayMessages()
+            persistCurrentConversation()
+
+        case .agentEnd(_):
+            isGenerating = false
+            isThinking = false
+            streamingText = ""
+            streamingThinking = ""
+            notchTextLength = 0
+            refreshDisplayMessages()
+            // turnEnd already saved — only save again if no turns occurred
+            autoSpeakIfEnabled()
+
+            // Show complete state in notch
+            if let notchController, notchController.isShowing,
+               let lastAssistant = messages.last(where: { $0.role == .assistant }) {
+                notchController.updatePhase(.complete(text: lastAssistant.content))
+            }
+
+        case .turnStart, .messageStart, .messageEnd, .toolExecutionUpdate:
+            break
+        }
+    }
+
+    // MARK: - Private Helpers
+
+    /// Derive UI messages from the agent's authoritative state.
+    private func refreshDisplayMessages() {
+        messages = agent.state.messages.map { msg in
+            if let chat = msg as? AgentChatMessage { return chat }
+            return AgentChatMessage(from: msg)
+        }
     }
 
     private func persistCurrentConversation() {
-        conversationStore.updateCurrentMessages(messages)
+        guard !agent.state.messages.isEmpty else { return }
+        conversationStore.updateCurrentMessages(agent.state.messages.map { $0 as any AgentMessageProtocol & Sendable })
         conversationStore.saveCurrent()
+    }
+
+    private func autoSpeakIfEnabled() {
+        guard let settings, settings.agentAutoSpeak,
+              let lastAssistant = messages.last(where: { $0.role == .assistant }),
+              !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        Log.agent.info("Auto-speaking response (\(lastAssistant.content.count) chars)")
+        speechCoordinator?.speakText(lastAssistant.content)
+    }
+
+    private func updatePhaseIndicator(_ reason: ContextTransformReason) {
+        switch reason {
+        case .compaction:
+            notchController?.updatePhase(.thinking)
+            Log.agent.info("Context compaction started")
+        case .extensionTransform(let name):
+            Log.agent.info("Extension transform: \(name)")
+        }
+    }
+
+    private func clearPhaseIndicator() {
+        // Phase indicator is transient — clears automatically when next event arrives
     }
 }

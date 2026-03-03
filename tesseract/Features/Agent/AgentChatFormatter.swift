@@ -4,9 +4,9 @@ import Tokenizers
 
 /// Converts ``AgentChatMessage`` arrays into ``UserInput`` for the MLX pipeline.
 ///
-/// Stateless — all methods are static. The MLXLMCommon Jinja template pipeline
-/// handles the actual ChatML `<|im_start|>role\ncontent<|im_end|>` formatting;
-/// this enum just bridges our domain types into ``Chat.Message``.
+/// **Deprecated**: Replaced by ``MessageConversion/toLLMCommonMessages``. Kept only
+/// because ``AgentEngine/generate(messages:tools:parameters:)`` (the legacy overload
+/// used by ``AgentRunner``) still calls ``makeUserInput``. Will be deleted in Epic 7.
 enum AgentChatFormatter {
 
     /// Maps agent messages to a ``UserInput`` ready for ``ModelContainer/prepare(input:)``.

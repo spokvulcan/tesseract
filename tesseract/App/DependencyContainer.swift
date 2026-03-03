@@ -32,38 +32,131 @@ final class DependencyContainer: ObservableObject {
 
     // Agent (LLM)
     lazy var agentEngine = AgentEngine()
-    lazy var agentDataStore = AgentDataStore()
-    lazy var toolRegistry: ToolRegistry = {
-        let store = agentDataStore
-        return ToolRegistry(tools: [
-            MemorySaveTool(store: store),
-            MemoryUpdateTool(store: store),
-            MemoryDeleteTool(store: store),
-            GoalCreateTool(store: store),
-            GoalListTool(store: store),
-            GoalUpdateTool(store: store),
-            TaskCreateTool(store: store),
-            TaskListTool(store: store),
-            TaskCompleteTool(store: store),
-            HabitCreateTool(store: store),
-            HabitLogTool(store: store),
-            HabitStatusTool(store: store),
-            MoodLogTool(store: store),
-            MoodListTool(store: store),
-            ReminderSetTool(store: store),
-            RespondTool(),
-        ])
+
+    // New architecture (Epics 0-5)
+    lazy var agentSandbox: PathSandbox = {
+        PathSandbox(root: PathSandbox.defaultRoot)
     }()
-    lazy var agentRunner: AgentRunner = {
-        AgentRunner(engine: agentEngine, toolRegistry: toolRegistry)
+    lazy var extensionHost = ExtensionHost()
+    lazy var packageRegistry = PackageRegistry()
+    lazy var contextManager = ContextManager(settings: .standard)
+    lazy var newToolRegistry: ToolRegistry = {
+        ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
+    }()
+    lazy var agent: Agent = {
+        let agentRoot = PathSandbox.defaultRoot
+        let engine = agentEngine
+
+        // 1. Bootstrap packages (discover, seed data, register extensions)
+        PackageBootstrap.bootstrap(
+            packageRegistry: packageRegistry,
+            extensionHost: extensionHost,
+            agentRoot: agentRoot
+        )
+
+        // 2. Refresh extension tools after package bootstrap
+        newToolRegistry.refreshExtensionTools(from: extensionHost)
+        let tools = newToolRegistry.allTools
+
+        // 3. Discover skills from agent root + packages
+        let skillsDir = agentRoot.appendingPathComponent("skills")
+        let skills = SkillRegistry.discover(
+            locations: [skillsDir],
+            packageSkillFiles: packageRegistry.allSkillPaths
+        )
+
+        // 4. Load context files (AGENTS.md, CLAUDE.md, APPEND_SYSTEM.md, etc.)
+        let contextLoader = ContextLoader(agentRoot: agentRoot)
+        let loadedContext = contextLoader.load(
+            packageContextFiles: packageRegistry.allContextFilePaths,
+            packagePromptAppends: packageRegistry.allPromptAppendPaths,
+            packageSystemOverrides: []
+        )
+
+        // 5. Assemble system prompt with full context
+        let systemPrompt = SystemPromptAssembler.assemble(
+            defaultPrompt: SystemPromptAssembler.defaultCorePrompt,
+            loadedContext: loadedContext,
+            skills: skills,
+            tools: tools,
+            dateTime: Date(),
+            agentRoot: agentRoot.path
+        )
+
+        // 6. Build compaction transform
+        let ctxManager = contextManager
+        let compactionTransform = makeCompactionTransform(
+            contextManager: ctxManager,
+            contextWindow: 120_000,
+            summarize: { prompt in
+                // Bridge the summarization call to AgentEngine.
+                // Uses a simple single-prompt generation for summarization.
+                let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+                let task = Task { @MainActor in
+                    do {
+                        let s = try engine.generate(prompt: prompt)
+                        for try await gen in s {
+                            continuation.yield(gen)
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+                var result = ""
+                for try await gen in stream {
+                    if case .text(let chunk) = gen {
+                        result += chunk
+                    }
+                }
+                return result
+            }
+        )
+
+        // 7. Create agent config
+        let config = AgentLoopConfig(
+            model: AgentModelRef(id: settingsManager.selectedAgentModelID),
+            convertToLlm: { msgs in msgs.compactMap { $0.toLLMMessage() } },
+            contextTransform: compactionTransform,
+            getSteeringMessages: nil,
+            getFollowUpMessages: nil
+        )
+
+        // 8. Create Agent
+        return Agent(
+            config: config,
+            systemPrompt: systemPrompt,
+            tools: tools,
+            generate: { systemPrompt, messages, tools, _ in
+                // Bridge MainActor-isolated engine.generate into a Sendable closure.
+                let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+                let task = Task { @MainActor in
+                    do {
+                        let engineStream = try engine.generate(
+                            systemPrompt: systemPrompt,
+                            messages: messages,
+                            tools: tools
+                        )
+                        for try await generation in engineStream {
+                            continuation.yield(generation)
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+                return stream
+            }
+        )
     }()
     lazy var agentConversationStore = AgentConversationStore()
     lazy var agentNotchController = AgentNotchPanelController()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
-            agentRunner: agentRunner,
+            agent: agent,
             conversationStore: agentConversationStore,
-            dataStore: agentDataStore,
             audioCapture: audioCaptureEngine,
             transcriptionEngine: transcriptionEngine,
             settings: settingsManager,

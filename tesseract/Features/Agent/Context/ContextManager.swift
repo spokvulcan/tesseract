@@ -35,7 +35,7 @@ nonisolated struct CompactionSettings: Sendable {
 /// Tracks whether compaction should run and executes the summarize-and-trim
 /// algorithm when the context window is nearly full. Designed to be used via
 /// `makeTransformContext` which produces a closure compatible with `ContextTransformConfig`.
-nonisolated actor ContextManager {
+actor ContextManager {
     let settings: CompactionSettings
     private var lastSummary: String?
 
@@ -216,12 +216,8 @@ nonisolated actor ContextManager {
                     lines.append("Assistant: \(msg.content)")
                 }
             case let msg as ToolResultMessage:
-                let text = msg.content.compactMap { block -> String? in
-                    if case .text(let t) = block { return t }
-                    return nil
-                }.joined(separator: "\n")
                 let prefix = msg.isError ? "Tool Error" : "Tool Result"
-                lines.append("\(prefix) (\(msg.toolName)): \(text)")
+                lines.append("\(prefix) (\(msg.toolName)): \(msg.content.textContent)")
             case let msg as CompactionSummaryMessage:
                 lines.append("Previous Summary: \(msg.summary)")
             default:

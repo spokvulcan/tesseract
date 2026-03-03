@@ -45,7 +45,11 @@ enum AgentEvent: Sendable {
 
     // -- Turn lifecycle --
     case turnStart
-    case turnEnd(message: AssistantMessage, toolResults: [ToolResultMessage])
+    case turnEnd(
+        message: AssistantMessage,
+        toolResults: [ToolResultMessage],
+        contextMessages: [any AgentMessageProtocol & Sendable]
+    )
 
     // -- Context transform lifecycle --
     case contextTransformStart(reason: ContextTransformReason)

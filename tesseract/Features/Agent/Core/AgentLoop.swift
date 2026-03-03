@@ -158,11 +158,11 @@ private func runLoop(
             // 4. Check for cancellation or error
             switch stopReason {
             case .cancelled:
-                emit(.turnEnd(message: assistantMessage, toolResults: []))
+                emit(.turnEnd(message: assistantMessage, toolResults: [], contextMessages: context.messages))
                 emit(.agentEnd(messages: allNewMessages.snapshot()))
                 return
             case .error(let error):
-                emit(.turnEnd(message: assistantMessage, toolResults: []))
+                emit(.turnEnd(message: assistantMessage, toolResults: [], contextMessages: context.messages))
                 emit(.agentEnd(messages: allNewMessages.snapshot()))
                 Log.agent.error("Generation error: \(error)")
                 return
@@ -174,7 +174,7 @@ private func runLoop(
             let toolCalls = assistantMessage.toolCalls
             guard !toolCalls.isEmpty else {
                 // No tool calls — end the inner loop
-                emit(.turnEnd(message: assistantMessage, toolResults: []))
+                emit(.turnEnd(message: assistantMessage, toolResults: [], contextMessages: context.messages))
                 break innerLoop
             }
 
@@ -189,7 +189,7 @@ private func runLoop(
                 emit: emit
             )
 
-            emit(.turnEnd(message: assistantMessage, toolResults: toolResults))
+            emit(.turnEnd(message: assistantMessage, toolResults: toolResults, contextMessages: context.messages))
 
             // 8. Set pending = steering
             pendingMessages = steeringMessages

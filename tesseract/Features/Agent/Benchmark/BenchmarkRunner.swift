@@ -3,42 +3,11 @@ import MLX
 import MLXLMCommon
 import os
 
-/// Mock replacement for ReminderSetTool that validates arguments but skips UNUserNotificationCenter.
-private struct MockReminderSetTool: AgentTool {
-    let name = "reminder_set"
-    let description = "Set a reminder that will show as a system notification at the specified time"
-    let parameters: [ToolParameter] = [
-        .required("message", type: .string, description: "Reminder message"),
-        .required("time", type: .string, description: "When to remind (e.g. 'in 30 minutes', 'at 3pm', 'tomorrow at 9am', ISO8601)"),
-    ]
-
-    let store: AgentDataStore
-
-    func execute(arguments: [String: JSONValue]) async throws -> String {
-        guard let message = arguments.string(for: "message") else {
-            throw AgentToolError.missingArgument("message")
-        }
-        guard let timeStr = arguments.string(for: "time") else {
-            throw AgentToolError.missingArgument("time")
-        }
-        guard let triggerDate = DateParsingUtility.parse(timeStr) else {
-            throw AgentToolError.invalidArgument("time", "could not parse \"\(timeStr)\"")
-        }
-        guard triggerDate > Date() else {
-            throw AgentToolError.invalidArgument("time", "reminder time must be in the future")
-        }
-
-        let reminder = Reminder(message: message, triggerDate: triggerDate)
-        await store.append(reminder, to: "reminders.json")
-
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return "Done. Reminder set: \"\(message)\" at \(formatter.string(from: triggerDate))."
-    }
-}
-
 /// Orchestrates the full benchmark run: load model, run scenarios, write reports.
+///
+/// **Deprecated**: This benchmark runner uses the old domain-tool architecture
+/// (AgentRunner, LegacyToolRegistry, AgentDataStore). It will be rewritten in
+/// Epic 7 to test the new file-based tool workflows.
 @MainActor
 final class BenchmarkRunner {
 
@@ -154,13 +123,12 @@ final class BenchmarkRunner {
     ) async throws -> BenchmarkScenarioResult {
         log("  Running \(scenario.id): \(scenario.description) (\(scenario.turns.count) turns)")
 
-        // Fresh temp data store
+        // Fresh temp directory for benchmark data
         let tempDir = config.outputDir
             .appendingPathComponent("data_\(scenario.id)_\(UUID().uuidString.prefix(8))")
-        let store = AgentDataStore(baseDirectory: tempDir)
 
-        // Build tool registry with mock ReminderSetTool
-        let registry = buildToolRegistry(store: store)
+        // Deprecated: uses empty LegacyToolRegistry. Epic 7 will rewrite benchmarks.
+        let registry = LegacyToolRegistry(tools: [])
         let runner = AgentRunner(engine: engine, toolRegistry: registry, maxToolRounds: 3)
 
         // Transcript for full I/O debugging
@@ -181,11 +149,9 @@ final class BenchmarkRunner {
             // Append user message
             messages.append(.user(expectation.userMessage))
 
-            // Build prompt with system prompt + context window
-            let memories: [AgentMemory] = await store.loadArray(AgentMemory.self, from: "memories.json")
-            let memoryTexts: [String]? = memories.isEmpty ? nil : memories.enumerated().map { "\($0.offset + 1). \($0.element.text)" }
+            // Build prompt with system prompt (memories are now read via file tools)
             let targetModelID = config.modelID ?? "qwen3-4b-instruct-2507"
-            let systemPrompt = SystemPromptBuilder.build(modelID: targetModelID, memories: memoryTexts)
+            let systemPrompt = SystemPromptBuilder.build(modelID: targetModelID)
             let contextLimit = 60
             let recentMessages = Array(messages.suffix(contextLimit))
             let maskedMessages = AgentChatMessage.withObservationMasking(recentMessages)
@@ -361,29 +327,6 @@ final class BenchmarkRunner {
             passed: allPassed,
             summary: summary
         )
-    }
-
-    // MARK: - Tool Registry
-
-    private func buildToolRegistry(store: AgentDataStore) -> ToolRegistry {
-        ToolRegistry(tools: [
-            MemorySaveTool(store: store),
-            MemoryUpdateTool(store: store),
-            MemoryDeleteTool(store: store),
-            GoalCreateTool(store: store),
-            GoalListTool(store: store),
-            GoalUpdateTool(store: store),
-            TaskCreateTool(store: store),
-            TaskListTool(store: store),
-            TaskCompleteTool(store: store),
-            HabitCreateTool(store: store),
-            HabitLogTool(store: store),
-            HabitStatusTool(store: store),
-            MoodLogTool(store: store),
-            MoodListTool(store: store),
-            MockReminderSetTool(store: store),
-            RespondTool(),
-        ])
     }
 
     // MARK: - Model Resolution

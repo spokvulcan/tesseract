@@ -1,18 +1,35 @@
 import Foundation
 
-struct AgentConversation: Identifiable, Codable, Sendable {
+struct AgentConversation: Identifiable, Sendable {
     let id: UUID
-    var messages: [AgentChatMessage]
+    var messages: [any AgentMessageProtocol & Sendable]
     let createdAt: Date
     var updatedAt: Date
 
+    /// Derive title from first user message content.
     var title: String {
-        messages.first(where: { $0.role == .user })?.content.prefix(80).description ?? "New Conversation"
+        for msg in messages {
+            if let core = msg as? CoreMessage, case .user(let user) = core {
+                let text = user.content.prefix(80)
+                return text.isEmpty ? "New Conversation" : String(text)
+            }
+            // Also check bare UserMessage (not wrapped in CoreMessage)
+            if let user = msg as? UserMessage {
+                let text = user.content.prefix(80)
+                return text.isEmpty ? "New Conversation" : String(text)
+            }
+        }
+        return "New Conversation"
     }
 
     var messageCount: Int { messages.count }
 
-    init(id: UUID = UUID(), messages: [AgentChatMessage] = [], createdAt: Date = Date(), updatedAt: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        messages: [any AgentMessageProtocol & Sendable] = [],
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
         self.id = id
         self.messages = messages
         self.createdAt = createdAt
@@ -23,7 +40,7 @@ struct AgentConversation: Identifiable, Codable, Sendable {
 /// Lightweight summary for the conversation index (avoids loading full message history).
 struct AgentConversationSummary: Identifiable, Codable, Sendable {
     let id: UUID
-    let title: String
+    var title: String
     let createdAt: Date
     var updatedAt: Date
     var messageCount: Int
@@ -34,5 +51,13 @@ struct AgentConversationSummary: Identifiable, Codable, Sendable {
         self.createdAt = conversation.createdAt
         self.updatedAt = conversation.updatedAt
         self.messageCount = conversation.messageCount
+    }
+
+    init(id: UUID, title: String, createdAt: Date, updatedAt: Date, messageCount: Int) {
+        self.id = id
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.messageCount = messageCount
     }
 }

@@ -45,6 +45,13 @@ nonisolated enum ContentBlock: Sendable, Codable, Hashable {
     }
 }
 
+extension [ContentBlock] {
+    /// Extracts and joins all `.text` blocks into a single string.
+    nonisolated var textContent: String {
+        compactMap { if case .text(let t) = $0 { t } else { nil } }.joined(separator: "\n")
+    }
+}
+
 // MARK: - AgentToolResult
 
 /// Structured result returned by a tool execution.

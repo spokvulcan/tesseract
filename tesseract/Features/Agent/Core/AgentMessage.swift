@@ -26,7 +26,7 @@ nonisolated enum LLMMessage: Sendable, Equatable {
 protocol AgentMessageProtocol: Sendable {
     /// Convert to LLM context representation. Returns nil for messages
     /// that should not appear in the LLM context (e.g. UI-only messages).
-    func toLLMMessage() -> LLMMessage?
+    nonisolated func toLLMMessage() -> LLMMessage?
 }
 
 // MARK: - UserMessage

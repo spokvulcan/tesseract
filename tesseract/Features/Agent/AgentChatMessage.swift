@@ -1,12 +1,13 @@
 import Foundation
 import MLXLMCommon
 
-/// Minimal domain message type for the agent inference layer.
+/// UI display message type for the agent chat view.
 ///
-/// Decoupled from ``MLXLMCommon/Chat.Message`` to stay fully `Sendable`
-/// (text-only — no image/video baggage) and to avoid requiring `MLXLMCommon`
-/// imports throughout app code. See ``AgentChatFormatter`` for the bridge.
-struct AgentChatMessage: Sendable, Codable, Identifiable {
+/// Kept as a flat, `Codable` struct for view rendering. The coordinator converts
+/// protocol-based messages (`CoreMessage`, `AssistantMessage`, etc.) into this
+/// type via `init(from:)`. Not used as a primary storage format — the new
+/// architecture persists `AgentMessageProtocol` types via tagged JSON.
+struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
     enum Role: String, Sendable, Codable {
         case system
         case user
@@ -60,6 +61,67 @@ struct AgentChatMessage: Sendable, Codable, Identifiable {
 
     static func tool(_ content: String) -> Self {
         Self(id: UUID(), timestamp: Date(), role: .tool, content: content, thinking: nil)
+    }
+
+    // MARK: - AgentMessageProtocol
+
+    nonisolated func toLLMMessage() -> LLMMessage? {
+        switch role {
+        case .system: .system(content: content)
+        case .user: .user(content: content)
+        case .assistant: .assistant(content: content, toolCalls: nil)
+        case .tool: .toolResult(toolCallId: "", content: content)
+        }
+    }
+
+    // MARK: - Convert from Protocol Messages
+
+    /// Creates an `AgentChatMessage` from any `AgentMessageProtocol` for legacy UI display.
+    init(from message: any AgentMessageProtocol) {
+        let now = Date()
+        switch message {
+        case let core as CoreMessage:
+            switch core {
+            case .user(let user):
+                self.init(id: user.id, timestamp: user.timestamp, role: .user, content: user.content, thinking: nil)
+            case .assistant(let asst):
+                self.init(id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content, thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
+            case .toolResult(let tr):
+                self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil)
+            }
+        case let user as UserMessage:
+            self.init(id: user.id, timestamp: user.timestamp, role: .user, content: user.content, thinking: nil)
+        case let asst as AssistantMessage:
+            self.init(id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content, thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
+        case let tr as ToolResultMessage:
+            self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil)
+        case let compaction as CompactionSummaryMessage:
+            self.init(id: UUID(), timestamp: compaction.timestamp, role: .system,
+                      content: "[Context compacted — \(compaction.tokensBefore) tokens summarized]", thinking: nil)
+        case let chat as AgentChatMessage:
+            self = chat
+        default:
+            // Unknown message type — render as system note
+            self.init(id: UUID(), timestamp: now, role: .system, content: "[Unknown message]", thinking: nil)
+        }
+    }
+
+    // MARK: - ToolCallInfo → ToolCall Conversion
+
+    /// Converts new-architecture `ToolCallInfo` to legacy `ToolCall` (MLXLMCommon).
+    private static func convertToolCalls(_ calls: [ToolCallInfo]) -> [ToolCall] {
+        calls.map { info in
+            let args: [String: JSONValue]
+            if !info.argumentsJSON.isEmpty,
+               let data = info.argumentsJSON.data(using: .utf8),
+               let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data)
+            {
+                args = parsed
+            } else {
+                args = [:]
+            }
+            return ToolCall(function: .init(name: info.name, arguments: args))
+        }
     }
 
     // MARK: - Observation Masking

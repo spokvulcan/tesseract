@@ -28,18 +28,19 @@ enum AgentRunnerEvent: Sendable {
 
 /// Orchestrates the generate → execute tools → re-generate loop.
 ///
-/// Sits between ``AgentCoordinator`` (UI state) and ``AgentEngine`` (inference).
-/// Pure logic — takes messages in, yields ``AgentRunnerEvent``s out.
+/// **Deprecated**: Replaced by ``Agent`` + ``agentLoop`` (Epics 0-5). Kept only
+/// because ``BenchmarkRunner`` still references it. Will be deleted in Epic 7
+/// when benchmarks are rewritten for the new file-based tool architecture.
 @MainActor
 final class AgentRunner {
 
     private let engine: AgentEngine
-    private let toolRegistry: ToolRegistry
+    private let toolRegistry: LegacyToolRegistry
     let maxToolRounds: Int
 
     private var runTask: Task<Void, Never>?
 
-    init(engine: AgentEngine, toolRegistry: ToolRegistry, maxToolRounds: Int = 5) {
+    init(engine: AgentEngine, toolRegistry: LegacyToolRegistry, maxToolRounds: Int = 5) {
         self.engine = engine
         self.toolRegistry = toolRegistry
         self.maxToolRounds = maxToolRounds
