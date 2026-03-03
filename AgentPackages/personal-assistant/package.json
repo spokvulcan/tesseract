@@ -1,0 +1,19 @@
+{
+    "name": "personal-assistant",
+    "enabled": true,
+    "skills": [
+        "skills/memory/SKILL.md",
+        "skills/tasks/SKILL.md",
+        "skills/notes/SKILL.md"
+    ],
+    "promptAppendFiles": [
+        "prompts/APPEND_SYSTEM.md"
+    ],
+    "extensions": [
+        "PersonalAssistantExtension"
+    ],
+    "seedFiles": [
+        "data/memories.md",
+        "data/tasks.md"
+    ]
+}
