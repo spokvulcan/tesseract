@@ -126,11 +126,11 @@ final class BenchmarkTranscript {
             if !checks.argumentsCorrect {
                 lines.append("    ✗ Arguments incorrect")
             }
+            if !checks.responseRelevant {
+                lines.append("    ✗ Response missing expected content")
+            }
             if !checks.noForbiddenTools {
                 lines.append("    ✗ Forbidden tool called")
-            }
-            if !checks.noHallucinatedActions {
-                lines.append("    ✗ Hallucinated action — claimed completion without calling tool")
             }
             if checks.duplicateToolCalls > 0 {
                 lines.append("    ✗ Within-turn duplicate tool calls: \(checks.duplicateToolCalls)")

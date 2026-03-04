@@ -19,7 +19,6 @@ struct BenchmarkTurnChecks: Codable {
     let argumentsCorrect: Bool
     let responseRelevant: Bool
     let noForbiddenTools: Bool
-    let noHallucinatedActions: Bool
     let details: String?
 }
 

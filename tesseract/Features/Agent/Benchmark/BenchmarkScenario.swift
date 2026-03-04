@@ -99,10 +99,12 @@ struct TaskCreationScenario: BenchmarkScenario {
             toolsOptional: true
         ),
         // List all tasks — should include both new and seeded tasks
+        // toolsOptional: model may answer from context after recent edit
         TurnExpectation(
             "List all my pending tasks",
             tools: ["read"],
-            substrings: ["cleaning"]
+            substrings: ["cleaning"],
+            toolsOptional: true
         ),
     ]
 }

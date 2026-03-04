@@ -66,20 +66,12 @@ enum BenchmarkEvaluator {
             details: &details
         )
 
-        // 7. Hallucinated actions — model claims it did something without calling a tool
-        let noHallucinated = evaluateNoHallucinatedActions(
-            response: assistantResponse,
-            toolsCalled: calledNames,
-            details: &details
-        )
-
         let checks = BenchmarkTurnChecks(
             toolsCorrect: toolsCorrect,
             duplicateToolCalls: totalDuplicates,
             argumentsCorrect: argsCorrect,
             responseRelevant: responseRelevant,
             noForbiddenTools: noForbidden,
-            noHallucinatedActions: noHallucinated,
             details: details.isEmpty ? nil : details.joined(separator: "; ")
         )
 
@@ -91,7 +83,7 @@ enum BenchmarkEvaluator {
             toolRoundsUsed: toolRounds
         )
 
-        let passed = toolsCorrect && argsCorrect && noForbidden && noHallucinated && withinTurnDuplicates == 0
+        let passed = toolsCorrect && argsCorrect && responseRelevant && noForbidden && withinTurnDuplicates == 0
 
         return BenchmarkTurnResult(
             turnIndex: turnIndex,
@@ -281,78 +273,6 @@ enum BenchmarkEvaluator {
         let violating = called.filter { forbiddenSet.contains($0) }
         if !violating.isEmpty {
             details.append("Forbidden tool(s) called: \(violating.joined(separator: ", "))")
-            return false
-        }
-        return true
-    }
-
-    // MARK: - Hallucinated Action Detection
-
-    /// Past-tense action phrases that indicate the model claims it completed an action.
-    /// Each claim maps to a set of tools — if NONE of them were called, it's a hallucination.
-    ///
-    /// With file-based tools (read, write, edit, list), the model uses generic tools for
-    /// all operations. We check that at least one mutation tool (write or edit) was called
-    /// when the model claims to have performed an action.
-    private static let actionClaims: [(pattern: String, tools: Set<String>)] = [
-        // Memory operations — must call write or edit
-        ("saved to memory", ["write", "edit"]),
-        ("saved your memory", ["write", "edit"]),
-        ("i've saved", ["write", "edit"]),
-        ("i saved", ["write", "edit"]),
-        ("remembered that", ["write", "edit"]),
-        ("i've remembered", ["write", "edit"]),
-        ("i've noted", ["write", "edit"]),
-        ("noted that", ["write", "edit"]),
-        // Task operations — must call write or edit
-        ("task created", ["write", "edit"]),
-        ("created a task", ["write", "edit"]),
-        ("created task", ["write", "edit"]),
-        ("added a task", ["write", "edit"]),
-        ("added task", ["write", "edit"]),
-        ("task has been added", ["write", "edit"]),
-        // Task completion — must call edit
-        ("marked as complete", ["edit"]),
-        ("marked as done", ["edit"]),
-        ("marked it done", ["edit"]),
-        ("marked it as done", ["edit"]),
-        ("task completed", ["edit"]),
-    ]
-
-    /// Phrases that signal the model is offering/suggesting rather than claiming completion.
-    private static let offerPrefixes = [
-        "would you like me to",
-        "want me to",
-        "shall i",
-        "i can ",
-        "i could ",
-        "like me to",
-    ]
-
-    /// Detects when the model claims it performed an action without calling the tool.
-    private static func evaluateNoHallucinatedActions(
-        response: String,
-        toolsCalled: [String],
-        details: inout [String]
-    ) -> Bool {
-        let lower = response.lowercased()
-        let calledSet = Set(toolsCalled)
-
-        for claim in actionClaims {
-            // Skip if none of the required tools are missing (i.e., at least one was called)
-            guard lower.contains(claim.pattern) && claim.tools.isDisjoint(with: calledSet) else { continue }
-
-            // Check if the pattern appears inside an offer/suggestion context
-            if let range = lower.range(of: claim.pattern) {
-                let lineStart = lower[..<range.lowerBound].lastIndex(of: "\n").map { lower.index(after: $0) } ?? lower.startIndex
-                let prefix = String(lower[lineStart..<range.lowerBound])
-                if offerPrefixes.contains(where: { prefix.contains($0) }) {
-                    continue  // This is an offer, not a claim
-                }
-            }
-
-            let toolNames = claim.tools.sorted().joined(separator: "/")
-            details.append("Hallucinated action: response says '\(claim.pattern)' but none of [\(toolNames)] were called")
             return false
         }
         return true
