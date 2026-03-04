@@ -40,9 +40,9 @@ nonisolated func createListTool(sandbox: PathSandbox) -> AgentToolDefinition {
             required: []
         ),
         execute: { _, argsJSON, _, _ in
-            let pathArg = ListToolHelper.extractString(argsJSON, key: "path")
-            let recursive = ListToolHelper.extractBool(argsJSON, key: "recursive") ?? false
-            let limitArg = ListToolHelper.extractInt(argsJSON, key: "limit")
+            let pathArg = ToolArgExtractor.string(argsJSON, key: "path")
+            let recursive = ToolArgExtractor.bool(argsJSON, key: "recursive") ?? false
+            let limitArg = ToolArgExtractor.int(argsJSON, key: "limit")
             let limit = max(0, min(limitArg ?? Defaults.defaultLimit, Defaults.hardCap))
 
             let url: URL
@@ -77,38 +77,6 @@ nonisolated func createListTool(sandbox: PathSandbox) -> AgentToolDefinition {
 // MARK: - Helper (nonisolated)
 
 private nonisolated enum ListToolHelper: Sendable {
-
-    // MARK: Arg extraction
-
-    static func extractString(_ args: [String: JSONValue], key: String) -> String? {
-        guard let value = args[key] else { return nil }
-        switch value {
-        case .string(let s): return s
-        case .int(let i): return String(i)
-        case .double(let d): return String(d)
-        default: return nil
-        }
-    }
-
-    static func extractInt(_ args: [String: JSONValue], key: String) -> Int? {
-        guard let value = args[key] else { return nil }
-        switch value {
-        case .int(let i): return i
-        case .double(let d): return Int(d)
-        case .string(let s): return Int(s)
-        default: return nil
-        }
-    }
-
-    static func extractBool(_ args: [String: JSONValue], key: String) -> Bool? {
-        guard let value = args[key] else { return nil }
-        switch value {
-        case .bool(let b): return b
-        case .int(let i): return i != 0
-        case .string(let s): return s == "true" || s == "1"
-        default: return nil
-        }
-    }
 
     // MARK: Non-recursive listing
 

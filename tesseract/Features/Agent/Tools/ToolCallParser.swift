@@ -173,6 +173,10 @@ final class ToolCallParser {
                let function = try? JSONDecoder().decode(ToolCall.Function.self, from: data)
             {
                 events.append(.toolCall(ToolCall(function: function)))
+            } else if let toolCall = Self.parseXMLFunction(jsonContent) {
+                // Fallback: parse XML function format (<function=name><parameter=key>value</parameter></function>)
+                // This catches cases where the library's XMLFunctionParser intermittently fails
+                events.append(.toolCall(toolCall))
             } else {
                 events.append(.malformedToolCall(jsonContent))
             }
@@ -201,6 +205,37 @@ final class ToolCallParser {
         }
 
         return earliest
+    }
+
+    /// Regex for extracting `<parameter=KEY>VALUE</parameter>` pairs from XML function format.
+    private static let paramRegex: NSRegularExpression = {
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: #"<parameter=([^>]+)>\s*([\s\S]*?)\s*</parameter>"#)
+    }()
+
+    /// Parse XML function format: `<function=name><parameter=key>value</parameter></function>`
+    /// Used as fallback when the library's XMLFunctionParser fails.
+    private static func parseXMLFunction(_ content: String) -> ToolCall? {
+        // Match <function=NAME>...</function> (closing tag may lack ">")
+        guard let funcMatch = content.range(of: #"<function=([^>]+)>"#, options: .regularExpression) else {
+            return nil
+        }
+
+        let funcName = String(content[funcMatch].dropFirst("<function=".count).dropLast(">".count))
+
+        // Extract all <parameter=KEY>VALUE</parameter> pairs
+        var arguments: [String: JSONValue] = [:]
+        let nsContent = content as NSString
+        let matches = paramRegex.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+
+        for match in matches {
+            guard match.numberOfRanges >= 3 else { continue }
+            let key = nsContent.substring(with: match.range(at: 1))
+            let value = nsContent.substring(with: match.range(at: 2))
+            arguments[key] = .string(value)
+        }
+
+        return ToolCall(function: ToolCall.Function(name: funcName, arguments: arguments))
     }
 
     /// Returns the index where a partial prefix of the given tag begins at the tail of the buffer.

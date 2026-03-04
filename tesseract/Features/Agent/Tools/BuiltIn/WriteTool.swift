@@ -31,10 +31,10 @@ nonisolated func createWriteTool(sandbox: PathSandbox) -> AgentToolDefinition {
             required: ["path", "content"]
         ),
         execute: { _, argsJSON, signal, _ in
-            guard let path = WriteToolHelper.extractString(argsJSON, key: "path") else {
+            guard let path = ToolArgExtractor.string(argsJSON, key: "path") else {
                 return .error("Missing required argument: path")
             }
-            guard let content = WriteToolHelper.extractString(argsJSON, key: "content") else {
+            guard let content = ToolArgExtractor.string(argsJSON, key: "content") else {
                 return .error("Missing required argument: content")
             }
 
@@ -78,16 +78,3 @@ nonisolated func createWriteTool(sandbox: PathSandbox) -> AgentToolDefinition {
     )
 }
 
-// MARK: - Helper (nonisolated)
-
-private nonisolated enum WriteToolHelper: Sendable {
-    static func extractString(_ args: [String: JSONValue], key: String) -> String? {
-        guard let value = args[key] else { return nil }
-        switch value {
-        case .string(let s): return s
-        case .int(let i): return String(i)
-        case .double(let d): return String(d)
-        default: return nil
-        }
-    }
-}

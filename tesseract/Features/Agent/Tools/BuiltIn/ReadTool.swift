@@ -37,11 +37,11 @@ nonisolated func createReadTool(sandbox: PathSandbox) -> AgentToolDefinition {
             required: ["path"]
         ),
         execute: { _, argsJSON, _, _ in
-            guard let path = ReadToolHelper.extractString(argsJSON, key: "path") else {
+            guard let path = ToolArgExtractor.string(argsJSON, key: "path") else {
                 return .error("Missing required argument: path")
             }
-            let offset = ReadToolHelper.extractInt(argsJSON, key: "offset")
-            let limit = ReadToolHelper.extractInt(argsJSON, key: "limit")
+            let offset = ToolArgExtractor.int(argsJSON, key: "offset")
+            let limit = ToolArgExtractor.int(argsJSON, key: "limit")
 
             let url = try sandbox.resolveExisting(path)
             let displayName = sandbox.displayPath(url)
@@ -84,26 +84,6 @@ private nonisolated enum ReadToolHelper: Sendable {
             || utType.conforms(to: .tiff)
     }
 
-    static func extractString(_ args: [String: JSONValue], key: String) -> String? {
-        guard let value = args[key] else { return nil }
-        switch value {
-        case .string(let s): return s
-        case .int(let i): return String(i)
-        case .double(let d): return String(d)
-        default: return nil
-        }
-    }
-
-    static func extractInt(_ args: [String: JSONValue], key: String) -> Int? {
-        guard let value = args[key] else { return nil }
-        switch value {
-        case .int(let i): return i
-        case .double(let d): return Int(d)
-        case .string(let s): return Int(s)
-        default: return nil
-        }
-    }
-
     static func formatLine(number: Int, content: String) -> String {
         let pad = String(repeating: " ", count: max(0, 6 - String(number).count))
         return "\(pad)\(number)\t\(content)"
@@ -113,6 +93,16 @@ private nonisolated enum ReadToolHelper: Sendable {
         content: String, offset: Int?, limit: Int?,
         displayName: String
     ) -> AgentToolResult {
+        if content.isEmpty {
+            return AgentToolResult(
+                content: [.text("(empty file)")],
+                details: ReadToolDetails(
+                    path: displayName, lineCount: 0,
+                    wasTruncated: false, totalLines: 0
+                )
+            )
+        }
+
         let allLines = content.split(separator: "\n", omittingEmptySubsequences: false)
         let totalLines = allLines.count
 

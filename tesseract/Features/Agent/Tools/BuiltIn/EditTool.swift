@@ -35,14 +35,18 @@ nonisolated func createEditTool(sandbox: PathSandbox) -> AgentToolDefinition {
             required: ["path", "old_text", "new_text"]
         ),
         execute: { _, argsJSON, _, _ in
-            guard let path = EditToolHelper.extractString(argsJSON, key: "path") else {
+            guard let path = ToolArgExtractor.string(argsJSON, key: "path") else {
                 return .error("Missing required argument: path")
             }
-            guard let oldText = EditToolHelper.extractString(argsJSON, key: "old_text") else {
+            guard let oldText = ToolArgExtractor.string(argsJSON, key: "old_text") else {
                 return .error("Missing required argument: old_text")
             }
-            guard let newText = EditToolHelper.extractString(argsJSON, key: "new_text") else {
+            guard let newText = ToolArgExtractor.string(argsJSON, key: "new_text") else {
                 return .error("Missing required argument: new_text")
+            }
+
+            if oldText == newText {
+                return .error("old_text and new_text are identical. No changes needed.")
             }
 
             let url = try sandbox.resolveExisting(path)
@@ -112,18 +116,6 @@ nonisolated func createEditTool(sandbox: PathSandbox) -> AgentToolDefinition {
 // MARK: - Helper (nonisolated)
 
 private nonisolated enum EditToolHelper: Sendable {
-
-    // MARK: Arg extraction
-
-    static func extractString(_ args: [String: JSONValue], key: String) -> String? {
-        guard let value = args[key] else { return nil }
-        switch value {
-        case .string(let s): return s
-        case .int(let i): return String(i)
-        case .double(let d): return String(d)
-        default: return nil
-        }
-    }
 
     // MARK: BOM handling
 

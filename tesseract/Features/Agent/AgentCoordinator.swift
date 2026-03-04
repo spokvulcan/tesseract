@@ -341,7 +341,13 @@ final class AgentCoordinator: ObservableObject {
             Log.agent.info("Tool result [\(toolName)]: \(text.prefix(200))")
             notchController?.updatePhase(.thinking)
 
-        case .turnEnd(_, _, _):
+        case .turnEnd(let message, let toolResults, let contextMessages):
+            debugLogger.logTurn(
+                message: message,
+                toolResults: toolResults,
+                messageCount: contextMessages.count
+            )
+
             // Save after each turn for crash resilience
             refreshDisplayMessages()
             persistCurrentConversation()

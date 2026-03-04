@@ -22,10 +22,16 @@ actor LLMActor {
 
     /// Loads model weights, verifies with a 1-token generation, and resolves the tokenizer.
     ///
+    /// Reads the model's `config.json` to detect the model type and configure the
+    /// appropriate tool call format (e.g., `.xmlFunction` for Qwen3.5).
+    ///
     /// - Returns: The resolved ``AgentTokenizer`` (caller can stash it on MainActor).
     @discardableResult
     func loadModel(from directory: URL) async throws -> AgentTokenizer {
-        let container = try await loadModelContainer(directory: directory)
+        let format = Self.detectToolCallFormat(directory: directory)
+        Log.agent.info("Tool call format: \(format.map { "\($0)" } ?? "json (default)")")
+        let config = ModelConfiguration(directory: directory, toolCallFormat: format)
+        let container = try await loadModelContainer(configuration: config)
 
         // Verify with a 1-token generation
         let input = try await container.prepare(input: UserInput(prompt: "Hello"))
@@ -98,5 +104,27 @@ actor LLMActor {
     /// Returns current MLX memory usage in MB.
     func memoryStats() -> (activeMB: Float, peakMB: Float) {
         (Float(Memory.activeMemory) / 1e6, Float(Memory.peakMemory) / 1e6)
+    }
+
+    // MARK: - Private
+
+    /// Reads `config.json` from the model directory to detect the model type
+    /// and return the appropriate ``ToolCallFormat``.
+    ///
+    /// Qwen3.5 uses XML function syntax (`<function=name>...</function>`) inside
+    /// `<tool_call>` tags, which requires `.xmlFunction` format.
+    private static func detectToolCallFormat(directory: URL) -> ToolCallFormat? {
+        let configURL = directory.appendingPathComponent("config.json")
+        guard let data = try? Data(contentsOf: configURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelType = json["model_type"] as? String
+        else { return nil }
+
+        // Qwen3.5 chat template instructs XML function format for tool calls
+        if modelType.hasPrefix("qwen3_5") {
+            return .xmlFunction
+        }
+
+        return ToolCallFormat.infer(from: modelType)
     }
 }

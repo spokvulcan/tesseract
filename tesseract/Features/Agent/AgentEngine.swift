@@ -214,20 +214,30 @@ final class AgentEngine: ObservableObject {
                     input: input, parameters: parameters
                 )
                 let parser = ToolCallParser()
+                var rawChunkParts: [String] = []
+                var libraryParsedToolCalls = false
 
                 for await generation in genStream {
                     try Task.checkCancellation()
 
                     switch generation {
                     case .chunk(let text):
-                        for event in parser.processChunk(text) {
-                            continuation.yield(AgentGeneration(parserEvent: event))
+                        rawChunkParts.append(text)
+                        // When the library's ToolCallProcessor handles tool calls (xmlFunction
+                        // format), it leaks wrapper tags (<tool_call>/</tool_call>) as chunks.
+                        // Skip app-level parsing to avoid false "malformed tool call" warnings.
+                        if !libraryParsedToolCalls {
+                            for event in parser.processChunk(text) {
+                                continuation.yield(AgentGeneration(parserEvent: event))
+                            }
                         }
 
                     case .info(let completionInfo):
                         // Flush any buffered text before emitting info
-                        for event in parser.finalize() {
-                            continuation.yield(AgentGeneration(parserEvent: event))
+                        if !libraryParsedToolCalls {
+                            for event in parser.finalize() {
+                                continuation.yield(AgentGeneration(parserEvent: event))
+                            }
                         }
                         let info = AgentGeneration.Info(
                             promptTokenCount: completionInfo.promptTokenCount,
@@ -240,16 +250,30 @@ final class AgentEngine: ObservableObject {
                             "Generation complete — \(completionInfo.generationTokenCount) tokens, "
                             + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s"
                         )
+                        let rawChunks = rawChunkParts.joined()
+                        Log.agent.debug("Raw library chunks (after ToolCallProcessor):\n\(rawChunks)")
 
                     case .toolCall(let call):
-                        // Vendor already parsed it — yield directly
+                        // Vendor library parsed this tool call — yield directly
+                        libraryParsedToolCalls = true
+                        Log.agent.info("Library parsed tool call: \(call.function.name)(\(call.function.arguments))")
                         continuation.yield(.toolCall(call))
                     }
                 }
 
+                // Only warn if raw output has tool call markers AND the library didn't parse any
+                if !libraryParsedToolCalls {
+                    let rawChunks = rawChunkParts.joined()
+                    if rawChunks.contains("tool_call") || rawChunks.contains("<function") {
+                        Log.agent.warning("Raw output contains tool call markers but no .toolCall events were emitted by library")
+                    }
+                }
+
                 // Flush any remaining buffered text
-                for event in parser.finalize() {
-                    continuation.yield(AgentGeneration(parserEvent: event))
+                if !libraryParsedToolCalls {
+                    for event in parser.finalize() {
+                        continuation.yield(AgentGeneration(parserEvent: event))
+                    }
                 }
 
                 continuation.finish()

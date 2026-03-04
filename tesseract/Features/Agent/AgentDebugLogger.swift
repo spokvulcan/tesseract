@@ -4,8 +4,8 @@ import os
 /// Writes agent conversation turns to disk as JSON for post-hoc debugging.
 ///
 /// Each conversation gets a timestamped directory under the sandbox-safe temp dir.
-/// Each generation turn writes a JSON file with the full prompt, parameters,
-/// raw output (including think blocks), and performance metrics.
+/// Each turn writes a JSON file with assistant content, thinking, tool calls,
+/// and context size.
 ///
 /// Follows the same pattern as `AudioPlaybackManager`'s debug dump.
 @MainActor
@@ -13,6 +13,7 @@ final class AgentDebugLogger {
 
     private var sessionDir: URL?
     private var turnIndex: Int = 0
+    private static let iso8601 = ISO8601DateFormatter()
 
     /// Starts a new debug session with a timestamped directory.
     func startSession() {
@@ -30,77 +31,34 @@ final class AgentDebugLogger {
         }
     }
 
-    /// Logs the full input messages sent to the model.
-    func logPrompt(messages: [AgentChatMessage], parameters: AgentGenerateParameters) {
-        guard let dir = sessionDir else { return }
-
-        let entry: [String: Any] = [
-            "type": "prompt",
-            "turn": turnIndex,
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "parameters": [
-                "maxTokens": parameters.maxTokens,
-                "temperature": parameters.temperature,
-                "topP": parameters.topP,
-                "repetitionPenalty": parameters.repetitionPenalty as Any,
-                "repetitionContextSize": parameters.repetitionContextSize,
-            ],
-            "messages": messages.map { [
-                "role": $0.role.rawValue,
-                "content": $0.content,
-            ] },
-        ]
-
-        write(entry, filename: String(format: "turn_%03d_prompt.json", turnIndex), to: dir)
-    }
-
-    /// Logs the complete raw generation output (including think blocks).
-    func logResponse(
-        rawOutput: String,
-        displayOutput: String,
-        thinking: String? = nil,
-        info: AgentGeneration.Info?
+    /// Logs a complete turn: assistant content, thinking, tool calls + results, and message count.
+    func logTurn(
+        message: AssistantMessage,
+        toolResults: [ToolResultMessage],
+        messageCount: Int
     ) {
         guard let dir = sessionDir else { return }
 
         var entry: [String: Any] = [
-            "type": "response",
+            "type": "turn",
             "turn": turnIndex,
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "rawOutput": rawOutput,
-            "displayOutput": displayOutput,
+            "timestamp": Self.iso8601.string(from: Date()),
+            "assistantContent": message.content,
+            "messageCount": messageCount,
         ]
 
-        if let thinking, !thinking.isEmpty {
-            entry["thinkingContent"] = thinking
+        if let thinking = message.thinking, !thinking.isEmpty {
+            entry["thinking"] = thinking
         }
 
-        if let info {
-            entry["metrics"] = [
-                "promptTokenCount": info.promptTokenCount,
-                "generationTokenCount": info.generationTokenCount,
-                "promptTime": info.promptTime,
-                "generateTime": info.generateTime,
-                "tokensPerSecond": info.tokensPerSecond,
-            ]
+        if !toolResults.isEmpty {
+            entry["toolCalls"] = toolResults.map { [
+                "name": $0.toolName,
+                "result": String($0.content.textContent.prefix(500)),
+            ] }
         }
 
-        write(entry, filename: String(format: "turn_%03d_response.json", turnIndex), to: dir)
-        turnIndex += 1
-    }
-
-    /// Logs an error that occurred during generation.
-    func logError(_ error: String) {
-        guard let dir = sessionDir else { return }
-
-        let entry: [String: Any] = [
-            "type": "error",
-            "turn": turnIndex,
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "error": error,
-        ]
-
-        write(entry, filename: String(format: "turn_%03d_error.json", turnIndex), to: dir)
+        write(entry, filename: String(format: "turn_%03d.json", turnIndex), to: dir)
         turnIndex += 1
     }
 
