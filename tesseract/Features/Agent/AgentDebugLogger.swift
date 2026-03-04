@@ -31,6 +31,28 @@ final class AgentDebugLogger {
         }
     }
 
+    /// Logs the system prompt and tool definitions at session start.
+    func logSystemPrompt(_ prompt: String, tools: [AgentToolDefinition]) {
+        guard let dir = sessionDir else { return }
+
+        // Write full system prompt as text
+        let promptFile = dir.appendingPathComponent("system_prompt.txt")
+        try? prompt.write(to: promptFile, atomically: true, encoding: .utf8)
+
+        // Write tool names + descriptions as JSON
+        let toolEntries: [[String: String]] = tools.map {
+            ["name": $0.name, "description": String($0.description.prefix(200))]
+        }
+        if let data = try? JSONSerialization.data(
+            withJSONObject: toolEntries,
+            options: [.prettyPrinted, .sortedKeys]
+        ) {
+            try? data.write(to: dir.appendingPathComponent("tools.json"))
+        }
+
+        Log.agent.info("System prompt: \(prompt.count) chars, \(tools.count) tools [\(tools.map(\.name).joined(separator: ", "))]")
+    }
+
     /// Logs a complete turn: assistant content, thinking, tool calls + results, and message count.
     func logTurn(
         message: AssistantMessage,

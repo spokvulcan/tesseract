@@ -58,11 +58,14 @@ final class DependencyContainer: ObservableObject {
         newToolRegistry.refreshExtensionTools(from: extensionHost)
         let tools = newToolRegistry.allTools
 
-        // 3. Discover skills from agent root + packages
+        // 3. Discover skills from agent root + packages (sandbox-local paths)
         let skillsDir = agentRoot.appendingPathComponent("skills")
+        let cachedSkillPaths = PackageBootstrap.cachedSkillPaths(
+            from: packageRegistry, agentRoot: agentRoot
+        )
         let skills = SkillRegistry.discover(
             locations: [skillsDir],
-            packageSkillFiles: packageRegistry.allSkillPaths
+            packageSkillFiles: cachedSkillPaths
         )
 
         // 4. Load context files (AGENTS.md, CLAUDE.md, APPEND_SYSTEM.md, etc.)

@@ -109,6 +109,7 @@ final class AgentCoordinator: ObservableObject {
         // Start debug session on first turn
         if agent.state.messages.isEmpty {
             debugLogger.startSession()
+            debugLogger.logSystemPrompt(agent.state.systemPrompt, tools: agent.state.tools)
         }
 
         // Show thinking in notch if it's visible (voice-initiated)
@@ -305,8 +306,8 @@ final class AgentCoordinator: ObservableObject {
         case .contextTransformStart(let reason):
             updatePhaseIndicator(reason)
 
-        case .contextTransformEnd(_, let didMutate, _):
-            clearPhaseIndicator()
+        case .contextTransformEnd(let reason, let didMutate, _):
+            clearPhaseIndicator(reason: reason, didMutate: didMutate)
             if didMutate { refreshDisplayMessages() }
 
         case .messageUpdate(_, let delta):
@@ -402,13 +403,20 @@ final class AgentCoordinator: ObservableObject {
         switch reason {
         case .compaction:
             notchController?.updatePhase(.thinking)
-            Log.agent.info("Context compaction started")
         case .extensionTransform(let name):
             Log.agent.info("Extension transform: \(name)")
         }
     }
 
-    private func clearPhaseIndicator() {
+    private func clearPhaseIndicator(reason: ContextTransformReason, didMutate: Bool) {
         // Phase indicator is transient — clears automatically when next event arrives
+        if didMutate {
+            switch reason {
+            case .compaction:
+                Log.agent.info("Context compaction applied")
+            case .extensionTransform(let name):
+                Log.agent.info("Extension transform applied: \(name)")
+            }
+        }
     }
 }

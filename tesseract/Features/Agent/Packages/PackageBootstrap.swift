@@ -31,6 +31,11 @@ enum PackageBootstrap {
             packageRegistry.seedDataIfNeeded(package: package, agentRoot: agentRoot)
         }
 
+        // 2.5 Copy skill files into sandbox cache (package-managed, always overwritten).
+        for package in packageRegistry.enabledPackages {
+            copySkillsToCache(package: package, agentRoot: agentRoot)
+        }
+
         // 3. Unregister previously package-managed extensions, then re-register current ones.
         for path in packageManagedExtensionPaths {
             extensionHost.unregister(path: path)
@@ -65,5 +70,70 @@ enum PackageBootstrap {
                 return nil
             }
         }
+    }
+
+    // MARK: - Skill Cache
+
+    /// Return sandbox-local cached paths for all skill files from enabled packages.
+    static func cachedSkillPaths(from registry: PackageRegistry, agentRoot: URL) -> [URL] {
+        let fm = FileManager.default
+        let cacheRoot = agentRoot.appendingPathComponent(".cache/packages", isDirectory: true)
+        return registry.enabledPackages.flatMap { package -> [URL] in
+            let packageCache = cacheRoot.appendingPathComponent(package.manifest.name, isDirectory: true)
+            return package.skillPaths.compactMap { originalURL -> URL? in
+                guard let relativePath = relativePath(of: originalURL, to: package.baseURL) else {
+                    return nil
+                }
+                let cached = packageCache.appendingPathComponent(relativePath)
+                return fm.fileExists(atPath: cached.path) ? cached : nil
+            }
+        }
+    }
+
+    /// Copy skill directories from the bundle into `{agentRoot}/.cache/packages/{name}/`.
+    ///
+    /// Each skill file's containing directory is copied wholesale so sibling resources
+    /// (templates, references) are available for the agent's `read` tool.
+    private static func copySkillsToCache(package: ResolvedPackage, agentRoot: URL) {
+        let fm = FileManager.default
+        let packageCache = agentRoot
+            .appendingPathComponent(".cache/packages", isDirectory: true)
+            .appendingPathComponent(package.manifest.name, isDirectory: true)
+
+        // Clean stale cache from previous versions.
+        if fm.fileExists(atPath: packageCache.path) {
+            try? fm.removeItem(at: packageCache)
+        }
+
+        // Collect unique skill directories to copy.
+        var copiedDirs = Set<String>()
+        for skillURL in package.skillPaths {
+            guard let relative = relativePath(of: skillURL, to: package.baseURL) else { continue }
+
+            // Skill directory is the parent of the skill file.
+            let skillRelativeDir = (relative as NSString).deletingLastPathComponent
+            guard !skillRelativeDir.isEmpty, !copiedDirs.contains(skillRelativeDir) else { continue }
+            copiedDirs.insert(skillRelativeDir)
+
+            let sourceDir = package.baseURL.appendingPathComponent(skillRelativeDir, isDirectory: true)
+            let destDir = packageCache.appendingPathComponent(skillRelativeDir, isDirectory: true)
+
+            do {
+                try fm.createDirectory(at: destDir.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.copyItem(at: sourceDir, to: destDir)
+            } catch {
+                Log.agent.warning("[PackageBootstrap] Failed to cache skill dir \(skillRelativeDir): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Compute the relative path of `url` within `base`, or nil if not contained.
+    private static func relativePath(of url: URL, to base: URL) -> String? {
+        let urlPath = url.standardizedFileURL.path
+        let basePath = base.standardizedFileURL.path.hasSuffix("/")
+            ? base.standardizedFileURL.path
+            : base.standardizedFileURL.path + "/"
+        guard urlPath.hasPrefix(basePath) else { return nil }
+        return String(urlPath.dropFirst(basePath.count))
     }
 }
