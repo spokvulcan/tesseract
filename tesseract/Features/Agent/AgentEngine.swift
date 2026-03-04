@@ -84,25 +84,6 @@ final class AgentEngine: ObservableObject {
         try startGeneration(input: UserInput(prompt: prompt), parameters: parameters)
     }
 
-    /// Streams text generation from a structured conversation history.
-    ///
-    /// The messages are formatted into ChatML via the model's Jinja template pipeline.
-    ///
-    /// - Parameters:
-    ///   - messages: Conversation history in chronological order.
-    ///   - tools: Optional tool schemas for the Jinja template's `<tools>` block.
-    ///   - parameters: Generation parameters (temperature, maxTokens, etc.).
-    /// - Returns: An async stream of ``AgentGeneration`` events.
-    func generate(
-        messages: [AgentChatMessage],
-        tools: [ToolSpec]? = nil,
-        parameters: AgentGenerateParameters = .default
-    ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
-        Log.agent.debug("generate(messages:) — \(messages.count) messages, maxTokens=\(parameters.maxTokens), temp=\(parameters.temperature)")
-        let input = AgentChatFormatter.makeUserInput(from: messages, tools: tools)
-        return try startGeneration(input: input, parameters: parameters)
-    }
-
     /// Streams text generation from the new `LLMMessage`-based conversation format.
     ///
     /// Bridges the new agent loop's message types to the existing MLX inference pipeline.
@@ -148,31 +129,6 @@ final class AgentEngine: ObservableObject {
     /// Returns current MLX memory usage in MB.
     func memoryStats() async -> (activeMB: Float, peakMB: Float) {
         await llmActor.memoryStats()
-    }
-
-    /// Returns the exact ChatML string the model receives as input, including
-    /// `<|im_start|>`, `<|im_end|>`, tool definitions, and generation prompt.
-    ///
-    /// Renders messages and tools through the same Jinja template used during generation,
-    /// so the output matches what the model tokenizer produces token-for-token.
-    func formatRawPrompt(
-        messages: [AgentChatMessage],
-        tools: [ToolSpec]?
-    ) async throws -> String {
-        let messageDicts: [[String: any Sendable]] = messages.map { msg in
-            var content = msg.content
-            if !msg.toolCalls.isEmpty {
-                for call in msg.toolCalls {
-                    if let data = try? JSONEncoder().encode(call.function),
-                       let json = String(data: data, encoding: .utf8)
-                    {
-                        content += "\n<tool_call>\n\(json)\n</tool_call>"
-                    }
-                }
-            }
-            return ["role": msg.role.rawValue, "content": content]
-        }
-        return try await llmActor.formatRawPrompt(messages: messageDicts, tools: tools)
     }
 
     /// Releases the model from memory.

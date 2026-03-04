@@ -5,9 +5,8 @@ import os
 
 /// Orchestrates the full benchmark run: load model, run scenarios, write reports.
 ///
-/// **Deprecated**: This benchmark runner uses the old domain-tool architecture
-/// (AgentRunner, LegacyToolRegistry, AgentDataStore). It will be rewritten in
-/// Epic 7 to test the new file-based tool workflows.
+/// Uses the new `Agent` class with built-in file tools (read, write, edit, list)
+/// and a sandbox-isolated temporary directory per scenario.
 @MainActor
 final class BenchmarkRunner {
 
@@ -47,7 +46,6 @@ final class BenchmarkRunner {
 
         for (configIdx, baseParams) in paramConfigs.enumerated() {
             // Cap maxTokens per round to prevent runaway generation
-            // For quick sweep, use model-specific params; for full sweep, use the sweep config
             var params = config.sweep == .quick ? modelBaseParams : baseParams
             params.maxTokens = min(params.maxTokens, config.maxTokensPerRound)
 
@@ -86,12 +84,12 @@ final class BenchmarkRunner {
 
             let report = BenchmarkReport(
                 metadata: BenchmarkMetadata(
-                    date: ISO8601DateFormatter().string(from: Date()),
+                    date: Self.iso8601.string(from: Date()),
                     modelName: resolvedModelName,
                     hardware: hardwareString(),
                     parameters: params,
-                    contextLimit: 20,
-                    maxToolRounds: 3,
+                    contextLimit: 0,  // No fixed limit — managed by compaction
+                    maxToolRounds: 0,  // No cap — loop runs until no more tool calls
                     sweepLabel: paramLabel
                 ),
                 scenarios: scenarioResults,
@@ -123,15 +121,44 @@ final class BenchmarkRunner {
     ) async throws -> BenchmarkScenarioResult {
         log("  Running \(scenario.id): \(scenario.description) (\(scenario.turns.count) turns)")
 
-        // Fresh temp directory for benchmark data
+        // 1. Create isolated sandbox directory for this scenario
         let tempDir = config.outputDir
             .appendingPathComponent("data_\(scenario.id)_\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
 
-        // Deprecated: uses empty LegacyToolRegistry. Epic 7 will rewrite benchmarks.
-        let registry = LegacyToolRegistry(tools: [])
-        let runner = AgentRunner(engine: engine, toolRegistry: registry, maxToolRounds: 3)
+        // Seed initial data files
+        seedBenchmarkData(at: tempDir)
 
-        // Transcript for full I/O debugging
+        let sandbox = PathSandbox(root: tempDir)
+        let tools = BuiltInToolFactory.createAll(sandbox: sandbox)
+
+        // 2. Build system prompt with file-workflow instructions
+        let systemPrompt = buildBenchmarkSystemPrompt(tools: tools, agentRoot: tempDir.path)
+
+        // 3. Create performance metrics collector
+        let metrics = BenchmarkMetrics()
+
+        // 4. Create Agent with benchmarking generate function
+        let loopConfig = AgentLoopConfig(
+            model: AgentModelRef(id: config.resolvedModelID),
+            convertToLlm: { msgs in msgs.compactMap { $0.toLLMMessage() } },
+            contextTransform: nil,
+            getSteeringMessages: nil,
+            getFollowUpMessages: nil
+        )
+
+        let generateFn = makeBenchmarkGenerate(
+            engine: engine, parameters: parameters, metrics: metrics
+        )
+
+        let agent = Agent(
+            config: loopConfig,
+            systemPrompt: systemPrompt,
+            tools: tools,
+            generate: generateFn
+        )
+
+        // 5. Transcript for full I/O debugging
         let transcript = BenchmarkTranscript()
         transcript.writeHeader(
             scenarioID: scenario.id,
@@ -139,166 +166,113 @@ final class BenchmarkRunner {
             parameters: parameters
         )
 
-        var messages: [AgentChatMessage] = []
+        // 6. Run each turn
         var turnResults: [BenchmarkTurnResult] = []
         var conversationToolHistory: [(name: String, arguments: [String: JSONValue], result: String)] = []
 
         for (turnIdx, expectation) in scenario.turns.enumerated() {
             let turnStart = CFAbsoluteTimeGetCurrent()
 
-            // Append user message
-            messages.append(.user(expectation.userMessage))
+            // Collect events for this turn
+            let turnCollector = TurnEventCollector()
+            let unsubscribe = agent.subscribe { event in
+                turnCollector.handleEvent(event)
+            }
 
-            // Build prompt with system prompt (memories are now read via file tools)
-            let targetModelID = config.resolvedModelID
-            let systemPrompt = SystemPromptBuilder.build(modelID: targetModelID)
-            let contextLimit = 60
-            let recentMessages = Array(messages.suffix(contextLimit))
-            let maskedMessages = AgentChatMessage.withObservationMasking(recentMessages)
-            let prompt: [AgentChatMessage] = [.system(systemPrompt)] + maskedMessages
-
-            // Write turn start to transcript (skip raw prompt formatting — it's expensive)
+            // Write turn start to transcript
             transcript.writeTurnStart(
                 index: turnIdx, total: scenario.turns.count,
                 userMessage: expectation.userMessage
             )
 
-            // Run agent — track per-round output for transcript
-            var responseText = ""
-            var toolsCalled: [(name: String, arguments: [String: JSONValue])] = []
-            var toolResults: [String] = []
-            var info: AgentGeneration.Info?
-            var toolRounds = 0
+            // Send user message and wait for agent to finish
+            let userMsg = UserMessage.create(expectation.userMessage)
+            agent.prompt(userMsg)
+            await agent.waitForIdle()
 
-            // Per-round accumulation for transcript
-            var roundText = ""
-            var roundThinking: String? = nil
-            var roundToolCalls: [(name: String, arguments: [String: JSONValue])] = []
-            var currentRound = 1
-            var inThinking = false
-            var roundPromptTokens: Int? = nil
-            var roundGenTokens: Int? = nil
+            // Unsubscribe
+            unsubscribe()
 
-            let stream = try runner.run(messages: prompt, parameters: parameters, emitRawPrompts: true)
-            for try await event in stream {
-                switch event {
-                case .text(let chunk):
-                    responseText += chunk
-                    roundText += chunk
+            // Drain metrics
+            let infos = metrics.drain()
+            let aggregateInfo = Self.aggregateInfos(infos)
 
-                case .thinkStart:
-                    inThinking = true
-                    roundThinking = ""
+            let latencyMs = (CFAbsoluteTimeGetCurrent() - turnStart) * 1000
 
-                case .thinking(let chunk):
-                    roundThinking = (roundThinking ?? "") + chunk
+            // Extract collected data from events
+            let toolsCalled = turnCollector.toolsCalled
+            let toolResults = turnCollector.toolResults
+            let responseText = turnCollector.assistantText
+            let toolRounds = turnCollector.toolRoundCount
 
-                case .thinkEnd:
-                    inThinking = false
+            // Write tool executions to transcript
+            for (round, roundData) in turnCollector.rounds.enumerated() {
+                // Write round output (assistant text for this round)
+                transcript.writeRoundOutput(
+                    round: round + 1,
+                    rawOutput: roundData.text,
+                    thinkingContent: roundData.thinking,
+                    promptTokens: nil,
+                    genTokens: nil
+                )
 
-                case .toolStart(let name, let arguments):
-                    toolRounds += 1
-                    toolsCalled.append((name: name, arguments: arguments))
-                    roundToolCalls.append((name: name, arguments: arguments))
-
-                case .toolResult(let name, let result):
-                    toolResults.append(result)
-
-                    // Write the completed round to transcript
-                    transcript.writeRoundOutput(
-                        round: currentRound,
-                        rawOutput: roundText,
-                        thinkingContent: roundThinking,
-                        promptTokens: roundPromptTokens,
-                        genTokens: roundGenTokens
-                    )
-                    if !roundToolCalls.isEmpty {
-                        transcript.writeToolCalls(calls: roundToolCalls)
-                    }
-
-                    // Write tool execution
-                    let matchingCall = roundToolCalls.last { $0.name == name }
+                // Write tool calls and results
+                for execution in roundData.toolExecutions {
                     transcript.writeToolExecution(
-                        name: name,
-                        arguments: matchingCall?.arguments ?? [:],
-                        result: result
+                        name: execution.name,
+                        arguments: execution.arguments,
+                        result: execution.result
                     )
-
-                    // Reset for next round
-                    currentRound += 1
-                    roundText = ""
-                    roundThinking = nil
-                    roundToolCalls = []
-                    roundPromptTokens = nil
-                    roundGenTokens = nil
-
-                case .roundStart(let round, let rawPrompt, let msgCount):
-                    transcript.writeRawPrompt(round: round, rawPrompt: rawPrompt, messageCount: msgCount)
-
-                case .info(let i):
-                    info = i
-                    roundPromptTokens = i.promptTokenCount
-                    roundGenTokens = i.generationTokenCount
-
-                case .completed(let newMessages):
-                    // Get the final assistant text (last assistant message)
-                    if let lastAssistant = newMessages.last(where: { $0.role == .assistant }) {
-                        responseText = lastAssistant.content
-                    }
-                    messages.append(contentsOf: newMessages)
-
-                    // Always write final round output — even for text-only responses
-                    // (an empty response is itself diagnostic)
-                    transcript.writeRoundOutput(
-                        round: currentRound,
-                        rawOutput: roundText,
-                        thinkingContent: roundThinking,
-                        promptTokens: roundPromptTokens,
-                        genTokens: roundGenTokens
-                    )
-
-                default:
-                    break
                 }
             }
 
-            let latencyMs = (CFAbsoluteTimeGetCurrent() - turnStart) * 1000
+            // Write final round if there's trailing text after last tool call
+            if let trailingText = turnCollector.trailingText, !trailingText.isEmpty {
+                transcript.writeRoundOutput(
+                    round: turnCollector.rounds.count + 1,
+                    rawOutput: trailingText,
+                    thinkingContent: nil,
+                    promptTokens: nil,
+                    genTokens: nil
+                )
+            }
 
             // Evaluate turn
             let turnResult = BenchmarkEvaluator.evaluate(
                 turnIndex: turnIdx,
                 expectation: expectation,
                 toolsCalled: toolsCalled,
-                toolResults: toolResults,
+                toolResults: toolResults.map(\.result),
                 assistantResponse: responseText,
-                info: info,
+                info: aggregateInfo,
                 toolRounds: toolRounds,
                 latencyMs: latencyMs,
                 conversationToolHistory: conversationToolHistory
             )
             turnResults.append(turnResult)
 
-            // Write turn result to transcript (exclude `respond` — it's infrastructure)
-            let dataToolsCalled = toolsCalled.filter { $0.name != "respond" }
+            // Write turn result to transcript
             transcript.writeTurnResult(
                 passed: turnResult.passed,
-                toolsCalled: dataToolsCalled.map(\.name),
+                toolsCalled: toolsCalled.map(\.name),
                 expectedTools: expectation.expectedTools,
-                tokPerSec: info?.tokensPerSecond,
+                tokPerSec: aggregateInfo?.tokensPerSecond,
                 latencyMs: latencyMs,
                 checks: turnResult.checks
             )
 
-            // Update conversation tool history (exclude respond — it's infrastructure)
-            for (i, call) in dataToolsCalled.enumerated() {
-                let result = i < toolResults.count ? toolResults[i] : ""
-                conversationToolHistory.append((name: call.name, arguments: call.arguments, result: result))
+            // Update conversation tool history
+            for (i, call) in toolsCalled.enumerated() {
+                let result = i < toolResults.count ? toolResults[i].result : ""
+                conversationToolHistory.append(
+                    (name: call.name, arguments: call.arguments, result: result)
+                )
             }
 
             let status = turnResult.passed ? "ok" : "FAIL"
-            let tokSec = info.map { String(format: "%.1f", $0.tokensPerSecond) } ?? "?"
+            let tokSec = aggregateInfo.map { String(format: "%.1f", $0.tokensPerSecond) } ?? "?"
             log("    Turn \(turnIdx + 1)/\(scenario.turns.count) [\(status)] — " +
-                "tools: \(dataToolsCalled.map(\.name)) — \(tokSec) tok/s — \(String(format: "%.0f", latencyMs))ms")
+                "tools: \(toolsCalled.map(\.name)) — \(tokSec) tok/s — \(String(format: "%.0f", latencyMs))ms")
         }
 
         // Write scenario footer and save transcript
@@ -329,6 +303,138 @@ final class BenchmarkRunner {
         )
     }
 
+    // MARK: - Benchmark Setup
+
+    /// Seeds the benchmark sandbox with initial data files.
+    private func seedBenchmarkData(at directory: URL) {
+        let memoriesContent = """
+            # Memories
+
+            - Alex prefers dark mode for all apps
+            - Alex's birthday is March 15th
+            """
+
+        let tasksContent = """
+            # Tasks
+
+            - [ ] Buy groceries
+            - [ ] Schedule dentist appointment
+            - [ ] Call mom
+            """
+
+        do {
+            try memoriesContent.write(
+                to: directory.appendingPathComponent("memories.md"),
+                atomically: true, encoding: .utf8
+            )
+            try tasksContent.write(
+                to: directory.appendingPathComponent("tasks.md"),
+                atomically: true, encoding: .utf8
+            )
+        } catch {
+            log("WARNING: Failed to seed benchmark data: \(error.localizedDescription)")
+        }
+    }
+
+    /// Builds a system prompt tailored for benchmarks with file-workflow instructions.
+    private func buildBenchmarkSystemPrompt(
+        tools: [AgentToolDefinition],
+        agentRoot: String
+    ) -> String {
+        let contextLoader = ContextLoader(agentRoot: URL(fileURLWithPath: agentRoot))
+        let loadedContext = contextLoader.load()
+
+        return SystemPromptAssembler.assemble(
+            defaultPrompt: Self.benchmarkCorePrompt,
+            loadedContext: loadedContext,
+            skills: [],
+            tools: tools,
+            agentRoot: agentRoot
+        )
+    }
+
+    /// Benchmark-specific core prompt that includes file-workflow instructions.
+    private static let benchmarkCorePrompt = """
+        You are an expert local assistant operating inside Tesseract, a tool-calling agent harness.
+        You help users by reading files, editing files, writing files, and using other tools provided by the current package or project.
+
+        Available tools:
+        - read: Read file contents
+        - write: Create or overwrite files
+        - edit: Make surgical edits to files (find exact text and replace)
+        - list: List files and directories
+
+        Guidelines:
+        - Use read to examine files before editing
+        - Use edit for precise changes (old_text must match exactly)
+        - Use write only for new files or complete rewrites
+        - Be concise in your responses
+
+        You manage the user's personal data using files:
+        - memories.md: User's memories and important facts (append new entries as bullet points)
+        - tasks.md: User's task list (markdown checkboxes: - [ ] for pending, - [x] for done)
+
+        When asked to remember something: read memories.md, then edit to add the new memory as a bullet point.
+        When asked to create a task: read tasks.md, then edit to add a new checkbox item (- [ ] task).
+        When asked to complete a task: read tasks.md, then edit to change [ ] to [x] for that task.
+        When asked about memories or tasks: read the appropriate file.
+        """
+
+    // MARK: - Generate Function
+
+    /// Creates an instrumented generate function that captures performance metrics.
+    private func makeBenchmarkGenerate(
+        engine: AgentEngine,
+        parameters: AgentGenerateParameters,
+        metrics: BenchmarkMetrics
+    ) -> LLMGenerateFunction {
+        // Capture parameters for all generations in this scenario
+        return { [weak engine] systemPrompt, messages, tools, _ in
+            let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+            let task = Task { @MainActor in
+                guard let engine else {
+                    continuation.finish()
+                    return
+                }
+                do {
+                    let engineStream = try engine.generate(
+                        systemPrompt: systemPrompt,
+                        messages: messages,
+                        tools: tools,
+                        parameters: parameters
+                    )
+                    for try await generation in engineStream {
+                        // Capture info events for performance metrics
+                        if case .info(let info) = generation {
+                            metrics.append(info)
+                        }
+                        continuation.yield(generation)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+            return stream
+        }
+    }
+
+    /// Aggregates multiple generation info events into a single summary.
+    private static func aggregateInfos(_ infos: [AgentGeneration.Info]) -> AgentGeneration.Info? {
+        guard !infos.isEmpty else { return nil }
+        let totalPromptTokens = infos.reduce(0) { $0 + $1.promptTokenCount }
+        let totalGenTokens = infos.reduce(0) { $0 + $1.generationTokenCount }
+        let totalPromptTime = infos.reduce(0.0) { $0 + $1.promptTime }
+        let totalGenTime = infos.reduce(0.0) { $0 + $1.generateTime }
+        return AgentGeneration.Info(
+            promptTokenCount: totalPromptTokens,
+            generationTokenCount: totalGenTokens,
+            promptTime: totalPromptTime,
+            generateTime: totalGenTime
+        )
+    }
+
     // MARK: - Model Resolution
 
     private func resolveModelDirectory() throws -> URL {
@@ -346,7 +452,10 @@ final class BenchmarkRunner {
         }
 
         let cacheBase = URL.cachesDirectory.appendingPathComponent("mlx-audio")
-        let modelDir = cacheBase.appendingPathComponent(cacheSub)
+        var modelDir = cacheBase.appendingPathComponent(cacheSub)
+        if let prefix = definition.pathPrefix {
+            modelDir = modelDir.appendingPathComponent(prefix)
+        }
 
         guard FileManager.default.fileExists(atPath: modelDir.path) else {
             throw BenchmarkError.modelNotFound(
@@ -370,8 +479,10 @@ final class BenchmarkRunner {
         logFileHandle = FileHandle(forWritingAtPath: logURL.path)
     }
 
+    private static let iso8601 = ISO8601DateFormatter()
+
     private func log(_ message: String) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = Self.iso8601.string(from: Date())
         let line = "[\(timestamp)] \(message)\n"
         logger.info("\(message)")
         logFileHandle?.write(Data(line.utf8))
@@ -380,8 +491,6 @@ final class BenchmarkRunner {
     // MARK: - Helpers
 
     private func resolveResultsDirectory() -> URL {
-        // Write results under the sandbox-accessible output dir.
-        // bench.sh copies them to benchmarks/results/ in the repo afterwards.
         config.outputDir.appendingPathComponent("results")
     }
 
@@ -400,6 +509,110 @@ final class BenchmarkRunner {
         DebugPaths.timestamp()
     }
 }
+
+// MARK: - BenchmarkMetrics
+
+/// Thread-safe performance metrics collector for benchmark generation.
+/// Written from the generate closure (Task context), read on MainActor.
+@MainActor
+final class BenchmarkMetrics {
+    private var infos: [AgentGeneration.Info] = []
+
+    func append(_ info: AgentGeneration.Info) {
+        infos.append(info)
+    }
+
+    func drain() -> [AgentGeneration.Info] {
+        let result = infos
+        infos.removeAll()
+        return result
+    }
+
+}
+
+// MARK: - TurnEventCollector
+
+/// Collects agent events for a single benchmark turn to extract tool calls,
+/// results, assistant text, and round structure.
+@MainActor
+final class TurnEventCollector {
+
+    struct ToolExecution {
+        let name: String
+        let arguments: [String: JSONValue]
+        let result: String
+    }
+
+    struct RoundData {
+        var text: String = ""
+        var thinking: String?
+        var toolExecutions: [ToolExecution] = []
+    }
+
+    private(set) var toolsCalled: [(name: String, arguments: [String: JSONValue])] = []
+    private(set) var toolResults: [(name: String, result: String)] = []
+    private(set) var assistantText: String = ""
+    private(set) var rounds: [RoundData] = []
+    private(set) var trailingText: String?
+    private(set) var toolRoundCount: Int = 0
+
+    private var currentRound = RoundData()
+    private var pendingToolArgs: [String: [String: JSONValue]] = [:]  // toolCallId -> args
+
+    func handleEvent(_ event: AgentEvent) {
+        switch event {
+        case .messageUpdate(let message, let delta):
+            if let textDelta = delta.textDelta {
+                currentRound.text += textDelta
+            }
+            if let thinkingDelta = delta.thinkingDelta {
+                currentRound.thinking = (currentRound.thinking ?? "") + thinkingDelta
+            }
+            // Update full assistant text from the latest message
+            assistantText = message.content
+
+        case .toolExecutionStart(let toolCallId, let name, let argsJSON):
+            toolRoundCount += 1
+            // Parse arguments
+            let args: [String: JSONValue]
+            if let data = argsJSON.data(using: .utf8),
+               let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data) {
+                args = parsed
+            } else {
+                args = [:]
+            }
+            toolsCalled.append((name: name, arguments: args))
+            pendingToolArgs[toolCallId] = args
+
+        case .toolExecutionEnd(let toolCallId, let name, let result, _):
+            let resultText = result.content.textContent
+            toolResults.append((name: name, result: resultText))
+
+            let args = pendingToolArgs.removeValue(forKey: toolCallId) ?? [:]
+            currentRound.toolExecutions.append(
+                ToolExecution(name: name, arguments: args, result: resultText)
+            )
+
+        case .turnEnd:
+            // Finalize the current round
+            if !currentRound.text.isEmpty || !currentRound.toolExecutions.isEmpty {
+                rounds.append(currentRound)
+            }
+            currentRound = RoundData()
+
+        case .agentEnd:
+            // Capture any trailing text
+            if !currentRound.text.isEmpty {
+                trailingText = currentRound.text
+            }
+
+        default:
+            break
+        }
+    }
+}
+
+// MARK: - BenchmarkError
 
 enum BenchmarkError: LocalizedError {
     case modelNotFound(String)

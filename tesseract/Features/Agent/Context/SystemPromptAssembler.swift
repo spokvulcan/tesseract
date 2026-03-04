@@ -5,7 +5,7 @@ import Foundation
 /// Pi-style system prompt assembly. Combines a base prompt with context files,
 /// skills, overrides, and runtime metadata into the final system prompt string.
 ///
-/// The old `SystemPromptBuilder` remains functional until Epic 6 integration.
+/// Used by `Agent` and `BenchmarkRunner` for system prompt construction.
 nonisolated enum SystemPromptAssembler: Sendable {
 
     // MARK: - Default Prompt

@@ -124,30 +124,4 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
         }
     }
 
-    // MARK: - Observation Masking
-
-    private static let maskedToolContent = "[Tool result omitted — re-run tool if needed]"
-
-    /// Applies observation masking: replaces old tool results with a short placeholder
-    /// to reduce context size while preserving conversation structure.
-    ///
-    /// JetBrains research shows this outperforms LLM summarization — the model keeps its
-    /// action history (user + assistant messages) intact but sheds stale tool outputs.
-    ///
-    /// - Parameters:
-    ///   - messages: The full message list (excluding system prompt).
-    ///   - preserveRecent: Number of most-recent messages whose tool results stay intact.
-    static func withObservationMasking(
-        _ messages: [AgentChatMessage],
-        preserveRecent: Int = 20
-    ) -> [AgentChatMessage] {
-        guard messages.count > preserveRecent else { return messages }
-        let maskBefore = messages.count - preserveRecent
-        return messages.enumerated().map { i, msg in
-            if i < maskBefore && msg.role == .tool && msg.content != maskedToolContent {
-                return .tool(maskedToolContent)
-            }
-            return msg
-        }
-    }
 }

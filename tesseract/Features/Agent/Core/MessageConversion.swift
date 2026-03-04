@@ -15,8 +15,7 @@ func defaultConvertToLlm(_ messages: [any AgentMessageProtocol]) -> [LLMMessage]
 ///
 /// Since Tesseract uses local models with XML-based `<tool_call>` tags (not native
 /// JSON tool calling), assistant messages reconstruct tool calls as inline XML in the
-/// content string.  This matches the existing `AgentRunner.reconstructAssistantMessage`
-/// behavior.
+/// content string.
 func toLLMCommonMessages(_ messages: [LLMMessage]) -> [Chat.Message] {
     messages.map { message in
         switch message {

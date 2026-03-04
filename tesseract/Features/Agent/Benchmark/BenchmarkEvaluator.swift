@@ -16,9 +16,7 @@ enum BenchmarkEvaluator {
         latencyMs: Double,
         conversationToolHistory: [(name: String, arguments: [String: JSONValue], result: String)]
     ) -> BenchmarkTurnResult {
-        // Filter out `respond` — it's infrastructure, not a data tool.
-        // Benchmark expectations only care about data tools.
-        let calledNames = toolsCalled.map(\.name).filter { $0 != "respond" }
+        let calledNames = toolsCalled.map(\.name)
         var details: [String] = []
 
         // 1. Tool correctness (skip if tools are optional for this turn)
@@ -149,15 +147,13 @@ enum BenchmarkEvaluator {
     private static func countWithinTurnDuplicates(
         _ calls: [(name: String, arguments: [String: JSONValue])]
     ) -> Int {
-        var seen: [String] = []
+        var seen = Set<String>()
         var duplicates = 0
 
         for call in calls {
             let key = canonicalKey(name: call.name, arguments: call.arguments)
-            if seen.contains(key) {
+            if !seen.insert(key).inserted {
                 duplicates += 1
-            } else {
-                seen.append(key)
             }
         }
         return duplicates
@@ -166,7 +162,7 @@ enum BenchmarkEvaluator {
     /// Read-only tools whose results change as data is mutated.
     /// Re-calling these is expected behavior, not a duplicate.
     private static let readOnlyTools: Set<String> = [
-        "goal_list", "task_list", "mood_list", "habit_status",
+        "read", "list",
     ]
 
     /// Counts tool calls that duplicate a previous successful call in conversation history.
@@ -292,39 +288,35 @@ enum BenchmarkEvaluator {
 
     // MARK: - Hallucinated Action Detection
 
-    /// Past-tense action phrases that indicate the model claims it completed a tool action.
-    /// Patterns must be specific enough to avoid matching offers ("Would you like me to set a reminder?").
-    private static let actionClaims: [(pattern: String, tool: String)] = [
-        // habit_create — past-tense claims
-        ("habit created", "habit_create"),
-        ("created a habit", "habit_create"),
-        ("created habit", "habit_create"),
-        // goal_create
-        ("goal created", "goal_create"),
-        ("created a goal", "goal_create"),
-        ("created goal", "goal_create"),
-        // task_create
-        ("task created", "task_create"),
-        ("created a task", "task_create"),
-        ("created task", "task_create"),
-        // reminder_set — only past-tense; "set a reminder" is ambiguous (offer vs claim)
-        ("reminder is set", "reminder_set"),
-        ("reminder has been set", "reminder_set"),
-        ("i've set a reminder", "reminder_set"),
-        ("i set a reminder", "reminder_set"),
-        // memory_save
-        ("saved to memory", "memory_save"),
-        ("i've saved", "memory_save"),
-        ("i saved", "memory_save"),
-        // mood_log
-        ("logged your mood", "mood_log"),
-        ("mood logged", "mood_log"),
-        // habit_log
-        ("logged your habit", "habit_log"),
-        ("habit logged", "habit_log"),
-        // task_complete
-        ("marked as complete", "task_complete"),
-        ("task completed", "task_complete"),
+    /// Past-tense action phrases that indicate the model claims it completed an action.
+    /// Each claim maps to a set of tools — if NONE of them were called, it's a hallucination.
+    ///
+    /// With file-based tools (read, write, edit, list), the model uses generic tools for
+    /// all operations. We check that at least one mutation tool (write or edit) was called
+    /// when the model claims to have performed an action.
+    private static let actionClaims: [(pattern: String, tools: Set<String>)] = [
+        // Memory operations — must call write or edit
+        ("saved to memory", ["write", "edit"]),
+        ("saved your memory", ["write", "edit"]),
+        ("i've saved", ["write", "edit"]),
+        ("i saved", ["write", "edit"]),
+        ("remembered that", ["write", "edit"]),
+        ("i've remembered", ["write", "edit"]),
+        ("i've noted", ["write", "edit"]),
+        ("noted that", ["write", "edit"]),
+        // Task operations — must call write or edit
+        ("task created", ["write", "edit"]),
+        ("created a task", ["write", "edit"]),
+        ("created task", ["write", "edit"]),
+        ("added a task", ["write", "edit"]),
+        ("added task", ["write", "edit"]),
+        ("task has been added", ["write", "edit"]),
+        // Task completion — must call edit
+        ("marked as complete", ["edit"]),
+        ("marked as done", ["edit"]),
+        ("marked it done", ["edit"]),
+        ("marked it as done", ["edit"]),
+        ("task completed", ["edit"]),
     ]
 
     /// Phrases that signal the model is offering/suggesting rather than claiming completion.
@@ -347,7 +339,8 @@ enum BenchmarkEvaluator {
         let calledSet = Set(toolsCalled)
 
         for claim in actionClaims {
-            guard lower.contains(claim.pattern) && !calledSet.contains(claim.tool) else { continue }
+            // Skip if none of the required tools are missing (i.e., at least one was called)
+            guard lower.contains(claim.pattern) && claim.tools.isDisjoint(with: calledSet) else { continue }
 
             // Check if the pattern appears inside an offer/suggestion context
             if let range = lower.range(of: claim.pattern) {
@@ -358,7 +351,8 @@ enum BenchmarkEvaluator {
                 }
             }
 
-            details.append("Hallucinated action: response says '\(claim.pattern)' but \(claim.tool) was never called")
+            let toolNames = claim.tools.sorted().joined(separator: "/")
+            details.append("Hallucinated action: response says '\(claim.pattern)' but none of [\(toolNames)] were called")
             return false
         }
         return true
@@ -367,7 +361,6 @@ enum BenchmarkEvaluator {
     // MARK: - Aggregate Scoring
 
     static func computeScenarioSummary(turns: [BenchmarkTurnResult]) -> BenchmarkScenarioSummary {
-        let totalTools = turns.reduce(0) { $0 + max($1.toolsCalled.count, 1) }
         let correctTools = turns.filter { $0.checks.toolsCorrect }.count
         let toolAccuracy = turns.isEmpty ? 1.0 : Double(correctTools) / Double(turns.count)
 
