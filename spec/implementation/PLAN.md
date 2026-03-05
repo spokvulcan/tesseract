@@ -20,8 +20,9 @@ This means the app continues to build and run after every epic. The old agent lo
 | 5 | [Package System](EPIC_5_PACKAGE_SYSTEM.md) | 5 | ~10 | 0 | 0 |
 | 6 | [Session Integration](EPIC_6_SESSION_INTEGRATION.md) | 10 | 0 | 7 | 10 |
 | 7 | [Cleanup and Verification](EPIC_7_CLEANUP_AND_VERIFICATION.md) | 4 | 0 | 3 | 0 |
+| 8 | [Bash Tool & Project Access](EPIC_8_BASH_AND_PROJECT_ACCESS.md) | 10 | 4 | 5+2 ent | 0 |
 
-**Total: ~50 tasks, ~35 new files, ~10 modified files, ~10 deleted files**
+**Total: ~60 tasks, ~39 new files, ~17 modified files, ~10 deleted files**
 
 ## Dependency Graph
 
@@ -41,9 +42,11 @@ Epic 0: Foundation Types
    └──────────→ Epic 6: Session Integration ←── ALL of 1-5
                    │
                    └──→ Epic 7: Cleanup and Verification
+                   │
+                   └──→ Epic 8: Bash Tool & Project Access ←── 1, 2, 3
 ```
 
-**Parallelism**: Epics 1, 2, and 4 can be developed in parallel after Epic 0. Epic 3 depends on Epic 2 (uses `CompactionSummaryMessage` and `convertToLlm`). Epic 5 depends on both Epic 3 and Epic 4. Epic 6 integrates everything. Epic 7 is cleanup.
+**Parallelism**: Epics 1, 2, and 4 can be developed in parallel after Epic 0. Epic 3 depends on Epic 2 (uses `CompactionSummaryMessage` and `convertToLlm`). Epic 5 depends on both Epic 3 and Epic 4. Epic 6 integrates everything. Epic 7 is cleanup. Epic 8 (bash + project access) can start after Epics 1-3 and is independent of 6-7.
 
 ## File Map
 
@@ -67,11 +70,21 @@ Features/Agent/Core/
 
 ```
 Features/Agent/Tools/BuiltIn/
-├── PathSandbox.swift           ← E1: Sandboxed path resolution
+├── PathSandbox.swift           ← E1: Sandboxed path resolution (E8: multi-root)
 ├── ReadTool.swift              ← E1: File read with truncation
 ├── WriteTool.swift             ← E1: File write with mkdir
 ├── EditTool.swift              ← E1: Exact-match edit with fuzzy fallback
-└── ListTool.swift              ← E1: Directory listing
+├── ListTool.swift              ← E1: Directory listing
+├── BashTool.swift              ← E8: Bash command execution
+└── ANSIStripper.swift          ← E8: ANSI escape code removal
+```
+
+### New Project Access Files (Features/Agent/ProjectAccess/)
+
+```
+Features/Agent/ProjectAccess/
+├── ProjectAccessManager.swift  ← E8: Security-scoped bookmarks + NSOpenPanel
+└── ProjectAccessView.swift     ← E8: UI for managing granted directories
 ```
 
 ### New Context Files (Features/Agent/Context/)
@@ -188,3 +201,7 @@ Each epic includes build verification. The app must build after every task.
 3. **ToolCallParser compatibility** (Epic 2) — The existing parser handles `<tool_call>` XML tags. Pi uses server-side JSON tool calling. Since Tesseract uses local models with XML-based tool calling, the parser stays but the integration point changes.
 
 4. **Benchmark suite** (Epic 7) — All 7 scenarios reference domain tools (memory, task, goal, etc.). After the rewrite, benchmarks need to test file-based workflows instead.
+
+5. **Process in App Sandbox** (Epic 8) — Child processes inherit the sandbox. Some commands may fail unexpectedly (e.g., `ps`, `open`, Homebrew tools). The system prompt warns the LLM, but real-world testing will reveal edge cases.
+
+6. **Security-scoped bookmark staleness** (Epic 8) — Bookmarks can become stale after macOS updates or disk changes. Implementation handles re-creation, but edge cases may exist.
