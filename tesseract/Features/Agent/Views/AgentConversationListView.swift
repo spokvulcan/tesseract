@@ -86,32 +86,45 @@ struct AgentConversationListView: View {
     @ViewBuilder
     private func messageBubble(_ message: AgentChatMessage) -> some View {
         if message.role == .assistant {
-            AssistantMessageBubble(
-                message: message,
-                isSpeaking: speakingMessageID == message.id && isSpeechActive,
-                onPlay: {
-                    speakingMessageID = message.id
-                    coordinator.speakMessage(message)
-                },
-                onStop: {
-                    coordinator.stopSpeaking()
-                    speakingMessageID = nil
-                }
-            )
-            .id(message.id)
-        } else {
             HStack {
-                if message.role == .user { Spacer(minLength: 60) }
-
+                AssistantMessageBubble(
+                    message: message,
+                    isSpeaking: speakingMessageID == message.id && isSpeechActive,
+                    onPlay: {
+                        speakingMessageID = message.id
+                        coordinator.speakMessage(message)
+                    },
+                    onStop: {
+                        coordinator.stopSpeaking()
+                        speakingMessageID = nil
+                    }
+                )
+                .id(message.id)
+                
+                Spacer(minLength: 60)
+            }
+        } else if message.role == .user {
+            HStack {
+                Spacer(minLength: 60)
+                
+                UserMessageBubble(message: message)
+                    .id(message.id)
+            }
+        } else if message.role == .tool {
+            HStack {
+                AgentToolResultBubbleView(message: message)
+                    .id(message.id)
+                Spacer(minLength: 60)
+            }
+        } else {
+            // System messages
+            HStack {
+                Spacer(minLength: 60)
                 Text(message.content)
-                    .textSelection(.enabled)
-                    .bubbleBackground(
-                        message.role == .user
-                            ? AnyShapeStyle(.tint.opacity(0.15))
-                            : AnyShapeStyle(.fill.quaternary)
-                    )
-
-                if message.role != .user { Spacer(minLength: 60) }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+                Spacer(minLength: 60)
             }
             .id(message.id)
         }
@@ -121,7 +134,7 @@ struct AgentConversationListView: View {
 
     private var streamingBubble: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
                 if !coordinator.streamingThinking.isEmpty {
                     DisclosureGroup(isExpanded: .constant(true)) {
                         Text(coordinator.streamingThinking)
@@ -142,10 +155,22 @@ struct AgentConversationListView: View {
 
                 if !coordinator.streamingText.isEmpty {
                     Text(coordinator.streamingText)
+                        .font(.system(size: 15))
                         .textSelection(.enabled)
                 }
             }
-            .bubbleBackground()
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color(white: 0.15))
+            .foregroundStyle(.white)
+            .clipShape(
+                .rect(
+                    topLeadingRadius: 18,
+                    bottomLeadingRadius: 4,
+                    bottomTrailingRadius: 18,
+                    topTrailingRadius: 18
+                )
+            )
 
             Spacer(minLength: 60)
         }
