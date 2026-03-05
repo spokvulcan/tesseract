@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111012F41A000003C1B55 /* MLXLLM */; };
+		E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111032F41A000003C1B55 /* MLXLMCommon */; };
+		E0A5AC022F50B000003C1B55 /* AgentPackages in Resources */ = {isa = PBXBuildFile; fileRef = E0A5AC012F50B000003C1B55 /* AgentPackages */; };
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
 		E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudio */; };
 		E0DF77002F3FC000003C1B55 /* MLXImageGen in Frameworks */ = {isa = PBXBuildFile; productRef = E0DF77012F3FC000003C1B55 /* MLXImageGen */; };
@@ -30,6 +33,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		E0A5AC012F50B000003C1B55 /* AgentPackages */ = {isa = PBXFileReference; lastKnownFileType = folder; path = AgentPackages; sourceTree = "<group>"; };
 		E0C654902F2E946A003C1B55 /* tesseract.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = tesseract.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0C6549F2F2E946B003C1B55 /* tesseractTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tesseractTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0C654A92F2E946B003C1B55 /* tesseractUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tesseractUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -61,6 +65,8 @@
 				E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */,
 				E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */,
 				E0DF77002F3FC000003C1B55 /* MLXImageGen in Frameworks */,
+				E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */,
+				E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -84,6 +90,7 @@
 		E0C654872F2E946A003C1B55 = {
 			isa = PBXGroup;
 			children = (
+				E0A5AC012F50B000003C1B55 /* AgentPackages */,
 				E0C654922F2E946A003C1B55 /* tesseract */,
 				E0C654A22F2E946B003C1B55 /* tesseractTests */,
 				E0C654AC2F2E946B003C1B55 /* tesseractUITests */,
@@ -124,6 +131,8 @@
 				E0C655412F2EA000003C1B55 /* WhisperKit */,
 				E0C655512F3BA000003C1B55 /* MLXAudio */,
 				E0DF77012F3FC000003C1B55 /* MLXImageGen */,
+				E0A111012F41A000003C1B55 /* MLXLLM */,
+				E0A111032F41A000003C1B55 /* MLXLMCommon */,
 			);
 			productName = tesseract;
 			productReference = E0C654902F2E946A003C1B55 /* tesseract.app */;
@@ -229,6 +238,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E0A5AC022F50B000003C1B55 /* AgentPackages in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -659,6 +669,14 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		E0A111012F41A000003C1B55 /* MLXLLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLXLLM;
+		};
+		E0A111032F41A000003C1B55 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLXLMCommon;
+		};
 		E0C655412F2EA000003C1B55 /* WhisperKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */;

@@ -3,6 +3,7 @@
 //  tesseract
 //
 
+import Foundation
 import os
 
 /// A wrapper around `os.Logger` that logs all dynamic values as public.
@@ -11,7 +12,7 @@ import os
 /// Swift resolves `\(path)` as standard `String` interpolation first, then the
 /// wrapper passes the entire string to `os.Logger` with `privacy: .public`.
 /// This means `log stream` shows real values instead of `<private>`.
-struct PublicLogger {
+nonisolated struct PublicLogger: Sendable {
     private let logger: Logger
 
     init(subsystem: String, category: String) {
@@ -43,10 +44,30 @@ struct PublicLogger {
     }
 }
 
-enum Log {
+/// Shared debug output paths under the sandbox-safe temp directory.
+nonisolated enum DebugPaths: Sendable {
+    static let root: URL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("tesseract-debug")
+    static let agent: URL = root.appendingPathComponent("agent")
+    static let benchmark: URL = root.appendingPathComponent("benchmark")
+
+    /// Cached formatter for timestamped directory names (`2026-03-04_001629`).
+    static let timestampFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HHmmss"
+        return f
+    }()
+
+    static func timestamp() -> String {
+        timestampFormatter.string(from: Date())
+    }
+}
+
+nonisolated enum Log: Sendable {
     static let audio = PublicLogger(subsystem: "com.tesseract.app", category: "audio")
     static let transcription = PublicLogger(subsystem: "com.tesseract.app", category: "transcription")
     static let general = PublicLogger(subsystem: "com.tesseract.app", category: "general")
     static let speech = PublicLogger(subsystem: "com.tesseract.app", category: "speech")
     static let image = PublicLogger(subsystem: "com.tesseract.app", category: "image")
+    static let agent = PublicLogger(subsystem: "com.tesseract.app", category: "agent")
 }

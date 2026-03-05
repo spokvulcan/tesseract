@@ -8,6 +8,7 @@ import Foundation
 enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
     case speechToText = "Speech-to-Text"
     case textToSpeech = "Text-to-Speech"
+    case agent = "Agent"
     case imageGeneration = "Image Generation"
 
     var id: String { rawValue }
@@ -16,6 +17,7 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .speechToText: "mic.fill"
         case .textToSpeech: "speaker.wave.3.fill"
+        case .agent: "brain"
         case .imageGeneration: "photo.fill"
         }
     }
@@ -56,6 +58,8 @@ struct ModelDefinition: Identifiable, Sendable {
 }
 
 extension ModelDefinition {
+    static let defaultAgentModelID = "qwen3.5-4b"
+
     // Image generation models are kept here but excluded from `all` until the feature is ready.
     static let all: [ModelDefinition] = [
         ModelDefinition(
@@ -81,6 +85,66 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~3.6 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "nanbeige4.1-3b",
+            displayName: "Nanbeige4.1-3B",
+            description: "3B parameter bilingual agent model with tool calling and reasoning.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "mlx-community/Nanbeige4.1-3B-8bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~4.2 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3-4b-instruct-2507",
+            displayName: "Qwen3-4B Instruct",
+            description: "4B parameter non-thinking agent model. Fast responses, no reasoning delay.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "mlx-community/Qwen3-4B-Instruct-2507-8bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~4.5 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3-4b-thinking-2507",
+            displayName: "Qwen3-4B Thinking",
+            description: "4B parameter thinking agent model. Always-on reasoning, higher tool accuracy.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "lmstudio-community/Qwen3-4B-Thinking-2507-MLX-8bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~4.5 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3-4b-thinking-opus-distill",
+            displayName: "Qwen3-4B Opus Distill",
+            description: "4B thinking model distilled from Claude 4.5 Opus high-reasoning. 8-bit MLX.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "nightmedia/Qwen3-4B-Thinking-2507-Claude-4.5-Opus-High-Reasoning-Distill-qx86-hi-mlx",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~3.8 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3.5-4b",
+            displayName: "Qwen3.5-4B",
+            description: "4B hybrid-attention model with 256K context. Tool calling with think blocks.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "mlx-community/Qwen3.5-4B-MLX-8bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~5 GB",
             dependencies: []
         ),
     ]

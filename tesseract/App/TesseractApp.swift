@@ -45,27 +45,29 @@ struct TesseractApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var container = DependencyContainer()
     @State private var showOnboarding = false
-    @State private var selectedNavigation: NavigationItem? = .dictation
+    @State private var selectedNavigation: NavigationItem? = .agent
+
+    init() {
+        if CommandLine.arguments.contains("--benchmark") {
+            Task { @MainActor in
+                let runner = BenchmarkRunner()
+                do {
+                    try await runner.run()
+                } catch {
+                    Log.agent.error("Benchmark failed: \(error)")
+                }
+                exit(0)
+            }
+        }
+    }
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            ContentView(
-                coordinator: container.dictationCoordinator,
-                transcriptionEngine: container.transcriptionEngine,
-                history: container.transcriptionHistory,
-                permissionsManager: container.permissionsManager,
-                audioCapture: container.audioCaptureEngine,
-                speechCoordinator: container.speechCoordinator,
-                speechEngine: container.speechEngine,
-                imageGenEngine: container.imageGenEngine,
-                zimageGenEngine: container.zimageGenEngine,
-                selectedNavigation: $selectedNavigation
-            )
+            ContentView(selectedNavigation: $selectedNavigation)
             .background {
                 WindowOpenerView(appDelegate: appDelegate)
             }
-            .environmentObject(container)
-            .environmentObject(container.modelDownloadManager)
+            .injectDependencies(from: container)
             .focusedSceneValue(\.dictationActions, DictationActions(
                 toggleRecording: { [weak container] in
                     container?.dictationCoordinator.toggleRecording()
@@ -91,10 +93,7 @@ struct TesseractApp: App {
                 }
             }
             .sheet(isPresented: $showOnboarding) {
-                OnboardingView(
-                    permissionsManager: container.permissionsManager,
-                    isPresented: $showOnboarding
-                )
+                OnboardingView(isPresented: $showOnboarding)
             }
             .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
                 showOnboarding = true

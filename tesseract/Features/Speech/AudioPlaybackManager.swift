@@ -152,16 +152,13 @@ final class AudioPlaybackManager: ObservableObject {
         isPlaying = true
 
         if debugDumpEnabled {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM-dd_HHmmss"
-            formatter.timeZone = .current
-            let dir = URL(fileURLWithPath: "/tmp/tesseract-debug")
-                .appendingPathComponent(formatter.string(from: Date()))
+            let dir = DebugPaths.root
+                .appendingPathComponent(DebugPaths.timestamp())
             do {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                NSLog("[tesseract-debug] Created debug dir: %@", dir.path)
+                Log.speech.info("Created debug dir: \(dir.path)")
             } catch {
-                NSLog("[tesseract-debug] FAILED to create dir %@: %@", dir.path, error.localizedDescription)
+                Log.speech.error("Failed to create debug dir \(dir.path): \(error.localizedDescription)")
             }
             debugOutputDir = dir
             debugRawChunks = []
@@ -300,7 +297,7 @@ final class AudioPlaybackManager: ObservableObject {
             try? jsonData.write(to: dir.appendingPathComponent("metadata.json"))
         }
 
-        NSLog("[tesseract-debug] Dump written: %d chunks, %d samples → %@", debugRawChunks.count, debugScheduledSamples.count, dir.path)
+        Log.speech.info("Debug dump written: \(debugRawChunks.count) chunks, \(debugScheduledSamples.count) samples → \(dir.path)")
     }
 
     private func writeWAV(samples: [Float], sampleRate: Int, to url: URL) {

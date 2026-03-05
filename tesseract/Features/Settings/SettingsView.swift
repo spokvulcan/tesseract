@@ -162,6 +162,7 @@ struct RecordingSettingsSection: View {
     @EnvironmentObject private var container: DependencyContainer
     @State private var isRecordingHotkey = false
     @State private var isRecordingTTSHotkey = false
+    @State private var isRecordingAgentHotkey = false
 
     var body: some View {
         Form {
@@ -251,6 +252,71 @@ struct RecordingSettingsSection: View {
                 }
             }
 
+            Section("Agent Hotkey") {
+                HStack {
+                    Text("Talk to Tesse:")
+                    Spacer()
+
+                    if isRecordingAgentHotkey {
+                        Text("Press a key...")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Waiting for key press")
+                    } else {
+                        Text(settings.agentHotkey.displayString)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.2))
+                            .cornerRadius(4)
+                            .accessibilityLabel("Current agent hotkey: \(settings.agentHotkey.displayString)")
+                    }
+
+                    Button(isRecordingAgentHotkey ? "Cancel" : "Change") {
+                        if isRecordingAgentHotkey {
+                            isRecordingAgentHotkey = false
+                        } else {
+                            recordNewAgentHotkey()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityHint(isRecordingAgentHotkey ? "Cancel recording new hotkey" : "Record a new agent hotkey")
+                }
+
+                if settings.agentHotkey.modifierFlags.contains(.function) {
+                    Text("Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Section("Agent Model") {
+                let agentModels = ModelDefinition.all.filter { $0.category == .agent }
+                let downloadedAgentModels = agentModels.filter { model in
+                    if case .downloaded = container.modelDownloadManager.statuses[model.id] {
+                        return true
+                    }
+                    return false
+                }
+
+                if downloadedAgentModels.isEmpty {
+                    Text("No agent models downloaded. Download one from the Models page.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Model", selection: $settings.selectedAgentModelID) {
+                        ForEach(downloadedAgentModels) { model in
+                            Text(model.displayName).tag(model.id)
+                        }
+                    }
+
+                    if let selected = agentModels.first(where: { $0.id == settings.selectedAgentModelID }) {
+                        Text(selected.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section("Duration") {
                 VStack(alignment: .leading) {
                     let minutes = Int(settings.maxRecordingDuration) / 60
@@ -299,6 +365,17 @@ struct RecordingSettingsSection: View {
                 settings.ttsHotkey = combo
             }
             isRecordingTTSHotkey = false
+        }
+    }
+
+    private func recordNewAgentHotkey() {
+        isRecordingAgentHotkey = true
+
+        Task {
+            if let combo = await container.hotkeyManager.recordHotkey() {
+                settings.agentHotkey = combo
+            }
+            isRecordingAgentHotkey = false
         }
     }
 }

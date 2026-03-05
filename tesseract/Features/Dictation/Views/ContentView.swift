@@ -7,16 +7,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @ObservedObject var coordinator: DictationCoordinator
-    @ObservedObject var transcriptionEngine: TranscriptionEngine
-    @ObservedObject var history: TranscriptionHistory
-    @ObservedObject var permissionsManager: PermissionsManager
-    @ObservedObject var audioCapture: AudioCaptureEngine
-    @ObservedObject var speechCoordinator: SpeechCoordinator
-    @ObservedObject var speechEngine: SpeechEngine
-    @ObservedObject var imageGenEngine: ImageGenEngine
-    @ObservedObject var zimageGenEngine: ZImageGenEngine
-
     @Binding var selectedNavigation: NavigationItem?
 
     // Sidebar closed by default
@@ -26,47 +16,17 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(selection: $selectedNavigation)
                 .navigationDestination(for: NavigationItem.self) { page in
-                    page.viewForPage(
-                        coordinator: coordinator,
-                        transcriptionEngine: transcriptionEngine,
-                        history: history,
-                        permissionsManager: permissionsManager,
-                        audioCapture: audioCapture,
-                        speechCoordinator: speechCoordinator,
-                        speechEngine: speechEngine,
-                        imageGenEngine: imageGenEngine,
-                        zimageGenEngine: zimageGenEngine
-                    )
+                    page.destinationView
                 }
         } detail: {
             if let selected = selectedNavigation {
-                selected.viewForPage(
-                    coordinator: coordinator,
-                    transcriptionEngine: transcriptionEngine,
-                    history: history,
-                    permissionsManager: permissionsManager,
-                    audioCapture: audioCapture,
-                    speechCoordinator: speechCoordinator,
-                    speechEngine: speechEngine,
-                    imageGenEngine: imageGenEngine,
-                    zimageGenEngine: zimageGenEngine
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .scrollEdgeEffectStyle(.soft, for: .top)
+                selected.destinationView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scrollEdgeEffectStyle(.soft, for: .top)
             } else {
-                NavigationItem.dictation.viewForPage(
-                    coordinator: coordinator,
-                    transcriptionEngine: transcriptionEngine,
-                    history: history,
-                    permissionsManager: permissionsManager,
-                    audioCapture: audioCapture,
-                    speechCoordinator: speechCoordinator,
-                    speechEngine: speechEngine,
-                    imageGenEngine: imageGenEngine,
-                    zimageGenEngine: zimageGenEngine
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .scrollEdgeEffectStyle(.soft, for: .top)
+                NavigationItem.dictation.destinationView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scrollEdgeEffectStyle(.soft, for: .top)
             }
         }
         .navigationSplitViewStyle(.balanced)

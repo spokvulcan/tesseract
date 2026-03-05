@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Tesseract is a privacy-focused, offline voice-to-text dictation app for macOS. It captures audio via push-to-talk, transcribes locally using WhisperKit, and injects text into any focused application.
+Tesseract is a privacy-focused, fully offline AI assistant for macOS. All inference (speech-to-text, text-to-speech, LLM agent, image generation) runs locally on Apple Silicon using MLX.
 
 - **Platform**: macOS 26+ (Apple Silicon only)
 - **Framework**: Swift 6.2 / SwiftUI
-- **ASR Engine**: WhisperKit (CoreML-based)
-- **VAD**: Silero VAD (planned)
+- **ASR**: WhisperKit (CoreML-based speech-to-text)
+- **TTS**: Qwen3TTS via MLX (text-to-speech with voice anchoring)
+- **LLM Agent**: On-device language model via MLXLM (tool-calling agent loop)
+- **Image Gen**: FLUX.2-klein-4B via MLX (not yet runtime-tested, hidden from UI)
 
 ## Build Commands
 
@@ -52,22 +54,37 @@ tesseract/
 ├── App/                    # Entry point, AppDelegate, MenuBarManager, DependencyContainer
 ├── Core/
 │   ├── Audio/              # AudioCaptureEngine, AudioDeviceManager, AudioConverter
-│   ├── TextInjection/      # TextInjector (clipboard-based), HotkeyManager
-│   └── Permissions/        # PermissionsManager
+│   ├── TextInjection/      # TextInjector (clipboard-based), HotkeyManager, TextExtractor
+│   ├── Permissions/        # PermissionsManager
+│   └── Logging.swift       # PublicLogger + Log enum
 ├── Features/
-│   ├── Dictation/          # DictationCoordinator (state machine), views
-│   ├── Transcription/      # TranscriptionEngine, ModelManager, History
-│   └── Settings/           # SettingsView, SettingsManager
-└── Models/                 # DictationState, TranscriptionResult, KeyCombo, etc.
+│   ├── Agent/              # LLM agent: engine, runner, tools, chat UI, benchmarks
+│   ├── Dictation/          # DictationCoordinator (state machine), dictation views
+│   ├── ImageGen/           # FLUX.2 image generation (hidden from UI, untested)
+│   ├── Models/             # Model download manager, models page UI
+│   ├── Settings/           # SettingsView, SettingsManager
+│   ├── Speech/             # SpeechCoordinator, SpeechEngine, TTS playback, notch overlay
+│   └── Transcription/      # TranscriptionEngine, ModelManager, History, PostProcessor
+├── Models/                 # Shared types: DictationState, NavigationItem, KeyCombo, etc.
+└── Resources/Benchmark/    # Agent benchmark configs and suites
+Vendor/
+├── mlx-audio-swift/        # TTS (Qwen3TTS), forced aligner, audio codecs (Swift Package)
+└── mlx-image-swift/        # FLUX.2 image generation (Swift Package)
 ```
 
 ### Key Patterns
 
-- **Dependency Injection**: `DependencyContainer` manages all service instantiation
-- **State Machine**: `DictationCoordinator` manages: idle → listening → recording → processing
-- **Actor Isolation**: `WhisperActor` isolates WhisperKit access (not Sendable)
-- **MainActor**: All `ObservableObject` classes are `@MainActor`
-- **Settings**: `@AppStorage` wrapper for UserDefaults persistence
+- **EnvironmentObject injection**: All major services from `DependencyContainer` are injected as `@EnvironmentObject` in `TesseractApp.swift` (14 objects). Views access services directly — no prop drilling.
+- **DependencyContainer**: `@MainActor` class with lazy-initialized services. Wires core (audio, permissions, hotkeys), TTS stack (speech engine → coordinator), agent stack (LLM engine → tools → runner → coordinator), and overlay controllers.
+- **State Machines**: `DictationCoordinator` (idle → listening → recording → processing), `SpeechCoordinator` (TTS pipeline), `AgentCoordinator` (agent chat + voice I/O).
+- **Actor Isolation**: `WhisperActor` isolates WhisperKit, `LLMActor` isolates MLXLM model container. Both are non-Sendable Swift actors.
+- **MainActor**: All `ObservableObject` classes are `@MainActor`.
+- **Settings**: `@AppStorage` wrapper for UserDefaults persistence.
+- **Constants**: `private enum Defaults` pattern inside each class for magic numbers.
+
+### Navigation
+
+`NavigationItem` enum drives the sidebar. Main pages: `.dictation`, `.speech`, `.agent`. Settings pages: `.general`, `.model`, `.recording`. Image gen (`.image`, `.zimage`) exists in the enum but is hidden from the sidebar until ready. Default view is `.agent`.
 
 ### Recording Flow
 
@@ -76,9 +93,38 @@ onHotkeyDown() → AudioCaptureEngine.startCapture() → state = .recording
 onHotkeyUp() → stopCapture() → TranscriptionEngine.transcribe() → TextInjector.inject()
 ```
 
-### Text Injection Architecture
+Text injection uses clipboard-based approach (copy → Cmd+V → restore clipboard) to remain within App Sandbox.
 
-Uses clipboard-based injection (copy → simulate Cmd+V → restore) instead of Accessibility APIs to remain within App Sandbox constraints.
+### Agent Architecture (`Features/Agent/`)
+
+**Inference**: `LLMActor` (Swift actor) → `AgentEngine` (@MainActor wrapper) → `AgentRunner` (agentic loop).
+
+**Agent loop** (`AgentRunner`): Generate → parse tool calls → execute tools → append results → re-generate. Max 5 rounds (3 in benchmarks). Features:
+- Streaming `ToolCallParser` handles `<tool_call>` and `<think>` tags across chunk boundaries
+- Within-turn dedup: skips re-executing identical tool+args in same turn
+- Two-stage stall recovery: nudge message → synthetic tool injection for empty rounds
+- `respond` tool: early-exit signal that extracts final text without another generation round
+
+**System prompts** (`SystemPromptBuilder`): Three tiers — minimal (distilled models), condensed (thinking models), default (full rules + examples). All inject current date, user memories, and conversation summaries.
+
+**Tools** (16 total in `ToolRegistry`): memory (save/update/delete), goal (create/list/update), task (create/list/complete), habit (create/log/status), mood (log/list), reminder (set), respond. All backed by `AgentDataStore` (actor, JSON files at `~/Library/Application Support/tesse-ract/agent/`). All tools use **1-based indexing**.
+
+**Context management**: `AgentCoordinator` keeps last 60 messages. Observation masking replaces tool results beyond the 20 most recent with placeholders to manage context size.
+
+**Conversations**: `AgentConversationStore` uses index.json (summaries) + individual `{uuid}.json` files for persistence.
+
+**Benchmarks**: `--benchmark` flag runs 7 scenarios (S1–S7) with parameter sweeps. Reports written to `/tmp/tesseract-debug/benchmark/`. Current pass rate: 7/7.
+
+### Hotkeys
+
+Three registered hotkeys in `DependencyContainer.setup()`:
+- **Option+Space**: Dictation (push-to-talk)
+- **fn+Space**: TTS (text-to-speech)
+- **Control+Space**: Agent (voice input)
+
+### Memory Budget
+
+Only one large model can be active at a time on 8GB machines. `DependencyContainer.prepareForInference` releases other model memory before loading a new one.
 
 ## Key Configuration
 
@@ -121,22 +167,24 @@ import os
 
 Log.speech.info("Playing \(sampleCount) samples at \(rate)Hz")
 Log.audio.error("Device not found: \(deviceId)")
-Log.general.debug("State changed to \(newState)")
+Log.agent.debug("Tool call: \(toolName)")
 ```
 
-Available categories: `Log.audio`, `Log.transcription`, `Log.speech`, `Log.general`.
+Available categories: `Log.audio`, `Log.transcription`, `Log.speech`, `Log.general`, `Log.image`, `Log.agent`.
 
 `Log` uses `PublicLogger` — a wrapper around `os.Logger` that marks all interpolated values as `.public` so they show real values in `log stream` instead of `<private>`.
 
 ### Vendored library code (`Vendor/`)
 
-Vendor code doesn't have access to the `Log` enum. Use `NSLog` instead:
+Vendor code doesn't have access to the `Log` enum. Use `os.Logger` with the app's subsystem:
 
 ```swift
-NSLog("[MyLib] Generated %d tokens in %.2fs", tokenCount, elapsed)
+import os
+private let logger = Logger(subsystem: "com.tesseract.app", category: "mylib")
+logger.info("Generated \(tokenCount) tokens in \(elapsed, format: .fixed(precision: 2))s")
 ```
 
-`NSLog` output is captured by `scripts/dev.sh log` (it filters `process == "tesseract" AND subsystem == ""`). It shows without a category tag but is still visible.
+**Do not use `print()` or `NSLog`** in vendor code — neither is captured by `scripts/dev.sh log`.
 
 ### Viewing logs
 
@@ -154,13 +202,13 @@ Use [Conventional Commits](https://www.conventionalcommits.org/). Format:
 
 Types: `feat`, `fix`, `refactor`, `style`, `perf`, `docs`, `test`, `build`, `ci`, `chore`.
 
-Scope is optional but encouraged (e.g., `tts`, `ui`, `audio`, `models`).
+Scope is optional but encouraged (e.g., `tts`, `ui`, `audio`, `agent`, `models`).
 
 Examples:
 - `feat(tts): add voice anchor for long-form consistency`
 - `fix(audio): handle device disconnection during recording`
 - `refactor(ui): unify models page with grouped form style`
-- `perf(tts): reuse code0 embeddings across predictor steps`
+- `feat(agent): add habit tracking tools`
 
 ## Skills
 
@@ -176,5 +224,8 @@ Invoke the `/macos-development` skill before writing or reviewing macOS/Swift/Sw
 
 ## Documentation
 
-- `PLAN.md` - 27-task implementation plan across 5 phases
-- `IMPLEMENTATION_LOG.md` - Progress tracking and architecture decisions
+- `TESSE_DEVELOPMENT_PLAN.md` — Current state and development roadmap
+- `ARCHITECTURE.md` — System architecture reference
+- `docs/TTS_STREAMING_AND_VOICE_CONSISTENCY.md` — TTS streaming and voice anchor architecture
+- `docs/TTS_PERFORMANCE_INVESTIGATION.md` — TTS performance profiling data
+- `docs/IMAGE_GENERATION.md` — FLUX.2 image generation architecture

@@ -7,7 +7,7 @@ import AppKit
 import SwiftUI
 
 struct OnboardingView: View {
-    @ObservedObject var permissionsManager: PermissionsManager
+    @EnvironmentObject private var permissionsManager: PermissionsManager
     @Binding var isPresented: Bool
 
     @State private var currentStep = 0
@@ -83,9 +83,9 @@ struct OnboardingView: View {
         case 1:
             LanguageSelectionStepContent()
         case 2:
-            MicrophonePermissionStepContent(permissionsManager: permissionsManager)
+            MicrophonePermissionStepContent()
         case 3:
-            AccessibilityPermissionStepContent(permissionsManager: permissionsManager)
+            AccessibilityPermissionStepContent()
         case 4:
             ReadyStepContent()
         default:
@@ -247,7 +247,7 @@ struct LanguageSelectionStepContent: View {
 // MARK: - Microphone Permission Step Content
 
 struct MicrophonePermissionStepContent: View {
-    @ObservedObject var permissionsManager: PermissionsManager
+    @EnvironmentObject private var permissionsManager: PermissionsManager
 
     var body: some View {
         VStack(spacing: 24) {
@@ -322,7 +322,7 @@ struct MicrophonePermissionStepContent: View {
 // MARK: - Accessibility Permission Step Content
 
 struct AccessibilityPermissionStepContent: View {
-    @ObservedObject var permissionsManager: PermissionsManager
+    @EnvironmentObject private var permissionsManager: PermissionsManager
 
     var body: some View {
         VStack(spacing: 24) {
@@ -476,8 +476,6 @@ struct HotkeyHint: View {
 }
 
 #Preview {
-    OnboardingView(
-        permissionsManager: PermissionsManager(),
-        isPresented: .constant(true)
-    )
+    OnboardingView(isPresented: .constant(true))
+        .environmentObject(PermissionsManager())
 }
