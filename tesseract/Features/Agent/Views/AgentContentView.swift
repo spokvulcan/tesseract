@@ -47,17 +47,18 @@ struct AgentContentView: View {
                 speakingMessageID: $speakingMessageID,
                 isSpeechActive: isSpeechActive
             )
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 0) {
+                if isSpeechActive {
+                    AgentSpeechIndicatorBar(onStop: {
+                        coordinator.stopSpeaking()
+                        speakingMessageID = nil
+                    })
+                }
 
-            if isSpeechActive {
-                AgentSpeechIndicatorBar(onStop: {
-                    coordinator.stopSpeaking()
-                    speakingMessageID = nil
-                })
+                AgentInputBarView(inputText: $inputText)
             }
-
-            Divider()
-
-            AgentInputBarView(inputText: $inputText)
         }
         .navigationTitle("Agent")
         .onChange(of: speechCoordinator.state) { _, newState in

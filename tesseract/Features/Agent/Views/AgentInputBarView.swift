@@ -13,6 +13,7 @@ struct AgentInputBarView: View {
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var isHoldingMic = false
+    @State private var textHeight: CGFloat = 20
     @AppStorage("selectedAgentModelID") private var agentModelID: String = ModelDefinition.defaultAgentModelID
 
     private var isModelDownloaded: Bool {
@@ -23,37 +24,113 @@ struct AgentInputBarView: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            TextField("Message…", text: $inputText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .onSubmit { send() }
-                .disabled(coordinator.voiceState == .recording || coordinator.voiceState == .transcribing)
-
-            micButton
-
-            if coordinator.isGenerating {
-                Button {
-                    coordinator.cancelGeneration()
-                } label: {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.red)
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                if inputText.isEmpty {
+                    Text("Message…")
+                        .font(.system(size: 15))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 16)
+                        .allowsHitTesting(false)
                 }
-                .buttonStyle(.plain)
-                .help("Cancel generation")
-            } else {
-                Button {
-                    send()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(canSend ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .help("Send message")
+                
+                AgentScrollableTextField(
+                    text: $inputText,
+                    dynamicHeight: $textHeight,
+                    onCommit: { send() },
+                    isEnabled: !(coordinator.voiceState == .recording || coordinator.voiceState == .transcribing)
+                )
+                .frame(height: min(max(textHeight, 20), 150))
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
             }
+            
+            HStack(spacing: 16) {
+                // Formatting and attachment actions (mocked for visual fidelity)
+                HStack(spacing: 14) {
+                    Button { } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                            .background(.quinary, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add attachment")
+                    
+                    Button { } label: {
+                        Text("Aa")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Format text")
+                    
+                    Button { } label: {
+                        Image(systemName: "face.smiling")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Emoji")
+                    
+                    Button { } label: {
+                        Image(systemName: "at")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Mention")
+                    
+                    Button { } label: {
+                        Image(systemName: "slash.square")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Commands")
+                }
+                
+                Spacer()
+                
+                // Active input controls
+                HStack(spacing: 12) {
+                    micButton
+                    
+                    if coordinator.isGenerating {
+                        Button {
+                            coordinator.cancelGeneration()
+                        } label: {
+                            Image(systemName: "stop.circle.fill")
+                                .font(.system(size: 20))
+                                .foregroundStyle(.red)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Cancel generation")
+                    } else {
+                        Button {
+                            send()
+                        } label: {
+                            Image(systemName: "paperplane.fill")
+                                .font(.system(size: 18))
+                                .foregroundStyle(canSend ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canSend)
+                        .help("Send message")
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+        }
+        .glassEffect(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(.quaternary, lineWidth: 0.5)
         }
         .padding(Theme.Spacing.md)
     }
