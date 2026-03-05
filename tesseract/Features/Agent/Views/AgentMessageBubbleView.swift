@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import Textual
 
 struct AssistantMessageBubble: View {
     let message: AgentChatMessage
@@ -12,6 +13,8 @@ struct AssistantMessageBubble: View {
     var onStop: (() -> Void)? = nil
     @State private var isThinkingExpanded = false
     @State private var isHovering = false
+    
+    @AppStorage("agentUseMarkdown") private var useMarkdown = true
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -20,9 +23,15 @@ struct AssistantMessageBubble: View {
                     thinkingSection(thinking)
                 }
                 if !message.content.isEmpty {
-                    Text(message.content)
-                        .font(.system(size: 15))
-                        .textSelection(.enabled)
+                    if useMarkdown {
+                        StructuredText(markdown: message.content)
+                            .textual.structuredTextStyle(.gitHub)
+                            .textual.textSelection(.enabled)
+                    } else {
+                        Text(message.content)
+                            .font(.system(size: 15))
+                            .textSelection(.enabled)
+                    }
                 }
                 
                 if !message.toolCalls.isEmpty {
@@ -31,6 +40,7 @@ struct AssistantMessageBubble: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             
             // Timestamp and playback controls
             HStack(spacing: 4) {
@@ -89,12 +99,21 @@ struct AssistantMessageBubble: View {
 
 struct UserMessageBubble: View {
     let message: AgentChatMessage
+    @AppStorage("agentUseMarkdown") private var useMarkdown = true
     
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Text(message.content)
-                .font(.system(size: 15))
-                .textSelection(.enabled)
+            if useMarkdown {
+                StructuredText(markdown: message.content)
+                    .textual.structuredTextStyle(.default)
+                    .textual.textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(message.content)
+                    .font(.system(size: 15))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             
             Text(message.timestamp.formatted(date: .omitted, time: .shortened))
                 .font(.system(size: 11))

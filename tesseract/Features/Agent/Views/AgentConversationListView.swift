@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import Textual
 
 struct AgentConversationListView: View {
     @Binding var speakingMessageID: UUID?
@@ -132,6 +133,8 @@ struct AgentConversationListView: View {
 
     // MARK: - Streaming Bubble
 
+    @AppStorage("agentUseMarkdown") private var useMarkdown = true
+
     private var streamingBubble: some View {
         HStack {
             VStack(alignment: .leading, spacing: 6) {
@@ -154,9 +157,15 @@ struct AgentConversationListView: View {
                 }
 
                 if !coordinator.streamingText.isEmpty {
-                    Text(coordinator.streamingText)
-                        .font(.system(size: 15))
-                        .textSelection(.enabled)
+                    if useMarkdown {
+                        StructuredText(markdown: coordinator.streamingText)
+                            .textual.structuredTextStyle(.gitHub)
+                            .textual.textSelection(.enabled)
+                    } else {
+                        Text(coordinator.streamingText)
+                            .font(.system(size: 15))
+                            .textSelection(.enabled)
+                    }
                 }
             }
             .padding(.horizontal, 14)

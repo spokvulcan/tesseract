@@ -12,6 +12,7 @@ struct AgentContentView: View {
     @State private var showingHistory = false
     @State private var speakingMessageID: UUID?
     @AppStorage("agentAutoSpeak") private var autoSpeakEnabled = false
+    @AppStorage("agentUseMarkdown") private var useMarkdown = true
     @AppStorage("selectedAgentModelID") private var agentModelID: String = ModelDefinition.defaultAgentModelID
 
     private var isModelDownloaded: Bool {
@@ -96,6 +97,13 @@ struct AgentContentView: View {
                     Image(systemName: autoSpeakEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
                 }
                 .help(autoSpeakEnabled ? "Auto-speak responses (on)" : "Auto-speak responses (off)")
+                
+                Button {
+                    useMarkdown.toggle()
+                } label: {
+                    Image(systemName: useMarkdown ? "text.alignleft" : "doc.plaintext")
+                }
+                .help(useMarkdown ? "Disable Markdown formatting" : "Enable Markdown formatting")
             }
         }
     }
