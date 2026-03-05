@@ -100,3 +100,33 @@ Liquid Glass honors system settings natively:
 - **Reduced Motion:** Morphing animations and dynamic shifting behave as standard crossfades.
 
 By using `.glassEffect(in:)` instead of manually trying to blur a background, you ensure your app respects user preferences seamlessly. Avoid stacking too many Liquid Glass elements ("glass on glass"), which can degrade accessibility and visual hierarchy.
+
+## 6. Building Auto-Expanding Liquid Glass Input Bars
+
+When building custom chat/input bars that float over content and use Liquid Glass, standard SwiftUI `TextField(axis: .vertical)` does not scroll naturally when height-constrained. Instead, use an `NSViewRepresentable` wrapping an `NSTextView`:
+
+1. **Dynamic Height Calculation**: Instead of layout hacks, use `NSLayoutManager` within the `NSViewRepresentable` to correctly measure the text bounds:
+```swift
+func recalculateHeight(textView: NSTextView) {
+    guard let layoutManager = textView.layoutManager,
+          let textContainer = textView.textContainer else { return }
+    
+    layoutManager.ensureLayout(for: textContainer)
+    let usedRect = layoutManager.usedRect(for: textContainer)
+    
+    DispatchQueue.main.async {
+        self.parent.dynamicHeight = usedRect.height
+    }
+}
+```
+
+2. **Wrapping Constraints**: Configure the `NSTextView` properly so text wraps within the view bounds instead of extending horizontally:
+```swift
+textView.isVerticallyResizable = true
+textView.isHorizontallyResizable = false
+textView.autoresizingMask = [.width]
+textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+textView.textContainer?.widthTracksTextView = true
+```
+
+3. **Smooth Scroll Setup**: Apply `.frame(height: min(max(dynamicHeight, 20), 150))` on the SwiftUI view. This ensures the input bar starts as a single line, expands seamlessly as you type up to ~150 points, and then gracefully initiates the internal scrollbar for any longer content.
