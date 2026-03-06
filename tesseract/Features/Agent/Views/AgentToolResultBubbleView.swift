@@ -13,14 +13,14 @@ struct AgentToolResultBubbleView: View {
                 }
             }) {
                 HStack(spacing: 8) {
-                    Image(systemName: "checkmark")
+                    Image(systemName: message.isError ? "xmark" : "checkmark")
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(message.isError ? .red : .secondary)
                         .frame(width: 16)
-                    
-                    Text("Done")
+
+                    Text(message.isError ? "Failed" : "Done")
                         .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(message.isError ? .red : .secondary)
                     
                     Spacer()
                     

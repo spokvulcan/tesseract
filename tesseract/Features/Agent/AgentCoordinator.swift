@@ -379,7 +379,7 @@ final class AgentCoordinator: ObservableObject {
     /// Derive UI messages from the agent's authoritative state.
     private func refreshDisplayMessages() {
         messages = agent.state.messages.map { msg in
-            if let chat = msg as? AgentChatMessage { return chat }
+            if let chat = msg as? AgentChatMessage { return chat.normalizedForDisplay() }
             return AgentChatMessage(from: msg)
         }
     }

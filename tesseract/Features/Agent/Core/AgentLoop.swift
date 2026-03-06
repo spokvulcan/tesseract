@@ -397,9 +397,7 @@ private func executeToolCalls(
         let args: [String: JSONValue]
         if call.argumentsJSON.isEmpty || call.argumentsJSON == "{}" {
             args = [:]
-        } else if let data = call.argumentsJSON.data(using: .utf8),
-                  let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data)
-        {
+        } else if let parsed = ToolArgumentNormalizer.decode(call.argumentsJSON) {
             args = parsed
         } else {
             let errorResult = ToolResultMessage.create(
@@ -503,12 +501,7 @@ private func executeToolCalls(
 
 /// Encode `[String: JSONValue]` arguments back to a JSON string.
 private func encodeArguments(_ arguments: [String: JSONValue]) -> String {
-    guard let data = try? JSONEncoder().encode(arguments),
-          let json = String(data: data, encoding: .utf8)
-    else {
-        return "{}"
-    }
-    return json
+    ToolArgumentNormalizer.encode(arguments)
 }
 
 /// Thread-safe accumulator for messages produced during a loop run.

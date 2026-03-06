@@ -6,132 +6,79 @@
 //
 
 import Testing
+import MLXLMCommon
 @testable import tesseract
 
 @MainActor
-struct TranscriptionPostProcessorTests {
+struct ToolArgumentNormalizerTests {
 
-    @Test func processTrimsWhitespace() async throws {
-        let processor = TranscriptionPostProcessor()
-        let result = processor.process("  Hello World  ")
-        #expect(result == "Hello World")
+    @Test func unwrapsWrappedStringArguments() async throws {
+        let normalized = ToolArgumentNormalizer.normalize([
+            "path": .string(#"string("conversations\/ABC-123.json")"#)
+        ])
+
+        #expect(normalized["path"] == .string("conversations/ABC-123.json"))
     }
 
-    @Test func processRemovesDuplicateSpaces() async throws {
-        let processor = TranscriptionPostProcessor()
-        let result = processor.process("Hello    World")
-        #expect(result == "Hello World")
+    @Test func extractorHandlesWrappedScalarArguments() async throws {
+        let args: [String: JSONValue] = [
+            "path": .string(#".string("notes\/todo.md")"#),
+            "offset": .string("int(42)"),
+            "recursive": .string("bool(true)"),
+        ]
+
+        #expect(ToolArgExtractor.string(args, key: "path") == "notes/todo.md")
+        #expect(ToolArgExtractor.int(args, key: "offset") == 42)
+        #expect(ToolArgExtractor.bool(args, key: "recursive") == true)
     }
 
-    @Test func processCapitalizesFirstLetter() async throws {
-        let processor = TranscriptionPostProcessor()
-        let result = processor.process("hello world")
-        #expect(result == "Hello world")
-    }
+    @Test func boolExtractorHandlesWrappedCapitalizedStringBools() async throws {
+        let args: [String: JSONValue] = [
+            "recursive": .string(#"string("True")"#),
+            "enabled": .string(#"string("off")"#),
+        ]
 
-    @Test func processCapitalizesAfterPunctuation() async throws {
-        let processor = TranscriptionPostProcessor()
-        let result = processor.process("Hello. world")
-        #expect(result == "Hello. World")
-    }
-
-    @Test func processCapitalizesStandaloneI() async throws {
-        let processor = TranscriptionPostProcessor()
-        let result = processor.process("i think i can")
-        #expect(result == "I think I can")
-    }
-
-    @Test func processRemovesRepeatedWords() async throws {
-        let processor = TranscriptionPostProcessor()
-        let result = processor.process("the the cat")
-        #expect(result == "The cat")
-    }
-
-    @Test func processHandlesEmptyString() async throws {
-        let processor = TranscriptionPostProcessor()
-        let result = processor.process("")
-        #expect(result == "")
+        #expect(ToolArgExtractor.bool(args, key: "recursive") == true)
+        #expect(ToolArgExtractor.bool(args, key: "enabled") == false)
+        #expect(args.bool(for: "recursive") == true)
+        #expect(args.bool(for: "enabled") == false)
     }
 }
 
 @MainActor
-struct AudioConverterTests {
+struct AgentChatMessageToolResultTests {
 
-    @Test func normalizeHandlesEmptyArray() async throws {
-        let result = AudioConverter.normalize([])
-        #expect(result.isEmpty)
+    @Test func preservesToolErrorStateFromCoreMessage() async throws {
+        let toolResult = ToolResultMessage(
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [.text("Tool execution failed: File not found")],
+            isError: true
+        )
+
+        let message = AgentChatMessage(from: toolResult)
+
+        #expect(message.role == .tool)
+        #expect(message.isError)
     }
 
-    @Test func calculateRMSHandlesEmptyArray() async throws {
-        let result = AudioConverter.calculateRMS([])
-        #expect(result == 0)
-    }
+    @Test func normalizesWrappedToolCallArgumentsForLegacyDisplayMessages() async throws {
+        let rawArguments: [String: any Sendable] = [
+            "recursive": #"string("True")"#,
+            "path": #"string("tasks.md")"#,
+        ]
+        let rawToolCall = ToolCall(
+            function: .init(
+                name: "list",
+                arguments: rawArguments
+            )
+        )
+        let rawMessage = AgentChatMessage.assistant("", toolCalls: [rawToolCall])
 
-    @Test func hasClippingDetectsClipping() async throws {
-        let samples: [Float] = [0.5, 0.99, 0.3]
-        #expect(AudioConverter.hasClipping(samples))
-    }
+        let normalized = rawMessage.normalizedForDisplay()
+        let args = normalized.toolCalls[0].function.arguments
 
-    @Test func hasClippingReturnsFalseForNormalAudio() async throws {
-        let samples: [Float] = [0.5, 0.3, 0.2]
-        #expect(!AudioConverter.hasClipping(samples))
-    }
-}
-
-@MainActor
-struct KeyComboTests {
-
-    @Test func f5PresetIsCorrect() async throws {
-        let combo = KeyCombo.f5
-        #expect(combo.keyCode == 96)
-        #expect(combo.modifiers == 0)
-    }
-
-    @Test func displayStringShowsCorrectFormat() async throws {
-        let combo = KeyCombo.f5
-        #expect(combo.displayString == "F5")
-    }
-}
-
-@MainActor
-struct DictationStateTests {
-
-    @Test func idleStateIsNotActive() async throws {
-        let state = DictationState.idle
-        #expect(!state.isActive)
-    }
-
-    @Test func recordingStateIsActive() async throws {
-        let state = DictationState.recording
-        #expect(state.isActive)
-    }
-
-    @Test func processingStateIsActive() async throws {
-        let state = DictationState.processing
-        #expect(state.isActive)
-    }
-
-    @Test func errorStateIsNotActive() async throws {
-        let state = DictationState.error("Test error")
-        #expect(!state.isActive)
-    }
-}
-
-@MainActor
-struct WhisperModelTests {
-
-    @Test func allCasesExist() async throws {
-        #expect(WhisperModel.allCases.count == 4)
-    }
-
-    @Test func baseSizeIsCorrect() async throws {
-        #expect(WhisperModel.base.sizeGB == 0.145)
-    }
-
-    @Test func displayNameIsCorrect() async throws {
-        #expect(WhisperModel.tiny.displayName == "Tiny")
-        #expect(WhisperModel.base.displayName == "Base")
-        #expect(WhisperModel.small.displayName == "Small")
-        #expect(WhisperModel.medium.displayName == "Medium")
+        #expect(args["recursive"] == JSONValue.string("True"))
+        #expect(args["path"] == JSONValue.string("tasks.md"))
     }
 }

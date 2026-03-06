@@ -22,9 +22,10 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
     let thinking: String?
     let toolCalls: [ToolCall]
     let toolCallId: String?
+    let isError: Bool
 
     // Explicit init with default toolCalls for convenience.
-    init(id: UUID, timestamp: Date, role: Role, content: String, thinking: String?, toolCalls: [ToolCall] = [], toolCallId: String? = nil) {
+    init(id: UUID, timestamp: Date, role: Role, content: String, thinking: String?, toolCalls: [ToolCall] = [], toolCallId: String? = nil, isError: Bool = false) {
         self.id = id
         self.timestamp = timestamp
         self.role = role
@@ -32,11 +33,12 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
         self.thinking = thinking
         self.toolCalls = toolCalls
         self.toolCallId = toolCallId
+        self.isError = isError
     }
 
     // Custom Codable for backward compatibility (toolCalls absent in older data).
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, role, content, thinking, toolCalls, toolCallId
+        case id, timestamp, role, content, thinking, toolCalls, toolCallId, isError
     }
 
     init(from decoder: Decoder) throws {
@@ -46,8 +48,10 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
         role = try c.decode(Role.self, forKey: .role)
         content = try c.decode(String.self, forKey: .content)
         thinking = try c.decodeIfPresent(String.self, forKey: .thinking)
-        toolCalls = try c.decodeIfPresent([ToolCall].self, forKey: .toolCalls) ?? []
+        let decodedToolCalls = try c.decodeIfPresent([ToolCall].self, forKey: .toolCalls) ?? []
+        toolCalls = Self.normalizeToolCalls(decodedToolCalls)
         toolCallId = try c.decodeIfPresent(String.self, forKey: .toolCallId)
+        isError = try c.decodeIfPresent(Bool.self, forKey: .isError) ?? false
     }
 
     static func system(_ content: String) -> Self {
@@ -62,8 +66,8 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
         Self(id: UUID(), timestamp: Date(), role: .assistant, content: content, thinking: thinking, toolCalls: toolCalls, toolCallId: nil)
     }
 
-    static func tool(_ content: String, toolCallId: String) -> Self {
-        Self(id: UUID(), timestamp: Date(), role: .tool, content: content, thinking: nil, toolCallId: toolCallId)
+    static func tool(_ content: String, toolCallId: String, isError: Bool = false) -> Self {
+        Self(id: UUID(), timestamp: Date(), role: .tool, content: content, thinking: nil, toolCallId: toolCallId, isError: isError)
     }
 
     // MARK: - AgentMessageProtocol
@@ -90,14 +94,14 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
             case .assistant(let asst):
                 self.init(id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content, thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
             case .toolResult(let tr):
-                self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId)
+                self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId, isError: tr.isError)
             }
         case let user as UserMessage:
             self.init(id: user.id, timestamp: user.timestamp, role: .user, content: user.content, thinking: nil)
         case let asst as AssistantMessage:
             self.init(id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content, thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
         case let tr as ToolResultMessage:
-            self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId)
+            self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId, isError: tr.isError)
         case let compaction as CompactionSummaryMessage:
             self.init(id: UUID(), timestamp: compaction.timestamp, role: .system,
                       content: "[Context compacted — \(compaction.tokensBefore) tokens summarized]", thinking: nil)
@@ -111,20 +115,60 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
 
     // MARK: - ToolCallInfo → ToolCall Conversion
 
+    func normalizedForDisplay() -> AgentChatMessage {
+        AgentChatMessage(
+            id: id,
+            timestamp: timestamp,
+            role: role,
+            content: content,
+            thinking: thinking,
+            toolCalls: Self.normalizeToolCalls(toolCalls),
+            toolCallId: toolCallId,
+            isError: isError
+        )
+    }
+
     /// Converts new-architecture `ToolCallInfo` to legacy `ToolCall` (MLXLMCommon).
     private static func convertToolCalls(_ calls: [ToolCallInfo]) -> [ToolCall] {
         calls.map { info in
             let args: [String: JSONValue]
             if !info.argumentsJSON.isEmpty,
-               let data = info.argumentsJSON.data(using: .utf8),
-               let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data)
-            {
+               let parsed = ToolArgumentNormalizer.decode(info.argumentsJSON) {
                 args = parsed
             } else {
                 args = [:]
             }
-            return ToolCall(function: .init(name: info.name, arguments: args))
+            return buildToolCall(name: info.name, arguments: args)
         }
+    }
+
+    private static func normalizeToolCalls(_ calls: [ToolCall]) -> [ToolCall] {
+        calls.map { call in
+            buildToolCall(
+                name: call.function.name,
+                arguments: ToolArgumentNormalizer.normalize(call.function.arguments)
+            )
+        }
+    }
+
+    private static func buildToolCall(name: String, arguments: [String: JSONValue]) -> ToolCall {
+        let payload = ToolCallPayload(function: .init(name: name, arguments: arguments))
+        if let data = try? JSONEncoder().encode(payload),
+           let toolCall = try? JSONDecoder().decode(ToolCall.self, from: data) {
+            return toolCall
+        }
+
+        assertionFailure("Failed to rebuild ToolCall with normalized arguments")
+        return ToolCall(function: .init(name: name, arguments: [:]))
+    }
+
+    private struct ToolCallPayload: Codable {
+        let function: FunctionPayload
+    }
+
+    private struct FunctionPayload: Codable {
+        let name: String
+        let arguments: [String: JSONValue]
     }
 
 }

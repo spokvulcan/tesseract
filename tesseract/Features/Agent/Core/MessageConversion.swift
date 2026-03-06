@@ -48,7 +48,14 @@ private func reconstructAssistantContent(
     var result = content
     for call in toolCalls {
         // Build the {"name":"...","arguments":{...}} JSON that the parser expects
-        let argsFragment = call.argumentsJSON.isEmpty ? "{}" : call.argumentsJSON
+        let argsFragment: String
+        if call.argumentsJSON.isEmpty {
+            argsFragment = "{}"
+        } else if let normalized = ToolArgumentNormalizer.decode(call.argumentsJSON) {
+            argsFragment = ToolArgumentNormalizer.encode(normalized)
+        } else {
+            argsFragment = call.argumentsJSON
+        }
         result += "\n<tool_call>\n{\"name\":\"\(call.name)\",\"arguments\":\(argsFragment)}\n</tool_call>"
     }
     return result

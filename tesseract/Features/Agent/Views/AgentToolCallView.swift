@@ -6,6 +6,10 @@ struct AgentToolCallView: View {
     var toolResult: AgentChatMessage? = nil
     var isListStyle: Bool = false
     @State private var isExpanded = false
+
+    private var normalizedArguments: [String: JSONValue] {
+        ToolArgumentNormalizer.normalize(toolCall.function.arguments)
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -15,11 +19,18 @@ struct AgentToolCallView: View {
                 }
             }) {
                 HStack(spacing: 8) {
-                    if toolResult != nil {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.green)
-                            .frame(width: 16)
+                    if let result = toolResult {
+                        if result.isError {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.red)
+                                .frame(width: 16)
+                        } else {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.green)
+                                .frame(width: 16)
+                        }
                     } else {
                         Image(systemName: iconForTool(toolCall.function.name))
                             .font(.system(size: 12))
@@ -27,9 +38,9 @@ struct AgentToolCallView: View {
                             .frame(width: 16)
                     }
                     
-                    Text(titleForTool(toolCall.function.name, arguments: toolCall.function.arguments))
+                    Text(titleForTool(toolCall.function.name, arguments: normalizedArguments))
                         .font(.system(size: 13))
-                        .foregroundStyle(toolResult != nil ? .primary : .secondary)
+                        .foregroundStyle(toolResult != nil ? (toolResult?.isError == true ? .red : .primary) : .secondary)
                     
                     Spacer()
                     
@@ -145,16 +156,16 @@ struct AgentToolCallView: View {
     private func formatToolCall(_ toolCall: ToolCall) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        
+
         do {
-            let data = try encoder.encode(toolCall.function.arguments)
+            let data = try encoder.encode(normalizedArguments)
             if let jsonString = String(data: data, encoding: .utf8) {
                 return jsonString == "{}" ? "No arguments" : jsonString
             }
         } catch {
-            return "\(toolCall.function.arguments ?? [:])"
+            return "\(normalizedArguments)"
         }
-        
+
         return "No arguments"
     }
 }

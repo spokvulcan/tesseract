@@ -18,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var navigationSelection: Binding<NavigationItem?>?
     var onOpenWindow: (() -> Void)?
     private var hasSetupWithContainer = false
+    private var isRunningUnderTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Ensure only one instance of the app runs at a time
@@ -58,6 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func ensureSingleInstance() {
+        if isRunningUnderTests {
+            return
+        }
+
         let bundleID = Bundle.main.bundleIdentifier ?? "com.tesseract.app"
         let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
 
