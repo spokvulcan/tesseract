@@ -5,7 +5,7 @@ import Foundation
 /// Built-in extension for the personal assistant package.
 ///
 /// For MVP, the personal assistant is purely skill-driven — it relies on the
-/// file tools (read, write, edit, list) guided by skill instructions. No custom
+/// file tools (read, write, edit, ls) guided by skill instructions. No custom
 /// tools are needed yet.
 ///
 /// Future post-MVP additions:

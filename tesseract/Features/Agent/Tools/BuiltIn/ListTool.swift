@@ -1,49 +1,67 @@
 import Foundation
 import MLXLMCommon
 
-// MARK: - ListToolDetails
+// MARK: - LsToolDetails
 
-nonisolated struct ListToolDetails: Sendable, Hashable {
-    let path: String
-    let entryCount: Int
-    let wasTruncated: Bool
+nonisolated struct LsToolTruncationDetails: Sendable, Hashable {
+    let truncated: Bool
+    let truncatedBy: String?
+    let totalLines: Int
+    let totalBytes: Int
+    let outputLines: Int
+    let outputBytes: Int
+    let lastLinePartial: Bool
+    let firstLineExceedsLimit: Bool
+    let maxLines: Int
+    let maxBytes: Int
 }
 
-// MARK: - ListTool Factory
+nonisolated struct LsToolDetails: Sendable, Hashable {
+    let truncation: LsToolTruncationDetails?
+    let entryLimitReached: Int?
+}
+
+// MARK: - LsToolError
+
+nonisolated struct LsToolError: LocalizedError {
+    let message: String
+
+    var errorDescription: String? { message }
+}
+
+// MARK: - LsTool Factory
 
 private nonisolated enum Defaults {
-    static let defaultLimit = 200
-    static let hardCap = 500
+    static let defaultLimit = 500
+    static let maxBytes = 50 * 1_024
 }
 
-nonisolated func createListTool(sandbox: PathSandbox) -> AgentToolDefinition {
+nonisolated func createLsTool(sandbox: PathSandbox) -> AgentToolDefinition {
     AgentToolDefinition(
-        name: "list",
-        label: "List Directory",
-        description: "List files and directories. Shows tree-style output with file sizes.",
+        name: "ls",
+        label: "ls",
+        description: "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first).",
         parameterSchema: JSONSchema(
             type: "object",
             properties: [
                 "path": PropertySchema(
                     type: "string",
-                    description: "Directory path (defaults to working directory root)"
-                ),
-                "recursive": PropertySchema(
-                    type: "boolean",
-                    description: "List recursively (default: false)"
+                    description: "Directory to list (default: current directory)"
                 ),
                 "limit": PropertySchema(
                     type: "integer",
-                    description: "Maximum entries to return (default: 200, max: 500)"
+                    description: "Maximum number of entries to return (default: 500)"
                 ),
             ],
             required: []
         ),
-        execute: { _, argsJSON, _, _ in
+        execute: { _, argsJSON, signal, _ in
+            if signal?.isCancelled == true {
+                throw LsToolError(message: "Operation aborted")
+            }
+
             let pathArg = ToolArgExtractor.string(argsJSON, key: "path")
-            let recursive = ToolArgExtractor.bool(argsJSON, key: "recursive") ?? false
-            let limitArg = ToolArgExtractor.int(argsJSON, key: "limit")
-            let limit = max(0, min(limitArg ?? Defaults.defaultLimit, Defaults.hardCap))
+            let limit = ToolArgExtractor.int(argsJSON, key: "limit") ?? Defaults.defaultLimit
 
             let url: URL
             if let pathArg {
@@ -52,238 +70,192 @@ nonisolated func createListTool(sandbox: PathSandbox) -> AgentToolDefinition {
                 url = sandbox.root.standardizedFileURL
             }
 
-            // Verify it's a directory
             var isDir: ObjCBool = false
             let fm = FileManager.default
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
-                throw PathSandboxError.notDirectory(sandbox.displayPath(url))
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else {
+                throw LsToolError(message: "Path not found: \(url.path)")
+            }
+            guard isDir.boolValue else {
+                throw LsToolError(message: "Not a directory: \(url.path)")
             }
 
-            let displayRoot = sandbox.displayPath(url)
-
-            if recursive {
-                return ListToolHelper.listRecursive(
-                    url: url, sandbox: sandbox, displayRoot: displayRoot,
-                    limit: limit, fm: fm)
-            } else {
-                return ListToolHelper.listFlat(
-                    url: url, sandbox: sandbox, displayRoot: displayRoot,
-                    limit: limit, fm: fm)
-            }
+            return try LsToolHelper.listDirectory(
+                at: url,
+                limit: limit,
+                fileManager: fm,
+                signal: signal
+            )
         }
     )
 }
 
-// MARK: - Helper (nonisolated)
+nonisolated func createListTool(sandbox: PathSandbox) -> AgentToolDefinition {
+    createLsTool(sandbox: sandbox)
+}
 
-private nonisolated enum ListToolHelper: Sendable {
+// MARK: - Helper
 
-    // MARK: Non-recursive listing
-
-    static func listFlat(
-        url: URL, sandbox: PathSandbox, displayRoot: String,
-        limit: Int, fm: FileManager
-    ) -> AgentToolResult {
-        let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey]
-        let contents: [URL]
+private nonisolated enum LsToolHelper: Sendable {
+    static func listDirectory(
+        at url: URL,
+        limit: Int,
+        fileManager: FileManager,
+        signal: CancellationToken?
+    ) throws -> AgentToolResult {
+        let entries: [String]
         do {
-            contents = try fm.contentsOfDirectory(
-                at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
-            ).sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+            entries = try fileManager.contentsOfDirectory(atPath: url.path)
         } catch {
-            return .error("Failed to list directory: \(error.localizedDescription)")
+            throw LsToolError(message: "Cannot read directory: \(error.localizedDescription)")
         }
 
-        let totalCount = contents.count
-        let entries = Array(contents.prefix(limit))
-        let wasTruncated = totalCount > limit
+        let sortedEntries = entries.sorted(by: caseInsensitiveAscending)
+        var results: [String] = []
+        var entryLimitReached: Int?
 
-        var lines: [String] = ["\(displayRoot)/"]
-        for (i, entry) in entries.enumerated() {
-            let isLast = (i == entries.count - 1) && !wasTruncated
-            let connector = isLast ? "└── " : "├── "
-            lines.append(connector + entryLabel(entry, fm: fm))
-        }
-
-        if wasTruncated {
-            lines.append("└── [Showing \(entries.count) of \(totalCount) entries. Use limit=\(min(totalCount, Defaults.hardCap)) to see more.]")
-        }
-
-        return AgentToolResult(
-            content: [.text(lines.joined(separator: "\n"))],
-            details: ListToolDetails(
-                path: displayRoot,
-                entryCount: entries.count,
-                wasTruncated: wasTruncated
-            )
-        )
-    }
-
-    // MARK: Recursive listing
-
-    /// Represents a node in the directory tree for recursive output.
-    struct TreeNode {
-        let name: String
-        let isDirectory: Bool
-        let size: Int?
-        var children: [TreeNode] = []
-    }
-
-    static func listRecursive(
-        url: URL, sandbox: PathSandbox, displayRoot: String,
-        limit: Int, fm: FileManager
-    ) -> AgentToolResult {
-        let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey]
-        guard let enumerator = fm.enumerator(
-            at: url, includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles]
-        ) else {
-            return .error("Failed to enumerate directory")
-        }
-
-        // Collect entries up to limit
-        var collected: [(url: URL, depth: [String])] = []
-        var totalCount = 0
-        let rootPath = url.standardizedFileURL.path
-        let rootSlash = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-
-        for case let entry as URL in enumerator {
-            totalCount += 1
-            if collected.count < limit {
-                let entryPath = entry.standardizedFileURL.path
-                let relative: String
-                if entryPath.hasPrefix(rootSlash) {
-                    relative = String(entryPath.dropFirst(rootSlash.count))
-                } else {
-                    relative = entry.lastPathComponent
-                }
-                let components = relative.split(separator: "/").map(String.init)
-                collected.append((url: entry, depth: components))
+        for entry in sortedEntries {
+            if signal?.isCancelled == true {
+                throw LsToolError(message: "Operation aborted")
             }
-        }
 
-        let wasTruncated = totalCount > limit
-
-        // Build tree structure
-        var root = TreeNode(name: displayRoot, isDirectory: true, size: nil)
-        for item in collected {
-            insertIntoTree(node: &root, components: item.depth, url: item.url, fm: fm)
-        }
-
-        // Render
-        var lines: [String] = ["\(displayRoot)/"]
-        renderTree(node: root, prefix: "", isRoot: true, lines: &lines)
-
-        if wasTruncated {
-            lines.append("[Showing \(collected.count) of \(totalCount) entries. Use limit=\(min(totalCount, Defaults.hardCap)) to see more.]")
-        }
-
-        return AgentToolResult(
-            content: [.text(lines.joined(separator: "\n"))],
-            details: ListToolDetails(
-                path: displayRoot,
-                entryCount: collected.count,
-                wasTruncated: wasTruncated
-            )
-        )
-    }
-
-    static func insertIntoTree(
-        node: inout TreeNode, components: [String], url: URL, fm: FileManager
-    ) {
-        guard let first = components.first else { return }
-
-        if let idx = node.children.firstIndex(where: { $0.name == first }) {
-            if components.count > 1 {
-                insertIntoTree(
-                    node: &node.children[idx],
-                    components: Array(components.dropFirst()),
-                    url: url, fm: fm)
+            if results.count >= limit {
+                entryLimitReached = limit
+                break
             }
-        } else {
-            if components.count == 1 {
-                // Leaf entry
-                var isDir: ObjCBool = false
-                fm.fileExists(atPath: url.path, isDirectory: &isDir)
-                let size: Int?
-                if !isDir.boolValue {
-                    size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
-                } else {
-                    size = nil
-                }
-                node.children.append(TreeNode(
-                    name: first, isDirectory: isDir.boolValue, size: size))
+
+            let entryURL = url.appendingPathComponent(entry)
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: entryURL.path, isDirectory: &isDirectory) else {
+                continue
+            }
+
+            results.append(entry + (isDirectory.boolValue ? "/" : ""))
+        }
+
+        if results.isEmpty {
+            return .text("(empty directory)")
+        }
+
+        let rawOutput = results.joined(separator: "\n")
+        let truncation = truncateHead(rawOutput, maxBytes: Defaults.maxBytes)
+        var output = truncation.content
+        var notices: [String] = []
+
+        if let entryLimitReached {
+            notices.append("\(entryLimitReached) entries limit reached. Use limit=\(entryLimitReached * 2) for more")
+        }
+
+        var truncationDetails: LsToolTruncationDetails?
+        if truncation.truncated {
+            notices.append("\(formatSize(Defaults.maxBytes)) limit reached")
+            truncationDetails = LsToolTruncationDetails(
+                truncated: true,
+                truncatedBy: truncation.truncatedBy,
+                totalLines: truncation.totalLines,
+                totalBytes: truncation.totalBytes,
+                outputLines: truncation.outputLines,
+                outputBytes: truncation.outputBytes,
+                lastLinePartial: false,
+                firstLineExceedsLimit: truncation.firstLineExceedsLimit,
+                maxLines: Int.max,
+                maxBytes: Defaults.maxBytes
+            )
+        }
+
+        if !notices.isEmpty {
+            output += "\n\n[\(notices.joined(separator: ". "))]"
+        }
+
+        let details: LsToolDetails? =
+            if truncationDetails != nil || entryLimitReached != nil {
+                LsToolDetails(truncation: truncationDetails, entryLimitReached: entryLimitReached)
             } else {
-                // Intermediate directory
-                var dirNode = TreeNode(name: first, isDirectory: true, size: nil)
-                insertIntoTree(
-                    node: &dirNode,
-                    components: Array(components.dropFirst()),
-                    url: url, fm: fm)
-                node.children.append(dirNode)
+                nil
             }
-        }
+
+        return AgentToolResult(content: [.text(output)], details: details)
     }
 
-    static func renderTree(
-        node: TreeNode, prefix: String, isRoot: Bool, lines: inout [String]
+    static func caseInsensitiveAscending(_ lhs: String, _ rhs: String) -> Bool {
+        let lowerCompare = lhs.lowercased().compare(rhs.lowercased())
+        if lowerCompare == .orderedSame {
+            return lhs < rhs
+        }
+        return lowerCompare == .orderedAscending
+    }
+
+    static func truncateHead(_ content: String, maxBytes: Int) -> (
+        content: String,
+        truncated: Bool,
+        truncatedBy: String?,
+        totalLines: Int,
+        totalBytes: Int,
+        outputLines: Int,
+        outputBytes: Int,
+        firstLineExceedsLimit: Bool
     ) {
-        let sorted = node.children.sorted {
-            // Directories first, then alphabetical
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        let totalBytes = content.utf8.count
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let totalLines = lines.count
+
+        if totalBytes <= maxBytes {
+            return (
+                content: content,
+                truncated: false,
+                truncatedBy: nil,
+                totalLines: totalLines,
+                totalBytes: totalBytes,
+                outputLines: totalLines,
+                outputBytes: totalBytes,
+                firstLineExceedsLimit: false
+            )
         }
 
-        for (i, child) in sorted.enumerated() {
-            let isLast = i == sorted.count - 1
-            let connector = isLast ? "└── " : "├── "
-            let childPrefix = isLast ? "    " : "│   "
-            lines.append(prefix + connector + entryLabel(for: child))
+        if let firstLine = lines.first, firstLine.utf8.count > maxBytes {
+            return (
+                content: "",
+                truncated: true,
+                truncatedBy: "bytes",
+                totalLines: totalLines,
+                totalBytes: totalBytes,
+                outputLines: 0,
+                outputBytes: 0,
+                firstLineExceedsLimit: true
+            )
+        }
 
-            if child.isDirectory {
-                renderTree(
-                    node: child, prefix: prefix + childPrefix,
-                    isRoot: false, lines: &lines)
+        var outputLines: [String] = []
+        var outputBytes = 0
+
+        for line in lines {
+            let lineBytes = line.utf8.count + (outputLines.isEmpty ? 0 : 1)
+            if outputBytes + lineBytes > maxBytes {
+                break
             }
+            outputLines.append(line)
+            outputBytes += lineBytes
         }
-    }
 
-    // MARK: Formatting
-
-    static func entryLabel(for node: TreeNode) -> String {
-        if node.isDirectory {
-            return "\(node.name)/"
-        }
-        if let size = node.size {
-            return "\(node.name) (\(formatSize(size)))"
-        }
-        return node.name
-    }
-
-    static func entryLabel(_ url: URL, fm: FileManager) -> String {
-        var isDir: ObjCBool = false
-        fm.fileExists(atPath: url.path, isDirectory: &isDir)
-        let name = url.lastPathComponent
-        if isDir.boolValue {
-            return "\(name)/"
-        }
-        if let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
-           let size = values.fileSize
-        {
-            return "\(name) (\(formatSize(size)))"
-        }
-        return name
+        let output = outputLines.joined(separator: "\n")
+        return (
+            content: output,
+            truncated: true,
+            truncatedBy: "bytes",
+            totalLines: totalLines,
+            totalBytes: totalBytes,
+            outputLines: outputLines.count,
+            outputBytes: output.utf8.count,
+            firstLineExceedsLimit: false
+        )
     }
 
     static func formatSize(_ bytes: Int) -> String {
-        if bytes < 1_000 {
-            return "\(bytes) B"
-        } else if bytes < 1_000_000 {
-            let kb = Double(bytes) / 1_000.0
-            return kb < 10 ? String(format: "%.1f KB", kb) : String(format: "%.0f KB", kb)
-        } else {
-            let mb = Double(bytes) / 1_000_000.0
-            return mb < 10 ? String(format: "%.1f MB", mb) : String(format: "%.0f MB", mb)
+        if bytes < 1_024 {
+            return "\(bytes)B"
         }
+        if bytes < 1_024 * 1_024 {
+            return String(format: "%.1fKB", Double(bytes) / 1_024.0)
+        }
+        return String(format: "%.1fMB", Double(bytes) / (1_024.0 * 1_024.0))
     }
 }

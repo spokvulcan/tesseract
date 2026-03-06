@@ -312,6 +312,138 @@ struct ReadToolTests {
 }
 
 @MainActor
+struct LsToolTests {
+
+    @Test func listsDotfilesAndDirectoriesLikePi() async throws {
+        let (tool, root) = try makeLsToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        try "secret".write(
+            to: root.appendingPathComponent(".hidden-file"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".hidden-dir"),
+            withIntermediateDirectories: true
+        )
+        try "A".write(
+            to: root.appendingPathComponent("Alpha.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "Z".write(
+            to: root.appendingPathComponent("zeta.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let result = try await tool.execute("ls-1", lsToolArgs(path: "."), nil, nil)
+        let lines = result.content.textContent.split(separator: "\n").map(String.init)
+
+        #expect(lines == [".hidden-dir/", ".hidden-file", "Alpha.txt", "zeta.txt"])
+        #expect(result.details == nil)
+    }
+
+    @Test func returnsEmptyDirectoryNotice() async throws {
+        let (tool, root) = try makeLsToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let result = try await tool.execute("ls-2", [:], nil, nil)
+
+        #expect(result.content.textContent == "(empty directory)")
+        #expect(result.details == nil)
+    }
+
+    @Test func throwsWhenPathDoesNotExist() async throws {
+        let (tool, root) = try makeLsToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        do {
+            _ = try await tool.execute("ls-3", lsToolArgs(path: "missing"), nil, nil)
+            Issue.record("Expected ls tool to throw for a missing path")
+        } catch {
+            #expect(error.localizedDescription == "Path not found: \(root.appendingPathComponent("missing").path)")
+        }
+    }
+
+    @Test func throwsWhenPathIsNotADirectory() async throws {
+        let (tool, root) = try makeLsToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("file.txt")
+        try "hello".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        do {
+            _ = try await tool.execute("ls-4", lsToolArgs(path: "file.txt"), nil, nil)
+            Issue.record("Expected ls tool to throw for non-directory paths")
+        } catch {
+            #expect(error.localizedDescription == "Not a directory: \(fileURL.path)")
+        }
+    }
+
+    @Test func showsEntryLimitNoticeLikePi() async throws {
+        let (tool, root) = try makeLsToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        try "a".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "b".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        try "c".write(to: root.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+
+        let result = try await tool.execute("ls-5", lsToolArgs(path: ".", limit: 2), nil, nil)
+
+        #expect(
+            result.content.textContent
+                == "a.txt\nb.txt\n\n[2 entries limit reached. Use limit=4 for more]"
+        )
+
+        guard let details = result.details as? LsToolDetails else {
+            Issue.record("Expected LsToolDetails")
+            return
+        }
+        #expect(details.entryLimitReached == 2)
+        #expect(details.truncation == nil)
+    }
+
+    @Test func showsByteLimitNoticeLikePi() async throws {
+        let (tool, root) = try makeLsToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        for index in 0..<300 {
+            let name = String(repeating: "a", count: 190) + String(format: "-%03d.txt", index)
+            try "x".write(
+                to: root.appendingPathComponent(name),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        let result = try await tool.execute("ls-6", lsToolArgs(path: "."), nil, nil)
+
+        #expect(result.content.textContent.contains("[50.0KB limit reached]"))
+
+        guard let details = result.details as? LsToolDetails else {
+            Issue.record("Expected LsToolDetails")
+            return
+        }
+        #expect(details.entryLimitReached == nil)
+        #expect(details.truncation?.truncated == true)
+        #expect(details.truncation?.truncatedBy == "bytes")
+    }
+
+    @Test func builtInToolsExposeLsInsteadOfList() async throws {
+        let (_, root) = try makeLsToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let sandbox = PathSandbox(root: root)
+        let names = BuiltInToolFactory.createAll(sandbox: sandbox).map(\.name)
+
+        #expect(names.contains("ls"))
+        #expect(!names.contains("list"))
+    }
+}
+
+@MainActor
 struct WriteToolTests {
 
     @Test func writesFileContentsWithPiStyleSuccessMessage() async throws {
@@ -781,6 +913,14 @@ private func makeReadToolTestRig() throws -> (tool: AgentToolDefinition, root: U
     return (createReadTool(sandbox: sandbox), root)
 }
 
+private func makeLsToolTestRig() throws -> (tool: AgentToolDefinition, root: URL) {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("tesseract-ls-tool-tests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let sandbox = PathSandbox(root: root)
+    return (createLsTool(sandbox: sandbox), root)
+}
+
 private func removeReadToolTestRig(_ root: URL) {
     try? FileManager.default.removeItem(at: root)
 }
@@ -825,6 +965,17 @@ private func writeToolArgs(path: String, content: String) -> [String: JSONValue]
         "path": .string(path),
         "content": .string(content),
     ]
+}
+
+private func lsToolArgs(path: String? = nil, limit: Int? = nil) -> [String: JSONValue] {
+    var args: [String: JSONValue] = [:]
+    if let path {
+        args["path"] = .string(path)
+    }
+    if let limit {
+        args["limit"] = .int(limit)
+    }
+    return args
 }
 
 private func readUTF8PreservingBytes(from url: URL) throws -> String {

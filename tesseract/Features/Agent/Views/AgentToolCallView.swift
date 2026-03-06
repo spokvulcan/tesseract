@@ -101,6 +101,7 @@ struct AgentToolCallView: View {
         case let n where n.contains("read"): return "doc.text"
         case let n where n.contains("write"): return "square.and.pencil"
         case let n where n.contains("edit"): return "pencil.line"
+        case "ls": return "folder"
         case let n where n.contains("list"): return "folder"
         case let n where n.contains("memory"): return "brain"
         case let n where n.contains("task") || n.contains("goal"): return "checklist"
@@ -131,7 +132,7 @@ struct AgentToolCallView: View {
                 return "Editing \(filename)"
             }
             return "Editing file"
-        case "list_files", "list_directory":
+        case "ls", "list", "list_files", "list_directory":
             if case .string(let path)? = args["path"] {
                 let folder = (path as NSString).lastPathComponent
                 return "Listing files in \(folder)"

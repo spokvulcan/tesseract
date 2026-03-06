@@ -5,7 +5,7 @@ import os
 
 /// Orchestrates the full benchmark run: load model, run scenarios, write reports.
 ///
-/// Uses the new `Agent` class with built-in file tools (read, write, edit, list)
+/// Uses the new `Agent` class with built-in file tools (read, write, edit, ls)
 /// and a sandbox-isolated temporary directory per scenario.
 @MainActor
 final class BenchmarkRunner {
@@ -362,7 +362,7 @@ final class BenchmarkRunner {
         - read: Read file contents
         - write: Create or overwrite files
         - edit: Make surgical edits to files (find exact text and replace)
-        - list: List files and directories
+        - ls: List files and directories
 
         Guidelines:
         - Use read to examine files before editing

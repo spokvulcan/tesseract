@@ -154,7 +154,7 @@ enum BenchmarkEvaluator {
     /// Read-only tools whose results change as data is mutated.
     /// Re-calling these is expected behavior, not a duplicate.
     private static let readOnlyTools: Set<String> = [
-        "read", "list",
+        "read", "ls",
     ]
 
     /// Counts tool calls that duplicate a previous successful call in conversation history.

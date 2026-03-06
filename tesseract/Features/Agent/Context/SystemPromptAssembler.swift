@@ -18,12 +18,12 @@ nonisolated enum SystemPromptAssembler: Sendable {
         - read: Read file contents
         - write: Create or overwrite files
         - edit: Make surgical edits to files (find exact text and replace)
-        - list: List files and directories
+        - ls: List files and directories
 
         In addition to the tools above, you may have access to other custom tools depending on the current package or project.
 
         Guidelines:
-        - Use list to discover files and directories
+        - Use ls to discover files and directories
         - Use read to examine files before editing and writing
         - Use edit for precise changes (old text must match exactly)
         - Use write only if read the file first and it is empty or not exists, otherwise use edit.

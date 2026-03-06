@@ -7,7 +7,7 @@ nonisolated enum BuiltInToolFactory: Sendable {
             createReadTool(sandbox: sandbox),
             createWriteTool(sandbox: sandbox),
             createEditTool(sandbox: sandbox),
-            createListTool(sandbox: sandbox),
+            createLsTool(sandbox: sandbox),
         ]
     }
 }
