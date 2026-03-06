@@ -312,6 +312,103 @@ struct ReadToolTests {
 }
 
 @MainActor
+struct WriteToolTests {
+
+    @Test func writesFileContentsWithPiStyleSuccessMessage() async throws {
+        let (tool, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("write-test.txt")
+        let content = "Test content"
+
+        let result = try await tool.execute(
+            "write-1",
+            writeToolArgs(path: "write-test.txt", content: content),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully wrote"))
+        #expect(result.content.textContent.contains("write-test.txt"))
+        #expect(result.details == nil)
+        #expect(try readUTF8PreservingBytes(from: fileURL) == content)
+    }
+
+    @Test func createsParentDirectories() async throws {
+        let (tool, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("nested/dir/test.txt")
+        let content = "Nested content"
+
+        let result = try await tool.execute(
+            "write-2",
+            writeToolArgs(path: "nested/dir/test.txt", content: content),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully wrote"))
+        #expect(try readUTF8PreservingBytes(from: fileURL) == content)
+    }
+
+    @Test func overwritesExistingFileContents() async throws {
+        let (tool, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("overwrite.txt")
+        try "Original content".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        _ = try await tool.execute(
+            "write-3",
+            writeToolArgs(path: "overwrite.txt", content: "Replacement"),
+            nil,
+            nil
+        )
+
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "Replacement")
+    }
+
+    @Test func reportsUtf16LengthLikePi() async throws {
+        let (tool, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let content = "A😀B"
+        let result = try await tool.execute(
+            "write-4",
+            writeToolArgs(path: "unicode.txt", content: content),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully wrote 4 bytes to unicode.txt"))
+        #expect(
+            try readUTF8PreservingBytes(from: root.appendingPathComponent("unicode.txt")) == content
+        )
+    }
+
+    @Test func throwsOperationAbortedWhenAlreadyCancelled() async throws {
+        let (tool, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let token = CancellationToken()
+        token.cancel()
+
+        do {
+            _ = try await tool.execute(
+                "write-5",
+                writeToolArgs(path: "cancelled.txt", content: "Should not write"),
+                token,
+                nil
+            )
+            Issue.record("Expected write tool to throw when already cancelled")
+        } catch {
+            #expect(error.localizedDescription == "Operation aborted")
+        }
+    }
+}
+
+@MainActor
 @Suite(.serialized)
 struct EditToolTests {
 
@@ -696,6 +793,14 @@ private func makeEditToolTestRig() throws -> (tool: AgentToolDefinition, root: U
     return (createEditTool(sandbox: sandbox), root)
 }
 
+private func makeWriteToolTestRig() throws -> (tool: AgentToolDefinition, root: URL) {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("tesseract-write-tool-tests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let sandbox = PathSandbox(root: root)
+    return (createWriteTool(sandbox: sandbox), root)
+}
+
 private func readToolArgs(path: String, offset: Int? = nil, limit: Int? = nil) -> [String: JSONValue] {
     var args: [String: JSONValue] = ["path": .string(path)]
     if let offset {
@@ -712,6 +817,13 @@ private func editToolArgs(path: String, oldText: String, newText: String) -> [St
         "path": .string(path),
         "old_text": .string(oldText),
         "new_text": .string(newText),
+    ]
+}
+
+private func writeToolArgs(path: String, content: String) -> [String: JSONValue] {
+    [
+        "path": .string(path),
+        "content": .string(content),
     ]
 }
 

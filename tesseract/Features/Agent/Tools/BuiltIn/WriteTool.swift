@@ -1,12 +1,12 @@
 import Foundation
 import MLXLMCommon
 
-// MARK: - WriteToolDetails
+// MARK: - WriteToolError
 
-nonisolated struct WriteToolDetails: Sendable, Hashable {
-    let path: String
-    let byteCount: Int
-    let created: Bool
+nonisolated struct WriteToolError: LocalizedError {
+    let message: String
+
+    var errorDescription: String? { message }
 }
 
 // MARK: - WriteTool Factory
@@ -39,14 +39,12 @@ nonisolated func createWriteTool(sandbox: PathSandbox) -> AgentToolDefinition {
             }
 
             let url = try sandbox.resolveForWrite(path)
-            let displayName = sandbox.displayPath(url)
 
             if signal?.isCancelled == true {
-                return .error("Cancelled")
+                throw WriteToolError(message: "Operation aborted")
             }
 
             let fileManager = FileManager.default
-            let isNew = !fileManager.fileExists(atPath: url.path)
 
             // Create parent directories if needed
             let parent = url.deletingLastPathComponent()
@@ -62,19 +60,13 @@ nonisolated func createWriteTool(sandbox: PathSandbox) -> AgentToolDefinition {
             try data.write(to: url, options: .atomic)
 
             if signal?.isCancelled == true {
-                return .error("Cancelled")
+                throw WriteToolError(message: "Operation aborted")
             }
 
-            let byteCount = data.count
+            let reportedByteCount = content.utf16.count
             return AgentToolResult(
-                content: [.text("Wrote \(byteCount) bytes to \(displayName)")],
-                details: WriteToolDetails(
-                    path: displayName,
-                    byteCount: byteCount,
-                    created: isNew
-                )
+                content: [.text("Successfully wrote \(reportedByteCount) bytes to \(path)")]
             )
         }
     )
 }
-
