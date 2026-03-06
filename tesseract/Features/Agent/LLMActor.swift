@@ -25,9 +25,9 @@ actor LLMActor {
     /// Reads the model's `config.json` to detect the model type and configure the
     /// appropriate tool call format (e.g., `.xmlFunction` for Qwen3.5).
     ///
-    /// - Returns: The resolved ``AgentTokenizer`` (caller can stash it on MainActor).
+    /// - Returns: The resolved ``AgentTokenizer`` and whether the template starts inside a think block.
     @discardableResult
-    func loadModel(from directory: URL) async throws -> AgentTokenizer {
+    func loadModel(from directory: URL) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let format = Self.detectToolCallFormat(directory: directory)
         Log.agent.info("Tool call format: \(format.map { "\($0)" } ?? "json (default)")")
         let config = ModelConfiguration(directory: directory, toolCallFormat: format)
@@ -43,7 +43,7 @@ actor LLMActor {
 
         modelContainer = container
         agentTokenizer = tokenizer
-        return tokenizer
+        return (tokenizer, Self.detectPromptStartsThinking(directory: directory))
     }
 
     /// Prepares input and starts generation, returning the raw stream.
@@ -107,6 +107,27 @@ actor LLMActor {
     }
 
     // MARK: - Private
+
+    /// Returns `true` if the model's chat template appends `<think>` to the generation prompt.
+    ///
+    /// Detected models:
+    /// - Qwen3.5: `enable_thinking` defaults to true, template ends with `<think>\n`
+    /// - Qwen3 Thinking / Opus Distill: unconditionally append `<think>\n`
+    /// - Qwen3 Instruct / Nanbeige: no thinking in prompt → returns false
+    private static func detectPromptStartsThinking(directory: URL) -> Bool {
+        let templateURL = directory.appendingPathComponent("chat_template.jinja")
+        guard let template = try? String(contentsOf: templateURL, encoding: .utf8) else {
+            return false
+        }
+
+        // Check if the add_generation_prompt section contains <think>
+        // All known thinking templates put <think> right after <|im_start|>assistant
+        // in the add_generation_prompt block at the end of the template.
+        guard let genPromptRange = template.range(of: "add_generation_prompt") else {
+            return false
+        }
+        return template[genPromptRange.upperBound...].contains("<think>")
+    }
 
     /// Reads `config.json` from the model directory to detect the model type
     /// and return the appropriate ``ToolCallFormat``.

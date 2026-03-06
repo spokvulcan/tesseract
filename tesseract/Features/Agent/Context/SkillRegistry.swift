@@ -69,9 +69,12 @@ nonisolated enum SkillRegistry: Sendable {
 
         var xml = """
             The following skills provide specialized instructions for specific tasks.
-            Use the read tool to load a skill's file when the task matches its description.
-            When a skill file references a relative path, resolve it against the skill directory.
-
+            Never guess how specific workflow or task should be done.
+            Always read skill before do anything related to skill description. 
+            Use the read tool to read a skill's file when the task matches its description.
+            When a skill file references a relative path, resolve it against the skill directory
+            (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.
+            Skills are .md files not tools, always use read tool to load the skill.
             <available_skills>
             """
 

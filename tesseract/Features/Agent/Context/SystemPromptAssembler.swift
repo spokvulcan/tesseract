@@ -24,16 +24,11 @@ nonisolated enum SystemPromptAssembler: Sendable {
 
         Guidelines:
         - Use list to discover files and directories
-        - Use read to examine files before editing
+        - Use read to examine files before editing and writing
         - Use edit for precise changes (old text must match exactly)
-        - Use write only for new files or complete rewrites
+        - Use write only if read the file first and it is empty or not exists, otherwise use edit.
         - Be concise in your responses
         - Show file paths clearly when working with files
-
-        Tesseract resources:
-        - Project context files are loaded from AGENTS.md or CLAUDE.md
-        - The system prompt may be replaced by SYSTEM.md or extended by APPEND_SYSTEM.md
-        - Skills may be available and should be used when relevant
         """
 
     // MARK: - Private

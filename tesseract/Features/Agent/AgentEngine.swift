@@ -35,6 +35,9 @@ final class AgentEngine: ObservableObject {
 
     private(set) var agentTokenizer: AgentTokenizer?
 
+    /// Whether the loaded model's template starts generation inside a `<think>` block.
+    private(set) var promptStartsThinking = false
+
     private let llmActor = LLMActor()
     private var generationTask: Task<Void, Never>?
 
@@ -49,7 +52,7 @@ final class AgentEngine: ObservableObject {
         loadingStatus = "Loading model…"
 
         do {
-            let tokenizer = try await llmActor.loadModel(from: directory)
+            let (tokenizer, startsThinking) = try await llmActor.loadModel(from: directory)
 
             let st = tokenizer.specialTokens
             Log.agent.info(
@@ -59,9 +62,10 @@ final class AgentEngine: ObservableObject {
             )
 
             agentTokenizer = tokenizer
+            promptStartsThinking = startsThinking
             isModelLoaded = true
             loadingStatus = ""
-            Log.agent.info("Model loaded and verified successfully")
+            Log.agent.info("Model loaded — promptStartsThinking=\(promptStartsThinking)")
         } catch {
             loadingStatus = ""
             Log.agent.error("Failed to load model: \(error)")
@@ -135,6 +139,7 @@ final class AgentEngine: ObservableObject {
     func unloadModel() {
         cancelGeneration()
         agentTokenizer = nil
+        promptStartsThinking = false
         isModelLoaded = false
         loadingStatus = ""
         Task { await llmActor.unloadModel() }
@@ -156,6 +161,7 @@ final class AgentEngine: ObservableObject {
 
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
         let actor = llmActor
+        let startsThinking = promptStartsThinking
 
         let task = Task { @MainActor [weak self] in
             defer {
@@ -169,7 +175,7 @@ final class AgentEngine: ObservableObject {
                 let genStream = try await actor.generate(
                     input: input, parameters: parameters
                 )
-                let parser = ToolCallParser()
+                let parser = ToolCallParser(startsInsideThinkBlock: startsThinking)
                 var rawChunkParts: [String] = []
                 var libraryParsedToolCalls = false
 

@@ -42,22 +42,46 @@ final class ToolCallParser {
 
     private var buffer = ""
     private var insideThinkBlock = false
+    private var pendingThinkStart = false
+
+    /// - Parameter startsInsideThinkBlock: When `true`, the parser assumes the generation
+    ///   begins inside a `<think>` block (e.g. Qwen3.5 chat template appends `<think>\n`
+    ///   to the prompt). Initial chunks are emitted as `.thinking` events.
+    init(startsInsideThinkBlock: Bool = false) {
+        if startsInsideThinkBlock {
+            self.insideThinkBlock = true
+            self.pendingThinkStart = true
+        }
+    }
 
     /// Process a chunk of streaming text and return any events.
     func processChunk(_ chunk: String) -> [Event] {
         buffer += chunk
-        return drain()
+        var events: [Event] = []
+        if pendingThinkStart {
+            events.append(.thinkStart)
+            pendingThinkStart = false
+        }
+        events.append(contentsOf: drain())
+        return events
     }
 
     /// Flush any remaining buffered text as events.
     /// Call this when generation is complete.
     func finalize() -> [Event] {
+        var events: [Event] = []
+
+        if pendingThinkStart {
+            events.append(.thinkStart)
+            pendingThinkStart = false
+        }
+
         guard !buffer.isEmpty else {
             if insideThinkBlock {
                 insideThinkBlock = false
-                return [.thinkEnd]
+                events.append(.thinkEnd)
             }
-            return []
+            return events
         }
 
         let remaining = buffer
@@ -65,13 +89,13 @@ final class ToolCallParser {
 
         if insideThinkBlock {
             insideThinkBlock = false
-            var events: [Event] = []
             if !remaining.isEmpty { events.append(.thinking(remaining)) }
             events.append(.thinkEnd)
             return events
         }
 
-        return [.text(remaining)]
+        events.append(.text(remaining))
+        return events
     }
 
     // MARK: - Private
@@ -130,10 +154,13 @@ final class ToolCallParser {
             }
 
             if let earliest, earliest.kind == 1, let thinkEndRange {
-                // Stray </think> without opening <think> — model omitted the start tag.
-                // Emit text before it (this is leaked thinking content), signal transition.
+                // Stray </think> without opening <think> — the template put <think> in the
+                // prompt so the parser missed it. Treat content before </think> as thinking.
                 let before = String(buffer[..<thinkEndRange.lowerBound])
-                if !before.isEmpty { events.append(.text(before)) }
+                events.append(.thinkStart)
+                if !before.isEmpty {
+                    events.append(.thinking(before))
+                }
                 events.append(.thinkEnd)
                 buffer = String(buffer[thinkEndRange.upperBound...])
                 continue

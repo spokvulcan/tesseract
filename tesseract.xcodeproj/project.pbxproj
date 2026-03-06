@@ -43,22 +43,16 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E0C654922F2E946A003C1B55 /* tesseract */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = tesseract;
 			sourceTree = "<group>";
 		};
 		E0C654A22F2E946B003C1B55 /* tesseractTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = tesseractTests;
 			sourceTree = "<group>";
 		};
 		E0C654AC2F2E946B003C1B55 /* tesseractUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-			);
 			path = tesseractUITests;
 			sourceTree = "<group>";
 		};
@@ -223,8 +217,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */,
-				E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "mlx-audio-swift" */,
-				E0DF77022F3FC000003C1B55 /* XCLocalSwiftPackageReference "mlx-image-swift" */,
+				E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */,
+				E0DF77022F3FC000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-image-swift" */,
 				E0B999882F59F4DA00F80663 /* XCRemoteSwiftPackageReference "textual" */,
 				2EE88EC58D52DCCACA5960B0 /* XCRemoteSwiftPackageReference "textual" */,
 			);
@@ -654,11 +648,11 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "mlx-audio-swift" */ = {
+		E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "Vendor/mlx-audio-swift";
 		};
-		E0DF77022F3FC000003C1B55 /* XCLocalSwiftPackageReference "mlx-image-swift" */ = {
+		E0DF77022F3FC000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-image-swift" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "Vendor/mlx-image-swift";
 		};
@@ -712,12 +706,12 @@
 		};
 		E0C655512F3BA000003C1B55 /* MLXAudio */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "mlx-audio-swift" */;
+			package = E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */;
 			productName = MLXAudio;
 		};
 		E0DF77012F3FC000003C1B55 /* MLXImageGen */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = E0DF77022F3FC000003C1B55 /* XCLocalSwiftPackageReference "mlx-image-swift" */;
+			package = E0DF77022F3FC000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-image-swift" */;
 			productName = MLXImageGen;
 		};
 /* End XCSwiftPackageProductDependency section */
