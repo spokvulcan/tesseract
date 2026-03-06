@@ -21,20 +21,22 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
     let content: String
     let thinking: String?
     let toolCalls: [ToolCall]
+    let toolCallId: String?
 
     // Explicit init with default toolCalls for convenience.
-    init(id: UUID, timestamp: Date, role: Role, content: String, thinking: String?, toolCalls: [ToolCall] = []) {
+    init(id: UUID, timestamp: Date, role: Role, content: String, thinking: String?, toolCalls: [ToolCall] = [], toolCallId: String? = nil) {
         self.id = id
         self.timestamp = timestamp
         self.role = role
         self.content = content
         self.thinking = thinking
         self.toolCalls = toolCalls
+        self.toolCallId = toolCallId
     }
 
     // Custom Codable for backward compatibility (toolCalls absent in older data).
     enum CodingKeys: String, CodingKey {
-        case id, timestamp, role, content, thinking, toolCalls
+        case id, timestamp, role, content, thinking, toolCalls, toolCallId
     }
 
     init(from decoder: Decoder) throws {
@@ -45,22 +47,23 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
         content = try c.decode(String.self, forKey: .content)
         thinking = try c.decodeIfPresent(String.self, forKey: .thinking)
         toolCalls = try c.decodeIfPresent([ToolCall].self, forKey: .toolCalls) ?? []
+        toolCallId = try c.decodeIfPresent(String.self, forKey: .toolCallId)
     }
 
     static func system(_ content: String) -> Self {
-        Self(id: UUID(), timestamp: Date(), role: .system, content: content, thinking: nil)
+        Self(id: UUID(), timestamp: Date(), role: .system, content: content, thinking: nil, toolCallId: nil)
     }
 
     static func user(_ content: String) -> Self {
-        Self(id: UUID(), timestamp: Date(), role: .user, content: content, thinking: nil)
+        Self(id: UUID(), timestamp: Date(), role: .user, content: content, thinking: nil, toolCallId: nil)
     }
 
     static func assistant(_ content: String, thinking: String? = nil, toolCalls: [ToolCall] = []) -> Self {
-        Self(id: UUID(), timestamp: Date(), role: .assistant, content: content, thinking: thinking, toolCalls: toolCalls)
+        Self(id: UUID(), timestamp: Date(), role: .assistant, content: content, thinking: thinking, toolCalls: toolCalls, toolCallId: nil)
     }
 
-    static func tool(_ content: String) -> Self {
-        Self(id: UUID(), timestamp: Date(), role: .tool, content: content, thinking: nil)
+    static func tool(_ content: String, toolCallId: String) -> Self {
+        Self(id: UUID(), timestamp: Date(), role: .tool, content: content, thinking: nil, toolCallId: toolCallId)
     }
 
     // MARK: - AgentMessageProtocol
@@ -70,7 +73,7 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
         case .system: .system(content: content)
         case .user: .user(content: content)
         case .assistant: .assistant(content: content, toolCalls: nil)
-        case .tool: .toolResult(toolCallId: "", content: content)
+        case .tool: .toolResult(toolCallId: toolCallId ?? "", content: content)
         }
     }
 
@@ -87,14 +90,14 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
             case .assistant(let asst):
                 self.init(id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content, thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
             case .toolResult(let tr):
-                self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil)
+                self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId)
             }
         case let user as UserMessage:
             self.init(id: user.id, timestamp: user.timestamp, role: .user, content: user.content, thinking: nil)
         case let asst as AssistantMessage:
             self.init(id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content, thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
         case let tr as ToolResultMessage:
-            self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil)
+            self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId)
         case let compaction as CompactionSummaryMessage:
             self.init(id: UUID(), timestamp: compaction.timestamp, role: .system,
                       content: "[Context compacted — \(compaction.tokensBefore) tokens summarized]", thinking: nil)

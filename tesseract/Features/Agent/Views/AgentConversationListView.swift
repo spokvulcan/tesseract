@@ -12,6 +12,55 @@ struct AgentConversationListView: View {
 
     @EnvironmentObject private var coordinator: AgentCoordinator
 
+    enum DisplayBlock: Identifiable {
+        case user(AgentChatMessage)
+        case assistant(AgentChatMessage, [AgentChatMessage])
+        case system(AgentChatMessage)
+        
+        var id: UUID {
+            switch self {
+            case .user(let msg): return msg.id
+            case .assistant(let msg, _): return msg.id
+            case .system(let msg): return msg.id
+            }
+        }
+    }
+    
+    private var displayBlocks: [DisplayBlock] {
+        var blocks: [DisplayBlock] = []
+        var currentAssistant: AgentChatMessage?
+        var currentToolResults: [AgentChatMessage] = []
+        
+        for message in coordinator.messages {
+            switch message.role {
+            case .user, .system:
+                if let asst = currentAssistant {
+                    blocks.append(.assistant(asst, currentToolResults))
+                    currentAssistant = nil
+                    currentToolResults = []
+                }
+                blocks.append(message.role == .user ? .user(message) : .system(message))
+            case .assistant:
+                if let asst = currentAssistant {
+                    blocks.append(.assistant(asst, currentToolResults))
+                    currentToolResults = []
+                }
+                currentAssistant = message
+            case .tool:
+                if currentAssistant != nil {
+                    currentToolResults.append(message)
+                } else {
+                    // Orphan tool result (fallback)
+                    blocks.append(.system(message))
+                }
+            }
+        }
+        if let asst = currentAssistant {
+            blocks.append(.assistant(asst, currentToolResults))
+        }
+        return blocks
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -20,8 +69,8 @@ struct AgentConversationListView: View {
                         emptyState
                     }
 
-                    ForEach(coordinator.messages) { message in
-                        messageBubble(message)
+                    ForEach(displayBlocks) { block in
+                        blockView(block)
                     }
 
                     if coordinator.isGenerating &&
@@ -85,40 +134,18 @@ struct AgentConversationListView: View {
     // MARK: - Message Bubbles
 
     @ViewBuilder
-    private func messageBubble(_ message: AgentChatMessage) -> some View {
-        if message.role == .assistant {
-            HStack {
-                AssistantMessageBubble(
-                    message: message,
-                    isSpeaking: speakingMessageID == message.id && isSpeechActive,
-                    onPlay: {
-                        speakingMessageID = message.id
-                        coordinator.speakMessage(message)
-                    },
-                    onStop: {
-                        coordinator.stopSpeaking()
-                        speakingMessageID = nil
-                    }
-                )
-                .id(message.id)
-                
-                Spacer(minLength: 60)
-            }
-        } else if message.role == .user {
+    private func blockView(_ block: DisplayBlock) -> some View {
+        switch block {
+        case .user(let message):
             HStack {
                 Spacer(minLength: 60)
-                
                 UserMessageBubble(message: message)
                     .id(message.id)
             }
-        } else if message.role == .tool {
-            HStack {
-                AgentToolResultBubbleView(message: message)
-                    .id(message.id)
-                Spacer(minLength: 60)
-            }
-        } else {
-            // System messages
+        case .assistant(let message, let toolResults):
+            assistantBlockView(message: message, toolResults: toolResults)
+                .id(message.id)
+        case .system(let message):
             HStack {
                 Spacer(minLength: 60)
                 Text(message.content)
@@ -131,32 +158,87 @@ struct AgentConversationListView: View {
         }
     }
 
+    @ViewBuilder
+    private func assistantBlockView(message: AgentChatMessage, toolResults: [AgentChatMessage]) -> some View {
+        let hasContent = !message.content.isEmpty
+        let hasThinkingOrTools = (message.thinking?.isEmpty == false) || !message.toolCalls.isEmpty
+        
+        if hasContent {
+            // Normal message bubble
+            HStack {
+                AssistantMessageBubble(
+                    message: message,
+                    toolResults: toolResults,
+                    isSpeaking: speakingMessageID == message.id && isSpeechActive,
+                    onPlay: {
+                        speakingMessageID = message.id
+                        coordinator.speakMessage(message)
+                    },
+                    onStop: {
+                        coordinator.stopSpeaking()
+                        speakingMessageID = nil
+                    }
+                )
+                
+                Spacer(minLength: 60)
+            }
+        } else if hasThinkingOrTools {
+            // "Ghost" list lane (no bubble)
+            HStack {
+                AssistantMessageListBlock(message: message, toolResults: toolResults)
+                Spacer(minLength: 60)
+            }
+        }
+    }
+
     // MARK: - Streaming Bubble
 
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
 
     private var streamingBubble: some View {
         HStack {
+            let hasText = !coordinator.streamingText.isEmpty
+            
             VStack(alignment: .leading, spacing: 6) {
                 if !coordinator.streamingThinking.isEmpty {
-                    DisclosureGroup(isExpanded: .constant(true)) {
-                        Text(coordinator.streamingThinking)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .padding(.top, 4)
-                    } label: {
-                        Label(
-                            coordinator.isThinking ? "Thinking…" : "Thinking",
-                            systemImage: "brain.head.profile"
-                        )
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Button(action: {}) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "brain")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 16)
+                                
+                                Text(coordinator.isThinking ? "Thinking…" : "Thinking")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.secondary)
+                                
+                                Spacer()
+                                
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.tertiary)
+                                    .rotationEffect(.degrees(90))
+                            }
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, hasText ? 0 : 14)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(coordinator.streamingThinking)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .padding(.leading, hasText ? 24 : 38)
+                                .padding(.trailing, 14)
+                                .padding(.bottom, 6)
+                        }
                     }
-                    .padding(.bottom, 6)
                 }
 
-                if !coordinator.streamingText.isEmpty {
+                if hasText {
                     if useMarkdown {
                         StructuredText(markdown: coordinator.streamingText)
                             .textual.structuredTextStyle(.gitHub)
@@ -168,9 +250,9 @@ struct AgentConversationListView: View {
                     }
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color(white: 0.15))
+            .padding(.horizontal, hasText ? 14 : 0)
+            .padding(.vertical, hasText ? 10 : 4)
+            .background(hasText ? Color(white: 0.15) : Color.clear)
             .foregroundStyle(.white)
             .clipShape(
                 .rect(
