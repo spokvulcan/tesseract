@@ -311,6 +311,368 @@ struct ReadToolTests {
     }
 }
 
+@MainActor
+@Suite(.serialized)
+struct EditToolTests {
+
+    @Test func replacesTextInFile() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("edit-test.txt")
+        try "Hello, world!".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let result = try await tool.execute(
+            "edit-1",
+            editToolArgs(path: "edit-test.txt", oldText: "world", newText: "testing"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully replaced text in edit-test.txt."))
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "Hello, testing!")
+
+        guard let details = result.details as? EditToolDetails else {
+            Issue.record("Expected EditToolDetails")
+            return
+        }
+        #expect(details.path == "edit-test.txt")
+        #expect(details.diff.contains("testing"))
+        #expect(details.firstChangedLine == 1)
+    }
+
+    @Test func throwsIfTextNotFound() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        try "Hello, world!".write(
+            to: root.appendingPathComponent("edit-test.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        do {
+            _ = try await tool.execute(
+                "edit-2",
+                editToolArgs(path: "edit-test.txt", oldText: "nonexistent", newText: "testing"),
+                nil,
+                nil
+            )
+            Issue.record("Expected edit tool to throw when old_text is missing")
+        } catch {
+            #expect(
+                error.localizedDescription
+                    == "Could not find the exact text in edit-test.txt. The old text must match exactly including all whitespace and newlines."
+            )
+        }
+    }
+
+    @Test func throwsIfTextAppearsMultipleTimes() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        try "foo foo foo".write(
+            to: root.appendingPathComponent("edit-test.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        do {
+            _ = try await tool.execute(
+                "edit-3",
+                editToolArgs(path: "edit-test.txt", oldText: "foo", newText: "bar"),
+                nil,
+                nil
+            )
+            Issue.record("Expected edit tool to throw for duplicate matches")
+        } catch {
+            #expect(
+                error.localizedDescription
+                    == "Found 3 occurrences of the text in edit-test.txt. The text must be unique. Please provide more context to make it unique."
+            )
+        }
+    }
+
+    @Test func matchesTextWithTrailingWhitespaceStripped() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("trailing-ws.txt")
+        try "line one   \nline two  \nline three\n".write(
+            to: fileURL,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let result = try await tool.execute(
+            "edit-4",
+            editToolArgs(path: "trailing-ws.txt", oldText: "line one\nline two\n", newText: "replaced\n"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully replaced text in trailing-ws.txt."))
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "replaced\nline three\n")
+    }
+
+    @Test func matchesSmartSingleQuotesToASCIIQuotes() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("smart-quotes.txt")
+        try "console.log(‘hello’);\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        _ = try await tool.execute(
+            "edit-5",
+            editToolArgs(
+                path: "smart-quotes.txt",
+                oldText: "console.log('hello');",
+                newText: "console.log('world');"
+            ),
+            nil,
+            nil
+        )
+
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "console.log('world');\n")
+    }
+
+    @Test func matchesSmartDoubleQuotesToASCIIQuotes() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("smart-double-quotes.txt")
+        try "const msg = “Hello World”;\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        _ = try await tool.execute(
+            "edit-6",
+            editToolArgs(
+                path: "smart-double-quotes.txt",
+                oldText: #"const msg = "Hello World";"#,
+                newText: #"const msg = "Goodbye";"#
+            ),
+            nil,
+            nil
+        )
+
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "const msg = \"Goodbye\";\n")
+    }
+
+    @Test func matchesUnicodeDashesToASCIIHyphen() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("unicode-dashes.txt")
+        try "range: 1–5\nbreak—here\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        _ = try await tool.execute(
+            "edit-7",
+            editToolArgs(
+                path: "unicode-dashes.txt",
+                oldText: "range: 1-5\nbreak-here",
+                newText: "range: 10-50\nbreak--here"
+            ),
+            nil,
+            nil
+        )
+
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "range: 10-50\nbreak--here\n")
+    }
+
+    @Test func matchesNonBreakingSpaceToRegularSpace() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("nbsp.txt")
+        try "hello\u{00A0}world\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        _ = try await tool.execute(
+            "edit-8",
+            editToolArgs(path: "nbsp.txt", oldText: "hello world", newText: "hello universe"),
+            nil,
+            nil
+        )
+
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "hello universe\n")
+    }
+
+    @Test func prefersExactMatchOverFuzzyMatch() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("exact-preferred.txt")
+        try "const x = 'exact';\nconst y = 'other';\n".write(
+            to: fileURL,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        _ = try await tool.execute(
+            "edit-9",
+            editToolArgs(
+                path: "exact-preferred.txt",
+                oldText: "const x = 'exact';",
+                newText: "const x = 'changed';"
+            ),
+            nil,
+            nil
+        )
+
+        #expect(
+            try readUTF8PreservingBytes(from: fileURL)
+                == "const x = 'changed';\nconst y = 'other';\n"
+        )
+    }
+
+    @Test func stillFailsWhenTextIsMissingAfterFuzzyMatching() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        try "completely different content\n".write(
+            to: root.appendingPathComponent("no-match.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        do {
+            _ = try await tool.execute(
+                "edit-10",
+                editToolArgs(path: "no-match.txt", oldText: "this does not exist", newText: "replacement"),
+                nil,
+                nil
+            )
+            Issue.record("Expected edit tool to throw when fuzzy matching cannot find a match")
+        } catch {
+            #expect(
+                error.localizedDescription
+                    == "Could not find the exact text in no-match.txt. The old text must match exactly including all whitespace and newlines."
+            )
+        }
+    }
+
+    @Test func detectsDuplicatesAfterFuzzyNormalization() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        try "hello world   \nhello world\n".write(
+            to: root.appendingPathComponent("fuzzy-dups.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        do {
+            _ = try await tool.execute(
+                "edit-11",
+                editToolArgs(path: "fuzzy-dups.txt", oldText: "hello world", newText: "replaced"),
+                nil,
+                nil
+            )
+            Issue.record("Expected edit tool to throw for fuzzy-normalized duplicates")
+        } catch {
+            #expect(
+                error.localizedDescription
+                    == "Found 2 occurrences of the text in fuzzy-dups.txt. The text must be unique. Please provide more context to make it unique."
+            )
+        }
+    }
+
+    @Test func matchesLFOldTextAgainstCRLFFileContent() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("crlf-test.txt")
+        try Data("line one\r\nline two\r\nline three\r\n".utf8).write(to: fileURL)
+
+        let result = try await tool.execute(
+            "edit-12",
+            editToolArgs(path: "crlf-test.txt", oldText: "line two\n", newText: "replaced line\n"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully replaced text in crlf-test.txt."))
+    }
+
+    @Test func preservesCRLFLineEndingsAfterEdit() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("crlf-preserve.txt")
+        try Data("first\r\nsecond\r\nthird\r\n".utf8).write(to: fileURL)
+
+        _ = try await tool.execute(
+            "edit-13",
+            editToolArgs(path: "crlf-preserve.txt", oldText: "second\n", newText: "REPLACED\n"),
+            nil,
+            nil
+        )
+
+        let actual = try Data(contentsOf: fileURL)
+        let expected = Data("first\r\nREPLACED\r\nthird\r\n".utf8)
+        #expect(actual == expected)
+    }
+
+    @Test func preservesLFLineEndingsForLFFiles() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("lf-preserve.txt")
+        try "first\nsecond\nthird\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        _ = try await tool.execute(
+            "edit-14",
+            editToolArgs(path: "lf-preserve.txt", oldText: "second\n", newText: "REPLACED\n"),
+            nil,
+            nil
+        )
+
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "first\nREPLACED\nthird\n")
+    }
+
+    @Test func detectsDuplicatesAcrossCRLFAndLFVariants() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        try Data("hello\r\nworld\r\n---\r\nhello\nworld\n".utf8).write(
+            to: root.appendingPathComponent("mixed-endings.txt")
+        )
+
+        do {
+            _ = try await tool.execute(
+                "edit-15",
+                editToolArgs(path: "mixed-endings.txt", oldText: "hello\nworld\n", newText: "replaced\n"),
+                nil,
+                nil
+            )
+            Issue.record("Expected edit tool to throw for duplicate mixed line-ending matches")
+        } catch {
+            #expect(
+                error.localizedDescription
+                    == "Found 2 occurrences of the text in mixed-endings.txt. The text must be unique. Please provide more context to make it unique."
+            )
+        }
+    }
+
+    @Test func preservesUTF8BOMAfterEdit() async throws {
+        let (tool, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("bom-test.txt")
+        let initialData = Data([0xEF, 0xBB, 0xBF]) + Data("first\r\nsecond\r\nthird\r\n".utf8)
+        try initialData.write(to: fileURL)
+
+        _ = try await tool.execute(
+            "edit-16",
+            editToolArgs(path: "bom-test.txt", oldText: "second\n", newText: "REPLACED\n"),
+            nil,
+            nil
+        )
+
+        let actual = try Data(contentsOf: fileURL)
+        let expected = Data([0xEF, 0xBB, 0xBF]) + Data("first\r\nREPLACED\r\nthird\r\n".utf8)
+        #expect(actual == expected)
+    }
+}
+
 private let tinyPNGBase64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2Z0AAAAASUVORK5CYII="
 
@@ -326,6 +688,14 @@ private func removeReadToolTestRig(_ root: URL) {
     try? FileManager.default.removeItem(at: root)
 }
 
+private func makeEditToolTestRig() throws -> (tool: AgentToolDefinition, root: URL) {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("tesseract-edit-tool-tests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let sandbox = PathSandbox(root: root)
+    return (createEditTool(sandbox: sandbox), root)
+}
+
 private func readToolArgs(path: String, offset: Int? = nil, limit: Int? = nil) -> [String: JSONValue] {
     var args: [String: JSONValue] = ["path": .string(path)]
     if let offset {
@@ -335,6 +705,19 @@ private func readToolArgs(path: String, offset: Int? = nil, limit: Int? = nil) -
         args["limit"] = .int(limit)
     }
     return args
+}
+
+private func editToolArgs(path: String, oldText: String, newText: String) -> [String: JSONValue] {
+    [
+        "path": .string(path),
+        "old_text": .string(oldText),
+        "new_text": .string(newText),
+    ]
+}
+
+private func readUTF8PreservingBytes(from url: URL) throws -> String {
+    let data = try Data(contentsOf: url)
+    return String(decoding: data, as: UTF8.self)
 }
 
 private func makeLineFile(count: Int) -> String {

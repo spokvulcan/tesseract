@@ -9,6 +9,12 @@ nonisolated struct EditToolDetails: Sendable, Hashable {
     let firstChangedLine: Int
 }
 
+nonisolated struct EditToolError: LocalizedError {
+    let message: String
+
+    var errorDescription: String? { message }
+}
+
 // MARK: - EditTool Factory
 
 nonisolated func createEditTool(sandbox: PathSandbox) -> AgentToolDefinition {
@@ -45,64 +51,80 @@ nonisolated func createEditTool(sandbox: PathSandbox) -> AgentToolDefinition {
                 return .error("Missing required argument: new_text")
             }
 
-            if oldText == newText {
-                return .error("old_text and new_text are identical. No changes needed.")
-            }
-
             let url = try sandbox.resolveExisting(path)
             let displayName = sandbox.displayPath(url)
 
-            // Read raw bytes to detect BOM and line endings
             let rawData = try Data(contentsOf: url)
             let (content, hasBOM) = EditToolHelper.stripBOM(rawData)
-            let hasCRLF = content.contains("\r\n")
+            let normalizedContent = EditToolHelper.normalizeToLF(content)
+            let normalizedOld = EditToolHelper.normalizeToLF(oldText)
+            let normalizedNew = EditToolHelper.normalizeToLF(newText)
+            let match = EditToolHelper.fuzzyFindText(content: normalizedContent, oldText: normalizedOld)
 
-            // Normalize to LF for matching
-            let normalized = hasCRLF ? content.replacingOccurrences(of: "\r\n", with: "\n") : content
-            let normalizedOld = oldText.replacingOccurrences(of: "\r\n", with: "\n")
-            let normalizedNew = newText.replacingOccurrences(of: "\r\n", with: "\n")
-
-            // Count occurrences
-            let count = EditToolHelper.countOccurrences(of: normalizedOld, in: normalized)
-
-            if count == 0 {
-                return EditToolHelper.handleZeroMatches(
-                    normalizedOld: normalizedOld, normalized: normalized)
+            guard match.found else {
+                throw EditToolError(
+                    message:
+                        "Could not find the exact text in \(path). The old text must match exactly including all whitespace and newlines."
+                )
             }
 
-            if count > 1 {
-                return .error("Found \(count) matches. old_text must match exactly once. Add surrounding context to make it unique.")
+            let fuzzyContent = EditToolHelper.normalizeForFuzzyMatch(normalizedContent)
+            let fuzzyOld = EditToolHelper.normalizeForFuzzyMatch(normalizedOld)
+            let occurrences = EditToolHelper.countOccurrences(of: fuzzyOld, in: fuzzyContent)
+
+            if occurrences > 1 {
+                throw EditToolError(
+                    message:
+                        "Found \(occurrences) occurrences of the text in \(path). The text must be unique. Please provide more context to make it unique."
+                )
             }
 
-            // Exactly one match — perform the replacement
-            let replaced = normalized.replacingOccurrences(of: normalizedOld, with: normalizedNew)
+            let baseContent = match.contentForReplacement
+            let matchedText = EditToolHelper.substring(
+                of: baseContent,
+                start: match.index,
+                length: match.matchLength
+            )
+            let replaced = EditToolHelper.replacing(
+                in: baseContent,
+                start: match.index,
+                length: match.matchLength,
+                with: normalizedNew
+            )
 
-            // Restore original line endings and BOM
-            var output = hasCRLF ? replaced.replacingOccurrences(of: "\n", with: "\r\n") : replaced
+            if baseContent == replaced {
+                throw EditToolError(
+                    message:
+                        "No changes made to \(path). The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected."
+                )
+            }
+
+            var output = EditToolHelper.restoreLineEndings(
+                replaced,
+                ending: EditToolHelper.detectLineEnding(in: rawData)
+            )
             if hasBOM {
                 output = "\u{FEFF}" + output
             }
 
             guard let outputData = output.data(using: .utf8) else {
-                return .error("Edited content could not be encoded as UTF-8")
+                throw EditToolError(message: "Edited content could not be encoded as UTF-8")
             }
             try outputData.write(to: url, options: .atomic)
 
-            // Compute first changed line (1-indexed) and diff
             let firstChangedLine = EditToolHelper.lineNumber(
-                of: normalizedOld, in: normalized)
+                forCharacterOffset: match.index,
+                in: baseContent
+            )
             let diff = EditToolHelper.unifiedDiff(
                 path: displayName,
-                oldText: normalizedOld,
+                oldText: matchedText,
                 newText: normalizedNew,
                 firstChangedLine: firstChangedLine
             )
 
-            let oldPreview = EditToolHelper.preview(normalizedOld)
-            let newPreview = EditToolHelper.preview(normalizedNew)
-
             return AgentToolResult(
-                content: [.text("Edited \(displayName): replaced \(oldPreview) with \(newPreview)")],
+                content: [.text("Successfully replaced text in \(path).")],
                 details: EditToolDetails(
                     path: displayName,
                     diff: diff,
@@ -117,6 +139,18 @@ nonisolated func createEditTool(sandbox: PathSandbox) -> AgentToolDefinition {
 
 private nonisolated enum EditToolHelper: Sendable {
 
+    enum LineEnding {
+        case lf
+        case crlf
+    }
+
+    struct MatchResult: Sendable {
+        let found: Bool
+        let index: Int
+        let matchLength: Int
+        let contentForReplacement: String
+    }
+
     // MARK: BOM handling
 
     static func stripBOM(_ data: Data) -> (content: String, hasBOM: Bool) {
@@ -127,6 +161,108 @@ private nonisolated enum EditToolHelper: Sendable {
         }
         let content = String(data: data, encoding: .utf8) ?? ""
         return (content, false)
+    }
+
+    // MARK: Line endings
+
+    static func detectLineEnding(in data: Data) -> LineEnding {
+        let bytes = Array(data)
+        guard !bytes.isEmpty else { return .lf }
+
+        for index in bytes.indices {
+            switch bytes[index] {
+            case 0x0D:
+                if index + 1 < bytes.count, bytes[index + 1] == 0x0A {
+                    return .crlf
+                }
+                return .lf
+            case 0x0A:
+                return .lf
+            default:
+                continue
+            }
+        }
+
+        return .lf
+    }
+
+    static func normalizeToLF(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+    }
+
+    static func restoreLineEndings(_ text: String, ending: LineEnding) -> String {
+        switch ending {
+        case .lf:
+            text
+        case .crlf:
+            text
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .joined(separator: "\r\n")
+        }
+    }
+
+    // MARK: Fuzzy matching
+
+    static func normalizeForFuzzyMatch(_ text: String) -> String {
+        text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { trimTrailingWhitespace(String($0)) }
+            .joined(separator: "\n")
+            .replacingOccurrences(
+                of: #"[‘’‚‛]"#,
+                with: "'",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"[“”„‟]"#,
+                with: "\"",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"[‐‑‒–—―−]"#,
+                with: "-",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"[  -   　]"#,
+                with: " ",
+                options: .regularExpression
+            )
+    }
+
+    static func fuzzyFindText(content: String, oldText: String) -> MatchResult {
+        if let exactRange = content.range(of: oldText) {
+            return MatchResult(
+                found: true,
+                index: content.distance(from: content.startIndex, to: exactRange.lowerBound),
+                matchLength: oldText.count,
+                contentForReplacement: content
+            )
+        }
+
+        let fuzzyContent = normalizeForFuzzyMatch(content)
+        let fuzzyOld = normalizeForFuzzyMatch(oldText)
+
+        guard let fuzzyRange = fuzzyContent.range(of: fuzzyOld) else {
+            return MatchResult(found: false, index: -1, matchLength: 0, contentForReplacement: content)
+        }
+
+        return MatchResult(
+            found: true,
+            index: fuzzyContent.distance(from: fuzzyContent.startIndex, to: fuzzyRange.lowerBound),
+            matchLength: fuzzyOld.count,
+            contentForReplacement: fuzzyContent
+        )
+    }
+
+    private static func trimTrailingWhitespace(_ text: String) -> String {
+        var result = text
+        while let last = result.last, last.isWhitespace {
+            result.removeLast()
+        }
+        return result
     }
 
     // MARK: Occurrence counting
@@ -142,50 +278,31 @@ private nonisolated enum EditToolHelper: Sendable {
         return count
     }
 
-    // MARK: Zero-match handling with fuzzy fallback
-
-    static func handleZeroMatches(
-        normalizedOld: String, normalized: String
-    ) -> AgentToolResult {
-        let fuzzyNeedle = collapseWhitespace(normalizedOld)
-        // Scan the file content for a fuzzy match
-        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
-
-        // Build a sliding window of the same number of lines as old_text
-        let needleLineCount = normalizedOld.split(
-            separator: "\n", omittingEmptySubsequences: false
-        ).count
-
-        for windowStart in 0...max(0, lines.count - needleLineCount) {
-            let windowEnd = min(windowStart + needleLineCount, lines.count)
-            let windowText = lines[windowStart..<windowEnd].joined(separator: "\n")
-            if collapseWhitespace(windowText) == fuzzyNeedle {
-                return .error(
-                    "No exact match found. Did you mean:\n\n\(windowText)\n\n(Copy the exact text above into old_text)"
-                )
-            }
-        }
-
-        return .error("No match found for the specified old_text")
-    }
-
-    /// Collapse runs of whitespace (spaces, tabs, etc.) to a single space and trim each line.
-    static func collapseWhitespace(_ text: String) -> String {
-        text.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { line in
-                line.split(omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
-                    .joined(separator: " ")
-            }
-            .joined(separator: "\n")
-    }
-
     // MARK: Line number
 
-    /// Find the 1-indexed line number where `needle` first appears in `haystack`.
-    static func lineNumber(of needle: String, in haystack: String) -> Int {
-        guard let range = haystack.range(of: needle) else { return 1 }
-        let prefix = haystack[haystack.startIndex..<range.lowerBound]
+    static func lineNumber(forCharacterOffset offset: Int, in content: String) -> Int {
+        guard offset > 0 else { return 1 }
+        let clampedOffset = min(offset, content.count)
+        let boundary = content.index(content.startIndex, offsetBy: clampedOffset)
+        let prefix = content[content.startIndex..<boundary]
         return prefix.filter({ $0 == "\n" }).count + 1
+    }
+
+    static func substring(of text: String, start: Int, length: Int) -> String {
+        let startIndex = text.index(text.startIndex, offsetBy: start)
+        let endIndex = text.index(startIndex, offsetBy: length)
+        return String(text[startIndex..<endIndex])
+    }
+
+    static func replacing(
+        in text: String,
+        start: Int,
+        length: Int,
+        with replacement: String
+    ) -> String {
+        let startIndex = text.index(text.startIndex, offsetBy: start)
+        let endIndex = text.index(startIndex, offsetBy: length)
+        return String(text[..<startIndex]) + replacement + String(text[endIndex...])
     }
 
     // MARK: Unified diff
@@ -210,16 +327,5 @@ private nonisolated enum EditToolHelper: Sendable {
             diff += "+\(line)\n"
         }
         return diff
-    }
-
-    // MARK: Preview
-
-    /// Short preview of text for the success message.
-    static func preview(_ text: String, maxLength: Int = 40) -> String {
-        let oneLine = text.replacingOccurrences(of: "\n", with: "\\n")
-        if oneLine.count <= maxLength {
-            return "\"\(oneLine)\""
-        }
-        return "\"\(oneLine.prefix(maxLength))…\""
     }
 }
