@@ -13,9 +13,9 @@ func defaultConvertToLlm(_ messages: [any AgentMessageProtocol]) -> [LLMMessage]
 
 /// Bridge `LLMMessage` to `MLXLMCommon.Chat.Message` for the inference pipeline.
 ///
-/// Since Tesseract uses local models with XML-based `<tool_call>` tags (not native
-/// JSON tool calling), assistant messages reconstruct tool calls as inline XML in the
-/// content string.
+/// Since Tesseract uses local models with XML-based `<tool_call>` tags, assistant
+/// messages reconstruct historical tool calls inline in the content string using
+/// the model's expected wire format.
 func toLLMCommonMessages(_ messages: [LLMMessage]) -> [Chat.Message] {
     messages.map { message in
         switch message {
@@ -35,10 +35,14 @@ func toLLMCommonMessages(_ messages: [LLMMessage]) -> [Chat.Message] {
 
 /// Append `<tool_call>` XML tags to assistant content so the model sees what it called.
 ///
-/// Produces the same format the `ToolCallParser` expects:
+/// Produces Qwen 3.5's XML function format inside `<tool_call>` boundaries:
 /// ```
 /// <tool_call>
-/// {"name":"tool_name","arguments":{...}}
+/// <function=tool_name>
+/// <parameter=key>
+/// value
+/// </parameter>
+/// </function>
 /// </tool_call>
 /// ```
 private func reconstructAssistantContent(
@@ -47,18 +51,43 @@ private func reconstructAssistantContent(
     guard let toolCalls, !toolCalls.isEmpty else { return content }
     var result = content
     for call in toolCalls {
-        // Build the {"name":"...","arguments":{...}} JSON that the parser expects
-        let argsFragment: String
-        if call.argumentsJSON.isEmpty {
-            argsFragment = "{}"
-        } else if let normalized = ToolArgumentNormalizer.decode(call.argumentsJSON) {
-            argsFragment = ToolArgumentNormalizer.encode(normalized)
-        } else {
-            argsFragment = call.argumentsJSON
+        result += "\n<tool_call>\n<function=\(call.name)>\n"
+
+        if let arguments = ToolArgumentNormalizer.decode(call.argumentsJSON) {
+            for key in arguments.keys.sorted() {
+                guard let value = arguments[key] else { continue }
+                result += "<parameter=\(key)>\n"
+                result += formatToolCallParameterValue(value)
+                result += "\n</parameter>\n"
+            }
         }
-        result += "\n<tool_call>\n{\"name\":\"\(call.name)\",\"arguments\":\(argsFragment)}\n</tool_call>"
+
+        result += "</function>\n</tool_call>"
     }
     return result
+}
+
+private func formatToolCallParameterValue(_ value: JSONValue) -> String {
+    switch value {
+    case .string(let string):
+        return string
+    case .int(let int):
+        return String(int)
+    case .double(let double):
+        return String(double)
+    case .bool(let bool):
+        return bool ? "True" : "False"
+    case .null:
+        return "None"
+    case .array, .object:
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(value),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return json
+    }
 }
 
 // MARK: - Message Factory Helpers

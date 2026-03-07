@@ -85,6 +85,65 @@ struct AgentChatMessageToolResultTests {
 }
 
 @MainActor
+struct MessageConversionTests {
+
+    @Test func reconstructsAssistantToolCallsUsingXMLFunctionFormat() async throws {
+        let toolCalls = [
+            ToolCallInfo(
+                id: "call-1",
+                name: "read",
+                argumentsJSON: #"{"path":"notes/todo.md","offset":42,"recursive":true,"metadata":{"kind":"text","priority":1},"lines":[1,2],"fallback":null}"#
+            )
+        ]
+
+        let messages = toLLMCommonMessages([
+            .assistant(content: "Opening file.", toolCalls: toolCalls)
+        ])
+
+        #expect(messages.count == 1)
+        #expect(messages[0].role == .assistant)
+        let content = messages[0].content
+
+        #expect(content.hasPrefix("Opening file.\n<tool_call>\n<function=read>\n"))
+        #expect(content.contains("<parameter=path>\nnotes/todo.md\n</parameter>"))
+        #expect(content.contains("<parameter=offset>\n42\n</parameter>"))
+        #expect(content.contains("<parameter=recursive>\nTrue\n</parameter>"))
+        #expect(content.contains(#"""
+<parameter=metadata>
+{"kind":"text","priority":1}
+</parameter>
+"""#))
+        #expect(content.contains(#"""
+<parameter=lines>
+[1,2]
+</parameter>
+"""#))
+        #expect(content.contains("<parameter=fallback>\nNone\n</parameter>"))
+        #expect(content.hasSuffix("</function>\n</tool_call>"))
+    }
+
+    @Test func omitsParametersWhenToolCallArgumentsAreMalformed() async throws {
+        let toolCalls = [
+            ToolCallInfo(
+                id: "call-2",
+                name: "write",
+                argumentsJSON: "{not json"
+            )
+        ]
+
+        let messages = toLLMCommonMessages([
+            .assistant(content: "", toolCalls: toolCalls)
+        ])
+
+        #expect(messages.count == 1)
+        #expect(messages[0].role == .assistant)
+        let content = messages[0].content
+
+        #expect(content == "\n<tool_call>\n<function=write>\n</function>\n</tool_call>")
+    }
+}
+
+@MainActor
 struct ReadToolTests {
 
     @Test func readsNumberedTextFileContentsWithinLimits() async throws {
