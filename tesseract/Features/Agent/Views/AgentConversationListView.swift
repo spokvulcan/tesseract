@@ -65,6 +65,10 @@ struct AgentConversationListView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    if !coordinator.assembledSystemPrompt.isEmpty {
+                        AgentSystemPromptView()
+                    }
+
                     if coordinator.messages.isEmpty && !coordinator.isGenerating {
                         emptyState
                     }

@@ -119,6 +119,37 @@ final class AgentEngine: ObservableObject {
         return try startGeneration(input: input, parameters: parameters)
     }
 
+    /// Formats a system prompt + tools through the chat template, returning the raw ChatML string and token count.
+    ///
+    /// Some model templates (e.g. Qwen3.5) require at least one user message, so a placeholder
+    /// is appended and stripped from the output to isolate the system prompt portion.
+    func formatRawPrompt(systemPrompt: String, tools: [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int) {
+        let placeholder = "__SYSTEM_PROMPT_END__"
+        let messages: [[String: any Sendable]] = [
+            ["role": "system", "content": systemPrompt],
+            ["role": "user", "content": placeholder],
+        ]
+        let toolSpecs: [ToolSpec]? = tools?.map { $0.toolSpec }
+        var result = try await llmActor.formatRawPromptWithCount(messages: messages, tools: toolSpecs)
+
+        // Strip everything from the placeholder user message onward
+        if let range = result.text.range(of: placeholder) {
+            // Back up to the im_start tag for the user turn
+            let beforePlaceholder = result.text[..<range.lowerBound]
+            if let userTagRange = beforePlaceholder.range(of: "<|im_start|>user", options: .backwards) {
+                result.text = String(result.text[..<userTagRange.lowerBound])
+            } else {
+                result.text = String(beforePlaceholder)
+            }
+        }
+
+        // Recount tokens for the trimmed text
+        if let tokenizer = agentTokenizer {
+            result.tokenCount = await tokenizer.encode(result.text, addSpecialTokens: false).count
+        }
+        return result
+    }
+
     /// Cancels any in-progress generation.
     func cancelGeneration() {
         generationTask?.cancel()

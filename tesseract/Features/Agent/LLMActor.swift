@@ -88,6 +88,23 @@ actor LLMActor {
         }
     }
 
+    /// Formats and returns the raw ChatML string along with its token count in a single actor hop.
+    func formatRawPromptWithCount(
+        messages: [[String: any Sendable]],
+        tools: [ToolSpec]?
+    ) async throws -> (text: String, tokenCount: Int) {
+        guard let container = modelContainer else {
+            throw AgentEngineError.modelNotLoaded
+        }
+        return try await container.perform { context in
+            let tokens = try context.tokenizer.applyChatTemplate(
+                messages: messages, tools: tools
+            )
+            let text = context.tokenizer.decode(tokens: tokens, skipSpecialTokens: false)
+            return (text, tokens.count)
+        }
+    }
+
     /// Releases the model from memory.
     func unloadModel() {
         modelContainer = nil

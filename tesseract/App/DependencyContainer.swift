@@ -186,6 +186,10 @@ final class DependencyContainer: ObservableObject {
                 }
                 try await self.agentEngine.loadModel(from: path)
             },
+            formatRawPrompt: { [weak self] systemPrompt, tools in
+                guard let self else { throw AgentEngineError.modelNotLoaded }
+                return try await self.agentEngine.formatRawPrompt(systemPrompt: systemPrompt, tools: tools)
+            },
             speechCoordinator: speechCoordinator,
             notchController: agentNotchController
         )

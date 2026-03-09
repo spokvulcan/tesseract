@@ -21,6 +21,11 @@ final class AgentCoordinator: ObservableObject {
     @Published private(set) var voiceState: AgentVoiceState = .idle
     @Published var error: String?
 
+    // System prompt transparency
+    @Published private(set) var assembledSystemPrompt: String = ""
+    @Published private(set) var rawChatMLPrompt: String?
+    @Published private(set) var systemPromptTokenCount: Int?
+
     // MARK: - Dependencies
 
     private let agent: Agent
@@ -33,8 +38,10 @@ final class AgentCoordinator: ObservableObject {
     private let notchController: AgentNotchPanelController?
     private let prepareForInference: (@MainActor () -> Void)?
     private let loadAgentModel: (@MainActor () async throws -> Void)?
+    private let formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))?
     private let debugLogger = AgentDebugLogger()
     private var voiceErrorResetTask: Task<Void, Never>?
+    private var rawPromptFetchTask: Task<Void, Never>?
     private var notchTextLength: Int = 0
 
     /// Unsubscribe closure for agent event subscription.
@@ -55,6 +62,7 @@ final class AgentCoordinator: ObservableObject {
         settings: SettingsManager? = nil,
         prepareForInference: (@MainActor () -> Void)? = nil,
         loadAgentModel: (@MainActor () async throws -> Void)? = nil,
+        formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))? = nil,
         speechCoordinator: SpeechCoordinator? = nil,
         notchController: AgentNotchPanelController? = nil
     ) {
@@ -65,8 +73,12 @@ final class AgentCoordinator: ObservableObject {
         self.settings = settings
         self.prepareForInference = prepareForInference
         self.loadAgentModel = loadAgentModel
+        self.formatRawPrompt = formatRawPrompt
         self.speechCoordinator = speechCoordinator
         self.notchController = notchController
+
+        // Sync assembled system prompt immediately (agent has it from init)
+        assembledSystemPrompt = agent.state.systemPrompt
 
         // Subscribe to agent events
         subscribeToAgentEvents()
@@ -138,6 +150,8 @@ final class AgentCoordinator: ObservableObject {
         streamingThinking = ""
         isThinking = false
         error = nil
+        rawChatMLPrompt = nil
+        systemPromptTokenCount = nil
         debugLogger.reset()
         Log.agent.info("New conversation created")
     }
@@ -371,6 +385,36 @@ final class AgentCoordinator: ObservableObject {
 
         case .turnStart, .messageStart, .messageEnd, .toolExecutionUpdate:
             break
+        }
+    }
+
+    // MARK: - System Prompt
+
+    /// Fetches the raw ChatML-formatted system prompt from the model's tokenizer.
+    func fetchRawSystemPrompt() {
+        assembledSystemPrompt = agent.state.systemPrompt
+        Log.agent.info("fetchRawSystemPrompt — prompt length=\(assembledSystemPrompt.count)")
+
+        let tools = agent.state.tools
+        guard let formatRawPrompt else {
+            Log.agent.warning("fetchRawSystemPrompt — formatRawPrompt closure is nil")
+            return
+        }
+
+        Log.agent.info("fetchRawSystemPrompt — calling closure with \(tools.count) tools")
+        rawPromptFetchTask?.cancel()
+        rawPromptFetchTask = Task {
+            do {
+                let result = try await formatRawPrompt(assembledSystemPrompt, tools)
+                guard !Task.isCancelled else { return }
+                Log.agent.info("fetchRawSystemPrompt — success, raw length=\(result.text.count), tokens=\(result.tokenCount)")
+                rawChatMLPrompt = result.text
+                systemPromptTokenCount = result.tokenCount
+            } catch is CancellationError {
+                Log.agent.debug("fetchRawSystemPrompt — cancelled")
+            } catch {
+                Log.agent.error("fetchRawSystemPrompt — error: \(error)")
+            }
         }
     }
 
