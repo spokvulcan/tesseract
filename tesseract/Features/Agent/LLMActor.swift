@@ -30,20 +30,18 @@ actor LLMActor {
     func loadModel(from directory: URL) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let format = Self.detectToolCallFormat(directory: directory)
         Log.agent.info("Tool call format: \(format.map { "\($0)" } ?? "json (default)")")
+
+        if isParoQuantModel(directory: directory) {
+            Log.agent.info("Detected ParoQuant model, using custom load path")
+            let container = try await loadParoQuantModel(
+                from: directory, toolCallFormat: format
+            )
+            return try await verifyAndStore(container: container, directory: directory)
+        }
+
         let config = ModelConfiguration(directory: directory, toolCallFormat: format)
         let container = try await loadModelContainer(configuration: config)
-
-        // Verify with a 1-token generation
-        let input = try await container.prepare(input: UserInput(prompt: "Hello"))
-        let parameters = GenerateParameters(maxTokens: 1)
-        let stream = try await container.generate(input: input, parameters: parameters)
-        for await _ in stream {}
-
-        let tokenizer = try await AgentTokenizer(container: container)
-
-        modelContainer = container
-        agentTokenizer = tokenizer
-        return (tokenizer, Self.detectPromptStartsThinking(directory: directory))
+        return try await verifyAndStore(container: container, directory: directory)
     }
 
     /// Prepares input and starts generation, returning the raw stream.
@@ -107,6 +105,21 @@ actor LLMActor {
     }
 
     // MARK: - Private
+
+    /// Verifies the model with a 1-token generation, stores it, and returns the tokenizer.
+    private func verifyAndStore(
+        container: ModelContainer, directory: URL
+    ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
+        let input = try await container.prepare(input: UserInput(prompt: "Hello"))
+        let parameters = GenerateParameters(maxTokens: 1)
+        let stream = try await container.generate(input: input, parameters: parameters)
+        for await _ in stream {}
+
+        let tokenizer = try await AgentTokenizer(container: container)
+        modelContainer = container
+        agentTokenizer = tokenizer
+        return (tokenizer, Self.detectPromptStartsThinking(directory: directory))
+    }
 
     /// Returns `true` if the model's chat template appends `<think>` to the generation prompt.
     ///

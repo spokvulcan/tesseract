@@ -147,6 +147,18 @@ extension ModelDefinition {
             sizeDescription: "~5 GB",
             dependencies: []
         ),
+        ModelDefinition(
+            id: "qwen3-4b-paro",
+            displayName: "Qwen3-4B PARO (INT4)",
+            description: "ParoQuant INT4 — near-FP16 quality at half the size of 8-bit.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "z-lab/Qwen3-4B-PARO",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~2.7 GB",
+            dependencies: []
+        ),
     ]
 
     static let imageGenerationModels: [ModelDefinition] = [

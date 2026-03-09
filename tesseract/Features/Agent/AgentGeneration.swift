@@ -40,7 +40,7 @@ struct AgentGenerateParameters: Sendable, Codable {
 
     /// Qwen3.5-4B recommended parameters.
     static let qwen35 = AgentGenerateParameters(
-        temperature: 0.6,
+        temperature: 1.0,
         topP: 0.95
     )
 

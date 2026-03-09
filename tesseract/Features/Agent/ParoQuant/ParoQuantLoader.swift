@@ -1,0 +1,379 @@
+import Foundation
+import Hub
+import MLX
+import MLXLLM
+import MLXLMCommon
+import MLXNN
+import Tokenizers
+
+// MARK: - Detection
+
+/// Returns `true` if the model directory contains a ParoQuant checkpoint.
+nonisolated func isParoQuantModel(directory: URL) -> Bool {
+    detectQuantMethod(directory: directory) == "paroquant"
+}
+
+// MARK: - Config
+
+nonisolated struct ParoQuantConfig: Sendable {
+    let bits: Int
+    let groupSize: Int
+    let krot: Int
+}
+
+/// Reads ParoQuant quantization config from config.json data.
+nonisolated private func readParoQuantConfig(_ configData: Data) -> ParoQuantConfig? {
+    guard let json = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
+          let qc = json["quantization_config"] as? [String: Any]
+    else { return nil }
+
+    let bits = qc["bits"] as? Int ?? 4
+    let groupSize = qc["group_size"] as? Int ?? 128
+    let krot = qc["krot"] as? Int ?? 8
+    return ParoQuantConfig(bits: bits, groupSize: groupSize, krot: krot)
+}
+
+/// Detects quant_method from config.json. Returns nil if not ParoQuant.
+nonisolated private func detectQuantMethod(directory: URL) -> String? {
+    let configURL = directory.appendingPathComponent("config.json")
+    guard let data = try? Data(contentsOf: configURL),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let qc = json["quantization_config"] as? [String: Any],
+          let method = qc["quant_method"] as? String
+    else { return nil }
+    return method
+}
+
+// MARK: - AutoAWQ Conversion
+
+nonisolated private enum AWQ {
+    static let bits = 4
+    static let packFactor = 32 / bits  // 8 values per uint32
+    static let mask: Int32 = (1 << bits) - 1
+    static let shifts: [Int32] = (0..<8).map { Int32($0 * bits) }
+    /// Inverse of AutoAWQ reorder [0,2,4,6,1,3,5,7] → [0,4,1,5,2,6,3,7]
+    static let inverseReorder = [0, 4, 1, 5, 2, 6, 3, 7]
+
+    // Pre-computed MLXArrays (created once, reused across calls)
+    nonisolated(unsafe) static let shiftsArray = MLXArray(shifts.map { Int64($0) }).reshaped(1, 1, 8)
+    nonisolated(unsafe) static let reorderIndices = MLXArray(inverseReorder.map { Int32($0) })
+}
+
+/// Unpack AutoAWQ int32 → raw uint8 values, undoing the [0,2,4,6,1,3,5,7] reorder.
+///
+/// Input: `[rows, cols]` of int32 (each packing 8 × 4-bit values)
+/// Output: `[rows, cols * 8]` of uint8 (raw 4-bit values)
+nonisolated private func unpackAndReorder(_ packed: MLXArray) -> MLXArray {
+    let rows = packed.dim(0)
+    let cols = packed.dim(1)
+
+    let expanded = packed.asType(.int64).expandedDimensions(axis: 2)
+    let raw = ((expanded >> AWQ.shiftsArray) & Int64(AWQ.mask)).asType(.uint8)
+    let reordered = raw.take(AWQ.reorderIndices, axis: 2)
+
+    return reordered.reshaped(rows, cols * 8)
+}
+
+/// Pack raw uint8 values into uint32 (MLX sequential layout).
+///
+/// Input: `[rows, cols]` of uint8 where cols is divisible by 8
+/// Output: `[rows, cols / 8]` of uint32
+nonisolated private func packMLX(_ w: MLXArray) -> MLXArray {
+    let rows = w.dim(0)
+    let reshaped = w.reshaped(rows, -1, AWQ.packFactor)  // [rows, cols/8, 8]
+
+    var packed = reshaped[0..., 0..., 0].asType(.uint32)
+    for i in 1..<AWQ.packFactor {
+        packed = packed | (reshaped[0..., 0..., i].asType(.uint32) << UInt32(i * AWQ.bits))
+    }
+    return packed
+}
+
+/// Convert AutoAWQ checkpoint weights to MLX quantized format in-place.
+///
+/// For each layer that has both `.qweight` and `.theta`:
+/// - `.qweight` → `.weight` (unpack, undo reorder, transpose, repack as MLX uint32)
+/// - `.qzeros` + `.scales` → `.biases` (compute `-scales * zeros`, transpose)
+/// - `.scales` → `.scales` (transpose)
+/// - `.theta`, `.pairs`, `.channel_scales`, `.bias` → pass through
+nonisolated private func convertAutoAWQ(
+    _ weights: inout [String: MLXArray], groupSize: Int
+) {
+    // Find prefixes that have both .qweight and .theta
+    let prefixes = Set(
+        weights.keys
+            .filter { $0.hasSuffix(".qweight") }
+            .compactMap { key -> String? in
+                let pfx = String(key.dropLast("qweight".count))
+                return weights["\(pfx)theta"] != nil ? pfx : nil
+            }
+    )
+
+    guard !prefixes.isEmpty else { return }
+
+    // Pass 1: compute biases from qzeros + scales BEFORE scales are transposed.
+    // Dict iteration order is non-deterministic, so qzeros must be processed
+    // while scales are still in their original [groups, outDims] layout.
+    for pfx in prefixes {
+        guard let qzeros = weights.removeValue(forKey: "\(pfx)qzeros") else { continue }
+        let zeros = unpackAndReorder(qzeros).asType(.float32)
+        let scales = weights["\(pfx)scales"]!.asType(.float32)
+        weights["\(pfx)biases"] = (-scales * zeros).transposed().asType(.float16)
+    }
+
+    // Pass 2: convert remaining keys (qweight, scales, channel_scales)
+    let keysToConvert = weights.keys.filter { key in
+        prefixes.contains(where: { key.hasPrefix($0) })
+    }
+
+    for key in keysToConvert {
+        guard let pfx = prefixes.first(where: { key.hasPrefix($0) }) else { continue }
+        let suffix = String(key.dropFirst(pfx.count))
+
+        switch suffix {
+        case "qweight":
+            let val = weights.removeValue(forKey: key)!
+            weights["\(pfx)weight"] = packMLX(unpackAndReorder(val).transposed())
+
+        case "scales":
+            weights[key] = weights[key]!.transposed()
+
+        case "channel_scales":
+            if let val = weights[key], val.ndim == 1 {
+                weights[key] = val.reshaped(1, -1)
+            }
+
+        default:
+            break  // theta, pairs, bias — keep as-is
+        }
+    }
+}
+
+// MARK: - Layer Patching
+
+/// Replace Linear layers with RotateQuantizedLinear where rotation parameters exist.
+nonisolated private func patchRotationLayers(
+    model: Module, weights: [String: MLXArray],
+    bits: Int, groupSize: Int
+) {
+    // Find all layer prefixes that have .theta weights
+    let prefixes = weights.keys
+        .filter { $0.hasSuffix(".theta") }
+        .map { String($0.dropLast(".theta".count)) }
+        .sorted()
+
+    guard !prefixes.isEmpty else { return }
+
+    var updates = [(String, Module)]()
+
+    for prefix in prefixes {
+        // Infer dimensions from the converted weights
+        guard let thetaArray = weights["\(prefix).theta"] else { continue }
+        let krot = thetaArray.dim(0)
+        let halfDim = thetaArray.dim(1)
+        let inputDims = halfDim * 2
+
+        // Infer outputDims from weight shape
+        // After conversion, weight is [outputDims, inputDims * bits / 32]
+        guard let weightArray = weights["\(prefix).weight"] else { continue }
+        let outputDims = weightArray.dim(0)
+
+        let hasBias = weights["\(prefix).bias"] != nil
+
+        let replacement = RotateQuantizedLinear(
+            inputDims: inputDims,
+            outputDims: outputDims,
+            hasBias: hasBias,
+            groupSize: groupSize,
+            bits: bits,
+            krot: krot
+        )
+
+        updates.append((prefix, replacement))
+    }
+
+    if !updates.isEmpty {
+        model.update(modules: ModuleChildren.unflattened(updates))
+    }
+}
+
+/// Predicate for the native MLX quantization pass.
+///
+/// ParoQuant checkpoints store rotation-aware INT4 weights for transformer projections,
+/// but the tied IO embedding path still needs standard MLX quantization.
+nonisolated private func isParoQuantIOLayer(path: String, module: Module) -> Bool {
+    guard module is Quantizable else { return false }
+    return path.hasSuffix("embed_tokens") || path.hasSuffix("lm_head")
+}
+
+/// Layers already represented in MLX quantized checkpoint form.
+///
+/// These need their module types swapped before `update(parameters:)` applies
+/// quantized `weight` / `scales` / `biases` tensors.
+nonisolated private func isCheckpointQuantizedLayer(
+    path: String, weights: [String: MLXArray]
+) -> Bool {
+    weights["\(path).scales"] != nil && weights["\(path).theta"] == nil
+}
+
+// MARK: - UserInputProcessor
+
+/// Local UserInputProcessor for ParoQuant models.
+/// Mirrors the private `LLMUserInputProcessor` from MLXLLM.
+nonisolated private struct ParoQuantInputProcessor: UserInputProcessor {
+    let tokenizer: Tokenizer
+    let configuration: ModelConfiguration
+    let messageGenerator: MessageGenerator
+
+    func prepare(input: UserInput) throws -> LMInput {
+        let messages = messageGenerator.generate(from: input)
+        do {
+            let promptTokens = try tokenizer.applyChatTemplate(
+                messages: messages, tools: input.tools,
+                additionalContext: input.additionalContext)
+            return LMInput(tokens: MLXArray(promptTokens))
+        } catch TokenizerError.missingChatTemplate {
+            Log.agent.warning(
+                "Tokenizer is missing a chat template for the ParoQuant model; falling back to plain text prompt formatting"
+            )
+            let prompt = messages
+                .compactMap { $0["content"] as? String }
+                .joined(separator: "\n\n")
+            let promptTokens = tokenizer.encode(text: prompt)
+            return LMInput(tokens: MLXArray(promptTokens))
+        }
+    }
+}
+
+// MARK: - Load Entry Point
+
+
+/// Load a ParoQuant model, returning a ModelContainer.
+///
+/// This reuses the standard factory components (typeRegistry for model creation,
+/// loadTokenizer for tokenizer) but handles AutoAWQ weight conversion and
+/// rotation layer patching ourselves.
+nonisolated func loadParoQuantModel(
+    from directory: URL, toolCallFormat: ToolCallFormat?
+) async throws -> ModelContainer {
+    // 1. Parse config.json
+    let configURL = directory.appendingPathComponent("config.json")
+    let configData = try Data(contentsOf: configURL)
+    let baseConfig = try JSONDecoder().decode(BaseConfiguration.self, from: configData)
+
+    // 2. Read ParoQuant params
+    guard let paroConfig = readParoQuantConfig(configData) else {
+        throw ParoQuantError.missingConfig
+    }
+    Log.agent.info(
+        "ParoQuant config: bits=\(paroConfig.bits), groupSize=\(paroConfig.groupSize), krot=\(paroConfig.krot)"
+    )
+
+    // 3. Create model via standard typeRegistry
+    let model = try await LLMModelFactory.shared.typeRegistry
+        .createModel(configuration: configData, modelType: baseConfig.modelType)
+
+    // 4. EOS token override from generation_config.json
+    var eosTokenIds = Set(baseConfig.eosTokenIds?.values ?? [])
+    let genConfigURL = directory.appendingPathComponent("generation_config.json")
+    if let genData = try? Data(contentsOf: genConfigURL),
+       let genConfig = try? JSONDecoder().decode(GenerationConfigFile.self, from: genData),
+       let genEos = genConfig.eosTokenIds?.values
+    {
+        eosTokenIds = Set(genEos)
+    }
+
+    var config = ModelConfiguration(directory: directory, toolCallFormat: toolCallFormat)
+    config.eosTokenIds = eosTokenIds
+
+    // 5. Load raw safetensors
+    var weights = [String: MLXArray]()
+    let enumerator = FileManager.default.enumerator(
+        at: directory, includingPropertiesForKeys: nil)!
+    while let url = enumerator.nextObject() as? URL {
+        if url.pathExtension == "safetensors" {
+            let w = try loadArrays(url: url)
+            for (key, value) in w {
+                weights[key] = value
+            }
+        }
+    }
+
+    Log.agent.info("Loaded \(weights.count) weight keys from safetensors")
+
+    // 6. Model-specific sanitization
+    weights = model.sanitize(weights: weights)
+
+    // 7. Convert AutoAWQ format → MLX format
+    if weights.keys.contains(where: { $0.hasSuffix(".qweight") }) {
+        convertAutoAWQ(&weights, groupSize: paroConfig.groupSize)
+        Log.agent.info("Converted AutoAWQ weights to MLX format")
+    }
+
+    // 8. Patch rotation layers
+    patchRotationLayers(
+        model: model, weights: weights,
+        bits: paroConfig.bits, groupSize: paroConfig.groupSize
+    )
+
+    // 9. Quantize any non-rotation layers already stored in MLX quantized form.
+    quantize(model: model) { path, module in
+        guard module is Quantizable else { return nil }
+        guard isCheckpointQuantizedLayer(path: path, weights: weights) else {
+            return nil
+        }
+        return (paroConfig.groupSize, paroConfig.bits, .affine)
+    }
+
+    // 10. Load checkpoint weights into the patched model
+    let parameters = ModuleParameters.unflattened(weights)
+    let verify: Module.VerifyUpdate = [.noUnusedKeys, .shapeMismatch]
+    try model.update(parameters: parameters, verify: verify)
+
+    // 11. Quantize the IO embedding path from the loaded FP16 weights.
+    quantize(model: model) { path, module in
+        guard isParoQuantIOLayer(path: path, module: module) else {
+            return nil
+        }
+        return (paroConfig.groupSize, paroConfig.bits, .affine)
+    }
+
+    // 12. Materialize the model after all module swaps are complete.
+    eval(model)
+    Log.agent.info("ParoQuant model loaded and evaluated")
+
+    // 13. Load tokenizer
+    let tokenizer = try await loadTokenizer(configuration: config, hub: defaultHubApi)
+
+    // 14. Create processor with messageGenerator
+    let messageGenerator: MessageGenerator =
+        if let llmModel = model as? LLMModel {
+            llmModel.messageGenerator(tokenizer: tokenizer)
+        } else {
+            DefaultMessageGenerator()
+        }
+    let processor = ParoQuantInputProcessor(
+        tokenizer: tokenizer, configuration: config,
+        messageGenerator: messageGenerator
+    )
+
+    // 15. Assemble ModelContext → ModelContainer
+    let context = ModelContext(
+        configuration: config, model: model,
+        processor: processor, tokenizer: tokenizer
+    )
+    return ModelContainer(context: context)
+}
+
+// MARK: - Errors
+
+nonisolated enum ParoQuantError: LocalizedError {
+    case missingConfig
+
+    var errorDescription: String? {
+        switch self {
+        case .missingConfig:
+            return "Missing quantization_config in config.json for ParoQuant model"
+        }
+    }
+}
