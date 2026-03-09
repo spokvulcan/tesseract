@@ -383,7 +383,7 @@ final class AgentCoordinator: ObservableObject {
                 notchController.updatePhase(.complete(text: lastAssistant.content))
             }
 
-        case .turnStart, .messageStart, .messageEnd, .toolExecutionUpdate:
+        case .turnStart, .messageStart, .messageEnd, .toolExecutionUpdate, .malformedToolCall:
             break
         }
     }

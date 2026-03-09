@@ -63,6 +63,7 @@ enum AgentEvent: Sendable {
     case messageStart(message: any AgentMessageProtocol & Sendable)
     case messageUpdate(message: AssistantMessage, streamDelta: AssistantStreamDelta)
     case messageEnd(message: any AgentMessageProtocol & Sendable)
+    case malformedToolCall(raw: String)
 
     // -- Tool execution --
     case toolExecutionStart(toolCallId: String, toolName: String, argsJSON: String)

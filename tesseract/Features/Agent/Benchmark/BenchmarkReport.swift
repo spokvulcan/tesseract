@@ -6,6 +6,7 @@ struct BenchmarkTurnResult: Codable {
     let turnIndex: Int
     let userMessage: String
     let assistantResponse: String
+    let attemptedTools: [String]
     let toolsCalled: [String]
     let toolResults: [String]
     let passed: Bool
@@ -18,7 +19,11 @@ struct BenchmarkTurnChecks: Codable {
     let duplicateToolCalls: Int
     let argumentsCorrect: Bool
     let responseRelevant: Bool
+    let clarificationAsked: Bool
     let noForbiddenTools: Bool
+    let noInvalidToolCalls: Bool
+    let malformedToolCallCount: Int
+    let fileAssertionsPassed: Bool
     let details: String?
 }
 
@@ -73,6 +78,7 @@ struct BenchmarkMetadata: Codable {
     let modelName: String
     let hardware: String
     let parameters: AgentGenerateParameters
+    let promptProfile: BenchmarkConfig.PromptProfile
     let contextLimit: Int
     let maxToolRounds: Int
     let sweepLabel: String
@@ -95,6 +101,7 @@ extension BenchmarkReport {
         lines.append("  BENCHMARK REPORT — \(metadata.date)")
         lines.append("  Model: \(metadata.modelName) | \(metadata.hardware)")
         lines.append("  Params: \(metadata.sweepLabel)")
+        lines.append("  Prompt: \(metadata.promptProfile.rawValue)")
         lines.append("═══════════════════════════════════════════════════════")
         lines.append("")
 

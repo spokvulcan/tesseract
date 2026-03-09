@@ -4,65 +4,76 @@ import MLXLMCommon
 /// Evaluates a single turn's model output against expectations.
 enum BenchmarkEvaluator {
 
-    /// Evaluates one turn and returns the result.
     static func evaluate(
         turnIndex: Int,
         expectation: TurnExpectation,
-        toolsCalled: [(name: String, arguments: [String: JSONValue])],
+        attemptedToolCalls: [(name: String, arguments: [String: JSONValue])],
+        executedToolCalls: [(name: String, arguments: [String: JSONValue])],
         toolResults: [String],
         assistantResponse: String,
         info: AgentGeneration.Info?,
         toolRounds: Int,
         latencyMs: Double,
-        conversationToolHistory: [(name: String, arguments: [String: JSONValue], result: String)]
+        conversationToolHistory: [(name: String, arguments: [String: JSONValue], result: String)],
+        malformedToolCalls: [String],
+        sandboxRoot: URL
     ) -> BenchmarkTurnResult {
-        let calledNames = toolsCalled.map(\.name)
+        let calledNames = executedToolCalls.map(\.name)
+        let attemptedNames = attemptedToolCalls.map(\.name)
         var details: [String] = []
 
-        // 1. Tool correctness (skip if tools are optional for this turn)
-        let toolsCorrect: Bool
-        if expectation.toolsOptional {
-            toolsCorrect = true
-        } else {
-            toolsCorrect = evaluateToolCorrectness(
-                expected: expectation.expectedTools,
-                called: calledNames,
-                details: &details
+        let toolsCorrect = evaluateToolCorrectness(
+            expectation: expectation,
+            executed: executedToolCalls,
+            details: &details
+        )
+
+        let argsCorrect = evaluateArguments(
+            expectation: expectation,
+            executed: executedToolCalls,
+            details: &details
+        )
+
+        let withinTurnDuplicates = countWithinTurnDuplicates(executedToolCalls)
+        let crossTurnDuplicates = countCrossTurnDuplicates(
+            executedToolCalls, conversationHistory: conversationToolHistory
+        )
+        let totalDuplicates = withinTurnDuplicates + crossTurnDuplicates
+        if totalDuplicates > 0 {
+            details.append(
+                "\(totalDuplicates) duplicate tool call(s) (within-turn: \(withinTurnDuplicates), cross-turn: \(crossTurnDuplicates))"
             )
         }
 
-        // 2. Duplicate detection (within this turn)
-        let withinTurnDuplicates = countWithinTurnDuplicates(toolsCalled)
-
-        // 3. Cross-turn duplicates: tool called when conversation already has identical successful result
-        let crossTurnDuplicates = countCrossTurnDuplicates(
-            toolsCalled, conversationHistory: conversationToolHistory
-        )
-
-        let totalDuplicates = withinTurnDuplicates + crossTurnDuplicates
-        if totalDuplicates > 0 {
-            details.append("\(totalDuplicates) duplicate tool call(s) (within-turn: \(withinTurnDuplicates), cross-turn: \(crossTurnDuplicates))")
-        }
-
-        // 4. Argument correctness
-        let argsCorrect = evaluateArguments(
-            expected: expectation.expectedArguments,
-            toolsCalled: toolsCalled,
-            details: &details
-        )
-
-        // 5. Response relevance
         let responseRelevant = evaluateResponseRelevance(
             expected: expectation.expectedSubstrings,
             response: assistantResponse,
-            expectsClarification: expectation.expectsClarification,
             details: &details
         )
 
-        // 6. Forbidden tools
+        let clarificationAsked = evaluateClarification(
+            required: expectation.expectsClarification,
+            response: assistantResponse,
+            details: &details
+        )
+
         let noForbidden = evaluateForbiddenTools(
             forbidden: expectation.forbiddenTools,
-            called: calledNames,
+            attempted: attemptedNames,
+            executed: calledNames,
+            details: &details
+        )
+
+        let noInvalidToolCalls = evaluateInvalidToolCalls(
+            attempted: attemptedToolCalls,
+            executed: executedToolCalls,
+            malformedToolCalls: malformedToolCalls,
+            details: &details
+        )
+
+        let fileAssertionsPassed = evaluateFileAssertions(
+            assertions: expectation.fileAssertions,
+            sandboxRoot: sandboxRoot,
             details: &details
         )
 
@@ -71,7 +82,11 @@ enum BenchmarkEvaluator {
             duplicateToolCalls: totalDuplicates,
             argumentsCorrect: argsCorrect,
             responseRelevant: responseRelevant,
+            clarificationAsked: clarificationAsked,
             noForbiddenTools: noForbidden,
+            noInvalidToolCalls: noInvalidToolCalls,
+            malformedToolCallCount: malformedToolCalls.count,
+            fileAssertionsPassed: fileAssertionsPassed,
             details: details.isEmpty ? nil : details.joined(separator: "; ")
         )
 
@@ -83,12 +98,20 @@ enum BenchmarkEvaluator {
             toolRoundsUsed: toolRounds
         )
 
-        let passed = toolsCorrect && argsCorrect && responseRelevant && noForbidden && withinTurnDuplicates == 0
+        let passed = toolsCorrect
+            && argsCorrect
+            && responseRelevant
+            && clarificationAsked
+            && noForbidden
+            && noInvalidToolCalls
+            && fileAssertionsPassed
+            && withinTurnDuplicates == 0
 
         return BenchmarkTurnResult(
             turnIndex: turnIndex,
             userMessage: expectation.userMessage,
             assistantResponse: String(assistantResponse.prefix(500)),
+            attemptedTools: attemptedNames,
             toolsCalled: calledNames,
             toolResults: toolResults.map { String($0.prefix(200)) },
             passed: passed,
@@ -99,43 +122,41 @@ enum BenchmarkEvaluator {
 
     // MARK: - Tool Correctness
 
-    /// Checks that expected tools were called (order-independent, allows multi-call).
     private static func evaluateToolCorrectness(
-        expected: [String],
-        called: [String],
+        expectation: TurnExpectation,
+        executed: [(name: String, arguments: [String: JSONValue])],
         details: inout [String]
     ) -> Bool {
-        if expected.isEmpty {
-            // No tools expected — model should not have called any
-            if !called.isEmpty {
-                details.append("Expected no tools, but called: \(called.joined(separator: ", "))")
+        switch expectation.toolMatchMode {
+        case .noTools:
+            if !executed.isEmpty {
+                details.append("Expected no executed tools, but called: \(executed.map(\.name).joined(separator: ", "))")
                 return false
             }
             return true
+
+        case .containsSequence:
+            return sequenceMatch(
+                expected: expectation.expectedToolCalls,
+                actual: executed,
+                requireExactLength: false,
+                validateArguments: false,
+                details: &details
+            )
+
+        case .exactSequence:
+            return sequenceMatch(
+                expected: expectation.expectedToolCalls,
+                actual: executed,
+                requireExactLength: true,
+                validateArguments: false,
+                details: &details
+            )
         }
-
-        // Count expected occurrences
-        var expectedCounts: [String: Int] = [:]
-        for name in expected { expectedCounts[name, default: 0] += 1 }
-
-        var calledCounts: [String: Int] = [:]
-        for name in called { calledCounts[name, default: 0] += 1 }
-
-        var correct = true
-        for (name, count) in expectedCounts {
-            let actualCount = calledCounts[name] ?? 0
-            if actualCount < count {
-                details.append("Expected \(count)x \(name), got \(actualCount)")
-                correct = false
-            }
-        }
-
-        return correct
     }
 
     // MARK: - Duplicate Detection
 
-    /// Counts same-tool-same-args duplicates within a single turn.
     private static func countWithinTurnDuplicates(
         _ calls: [(name: String, arguments: [String: JSONValue])]
     ) -> Int {
@@ -151,23 +172,16 @@ enum BenchmarkEvaluator {
         return duplicates
     }
 
-    /// Read-only tools whose results change as data is mutated.
-    /// Re-calling these is expected behavior, not a duplicate.
     private static let readOnlyTools: Set<String> = [
         "read", "ls",
     ]
 
-    /// Counts tool calls that duplicate a previous successful call in conversation history.
-    /// Read-only listing/status tools are excluded — their results change after mutations,
-    /// so re-calling them is correct behavior, not waste.
     private static func countCrossTurnDuplicates(
         _ calls: [(name: String, arguments: [String: JSONValue])],
         conversationHistory: [(name: String, arguments: [String: JSONValue], result: String)]
     ) -> Int {
         let historyKeys = Set(conversationHistory.compactMap { entry -> String? in
-            // Only count successful past calls (not errors)
             guard !entry.result.hasPrefix("Error:") else { return nil }
-            // Skip read-only tools — re-querying is expected
             guard !readOnlyTools.contains(entry.name) else { return nil }
             return canonicalKey(name: entry.name, arguments: entry.arguments)
         })
@@ -204,28 +218,93 @@ enum BenchmarkEvaluator {
     // MARK: - Argument Validation
 
     private static func evaluateArguments(
-        expected: [String: [String: String]],
-        toolsCalled: [(name: String, arguments: [String: JSONValue])],
+        expectation: TurnExpectation,
+        executed: [(name: String, arguments: [String: JSONValue])],
         details: inout [String]
     ) -> Bool {
-        guard !expected.isEmpty else { return true }
+        switch expectation.toolMatchMode {
+        case .noTools:
+            return true
+        case .containsSequence:
+            return sequenceMatch(
+                expected: expectation.expectedToolCalls,
+                actual: executed,
+                requireExactLength: false,
+                validateArguments: true,
+                details: &details
+            )
+        case .exactSequence:
+            return sequenceMatch(
+                expected: expectation.expectedToolCalls,
+                actual: executed,
+                requireExactLength: true,
+                validateArguments: true,
+                details: &details
+            )
+        }
+    }
 
-        var correct = true
-        for (toolName, expectedArgs) in expected {
-            guard let call = toolsCalled.first(where: { $0.name == toolName }) else {
-                // Tool wasn't called — already flagged in tool correctness
-                continue
+    private static func sequenceMatch(
+        expected: [ExpectedToolCall],
+        actual: [(name: String, arguments: [String: JSONValue])],
+        requireExactLength: Bool,
+        validateArguments: Bool,
+        details: inout [String]
+    ) -> Bool {
+        if requireExactLength && expected.count != actual.count {
+            details.append("Expected exactly \(expected.count) tool call(s), got \(actual.count)")
+        }
+
+        guard !expected.isEmpty else { return requireExactLength ? actual.isEmpty : true }
+
+        var actualIndex = 0
+        var matched = 0
+
+        for (expectedIndex, expectedCall) in expected.enumerated() {
+            var foundIndex: Int?
+            while actualIndex < actual.count {
+                let actualCall = actual[actualIndex]
+                if actualCall.name == expectedCall.name {
+                    foundIndex = actualIndex
+                    break
+                }
+                if requireExactLength {
+                    details.append(
+                        "Tool order mismatch at position \(expectedIndex + 1): expected \(expectedCall.name), got \(actualCall.name)"
+                    )
+                    return false
+                }
+                actualIndex += 1
             }
 
-            for (key, expectedSubstring) in expectedArgs {
-                let actualValue = call.arguments.string(for: key) ?? ""
-                if !actualValue.lowercased().contains(expectedSubstring.lowercased()) {
-                    details.append("\(toolName).\(key): expected '\(expectedSubstring)' in '\(actualValue)'")
-                    correct = false
+            guard let matchIndex = foundIndex else {
+                details.append("Missing expected tool call \(expectedIndex + 1): \(expectedCall.name)")
+                return false
+            }
+
+            if validateArguments {
+                let actualCall = actual[matchIndex]
+                for (key, expectedSubstring) in expectedCall.arguments {
+                    let actualValue = actualCall.arguments.string(for: key) ?? ""
+                    if !actualValue.lowercased().contains(expectedSubstring.lowercased()) {
+                        details.append(
+                            "\(expectedCall.name).\(key) at call \(expectedIndex + 1): expected '\(expectedSubstring)' in '\(actualValue)'"
+                        )
+                        return false
+                    }
                 }
             }
+
+            matched += 1
+            actualIndex = matchIndex + 1
         }
-        return correct
+
+        if requireExactLength && matched == expected.count && actual.count > expected.count {
+            details.append("Unexpected extra tool call(s): \(actual.dropFirst(expected.count).map(\.name))")
+            return false
+        }
+
+        return true
     }
 
     // MARK: - Response Relevance
@@ -233,7 +312,6 @@ enum BenchmarkEvaluator {
     private static func evaluateResponseRelevance(
         expected: [String],
         response: String,
-        expectsClarification: Bool,
         details: inout [String]
     ) -> Bool {
         let lower = response.lowercased()
@@ -246,36 +324,127 @@ enum BenchmarkEvaluator {
             }
         }
 
-        if expectsClarification {
-            let clarificationSignals = ["?", "what", "when", "which", "could you", "can you",
-                                        "please", "more details", "specify", "clarify",
-                                        "let me know", "tell me"]
-            let hasClarification = clarificationSignals.contains { lower.contains($0) }
-            if !hasClarification {
-                details.append("Expected clarification question, but response seems definitive")
-                // Don't fail — this is a soft check
-            }
-        }
-
         return relevant
+    }
+
+    private static func evaluateClarification(
+        required: Bool,
+        response: String,
+        details: inout [String]
+    ) -> Bool {
+        guard required else { return true }
+
+        let lower = response.lowercased()
+        let clarificationSignals = [
+            "?",
+            "which",
+            "what",
+            "could you clarify",
+            "can you clarify",
+            "which one",
+            "do you mean",
+            "please clarify",
+        ]
+        let hasClarification = clarificationSignals.contains { lower.contains($0) }
+        if !hasClarification {
+            details.append("Expected clarification question, but response seems definitive")
+        }
+        return hasClarification
     }
 
     // MARK: - Forbidden Tools
 
     private static func evaluateForbiddenTools(
         forbidden: [String],
-        called: [String],
+        attempted: [String],
+        executed: [String],
         details: inout [String]
     ) -> Bool {
         guard !forbidden.isEmpty else { return true }
 
         let forbiddenSet = Set(forbidden)
-        let violating = called.filter { forbiddenSet.contains($0) }
+        let violating = (attempted + executed).filter { forbiddenSet.contains($0) }
         if !violating.isEmpty {
             details.append("Forbidden tool(s) called: \(violating.joined(separator: ", "))")
             return false
         }
         return true
+    }
+
+    // MARK: - Invalid Tool Calls
+
+    private static func evaluateInvalidToolCalls(
+        attempted: [(name: String, arguments: [String: JSONValue])],
+        executed: [(name: String, arguments: [String: JSONValue])],
+        malformedToolCalls: [String],
+        details: inout [String]
+    ) -> Bool {
+        var valid = true
+
+        if !malformedToolCalls.isEmpty {
+            details.append("Malformed tool call(s): \(malformedToolCalls.count)")
+            valid = false
+        }
+
+        var executedCounts: [String: Int] = [:]
+        for call in executed {
+            executedCounts[canonicalKey(name: call.name, arguments: call.arguments), default: 0] += 1
+        }
+
+        var invalidAttempts: [String] = []
+        for call in attempted {
+            let key = canonicalKey(name: call.name, arguments: call.arguments)
+            if let remaining = executedCounts[key], remaining > 0 {
+                executedCounts[key] = remaining - 1
+            } else {
+                invalidAttempts.append(call.name)
+            }
+        }
+
+        if !invalidAttempts.isEmpty {
+            details.append("Attempted tool call(s) that never executed: \(invalidAttempts.joined(separator: ", "))")
+            valid = false
+        }
+
+        return valid
+    }
+
+    // MARK: - File Assertions
+
+    private static func evaluateFileAssertions(
+        assertions: [FileAssertion],
+        sandboxRoot: URL,
+        details: inout [String]
+    ) -> Bool {
+        guard !assertions.isEmpty else { return true }
+
+        var passed = true
+
+        for assertion in assertions {
+            let fileURL = sandboxRoot.appendingPathComponent(assertion.path)
+            guard let data = try? Data(contentsOf: fileURL),
+                  let text = String(data: data, encoding: .utf8) else {
+                details.append("File assertion failed: could not read \(assertion.path)")
+                passed = false
+                continue
+            }
+
+            for substring in assertion.mustContain {
+                if !text.localizedCaseInsensitiveContains(substring) {
+                    details.append("File assertion failed: \(assertion.path) missing '\(substring)'")
+                    passed = false
+                }
+            }
+
+            for substring in assertion.mustNotContain {
+                if text.localizedCaseInsensitiveContains(substring) {
+                    details.append("File assertion failed: \(assertion.path) unexpectedly contains '\(substring)'")
+                    passed = false
+                }
+            }
+        }
+
+        return passed
     }
 
     // MARK: - Aggregate Scoring

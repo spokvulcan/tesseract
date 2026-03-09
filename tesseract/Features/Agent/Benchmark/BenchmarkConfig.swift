@@ -7,11 +7,17 @@ struct BenchmarkConfig {
         case full
     }
 
+    enum PromptProfile: String, Codable {
+        case benchmark
+        case production
+    }
+
     let sweep: Sweep
     let scenarioIDs: [String]?  // nil = all
     let outputDir: URL
     let modelDir: URL?  // nil = auto-detect
     let modelID: String?  // nil = default (see ModelDefinition.defaultAgentModelID)
+    let promptProfile: PromptProfile
 
     var resolvedModelID: String {
         modelID ?? ModelDefinition.defaultAgentModelID
@@ -112,6 +118,13 @@ struct BenchmarkConfig {
             return nil
         }()
 
+        let promptProfile: PromptProfile = {
+            if let idx = args.firstIndex(of: "--bench-prompt"), idx + 1 < args.count {
+                return PromptProfile(rawValue: args[idx + 1]) ?? .benchmark
+            }
+            return .benchmark
+        }()
+
         let maxTokensPerRound: Int = {
             if let idx = args.firstIndex(of: "--bench-max-tokens"), idx + 1 < args.count,
                let val = Int(args[idx + 1]) {
@@ -126,6 +139,7 @@ struct BenchmarkConfig {
             outputDir: outputDir,
             modelDir: modelDir,
             modelID: modelID,
+            promptProfile: promptProfile,
             maxTokensPerRound: maxTokensPerRound
         )
     }

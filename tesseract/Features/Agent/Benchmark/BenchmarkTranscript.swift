@@ -98,6 +98,7 @@ final class BenchmarkTranscript {
 
     func writeTurnResult(
         passed: Bool,
+        attemptedTools: [String],
         toolsCalled: [String],
         expectedTools: [String],
         tokPerSec: Double?,
@@ -106,10 +107,14 @@ final class BenchmarkTranscript {
     ) {
         let status = passed ? "PASS" : "FAIL"
         lines.append("── RESULT: [\(status)] ──")
+        lines.append("  Tools attempted: \(attemptedTools)")
         lines.append("  Tools called:  \(toolsCalled)")
         lines.append("  Expected:      \(expectedTools)")
         if checks.duplicateToolCalls > 0 {
             lines.append("  Duplicates:    \(checks.duplicateToolCalls)")
+        }
+        if checks.malformedToolCallCount > 0 {
+            lines.append("  Malformed:     \(checks.malformedToolCallCount)")
         }
         if let tps = tokPerSec {
             lines.append("  Token/s:       \(String(format: "%.1f", tps))")
@@ -129,8 +134,17 @@ final class BenchmarkTranscript {
             if !checks.responseRelevant {
                 lines.append("    ✗ Response missing expected content")
             }
+            if !checks.clarificationAsked {
+                lines.append("    ✗ Expected a clarification question")
+            }
             if !checks.noForbiddenTools {
                 lines.append("    ✗ Forbidden tool called")
+            }
+            if !checks.noInvalidToolCalls {
+                lines.append("    ✗ Invalid or non-executed tool call attempted")
+            }
+            if !checks.fileAssertionsPassed {
+                lines.append("    ✗ File assertions failed")
             }
             if checks.duplicateToolCalls > 0 {
                 lines.append("    ✗ Within-turn duplicate tool calls: \(checks.duplicateToolCalls)")
@@ -152,6 +166,12 @@ final class BenchmarkTranscript {
         lines.append("  Tool Accuracy:  \(String(format: "%.0f%%", toolAccuracy * 100))")
         lines.append("  Duplicate Rate: \(String(format: "%.0f%%", duplicateRate * 100))")
         lines.append(String(repeating: "═", count: 72))
+    }
+
+    func writePreTurnMutation(path: String) {
+        lines.append("╌╌╌ SANDBOX MUTATION ╌╌╌")
+        lines.append("→ overwrite(\(path))")
+        lines.append("")
     }
 
     // MARK: - Write to Disk

@@ -335,6 +335,7 @@ private func streamAssistantResponse(
 
             case .malformedToolCall(let raw):
                 Log.agent.warning("Malformed tool call ignored: \(raw)")
+                emit(.malformedToolCall(raw: raw))
 
             case .info:
                 // Metrics — useful for logging but don't affect the message

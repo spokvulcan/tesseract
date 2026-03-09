@@ -88,6 +88,7 @@ final class BenchmarkRunner {
                     modelName: resolvedModelName,
                     hardware: hardwareString(),
                     parameters: params,
+                    promptProfile: config.promptProfile,
                     contextLimit: 0,  // No fixed limit — managed by compaction
                     maxToolRounds: 0,  // No cap — loop runs until no more tool calls
                     sweepLabel: paramLabel
@@ -128,12 +129,18 @@ final class BenchmarkRunner {
 
         // Seed initial data files
         seedBenchmarkData(at: tempDir)
+        seedScenarioFiles(at: tempDir, files: scenario.benchmarkFiles)
+
+        // Seed skill files for this scenario
+        let skillMetadata = seedSkillFiles(at: tempDir, skills: scenario.benchmarkSkills)
 
         let sandbox = PathSandbox(root: tempDir)
         let tools = BuiltInToolFactory.createAll(sandbox: sandbox)
 
         // 2. Build system prompt with file-workflow instructions
-        let systemPrompt = buildBenchmarkSystemPrompt(tools: tools, agentRoot: tempDir.path)
+        let systemPrompt = buildBenchmarkSystemPrompt(
+            tools: tools, agentRoot: tempDir.path, skills: skillMetadata
+        )
 
         // 3. Create performance metrics collector
         let metrics = BenchmarkMetrics()
@@ -185,6 +192,11 @@ final class BenchmarkRunner {
                 userMessage: expectation.userMessage
             )
 
+            for file in expectation.preTurnFiles {
+                seedScenarioFiles(at: tempDir, files: [file])
+                transcript.writePreTurnMutation(path: file.relativePath)
+            }
+
             // Send user message and wait for agent to finish
             let userMsg = UserMessage.create(expectation.userMessage)
             agent.prompt(userMsg)
@@ -200,6 +212,7 @@ final class BenchmarkRunner {
             let latencyMs = (CFAbsoluteTimeGetCurrent() - turnStart) * 1000
 
             // Extract collected data from events
+            let attemptedToolCalls = turnCollector.attemptedToolCalls
             let toolsCalled = turnCollector.toolsCalled
             let toolResults = turnCollector.toolResults
             let responseText = turnCollector.assistantText
@@ -241,21 +254,25 @@ final class BenchmarkRunner {
             let turnResult = BenchmarkEvaluator.evaluate(
                 turnIndex: turnIdx,
                 expectation: expectation,
-                toolsCalled: toolsCalled,
+                attemptedToolCalls: attemptedToolCalls,
+                executedToolCalls: toolsCalled,
                 toolResults: toolResults.map(\.result),
                 assistantResponse: responseText,
                 info: aggregateInfo,
                 toolRounds: toolRounds,
                 latencyMs: latencyMs,
-                conversationToolHistory: conversationToolHistory
+                conversationToolHistory: conversationToolHistory,
+                malformedToolCalls: turnCollector.malformedToolCalls,
+                sandboxRoot: tempDir
             )
             turnResults.append(turnResult)
 
             // Write turn result to transcript
             transcript.writeTurnResult(
                 passed: turnResult.passed,
+                attemptedTools: turnResult.attemptedTools,
                 toolsCalled: toolsCalled.map(\.name),
-                expectedTools: expectation.expectedTools,
+                expectedTools: expectation.expectedToolCalls.map(\.name),
                 tokPerSec: aggregateInfo?.tokensPerSecond,
                 latencyMs: latencyMs,
                 checks: turnResult.checks
@@ -336,18 +353,66 @@ final class BenchmarkRunner {
         }
     }
 
+    /// Writes scenario-specific files into the sandbox, overwriting existing files when needed.
+    private func seedScenarioFiles(at directory: URL, files: [BenchmarkSeedFile]) {
+        guard !files.isEmpty else { return }
+
+        for file in files {
+            let url = directory.appendingPathComponent(file.relativePath)
+            let parent = url.deletingLastPathComponent()
+            do {
+                try FileManager.default.createDirectory(
+                    at: parent, withIntermediateDirectories: true
+                )
+                try file.content.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                log("WARNING: Failed to seed benchmark file '\(file.relativePath)': \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Seeds skill files into the sandbox and returns SkillMetadata for prompt assembly.
+    private func seedSkillFiles(at directory: URL, skills: [BenchmarkSkill]) -> [SkillMetadata] {
+        skills.compactMap { skill in
+            let fileURL = directory.appendingPathComponent(skill.relativePath)
+            let parentDir = fileURL.deletingLastPathComponent()
+            do {
+                try FileManager.default.createDirectory(
+                    at: parentDir, withIntermediateDirectories: true
+                )
+                try skill.content.write(to: fileURL, atomically: true, encoding: .utf8)
+                return SkillMetadata(
+                    name: skill.name,
+                    description: skill.description,
+                    filePath: fileURL.path,
+                    disableModelInvocation: false
+                )
+            } catch {
+                log("WARNING: Failed to seed skill '\(skill.name)': \(error.localizedDescription)")
+                return nil
+            }
+        }
+    }
+
     /// Builds a system prompt tailored for benchmarks with file-workflow instructions.
     private func buildBenchmarkSystemPrompt(
         tools: [AgentToolDefinition],
-        agentRoot: String
+        agentRoot: String,
+        skills: [SkillMetadata] = []
     ) -> String {
         let contextLoader = ContextLoader(agentRoot: URL(fileURLWithPath: agentRoot))
         let loadedContext = contextLoader.load()
+        let defaultPrompt: String = switch config.promptProfile {
+        case .benchmark:
+            Self.benchmarkCorePrompt
+        case .production:
+            SystemPromptAssembler.defaultCorePrompt
+        }
 
         return SystemPromptAssembler.assemble(
-            defaultPrompt: Self.benchmarkCorePrompt,
+            defaultPrompt: defaultPrompt,
             loadedContext: loadedContext,
-            skills: [],
+            skills: skills,
             tools: tools,
             agentRoot: agentRoot
         )
@@ -365,9 +430,10 @@ final class BenchmarkRunner {
         - ls: List files and directories
 
         Guidelines:
-        - Use read to examine files before editing
+        - Use ls to discover files and directories
+        - Use read to examine files before editing and writing
+        - Use write only if you read the file first and it is empty or does not exist, otherwise use edit
         - Use edit for precise changes (old_text must match exactly)
-        - Use write only for new files or complete rewrites
         - Be concise in your responses
 
         You manage the user's personal data using files:
@@ -550,11 +616,13 @@ final class TurnEventCollector {
     }
 
     private(set) var toolsCalled: [(name: String, arguments: [String: JSONValue])] = []
+    private(set) var attemptedToolCalls: [(name: String, arguments: [String: JSONValue])] = []
     private(set) var toolResults: [(name: String, result: String)] = []
     private(set) var assistantText: String = ""
     private(set) var rounds: [RoundData] = []
     private(set) var trailingText: String?
     private(set) var toolRoundCount: Int = 0
+    private(set) var malformedToolCalls: [String] = []
 
     private var currentRound = RoundData()
     private var pendingToolArgs: [String: [String: JSONValue]] = [:]  // toolCallId -> args
@@ -570,17 +638,17 @@ final class TurnEventCollector {
             }
             // Update full assistant text from the latest message
             assistantText = message.content
+            attemptedToolCalls = message.toolCalls.map { call in
+                (
+                    name: call.name,
+                    arguments: Self.parseArguments(from: call.argumentsJSON)
+                )
+            }
 
         case .toolExecutionStart(let toolCallId, let name, let argsJSON):
             toolRoundCount += 1
             // Parse arguments
-            let args: [String: JSONValue]
-            if let data = argsJSON.data(using: .utf8),
-               let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data) {
-                args = parsed
-            } else {
-                args = [:]
-            }
+            let args = Self.parseArguments(from: argsJSON)
             toolsCalled.append((name: name, arguments: args))
             pendingToolArgs[toolCallId] = args
 
@@ -593,7 +661,13 @@ final class TurnEventCollector {
                 ToolExecution(name: name, arguments: args, result: resultText)
             )
 
-        case .turnEnd:
+        case .turnEnd(let message, _, _):
+            attemptedToolCalls = message.toolCalls.map { call in
+                (
+                    name: call.name,
+                    arguments: Self.parseArguments(from: call.argumentsJSON)
+                )
+            }
             // Finalize the current round
             if !currentRound.text.isEmpty || !currentRound.toolExecutions.isEmpty {
                 rounds.append(currentRound)
@@ -606,9 +680,20 @@ final class TurnEventCollector {
                 trailingText = currentRound.text
             }
 
+        case .malformedToolCall(let raw):
+            malformedToolCalls.append(raw)
+
         default:
             break
         }
+    }
+
+    private static func parseArguments(from json: String) -> [String: JSONValue] {
+        guard let data = json.data(using: .utf8),
+              let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data) else {
+            return [:]
+        }
+        return parsed
     }
 }
 

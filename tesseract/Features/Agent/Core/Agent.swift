@@ -310,7 +310,7 @@ final class Agent {
             }
 
         case .turnStart, .turnEnd, .agentEnd, .messageStart, .messageEnd,
-             .toolExecutionUpdate:
+             .toolExecutionUpdate, .malformedToolCall:
             break
         }
     }
