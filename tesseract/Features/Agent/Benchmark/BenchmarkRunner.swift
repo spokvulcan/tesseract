@@ -451,7 +451,7 @@ final class BenchmarkRunner {
             )
         }
 
-        let cacheBase = URL.cachesDirectory.appendingPathComponent("mlx-audio")
+        let cacheBase = ModelDownloadManager.modelStorageURL
         var modelDir = cacheBase.appendingPathComponent(cacheSub)
         if let prefix = definition.pathPrefix {
             modelDir = modelDir.appendingPathComponent(prefix)

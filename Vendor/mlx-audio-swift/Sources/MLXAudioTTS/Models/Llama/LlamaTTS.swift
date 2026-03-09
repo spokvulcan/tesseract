@@ -979,7 +979,7 @@ private func llamaTTSResolveOrDownloadModel(
     requiredExtension: String
 ) async throws -> URL {
     let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
-    let modelDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+    let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         .appendingPathComponent("mlx-audio")
         .appendingPathComponent(modelSubdir)
 

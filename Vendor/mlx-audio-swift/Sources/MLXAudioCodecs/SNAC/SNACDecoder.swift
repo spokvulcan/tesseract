@@ -229,7 +229,7 @@ private func resolveOrDownloadSNACModel(
 ) async throws -> URL {
     // Use a persistent cache directory based on repo ID
     let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
-    let modelDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+    let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         .appendingPathComponent("mlx-audio")
         .appendingPathComponent(modelSubdir)
 

@@ -23,8 +23,17 @@ final class ModelDownloadManager: ObservableObject {
 
     private var downloadTasks: [String: Task<Void, Never>] = [:]
 
-    private static let cacheBaseURL: URL = {
-        URL.cachesDirectory.appendingPathComponent("mlx-audio")
+    static let modelStorageURL: URL = {
+        let url = URL.applicationSupportDirectory.appendingPathComponent("mlx-audio")
+        // Ensure directory exists and is excluded from Time Machine / iCloud backup
+        // (re-downloadable content per Apple guidelines). Setting on the parent
+        // directory excludes all contents.
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        var mutable = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutable.setResourceValues(values)
+        return url
     }()
 
     init() {
@@ -54,7 +63,7 @@ final class ModelDownloadManager: ObservableObject {
         }
         guard let subdir = model.cacheSubdirectory else { return .notDownloaded }
 
-        var checkDir = cacheBaseURL.appendingPathComponent(subdir)
+        var checkDir = modelStorageURL.appendingPathComponent(subdir)
         if let pathPrefix {
             checkDir = checkDir.appendingPathComponent(pathPrefix)
         }
@@ -217,7 +226,7 @@ final class ModelDownloadManager: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "No cache subdirectory for \(modelID)"]
             )
         }
-        let modelDir = Self.cacheBaseURL.appendingPathComponent(subdir)
+        let modelDir = Self.modelStorageURL.appendingPathComponent(subdir)
 
         var pending = [(index: Int, entry: Git.TreeEntry)]()
         for (index, entry) in filtered.enumerated() {
@@ -372,7 +381,7 @@ final class ModelDownloadManager: ObservableObject {
         guard let model = ModelDefinition.all.first(where: { $0.id == modelID }) else { return }
         guard let subdir = model.cacheSubdirectory else { return }
 
-        var deleteDir = Self.cacheBaseURL.appendingPathComponent(subdir)
+        var deleteDir = Self.modelStorageURL.appendingPathComponent(subdir)
         if let prefix = model.pathPrefix {
             deleteDir = deleteDir.appendingPathComponent(prefix)
         }
@@ -389,7 +398,7 @@ final class ModelDownloadManager: ObservableObject {
         guard let model = ModelDefinition.all.first(where: { $0.id == modelID }) else { return nil }
         guard let subdir = model.cacheSubdirectory else { return nil }
 
-        var path = Self.cacheBaseURL.appendingPathComponent(subdir)
+        var path = Self.modelStorageURL.appendingPathComponent(subdir)
         if let prefix = model.pathPrefix {
             path = path.appendingPathComponent(prefix)
         }

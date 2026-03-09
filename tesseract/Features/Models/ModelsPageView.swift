@@ -28,7 +28,7 @@ struct ModelsPageView: View {
             }
 
             Section {
-                CacheSummaryView(totalSize: downloadManager.totalCacheSize)
+                StorageSummaryView(totalSize: downloadManager.totalCacheSize)
             }
         }
         .formStyle(.grouped)
@@ -54,20 +54,20 @@ struct ModelsPageView: View {
     }
 }
 
-// MARK: - Cache Summary
+// MARK: - Storage Summary
 
-struct CacheSummaryView: View {
+struct StorageSummaryView: View {
     let totalSize: Int64
 
-    private let cacheURL = URL.cachesDirectory.appendingPathComponent("mlx-audio")
+    private let storageURL = ModelDownloadManager.modelStorageURL
 
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Cache: \(ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file))")
+                Text("Storage: \(ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(cacheURL.path)
+                Text(storageURL.path)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
@@ -76,7 +76,7 @@ struct CacheSummaryView: View {
             Spacer()
 
             Button("Show in Finder") {
-                NSWorkspace.shared.open(cacheURL)
+                NSWorkspace.shared.open(storageURL)
             }
             .font(.caption)
             .buttonStyle(.bordered)
