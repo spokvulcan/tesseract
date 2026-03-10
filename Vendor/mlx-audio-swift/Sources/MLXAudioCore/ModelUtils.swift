@@ -2,6 +2,9 @@ import Foundation
 import HuggingFace
 
 public struct ModelUtils {
+    /// Shared directory name under Application Support for all downloaded model weights.
+    public static let storageDirectoryName = "models"
+
     public static func resolveModelType(repoID: Repo.ID, hfToken: String? = nil) async throws -> String? {
         let modelNameComponents = repoID.name.split(separator: "/").last?.split(separator: "-")
         let modelURL = try await resolveOrDownloadModel(repoID: repoID, requiredExtension: "safetensors", hfToken: hfToken)
@@ -52,7 +55,7 @@ public struct ModelUtils {
     ) async throws -> URL {
         // Use a persistent cache directory based on repo ID
         let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
-        let modelDir = URL.applicationSupportDirectory.appendingPathComponent("mlx-audio").appendingPathComponent(modelSubdir)
+        let modelDir = URL.applicationSupportDirectory.appendingPathComponent(storageDirectoryName).appendingPathComponent(modelSubdir)
 
         // Check if model already exists with required files
         if FileManager.default.fileExists(atPath: modelDir.path) {

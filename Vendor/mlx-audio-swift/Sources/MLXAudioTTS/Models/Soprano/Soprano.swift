@@ -950,7 +950,7 @@ private func resolveOrDownloadSopranoModel(
 ) async throws -> URL {
     let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
     let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        .appendingPathComponent("mlx-audio")
+        .appendingPathComponent(ModelUtils.storageDirectoryName)
         .appendingPathComponent(modelSubdir)
 
     if FileManager.default.fileExists(atPath: modelDir.path) {

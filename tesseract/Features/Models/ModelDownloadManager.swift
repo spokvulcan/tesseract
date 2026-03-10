@@ -24,7 +24,7 @@ final class ModelDownloadManager: ObservableObject {
     private var downloadTasks: [String: Task<Void, Never>] = [:]
 
     static let modelStorageURL: URL = {
-        let url = URL.applicationSupportDirectory.appendingPathComponent("mlx-audio")
+        let url = URL.applicationSupportDirectory.appendingPathComponent(ModelUtils.storageDirectoryName)
         // Ensure directory exists and is excluded from Time Machine / iCloud backup
         // (re-downloadable content per Apple guidelines). Setting on the parent
         // directory excludes all contents.

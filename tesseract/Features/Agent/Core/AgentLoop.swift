@@ -265,7 +265,6 @@ private func streamAssistantResponse(
     var textContent = ""
     var thinkingContent: String?
     var toolCalls: [ToolCallInfo] = []
-    var inThinking = false
 
     // Emit messageStart with a placeholder
     let placeholderMessage = AssistantMessage.create(content: "")
@@ -295,7 +294,6 @@ private func streamAssistantResponse(
                 ))
 
             case .thinkStart:
-                inThinking = true
                 if thinkingContent == nil { thinkingContent = "" }
 
             case .thinking(let text):
@@ -311,7 +309,7 @@ private func streamAssistantResponse(
                 ))
 
             case .thinkEnd:
-                inThinking = false
+                break
 
             case .toolCall(let call):
                 let info = ToolCallInfo(
@@ -523,3 +521,4 @@ private final class MessageAccumulator: @unchecked Sendable {
         return messages
     }
 }
+

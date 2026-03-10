@@ -85,7 +85,7 @@ struct AgentInputBarView: View {
                     .help("Mention")
                     
                     Button { } label: {
-                        Image(systemName: "slash.square")
+                        Image(systemName: "slash.circle")
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(.secondary)
                     }

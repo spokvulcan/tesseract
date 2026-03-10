@@ -1,6 +1,7 @@
 import Foundation
 import MLX
 import MLXNN
+import MLXAudioCore
 import HuggingFace
 
 
@@ -230,7 +231,7 @@ private func resolveOrDownloadSNACModel(
     // Use a persistent cache directory based on repo ID
     let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
     let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        .appendingPathComponent("mlx-audio")
+        .appendingPathComponent(ModelUtils.storageDirectoryName)
         .appendingPathComponent(modelSubdir)
 
     // Check if model already exists with weight files
