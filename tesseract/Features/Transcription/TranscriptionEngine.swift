@@ -144,7 +144,7 @@ actor WhisperActor {
     private var whisperKit: WhisperKit?
 
     func loadModel(from modelPath: URL) async throws {
-        let logger = Logger(subsystem: "com.tesseract.app", category: "transcription")
+        let logger = Logger(subsystem: "app.tesseract.agent", category: "transcription")
         logger.info("Loading model from path: \(modelPath.path)")
 
         // List contents of model folder for debugging

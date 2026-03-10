@@ -11,7 +11,7 @@ import os
 final class BenchmarkRunner {
 
     private let config: BenchmarkConfig
-    private let logger = Logger(subsystem: "com.tesseract.app", category: "benchmark")
+    private let logger = Logger(subsystem: "app.tesseract.agent", category: "benchmark")
     private var logFileHandle: FileHandle?
 
     init(config: BenchmarkConfig = .fromCommandLine()) {

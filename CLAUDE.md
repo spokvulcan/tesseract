@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Tesseract is a privacy-focused, fully offline AI assistant for macOS. All inference (speech-to-text, text-to-speech, LLM agent, image generation) runs locally on Apple Silicon using MLX.
+Tesseract Agent is a privacy-focused, fully offline AI assistant for macOS. All inference (speech-to-text, text-to-speech, LLM agent, image generation) runs locally on Apple Silicon using MLX.
 
 - **Platform**: macOS 26+ (Apple Silicon only)
 - **Framework**: Swift 6.2 / SwiftUI
@@ -107,7 +107,7 @@ Text injection uses clipboard-based approach (copy → Cmd+V → restore clipboa
 
 **System prompts** (`SystemPromptBuilder`): Three tiers — minimal (distilled models), condensed (thinking models), default (full rules + examples). All inject current date, user memories, and conversation summaries.
 
-**Tools** (16 total in `ToolRegistry`): memory (save/update/delete), goal (create/list/update), task (create/list/complete), habit (create/log/status), mood (log/list), reminder (set), respond. All backed by `AgentDataStore` (actor, JSON files at `~/Library/Application Support/tesse-ract/agent/`). All tools use **1-based indexing**.
+**Tools** (16 total in `ToolRegistry`): memory (save/update/delete), goal (create/list/update), task (create/list/complete), habit (create/log/status), mood (log/list), reminder (set), respond. All backed by `AgentDataStore` (actor, JSON files at `~/Library/Application Support/Tesseract Agent/agent/`). All tools use **1-based indexing**.
 
 **Context management**: `AgentCoordinator` keeps last 60 messages. Observation masking replaces tool results beyond the 20 most recent with placeholders to manage context size.
 
@@ -180,7 +180,7 @@ Vendor code doesn't have access to the `Log` enum. Use `os.Logger` with the app'
 
 ```swift
 import os
-private let logger = Logger(subsystem: "com.tesseract.app", category: "mylib")
+private let logger = Logger(subsystem: "app.tesseract.agent", category: "mylib")
 logger.info("Generated \(tokenCount) tokens in \(elapsed, format: .fixed(precision: 2))s")
 ```
 

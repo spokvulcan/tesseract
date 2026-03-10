@@ -10,7 +10,7 @@ import Tokenizers
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "com.tesseract.app", category: "speech")
+private let logger = Logger(subsystem: "app.tesseract.agent", category: "speech")
 
 // MARK: - Step Timings (profiling accumulator)
 

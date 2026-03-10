@@ -15,7 +15,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT="$PROJECT_DIR/tesseract.xcodeproj"
 SCHEME="tesseract"
-BUNDLE_ID="com.tesseract.app"
+BUNDLE_ID="app.tesseract.agent"
 DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
 
 # --- Helpers ---------------------------------------------------------------
@@ -43,8 +43,8 @@ kill_app() {
 # Print data directory paths after launching the app.
 # Uses OSC 8 escape sequences for clickable file:// links in supported terminals.
 print_data_paths() {
-    local container="$HOME/Library/Containers/com.tesseract.app/Data"
-    local agent_data="$container/Library/Application Support/tesse-ract/agent"
+    local container="$HOME/Library/Containers/app.tesseract.agent/Data"
+    local agent_data="$container/Library/Application Support/Tesseract Agent/agent"
     local conversations="$agent_data/conversations"
     local debug_root="$container/tmp/tesseract-debug"
     local bench_output="$debug_root/benchmark"
@@ -154,7 +154,7 @@ cmd_log() {
     # Whitelist: our subsystem + print()/NSLog from our process (empty subsystem).
     # To reveal <private> values, mark interpolations as public: \(path, privacy: .public)
     log stream \
-        --predicate 'subsystem == "com.tesseract.app" OR (process == "tesseract" AND subsystem == "")' \
+        --predicate 'subsystem == "app.tesseract.agent" OR (process == "tesseract" AND subsystem == "")' \
         --level debug \
         --style compact 2>&1 \
     | while IFS= read -r line; do
@@ -179,9 +179,9 @@ cmd_log() {
             level="\033[33mWRN\033[0m "
         fi
 
-        # Extract category from [com.tesseract.app:category]
+        # Extract category from [app.tesseract.agent:category]
         local category=""
-        if [[ "$line" =~ \[com\.tesseract\.app:([a-z]+)\] ]]; then
+        if [[ "$line" =~ \[app\.tesseract\.agent:([a-z]+)\] ]]; then
             category="${BASH_REMATCH[1]}"
         fi
 

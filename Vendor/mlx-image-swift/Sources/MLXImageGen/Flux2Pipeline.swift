@@ -8,7 +8,7 @@ import Tokenizers
 import HuggingFace
 
 let flux2Profiling = ProcessInfo.processInfo.arguments.contains("--flux2-profile")
-private let logger = Logger(subsystem: "com.tesseract.app", category: "image")
+private let logger = Logger(subsystem: "app.tesseract.agent", category: "image")
 
 /// Configuration for glyph injection during denoising.
 public struct GlyphInjectionConfig: Sendable {

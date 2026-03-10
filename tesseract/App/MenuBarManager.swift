@@ -98,7 +98,7 @@ final class MenuBarManager: ObservableObject {
         menu.addItem(NSMenuItem.separator())
 
         let quitItem = NSMenuItem(
-            title: "Quit tesse-ract",
+            title: "Quit Tesseract Agent",
             action: #selector(quit),
             keyEquivalent: ""  // ⌘Q handled by system
         )
@@ -146,7 +146,7 @@ final class MenuBarManager: ObservableObject {
         guard let button = statusItem?.button else { return }
 
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "tesse-ract")?
+        if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Tesseract Agent")?
             .withSymbolConfiguration(config) {
             image.isTemplate = true
             button.image = image

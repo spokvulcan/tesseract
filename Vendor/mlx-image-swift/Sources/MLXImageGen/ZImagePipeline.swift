@@ -7,7 +7,7 @@ import os
 import Tokenizers
 import HuggingFace
 
-private let logger = Logger(subsystem: "com.tesseract.app", category: "image")
+private let logger = Logger(subsystem: "app.tesseract.agent", category: "image")
 
 public actor ZImagePipeline {
     private let transformer: ZImageTransformer

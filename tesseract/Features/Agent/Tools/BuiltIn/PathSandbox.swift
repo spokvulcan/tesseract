@@ -40,7 +40,7 @@ nonisolated struct PathSandbox: Sendable {
     /// Default sandbox root for the agent's working directory.
     static var defaultRoot: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("tesse-ract/agent", isDirectory: true)
+        return appSupport.appendingPathComponent("Tesseract Agent/agent", isDirectory: true)
     }
 
     /// Resolve a user-provided path to an absolute URL within the sandbox.

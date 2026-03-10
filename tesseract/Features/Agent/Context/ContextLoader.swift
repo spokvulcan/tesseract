@@ -11,7 +11,7 @@ import Foundation
 nonisolated struct ContextLoader: Sendable {
 
     /// Root of the agent data directory.
-    /// Typically `~/Library/Application Support/tesse-ract/agent/`.
+    /// Typically `~/Library/Application Support/Tesseract Agent/agent/`.
     let agentRoot: URL
 
     // MARK: - LoadedContext

@@ -94,6 +94,7 @@ struct TesseractApp: App {
             }
             .sheet(isPresented: $showOnboarding) {
                 OnboardingView(isPresented: $showOnboarding)
+                    .injectDependencies(from: container)
             }
             .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
                 showOnboarding = true

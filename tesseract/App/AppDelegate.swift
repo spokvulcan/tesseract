@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.tesseract.app"
+        let bundleID = Bundle.main.bundleIdentifier ?? "app.tesseract.agent"
         let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
 
         // If more than one instance is running (including this one), terminate this instance

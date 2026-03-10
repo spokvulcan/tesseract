@@ -99,7 +99,7 @@ final class TranscriptionHistory: ObservableObject, TranscriptionStoring {
             loadFromDisk()
             return
         }
-        let appDirectory = appSupport.appendingPathComponent("tesse-ract", isDirectory: true)
+        let appDirectory = appSupport.appendingPathComponent("Tesseract Agent", isDirectory: true)
 
         // Create directory if needed
         try? FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)

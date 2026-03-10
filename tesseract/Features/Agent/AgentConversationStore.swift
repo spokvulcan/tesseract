@@ -18,7 +18,7 @@ private struct ConversationFile: Codable {
 ///
 /// Storage layout:
 /// ```
-/// ~/Library/Application Support/tesse-ract/agent/conversations/
+/// ~/Library/Application Support/Tesseract Agent/agent/conversations/
 /// ├── index.json              ← lightweight summaries for fast startup
 /// ├── {uuid}.json             ← full conversation data (tagged messages)
 /// └── ...
@@ -35,7 +35,7 @@ final class AgentConversationStore: ObservableObject {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         conversationsDir = appSupport
-            .appendingPathComponent("tesse-ract/agent/conversations", isDirectory: true)
+            .appendingPathComponent("Tesseract Agent/agent/conversations", isDirectory: true)
 
         ensureDirectory()
         loadOrResetIndex()
