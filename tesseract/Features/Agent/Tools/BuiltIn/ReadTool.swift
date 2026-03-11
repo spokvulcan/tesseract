@@ -27,7 +27,7 @@ nonisolated enum ReadToolError: LocalizedError {
 
 // MARK: - ReadTool Factory
 
-nonisolated func createReadTool(sandbox: PathSandbox) -> AgentToolDefinition {
+nonisolated func createReadTool(sandbox: PathSandbox, readTracker: FileReadTracker) -> AgentToolDefinition {
     AgentToolDefinition(
         name: "read",
         label: "Read File",
@@ -58,6 +58,7 @@ nonisolated func createReadTool(sandbox: PathSandbox) -> AgentToolDefinition {
             let limit = ToolArgExtractor.int(argsJSON, key: "limit")
 
             let url = try sandbox.resolveExisting(path)
+            readTracker.record(url.path)
             let displayName = sandbox.displayPath(url)
             let data = try Data(contentsOf: url)
 

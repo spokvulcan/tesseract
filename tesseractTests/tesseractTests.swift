@@ -147,7 +147,7 @@ struct MessageConversionTests {
 struct ReadToolTests {
 
     @Test func readsNumberedTextFileContentsWithinLimits() async throws {
-        let (tool, root) = try makeReadToolTestRig()
+        let (tool, _, root) = try makeReadToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         try "Hello, world!\nLine 2\nLine 3".write(
@@ -177,7 +177,7 @@ struct ReadToolTests {
     }
 
     @Test func showsContinuationNoticeWhenUserLimitLeavesMoreContent() async throws {
-        let (tool, root) = try makeReadToolTestRig()
+        let (tool, _, root) = try makeReadToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         try makeLineFile(count: 100).write(
@@ -201,7 +201,7 @@ struct ReadToolTests {
     }
 
     @Test func showsContinuationNoticeForOffsetAndLimit() async throws {
-        let (tool, root) = try makeReadToolTestRig()
+        let (tool, _, root) = try makeReadToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         try makeLineFile(count: 100).write(
@@ -226,7 +226,7 @@ struct ReadToolTests {
     }
 
     @Test func throwsWhenOffsetIsBeyondEndOfFile() async throws {
-        let (tool, root) = try makeReadToolTestRig()
+        let (tool, _, root) = try makeReadToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         try "Line 1\nLine 2\nLine 3".write(
@@ -251,7 +251,7 @@ struct ReadToolTests {
     }
 
     @Test func truncatesFilesThatExceedTheLineLimit() async throws {
-        let (tool, root) = try makeReadToolTestRig()
+        let (tool, _, root) = try makeReadToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         try makeLineFile(count: 2_500).write(
@@ -278,7 +278,7 @@ struct ReadToolTests {
     }
 
     @Test func truncatesFilesThatExceedTheByteLimit() async throws {
-        let (tool, root) = try makeReadToolTestRig()
+        let (tool, _, root) = try makeReadToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let longLines = (1...500).map { "Line \($0): " + String(repeating: "x", count: 200) }
@@ -302,7 +302,7 @@ struct ReadToolTests {
     }
 
     @Test func truncatesOversizedSingleLinesWithANotice() async throws {
-        let (tool, root) = try makeReadToolTestRig()
+        let (tool, _, root) = try makeReadToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         try String(repeating: "x", count: 60_000).write(
@@ -326,7 +326,7 @@ struct ReadToolTests {
     }
 
     @Test func detectsImagesByContentInsteadOfFilenameExtension() async throws {
-        let (tool, root) = try makeReadToolTestRig()
+        let (tool, _, root) = try makeReadToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let imageURL = root.appendingPathComponent("image.txt")
@@ -344,7 +344,7 @@ struct ReadToolTests {
     }
 
     @Test func treatsImageExtensionsWithTextContentAsText() async throws {
-        let (tool, root) = try makeReadToolTestRig()
+        let (tool, _, root) = try makeReadToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         try "definitely not a png".write(
@@ -506,7 +506,7 @@ struct LsToolTests {
 struct WriteToolTests {
 
     @Test func writesFileContentsWithPiStyleSuccessMessage() async throws {
-        let (tool, root) = try makeWriteToolTestRig()
+        let (tool, _, root) = try makeWriteToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("write-test.txt")
@@ -526,7 +526,7 @@ struct WriteToolTests {
     }
 
     @Test func createsParentDirectories() async throws {
-        let (tool, root) = try makeWriteToolTestRig()
+        let (tool, _, root) = try makeWriteToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("nested/dir/test.txt")
@@ -544,11 +544,12 @@ struct WriteToolTests {
     }
 
     @Test func overwritesExistingFileContents() async throws {
-        let (tool, root) = try makeWriteToolTestRig()
+        let (tool, tracker, root) = try makeWriteToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("overwrite.txt")
         try "Original content".write(to: fileURL, atomically: true, encoding: .utf8)
+        tracker.record(fileURL.path)
 
         _ = try await tool.execute(
             "write-3",
@@ -561,7 +562,7 @@ struct WriteToolTests {
     }
 
     @Test func reportsUtf16LengthLikePi() async throws {
-        let (tool, root) = try makeWriteToolTestRig()
+        let (tool, _, root) = try makeWriteToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let content = "A😀B"
@@ -579,7 +580,7 @@ struct WriteToolTests {
     }
 
     @Test func throwsOperationAbortedWhenAlreadyCancelled() async throws {
-        let (tool, root) = try makeWriteToolTestRig()
+        let (tool, _, root) = try makeWriteToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let token = CancellationToken()
@@ -604,11 +605,12 @@ struct WriteToolTests {
 struct EditToolTests {
 
     @Test func replacesTextInFile() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("edit-test.txt")
         try "Hello, world!".write(to: fileURL, atomically: true, encoding: .utf8)
+        tracker.record(fileURL.path)
 
         let result = try await tool.execute(
             "edit-1",
@@ -630,14 +632,12 @@ struct EditToolTests {
     }
 
     @Test func throwsIfTextNotFound() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
-        try "Hello, world!".write(
-            to: root.appendingPathComponent("edit-test.txt"),
-            atomically: true,
-            encoding: .utf8
-        )
+        let editTestURL = root.appendingPathComponent("edit-test.txt")
+        try "Hello, world!".write(to: editTestURL, atomically: true, encoding: .utf8)
+        tracker.record(editTestURL.path)
 
         do {
             _ = try await tool.execute(
@@ -656,14 +656,12 @@ struct EditToolTests {
     }
 
     @Test func throwsIfTextAppearsMultipleTimes() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
-        try "foo foo foo".write(
-            to: root.appendingPathComponent("edit-test.txt"),
-            atomically: true,
-            encoding: .utf8
-        )
+        let editTestURL = root.appendingPathComponent("edit-test.txt")
+        try "foo foo foo".write(to: editTestURL, atomically: true, encoding: .utf8)
+        tracker.record(editTestURL.path)
 
         do {
             _ = try await tool.execute(
@@ -682,7 +680,7 @@ struct EditToolTests {
     }
 
     @Test func matchesTextWithTrailingWhitespaceStripped() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("trailing-ws.txt")
@@ -691,6 +689,7 @@ struct EditToolTests {
             atomically: true,
             encoding: .utf8
         )
+        tracker.record(fileURL.path)
 
         let result = try await tool.execute(
             "edit-4",
@@ -704,11 +703,12 @@ struct EditToolTests {
     }
 
     @Test func matchesSmartSingleQuotesToASCIIQuotes() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("smart-quotes.txt")
         try "console.log(‘hello’);\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        tracker.record(fileURL.path)
 
         _ = try await tool.execute(
             "edit-5",
@@ -725,11 +725,12 @@ struct EditToolTests {
     }
 
     @Test func matchesSmartDoubleQuotesToASCIIQuotes() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("smart-double-quotes.txt")
         try "const msg = “Hello World”;\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        tracker.record(fileURL.path)
 
         _ = try await tool.execute(
             "edit-6",
@@ -746,11 +747,12 @@ struct EditToolTests {
     }
 
     @Test func matchesUnicodeDashesToASCIIHyphen() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("unicode-dashes.txt")
         try "range: 1–5\nbreak—here\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        tracker.record(fileURL.path)
 
         _ = try await tool.execute(
             "edit-7",
@@ -767,11 +769,12 @@ struct EditToolTests {
     }
 
     @Test func matchesNonBreakingSpaceToRegularSpace() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("nbsp.txt")
         try "hello\u{00A0}world\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        tracker.record(fileURL.path)
 
         _ = try await tool.execute(
             "edit-8",
@@ -784,7 +787,7 @@ struct EditToolTests {
     }
 
     @Test func prefersExactMatchOverFuzzyMatch() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("exact-preferred.txt")
@@ -793,6 +796,7 @@ struct EditToolTests {
             atomically: true,
             encoding: .utf8
         )
+        tracker.record(fileURL.path)
 
         _ = try await tool.execute(
             "edit-9",
@@ -812,14 +816,12 @@ struct EditToolTests {
     }
 
     @Test func stillFailsWhenTextIsMissingAfterFuzzyMatching() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
-        try "completely different content\n".write(
-            to: root.appendingPathComponent("no-match.txt"),
-            atomically: true,
-            encoding: .utf8
-        )
+        let noMatchURL = root.appendingPathComponent("no-match.txt")
+        try "completely different content\n".write(to: noMatchURL, atomically: true, encoding: .utf8)
+        tracker.record(noMatchURL.path)
 
         do {
             _ = try await tool.execute(
@@ -838,14 +840,12 @@ struct EditToolTests {
     }
 
     @Test func detectsDuplicatesAfterFuzzyNormalization() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
-        try "hello world   \nhello world\n".write(
-            to: root.appendingPathComponent("fuzzy-dups.txt"),
-            atomically: true,
-            encoding: .utf8
-        )
+        let fuzzyDupsURL = root.appendingPathComponent("fuzzy-dups.txt")
+        try "hello world   \nhello world\n".write(to: fuzzyDupsURL, atomically: true, encoding: .utf8)
+        tracker.record(fuzzyDupsURL.path)
 
         do {
             _ = try await tool.execute(
@@ -864,11 +864,12 @@ struct EditToolTests {
     }
 
     @Test func matchesLFOldTextAgainstCRLFFileContent() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("crlf-test.txt")
         try Data("line one\r\nline two\r\nline three\r\n".utf8).write(to: fileURL)
+        tracker.record(fileURL.path)
 
         let result = try await tool.execute(
             "edit-12",
@@ -881,11 +882,12 @@ struct EditToolTests {
     }
 
     @Test func preservesCRLFLineEndingsAfterEdit() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("crlf-preserve.txt")
         try Data("first\r\nsecond\r\nthird\r\n".utf8).write(to: fileURL)
+        tracker.record(fileURL.path)
 
         _ = try await tool.execute(
             "edit-13",
@@ -900,11 +902,12 @@ struct EditToolTests {
     }
 
     @Test func preservesLFLineEndingsForLFFiles() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("lf-preserve.txt")
         try "first\nsecond\nthird\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        tracker.record(fileURL.path)
 
         _ = try await tool.execute(
             "edit-14",
@@ -917,12 +920,12 @@ struct EditToolTests {
     }
 
     @Test func detectsDuplicatesAcrossCRLFAndLFVariants() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
-        try Data("hello\r\nworld\r\n---\r\nhello\nworld\n".utf8).write(
-            to: root.appendingPathComponent("mixed-endings.txt")
-        )
+        let mixedURL = root.appendingPathComponent("mixed-endings.txt")
+        try Data("hello\r\nworld\r\n---\r\nhello\nworld\n".utf8).write(to: mixedURL)
+        tracker.record(mixedURL.path)
 
         do {
             _ = try await tool.execute(
@@ -941,12 +944,13 @@ struct EditToolTests {
     }
 
     @Test func preservesUTF8BOMAfterEdit() async throws {
-        let (tool, root) = try makeEditToolTestRig()
+        let (tool, tracker, root) = try makeEditToolTestRig()
         defer { removeReadToolTestRig(root) }
 
         let fileURL = root.appendingPathComponent("bom-test.txt")
         let initialData = Data([0xEF, 0xBB, 0xBF]) + Data("first\r\nsecond\r\nthird\r\n".utf8)
         try initialData.write(to: fileURL)
+        tracker.record(fileURL.path)
 
         _ = try await tool.execute(
             "edit-16",
@@ -964,12 +968,13 @@ struct EditToolTests {
 private let tinyPNGBase64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2Z0AAAAASUVORK5CYII="
 
-private func makeReadToolTestRig() throws -> (tool: AgentToolDefinition, root: URL) {
+private func makeReadToolTestRig() throws -> (tool: AgentToolDefinition, tracker: FileReadTracker, root: URL) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("tesseract-read-tool-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let sandbox = PathSandbox(root: root)
-    return (createReadTool(sandbox: sandbox), root)
+    let tracker = FileReadTracker()
+    return (createReadTool(sandbox: sandbox, readTracker: tracker), tracker, root)
 }
 
 private func makeLsToolTestRig() throws -> (tool: AgentToolDefinition, root: URL) {
@@ -984,20 +989,22 @@ private func removeReadToolTestRig(_ root: URL) {
     try? FileManager.default.removeItem(at: root)
 }
 
-private func makeEditToolTestRig() throws -> (tool: AgentToolDefinition, root: URL) {
+private func makeEditToolTestRig() throws -> (tool: AgentToolDefinition, tracker: FileReadTracker, root: URL) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("tesseract-edit-tool-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let sandbox = PathSandbox(root: root)
-    return (createEditTool(sandbox: sandbox), root)
+    let tracker = FileReadTracker()
+    return (createEditTool(sandbox: sandbox, readTracker: tracker), tracker, root)
 }
 
-private func makeWriteToolTestRig() throws -> (tool: AgentToolDefinition, root: URL) {
+private func makeWriteToolTestRig() throws -> (tool: AgentToolDefinition, tracker: FileReadTracker, root: URL) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("tesseract-write-tool-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let sandbox = PathSandbox(root: root)
-    return (createWriteTool(sandbox: sandbox), root)
+    let tracker = FileReadTracker()
+    return (createWriteTool(sandbox: sandbox, readTracker: tracker), tracker, root)
 }
 
 private func readToolArgs(path: String, offset: Int? = nil, limit: Int? = nil) -> [String: JSONValue] {
@@ -1044,4 +1051,203 @@ private func readUTF8PreservingBytes(from url: URL) throws -> String {
 
 private func makeLineFile(count: Int) -> String {
     (1...count).map { "Line \($0)" }.joined(separator: "\n")
+}
+
+// MARK: - FileReadTracker Tests
+
+@MainActor
+struct FileReadTrackerTests {
+
+    @Test func recordAndHasRead() {
+        let tracker = FileReadTracker()
+        tracker.record("/tmp/a.txt")
+        #expect(tracker.hasRead("/tmp/a.txt"))
+    }
+
+    @Test func hasReadReturnsFalseForUnrecorded() {
+        let tracker = FileReadTracker()
+        #expect(!tracker.hasRead("/tmp/x.txt"))
+    }
+
+    @Test func recordIsIdempotent() {
+        let tracker = FileReadTracker()
+        tracker.record("/tmp/a.txt")
+        tracker.record("/tmp/a.txt")
+        #expect(tracker.hasRead("/tmp/a.txt"))
+    }
+
+    @Test func differentPathsAreIndependent() {
+        let tracker = FileReadTracker()
+        tracker.record("/tmp/a.txt")
+        #expect(!tracker.hasRead("/tmp/b.txt"))
+    }
+
+    @Test func pathNormalizationMatters() {
+        let tracker = FileReadTracker()
+        tracker.record("/tmp/a")
+        #expect(!tracker.hasRead("/tmp/./a"))
+    }
+}
+
+// MARK: - Write Tool Read Guard Tests
+
+@MainActor
+struct WriteToolReadGuardTests {
+
+    @Test func writeNewFileWithoutReadSucceeds() async throws {
+        let (tool, _, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let result = try await tool.execute(
+            "wg-1",
+            writeToolArgs(path: "brand-new.txt", content: "hello"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully wrote"))
+    }
+
+    @Test func writeExistingFileWithoutReadReturnsError() async throws {
+        let (tool, _, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("existing.txt")
+        try "original".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let result = try await tool.execute(
+            "wg-2",
+            writeToolArgs(path: "existing.txt", content: "overwrite"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("must read"))
+    }
+
+    @Test func writeExistingFileAfterReadSucceeds() async throws {
+        let (tool, tracker, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("existing.txt")
+        try "original".write(to: fileURL, atomically: true, encoding: .utf8)
+        tracker.record(fileURL.path)
+
+        let result = try await tool.execute(
+            "wg-3",
+            writeToolArgs(path: "existing.txt", content: "overwrite"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully wrote"))
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "overwrite")
+    }
+}
+
+// MARK: - Edit Tool Read Guard Tests
+
+@MainActor
+struct EditToolReadGuardTests {
+
+    @Test func editWithoutReadReturnsError() async throws {
+        let (tool, _, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("guarded.txt")
+        try "Hello, world!".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let result = try await tool.execute(
+            "eg-1",
+            editToolArgs(path: "guarded.txt", oldText: "world", newText: "testing"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("must read"))
+    }
+
+    @Test func editAfterReadSucceeds() async throws {
+        let (tool, tracker, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("guarded.txt")
+        try "Hello, world!".write(to: fileURL, atomically: true, encoding: .utf8)
+        tracker.record(fileURL.path)
+
+        let result = try await tool.execute(
+            "eg-2",
+            editToolArgs(path: "guarded.txt", oldText: "world", newText: "testing"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully replaced text"))
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "Hello, testing!")
+    }
+
+    @Test func editDifferentPathAfterReadReturnsError() async throws {
+        let (tool, tracker, root) = try makeEditToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileA = root.appendingPathComponent("a.txt")
+        let fileB = root.appendingPathComponent("b.txt")
+        try "content A".write(to: fileA, atomically: true, encoding: .utf8)
+        try "content B".write(to: fileB, atomically: true, encoding: .utf8)
+        tracker.record(fileA.path)
+
+        let result = try await tool.execute(
+            "eg-3",
+            editToolArgs(path: "b.txt", oldText: "content B", newText: "changed"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("must read"))
+    }
+}
+
+// MARK: - Read Tool Tracker Integration Tests
+
+@MainActor
+struct ReadToolTrackerTests {
+
+    @Test func readRecordsPathInTracker() async throws {
+        let (tool, tracker, root) = try makeReadToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("tracked.txt")
+        try "content".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        _ = try await tool.execute("rt-1", readToolArgs(path: "tracked.txt"), nil, nil)
+
+        #expect(tracker.hasRead(fileURL.path))
+    }
+
+    @Test func readThenEditIntegration() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tesseract-integration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let sandbox = PathSandbox(root: root)
+        let tracker = FileReadTracker()
+        let readTool = createReadTool(sandbox: sandbox, readTracker: tracker)
+        let editTool = createEditTool(sandbox: sandbox, readTracker: tracker)
+
+        let fileURL = root.appendingPathComponent("flow.txt")
+        try "Hello, world!".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        _ = try await readTool.execute("rt-2a", readToolArgs(path: "flow.txt"), nil, nil)
+
+        let result = try await editTool.execute(
+            "rt-2b",
+            editToolArgs(path: "flow.txt", oldText: "world", newText: "flow"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully replaced text"))
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "Hello, flow!")
+    }
 }

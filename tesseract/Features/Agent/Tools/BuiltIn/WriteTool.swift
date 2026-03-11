@@ -11,7 +11,7 @@ nonisolated struct WriteToolError: LocalizedError {
 
 // MARK: - WriteTool Factory
 
-nonisolated func createWriteTool(sandbox: PathSandbox) -> AgentToolDefinition {
+nonisolated func createWriteTool(sandbox: PathSandbox, readTracker: FileReadTracker) -> AgentToolDefinition {
     AgentToolDefinition(
         name: "write",
         label: "Write File",
@@ -39,6 +39,10 @@ nonisolated func createWriteTool(sandbox: PathSandbox) -> AgentToolDefinition {
             }
 
             let url = try sandbox.resolveForWrite(path)
+
+            if FileManager.default.fileExists(atPath: url.path) && !readTracker.hasRead(url.path) {
+                return .error("You must read a file before overwriting it. Use the read tool on '\(path)' first.")
+            }
 
             if signal?.isCancelled == true {
                 throw WriteToolError(message: "Operation aborted")

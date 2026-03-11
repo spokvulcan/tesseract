@@ -17,7 +17,7 @@ nonisolated struct EditToolError: LocalizedError {
 
 // MARK: - EditTool Factory
 
-nonisolated func createEditTool(sandbox: PathSandbox) -> AgentToolDefinition {
+nonisolated func createEditTool(sandbox: PathSandbox, readTracker: FileReadTracker) -> AgentToolDefinition {
     AgentToolDefinition(
         name: "edit",
         label: "Edit File",
@@ -52,6 +52,11 @@ nonisolated func createEditTool(sandbox: PathSandbox) -> AgentToolDefinition {
             }
 
             let url = try sandbox.resolveExisting(path)
+
+            if !readTracker.hasRead(url.path) {
+                return .error("You must read a file before editing it. Use the read tool on '\(path)' first.")
+            }
+
             let displayName = sandbox.displayPath(url)
 
             let rawData = try Data(contentsOf: url)
