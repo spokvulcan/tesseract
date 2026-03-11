@@ -343,7 +343,7 @@ struct RecordingSettingsSection: View {
         }
         .formStyle(.grouped)
 
-        .navigationTitle("Recording")
+        .navigationTitle("Preferences")
     }
 
     private func recordNewHotkey() {

@@ -17,8 +17,8 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
 
     var id: String { rawValue }
 
-    static let mainPages: [NavigationItem] = [.dictation, .speech, .agent]
-    static let settingsPages: [NavigationItem] = [.general, .model, .recording]
+    static let mainPages: [NavigationItem] = [.agent, .dictation, .speech]
+    static let settingsPages: [NavigationItem] = [.general, .recording, .model]
 
     var name: LocalizedStringResource {
         switch self {
@@ -29,7 +29,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .zimage: "Z-Image"
         case .general: "General"
         case .model: "Models"
-        case .recording: "Recording"
+        case .recording: "Preferences"
         }
     }
 
@@ -42,7 +42,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .zimage: "photo.artframe"
         case .general: "gear"
         case .model: "brain"
-        case .recording: "waveform"
+        case .recording: "slider.horizontal.3"
         }
     }
 
