@@ -452,6 +452,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Tesseract Agent";
 				INFOPLIST_KEY_CFBundleName = "Tesseract Agent";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Tesseract Agent uses Accessibility to register global keyboard shortcuts for dictation, text-to-speech, and agent voice input.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture voice for transcription";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -502,6 +503,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Tesseract Agent";
 				INFOPLIST_KEY_CFBundleName = "Tesseract Agent";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Tesseract Agent uses Accessibility to register global keyboard shortcuts for dictation, text-to-speech, and agent voice input.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture voice for transcription";
 				LD_RUNPATH_SEARCH_PATHS = (
