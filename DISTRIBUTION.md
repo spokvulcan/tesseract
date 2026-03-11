@@ -1,6 +1,6 @@
-# tesse-ract Distribution Checklist
+# Tesseract Agent Distribution Checklist
 
-Tracks what needs to be done to publish tesse-ract on the Mac App Store.
+Tracks what needs to be done to publish Tesseract Agent on the Mac App Store.
 
 ---
 
@@ -8,8 +8,8 @@ Tracks what needs to be done to publish tesse-ract on the Mac App Store.
 
 | Setting | Value |
 |---------|-------|
-| App Name (display) | tesse-ract (`CFBundleDisplayName`) |
-| Bundle Identifier | `com.tesseract.app` |
+| App Name (display) | Tesseract Agent (`CFBundleDisplayName`) |
+| Bundle Identifier | `app.tesseract.agent` |
 | Version | 1.0 |
 | Build | 1 |
 | Development Team | Configured (`5RBTC2MNY8`) |
@@ -46,12 +46,12 @@ Both share:
 - [x] Separate Release entitlements (no debug exceptions)
 - [x] Privacy manifest (`PrivacyInfo.xcprivacy`)
 - [x] Privacy usage description (`NSMicrophoneUsageDescription`)
-- [x] `CFBundleDisplayName` set to "tesse-ract" (Debug + Release)
+- [x] `CFBundleDisplayName` set to "Tesseract Agent" (Debug + Release)
 - [x] App icon added (all required macOS sizes)
 - [x] App category set (`public.app-category.productivity`)
 - [x] Version/build numbers set (1.0 / 1)
 - [x] App Store metadata drafted (`APP_STORE_METADATA.md`)
-- [x] All user-facing strings updated to "tesse-ract"
+- [x] All user-facing strings updated to "Tesseract Agent"
 - [x] Onboarding wizard updated for current feature set
 
 ---
@@ -68,7 +68,7 @@ Current signing identity is "Apple Development" (local testing only).
 
 ### 2. App Store Connect Setup
 
-- [ ] Create the app record (bundle ID `com.tesseract.app`, SKU, name "tesse-ract")
+- [ ] Create the app record (bundle ID `app.tesseract.agent`, SKU, name "Tesseract Agent")
 - [ ] Configure pricing and availability
 - [ ] Complete age rating questionnaire
 - [ ] Complete App Privacy questionnaire (no data collected — strong story)
@@ -91,7 +91,7 @@ Draft copy is in `APP_STORE_METADATA.md`. Still needed:
 xcodebuild archive \
   -project tesseract.xcodeproj \
   -scheme tesseract \
-  -archivePath build/tesse-ract.xcarchive
+  -archivePath build/Tesseract Agent.xcarchive
 
 # Or use Xcode: Product → Archive → Distribute App → App Store Connect
 ```
@@ -133,23 +133,23 @@ If App Store review is problematic (Accessibility permission usage can get scrut
 xcodebuild archive \
   -project tesseract.xcodeproj \
   -scheme tesseract \
-  -archivePath build/tesse-ract.xcarchive
+  -archivePath build/Tesseract Agent.xcarchive
 
 # 2. Export
 xcodebuild -exportArchive \
-  -archivePath build/tesse-ract.xcarchive \
+  -archivePath build/Tesseract Agent.xcarchive \
   -exportPath build/export \
   -exportOptionsPlist ExportOptions.plist
 
 # 3. Notarize
-xcrun notarytool submit build/export/tesse-ract.app.zip \
+xcrun notarytool submit build/export/Tesseract Agent.app.zip \
   --apple-id YOUR_APPLE_ID \
   --team-id 5RBTC2MNY8 \
   --password APP_SPECIFIC_PASSWORD \
   --wait
 
 # 4. Staple
-xcrun stapler staple build/export/tesse-ract.app
+xcrun stapler staple build/export/Tesseract Agent.app
 ```
 
 ### 3. Create DMG
@@ -157,14 +157,14 @@ xcrun stapler staple build/export/tesse-ract.app
 ```bash
 # Using create-dmg (brew install create-dmg)
 create-dmg \
-  --volname "tesse-ract" \
+  --volname "Tesseract Agent" \
   --volicon "path/to/icon.icns" \
   --window-pos 200 120 \
   --window-size 600 400 \
   --icon-size 100 \
-  --icon "tesse-ract.app" 150 190 \
+  --icon "Tesseract Agent.app" 150 190 \
   --app-drop-link 450 190 \
-  "tesse-ract-1.0.dmg" \
+  "Tesseract Agent-1.0.dmg" \
   "build/export/"
 ```
 

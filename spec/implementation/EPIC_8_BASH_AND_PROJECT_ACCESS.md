@@ -4,7 +4,7 @@
 
 ## Motivation
 
-The on-device LLM is trained to use bash commands for exploration and automation. Currently the agent can only read/write/edit files inside its own `~/Library/Application Support/tesse-ract/agent/` container. By adding:
+The on-device LLM is trained to use bash commands for exploration and automation. Currently the agent can only read/write/edit files inside its own `~/Library/Application Support/Tesseract Agent/agent/` container. By adding:
 
 1. A **bash tool** that executes shell commands via `Process`
 2. **Security-scoped bookmark** support so the user can grant access to a project directory

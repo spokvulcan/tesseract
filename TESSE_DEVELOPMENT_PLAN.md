@@ -1,8 +1,8 @@
-# tesse-ract Development Plan
+# Tesseract Agent Development Plan
 
 > Last updated: 2026-02-28
 
-This document tracks the current state of tesse-ract, what has been built, what is in progress, and what comes next. It replaces the original research blueprint (`reasearch/local Wispr Flow alternative.md`) which envisioned a Tauri/Rust app — the project pivoted to native Swift/SwiftUI + MLX for Apple Silicon.
+This document tracks the current state of Tesseract Agent, what has been built, what is in progress, and what comes next. It replaces the original research blueprint (`reasearch/local Wispr Flow alternative.md`) which envisioned a Tauri/Rust app — the project pivoted to native Swift/SwiftUI + MLX for Apple Silicon.
 
 ---
 

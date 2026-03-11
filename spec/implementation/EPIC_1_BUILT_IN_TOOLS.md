@@ -49,7 +49,7 @@ enum PathSandboxError: LocalizedError {
 }
 ```
 
-**Default sandbox root**: `~/Library/Application Support/tesse-ract/agent/`
+**Default sandbox root**: `~/Library/Application Support/Tesseract Agent/agent/`
 
 **Implementation details**:
 - `resolve()`:

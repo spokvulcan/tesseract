@@ -25,7 +25,7 @@ Discovers and loads context files (`AGENTS.md`, `CLAUDE.md`) and prompt override
 
 ```swift
 struct ContextLoader {
-    let agentRoot: URL  // ~/Library/Application Support/tesse-ract/agent/
+    let agentRoot: URL  // ~/Library/Application Support/Tesseract Agent/agent/
 
     struct LoadedContext {
         let contextFiles: [(path: String, content: String)]  // In load order
@@ -107,7 +107,7 @@ struct SkillRegistry {
 
 **Skill locations** (load order):
 ```
-1. ~/Library/Application Support/tesse-ract/agent/skills/    (user-global)
+1. ~/Library/Application Support/Tesseract Agent/agent/skills/    (user-global)
 2. Package-provided skill paths                               (from packages)
 3. Extension-provided skill paths                             (from resources_discover)
 ```

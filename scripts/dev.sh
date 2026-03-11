@@ -7,6 +7,7 @@
 #   run         Kill running app + launch the built app (Debug)
 #   dev         Build + kill + run using Release (main perf workflow)
 #   dev-profile Build + kill + run with profiling env vars enabled
+#   archive     Create release archive for App Store submission
 #   clean       Clean build artifacts and derived data
 #   log         Tail system log filtered to tesseract
 
@@ -139,6 +140,33 @@ cmd_dev_profile() {
     print_data_paths
 }
 
+cmd_archive() {
+    local archive_path="$PROJECT_DIR/build/Tesseract.xcarchive"
+    echo "Archiving tesseract for App Store (arm64 only)..."
+    rm -rf "$archive_path"
+    local archive_output
+    local exit_code=0
+    archive_output=$(xcodebuild archive \
+        -project "$PROJECT" \
+        -scheme "$SCHEME" \
+        -archivePath "$archive_path" \
+        -xcconfig "$PROJECT_DIR/Config/AppleSilicon.xcconfig" \
+        2>&1) || exit_code=$?
+
+    echo "$archive_output" | grep -E "^(error:|warning:|Build |BUILD |\*\* ARCHIVE)" || true
+
+    if [ $exit_code -ne 0 ]; then
+        echo ""
+        echo "ARCHIVE FAILED (exit code $exit_code)"
+        echo "$archive_output" | tail -20
+        return $exit_code
+    fi
+
+    echo ""
+    echo "Archive created at: $archive_path"
+    echo "Next: open Xcode Organizer (Window → Organizer) to upload to App Store Connect."
+}
+
 cmd_clean() {
     echo "Cleaning build..."
     xcodebuild clean -project "$PROJECT" -scheme "$SCHEME" 2>&1 | tail -1
@@ -205,6 +233,7 @@ usage() {
     echo "  run         Kill running app + launch the built app (Debug)"
     echo "  dev         Build + kill + run using Release (the main perf workflow)"
     echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
+    echo "  archive     Create release archive for App Store submission"
     echo "  clean       Clean build artifacts and derived data"
     echo "  log         Tail system log filtered to tesseract"
 }
@@ -216,6 +245,7 @@ case "${1:-}" in
     run)         cmd_run ;;
     dev)         cmd_dev ;;
     dev-profile) cmd_dev_profile ;;
+    archive)     cmd_archive ;;
     clean)       cmd_clean ;;
     log)         cmd_log ;;
     *)           usage ;;

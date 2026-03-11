@@ -1,3 +1,19 @@
+# Xcode build artifacts
+build/
+DerivedData/
+*.xcarchive
+
+# Xcode user-specific data
+xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Packages/
+
 # Research
 research/
 reasearch/
@@ -8,5 +24,7 @@ scripts/.venv/
 # WhisperKit model weights (too large for git)
 tesseract/Resources/Models/
 
-# Swift Package Manager Xcode metadata
-.swiftpm/
+# macOS
+.DS_Store
+*.swp
+*~

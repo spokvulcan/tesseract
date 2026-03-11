@@ -375,7 +375,7 @@ They are the Tesseract equivalent of Pi's skills:
 ### Skill Locations
 
 ```text
-~/Library/Application Support/tesse-ract/agent/skills/
+~/Library/Application Support/Tesseract Agent/agent/skills/
 {project}/.agents/skills/
 ```
 
@@ -506,7 +506,7 @@ The `personal-assistant` package provides:
 ### 9.2 Default Data Directory
 
 ```text
-~/Library/Application Support/tesse-ract/agent/
+~/Library/Application Support/Tesseract Agent/agent/
 ├── conversations/
 ├── skills/
 ├── packages/
@@ -613,7 +613,7 @@ This keeps the core generic. The personal tone and assistant-specific guidance b
 Pi walks ancestor directories from filesystem root to cwd, collecting `AGENTS.md`/`CLAUDE.md` at each level. Tesseract runs inside the macOS App Sandbox, which prevents arbitrary filesystem walking. Tesseract therefore loads context files from a **fixed, enumerable set of locations** — not by walking the filesystem.
 
 Context file sources (in load order):
-1. **Global agent directory**: `~/Library/Application Support/tesse-ract/agent/AGENTS.md` (or `CLAUDE.md`)
+1. **Global agent directory**: `~/Library/Application Support/Tesseract Agent/agent/AGENTS.md` (or `CLAUDE.md`)
 2. **Package-provided context**: Context files bundled by enabled packages
 3. **Extension-provided context**: Context files registered via `resources_discover` event
 
@@ -1276,7 +1276,7 @@ description: Use this skill when the user wants to remember, update, or forget p
 ### F.3 Skill Locations (load order = precedence order)
 
 ```
-1. ~/Library/Application Support/tesse-ract/agent/skills/     (user-global)
+1. ~/Library/Application Support/Tesseract Agent/agent/skills/     (user-global)
 2. {project}/.agents/skills/                                   (project-local)
 3. Package-provided skill paths                                (from packages)
 4. Extension-provided skill paths                              (from resources_discover)
@@ -1293,7 +1293,7 @@ When a skill file references a relative path, resolve it against the skill direc
   <skill>
     <name>memory-management</name>
     <description>Use this skill when the user wants to remember, update, or forget personal facts.</description>
-    <location>/Users/owl/Library/Application Support/tesse-ract/agent/skills/memory-management/SKILL.md</location>
+    <location>/Users/owl/Library/Application Support/Tesseract Agent/agent/skills/memory-management/SKILL.md</location>
   </skill>
 </available_skills>
 ```
@@ -1618,7 +1618,7 @@ All tools must resolve paths through a sandbox:
 - Path traversal (`../`) that escapes the sandbox is rejected
 - Symlinks that point outside the sandbox are rejected
 
-The sandbox root for Tesseract: `~/Library/Application Support/tesse-ract/agent/`
+The sandbox root for Tesseract: `~/Library/Application Support/Tesseract Agent/agent/`
 
 ---
 

@@ -124,7 +124,7 @@ Replace domain tool expectations with file tool expectations:
 **No code changes**. Comprehensive testing:
 
 1. **Fresh start**:
-   - Delete `~/Library/Application Support/tesse-ract/agent/`
+   - Delete `~/Library/Application Support/Tesseract Agent/agent/`
    - Launch app → verify seed files created (memories.md, tasks.md)
    - Verify skills discovered (check logs for skill names)
    - Verify system prompt assembled correctly (check debug logs)

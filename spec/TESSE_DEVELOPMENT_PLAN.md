@@ -241,7 +241,7 @@ The simplest possible tool. Returns the current date, time, and day of week. Pro
 
 ### 5.2 — `memory_save` / `memory_search` tools
 
-`memory_save`: Save a fact, preference, or important information to `~/Library/Application Support/tesse-ract/agent/memories.json`. Accepts an optional `category` parameter (e.g. preference, health, work, personal). Deduplicates on exact fact text.
+`memory_save`: Save a fact, preference, or important information to `~/Library/Application Support/Tesseract Agent/agent/memories.json`. Accepts an optional `category` parameter (e.g. preference, health, work, personal). Deduplicates on exact fact text.
 `memory_search`: Search stored memories by keyword overlap scoring. Returns top 10 matches with dates and categories.
 
 Simple JSON array of `{ "id": "...", "fact": "...", "category": "...", "createdAt": "..." }` entries.

@@ -149,7 +149,7 @@ struct AudioLevelMeter: View {
                 try audioCapture.startCapture()
                 isTestingMic = true
             } catch {
-                print("Failed to start mic test: \(error)")
+                Log.general.error("Failed to start mic test: \(error)")
             }
         }
     }

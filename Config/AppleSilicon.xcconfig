@@ -1,0 +1,3 @@
+// Tesseract Agent requires Apple Silicon for MLX inference.
+// Exclude x86_64 from all builds including SPM packages.
+ARCHS = arm64

@@ -2,7 +2,7 @@
 
 ## App Name
 
-Tesseract
+Tesseract Agent
 
 ### Name Research
 
@@ -33,7 +33,7 @@ AI that lives on your Mac. Dictation, text-to-speech, image generation, and more
 
 ## Description
 
-Tesseract brings intelligence to your Mac without sending a single byte to the cloud. Every model runs locally on Apple Silicon — your data never leaves your device.
+Tesseract Agent brings intelligence to your Mac without sending a single byte to the cloud. Every model runs locally on Apple Silicon — your data never leaves your device.
 
 Voice
 
@@ -70,19 +70,19 @@ Secondary (optional): Utilities
 
 ## Support URL
 
-<ADD SUPPORT URL>
+https://thetesseract.app/support
 
 ## Marketing URL (optional)
 
-<ADD MARKETING URL>
+https://thetesseract.app
 
 ## Privacy Policy URL
 
-<ADD PRIVACY POLICY URL>
+https://thetesseract.app/privacy
 
 ## App Review Notes
 
-Tesseract uses:
+Tesseract Agent uses:
 
 - Microphone access for recording voice dictation.
 - Accessibility permission to capture the global hotkey and to simulate paste into the active app.
