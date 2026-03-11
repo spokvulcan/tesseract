@@ -17,7 +17,7 @@ nonisolated struct SkillMetadata: Sendable {
 // MARK: - SkillRegistry
 
 /// Discovers skill files from known locations, parses YAML frontmatter, and
-/// generates the XML listing injected into the system prompt.
+/// generates the plain-text listing injected into the system prompt.
 nonisolated enum SkillRegistry: Sendable {
 
     // MARK: - Discovery
@@ -61,33 +61,31 @@ nonisolated enum SkillRegistry: Sendable {
 
     // MARK: - Prompt Formatting
 
-    /// Format discovered skills as XML for the system prompt.
+    /// Format discovered skills as plain-text markdown for the system prompt.
     /// Only includes skills where `disableModelInvocation` is false.
     static func formatForPrompt(_ skills: [SkillMetadata]) -> String {
         let eligible = skills.filter { !$0.disableModelInvocation }
         guard !eligible.isEmpty else { return "" }
 
-        var xml = """
-            The following skills provide specialized instructions for specific tasks.
-            Never guess how specific workflow or task should be done.
-            Always read skill before do anything related to skill description. 
-            Use the read tool to read a skill's file when the task matches its description.
-            When a skill file references a relative path, resolve it against the skill directory
-            (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.
-            Skills are .md files not tools, always use read tool to load the skill.
-            <available_skills>
+        var lines = """
+            # Skills
+
+            Skills are markdown instruction files on disk — they are NOT tools and cannot be called.
+            When a task matches a skill's description, use the read tool to load the skill file before proceeding.
+            Never guess how a specific workflow should be done — always read the skill first.
+
+            To load a skill, call the read tool with its file path, for example:
+              read(path: "\(eligible.first!.filePath)")
+
+            Available skills:
             """
 
         for skill in eligible {
-            xml += "\n  <skill>"
-            xml += "\n    <name>\(escapeXML(skill.name))</name>"
-            xml += "\n    <description>\(escapeXML(skill.description))</description>"
-            xml += "\n    <location>\(escapeXML(skill.filePath))</location>"
-            xml += "\n  </skill>"
+            lines += "\n- \(skill.name): \(skill.description) (file: \(skill.filePath))"
         }
 
-        xml += "\n</available_skills>"
-        return xml
+        lines += "\n\nWhen a skill file references a relative path, resolve it against that skill's directory (the parent of its file path shown above)."
+        return lines
     }
 
     // MARK: - Private — Directory Scanning
@@ -237,10 +235,4 @@ nonisolated enum SkillRegistry: Sendable {
         return value
     }
 
-    /// Escape XML special characters in text content.
-    private static func escapeXML(_ text: String) -> String {
-        text.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-    }
 }

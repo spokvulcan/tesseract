@@ -71,9 +71,9 @@ nonisolated enum SystemPromptAssembler: Sendable {
         // 4. Skills listing (only if the model has a read tool to load them)
         let hasReadTool = tools.contains { $0.name == "read" }
         if hasReadTool {
-            let skillsXML = SkillRegistry.formatForPrompt(skills)
-            if !skillsXML.isEmpty {
-                sections.append(skillsXML)
+            let skillsListing = SkillRegistry.formatForPrompt(skills)
+            if !skillsListing.isEmpty {
+                sections.append(skillsListing)
             }
         }
 

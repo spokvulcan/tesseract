@@ -79,9 +79,9 @@ struct BenchmarkSkill {
     let relativePath: String
     /// File content to write.
     let content: String
-    /// Skill name for prompt XML (e.g. "task-management").
+    /// Skill name for prompt listing (e.g. "task-management").
     let name: String
-    /// Skill description for prompt XML.
+    /// Skill description for prompt listing.
     let description: String
 }
 
