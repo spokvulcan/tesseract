@@ -72,6 +72,8 @@ enum AgentGeneration: Sendable {
     case thinking(String)
     /// The model finished its `<think>` block.
     case thinkEnd
+    /// Generation ended without `</think>` — reclassify thinking content as text.
+    case thinkReclassify
 
     /// Completion metrics emitted once generation finishes.
     case info(Info)
@@ -97,6 +99,7 @@ enum AgentGeneration: Sendable {
         case .thinkStart: self = .thinkStart
         case .thinking(let text): self = .thinking(text)
         case .thinkEnd: self = .thinkEnd
+        case .thinkReclassify: self = .thinkReclassify
         }
     }
 }

@@ -33,6 +33,8 @@ final class ToolCallParser {
         case thinking(String)
         /// The model finished its `<think>` block.
         case thinkEnd
+        /// Generation ended without `</think>` — consumer should reclassify thinking as text.
+        case thinkReclassify
     }
 
     private static let toolStartTag = "<tool_call>"
@@ -43,6 +45,7 @@ final class ToolCallParser {
     private var buffer = ""
     private var insideThinkBlock = false
     private var pendingThinkStart = false
+    private var thinkBlockClosed = false
 
     /// - Parameter startsInsideThinkBlock: When `true`, the parser assumes the generation
     ///   begins inside a `<think>` block (e.g. Qwen3.5 chat template appends `<think>\n`
@@ -79,6 +82,9 @@ final class ToolCallParser {
         guard !buffer.isEmpty else {
             if insideThinkBlock {
                 insideThinkBlock = false
+                if !thinkBlockClosed {
+                    events.append(.thinkReclassify)
+                }
                 events.append(.thinkEnd)
             }
             return events
@@ -89,7 +95,12 @@ final class ToolCallParser {
 
         if insideThinkBlock {
             insideThinkBlock = false
-            if !remaining.isEmpty { events.append(.thinking(remaining)) }
+            if !thinkBlockClosed {
+                events.append(.thinkReclassify)
+                if !remaining.isEmpty { events.append(.text(remaining)) }
+            } else {
+                if !remaining.isEmpty { events.append(.thinking(remaining)) }
+            }
             events.append(.thinkEnd)
             return events
         }
@@ -111,6 +122,7 @@ final class ToolCallParser {
                     if !content.isEmpty { events.append(.thinking(content)) }
                     events.append(.thinkEnd)
                     insideThinkBlock = false
+                    thinkBlockClosed = true
                     buffer = String(buffer[endRange.upperBound...])
                     continue
                 }
