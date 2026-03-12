@@ -4,7 +4,8 @@
     "skills": [
         "skills/memory/SKILL.md",
         "skills/tasks/SKILL.md",
-        "skills/notes/SKILL.md"
+        "skills/notes/SKILL.md",
+        "skills/clarification/SKILL.md"
     ],
     "promptAppendFiles": [
         "prompts/APPEND_SYSTEM.md"
