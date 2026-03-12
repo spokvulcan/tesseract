@@ -10,7 +10,10 @@ import Tokenizers
 
 /// Returns `true` if the model directory contains a ParoQuant checkpoint.
 nonisolated func isParoQuantModel(directory: URL) -> Bool {
-    detectQuantMethod(directory: directory) == "paroquant"
+    guard let configData = try? Data(contentsOf: directory.appendingPathComponent("config.json")) else {
+        return false
+    }
+    return isSupportedParoQuantModel(directory: directory, configData: configData)
 }
 
 // MARK: - Config
@@ -42,6 +45,26 @@ nonisolated private func detectQuantMethod(directory: URL) -> String? {
           let method = qc["quant_method"] as? String
     else { return nil }
     return method
+}
+
+/// The custom loader is only meant for z-lab/Qwen3.5-4B-PARO's VLM wrapper.
+nonisolated private func isSupportedParoQuantModel(directory: URL, configData: Data) -> Bool {
+    guard let json = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
+          let qc = json["quantization_config"] as? [String: Any],
+          let method = qc["quant_method"] as? String,
+          method == "paroquant"
+    else { return false }
+
+    let supportedDirectoryNames: Set<String> = [
+        "z-lab_Qwen3.5-4B-PARO",
+        "Qwen3.5-4B-PARO",
+    ]
+    if supportedDirectoryNames.contains(directory.lastPathComponent) {
+        return true
+    }
+
+    let architectures = json["architectures"] as? [String] ?? []
+    return architectures.contains("Qwen3_5ForConditionalGeneration")
 }
 
 // MARK: - AutoAWQ Conversion
@@ -151,11 +174,81 @@ nonisolated private func convertAutoAWQ(
 
 // MARK: - Layer Patching
 
+nonisolated private func requireTensor(
+    _ key: String, weights: [String: MLXArray]
+) throws -> MLXArray {
+    guard let tensor = weights[key] else {
+        throw ParoQuantError.missingTensor(key)
+    }
+    return tensor
+}
+
+nonisolated private func verifyTensorShape(
+    _ tensor: MLXArray, key: String, expected: [Int]
+) throws {
+    guard tensor.shape == expected else {
+        throw ParoQuantError.invalidTensorShape(
+            key: key,
+            expected: expected,
+            actual: tensor.shape
+        )
+    }
+}
+
+nonisolated private func rotationLeafModules(model: Module) -> [String: Module] {
+    Dictionary(uniqueKeysWithValues: model.leafModules().flattened())
+}
+
+nonisolated private func rotationModuleSpec(
+    prefix: String,
+    leafModules: [String: Module],
+    weights: [String: MLXArray],
+    bits: Int,
+    groupSize: Int
+) throws -> (inputDims: Int, outputDims: Int, hasBias: Bool, krot: Int) {
+    guard let original = leafModules[prefix] else {
+        throw ParoQuantError.rotationLayerNotFound(prefix)
+    }
+    guard let linear = original as? Linear else {
+        throw ParoQuantError.rotationLayerTypeMismatch(
+            path: prefix,
+            actualType: String(describing: type(of: original))
+        )
+    }
+
+    let outputDims = linear.shape.0
+    let inputDims = linear.shape.1
+    let groups = inputDims / groupSize
+    let packedInputDims = inputDims * bits / 32
+    let expectsBias = linear.bias != nil
+
+    let theta = try requireTensor("\(prefix).theta", weights: weights)
+    let pairs = try requireTensor("\(prefix).pairs", weights: weights)
+    let channelScales = try requireTensor("\(prefix).channel_scales", weights: weights)
+    let weight = try requireTensor("\(prefix).weight", weights: weights)
+    let scales = try requireTensor("\(prefix).scales", weights: weights)
+    let biases = try requireTensor("\(prefix).biases", weights: weights)
+
+    let krot = theta.dim(0)
+    try verifyTensorShape(theta, key: "\(prefix).theta", expected: [krot, inputDims / 2])
+    try verifyTensorShape(pairs, key: "\(prefix).pairs", expected: [krot, inputDims])
+    try verifyTensorShape(channelScales, key: "\(prefix).channel_scales", expected: [1, inputDims])
+    try verifyTensorShape(weight, key: "\(prefix).weight", expected: [outputDims, packedInputDims])
+    try verifyTensorShape(scales, key: "\(prefix).scales", expected: [outputDims, groups])
+    try verifyTensorShape(biases, key: "\(prefix).biases", expected: [outputDims, groups])
+
+    if expectsBias {
+        _ = try requireTensor("\(prefix).bias", weights: weights)
+    }
+
+    return (inputDims, outputDims, expectsBias, krot)
+}
+
 /// Replace Linear layers with RotateQuantizedLinear where rotation parameters exist.
 nonisolated private func patchRotationLayers(
     model: Module, weights: [String: MLXArray],
     bits: Int, groupSize: Int
-) {
+) throws {
     // Find all layer prefixes that have .theta weights
     let prefixes = weights.keys
         .filter { $0.hasSuffix(".theta") }
@@ -164,36 +257,39 @@ nonisolated private func patchRotationLayers(
 
     guard !prefixes.isEmpty else { return }
 
+    let leafModules = rotationLeafModules(model: model)
     var updates = [(String, Module)]()
 
     for prefix in prefixes {
-        // Infer dimensions from the converted weights
-        guard let thetaArray = weights["\(prefix).theta"] else { continue }
-        let krot = thetaArray.dim(0)
-        let halfDim = thetaArray.dim(1)
-        let inputDims = halfDim * 2
-
-        // Infer outputDims from weight shape
-        // After conversion, weight is [outputDims, inputDims * bits / 32]
-        guard let weightArray = weights["\(prefix).weight"] else { continue }
-        let outputDims = weightArray.dim(0)
-
-        let hasBias = weights["\(prefix).bias"] != nil
+        let spec = try rotationModuleSpec(
+            prefix: prefix,
+            leafModules: leafModules,
+            weights: weights,
+            bits: bits,
+            groupSize: groupSize
+        )
 
         let replacement = RotateQuantizedLinear(
-            inputDims: inputDims,
-            outputDims: outputDims,
-            hasBias: hasBias,
+            inputDims: spec.inputDims,
+            outputDims: spec.outputDims,
+            hasBias: spec.hasBias,
             groupSize: groupSize,
             bits: bits,
-            krot: krot
+            krot: spec.krot
         )
 
         updates.append((prefix, replacement))
     }
 
     if !updates.isEmpty {
-        model.update(modules: ModuleChildren.unflattened(updates))
+        try model.update(modules: ModuleChildren.unflattened(updates), verify: [.noUnusedKeys])
+
+        let patchedLeaves = rotationLeafModules(model: model)
+        for (path, _) in updates {
+            guard patchedLeaves[path] is RotateQuantizedLinear else {
+                throw ParoQuantError.rotationLayerPatchFailed(path)
+            }
+        }
     }
 }
 
@@ -256,9 +352,20 @@ nonisolated private struct ParoQuantInputProcessor: UserInputProcessor {
 nonisolated func loadParoQuantModel(
     from directory: URL, toolCallFormat: ToolCallFormat?
 ) async throws -> ModelContainer {
-    // 1. Parse config.json
+    // 1. Parse config.json (flatten VLM text_config if present)
     let configURL = directory.appendingPathComponent("config.json")
-    let configData = try Data(contentsOf: configURL)
+    var configData = try Data(contentsOf: configURL)
+    guard isSupportedParoQuantModel(directory: directory, configData: configData) else {
+        throw ParoQuantError.unsupportedModel
+    }
+    var configJSON = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
+    if let textConfig = configJSON["text_config"] as? [String: Any] {
+        for (key, value) in textConfig {
+            configJSON[key] = value
+        }
+        configJSON["model_type"] = "qwen3_5"
+        configData = try JSONSerialization.data(withJSONObject: configJSON)
+    }
     let baseConfig = try JSONDecoder().decode(BaseConfiguration.self, from: configData)
 
     // 2. Read ParoQuant params
@@ -301,17 +408,17 @@ nonisolated func loadParoQuantModel(
 
     Log.agent.info("Loaded \(weights.count) weight keys from safetensors")
 
-    // 6. Model-specific sanitization
-    weights = model.sanitize(weights: weights)
-
-    // 7. Convert AutoAWQ format → MLX format
+    // 6. Convert AutoAWQ format → MLX format (BEFORE sanitize — matches Python ordering)
     if weights.keys.contains(where: { $0.hasSuffix(".qweight") }) {
         convertAutoAWQ(&weights, groupSize: paroConfig.groupSize)
         Log.agent.info("Converted AutoAWQ weights to MLX format")
     }
 
+    // 7. Model-specific sanitization (AFTER AWQ — may remap key prefixes)
+    weights = model.sanitize(weights: weights)
+
     // 8. Patch rotation layers
-    patchRotationLayers(
+    try patchRotationLayers(
         model: model, weights: weights,
         bits: paroConfig.bits, groupSize: paroConfig.groupSize
     )
@@ -327,7 +434,7 @@ nonisolated func loadParoQuantModel(
 
     // 10. Load checkpoint weights into the patched model
     let parameters = ModuleParameters.unflattened(weights)
-    let verify: Module.VerifyUpdate = [.noUnusedKeys, .shapeMismatch]
+    let verify: Module.VerifyUpdate = [.allModelKeysSet, .shapeMismatch]
     try model.update(parameters: parameters, verify: verify)
 
     // 11. Quantize the IO embedding path from the loaded FP16 weights.
@@ -369,11 +476,29 @@ nonisolated func loadParoQuantModel(
 
 nonisolated enum ParoQuantError: LocalizedError {
     case missingConfig
+    case unsupportedModel
+    case missingTensor(String)
+    case invalidTensorShape(key: String, expected: [Int], actual: [Int])
+    case rotationLayerNotFound(String)
+    case rotationLayerTypeMismatch(path: String, actualType: String)
+    case rotationLayerPatchFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .missingConfig:
             return "Missing quantization_config in config.json for ParoQuant model"
+        case .unsupportedModel:
+            return "The custom ParoQuant loader only supports z-lab/Qwen3.5-4B-PARO"
+        case .missingTensor(let key):
+            return "Missing required ParoQuant tensor: \(key)"
+        case .invalidTensorShape(let key, let expected, let actual):
+            return "Invalid ParoQuant tensor shape for \(key): expected \(expected), got \(actual)"
+        case .rotationLayerNotFound(let path):
+            return "Unable to find ParoQuant rotation layer in model: \(path)"
+        case .rotationLayerTypeMismatch(let path, let actualType):
+            return "ParoQuant rotation layer \(path) is not a Linear-compatible module: \(actualType)"
+        case .rotationLayerPatchFailed(let path):
+            return "Failed to replace ParoQuant layer with RotateQuantizedLinear: \(path)"
         }
     }
 }

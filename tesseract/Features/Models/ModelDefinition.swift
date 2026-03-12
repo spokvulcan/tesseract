@@ -112,15 +112,15 @@ extension ModelDefinition {
             dependencies: []
         ),
         ModelDefinition(
-            id: "qwen3-4b-paro",
-            displayName: "Qwen3-4B PARO (INT4)",
-            description: "ParoQuant INT4 — near-FP16 quality at half the size of 8-bit.",
+            id: "qwen3.5-4b-paro",
+            displayName: "Qwen3.5-4B PARO (INT4)",
+            description: "ParoQuant INT4 — near-FP16 quality at half the size of 8-bit. Hybrid-attention, 256K context.",
             category: .agent,
             source: .huggingFace(
-                repo: "z-lab/Qwen3-4B-PARO",
+                repo: "z-lab/Qwen3.5-4B-PARO",
                 requiredExtension: "safetensors"
             ),
-            sizeDescription: "~2.7 GB",
+            sizeDescription: "~3.8 GB",
             dependencies: []
         ),
     ]
