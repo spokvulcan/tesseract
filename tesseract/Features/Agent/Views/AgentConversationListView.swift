@@ -12,6 +12,10 @@ struct AgentConversationListView: View {
 
     @EnvironmentObject private var coordinator: AgentCoordinator
 
+    @State private var isNearBottom: Bool = true
+    @State private var isUserScrolling: Bool = false
+    @State private var autoScrollLocked: Bool = true
+
     /// Stable ID for the synthetic streaming turn — avoids UUID() churn on every render.
     private static let streamingTurnID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
@@ -86,16 +90,43 @@ struct AgentConversationListView: View {
                 }
                 .padding()
             }
+            .onScrollGeometryChange(for: Bool.self) { geo in
+                geo.visibleRect.maxY >= geo.contentSize.height - 80
+            } action: { _, nearBottom in
+                isNearBottom = nearBottom
+                if nearBottom {
+                    autoScrollLocked = true
+                }
+                if isUserScrolling && !nearBottom {
+                    autoScrollLocked = false
+                }
+            }
+            .onScrollPhaseChange { _, newPhase in
+                isUserScrolling = (newPhase == .interacting || newPhase == .decelerating)
+                if newPhase == .idle && !isNearBottom {
+                    autoScrollLocked = false
+                }
+            }
             .onChange(of: coordinator.streamUpdateCount) {
-                withAnimation(.easeOut(duration: 0.1)) {
-                    proxy.scrollTo("streaming", anchor: .bottom)
+                if autoScrollLocked && coordinator.isGenerating {
+                    withAnimation(.easeOut(duration: 0.1)) {
+                        proxy.scrollTo("streaming", anchor: .bottom)
+                    }
                 }
             }
             .onChange(of: coordinator.messages.count) {
-                if let lastID = coordinator.messages.last?.id {
+                if autoScrollLocked, let lastID = coordinator.messages.last?.id {
                     let target: AnyHashable = coordinator.isGenerating ? "streaming" : lastID
                     withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo(target, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: coordinator.isGenerating) { _, generating in
+                if generating {
+                    autoScrollLocked = true
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo("streaming", anchor: .bottom)
                     }
                 }
             }
