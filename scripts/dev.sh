@@ -5,7 +5,8 @@
 # Commands:
 #   build       Build the project (Debug; shows errors/warnings only)
 #   run         Kill running app + launch the built app (Debug)
-#   dev         Build + kill + run using Release (main perf workflow)
+#   dev         Build + kill + run using Debug (fast iteration)
+#   dev-release Build + kill + run using Release (perf testing)
 #   dev-profile Build + kill + run with profiling env vars enabled
 #   archive     Create release archive for App Store submission
 #   clean       Clean build artifacts and derived data
@@ -17,17 +18,15 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT="$PROJECT_DIR/tesseract.xcodeproj"
 SCHEME="tesseract"
 BUNDLE_ID="app.tesseract.agent"
+DERIVED_DATA="$PROJECT_DIR/.build/DerivedData"
 DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
 
 # --- Helpers ---------------------------------------------------------------
 
 find_app() {
     local configuration="${1:-Debug}"
-    local products_dir
-    products_dir=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$configuration" -showBuildSettings 2>/dev/null \
-        | grep '^\s*BUILT_PRODUCTS_DIR' | awk '{print $3}')
-    local app_path="$products_dir/tesseract.app"
-    if [ -z "$products_dir" ] || [ ! -d "$app_path" ]; then
+    local app_path="$DERIVED_DATA/Build/Products/$configuration/tesseract.app"
+    if [ ! -d "$app_path" ]; then
         echo "Error: tesseract.app ($configuration) not found at $app_path. Run a matching build first." >&2
         return 1
     fi
@@ -84,7 +83,12 @@ cmd_build() {
     local build_output
     local exit_code=0
     build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
-        -configuration "$configuration" "$@" 2>&1) || exit_code=$?
+        -configuration "$configuration" \
+        -derivedDataPath "$DERIVED_DATA" \
+        -destination 'platform=macOS,arch=arm64' \
+        -disableAutomaticPackageResolution \
+        -skipPackagePluginValidation \
+        "$@" 2>&1) || exit_code=$?
 
     # Show errors, warnings, and the final BUILD result
     echo "$build_output" | grep -E "^(error:|warning:|Build |BUILD |\*\*)" || true
@@ -113,11 +117,18 @@ cmd_run() {
 }
 
 cmd_dev() {
+    local configuration="Debug"
+    cmd_build "$configuration"
+    echo ""
+    cmd_run "$configuration"
+    print_data_paths
+}
+
+cmd_dev_release() {
     local configuration="Release"
     cmd_build "$configuration" \
         SWIFT_COMPILATION_MODE=incremental \
-        DEBUG_INFORMATION_FORMAT=dwarf \
-        ONLY_ACTIVE_ARCH=YES
+        DEBUG_INFORMATION_FORMAT=dwarf
     echo ""
     cmd_run "$configuration"
     print_data_paths
@@ -127,8 +138,7 @@ cmd_dev_profile() {
     local configuration="Release"
     cmd_build "$configuration" \
         SWIFT_COMPILATION_MODE=incremental \
-        DEBUG_INFORMATION_FORMAT=dwarf \
-        ONLY_ACTIVE_ARCH=YES
+        DEBUG_INFORMATION_FORMAT=dwarf
     echo ""
 
     local app_path
@@ -169,9 +179,9 @@ cmd_archive() {
 
 cmd_clean() {
     echo "Cleaning build..."
-    xcodebuild clean -project "$PROJECT" -scheme "$SCHEME" 2>&1 | tail -1
+    xcodebuild clean -project "$PROJECT" -scheme "$SCHEME" -derivedDataPath "$DERIVED_DATA" 2>&1 | tail -1
     echo "Removing DerivedData..."
-    rm -rf $DERIVED_DATA_GLOB
+    rm -rf "$DERIVED_DATA" $DERIVED_DATA_GLOB
     echo "Clean complete."
 }
 
@@ -231,7 +241,8 @@ usage() {
     echo "Commands:"
     echo "  build       Build the project (Debug; shows errors/warnings only)"
     echo "  run         Kill running app + launch the built app (Debug)"
-    echo "  dev         Build + kill + run using Release (the main perf workflow)"
+    echo "  dev         Build + kill + run using Debug (fast iteration)"
+    echo "  dev-release Build + kill + run using Release (perf testing)"
     echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
     echo "  archive     Create release archive for App Store submission"
     echo "  clean       Clean build artifacts and derived data"
@@ -244,6 +255,7 @@ case "${1:-}" in
     build)       cmd_build ;;
     run)         cmd_run ;;
     dev)         cmd_dev ;;
+    dev-release) cmd_dev_release ;;
     dev-profile) cmd_dev_profile ;;
     archive)     cmd_archive ;;
     clean)       cmd_clean ;;
