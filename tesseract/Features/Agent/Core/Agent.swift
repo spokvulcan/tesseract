@@ -268,7 +268,20 @@ final class Agent {
         // Sync messages BEFORE notifying subscribers so they see current state.
         // The loop mutates its own context copy; these events carry snapshots.
         switch event {
+        case .messageEnd(let message):
+            // pi-mono: clear progressive stream on commit (this._state.streamMessage = null)
+            state.streamMessage = nil
+            // Commit to observable state on message_end (pi-mono pattern).
+            // Guard: skip empty assistant messages from cancel/error paths.
+            if let assistant = message as? AssistantMessage {
+                let hasContent = !assistant.content.isEmpty
+                    || (assistant.thinking?.isEmpty == false)
+                    || !assistant.toolCalls.isEmpty
+                guard hasContent else { break }
+            }
+            state.messages.append(message)
         case .turnEnd(_, _, let contextMessages):
+            // Authoritative sync — full replace from loop context snapshot.
             state.messages = contextMessages.map { $0 as any AgentMessageProtocol }
         case .agentEnd:
             // finishRun sets state.messages from finalContext; no need to duplicate here.

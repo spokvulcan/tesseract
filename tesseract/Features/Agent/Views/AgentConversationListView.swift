@@ -12,15 +12,18 @@ struct AgentConversationListView: View {
 
     @EnvironmentObject private var coordinator: AgentCoordinator
 
+    /// Stable ID for the synthetic streaming turn — avoids UUID() churn on every render.
+    private static let streamingTurnID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
     enum DisplayBlock: Identifiable {
         case user(AgentChatMessage)
-        case assistant(AgentChatMessage, [AgentChatMessage])
+        case assistant(AssistantTurn)
         case system(AgentChatMessage)
         
         var id: UUID {
             switch self {
             case .user(let msg): return msg.id
-            case .assistant(let msg, _): return msg.id
+            case .assistant(let turn): return turn.id
             case .system(let msg): return msg.id
             }
         }
@@ -28,36 +31,39 @@ struct AgentConversationListView: View {
     
     private var displayBlocks: [DisplayBlock] {
         var blocks: [DisplayBlock] = []
-        var currentAssistant: AgentChatMessage?
-        var currentToolResults: [AgentChatMessage] = []
+        var currentTurnMessages: [AgentChatMessage] = []
+        
+        func commitTurn() {
+            if !currentTurnMessages.isEmpty {
+                let turn = AssistantTurn(id: currentTurnMessages[0].id, messages: currentTurnMessages)
+                blocks.append(.assistant(turn))
+                currentTurnMessages = []
+            }
+        }
         
         for message in coordinator.messages {
             switch message.role {
             case .user, .system:
-                if let asst = currentAssistant {
-                    blocks.append(.assistant(asst, currentToolResults))
-                    currentAssistant = nil
-                    currentToolResults = []
-                }
+                commitTurn()
                 blocks.append(message.role == .user ? .user(message) : .system(message))
-            case .assistant:
-                if let asst = currentAssistant {
-                    blocks.append(.assistant(asst, currentToolResults))
-                    currentToolResults = []
-                }
-                currentAssistant = message
-            case .tool:
-                if currentAssistant != nil {
-                    currentToolResults.append(message)
-                } else {
-                    // Orphan tool result (fallback)
-                    blocks.append(.system(message))
-                }
+            case .assistant, .tool:
+                currentTurnMessages.append(message)
             }
         }
-        if let asst = currentAssistant {
-            blocks.append(.assistant(asst, currentToolResults))
+        commitTurn()
+        
+        // If generating and we didn't just commit an assistant turn (meaning the assistant hasn't appended a final message to the DB yet but might be streaming)
+        // Actually, if it's generating, we always want the LAST block to be the one showing the stream.
+        if coordinator.isGenerating {
+            if case .assistant = blocks.last {
+                // The last block is an assistant turn, it will handle it.
+            } else {
+                // There is no assistant turn at the end (e.g. just user message), add an empty one for streaming
+                let emptyTurn = AssistantTurn(id: Self.streamingTurnID, messages: [])
+                blocks.append(.assistant(emptyTurn))
+            }
         }
+        
         return blocks
     }
 
@@ -77,33 +83,10 @@ struct AgentConversationListView: View {
                         blockView(block)
                     }
 
-                    if coordinator.isGenerating &&
-                        (!coordinator.streamingText.isEmpty || !coordinator.streamingThinking.isEmpty) {
-                        streamingBubble
-                    }
-
-                    if coordinator.isGenerating
-                        && coordinator.streamingText.isEmpty
-                        && coordinator.streamingThinking.isEmpty {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Generating…")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 12)
-                        .id("generating")
-                    }
                 }
                 .padding()
             }
-            .onChange(of: coordinator.streamingText) {
-                withAnimation(.easeOut(duration: 0.1)) {
-                    proxy.scrollTo("streaming", anchor: .bottom)
-                }
-            }
-            .onChange(of: coordinator.streamingThinking) {
+            .onChange(of: coordinator.streamUpdateCount) {
                 withAnimation(.easeOut(duration: 0.1)) {
                     proxy.scrollTo("streaming", anchor: .bottom)
                 }
@@ -146,9 +129,17 @@ struct AgentConversationListView: View {
                 UserMessageBubble(message: message)
                     .id(message.id)
             }
-        case .assistant(let message, let toolResults):
-            assistantBlockView(message: message, toolResults: toolResults)
-                .id(message.id)
+        case .assistant(let turn):
+            HStack {
+                AssistantTurnView(
+                    turn: turn,
+                    isGenerating: coordinator.isGenerating && block.id == displayBlocks.last?.id,
+                    speakingMessageID: $speakingMessageID,
+                    isSpeechActive: isSpeechActive
+                )
+                .id(turn.id)
+                Spacer(minLength: 60)
+            }
         case .system(let message):
             HStack {
                 Spacer(minLength: 60)
@@ -162,113 +153,7 @@ struct AgentConversationListView: View {
         }
     }
 
-    @ViewBuilder
-    private func assistantBlockView(message: AgentChatMessage, toolResults: [AgentChatMessage]) -> some View {
-        let hasContent = !message.content.isEmpty
-        let hasThinkingOrTools = (message.thinking?.isEmpty == false) || !message.toolCalls.isEmpty
-        
-        if hasContent {
-            // Normal message bubble
-            HStack {
-                AssistantMessageBubble(
-                    message: message,
-                    toolResults: toolResults,
-                    isSpeaking: speakingMessageID == message.id && isSpeechActive,
-                    onPlay: {
-                        speakingMessageID = message.id
-                        coordinator.speakMessage(message)
-                    },
-                    onStop: {
-                        coordinator.stopSpeaking()
-                        speakingMessageID = nil
-                    }
-                )
-                
-                Spacer(minLength: 60)
-            }
-        } else if hasThinkingOrTools {
-            // "Ghost" list lane (no bubble)
-            HStack {
-                AssistantMessageListBlock(message: message, toolResults: toolResults)
-                Spacer(minLength: 60)
-            }
-        }
-    }
-
     // MARK: - Streaming Bubble
 
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
-
-    private var streamingBubble: some View {
-        HStack {
-            let hasText = !coordinator.streamingText.isEmpty
-            
-            VStack(alignment: .leading, spacing: 6) {
-                if !coordinator.streamingThinking.isEmpty {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Button(action: {}) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "brain")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 16)
-                                
-                                Text(coordinator.isThinking ? "Thinking…" : "Thinking")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
-                                
-                                Spacer()
-                                
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(.tertiary)
-                                    .rotationEffect(.degrees(90))
-                            }
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, hasText ? 0 : 14)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(coordinator.streamingThinking)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .padding(.leading, hasText ? 24 : 38)
-                                .padding(.trailing, 14)
-                                .padding(.bottom, 6)
-                        }
-                    }
-                }
-
-                if hasText {
-                    if useMarkdown {
-                        StructuredText(markdown: coordinator.streamingText)
-                            .textual.structuredTextStyle(.gitHub)
-                            .textual.textSelection(.enabled)
-                    } else {
-                        Text(coordinator.streamingText)
-                            .font(.system(size: 15))
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-            .padding(.horizontal, hasText ? 14 : 0)
-            .padding(.vertical, hasText ? 10 : 4)
-            .background(hasText ? Color(white: 0.15) : Color.clear)
-            .foregroundStyle(.white)
-            .clipShape(
-                .rect(
-                    topLeadingRadius: 18,
-                    bottomLeadingRadius: 4,
-                    bottomTrailingRadius: 18,
-                    topTrailingRadius: 18
-                )
-            )
-
-            Spacer(minLength: 60)
-        }
-        .id("streaming")
-    }
 }

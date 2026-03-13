@@ -48,7 +48,7 @@ struct AssistantMessageBubble: View {
             HStack(spacing: 4) {
                 // Fixed width container prevents layout shift on hover
                 ZStack {
-                    if isHovering || isSpeaking {
+                    if (isHovering && onPlay != nil) || isSpeaking {
                         Button {
                             isSpeaking ? onStop?() : onPlay?()
                         } label: {
@@ -162,68 +162,5 @@ struct UserMessageBubble: View {
                 topTrailingRadius: 18
             )
         )
-    }
-}
-
-struct AssistantMessageListBlock: View {
-    let message: AgentChatMessage
-    let toolResults: [AgentChatMessage]
-    @State private var isThinkingExpanded = false
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let thinking = message.thinking, !thinking.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    Button(action: {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            isThinkingExpanded.toggle()
-                        }
-                    }) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "brain")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 16)
-                            
-                            Text("Thinking")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                            
-                            Spacer()
-                            
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.tertiary)
-                                .rotationEffect(.degrees(isThinkingExpanded ? 90 : 0))
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 14)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    
-                    if isThinkingExpanded {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(thinking)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .padding(.leading, 38)
-                                .padding(.trailing, 14)
-                                .padding(.bottom, 6)
-                        }
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                }
-            }
-            
-            if !message.toolCalls.isEmpty {
-                ForEach(Array(message.toolCalls.enumerated()), id: \.offset) { index, toolCall in
-                    let result = index < toolResults.count ? toolResults[index] : nil
-                    AgentToolCallView(toolCall: toolCall, toolResult: result, isListStyle: true)
-                }
-            }
-        }
-        .padding(.vertical, 4)
     }
 }

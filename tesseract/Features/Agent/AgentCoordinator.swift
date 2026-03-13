@@ -14,10 +14,16 @@ final class AgentCoordinator: ObservableObject {
 
     /// Derived display messages. Refreshed from `agent.state.messages`.
     @Published private(set) var messages: [AgentChatMessage] = []
-    @Published private(set) var streamingText: String = ""
-    @Published private(set) var streamingThinking: String = ""
-    @Published private(set) var isThinking: Bool = false
+    /// Internal accumulator for notch text throttling. Not observed by views.
+    private var streamingText: String = ""
+    private var streamingThinkingActive: Bool = false
     @Published private(set) var isGenerating: Bool = false
+    @Published private(set) var streamUpdateCount: Int = 0
+
+    /// Progressive streaming message. Reads through to agent's @Observable state.
+    /// NOT @Published — computed property does not itself drive view invalidation.
+    /// The @Published streamUpdateCount is what triggers re-renders; this provides data.
+    var streamMessage: AssistantMessage? { agent.state.streamMessage }
     @Published private(set) var voiceState: AgentVoiceState = .idle
     @Published var error: String?
 
@@ -112,8 +118,7 @@ final class AgentCoordinator: ObservableObject {
         error = nil
         isGenerating = true
         streamingText = ""
-        streamingThinking = ""
-        isThinking = false
+        streamingThinkingActive = false
 
         // Free memory from other engines before inference
         prepareForInference?()
@@ -147,8 +152,7 @@ final class AgentCoordinator: ObservableObject {
         agent.resetMessages([])
         messages = []
         streamingText = ""
-        streamingThinking = ""
-        isThinking = false
+        streamingThinkingActive = false
         error = nil
         rawChatMLPrompt = nil
         systemPromptTokenCount = nil
@@ -168,8 +172,7 @@ final class AgentCoordinator: ObservableObject {
         }
         refreshDisplayMessages()
         streamingText = ""
-        streamingThinking = ""
-        isThinking = false
+        streamingThinkingActive = false
         error = nil
         debugLogger.reset()
         Log.agent.info("Loaded conversation \(id) with \(self.messages.count) messages")
@@ -325,6 +328,7 @@ final class AgentCoordinator: ObservableObject {
             if didMutate { refreshDisplayMessages() }
 
         case .messageUpdate(_, let delta):
+            streamUpdateCount += 1
             if let text = delta.textDelta {
                 streamingText += text
                 // Throttle notch updates — every 10 chars
@@ -334,12 +338,11 @@ final class AgentCoordinator: ObservableObject {
                     notchController?.updatePhase(.responding(text: streamingText))
                 }
             }
-            if let thinking = delta.thinkingDelta {
-                if !isThinking {
-                    isThinking = true
+            if delta.thinkingDelta != nil {
+                if !streamingThinkingActive {
+                    streamingThinkingActive = true
                     notchController?.updatePhase(.thinking)
                 }
-                streamingThinking += thinking
             }
 
         case .toolExecutionStart(_, let toolName, _):
@@ -347,8 +350,7 @@ final class AgentCoordinator: ObservableObject {
             notchController?.updatePhase(.toolCall(name: toolName))
             // Clear streaming state between tool rounds
             streamingText = ""
-            streamingThinking = ""
-            isThinking = false
+            streamingThinkingActive = false
             notchTextLength = 0
 
         case .toolExecutionEnd(_, let toolName, let result, _):
@@ -369,9 +371,9 @@ final class AgentCoordinator: ObservableObject {
 
         case .agentEnd(_):
             isGenerating = false
-            isThinking = false
             streamingText = ""
-            streamingThinking = ""
+            streamingThinkingActive = false
+            streamUpdateCount = 0
             notchTextLength = 0
             refreshDisplayMessages()
             // turnEnd already saved — only save again if no turns occurred
@@ -383,7 +385,10 @@ final class AgentCoordinator: ObservableObject {
                 notchController.updatePhase(.complete(text: lastAssistant.content))
             }
 
-        case .turnStart, .messageStart, .messageEnd, .toolExecutionUpdate, .malformedToolCall:
+        case .messageEnd:
+            refreshDisplayMessages()
+
+        case .turnStart, .messageStart, .toolExecutionUpdate, .malformedToolCall:
             break
         }
     }

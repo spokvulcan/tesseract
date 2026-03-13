@@ -1,10 +1,9 @@
 import SwiftUI
 import MLXLMCommon
 
-struct AgentToolCallView: View {
+struct AgentToolCallMinimalView: View {
     let toolCall: ToolCall
     var toolResult: AgentChatMessage? = nil
-    var isListStyle: Bool = false
     @State private var isExpanded = false
 
     private var normalizedArguments: [String: JSONValue] {
@@ -19,42 +18,18 @@ struct AgentToolCallView: View {
                 }
             }) {
                 HStack(spacing: 8) {
-                    if let result = toolResult {
-                        if result.isError {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.red)
-                                .frame(width: 16)
-                        } else {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.green)
-                                .frame(width: 16)
-                        }
-                    } else {
-                        Image(systemName: ToolDisplayHelpers.iconForTool(toolCall.function.name))
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 16)
-                    }
-                    
                     Text(ToolDisplayHelpers.titleForTool(toolCall.function.name, arguments: normalizedArguments))
                         .font(.system(size: 13))
-                        .foregroundStyle(toolResult != nil ? (toolResult?.isError == true ? .red : .primary) : .secondary)
+                        .foregroundStyle(toolResult?.isError == true ? .red : .secondary)
                     
                     Spacer()
-                    
-                    if toolResult == nil {
-                        // Showing an activity indicator or just time could go here if needed
-                    }
                     
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
-                .padding(.vertical, 6)
-                .padding(.horizontal, isListStyle ? 14 : 0)
+                .padding(.vertical, 0)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -62,35 +37,46 @@ struct AgentToolCallView: View {
             if isExpanded {
                 VStack(alignment: .leading, spacing: 12) {
                     // Arguments
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Arguments")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.tertiary)
                             .textCase(.uppercase)
+                        
                         Text(ToolDisplayHelpers.formatArguments(normalizedArguments))
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(white: 0.1).opacity(0.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     
                     // Result
                     if let result = toolResult {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("Result")
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundStyle(.tertiary)
                                 .textCase(.uppercase)
+                            
                             Text(result.content)
                                 .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(result.isError ? .red : .primary)
                                 .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(white: 0.1).opacity(0.5))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
                     }
                 }
-                .padding(.leading, isListStyle ? 38 : 24)
                 .padding(.trailing, 14)
                 .padding(.bottom, 8)
-                .padding(.top, 2)
+                .padding(.top, 6)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }

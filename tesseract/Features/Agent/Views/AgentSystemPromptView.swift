@@ -21,35 +21,23 @@ struct AgentSystemPromptView: View {
                     isExpanded.toggle()
                 }
             }) {
-                HStack(spacing: 8) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 16)
-
+                HStack(spacing: 4) {
                     Text("System Prompt")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
 
                     if let count = coordinator.systemPromptTokenCount {
-                        Text("\(count) tokens")
-                            .font(.system(size: 11, design: .monospaced))
+                        Text("(\(count) tokens)")
+                            .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.quaternary.opacity(0.5))
-                            .clipShape(Capsule())
                     }
 
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .bold))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
                 }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 14)
+                .padding(.vertical, 4)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
