@@ -683,8 +683,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/bohdanivanchenko/WhisperKit";
 			requirement = {
-				kind = branch;
 				branch = "bump-swift-transformers-1.2";
+				kind = branch;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

@@ -171,11 +171,20 @@ nonisolated open class RotateQuantizedLinear: QuantizedLinear {
     private func ensureCached() -> CachedRotation {
         if let c = cached { return c }
         let dim = theta.dim(1) * 2
+        let cosTheta = MLX.cos(theta)
+        let sinTheta = MLX.sin(theta)
+        let packed = packPairs(pairs, groupSize: groupSize)
+        let flat = channel_scales.reshaped(-1)
+
+        // Force GPU materialization so rotation constants are resident
+        // and not recomputed as part of each forward pass graph.
+        eval(cosTheta, sinTheta, packed, flat)
+
         let c = CachedRotation(
-            cos: MLX.cos(theta),
-            sin: MLX.sin(theta),
-            packedPairs: packPairs(pairs, groupSize: groupSize),
-            scalesFlat: channel_scales.reshaped(-1),
+            cos: cosTheta,
+            sin: sinTheta,
+            packedPairs: packed,
+            scalesFlat: flat,
             dim: dim,
             halfGroup: groupSize / 2,
             numGroups: dim / groupSize,

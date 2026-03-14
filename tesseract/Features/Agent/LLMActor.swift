@@ -12,7 +12,7 @@ import os
 actor LLMActor {
 
     private enum Defaults {
-        static let cacheLimitMB = 128
+        static let cacheLimitMB = 2048
     }
 
     private var modelContainer: ModelContainer?
