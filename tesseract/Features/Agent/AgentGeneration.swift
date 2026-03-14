@@ -10,8 +10,11 @@ struct AgentGenerateParameters: Sendable, Codable {
     var maxTokens: Int = 131_072
     var temperature: Float = 0.6
     var topP: Float = 0.95
+    var topK: Int = 0
+    var minP: Float = 0.0
     var repetitionPenalty: Float? = nil
     var repetitionContextSize: Int = 20
+    var presencePenalty: Float? = nil
 
     static let `default` = AgentGenerateParameters()
 
@@ -19,7 +22,9 @@ struct AgentGenerateParameters: Sendable, Codable {
     /// See: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507
     static let qwen3 = AgentGenerateParameters(
         temperature: 0.7,
-        topP: 0.8
+        topP: 0.8,
+        topK: 20,
+        presencePenalty: 1.5
     )
 
     /// Qwen3-4B-Thinking-2507 recommended parameters for thinking mode.
@@ -28,7 +33,8 @@ struct AgentGenerateParameters: Sendable, Codable {
     /// See: https://huggingface.co/Qwen/Qwen3-4B-Thinking-2507
     static let qwen3Thinking = AgentGenerateParameters(
         temperature: 0.6,
-        topP: 0.95
+        topP: 0.95,
+        topK: 20
     )
 
     /// Qwen3-4B distilled from Claude 4.5 Opus — no repetition penalty needed.
@@ -39,9 +45,12 @@ struct AgentGenerateParameters: Sendable, Codable {
     )
 
     /// Qwen3.5-4B recommended parameters.
+    /// See: https://huggingface.co/Qwen/Qwen3.5-4B
     static let qwen35 = AgentGenerateParameters(
         temperature: 1.0,
-        topP: 0.95
+        topP: 0.95,
+        topK: 20,
+        presencePenalty: 1.5
     )
 
     /// Returns the recommended parameters for a given model ID.

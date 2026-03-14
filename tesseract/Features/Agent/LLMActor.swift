@@ -64,8 +64,11 @@ actor LLMActor {
             maxTokens: parameters.maxTokens,
             temperature: parameters.temperature,
             topP: parameters.topP,
+            topK: parameters.topK,
+            minP: parameters.minP,
             repetitionPenalty: parameters.repetitionPenalty,
-            repetitionContextSize: parameters.repetitionContextSize
+            repetitionContextSize: parameters.repetitionContextSize,
+            presencePenalty: parameters.presencePenalty
         )
 
         return try await container.generate(input: prepared, parameters: genParams)

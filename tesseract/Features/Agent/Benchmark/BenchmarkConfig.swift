@@ -26,20 +26,21 @@ struct BenchmarkConfig {
     /// fails to emit a stop token and generates thousands of tokens per round.
     let maxTokensPerRound: Int
 
-    /// Parameter configurations to sweep over.
+    /// Parameter configurations to sweep over, seeded from the model's recommended defaults.
     var parameterConfigs: [AgentGenerateParameters] {
+        let base = AgentGenerateParameters.forModel(resolvedModelID)
         switch sweep {
         case .quick:
-            return [.default]
+            return [base]
         case .full:
-            return Self.fullSweepConfigs
+            return Self.fullSweepConfigs(base: base)
         }
     }
 
     /// Scenarios that should be skipped for non-default param configs (too slow).
     static let slowScenarioIDs: Set<String> = ["S4"]
 
-    private static let fullSweepConfigs: [AgentGenerateParameters] = {
+    private static func fullSweepConfigs(base: AgentGenerateParameters) -> [AgentGenerateParameters] {
         let temperatures: [Float] = [0.3, 0.6, 0.8, 1.0]
         let topPs: [Float] = [0.8, 0.9, 0.95]
         let repPenalties: [Float?] = [nil, 1.05, 1.1]
@@ -48,7 +49,7 @@ struct BenchmarkConfig {
         for temp in temperatures {
             for topP in topPs {
                 for repPen in repPenalties {
-                    var params = AgentGenerateParameters.default
+                    var params = base
                     params.temperature = temp
                     params.topP = topP
                     params.repetitionPenalty = repPen
@@ -57,14 +58,20 @@ struct BenchmarkConfig {
             }
         }
         return configs
-    }()
+    }
 
     /// Short label for a parameter config (used in filenames and charts).
     static func label(for params: AgentGenerateParameters) -> String {
         var parts = ["t=\(String(format: "%.1f", params.temperature))",
                      "p=\(String(format: "%.2f", params.topP))"]
+        if params.topK > 0 {
+            parts.append("k=\(params.topK)")
+        }
         if let rp = params.repetitionPenalty {
             parts.append("rp=\(String(format: "%.2f", rp))")
+        }
+        if let pp = params.presencePenalty {
+            parts.append("pp=\(String(format: "%.1f", pp))")
         }
         return parts.joined(separator: "_")
     }

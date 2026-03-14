@@ -681,10 +681,10 @@
 		};
 		E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/argmaxinc/WhisperKit";
+			repositoryURL = "https://github.com/bohdanivanchenko/WhisperKit";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.12.0;
+				kind = branch;
+				branch = "bump-swift-transformers-1.2";
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

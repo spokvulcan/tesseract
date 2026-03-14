@@ -40,13 +40,9 @@ final class BenchmarkRunner {
         let resultsDir = resolveResultsDirectory()
         try FileManager.default.createDirectory(at: resultsDir, withIntermediateDirectories: true)
 
-        // Determine model-specific base parameters
-        let targetID = config.resolvedModelID
-        let modelBaseParams = AgentGenerateParameters.forModel(targetID)
-
         for (configIdx, baseParams) in paramConfigs.enumerated() {
             // Cap maxTokens per round to prevent runaway generation
-            var params = config.sweep == .quick ? modelBaseParams : baseParams
+            var params = baseParams
             params.maxTokens = min(params.maxTokens, config.maxTokensPerRound)
 
             let paramLabel = BenchmarkConfig.label(for: params)
