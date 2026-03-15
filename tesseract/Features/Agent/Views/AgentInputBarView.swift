@@ -7,7 +7,7 @@ import SwiftUI
 
 struct AgentInputBarView: View {
     @Binding var inputText: String
-    @EnvironmentObject private var coordinator: AgentCoordinator
+    @Environment(AgentCoordinator.self) private var coordinator
     @EnvironmentObject private var agentEngine: AgentEngine
     @EnvironmentObject private var transcriptionEngine: TranscriptionEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager

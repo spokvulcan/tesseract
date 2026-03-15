@@ -36,24 +36,6 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
         self.isError = isError
     }
 
-    // Custom Codable for backward compatibility (toolCalls absent in older data).
-    enum CodingKeys: String, CodingKey {
-        case id, timestamp, role, content, thinking, toolCalls, toolCallId, isError
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(UUID.self, forKey: .id)
-        timestamp = try c.decode(Date.self, forKey: .timestamp)
-        role = try c.decode(Role.self, forKey: .role)
-        content = try c.decode(String.self, forKey: .content)
-        thinking = try c.decodeIfPresent(String.self, forKey: .thinking)
-        let decodedToolCalls = try c.decodeIfPresent([ToolCall].self, forKey: .toolCalls) ?? []
-        toolCalls = Self.normalizeToolCalls(decodedToolCalls)
-        toolCallId = try c.decodeIfPresent(String.self, forKey: .toolCallId)
-        isError = try c.decodeIfPresent(Bool.self, forKey: .isError) ?? false
-    }
-
     static func system(_ content: String) -> Self {
         Self(id: UUID(), timestamp: Date(), role: .system, content: content, thinking: nil, toolCallId: nil)
     }
@@ -83,7 +65,7 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
 
     // MARK: - Convert from Protocol Messages
 
-    /// Creates an `AgentChatMessage` from any `AgentMessageProtocol` for legacy UI display.
+    /// Creates an `AgentChatMessage` from any `AgentMessageProtocol`.
     init(from message: any AgentMessageProtocol) {
         let now = Date()
         switch message {
@@ -115,39 +97,10 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
 
     // MARK: - ToolCallInfo → ToolCall Conversion
 
-    func normalizedForDisplay() -> AgentChatMessage {
-        AgentChatMessage(
-            id: id,
-            timestamp: timestamp,
-            role: role,
-            content: content,
-            thinking: thinking,
-            toolCalls: Self.normalizeToolCalls(toolCalls),
-            toolCallId: toolCallId,
-            isError: isError
-        )
-    }
-
-    /// Converts new-architecture `ToolCallInfo` to legacy `ToolCall` (MLXLMCommon).
+    /// Converts new-architecture `ToolCallInfo` to `ToolCall` (MLXLMCommon).
     private static func convertToolCalls(_ calls: [ToolCallInfo]) -> [ToolCall] {
         calls.map { info in
-            let args: [String: JSONValue]
-            if !info.argumentsJSON.isEmpty,
-               let parsed = ToolArgumentNormalizer.decode(info.argumentsJSON) {
-                args = parsed
-            } else {
-                args = [:]
-            }
-            return buildToolCall(name: info.name, arguments: args)
-        }
-    }
-
-    private static func normalizeToolCalls(_ calls: [ToolCall]) -> [ToolCall] {
-        calls.map { call in
-            buildToolCall(
-                name: call.function.name,
-                arguments: ToolArgumentNormalizer.normalize(call.function.arguments)
-            )
+            buildToolCall(name: info.name, arguments: info.parsedArguments)
         }
     }
 

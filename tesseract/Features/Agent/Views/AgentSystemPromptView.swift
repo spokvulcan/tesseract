@@ -2,7 +2,7 @@ import SwiftUI
 import os
 
 struct AgentSystemPromptView: View {
-    @EnvironmentObject private var coordinator: AgentCoordinator
+    @Environment(AgentCoordinator.self) private var coordinator
     @State private var isExpanded = false
     @State private var selectedTab: PromptTab = .assembled
 

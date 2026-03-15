@@ -31,6 +31,10 @@ final class AgentConversationStore: ObservableObject {
 
     private let conversationsDir: URL
 
+    /// Bump this when on-disk message schemas change in incompatible ways.
+    /// Mismatched versions wipe the conversations directory on launch.
+    private static let storageVersion = 2
+
     init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
@@ -38,6 +42,7 @@ final class AgentConversationStore: ObservableObject {
             .appendingPathComponent("Tesseract Agent/agent/conversations", isDirectory: true)
 
         ensureDirectory()
+        migrateStorageVersionIfNeeded()
         loadOrResetIndex()
     }
 
@@ -112,6 +117,24 @@ final class AgentConversationStore: ObservableObject {
 
     private func ensureDirectory() {
         try? FileManager.default.createDirectory(at: conversationsDir, withIntermediateDirectories: true)
+    }
+
+    private var versionFileURL: URL {
+        conversationsDir.appendingPathComponent(".storage_version")
+    }
+
+    /// Wipes conversations directory when the on-disk storage version doesn't match.
+    private func migrateStorageVersionIfNeeded() {
+        let currentOnDisk = (try? String(contentsOf: versionFileURL, encoding: .utf8))
+            .flatMap(Int.init) ?? 0
+
+        if currentOnDisk == Self.storageVersion { return }
+
+        Log.agent.info("Storage version mismatch (disk=\(currentOnDisk), app=\(Self.storageVersion)) — clearing conversations")
+        try? FileManager.default.removeItem(at: conversationsDir)
+        ensureDirectory()
+        try? String(Self.storageVersion).write(to: versionFileURL, atomically: true, encoding: .utf8)
+        conversations = []
     }
 
     private func conversationFileURL(for id: UUID) -> URL {

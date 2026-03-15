@@ -73,7 +73,7 @@ extension View {
             .environmentObject(container.audioCaptureEngine)
             .environmentObject(container.speechCoordinator)
             .environmentObject(container.speechEngine)
-            .environmentObject(container.agentCoordinator)
+            .environment(container.agentCoordinator)
             .environmentObject(container.agentEngine)
             .environmentObject(container.agentConversationStore)
             .environmentObject(container.imageGenEngine)

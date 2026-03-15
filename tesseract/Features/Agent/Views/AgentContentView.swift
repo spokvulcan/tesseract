@@ -2,7 +2,7 @@ import SwiftUI
 import os
 
 struct AgentContentView: View {
-    @EnvironmentObject private var coordinator: AgentCoordinator
+    @Environment(AgentCoordinator.self) private var coordinator
     @EnvironmentObject private var agentEngine: AgentEngine
     @EnvironmentObject private var conversationStore: AgentConversationStore
     @EnvironmentObject private var speechCoordinator: SpeechCoordinator

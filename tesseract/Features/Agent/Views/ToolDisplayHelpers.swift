@@ -60,13 +60,16 @@ enum ToolDisplayHelpers {
         }
     }
 
+    private static let argumentEncoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return e
+    }()
+
     /// Pretty-prints tool call arguments as JSON.
     static func formatArguments(_ arguments: [String: JSONValue]) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-
         do {
-            let data = try encoder.encode(arguments)
+            let data = try argumentEncoder.encode(arguments)
             if let jsonString = String(data: data, encoding: .utf8) {
                 return jsonString == "{}" ? "No arguments" : jsonString
             }
@@ -75,5 +78,15 @@ enum ToolDisplayHelpers {
         }
 
         return "No arguments"
+    }
+
+    /// All display properties for a tool call, computed once.
+    static func displayProps(for info: ToolCallInfo) -> (title: String, icon: String, argsFormatted: String) {
+        let args = info.parsedArguments
+        return (
+            title: titleForTool(info.name, arguments: args),
+            icon: iconForTool(info.name),
+            argsFormatted: formatArguments(args)
+        )
     }
 }
