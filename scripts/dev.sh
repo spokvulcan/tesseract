@@ -76,9 +76,23 @@ print_data_paths() {
 
 # --- Commands --------------------------------------------------------------
 
+cmd_resolve() {
+    echo "Resolving package dependencies..."
+    xcodebuild -resolvePackageDependencies \
+        -project "$PROJECT" -scheme "$SCHEME" \
+        -derivedDataPath "$DERIVED_DATA" 2>&1 \
+    | grep -E "^(error:|warning:|Resolved)" || true
+}
+
 cmd_build() {
     local configuration="${1:-Debug}"
     shift || true
+
+    # Ensure SPM packages (especially NIO C shim modules) are fully resolved
+    # before compilation starts. Without this, the build can race against
+    # clang compilation of C targets like CAsyncHTTPClient/CNIOLLHTTP.
+    cmd_resolve
+
     echo "Building tesseract ($configuration)..."
     local build_output
     local exit_code=0
@@ -182,6 +196,8 @@ cmd_clean() {
     xcodebuild clean -project "$PROJECT" -scheme "$SCHEME" -derivedDataPath "$DERIVED_DATA" 2>&1 | tail -1
     echo "Removing DerivedData..."
     rm -rf "$DERIVED_DATA" $DERIVED_DATA_GLOB
+    echo "Clearing SPM module cache..."
+    rm -rf ~/Library/Caches/org.swift.swiftpm
     echo "Clean complete."
 }
 
@@ -245,7 +261,8 @@ usage() {
     echo "  dev-release Build + kill + run using Release (perf testing)"
     echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
     echo "  archive     Create release archive for App Store submission"
-    echo "  clean       Clean build artifacts and derived data"
+    echo "  resolve     Resolve SPM package dependencies"
+    echo "  clean       Clean build artifacts, derived data, and SPM cache"
     echo "  log         Tail system log filtered to tesseract"
 }
 
@@ -258,6 +275,7 @@ case "${1:-}" in
     dev-release) cmd_dev_release ;;
     dev-profile) cmd_dev_profile ;;
     archive)     cmd_archive ;;
+    resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;
     log)         cmd_log ;;
     *)           usage ;;
