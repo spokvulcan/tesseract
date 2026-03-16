@@ -4,15 +4,15 @@
 //
 
 import Foundation
-import Combine
+import Observation
 import os
 
-@MainActor
-final class SpeechCoordinator: ObservableObject {
-    @Published private(set) var state: SpeechState = .idle
-    @Published private(set) var currentText: String = ""
-    @Published private(set) var currentSegmentIndex: Int = 0
-    @Published private(set) var totalSegments: Int = 0
+@Observable @MainActor
+final class SpeechCoordinator {
+    private(set) var state: SpeechState = .idle
+    private(set) var currentText: String = ""
+    private(set) var currentSegmentIndex: Int = 0
+    private(set) var totalSegments: Int = 0
 
     private let textExtractor: any TextExtracting
     private let speechEngine: SpeechEngine

@@ -8,16 +8,16 @@ import SwiftUI
 struct AgentInputBarView: View {
     @Binding var inputText: String
     @Environment(AgentCoordinator.self) private var coordinator
-    @EnvironmentObject private var agentEngine: AgentEngine
-    @EnvironmentObject private var transcriptionEngine: TranscriptionEngine
+    @Environment(AgentEngine.self) private var agentEngine
+    @Environment(TranscriptionEngine.self) private var transcriptionEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var isHoldingMic = false
     @State private var textHeight: CGFloat = 20
-    @AppStorage("selectedAgentModelID") private var agentModelID: String = ModelDefinition.defaultAgentModelID
+    @Environment(SettingsManager.self) private var settings
 
     private var isModelDownloaded: Bool {
-        if case .downloaded = downloadManager.statuses[agentModelID] {
+        if case .downloaded = downloadManager.statuses[settings.selectedAgentModelID] {
             return true
         }
         return false
@@ -233,7 +233,7 @@ struct AgentInputBarView: View {
         guard isModelDownloaded,
               !agentEngine.isModelLoaded,
               !agentEngine.isLoading,
-              let path = downloadManager.modelPath(for: agentModelID)
+              let path = downloadManager.modelPath(for: settings.selectedAgentModelID)
         else { return }
 
         do {

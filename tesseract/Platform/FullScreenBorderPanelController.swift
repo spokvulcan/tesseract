@@ -23,33 +23,17 @@ final class FullScreenBorderPanelController {
 
     private var isEnabled = true
 
-    private let settings = SettingsManager.shared
+    private let settings: SettingsManager
 
-    init() {}
+    init(settings: SettingsManager) {
+        self.settings = settings
+    }
 
-    /// Set up the overlay panel with publishers for state and audio level.
-    func setup(
-        statePublisher: Published<DictationState>.Publisher,
-        audioLevelPublisher: Published<Float>.Publisher
-    ) {
+    /// Creates the overlay panel and starts screen observation.
+    /// Call `handleStateChange` and `handleAudioLevelChange` to push values.
+    func setup() {
         createPanel()
         startScreenObservation()
-
-        // Subscribe to state changes
-        statePublisher
-            .receive(on: RunLoop.main)
-            .sink { [weak self] state in
-                self?.handleStateChange(state)
-            }
-            .store(in: &cancellables)
-
-        // Subscribe to audio level updates
-        audioLevelPublisher
-            .receive(on: RunLoop.main)
-            .sink { [weak self] level in
-                self?.handleAudioLevelChange(level)
-            }
-            .store(in: &cancellables)
     }
 
     /// Enable or disable this overlay controller
@@ -107,12 +91,9 @@ final class FullScreenBorderPanelController {
         panel.alphaValue = 0
     }
 
-    private func handleStateChange(_ state: DictationState) {
-        // Update observable state (SwiftUI view will react automatically)
+    func handleStateChange(_ state: DictationState) {
         lastState = state
         overlayState.dictationState = state
-        // Also update theme in case it changed
-        overlayState.glowTheme = settings.glowTheme
         guard isEnabled else { return }
         applyVisibility(for: state)
     }
@@ -135,11 +116,15 @@ final class FullScreenBorderPanelController {
         }
     }
 
-    private func handleAudioLevelChange(_ level: Float) {
+    func handleAudioLevelChange(_ level: Float) {
         guard isEnabled else { return }
 
         // Update observable state (SwiftUI view will react automatically)
         overlayState.audioLevel = level
+    }
+
+    func handleGlowThemeChange(_ glowTheme: GlowTheme) {
+        overlayState.glowTheme = glowTheme
     }
 
     private func showPanel() {

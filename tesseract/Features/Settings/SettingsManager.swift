@@ -4,39 +4,87 @@
 //
 
 import Foundation
-import Combine
-import SwiftUI
+import Observation
 import ServiceManagement
-import os
+import AppKit
 
-@MainActor
-final class SettingsManager: ObservableObject {
-    static let shared = SettingsManager()
+@Observable @MainActor
+final class SettingsManager {
+
+    // MARK: - UserDefaults Keys
+
+    private enum Key {
+        static let launchAtLogin = "launchAtLogin"
+        static let showInDock = "showInDock"
+        static let showInMenuBar = "showInMenuBar"
+        static let autoInsertText = "autoInsertText"
+        static let restoreClipboard = "restoreClipboard"
+        static let overlayStyle = "overlayStyle"
+        static let glowTheme = "glowTheme"
+        static let selectedMicrophoneUID = "selectedMicrophoneUID"
+        static let language = "language"
+        static let hotkeyKeyCode = "hotkeyKeyCode"
+        static let hotkeyModifiers = "hotkeyModifiers"
+        static let ttsHotkeyKeyCode = "ttsHotkeyKeyCode"
+        static let ttsHotkeyModifiers = "ttsHotkeyModifiers"
+        static let agentHotkeyKeyCode = "agentHotkeyKeyCode"
+        static let agentHotkeyModifiers = "agentHotkeyModifiers"
+        static let ttsTemperature = "ttsTemperature"
+        static let ttsTopP = "ttsTopP"
+        static let ttsRepetitionPenalty = "ttsRepetitionPenalty"
+        static let ttsMaxTokens = "ttsMaxTokens"
+        static let ttsSeed = "ttsSeed"
+        static let ttsVoiceDescription = "ttsVoiceDescription"
+        static let ttsLanguage = "ttsLanguage"
+        static let ttsStreamingEnabled = "ttsStreamingEnabled"
+        static let agentAutoSpeak = "agentAutoSpeak"
+        static let selectedAgentModelID = "selectedAgentModelID"
+        static let maxRecordingDuration = "maxRecordingDuration"
+        static let playSounds = "playSounds"
+        static let showNotifications = "showNotifications"
+        static let hasCompletedOnboarding = "hasCompletedOnboarding"
+    }
 
     // MARK: - General Settings
 
-    @AppStorage("launchAtLogin") var launchAtLogin = false {
-        didSet { updateLaunchAtLogin() }
+    var launchAtLogin = false {
+        didSet {
+            UserDefaults.standard.set(launchAtLogin, forKey: Key.launchAtLogin)
+            updateLaunchAtLogin()
+        }
     }
 
-    @AppStorage("showInDock") var showInDock = true {
-        didSet { updateDockVisibility() }
+    var showInDock = true {
+        didSet {
+            UserDefaults.standard.set(showInDock, forKey: Key.showInDock)
+            applyDockVisibility()
+        }
     }
 
-    @AppStorage("showInMenuBar") var showInMenuBar = true
+    var showInMenuBar = true {
+        didSet { UserDefaults.standard.set(showInMenuBar, forKey: Key.showInMenuBar) }
+    }
 
-    @AppStorage("autoInsertText") var autoInsertText = true
+    var autoInsertText = true {
+        didSet { UserDefaults.standard.set(autoInsertText, forKey: Key.autoInsertText) }
+    }
 
-    @AppStorage("restoreClipboard") var restoreClipboard = true
+    var restoreClipboard = true {
+        didSet { UserDefaults.standard.set(restoreClipboard, forKey: Key.restoreClipboard) }
+    }
 
-    @AppStorage("overlayStyle") var overlayStyleRaw: String = OverlayStyle.pill.rawValue
+    var overlayStyleRaw: String = OverlayStyle.pill.rawValue {
+        didSet { UserDefaults.standard.set(overlayStyleRaw, forKey: Key.overlayStyle) }
+    }
 
     var overlayStyle: OverlayStyle {
         get { OverlayStyle(rawValue: overlayStyleRaw) ?? .pill }
         set { overlayStyleRaw = newValue.rawValue }
     }
 
-    @AppStorage("glowTheme") var glowThemeRaw: String = GlowTheme.appleIntelligence.rawValue
+    var glowThemeRaw: String = GlowTheme.appleIntelligence.rawValue {
+        didSet { UserDefaults.standard.set(glowThemeRaw, forKey: Key.glowTheme) }
+    }
 
     var glowTheme: GlowTheme {
         get { GlowTheme(rawValue: glowThemeRaw) ?? .appleIntelligence }
@@ -45,11 +93,15 @@ final class SettingsManager: ObservableObject {
 
     // MARK: - Audio Settings
 
-    @AppStorage("selectedMicrophoneUID") var selectedMicrophoneUID: String = ""
+    var selectedMicrophoneUID: String = "" {
+        didSet { UserDefaults.standard.set(selectedMicrophoneUID, forKey: Key.selectedMicrophoneUID) }
+    }
 
     // MARK: - Language Settings
 
-    @AppStorage("language") var language: String = "en"
+    var language: String = "en" {
+        didSet { UserDefaults.standard.set(language, forKey: Key.language) }
+    }
 
     var selectedLanguage: SupportedLanguage {
         SupportedLanguage.language(forCode: language) ?? .auto
@@ -57,9 +109,13 @@ final class SettingsManager: ObservableObject {
 
     // MARK: - Hotkey Settings
 
-    @AppStorage("hotkeyKeyCode") var hotkeyKeyCode: Int = Int(KeyCombo.optionSpace.keyCode)  // Option + Space
+    var hotkeyKeyCode: Int = Int(KeyCombo.optionSpace.keyCode) {
+        didSet { UserDefaults.standard.set(hotkeyKeyCode, forKey: Key.hotkeyKeyCode) }
+    }
 
-    @AppStorage("hotkeyModifiers") var hotkeyModifiers: Int = Int(KeyCombo.optionSpace.modifiers)
+    var hotkeyModifiers: Int = Int(KeyCombo.optionSpace.modifiers) {
+        didSet { UserDefaults.standard.set(hotkeyModifiers, forKey: Key.hotkeyModifiers) }
+    }
 
     var hotkey: KeyCombo {
         get {
@@ -74,10 +130,15 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    // MARK: - TTS Settings
+    // MARK: - TTS Hotkey
 
-    @AppStorage("ttsHotkeyKeyCode") var ttsHotkeyKeyCode: Int = Int(KeyCombo.functionSpace.keyCode)
-    @AppStorage("ttsHotkeyModifiers") var ttsHotkeyModifiers: Int = Int(KeyCombo.functionSpace.modifiers)
+    var ttsHotkeyKeyCode: Int = Int(KeyCombo.functionSpace.keyCode) {
+        didSet { UserDefaults.standard.set(ttsHotkeyKeyCode, forKey: Key.ttsHotkeyKeyCode) }
+    }
+
+    var ttsHotkeyModifiers: Int = Int(KeyCombo.functionSpace.modifiers) {
+        didSet { UserDefaults.standard.set(ttsHotkeyModifiers, forKey: Key.ttsHotkeyModifiers) }
+    }
 
     var ttsHotkey: KeyCombo {
         get {
@@ -94,8 +155,13 @@ final class SettingsManager: ObservableObject {
 
     // MARK: - Agent Hotkey
 
-    @AppStorage("agentHotkeyKeyCode") var agentHotkeyKeyCode: Int = Int(KeyCombo.controlSpace.keyCode)
-    @AppStorage("agentHotkeyModifiers") var agentHotkeyModifiers: Int = Int(KeyCombo.controlSpace.modifiers)
+    var agentHotkeyKeyCode: Int = Int(KeyCombo.controlSpace.keyCode) {
+        didSet { UserDefaults.standard.set(agentHotkeyKeyCode, forKey: Key.agentHotkeyKeyCode) }
+    }
+
+    var agentHotkeyModifiers: Int = Int(KeyCombo.controlSpace.modifiers) {
+        didSet { UserDefaults.standard.set(agentHotkeyModifiers, forKey: Key.agentHotkeyModifiers) }
+    }
 
     var agentHotkey: KeyCombo {
         get {
@@ -110,16 +176,47 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    @AppStorage("ttsTemperature") var ttsTemperature: Double = 0.6
-    @AppStorage("ttsTopP") var ttsTopP: Double = 0.8
-    @AppStorage("ttsRepetitionPenalty") var ttsRepetitionPenalty: Double = 1.3
-    @AppStorage("ttsMaxTokens") var ttsMaxTokens: Int = 4096
-    @AppStorage("ttsSeed") var ttsSeed: Int = 0
-    @AppStorage("ttsVoiceDescription") var ttsVoiceDescription: String = ""
-    @AppStorage("ttsLanguage") var ttsLanguage: String = "English"
-    @AppStorage("ttsStreamingEnabled") var ttsStreamingEnabled = true
-    @AppStorage("agentAutoSpeak") var agentAutoSpeak = false
-    @AppStorage("selectedAgentModelID") var selectedAgentModelID: String = ModelDefinition.defaultAgentModelID
+    // MARK: - TTS Settings
+
+    var ttsTemperature: Double = 0.6 {
+        didSet { UserDefaults.standard.set(ttsTemperature, forKey: Key.ttsTemperature) }
+    }
+
+    var ttsTopP: Double = 0.8 {
+        didSet { UserDefaults.standard.set(ttsTopP, forKey: Key.ttsTopP) }
+    }
+
+    var ttsRepetitionPenalty: Double = 1.3 {
+        didSet { UserDefaults.standard.set(ttsRepetitionPenalty, forKey: Key.ttsRepetitionPenalty) }
+    }
+
+    var ttsMaxTokens: Int = 4096 {
+        didSet { UserDefaults.standard.set(ttsMaxTokens, forKey: Key.ttsMaxTokens) }
+    }
+
+    var ttsSeed: Int = 0 {
+        didSet { UserDefaults.standard.set(ttsSeed, forKey: Key.ttsSeed) }
+    }
+
+    var ttsVoiceDescription: String = "" {
+        didSet { UserDefaults.standard.set(ttsVoiceDescription, forKey: Key.ttsVoiceDescription) }
+    }
+
+    var ttsLanguage: String = "English" {
+        didSet { UserDefaults.standard.set(ttsLanguage, forKey: Key.ttsLanguage) }
+    }
+
+    var ttsStreamingEnabled = true {
+        didSet { UserDefaults.standard.set(ttsStreamingEnabled, forKey: Key.ttsStreamingEnabled) }
+    }
+
+    var agentAutoSpeak = false {
+        didSet { UserDefaults.standard.set(agentAutoSpeak, forKey: Key.agentAutoSpeak) }
+    }
+
+    var selectedAgentModelID: String = ModelDefinition.defaultAgentModelID {
+        didSet { UserDefaults.standard.set(selectedAgentModelID, forKey: Key.selectedAgentModelID) }
+    }
 
     var ttsParameters: TTSParameters {
         get {
@@ -142,15 +239,93 @@ final class SettingsManager: ObservableObject {
 
     // MARK: - Advanced Settings
 
-    @AppStorage("maxRecordingDuration") var maxRecordingDuration: Double = 300.0
+    var maxRecordingDuration: Double = 300.0 {
+        didSet { UserDefaults.standard.set(maxRecordingDuration, forKey: Key.maxRecordingDuration) }
+    }
 
-    @AppStorage("playSounds") var playSounds = true
+    var playSounds = true {
+        didSet { UserDefaults.standard.set(playSounds, forKey: Key.playSounds) }
+    }
 
-    @AppStorage("showNotifications") var showNotifications = true
+    var showNotifications = true {
+        didSet { UserDefaults.standard.set(showNotifications, forKey: Key.showNotifications) }
+    }
 
     // MARK: - Onboarding
 
-    @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding = false
+    var hasCompletedOnboarding = false {
+        didSet { UserDefaults.standard.set(hasCompletedOnboarding, forKey: Key.hasCompletedOnboarding) }
+    }
+
+    // MARK: - Init
+
+    init() {
+        let ud = UserDefaults.standard
+
+        // Register defaults so reads return correct values before first explicit write.
+        ud.register(defaults: [
+            Key.launchAtLogin: false,
+            Key.showInDock: true,
+            Key.showInMenuBar: true,
+            Key.autoInsertText: true,
+            Key.restoreClipboard: true,
+            Key.overlayStyle: OverlayStyle.pill.rawValue,
+            Key.glowTheme: GlowTheme.appleIntelligence.rawValue,
+            Key.selectedMicrophoneUID: "",
+            Key.language: "en",
+            Key.hotkeyKeyCode: Int(KeyCombo.optionSpace.keyCode),
+            Key.hotkeyModifiers: Int(KeyCombo.optionSpace.modifiers),
+            Key.ttsHotkeyKeyCode: Int(KeyCombo.functionSpace.keyCode),
+            Key.ttsHotkeyModifiers: Int(KeyCombo.functionSpace.modifiers),
+            Key.agentHotkeyKeyCode: Int(KeyCombo.controlSpace.keyCode),
+            Key.agentHotkeyModifiers: Int(KeyCombo.controlSpace.modifiers),
+            Key.ttsTemperature: 0.6,
+            Key.ttsTopP: 0.8,
+            Key.ttsRepetitionPenalty: 1.3,
+            Key.ttsMaxTokens: 4096,
+            Key.ttsSeed: 0,
+            Key.ttsVoiceDescription: "",
+            Key.ttsLanguage: "English",
+            Key.ttsStreamingEnabled: true,
+            Key.agentAutoSpeak: false,
+            Key.selectedAgentModelID: ModelDefinition.defaultAgentModelID,
+            Key.maxRecordingDuration: 300.0,
+            Key.playSounds: true,
+            Key.showNotifications: true,
+            Key.hasCompletedOnboarding: false,
+        ])
+
+        // Load persisted values (didSet does NOT fire during init).
+        launchAtLogin = ud.bool(forKey: Key.launchAtLogin)
+        showInDock = ud.bool(forKey: Key.showInDock)
+        showInMenuBar = ud.bool(forKey: Key.showInMenuBar)
+        autoInsertText = ud.bool(forKey: Key.autoInsertText)
+        restoreClipboard = ud.bool(forKey: Key.restoreClipboard)
+        overlayStyleRaw = ud.string(forKey: Key.overlayStyle) ?? OverlayStyle.pill.rawValue
+        glowThemeRaw = ud.string(forKey: Key.glowTheme) ?? GlowTheme.appleIntelligence.rawValue
+        selectedMicrophoneUID = ud.string(forKey: Key.selectedMicrophoneUID) ?? ""
+        language = ud.string(forKey: Key.language) ?? "en"
+        hotkeyKeyCode = ud.integer(forKey: Key.hotkeyKeyCode)
+        hotkeyModifiers = ud.integer(forKey: Key.hotkeyModifiers)
+        ttsHotkeyKeyCode = ud.integer(forKey: Key.ttsHotkeyKeyCode)
+        ttsHotkeyModifiers = ud.integer(forKey: Key.ttsHotkeyModifiers)
+        agentHotkeyKeyCode = ud.integer(forKey: Key.agentHotkeyKeyCode)
+        agentHotkeyModifiers = ud.integer(forKey: Key.agentHotkeyModifiers)
+        ttsTemperature = ud.double(forKey: Key.ttsTemperature)
+        ttsTopP = ud.double(forKey: Key.ttsTopP)
+        ttsRepetitionPenalty = ud.double(forKey: Key.ttsRepetitionPenalty)
+        ttsMaxTokens = ud.integer(forKey: Key.ttsMaxTokens)
+        ttsSeed = ud.integer(forKey: Key.ttsSeed)
+        ttsVoiceDescription = ud.string(forKey: Key.ttsVoiceDescription) ?? ""
+        ttsLanguage = ud.string(forKey: Key.ttsLanguage) ?? "English"
+        ttsStreamingEnabled = ud.bool(forKey: Key.ttsStreamingEnabled)
+        agentAutoSpeak = ud.bool(forKey: Key.agentAutoSpeak)
+        selectedAgentModelID = ud.string(forKey: Key.selectedAgentModelID) ?? ModelDefinition.defaultAgentModelID
+        maxRecordingDuration = ud.double(forKey: Key.maxRecordingDuration)
+        playSounds = ud.bool(forKey: Key.playSounds)
+        showNotifications = ud.bool(forKey: Key.showNotifications)
+        hasCompletedOnboarding = ud.bool(forKey: Key.hasCompletedOnboarding)
+    }
 
     // MARK: - Methods
 
@@ -199,7 +374,7 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    private func updateDockVisibility() {
+    func applyDockVisibility() {
         if showInDock {
             NSApp.setActivationPolicy(.regular)
         } else {

@@ -4,7 +4,7 @@
 //
 
 import Foundation
-import Combine
+import Observation
 import CoreML
 import os
 @preconcurrency import WhisperKit
@@ -15,8 +15,8 @@ protocol Transcribing: AnyObject {
     func cancelTranscription()
 }
 
-@MainActor
-final class TranscriptionEngine: ObservableObject, Transcribing {
+@Observable @MainActor
+final class TranscriptionEngine: Transcribing {
     private enum Defaults {
         static let minimumTranscriptionTimeout: TimeInterval = 30
         static let maximumTranscriptionTimeout: TimeInterval = 240
@@ -24,8 +24,8 @@ final class TranscriptionEngine: ObservableObject, Transcribing {
         static let transcriptionTimeoutOverhead: TimeInterval = 10
     }
 
-    @Published private(set) var isModelLoaded = false
-    @Published private(set) var isTranscribing = false
+    private(set) var isModelLoaded = false
+    private(set) var isTranscribing = false
 
     private var whisperActor: WhisperActor?
     private var transcriptionTask: Task<TranscriptionResult, Error>?

@@ -69,7 +69,7 @@ struct WaveformCanvas: View {
 // MARK: - Waveform Visualizer
 
 struct WaveformVisualizer: View {
-    @ObservedObject var audioCapture: AudioCaptureEngine
+    var audioCapture: AudioCaptureEngine
     let state: DictationState
 
     @StateObject private var buffer = AudioLevelBuffer()

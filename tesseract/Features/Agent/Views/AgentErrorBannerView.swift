@@ -6,7 +6,7 @@
 import SwiftUI
 
 struct AgentModelLoadingBanner: View {
-    @EnvironmentObject private var agentEngine: AgentEngine
+    @Environment(AgentEngine.self) private var agentEngine
 
     var body: some View {
         HStack(spacing: 8) {

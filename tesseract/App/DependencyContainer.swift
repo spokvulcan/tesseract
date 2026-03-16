@@ -5,13 +5,14 @@
 
 import Foundation
 import Combine
+import Observation
 import SwiftUI
 import os
 
 @MainActor
 final class DependencyContainer: ObservableObject {
     // Core Services
-    lazy var settingsManager = SettingsManager.shared
+    let settingsManager = SettingsManager()
     lazy var permissionsManager = PermissionsManager()
     lazy var audioDeviceManager = AudioDeviceManager()
 
@@ -43,117 +44,14 @@ final class DependencyContainer: ObservableObject {
     lazy var newToolRegistry: ToolRegistry = {
         ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
     }()
-    lazy var agent: Agent = {
-        let agentRoot = PathSandbox.defaultRoot
-        let engine = agentEngine
-
-        // 1. Bootstrap packages (discover, seed data, register extensions)
-        PackageBootstrap.bootstrap(
-            packageRegistry: packageRegistry,
-            extensionHost: extensionHost,
-            agentRoot: agentRoot
-        )
-
-        // 2. Refresh extension tools after package bootstrap
-        newToolRegistry.refreshExtensionTools(from: extensionHost)
-        let tools = newToolRegistry.allTools
-
-        // 3. Discover skills from agent root + packages (sandbox-local paths)
-        let skillsDir = agentRoot.appendingPathComponent("skills")
-        let cachedSkillPaths = PackageBootstrap.cachedSkillPaths(
-            from: packageRegistry, agentRoot: agentRoot
-        )
-        let skills = SkillRegistry.discover(
-            locations: [skillsDir],
-            packageSkillFiles: cachedSkillPaths
-        )
-
-        // 4. Load context files (AGENTS.md, CLAUDE.md, APPEND_SYSTEM.md, etc.)
-        let contextLoader = ContextLoader(agentRoot: agentRoot)
-        let loadedContext = contextLoader.load(
-            packageContextFiles: packageRegistry.allContextFilePaths,
-            packagePromptAppends: packageRegistry.allPromptAppendPaths,
-            packageSystemOverrides: []
-        )
-
-        // 5. Assemble system prompt with full context
-        let systemPrompt = SystemPromptAssembler.assemble(
-            defaultPrompt: SystemPromptAssembler.defaultCorePrompt,
-            loadedContext: loadedContext,
-            skills: skills,
-            tools: tools,
-            dateTime: Date(),
-            agentRoot: agentRoot.path
-        )
-
-        // 6. Build compaction transform
-        let ctxManager = contextManager
-        let compactionTransform = makeCompactionTransform(
-            contextManager: ctxManager,
-            contextWindow: 120_000,
-            summarize: { prompt in
-                // Bridge the summarization call to AgentEngine.
-                // Uses a simple single-prompt generation for summarization.
-                let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
-                let task = Task { @MainActor in
-                    do {
-                        let s = try engine.generate(prompt: prompt)
-                        for try await gen in s {
-                            continuation.yield(gen)
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
-                    }
-                }
-                continuation.onTermination = { _ in task.cancel() }
-                var result = ""
-                for try await gen in stream {
-                    if case .text(let chunk) = gen {
-                        result += chunk
-                    }
-                }
-                return result
-            }
-        )
-
-        // 7. Create agent config
-        let config = AgentLoopConfig(
-            model: AgentModelRef(id: settingsManager.selectedAgentModelID),
-            convertToLlm: { msgs in msgs.compactMap { $0.toLLMMessage() } },
-            contextTransform: compactionTransform,
-            getSteeringMessages: nil,
-            getFollowUpMessages: nil
-        )
-
-        // 8. Create Agent
-        return Agent(
-            config: config,
-            systemPrompt: systemPrompt,
-            tools: tools,
-            generate: { systemPrompt, messages, tools, _ in
-                // Bridge MainActor-isolated engine.generate into a Sendable closure.
-                let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
-                let task = Task { @MainActor in
-                    do {
-                        let engineStream = try engine.generate(
-                            systemPrompt: systemPrompt,
-                            messages: messages,
-                            tools: tools
-                        )
-                        for try await generation in engineStream {
-                            continuation.yield(generation)
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
-                    }
-                }
-                continuation.onTermination = { _ in task.cancel() }
-                return stream
-            }
-        )
-    }()
+    lazy var agent: Agent = AgentFactory.makeAgent(
+        engine: agentEngine,
+        packageRegistry: packageRegistry,
+        extensionHost: extensionHost,
+        toolRegistry: newToolRegistry,
+        contextManager: contextManager,
+        selectedModelID: settingsManager.selectedAgentModelID
+    )
     lazy var agentConversationStore = AgentConversationStore()
     lazy var agentNotchController = AgentNotchPanelController()
     lazy var agentCoordinator: AgentCoordinator = {
@@ -215,9 +113,10 @@ final class DependencyContainer: ObservableObject {
     }()
 
     // Overlays
-    lazy var overlayPanelController = OverlayPanelController()
-    lazy var fullScreenBorderController = FullScreenBorderPanelController()
-    private var settingsCancellables = Set<AnyCancellable>()
+    lazy var overlayPanelController = OverlayPanelController(settings: settingsManager)
+    lazy var fullScreenBorderController = FullScreenBorderPanelController(settings: settingsManager)
+    private var cancellables = Set<AnyCancellable>()
+    private var observationTasks: [Task<Void, Never>] = []
 
     // Coordinator
     lazy var dictationCoordinator: DictationCoordinator = {
@@ -275,27 +174,44 @@ final class DependencyContainer: ObservableObject {
         startSettingsObservation()
 
         // Setup overlay panels
-        overlayPanelController.setup(
-            statePublisher: dictationCoordinator.$state,
-            audioLevelPublisher: audioCaptureEngine.$audioLevel
-        )
+        overlayPanelController.setup()
+        fullScreenBorderController.setup()
 
-        fullScreenBorderController.setup(
-            statePublisher: dictationCoordinator.$state,
-            audioLevelPublisher: audioCaptureEngine.$audioLevel
-        )
+        // Forward dictation state to overlay panels
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await state in Observations({ self.dictationCoordinator.state }) {
+                self.overlayPanelController.handleStateChange(state)
+                self.fullScreenBorderController.handleStateChange(state)
+            }
+        })
+
+        // Forward audio level to overlay panels
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await level in Observations({ self.audioCaptureEngine.audioLevel }) {
+                self.overlayPanelController.handleAudioLevelChange(level)
+                self.fullScreenBorderController.handleAudioLevelChange(level)
+            }
+        })
 
         // Set initial active overlay based on settings
         updateActiveOverlay()
 
-        // Observe settings changes to switch overlays dynamically
-        // Use NotificationCenter to observe UserDefaults changes for overlayStyle
-        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.updateActiveOverlay()
+        // Observe overlay style changes to switch overlays dynamically
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await _ in Observations({ self.settingsManager.overlayStyle }) {
+                self.updateActiveOverlay()
             }
-            .store(in: &settingsCancellables)
+        })
+
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await glowTheme in Observations({ self.settingsManager.glowTheme }) {
+                self.fullScreenBorderController.handleGlowThemeChange(glowTheme)
+            }
+        })
 
         // Load Whisper model from cache if already downloaded
         await loadWhisperModelIfAvailable()
@@ -311,7 +227,7 @@ final class DependencyContainer: ObservableObject {
                     await self.loadWhisperModelIfAvailable()
                 }
             }
-            .store(in: &settingsCancellables)
+            .store(in: &cancellables)
     }
 
     private func loadWhisperModelIfAvailable() async {
@@ -349,50 +265,47 @@ final class DependencyContainer: ObservableObject {
         agentCoordinator.stopVoiceInputAndSend()
     }
 
-    private var agentAudioLevelCancellable: AnyCancellable?
+    private var agentAudioLevelTask: Task<Void, Never>?
 
     private func startAgentAudioLevelForwarding() {
-        agentAudioLevelCancellable = audioCaptureEngine.$audioLevel
-            .receive(on: RunLoop.main)
-            .sink { [weak self] level in
-                guard let self else { return }
+        agentAudioLevelTask = Task { [weak self] in
+            guard let self else { return }
+            for await level in Observations({ self.audioCaptureEngine.audioLevel }) {
                 self.agentNotchController.state.phase = .listening(audioLevel: level)
             }
+        }
     }
 
     private func stopAgentAudioLevelForwarding() {
-        agentAudioLevelCancellable?.cancel()
-        agentAudioLevelCancellable = nil
+        agentAudioLevelTask?.cancel()
+        agentAudioLevelTask = nil
     }
 
-    private var lastTTSHotkey: KeyCombo?
-    private var lastAgentHotkey: KeyCombo?
-
     private func startSettingsObservation() {
-        lastTTSHotkey = settingsManager.ttsHotkey
-        lastAgentHotkey = settingsManager.agentHotkey
-
-        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                let newHotkey = settingsManager.hotkey
-                if newHotkey != hotkeyManager.currentHotkey {
-                    hotkeyManager.updateHotkey(newHotkey)
-                }
-
-                let newTTSHotkey = settingsManager.ttsHotkey
-                if newTTSHotkey != lastTTSHotkey {
-                    lastTTSHotkey = newTTSHotkey
-                    hotkeyManager.updateRegisteredHotkey(id: "tts", combo: newTTSHotkey)
-                }
-
-                let newAgentHotkey = settingsManager.agentHotkey
-                if newAgentHotkey != lastAgentHotkey {
-                    lastAgentHotkey = newAgentHotkey
-                    hotkeyManager.updateRegisteredHotkey(id: "agent", combo: newAgentHotkey)
+        // Observe dictation hotkey changes
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await hotkey in Observations({ self.settingsManager.hotkey }) {
+                if hotkey != self.hotkeyManager.currentHotkey {
+                    self.hotkeyManager.updateHotkey(hotkey)
                 }
             }
-            .store(in: &settingsCancellables)
+        })
+
+        // Observe TTS hotkey changes
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await hotkey in Observations({ self.settingsManager.ttsHotkey }) {
+                self.hotkeyManager.updateRegisteredHotkey(id: "tts", combo: hotkey)
+            }
+        })
+
+        // Observe agent hotkey changes
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await hotkey in Observations({ self.settingsManager.agentHotkey }) {
+                self.hotkeyManager.updateRegisteredHotkey(id: "agent", combo: hotkey)
+            }
+        })
     }
 }

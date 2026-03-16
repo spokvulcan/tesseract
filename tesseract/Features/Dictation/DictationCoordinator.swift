@@ -4,19 +4,19 @@
 //
 
 import Foundation
-import Combine
+import Observation
 import AppKit
 
-@MainActor
-final class DictationCoordinator: ObservableObject {
+@Observable @MainActor
+final class DictationCoordinator {
     private enum Defaults {
         static let minimumRecordingDuration: TimeInterval = 0.5
         static let errorAutoResetDelay: Duration = .seconds(3)
     }
 
-    @Published private(set) var state: DictationState = .idle
-    @Published private(set) var lastTranscription: String = ""
-    @Published private(set) var lastError: DictationError?
+    private(set) var state: DictationState = .idle
+    private(set) var lastTranscription: String = ""
+    private(set) var lastError: DictationError?
 
     private let audioCapture: any AudioCapturing
     private let transcriptionEngine: any Transcribing
@@ -33,7 +33,7 @@ final class DictationCoordinator: ObservableObject {
         transcriptionEngine: any Transcribing,
         textInjector: any TextInjecting,
         history: any TranscriptionStoring,
-        settings: SettingsManager = .shared
+        settings: SettingsManager
     ) {
         self.audioCapture = audioCapture
         self.transcriptionEngine = transcriptionEngine

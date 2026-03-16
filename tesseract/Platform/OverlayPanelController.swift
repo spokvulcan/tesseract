@@ -24,9 +24,11 @@ final class OverlayPanelController {
 
     private var isEnabled = true
 
-    private let settings = SettingsManager.shared
+    private let settings: SettingsManager
 
-    init() {}
+    init(settings: SettingsManager) {
+        self.settings = settings
+    }
 
     /// Enable or disable this overlay controller
     func setEnabled(_ enabled: Bool) {
@@ -38,29 +40,11 @@ final class OverlayPanelController {
         }
     }
 
-    /// Set up the overlay panel with publishers for state and audio level.
-    func setup(
-        statePublisher: Published<DictationState>.Publisher,
-        audioLevelPublisher: Published<Float>.Publisher
-    ) {
+    /// Creates the overlay panel and starts screen observation.
+    /// Call `handleStateChange` and `handleAudioLevelChange` to push values.
+    func setup() {
         createPanel()
         startScreenObservation()
-
-        // Subscribe to state changes
-        statePublisher
-            .receive(on: RunLoop.main)
-            .sink { [weak self] state in
-                self?.handleStateChange(state)
-            }
-            .store(in: &cancellables)
-
-        // Subscribe to audio level updates
-        audioLevelPublisher
-            .receive(on: RunLoop.main)
-            .sink { [weak self] level in
-                self?.handleAudioLevelChange(level)
-            }
-            .store(in: &cancellables)
     }
 
     private func createPanel() {
@@ -125,7 +109,7 @@ final class OverlayPanelController {
         }
     }
 
-    private func handleStateChange(_ state: DictationState) {
+    func handleStateChange(_ state: DictationState) {
         // Update observable state (SwiftUI view will react automatically)
         lastState = state
         overlayState.dictationState = state
@@ -151,7 +135,7 @@ final class OverlayPanelController {
         }
     }
 
-    private func handleAudioLevelChange(_ level: Float) {
+    func handleAudioLevelChange(_ level: Float) {
         guard isEnabled else { return }
 
         // Update observable state (SwiftUI view will react automatically)

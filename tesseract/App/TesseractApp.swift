@@ -5,7 +5,8 @@
 
 import SwiftUI
 
-/// Helper view that captures the openWindow environment action and provides it to the AppDelegate
+/// Bridges the SwiftUI `openWindow` environment action to the AppDelegate.
+/// Needed because `@Environment(\.openWindow)` is only available inside a SwiftUI view hierarchy.
 private struct WindowOpenerView: View {
     @Environment(\.openWindow) private var openWindow
     let appDelegate: AppDelegate
@@ -14,27 +15,8 @@ private struct WindowOpenerView: View {
         Color.clear
             .frame(width: 0, height: 0)
             .onAppear {
-                // Provide the open window callback with safety check
                 appDelegate.onOpenWindow = { [openWindow] in
-                    let hasContentWindow = NSApp.windows.contains { window in
-                        !(window is NSPanel) && window.canBecomeMain
-                    }
-                    if !hasContentWindow {
-                        openWindow(id: "main")
-                    }
-                }
-
-                // Deduplicate windows on launch (handles Xcode debug state restoration)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    let contentWindows = NSApp.windows.filter { window in
-                        !(window is NSPanel) && window.canBecomeMain
-                    }
-                    // Keep only the first window if duplicates exist
-                    if contentWindows.count > 1 {
-                        for window in contentWindows.dropFirst() {
-                            window.close()
-                        }
-                    }
+                    openWindow(id: "main")
                 }
             }
     }
@@ -62,12 +44,12 @@ struct TesseractApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: "main") {
-            ContentView(selectedNavigation: $selectedNavigation)
+        Window("Tesseract", id: "main") {
+            ContentView(container: container, selectedNavigation: $selectedNavigation)
             .background {
                 WindowOpenerView(appDelegate: appDelegate)
             }
-            .injectDependencies(from: container)
+            .injectCoreDependencies(from: container)
             .focusedSceneValue(\.dictationActions, DictationActions(
                 toggleRecording: { [weak container] in
                     container?.dictationCoordinator.toggleRecording()
@@ -88,29 +70,25 @@ struct TesseractApp: App {
                 appDelegate.setupWithContainer(container, navigationSelection: $selectedNavigation)
 
                 // Show onboarding if needed
-                if !SettingsManager.shared.hasCompletedOnboarding {
+                if !container.settingsManager.hasCompletedOnboarding {
                     showOnboarding = true
                 }
             }
             .sheet(isPresented: $showOnboarding) {
                 OnboardingView(isPresented: $showOnboarding)
-                    .injectDependencies(from: container)
+                    .injectCoreDependencies(from: container)
             }
             .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
                 showOnboarding = true
             }
         }
-        // Prevent WindowGroup from creating multiple windows via external events
-        .handlesExternalEvents(matching: Set<String>())
         .windowResizability(.contentMinSize)
         .defaultSize(width: 800, height: 700)
         .commands {
-            CommandGroup(replacing: .newItem) {}  // Remove "New Window" command
-
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
                     selectedNavigation = .general
-                    NSApp.activate(ignoringOtherApps: true)
+                    appDelegate.showMainWindow()
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }

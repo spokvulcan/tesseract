@@ -5,13 +5,13 @@
 
 import Foundation
 import AppKit
+import Observation
 import SwiftUI
-import Combine
 import MLX
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var cancellables = Set<AnyCancellable>()
+    private var observationTask: Task<Void, Never>?
     var container: DependencyContainer?
     var menuBarManager: MenuBarManager?
     private weak var trackedMainWindow: NSWindow?
@@ -88,7 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.navigationSelection = navigationSelection
 
         // Setup menu bar
-        menuBarManager = MenuBarManager()
+        menuBarManager = MenuBarManager(settings: container.settingsManager)
         menuBarManager?.coordinator = container.dictationCoordinator
         menuBarManager?.history = container.transcriptionHistory
         menuBarManager?.speechCoordinator = container.speechCoordinator
@@ -107,18 +107,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarManager?.setupMenuBar()
 
         // Subscribe to dictation state changes
-        container.dictationCoordinator.$state
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                // Ensure MainActor isolation for accessing @MainActor-isolated properties
-                Task { @MainActor in
-                    self?.menuBarManager?.updateState(from: state)
-                }
+        observationTask = Task { [weak self] in
+            guard let container = self?.container else { return }
+            for await state in Observations({ container.dictationCoordinator.state }) {
+                self?.menuBarManager?.updateState(from: state)
             }
-            .store(in: &cancellables)
+        }
 
-        // Handle dock visibility
-        updateDockVisibility()
+        // Apply initial dock visibility (didSet doesn't fire during SettingsManager.init)
+        container.settingsManager.applyDockVisibility()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -128,17 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            // Defer to next run loop iteration to let any SwiftUI window become visible first.
-            // This prevents duplicate window creation from the race condition where both
-            // SwiftUI and our code try to create windows simultaneously.
-            DispatchQueue.main.async { [weak self] in
-                let hasVisibleWindow = NSApp.windows.contains {
-                    !($0 is NSPanel) && $0.canBecomeMain && $0.isVisible
-                }
-                if !hasVisibleWindow {
-                    self?.showMainWindow()
-                }
-            }
+            showMainWindow()
         }
         return true
     }
@@ -152,6 +139,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        observationTask?.cancel()
+        observationTask = nil
+
         // Stop TTS generation and unload the model before exit() destroys MLX's
         // Metal device singleton. Pending GPU completion handlers would otherwise
         // crash trying to lock the destroyed mutex in Device::end_encoding.
@@ -202,13 +192,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func navigateToAgent() {
         navigationSelection?.wrappedValue = .agent
         showMainWindow()
-    }
-
-    private func updateDockVisibility() {
-        if SettingsManager.shared.showInDock {
-            NSApp.setActivationPolicy(.regular)
-        } else {
-            NSApp.setActivationPolicy(.accessory)
-        }
     }
 }

@@ -4,7 +4,7 @@
 //
 
 import Foundation
-import Combine
+import Observation
 import AVFoundation
 import Accelerate
 
@@ -67,7 +67,8 @@ protocol AudioCapturing: AnyObject {
 }
 
 @MainActor
-final class AudioCaptureEngine: ObservableObject, AudioCapturing {
+@Observable
+final class AudioCaptureEngine: AudioCapturing {
     private enum Defaults {
         static let targetSampleRate: Double = 16_000  // WhisperKit requirement
         static let defaultInputSampleRate: Double = 48_000
@@ -76,8 +77,8 @@ final class AudioCaptureEngine: ObservableObject, AudioCapturing {
         static let reserveSeconds: Int = 60
     }
 
-    @Published private(set) var isCapturing = false
-    @Published private(set) var audioLevel: Float = 0
+    private(set) var isCapturing = false
+    private(set) var audioLevel: Float = 0
 
     private var audioEngine: AVAudioEngine?
     private let sampleBuffer = SampleBuffer()

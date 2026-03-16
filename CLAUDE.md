@@ -28,14 +28,28 @@ Tests use Swift `Testing` framework (not XCTest), in `tesseractTests/`. Not requ
 
 ## Architecture
 
+### Observation Model
+
+The app uses Swift's `@Observable` (Observation framework) as the primary state model. Key types:
+
+- **`@Observable`**: `SettingsManager`, `DictationCoordinator`, `SpeechCoordinator`, `SpeechEngine`, `TranscriptionEngine`, `TranscriptionHistory`, `AudioCaptureEngine`, `AgentCoordinator`, `AgentEngine`, `Agent`, `AgentState`, `AgentNotchState`, `OverlayState`
+- **Still `ObservableObject`** (lower-priority, not yet migrated): `DependencyContainer`, `PermissionsManager`, `ModelDownloadManager`, `AgentConversationStore`, `ImageGenEngine`, `ZImageGenEngine`, `AudioPlaybackManager`, `MenuBarManager`, `AudioDeviceManager`, `HotkeyManager`, `TextInjector`, `AudioLevelBuffer`
+- **Inject `@Observable` types** with `.environment(instance)`, consume with `@Environment(Type.self)`. Use `@Bindable var x = x` in body for `$x` bindings.
+- **Inject `ObservableObject` types** with `.environmentObject(instance)`, consume with `@EnvironmentObject`.
+- **Do NOT use `@AppStorage` inside `@Observable`** — it fails to compile (backing-storage collision). Use manual `UserDefaults` with `didSet` persistence.
+
 ### Key Patterns
 
-- **DependencyContainer** (`App/`): `@MainActor`, lazy-initialized. Wires all services. 14 objects injected via `.injectDependencies(from:)` in `Core/ViewModifiers.swift`.
-- **Actor Isolation**: `WhisperActor` (WhisperKit), `LLMActor` (MLXLM), `ContextManager` (compaction). All `ObservableObject` classes are `@MainActor`. `Agent` uses `@Observable`.
+- **Window Scene**: Uses `Window("Tesseract", id: "main")` (single-instance, not `WindowGroup`). Settings live in the sidebar, not a separate `Settings` scene.
+- **DependencyContainer** (`App/`): `@MainActor`, lazy-initialized composition root. Wires all services. Scoped injection via `Core/ViewModifiers.swift` — 5 groups: core, dictation, speech, agent, model.
+- **AgentFactory** (`Features/Agent/AgentFactory.swift`): Extracts the multi-step agent bootstrap (package discovery, tool/skill registration, prompt assembly, compaction wiring) out of the container.
+- **Actor Isolation**: `WhisperActor` (WhisperKit), `LLMActor` (MLXLM), `TTSActor` (Qwen3TTS), `ContextManager` (compaction). All `@Observable`/`ObservableObject` classes are `@MainActor`.
 - **State Machines**: `DictationCoordinator`, `SpeechCoordinator`, `AgentCoordinator`, `AgentNotchState`.
-- **Settings**: `@AppStorage` via `SettingsManager`. Constants use `private enum Defaults` pattern.
+- **Settings**: `SettingsManager` is `@Observable @MainActor` with manual `UserDefaults` persistence (`didSet` + `register(defaults:)` in init). No singleton — injected via `DependencyContainer`.
+- **Platform Adapters** (`Platform/`): All AppKit bridge code — `HotkeyManager`, `TextInjector`, `MenuBarManager`, overlay/notch panel controllers, `OverlayScreenLocator`.
+- **Non-view Observation**: Uses Swift 6.2 `Observations` async sequences for observing `@Observable` state in non-SwiftUI code (DependencyContainer, AppDelegate, MenuBarManager).
 - **Hotkeys**: Option+Space (dictation), fn+Space (TTS), Control+Space (agent). All configurable.
-- **Memory Budget**: One large model at a time on 8GB. `prepareForInference` releases others first.
+- **Memory Budget**: Target 20GB unified memory. LLM + TTS are co-resident (both loaded simultaneously).
 
 ### Agent Architecture (`Features/Agent/`)
 
@@ -46,6 +60,7 @@ Tests use Swift `Testing` framework (not XCTest), in `tesseractTests/`. Not requ
 **4 built-in tools** (`Tools/BuiltIn/`): `read` (2K lines/50KB, supports images), `write` (atomic, auto-creates dirs), `edit` (exact match + fuzzy, unified diff), `ls` (500 entries/50KB). All sandboxed via `PathSandbox`. Extension tools aggregated by `ToolRegistry`.
 
 **Extensibility**:
+
 - **Packages** (`Packages/`): Discoverable via `package.json`. Provide skills, context files, system prompt overrides, seed data, extensions.
 - **Extensions** (`Extensions/`): Plugins contributing tools. First registration wins on name conflicts.
 - **Skills** (`Context/SkillRegistry.swift`): Markdown files with YAML frontmatter. Formatted as XML in system prompt.
@@ -91,5 +106,6 @@ private let logger = Logger(subsystem: "app.tesseract.agent", category: "mylib")
 ## Documentation
 
 - `TESSE_DEVELOPMENT_PLAN.md` — Roadmap
-- `ARCHITECTURE.md` — System architecture (dictation focus)
+- `ARCHITECTURE.md` — System architecture
+- `docs/macos26-swiftui-architecture-review.md` — Architecture review and modernization plan (Observation migration, Window scene, modularity decisions)
 - `docs/` — TTS streaming/performance, image gen, agent prompt engineering research, tool call XML reconstruction

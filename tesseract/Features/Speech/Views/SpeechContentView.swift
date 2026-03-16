@@ -6,9 +6,9 @@
 import SwiftUI
 
 struct SpeechContentView: View {
-    @EnvironmentObject private var speechCoordinator: SpeechCoordinator
-    @EnvironmentObject private var speechEngine: SpeechEngine
-    @ObservedObject private var settings = SettingsManager.shared
+    @Environment(SpeechCoordinator.self) private var speechCoordinator
+    @Environment(SpeechEngine.self) private var speechEngine
+    @Environment(SettingsManager.self) private var settings
 
     @AppStorage("ttsParametersPanelVisible") private var isParametersPanelVisible: Bool = true
     @State private var inputText: String = ""
@@ -51,7 +51,8 @@ struct SpeechContentView: View {
     // MARK: - Main Content
 
     private var mainContent: some View {
-        VStack(spacing: 16) {
+        @Bindable var settings = settings
+        return VStack(spacing: 16) {
             // Status indicator
             SpeechStatusView(
                 state: speechCoordinator.state,

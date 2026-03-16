@@ -4,22 +4,22 @@
 //
 
 import Foundation
-import Combine
+import Observation
 import os
 import MLX
 import MLXLMCommon
 import MLXAudioTTS
 import MLXAudioCore
 
-@MainActor
-final class SpeechEngine: ObservableObject {
+@Observable @MainActor
+final class SpeechEngine {
     private enum Defaults {
         static let modelRepo = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
     }
 
-    @Published private(set) var isModelLoaded = false
-    @Published private(set) var isLoading = false
-    @Published private(set) var loadingStatus: String = ""
+    private(set) var isModelLoaded = false
+    private(set) var isLoading = false
+    private(set) var loadingStatus: String = ""
 
     private var ttsActor: TTSActor?
 

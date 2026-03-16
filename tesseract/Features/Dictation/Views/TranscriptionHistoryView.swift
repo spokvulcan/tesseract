@@ -8,8 +8,8 @@ import SwiftUI
 // MARK: - History View (with ScrollView)
 
 struct TranscriptionHistoryView: View {
-    @ObservedObject var history: TranscriptionHistory
-    @ObservedObject private var settings = SettingsManager.shared
+    var history: TranscriptionHistory
+    @Environment(SettingsManager.self) private var settings
 
     // Layout constants for header alignment
     private let timeColumnWidth: CGFloat = 70
@@ -59,8 +59,8 @@ struct TranscriptionHistoryView: View {
 // MARK: - Inline History View (no ScrollView, for embedding in parent ScrollView)
 
 struct TranscriptionHistoryInlineView: View {
-    @ObservedObject var history: TranscriptionHistory
-    @ObservedObject private var settings = SettingsManager.shared
+    var history: TranscriptionHistory
+    @Environment(SettingsManager.self) private var settings
 
     private let timeColumnWidth: CGFloat = 70
     private let timeToConnectorSpacing: CGFloat = 12

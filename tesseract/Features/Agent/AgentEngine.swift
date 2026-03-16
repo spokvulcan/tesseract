@@ -1,5 +1,5 @@
-import Combine
 import Foundation
+import Observation
 import MLXLLM
 import MLXLMCommon
 import Tokenizers
@@ -25,13 +25,13 @@ enum AgentEngineError: LocalizedError {
 ///
 /// Model downloading is handled by ``ModelDownloadManager``. This engine loads
 /// the already-downloaded weights into memory via the actor and verifies them.
-@MainActor
-final class AgentEngine: ObservableObject {
+@Observable @MainActor
+final class AgentEngine {
 
-    @Published private(set) var isModelLoaded = false
-    @Published private(set) var isLoading = false
-    @Published private(set) var loadingStatus: String = ""
-    @Published private(set) var isGenerating = false
+    private(set) var isModelLoaded = false
+    private(set) var isLoading = false
+    private(set) var loadingStatus: String = ""
+    private(set) var isGenerating = false
 
     private(set) var agentTokenizer: AgentTokenizer?
 

@@ -7,6 +7,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
+    let container: DependencyContainer
     @Binding var selectedNavigation: NavigationItem?
 
     // Sidebar closed by default
@@ -16,15 +17,15 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(selection: $selectedNavigation)
                 .navigationDestination(for: NavigationItem.self) { page in
-                    page.destinationView
+                    injectedDestinationView(for: page)
                 }
         } detail: {
             if let selected = selectedNavigation {
-                selected.destinationView
+                injectedDestinationView(for: selected)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .scrollEdgeEffectStyle(.soft, for: .top)
             } else {
-                NavigationItem.dictation.destinationView
+                injectedDestinationView(for: .dictation)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .scrollEdgeEffectStyle(.soft, for: .top)
             }
@@ -34,5 +35,39 @@ struct ContentView: View {
         // Silently consume paste commands to prevent system alert sound
         // when text is injected while the app window is focused
         .onPasteCommand(of: [.plainText]) { _ in }
+    }
+
+    @MainActor
+    @ViewBuilder
+    private func injectedDestinationView(for page: NavigationItem) -> some View {
+        switch page {
+        case .dictation:
+            DictationContentView()
+                .injectDictationDependencies(from: container)
+        case .speech:
+            SpeechContentView()
+                .injectSpeechDependencies(from: container)
+        case .agent:
+            AgentContentView()
+                .injectAgentDependencies(from: container)
+                .environment(container.speechCoordinator)
+                .environment(container.transcriptionEngine)
+                .environmentObject(container.modelDownloadManager)
+        case .image:
+            ImageGenContentView()
+                .injectModelDependencies(from: container)
+        case .zimage:
+            ZImageGenContentView()
+                .injectModelDependencies(from: container)
+        case .general:
+            GeneralSettingsSection()
+        case .model:
+            ModelsPageView()
+                .environmentObject(container)
+                .environmentObject(container.modelDownloadManager)
+        case .recording:
+            RecordingSettingsSection()
+                .environmentObject(container)
+        }
     }
 }

@@ -8,7 +8,7 @@ import SwiftUI
 // MARK: - General Settings Section
 
 struct GeneralSettingsSection: View {
-    @ObservedObject private var settings = SettingsManager.shared
+    @Environment(SettingsManager.self) private var settings
 
     // Prevent disabling both dock and menu bar
     private var showInDockBinding: Binding<Bool> {
@@ -38,6 +38,7 @@ struct GeneralSettingsSection: View {
     }
 
     var body: some View {
+        @Bindable var settings = settings
         Form {
             Section {
                 Toggle("Launch at Login", isOn: $settings.launchAtLogin)
@@ -69,23 +70,21 @@ struct GeneralSettingsSection: View {
             }
 
             Section("Recording Overlay") {
-                Picker("Overlay Style", selection: $settings.overlayStyleRaw) {
+                Picker("Overlay Style", selection: $settings.overlayStyle) {
                     ForEach(OverlayStyle.allCases) { style in
-                        Text(style.displayName).tag(style.rawValue)
+                        Text(style.displayName).tag(style)
                     }
                 }
 
-                if let style = OverlayStyle(rawValue: settings.overlayStyleRaw) {
-                    Text(style.description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text(settings.overlayStyle.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 // Show glow theme picker for full-screen border style
                 if settings.overlayStyle == .fullScreenBorder {
-                    Picker("Glow Theme", selection: $settings.glowThemeRaw) {
+                    Picker("Glow Theme", selection: $settings.glowTheme) {
                         ForEach(GlowTheme.allCases) { theme in
-                            Text(theme.displayName).tag(theme.rawValue)
+                            Text(theme.displayName).tag(theme)
                         }
                     }
                 }
@@ -100,7 +99,7 @@ struct GeneralSettingsSection: View {
 // MARK: - Audio Level Meter
 
 struct AudioLevelMeter: View {
-    @ObservedObject var audioCapture: AudioCaptureEngine
+    var audioCapture: AudioCaptureEngine
     @State private var isTestingMic = false
 
     var body: some View {
@@ -158,13 +157,14 @@ struct AudioLevelMeter: View {
 // MARK: - Recording Settings Section
 
 struct RecordingSettingsSection: View {
-    @ObservedObject private var settings = SettingsManager.shared
+    @Environment(SettingsManager.self) private var settings
     @EnvironmentObject private var container: DependencyContainer
     @State private var isRecordingHotkey = false
     @State private var isRecordingTTSHotkey = false
     @State private var isRecordingAgentHotkey = false
 
     var body: some View {
+        @Bindable var settings = settings
         Form {
             Section("Microphone") {
                 Picker("Input Device", selection: $settings.selectedMicrophoneUID) {

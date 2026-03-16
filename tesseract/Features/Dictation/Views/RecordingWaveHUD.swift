@@ -6,7 +6,7 @@
 import SwiftUI
 
 struct RecordingWaveHUD: View {
-    @ObservedObject var audioCapture: AudioCaptureEngine
+    var audioCapture: AudioCaptureEngine
     let state: DictationState
 
     @State private var isVisible = false
@@ -31,7 +31,7 @@ struct RecordingWaveHUD: View {
         .onChange(of: state) { _, newState in
             isVisible = newState == .recording
         }
-        .onReceive(audioCapture.$audioLevel) { newValue in
+        .onChange(of: audioCapture.audioLevel) { _, newValue in
             let clamped = max(0.06, min(CGFloat(newValue), 1))
             withAnimation(.easeOut(duration: 0.12)) {
                 smoothedLevel = clamped

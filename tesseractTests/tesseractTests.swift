@@ -64,19 +64,17 @@ struct AgentChatMessageToolResultTests {
     }
 
     @Test func normalizesWrappedToolCallArgumentsForLegacyDisplayMessages() async throws {
-        let rawArguments: [String: any Sendable] = [
-            "recursive": #"string("True")"#,
-            "path": #"string("tasks.md")"#,
-        ]
-        let rawToolCall = ToolCall(
-            function: .init(
-                name: "list",
-                arguments: rawArguments
-            )
+        let rawToolCall = ToolCallInfo(
+            id: "call-1",
+            name: "list",
+            argumentsJSON: ToolArgumentNormalizer.encode([
+                "recursive": .string(#"string("True")"#),
+                "path": .string(#"string("tasks.md")"#),
+            ])
         )
-        let rawMessage = AgentChatMessage.assistant("", toolCalls: [rawToolCall])
+        let rawMessage = AssistantMessage(content: "", toolCalls: [rawToolCall])
 
-        let normalized = rawMessage.normalizedForDisplay()
+        let normalized = AgentChatMessage(from: rawMessage)
         let args = normalized.toolCalls[0].function.arguments
 
         #expect(args["recursive"] == JSONValue.string("True"))

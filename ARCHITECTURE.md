@@ -1,57 +1,60 @@
 # Tesseract Architecture
 
-This document describes the architecture of Tesseract, a privacy-focused, offline voice-to-text dictation app for macOS.
+This document describes the architecture of Tesseract Agent, a privacy-focused, fully offline AI assistant for macOS.
 
 For development guidelines and build commands, see [CLAUDE.md](./CLAUDE.md).
+For the detailed architecture review and modernization rationale, see [docs/macos26-swiftui-architecture-review.md](./docs/macos26-swiftui-architecture-review.md).
 
 ---
 
 ## Overview
 
-Tesseract captures audio via push-to-talk, transcribes locally using WhisperKit (CoreML-based), and injects text into any focused application. All processing happens on-device with no network requests for transcription.
+Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation (speech-to-text), text-to-speech, and an LLM-powered agent with tool-calling capabilities. All inference uses local models: WhisperKit (CoreML) for ASR, MLX for LLM and TTS.
 
 **Key Principles:**
-- Privacy-first: No audio data leaves the device
-- Offline: Bundled Whisper model, no downloads required
-- Sandboxed: Uses clipboard-based text injection to stay within App Sandbox
-- Responsive: Real-time audio feedback during recording
+- Privacy-first: No audio or text data leaves the device
+- Offline: All models run locally on Apple Silicon
+- Sandboxed: App Sandbox with clipboard-based text injection
+- Responsive: Real-time audio feedback, streaming inference
 
 ---
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                          Tesseract                              │
-├─────────────────────────────────────────────────────────────────┤
-│  App Layer                                                      │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
-│  │ AppDelegate  │ │ MenuBar      │ │ DependencyContainer      │ │
-│  │              │ │ Manager      │ │ (Service Orchestration)  │ │
-│  └──────────────┘ └──────────────┘ └──────────────────────────┘ │
-├─────────────────────────────────────────────────────────────────┤
-│  Coordinator                                                    │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │              DictationCoordinator                        │   │
-│  │         (State Machine: idle → recording → processing)   │   │
-│  └──────────────────────────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────────┤
-│  Core Services                                                  │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
-│  │ AudioCapture │ │ Transcription│ │ TextInjector             │ │
-│  │ Engine       │ │ Engine       │ │ (Clipboard + Cmd+V)      │ │
-│  └──────────────┘ └──────────────┘ └──────────────────────────┘ │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────┐ │
-│  │ HotkeyManager│ │ Permissions  │ │ SettingsManager          │ │
-│  │ (CGEventTap) │ │ Manager      │ │ (@AppStorage)            │ │
-│  └──────────────┘ └──────────────┘ └──────────────────────────┘ │
-├─────────────────────────────────────────────────────────────────┤
-│  External                                                       │
-│  ┌──────────────┐ ┌──────────────┐                              │
-│  │ WhisperKit   │ │ AVFoundation │                              │
-│  │ (CoreML ASR) │ │ (Audio I/O)  │                              │
-│  └──────────────┘ └──────────────┘                              │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                          Tesseract Agent                             │
+├──────────────────────────────────────────────────────────────────────┤
+│  App Layer                                                           │
+│  ┌──────────────┐ ┌──────────────────────────┐ ┌──────────────────┐  │
+│  │ TesseractApp │ │ DependencyContainer      │ │ AppDelegate      │  │
+│  │ Window scene │ │ (Composition Root)       │ │ (AppKit bridge)  │  │
+│  └──────────────┘ └──────────────────────────┘ └──────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Coordinators (@Observable, @MainActor)                              │
+│  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────────┐  │
+│  │  Dictation     │ │  Speech        │ │  Agent                   │  │
+│  │  Coordinator   │ │  Coordinator   │ │  Coordinator             │  │
+│  └────────────────┘ └────────────────┘ └──────────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Engines (@Observable, @MainActor)                                   │
+│  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────────┐  │
+│  │ Transcription  │ │ Speech         │ │  Agent                   │  │
+│  │ Engine         │ │ Engine         │ │  Engine                  │  │
+│  └────────────────┘ └────────────────┘ └──────────────────────────┘  │
+├──────────────────────────────────────────────────────────────────────┤
+│  Actors (inference isolation)                                        │
+│  ┌────────────────┐ ┌────────────────┐ ┌──────────────┐             │
+│  │ WhisperActor   │ │ TTSActor       │ │ LLMActor     │             │
+│  │ (CoreML ASR)   │ │ (MLX TTS)      │ │ (MLX LLM)    │             │
+│  └────────────────┘ └────────────────┘ └──────────────┘             │
+├──────────────────────────────────────────────────────────────────────┤
+│  Platform Adapters (AppKit)                                          │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐  │
+│  │ HotkeyMgr    │ │ TextInjector │ │ MenuBarMgr   │ │ Panel      │  │
+│  │ (CGEventTap) │ │ (Clipboard)  │ │ (NSStatusBar)│ │ Controllers│  │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -61,141 +64,181 @@ Tesseract captures audio via push-to-talk, transcribes locally using WhisperKit 
 ```
 tesseract/
 ├── App/                         # Application lifecycle
-│   ├── TesseractApp.swift       # SwiftUI App entry point
+│   ├── TesseractApp.swift       # SwiftUI App entry (Window scene)
 │   ├── AppDelegate.swift        # macOS lifecycle, single instance
-│   ├── DependencyContainer.swift# Service instantiation & wiring
-│   ├── MenuBarManager.swift     # Status bar menu
-│   └── *PanelController.swift   # Recording overlay windows
+│   └── DependencyContainer.swift# Composition root, service wiring
 │
-├── Core/                        # Platform services
+├── Core/                        # Shared services
 │   ├── Audio/
-│   │   ├── AudioCaptureEngine.swift   # AVAudioEngine recording
+│   │   ├── AudioCaptureEngine.swift   # @Observable, AVAudioEngine recording
 │   │   ├── AudioDeviceManager.swift   # Input device enumeration
 │   │   └── AudioConverter.swift       # Format conversion
-│   ├── TextInjection/
-│   │   ├── TextInjector.swift         # Clipboard-based paste
-│   │   └── HotkeyManager.swift        # Global hotkey listener
-│   └── Permissions/
-│       └── PermissionsManager.swift   # Mic & Accessibility checks
+│   ├── Permissions/
+│   │   └── PermissionsManager.swift   # Mic & Accessibility checks
+│   ├── ViewModifiers.swift      # Scoped dependency injection
+│   └── Logging.swift            # Unified logging (Log enum)
+│
+├── Platform/                    # AppKit bridge code
+│   ├── HotkeyManager.swift           # Global hotkey listener (CGEventTap)
+│   ├── TextInjector.swift             # Clipboard-based paste injection
+│   ├── TextExtractor.swift            # Selected text extraction
+│   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
+│   ├── OverlayPanelController.swift   # Recording pill overlay (NSPanel)
+│   ├── FullScreenBorderPanelController.swift  # Full-screen glow overlay
+│   ├── OverlayScreenLocator.swift     # Screen detection for overlays
+│   ├── AgentNotchPanelController.swift# Agent notch overlay
+│   └── TTSNotchPanelController.swift  # TTS notch overlay
 │
 ├── Features/                    # Feature modules
 │   ├── Dictation/
-│   │   ├── DictationCoordinator.swift # Main state machine
+│   │   ├── DictationCoordinator.swift # @Observable state machine
 │   │   └── Views/                     # Recording UI components
+│   ├── Speech/
+│   │   ├── SpeechCoordinator.swift    # @Observable TTS orchestrator
+│   │   ├── SpeechEngine.swift         # @Observable, wraps TTSActor
+│   │   └── Views/ + NotchOverlay/     # TTS UI
 │   ├── Transcription/
-│   │   ├── TranscriptionEngine.swift  # WhisperKit wrapper
-│   │   ├── ModelManager.swift         # Bundled model location
-│   │   ├── TranscriptionHistory.swift # Persistence
-│   │   └── TranscriptionPostProcessor.swift # Text cleanup
-│   └── Settings/
-│       ├── SettingsManager.swift      # @AppStorage wrapper
-│       └── SettingsView.swift         # Settings UI
+│   │   ├── TranscriptionEngine.swift  # @Observable, wraps WhisperActor
+│   │   ├── TranscriptionHistory.swift # @Observable, JSON persistence
+│   │   └── TranscriptionPostProcessor.swift
+│   ├── Agent/
+│   │   ├── AgentCoordinator.swift     # @Observable UI bridge
+│   │   ├── AgentEngine.swift          # @Observable, wraps LLMActor
+│   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
+│   │   ├── Core/                      # Agent loop, state, config
+│   │   ├── Tools/                     # Built-in + extension tools
+│   │   ├── Context/                   # System prompt, skills, compaction
+│   │   └── Views/                     # Chat UI
+│   ├── Settings/
+│   │   ├── SettingsManager.swift      # @Observable, manual UserDefaults
+│   │   └── SettingsView.swift         # Settings UI sections
+│   ├── ImageGen/                      # FLUX image generation (hidden)
+│   └── Models/                        # Model download management
 │
-└── Models/                      # Data types
-    ├── DictationState.swift     # State enum
-    ├── DictationError.swift     # Error types
-    ├── AudioData.swift          # Audio sample container
-    ├── TranscriptionResult.swift# Transcription output
-    ├── KeyCombo.swift           # Hotkey configuration
+└── Models/                      # Shared data types
+    ├── DictationState.swift
+    ├── NavigationItem.swift     # Sidebar routing enum
+    ├── KeyCombo.swift
     └── ...
 ```
 
 ---
 
-## Core Concepts
+## Observation and Data Flow
 
-### 1. State Machine (DictationCoordinator)
+### State Model
 
-The application's main flow is controlled by a state machine:
+The app uses Swift's Observation framework (`@Observable`) for all primary state types. This replaced the older `ObservableObject` + `@Published` + Combine model.
 
-```
-         onHotkeyDown()              onHotkeyUp()
-              │                           │
-              ▼                           ▼
-┌──────┐  ┌─────────┐  ┌──────────┐  ┌───────────┐  ┌──────┐
-│ idle │──│recording│──│processing│──│  inject   │──│ idle │
-└──────┘  └─────────┘  └──────────┘  └───────────┘  └──────┘
-    ▲                                                   │
-    └──────────────────── error ◄──────────────────────┘
-                      (auto-reset 3s)
-```
-
-**States:**
-- `idle` - Ready for input
-- `recording` - Capturing audio (hotkey held)
-- `processing` - Running WhisperKit transcription
-- `error(String)` - Error with auto-reset
-
-### 2. Dependency Injection (DependencyContainer)
-
-All services are instantiated lazily in `DependencyContainer`:
+**SwiftUI views** consume `@Observable` types via `@Environment(Type.self)`:
 
 ```swift
-@MainActor
-final class DependencyContainer: ObservableObject {
-    lazy var settingsManager = SettingsManager.shared
-    lazy var audioCaptureEngine = AudioCaptureEngine()
-    lazy var transcriptionEngine = TranscriptionEngine()
-    lazy var textInjector = TextInjector()
-    lazy var hotkeyManager = HotkeyManager()
-    // ...
-
-    lazy var dictationCoordinator: DictationCoordinator = {
-        DictationCoordinator(
-            audioCapture: audioCaptureEngine,
-            transcriptionEngine: transcriptionEngine,
-            textInjector: textInjector,
-            // ...
-        )
-    }()
-}
-```
-
-### 3. Actor Isolation
-
-Thread safety is ensured through Swift concurrency:
-
-- **@MainActor**: All UI-related classes (coordinators, managers, engines)
-- **WhisperActor**: Isolates non-Sendable WhisperKit library
-- **@unchecked Sendable**: Audio buffer classes with manual NSLock
-
-```swift
-// Audio tap runs on real-time thread, needs manual synchronization
-nonisolated final class SampleBuffer: @unchecked Sendable {
-    private var samples: [Float] = []
-    private let lock = NSLock()
-    // ...
-}
-
-// WhisperKit isolated in dedicated actor
-actor WhisperActor {
-    private var whisperKit: WhisperKit?
-    func transcribe(_ samples: [Float], language: String) async throws -> TranscriptionResult
-}
-```
-
-### 4. Reactive State (Combine)
-
-UI updates flow through Combine publishers:
-
-```swift
-// DictationCoordinator publishes state
-@Published private(set) var state: DictationState = .idle
-@Published private(set) var lastTranscription: String = ""
-
-// Views observe state
 struct DictationContentView: View {
-    @ObservedObject var coordinator: DictationCoordinator
+    @Environment(DictationCoordinator.self) private var coordinator
+    @Environment(SettingsManager.self) private var settings
 
     var body: some View {
-        switch coordinator.state {
-        case .idle: IdleView()
-        case .recording: RecordingView()
-        // ...
-        }
+        // For bindings, use @Bindable:
+        @Bindable var settings = settings
+        Toggle("Play sounds", isOn: $settings.playSounds)
     }
 }
 ```
+
+**Non-view code** (DependencyContainer, AppDelegate, MenuBarManager) observes `@Observable` state using Swift 6.2's `Observations` async sequence:
+
+```swift
+Task { [weak self] in
+    guard let self else { return }
+    for await state in Observations { self.dictationCoordinator.state } {
+        self.overlayPanelController.handleStateChange(state)
+    }
+}
+```
+
+### Settings Persistence
+
+`SettingsManager` is `@Observable @MainActor` with 29 settings backed by manual `UserDefaults` read/write:
+
+```swift
+@Observable @MainActor
+final class SettingsManager {
+    var playSounds = true {
+        didSet { UserDefaults.standard.set(playSounds, forKey: Key.playSounds) }
+    }
+    init() {
+        UserDefaults.standard.register(defaults: [...])
+        playSounds = UserDefaults.standard.bool(forKey: Key.playSounds)
+        // ...
+    }
+}
+```
+
+`@AppStorage` is NOT compatible with `@Observable` (compiler error). All settings use explicit `UserDefaults` with `didSet`.
+
+### Dependency Injection
+
+`DependencyContainer` creates all services lazily and injects them into the SwiftUI hierarchy via scoped modifiers:
+
+```swift
+.injectDependencies(from: container)
+// Expands to:
+//   .injectCoreDependencies(...)       — settings, permissions, container
+//   .injectDictationDependencies(...)  — coordinator, engine, history, audio
+//   .injectSpeechDependencies(...)     — coordinator, engine
+//   .injectAgentDependencies(...)      — coordinator, engine, conversation store
+//   .injectModelDependencies(...)      — download manager, image gen
+```
+
+AppKit consumers (MenuBarManager, panel controllers) receive dependencies via constructor injection — they cannot use `@Environment`.
+
+---
+
+## Core Concepts
+
+### 1. Window Scene
+
+The app uses `Window("Tesseract", id: "main")` — a single-instance window. This avoids the multi-window workarounds needed with `WindowGroup`. Settings live in the sidebar (`NavigationSplitView`), not a separate `Settings` scene.
+
+### 2. State Machines
+
+Coordinators manage user-facing flows as state machines:
+
+- **DictationCoordinator**: idle → recording → processing → inject → idle
+- **SpeechCoordinator**: idle → capturingText → generating → streaming/playing → idle
+- **AgentCoordinator**: bridges the Agent double-loop to SwiftUI via cached `ChatRow` arrays
+
+### 3. Actor Isolation
+
+Thread safety uses Swift concurrency:
+
+- **@MainActor**: All coordinators, engines, managers, views
+- **Actors**: `WhisperActor` (CoreML), `TTSActor` (MLX TTS), `LLMActor` (MLX LLM), `ContextManager` (compaction)
+- **@unchecked Sendable**: `SampleBuffer`, `AudioLevelRelay` (manual NSLock for real-time audio thread)
+
+### 4. Agent Architecture
+
+**Inference stack**: `LLMActor` → `AgentEngine` → `Agent` (double-loop orchestrator).
+
+**Agent bootstrap** (`AgentFactory.makeAgent()`): Discovers packages → registers extensions → discovers skills → loads context files → assembles system prompt → wires compaction → creates Agent instance.
+
+**Double-loop** (`Core/AgentLoop.swift`): Outer loop handles follow-ups, inner loop handles tool calls + steering. No fixed round limit.
+
+**4 built-in tools**: `read`, `write`, `edit`, `ls` — all sandboxed via `PathSandbox`.
+
+**Extensibility**: Packages, Extensions (tool plugins), Skills (markdown with YAML frontmatter).
+
+### 5. Platform Adapters
+
+All AppKit bridging lives in `Platform/`. These are the features that SwiftUI cannot cover:
+
+- Global hotkeys (CGEventTap)
+- Clipboard text injection (CGEvent Cmd+V simulation)
+- Always-on-top overlay panels (NSPanel)
+- Menu bar status item (NSStatusItem)
+- Notch overlays for TTS/Agent
+
+Panel controllers receive state via push methods (`handleStateChange`, `handleAudioLevelChange`) — they are publisher-agnostic. The DependencyContainer owns the `Observations` subscriptions and pushes values.
 
 ---
 
@@ -204,169 +247,43 @@ struct DictationContentView: View {
 ### Recording to Text Injection
 
 ```
-1. User presses hotkey (e.g., Option+Space)
+1. User presses hotkey (Option+Space)
    └─► HotkeyManager.onHotkeyDown()
        └─► DictationCoordinator.startRecording()
            └─► AudioCaptureEngine.startCapture()
-               └─► AVAudioEngine tap collects samples
 
 2. User releases hotkey
-   └─► HotkeyManager.onHotkeyUp()
-       └─► DictationCoordinator.stopRecordingAndProcess()
-           ├─► AudioCaptureEngine.stopCapture() → AudioData
-           └─► TranscriptionEngine.transcribe(audioData)
-               └─► WhisperActor → WhisperKit inference
-                   └─► TranscriptionResult
+   └─► DictationCoordinator.stopRecordingAndProcess()
+       ├─► AudioCaptureEngine.stopCapture() → AudioData
+       └─► TranscriptionEngine.transcribe(audioData)
+           └─► WhisperActor → WhisperKit inference → TranscriptionResult
 
 3. Post-processing
-   └─► TranscriptionPostProcessor.process(text)
-       └─► Remove artifacts, fix capitalization
-           └─► TextInjector.inject(cleanedText)
-               ├─► Copy to clipboard
-               └─► Simulate Cmd+V (if not focused on own window)
+   └─► TranscriptionPostProcessor → TextInjector.inject()
+       ├─► Copy to clipboard
+       └─► Simulate Cmd+V
 ```
 
 ### Audio Format Pipeline
 
 ```
-Microphone (48kHz stereo)
-    │
-    ▼
-AVAudioEngine input tap (device sample rate, mono float32)
-    │
-    ▼
-SampleBuffer (thread-safe accumulation)
-    │
-    ▼
-Resample to 16kHz (linear interpolation)
-    │
-    ▼
-WhisperKit (16kHz mono float32 required)
+Microphone (48kHz stereo) → AVAudioEngine tap (device rate, mono float32)
+  → SampleBuffer (thread-safe) → Resample to 16kHz → WhisperKit
 ```
 
 ---
 
-## Key Components
+## Decisions and Rationale
 
-### AudioCaptureEngine
+Key architectural decisions documented in `docs/macos26-swiftui-architecture-review.md`:
 
-Handles microphone access and audio capture:
-
-- Creates AVAudioEngine per recording session
-- Installs tap on input node for sample collection
-- Real-time RMS audio level metering
-- Resamples to 16kHz for WhisperKit
-
-### TranscriptionEngine
-
-Wraps WhisperKit for speech recognition:
-
-- Loads bundled CoreML model (Whisper Large V3 Turbo)
-- Configures compute: GPU encoder, Neural Engine decoder
-- Greedy decoding with language-specific prefill
-- Returns text, segments, and timing info
-
-### TextInjector
-
-Clipboard-based text injection:
-
-- Saves original clipboard contents
-- Copies transcribed text to clipboard
-- Simulates Cmd+V via CGEvent (when external app focused)
-- Restores original clipboard (configurable)
-
-### HotkeyManager
-
-Global hotkey detection with graceful degradation:
-
-- **Primary**: CGEventTap (requires Accessibility permission)
-  - Can suppress events from reaching other apps
-- **Fallback**: NSEvent global monitors
-  - Observation only, no suppression
-- Supports modifier-only hotkeys (e.g., Option alone)
-
----
-
-## Settings & Persistence
-
-### SettingsManager
-
-Uses `@AppStorage` for UserDefaults persistence:
-
-```swift
-@AppStorage("hotkey") var hotkeyData: Data?
-@AppStorage("language") var language: String = "auto"
-@AppStorage("maxRecordingDuration") var maxRecordingDuration: Double = 30
-@AppStorage("playSounds") var playSounds: Bool = true
-// ...
-```
-
-### TranscriptionHistory
-
-JSON file persistence:
-
-- Location: `~/Library/Application Support/Tesseract/transcription_history.json`
-- Stores up to 100 entries (configurable)
-- Auto-prunes oldest entries
-
----
-
-## Platform Integration
-
-### Entitlements
-
-```xml
-com.apple.security.app-sandbox          <!-- Sandboxed app -->
-com.apple.security.device.audio-input   <!-- Microphone access -->
-com.apple.security.network.client       <!-- Model downloads (future) -->
-```
-
-### Permissions
-
-| Permission | Purpose | Fallback |
-|------------|---------|----------|
-| Microphone | Audio capture | Required, no fallback |
-| Accessibility | Hotkey suppression | NSEvent monitors (no suppression) |
-
-### Menu Bar
-
-- Status item with waveform icon
-- Quick actions: Toggle recording, Settings, Quit
-- Updates state based on DictationCoordinator
-
----
-
-## Error Handling
-
-Errors are typed and provide recovery suggestions:
-
-```swift
-enum DictationError: LocalizedError {
-    case microphonePermissionDenied
-    case modelNotLoaded
-    case audioCaptureFailed(String)
-    case transcriptionFailed(String)
-    case noSpeechDetected
-    case recordingTooShort
-    // ...
-
-    var recoverySuggestion: String? {
-        switch self {
-        case .microphonePermissionDenied:
-            return "Grant microphone access in System Settings > Privacy & Security"
-        // ...
-        }
-    }
-}
-```
-
-Error states auto-reset after 3 seconds to return to idle.
-
----
-
-## Future Considerations
-
-- **Silero VAD**: Voice Activity Detection for automatic start/stop
-- **Multiple Models**: Support for different Whisper model sizes
-- **Streaming**: Real-time transcription during recording
-- **Custom Vocabulary**: User-defined word corrections
+- **`Window` not `WindowGroup`**: Product intent is a single main window. `Window` eliminates 5 workarounds for multi-window suppression.
+- **`@Observable` not `ObservableObject`**: Observation framework tracks property access precisely (no coarse object-wide invalidation). Better SwiftUI performance.
+- **No `@AppStorage` in `@Observable`**: Compiler incompatibility. All settings use manual `UserDefaults` with `didSet`.
+- **No `SettingsManager.shared` singleton**: Injected via `DependencyContainer`. AppKit consumers get it via constructor injection.
+- **`Observations` async sequence for non-view code**: Replaces Combine `$property.sink` for observing `@Observable` types outside SwiftUI views.
+- **`AgentFactory` separate from container**: Container wires dependencies; factory orchestrates multi-step bootstrap.
+- **Panel controllers are publisher-agnostic**: Accept values via `handleStateChange`/`handleAudioLevelChange` methods. The subscription mechanism lives in DependencyContainer and can change independently.
+- **Defer Agent package extraction**: Don't extract `Features/Agent` into a separate Swift package until dependency boundaries are clearer.
+- **Defer separate Settings scene**: Keep settings in the main window sidebar.
+- **Defer UI automation**: Invest in coordinator unit tests first.

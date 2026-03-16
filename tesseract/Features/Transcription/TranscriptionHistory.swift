@@ -4,7 +4,7 @@
 //
 
 import Foundation
-import Combine
+import Observation
 import SwiftUI
 import AppKit
 import os
@@ -80,12 +80,13 @@ protocol TranscriptionStoring: AnyObject {
 }
 
 @MainActor
-final class TranscriptionHistory: ObservableObject, TranscriptionStoring {
-    @Published private(set) var entries: [TranscriptionEntry] = []
+@Observable
+final class TranscriptionHistory: TranscriptionStoring {
+    private(set) var entries: [TranscriptionEntry] = []
 
     /// Flattened list of items for efficient lazy rendering.
     /// Updated only when entries change.
-    @Published private(set) var flattenedItems: [HistoryItem] = []
+    private(set) var flattenedItems: [HistoryItem] = []
 
     private let maxEntries: Int
     private let storageURL: URL

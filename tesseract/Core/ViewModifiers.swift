@@ -60,24 +60,61 @@ extension View {
 // MARK: - Dependency Injection
 
 extension View {
-    /// Injects all required environment objects from the DependencyContainer.
-    /// Use this single modifier instead of chaining multiple .environmentObject() calls.
+    /// Injects all dependencies from the container, organized by feature scope.
     @MainActor
     func injectDependencies(from container: DependencyContainer) -> some View {
         self
             .environmentObject(container)
-            .environmentObject(container.dictationCoordinator)
-            .environmentObject(container.transcriptionEngine)
-            .environmentObject(container.transcriptionHistory)
+            .injectCoreDependencies(from: container)
+            .injectDictationDependencies(from: container)
+            .injectSpeechDependencies(from: container)
+            .injectAgentDependencies(from: container)
+            .injectModelDependencies(from: container)
+    }
+
+    // MARK: - Scoped Injection
+
+    /// Core services used across multiple features: settings and permissions.
+    @MainActor
+    func injectCoreDependencies(from container: DependencyContainer) -> some View {
+        self
+            .environment(container.settingsManager)
             .environmentObject(container.permissionsManager)
-            .environmentObject(container.audioCaptureEngine)
-            .environmentObject(container.speechCoordinator)
-            .environmentObject(container.speechEngine)
+    }
+
+    /// Dictation feature: coordinator, transcription engine/history, audio capture.
+    @MainActor
+    func injectDictationDependencies(from container: DependencyContainer) -> some View {
+        self
+            .environment(container.dictationCoordinator)
+            .environment(container.transcriptionEngine)
+            .environment(container.transcriptionHistory)
+            .environment(container.audioCaptureEngine)
+    }
+
+    /// Speech/TTS feature: coordinator and engine.
+    @MainActor
+    func injectSpeechDependencies(from container: DependencyContainer) -> some View {
+        self
+            .environment(container.speechCoordinator)
+            .environment(container.speechEngine)
+    }
+
+    /// Agent feature: coordinator, engine, conversation store.
+    @MainActor
+    func injectAgentDependencies(from container: DependencyContainer) -> some View {
+        self
             .environment(container.agentCoordinator)
-            .environmentObject(container.agentEngine)
+            .environment(container.agentEngine)
             .environmentObject(container.agentConversationStore)
+    }
+
+    /// Model management and image generation.
+    @MainActor
+    func injectModelDependencies(from container: DependencyContainer) -> some View {
+        self
+            .environmentObject(container.modelDownloadManager)
             .environmentObject(container.imageGenEngine)
             .environmentObject(container.zimageGenEngine)
-            .environmentObject(container.modelDownloadManager)
     }
 }

@@ -6,12 +6,12 @@
 import SwiftUI
 
 struct DictationContentView: View {
-    @EnvironmentObject private var coordinator: DictationCoordinator
-    @EnvironmentObject private var transcriptionEngine: TranscriptionEngine
-    @EnvironmentObject private var history: TranscriptionHistory
+    @Environment(DictationCoordinator.self) private var coordinator
+    @Environment(TranscriptionEngine.self) private var transcriptionEngine
+    @Environment(TranscriptionHistory.self) private var history
     @EnvironmentObject private var permissionsManager: PermissionsManager
-    @EnvironmentObject private var audioCapture: AudioCaptureEngine
-    @ObservedObject private var settings = SettingsManager.shared
+    @Environment(AudioCaptureEngine.self) private var audioCapture
+    @Environment(SettingsManager.self) private var settings
 
     private let contentMaxWidth: CGFloat = Theme.Layout.contentMaxWidth
 

@@ -7,11 +7,12 @@ import AppKit
 import SwiftUI
 
 struct TTSParametersSidebar: View {
-    @ObservedObject private var settings = SettingsManager.shared
+    @Environment(SettingsManager.self) private var settings
 
     private let sidebarWidth: CGFloat = 260
 
     var body: some View {
+        @Bindable var settings = settings
         Form {
             Section("Sampling") {
                 VStack(alignment: .leading, spacing: 4) {

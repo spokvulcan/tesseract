@@ -3,20 +3,19 @@ import os
 
 struct AgentContentView: View {
     @Environment(AgentCoordinator.self) private var coordinator
-    @EnvironmentObject private var agentEngine: AgentEngine
+    @Environment(AgentEngine.self) private var agentEngine
     @EnvironmentObject private var conversationStore: AgentConversationStore
-    @EnvironmentObject private var speechCoordinator: SpeechCoordinator
+    @Environment(SpeechCoordinator.self) private var speechCoordinator
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var inputText = ""
     @State private var showingHistory = false
     @State private var speakingMessageID: UUID?
-    @AppStorage("agentAutoSpeak") private var autoSpeakEnabled = false
+    @Environment(SettingsManager.self) private var settings
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
-    @AppStorage("selectedAgentModelID") private var agentModelID: String = ModelDefinition.defaultAgentModelID
 
     private var isModelDownloaded: Bool {
-        if case .downloaded = downloadManager.statuses[agentModelID] {
+        if case .downloaded = downloadManager.statuses[settings.selectedAgentModelID] {
             return true
         }
         return false
@@ -92,11 +91,11 @@ struct AgentContentView: View {
                 }
 
                 Button {
-                    autoSpeakEnabled.toggle()
+                    settings.agentAutoSpeak.toggle()
                 } label: {
-                    Image(systemName: autoSpeakEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    Image(systemName: settings.agentAutoSpeak ? "speaker.wave.2.fill" : "speaker.slash.fill")
                 }
-                .help(autoSpeakEnabled ? "Auto-speak responses (on)" : "Auto-speak responses (off)")
+                .help(settings.agentAutoSpeak ? "Auto-speak responses (on)" : "Auto-speak responses (off)")
                 
                 Button {
                     useMarkdown.toggle()

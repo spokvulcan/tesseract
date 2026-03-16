@@ -8,6 +8,7 @@ import SwiftUI
 
 struct OnboardingView: View {
     @EnvironmentObject private var permissionsManager: PermissionsManager
+    @Environment(SettingsManager.self) private var settings
     @Binding var isPresented: Bool
 
     @State private var currentStep = 0
@@ -116,7 +117,7 @@ struct OnboardingView: View {
     }
 
     private func complete() {
-        SettingsManager.shared.hasCompletedOnboarding = true
+        settings.hasCompletedOnboarding = true
         isPresented = false
     }
 }
@@ -220,10 +221,11 @@ struct FeatureRow: View {
 // MARK: - Language Selection Step Content
 
 struct LanguageSelectionStepContent: View {
-    @ObservedObject private var settings = SettingsManager.shared
+    @Environment(SettingsManager.self) private var settings
 
     var body: some View {
-        VStack(spacing: 20) {
+        @Bindable var settings = settings
+        return VStack(spacing: 20) {
             Image(systemName: "globe")
                 .font(.system(size: 60))
                 .foregroundStyle(.tint)
@@ -406,7 +408,7 @@ struct AccessibilityPermissionStepContent: View {
 // MARK: - Ready Step Content
 
 struct ReadyStepContent: View {
-    @ObservedObject private var settings = SettingsManager.shared
+    @Environment(SettingsManager.self) private var settings
 
     var body: some View {
         VStack(spacing: 24) {
