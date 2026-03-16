@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 struct AgentConversationListView: View {
     @Binding var speakingMessageID: UUID?
@@ -30,21 +31,39 @@ struct AgentConversationListView: View {
                         speakingMessageID: $speakingMessageID,
                         isSpeechActive: isSpeechActive
                     )
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { _, newHeight in
+                        if row.heightCacheable {
+                            coordinator.cacheRowHeight(newHeight, for: row.id)
+                        }
+                    }
+                    .frame(height: row.heightCacheable ? coordinator.cachedHeight(for: row.id) : nil)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
                 }
             }
             .listStyle(.plain)
             .defaultScrollAnchor(.bottom)
-            .defaultScrollAnchor(.bottom, for: .sizeChanges)
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentSize.height > 0 &&
                 geo.visibleRect.maxY >= geo.contentSize.height - 80
             } action: { _, nearBottom in
                 isNearBottom = nearBottom
             }
+            // [Perf] Track content height changes — reveals layout instability causing scroll jumps
+            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.contentSize.height
+            } action: { oldHeight, newHeight in
+                let delta = newHeight - oldHeight
+                if abs(delta) > 1 {
+                    Log.agent.debug("[Perf] ScrollGeo contentHeight: \(String(format: "%.0f", oldHeight)) → \(String(format: "%.0f", newHeight)) (Δ\(String(format: "%.0f", delta))) | isNearBottom=\(isNearBottom)")
+                    ChatViewPerf.signposter.emitEvent("ContentHeightChange")
+                }
+            }
             .onChange(of: lastRowID) { _, newID in
                 if isNearBottom, let id = newID {
+                    Log.agent.debug("[Perf] scrollTo(lastRowID) triggered: \(id)")
                     withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo(id, anchor: .bottom)
                     }

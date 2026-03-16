@@ -17,6 +17,17 @@ struct ChatRow: Identifiable, Equatable, Sendable {
         case streamingText(StreamingTextRow)
         case streamingIndicator
     }
+
+    /// Whether this row's height can be cached for List estimation stability.
+    /// Excludes rows with local expansion state or streaming content.
+    var heightCacheable: Bool {
+        switch kind {
+        case .user, .assistantText, .toolText, .system, .turnHeader:
+            return true
+        case .thinking, .toolCall, .streamingText, .streamingIndicator:
+            return false
+        }
+    }
 }
 
 struct UserRow: Equatable, Sendable {

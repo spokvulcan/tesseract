@@ -41,6 +41,8 @@ final class AgentCoordinator {
     @ObservationIgnored private var expandedTurns: Set<UUID> = []
     /// Expanded tool call details (arguments/results visible), keyed by row ID.
     @ObservationIgnored private var expandedDetails: Set<String> = []
+    /// Cached measured row heights — stabilizes List's height estimation for off-screen cells.
+    @ObservationIgnored private var rowHeightCache: [String: CGFloat] = [:]
     /// Throttle streaming row updates.
     @ObservationIgnored private var lastStreamingUpdate: ContinuousClock.Instant = .now
     /// Turn that was auto-expanded for generation — auto-collapse on agentEnd.
@@ -354,20 +356,37 @@ final class AgentCoordinator {
     // MARK: - Expand/Collapse
 
     func toggleTurnExpanded(_ turnID: UUID) {
+        let beforeCount = rows.count
+        let expanding = !expandedTurns.contains(turnID)
         expandedTurns.formSymmetricDifference([turnID])
         // Track manual collapse of the streaming header
         if turnID == Self.streamingTurnID && !expandedTurns.contains(Self.streamingTurnID) {
             streamingManuallyCollapsed = true
         }
         assembleRowsFromCache()
+        Log.agent.debug("[Perf] toggleTurnExpanded: \(expanding ? "EXPAND" : "COLLAPSE") turn \(turnID) | rows \(beforeCount) → \(rows.count) (Δ\(rows.count - beforeCount))")
     }
 
     func toggleDetailExpanded(_ rowID: String) {
+        let beforeCount = rows.count
         expandedDetails.formSymmetricDifference([rowID])
         if let idx = rows.firstIndex(where: { $0.id == rowID }),
            case .toolCall(let data) = rows[idx].kind {
             rows[idx] = ChatRow(id: rowID, kind: .toolCall(data.togglingDetail()))
         }
+        Log.agent.debug("[Perf] toggleDetailExpanded: \(rowID) | rows \(beforeCount) → \(rows.count)")
+    }
+
+    // MARK: - Row Height Cache
+
+    /// Returns the cached height for a row, or nil if not yet measured.
+    func cachedHeight(for rowID: String) -> CGFloat? {
+        rowHeightCache[rowID]
+    }
+
+    /// Caches a measured row height. Called from the view layer via onGeometryChange.
+    func cacheRowHeight(_ height: CGFloat, for rowID: String) {
+        rowHeightCache[rowID] = height
     }
 
     // MARK: - Event Subscription
@@ -463,6 +482,8 @@ final class AgentCoordinator {
 
     /// Full rebuild: groups messages into turns, validates cache, stores turn order, assembles rows.
     private func rebuildRows() {
+        let perfState = ChatViewPerf.signposter.beginInterval("rebuildRows")
+
         let allMessages = agent.state.messages
 
         // Group messages into turns — each turn starts with a user/system message.
@@ -503,6 +524,8 @@ final class AgentCoordinator {
         // Validate cache for each turn
         var activeTurnIDs: Set<UUID> = []
         var newTurnOrder: [TurnRef] = []
+        var cacheHits = 0
+        var cacheMisses = 0
 
         for turn in turns {
             activeTurnIDs.insert(turn.id)
@@ -515,9 +538,11 @@ final class AgentCoordinator {
 
             if let cached = turnDisplayCache[turn.id],
                cached.messageIDs == messageIDs {
+                cacheHits += 1
                 continue // Cache hit
             }
 
+            cacheMisses += 1
             turnDisplayCache[turn.id] = computeTurnDisplayData(
                 turnID: turn.id, messages: turn.messages, messageIDs: messageIDs
             )
@@ -540,10 +565,15 @@ final class AgentCoordinator {
 
         turnOrder = newTurnOrder
         assembleRowsFromCache()
+
+        Log.agent.debug("[Perf] rebuildRows: \(allMessages.count) msgs → \(turns.count) turns → \(rows.count) rows | cache \(cacheHits) hit / \(cacheMisses) miss | pruned \(staleTurnIDs.count)")
+        ChatViewPerf.signposter.endInterval("rebuildRows", perfState)
     }
 
     /// Computes immutable display data for one turn from protocol messages.
     private func computeTurnDisplayData(turnID: UUID, messages: [any AgentMessageProtocol], messageIDs: [UUID]) -> TurnDisplayData {
+        let perfState = ChatViewPerf.signposter.beginInterval("computeTurnDisplayData")
+        defer { ChatViewPerf.signposter.endInterval("computeTurnDisplayData", perfState) }
         var steps: [StepDisplayData] = []
         var answerContent: String?
         var answerTimestamp: String?
@@ -625,6 +655,8 @@ final class AgentCoordinator {
     /// Stamps overlay state (expansion) onto immutable cached content to produce `rows`.
     /// Iterates stored `turnOrder` — no message walk needed.
     private func assembleRowsFromCache() {
+        let perfState = ChatViewPerf.signposter.beginInterval("assembleRowsFromCache")
+        let oldRowIDs = Set(rows.map(\.id))
         var newRows: [ChatRow] = []
 
         for turnRef in turnOrder {
@@ -753,7 +785,22 @@ final class AgentCoordinator {
             }
         }
 
+        // Row diff analysis
+        let newRowIDs = Set(newRows.map(\.id))
+        let inserted = newRowIDs.subtracting(oldRowIDs)
+        let removed = oldRowIDs.subtracting(newRowIDs)
+        if !inserted.isEmpty || !removed.isEmpty {
+            Log.agent.debug("[Perf] assembleRows: \(rows.count) → \(newRows.count) rows | +\(inserted.count) -\(removed.count)")
+            if !inserted.isEmpty, inserted.count <= 20 {
+                Log.agent.debug("[Perf]   inserted: \(inserted.sorted().joined(separator: ", "))")
+            }
+            if !removed.isEmpty, removed.count <= 20 {
+                Log.agent.debug("[Perf]   removed: \(removed.sorted().joined(separator: ", "))")
+            }
+        }
+
         rows = newRows
+        ChatViewPerf.signposter.endInterval("assembleRowsFromCache", perfState)
     }
 
     /// Counts live streaming steps from the current `streamMessage`.
@@ -867,6 +914,8 @@ final class AgentCoordinator {
         guard now - lastStreamingUpdate >= .milliseconds(50) else { return }
         lastStreamingUpdate = now
 
+        ChatViewPerf.signposter.emitEvent("updateStreamingRows")
+
         // Streaming header is interleaved with committed steps, so we reassemble
         // the full row list. assembleRowsFromCache is O(turns) with no string work.
         assembleRowsFromCache()
@@ -909,6 +958,7 @@ final class AgentCoordinator {
         turnOrder = []
         expandedTurns.removeAll()
         expandedDetails.removeAll()
+        rowHeightCache.removeAll()
         autoExpandedTurnID = nil
         streamingManuallyCollapsed = false
         lastStreamingToolArgs = []

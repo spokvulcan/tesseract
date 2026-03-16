@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 /// Routes a `ChatRow` to the appropriate leaf view with correct alignment.
 struct ChatRowView: View {
@@ -9,6 +10,7 @@ struct ChatRowView: View {
     @Environment(AgentCoordinator.self) private var coordinator
 
     var body: some View {
+        let _ = ChatViewPerf.signposter.emitEvent("ChatRowView.body")
         switch row.kind {
         case .user(let data):
             HStack {

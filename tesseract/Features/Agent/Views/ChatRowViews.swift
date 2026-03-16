@@ -1,5 +1,6 @@
 import SwiftUI
 import Textual
+import os
 
 // MARK: - Step Gutter (shared timeline column)
 
@@ -36,6 +37,7 @@ struct UserBubble: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        let _ = ChatViewPerf.signposter.emitEvent("UserBubble.body")
         HStack(alignment: .bottom, spacing: 8) {
             if useMarkdown {
                 StructuredText(markdown: data.content)
@@ -85,6 +87,7 @@ struct AssistantBubble: View, Equatable {
     }
 
     var body: some View {
+        let _ = ChatViewPerf.signposter.emitEvent("AssistantBubble.body")
         HStack(alignment: .bottom, spacing: 8) {
             VStack(alignment: .leading, spacing: 6) {
                 if useMarkdown {
@@ -146,6 +149,7 @@ struct StreamingBubble: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        let _ = ChatViewPerf.signposter.emitEvent("StreamingBubble.body")
         Text(data.content)
             .font(.system(size: 15))
             .textSelection(.enabled)
@@ -173,6 +177,7 @@ struct ThinkingRowView: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        let _ = ChatViewPerf.signposter.emitEvent("ThinkingRowView.body")
         HStack(alignment: .top, spacing: 12) {
             StepGutter(iconName: "brain", isLast: data.isLast)
 
@@ -234,6 +239,7 @@ struct ToolCallRowView: View, Equatable {
     }
 
     var body: some View {
+        let _ = ChatViewPerf.signposter.emitEvent("ToolCallRowView.body")
         HStack(alignment: .top, spacing: 12) {
             StepGutter(iconName: data.iconName, iconColor: data.isError ? .red : .secondary, isLast: data.isLast)
 
@@ -311,6 +317,7 @@ struct ToolTextRowView: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        let _ = ChatViewPerf.signposter.emitEvent("ToolTextRowView.body")
         HStack(alignment: .top, spacing: 12) {
             StepGutter(iconName: "text.bubble", isLast: data.isLast)
 
@@ -334,6 +341,7 @@ struct TurnHeaderView: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        let _ = ChatViewPerf.signposter.emitEvent("TurnHeaderView.body")
         Button(action: { coordinator.toggleTurnExpanded(data.turnID) }) {
             HStack(spacing: 4) {
                 Text("\(data.stepCount) step\(data.stepCount == 1 ? "" : "s")")

@@ -71,3 +71,10 @@ nonisolated enum Log: Sendable {
     static let image = PublicLogger(subsystem: "app.tesseract.agent", category: "image")
     static let agent = PublicLogger(subsystem: "app.tesseract.agent", category: "agent")
 }
+
+/// Chat view performance profiling — signposts visible in Instruments, logs to console.
+/// Category: "ChatViewPerf" — filter in Instruments → os_signpost.
+nonisolated enum ChatViewPerf: Sendable {
+    static let log = OSLog(subsystem: "app.tesseract.agent", category: "ChatViewPerf")
+    static let signposter = OSSignposter(logHandle: log)
+}
