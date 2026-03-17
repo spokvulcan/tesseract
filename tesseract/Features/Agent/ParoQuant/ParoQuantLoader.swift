@@ -346,130 +346,38 @@ nonisolated private struct ParoQuantInputProcessor: UserInputProcessor {
 
 /// Load a ParoQuant model, returning a ModelContainer.
 ///
-/// This reuses the standard factory components (typeRegistry for model creation,
-/// loadTokenizer for tokenizer) but handles AutoAWQ weight conversion and
-/// rotation layer patching ourselves.
+/// Delegates to MLXLMCommon's `loadParoQuantModel` which handles:
+/// - AutoAWQ weight conversion
+/// - Rotation layer patching
+/// - Pre-rotation of weights (bakes Givens rotation into quantized weights for +23% throughput)
+/// - Caching pre-rotated weights to disk for fast subsequent loads
 nonisolated func loadParoQuantModel(
     from directory: URL, toolCallFormat: ToolCallFormat?
 ) async throws -> ModelContainer {
-    // 1. Parse config.json (flatten VLM text_config if present)
-    let configURL = directory.appendingPathComponent("config.json")
-    var configData = try Data(contentsOf: configURL)
-    guard isSupportedParoQuantModel(directory: directory, configData: configData) else {
-        throw ParoQuantError.unsupportedModel
-    }
-    var configJSON = try JSONSerialization.jsonObject(with: configData) as! [String: Any]
-    if let textConfig = configJSON["text_config"] as? [String: Any] {
-        for (key, value) in textConfig {
-            configJSON[key] = value
-        }
-        configJSON["model_type"] = "qwen3_5"
-        configData = try JSONSerialization.data(withJSONObject: configJSON)
-    }
-    let baseConfig = try JSONDecoder().decode(BaseConfiguration.self, from: configData)
-
-    // 2. Read ParoQuant params
-    guard let paroConfig = readParoQuantConfig(configData) else {
-        throw ParoQuantError.missingConfig
-    }
-    Log.agent.info(
-        "ParoQuant config: bits=\(paroConfig.bits), groupSize=\(paroConfig.groupSize), krot=\(paroConfig.krot)"
+    // Use the library's loader (with pre-rotation + caching)
+    let container = try await MLXLMCommon.loadParoQuantModel(
+        from: directory,
+        typeRegistry: LLMModelFactory.shared.typeRegistry,
+        toolCallFormat: toolCallFormat
     )
 
-    // 3. Create model via standard typeRegistry
-    let model = try await LLMModelFactory.shared.typeRegistry
-        .createModel(configuration: configData, modelType: baseConfig.modelType)
-
-    // 4. EOS token override from generation_config.json
-    var eosTokenIds = Set(baseConfig.eosTokenIds?.values ?? [])
-    let genConfigURL = directory.appendingPathComponent("generation_config.json")
-    if let genData = try? Data(contentsOf: genConfigURL),
-       let genConfig = try? JSONDecoder().decode(GenerationConfigFile.self, from: genData),
-       let genEos = genConfig.eosTokenIds?.values
-    {
-        eosTokenIds = Set(genEos)
-    }
-
-    var config = ModelConfiguration(directory: directory, toolCallFormat: toolCallFormat)
-    config.eosTokenIds = eosTokenIds
-
-    // 5. Load raw safetensors
-    var weights = [String: MLXArray]()
-    let enumerator = FileManager.default.enumerator(
-        at: directory, includingPropertiesForKeys: nil)!
-    while let url = enumerator.nextObject() as? URL {
-        if url.pathExtension == "safetensors" {
-            let w = try loadArrays(url: url)
-            for (key, value) in w {
-                weights[key] = value
+    // Fix up the message generator — the library uses DefaultMessageGenerator
+    // because it can't access LLMModel from MLXLMCommon. We override with the
+    // proper model-specific generator.
+    await container.update { context in
+        let messageGenerator: MessageGenerator =
+            if let llmModel = context.model as? LLMModel {
+                llmModel.messageGenerator(tokenizer: context.tokenizer)
+            } else {
+                DefaultMessageGenerator()
             }
-        }
+        context.processor = ParoQuantInputProcessor(
+            tokenizer: context.tokenizer, configuration: context.configuration,
+            messageGenerator: messageGenerator
+        )
     }
 
-    Log.agent.info("Loaded \(weights.count) weight keys from safetensors")
-
-    // 6. Convert AutoAWQ format → MLX format (BEFORE sanitize — matches Python ordering)
-    if weights.keys.contains(where: { $0.hasSuffix(".qweight") }) {
-        convertAutoAWQ(&weights, groupSize: paroConfig.groupSize)
-        Log.agent.info("Converted AutoAWQ weights to MLX format")
-    }
-
-    // 7. Model-specific sanitization (AFTER AWQ — may remap key prefixes)
-    weights = model.sanitize(weights: weights)
-
-    // 8. Patch rotation layers
-    try patchRotationLayers(
-        model: model, weights: weights,
-        bits: paroConfig.bits, groupSize: paroConfig.groupSize
-    )
-
-    // 9. Quantize any non-rotation layers already stored in MLX quantized form.
-    quantize(model: model) { path, module in
-        guard module is Quantizable else { return nil }
-        guard isCheckpointQuantizedLayer(path: path, weights: weights) else {
-            return nil
-        }
-        return (paroConfig.groupSize, paroConfig.bits, .affine)
-    }
-
-    // 10. Load checkpoint weights into the patched model
-    let parameters = ModuleParameters.unflattened(weights)
-    let verify: Module.VerifyUpdate = [.allModelKeysSet, .shapeMismatch]
-    try model.update(parameters: parameters, verify: verify)
-
-    // 11. Quantize the IO embedding path from the loaded FP16 weights.
-    quantize(model: model) { path, module in
-        guard isParoQuantIOLayer(path: path, module: module) else {
-            return nil
-        }
-        return (paroConfig.groupSize, paroConfig.bits, .affine)
-    }
-
-    // 12. Materialize the model after all module swaps are complete.
-    eval(model)
-    Log.agent.info("ParoQuant model loaded and evaluated")
-
-    // 13. Load tokenizer
-    let tokenizer = try await loadTokenizer(configuration: config, hub: defaultHubApi)
-
-    // 14. Create processor with messageGenerator
-    let messageGenerator: MessageGenerator =
-        if let llmModel = model as? LLMModel {
-            llmModel.messageGenerator(tokenizer: tokenizer)
-        } else {
-            DefaultMessageGenerator()
-        }
-    let processor = ParoQuantInputProcessor(
-        tokenizer: tokenizer, configuration: config,
-        messageGenerator: messageGenerator
-    )
-
-    // 15. Assemble ModelContext → ModelContainer
-    let context = ModelContext(
-        configuration: config, model: model,
-        processor: processor, tokenizer: tokenizer
-    )
-    return ModelContainer(context: context)
+    return container
 }
 
 // MARK: - Errors

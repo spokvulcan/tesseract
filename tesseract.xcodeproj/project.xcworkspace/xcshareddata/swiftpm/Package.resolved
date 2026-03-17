@@ -31,10 +31,10 @@
     {
       "identity" : "mlx-swift-lm",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/INQTR/mlx-swift-lm.git",
+      "location" : "https://github.com/spokvulcan/mlx-swift-lm.git",
       "state" : {
-        "branch" : "gpu-only-penalties",
-        "revision" : "affde4028e16f0a4d30ec1a8767f0e02d76e7b91"
+        "branch" : "feat/paroquant-support",
+        "revision" : "ea9d22e"
       }
     },
     {
