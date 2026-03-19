@@ -1095,19 +1095,19 @@ case heartbeatEnd(result)
 ## 13. Implementation Phases
 
 ### Phase 1: Foundation (Core Scheduling) — MVP
-- [ ] `CronExpression` parser with full semantic contract + tests
-- [ ] `ScheduledTask` model + `ScheduledTaskStore` persistence (with `.storage_version`)
-- [ ] `SchedulingActor` with 60-second polling loop
+- [x] `CronExpression` parser with full semantic contract + tests
+- [x] `ScheduledTask` model + `ScheduledTaskStore` persistence (with `.storage_version`)
+- [x] `SchedulingActor` with 60-second polling loop
 - [ ] `SchedulingService` (MainActor facade)
 - [ ] Three agent tools: `cron_create`, `cron_list`, `cron_delete`
 - [ ] `BackgroundAgentFactory` — isolated agent instances with full assembly pipeline parity
 - [ ] `BackgroundSessionStore` — separate from user conversations (with `.storage_version`)
 - [ ] `InferenceArbiter` — unified model ownership across LLM/TTS/ImageGen
 - [ ] Wait-until-idle when user is active (via arbiter)
-- [ ] Sequential execution queue
+- [x] Sequential execution queue
 - [ ] Safety controls (global pause, max tasks, provenance, agent limits)
 - [ ] App lifecycle: persist on terminate, restore + catch-up on launch
-- [ ] Missed-run policy: evaluate persisted `nextRunAt` before advancing, < 1h catch-up, >= 1h mark missed
+- [x] Missed-run policy: evaluate persisted `nextRunAt` before advancing, < 1h catch-up, >= 1h mark missed
 
 ### Phase 2: Heartbeat — MVP
 - [ ] `HEARTBEAT.md` file + default template + seeding

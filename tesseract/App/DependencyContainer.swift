@@ -54,6 +54,16 @@ final class DependencyContainer: ObservableObject {
     )
     lazy var agentConversationStore = AgentConversationStore()
     lazy var scheduledTaskStore = ScheduledTaskStore()
+    lazy var schedulingActor: SchedulingActor = {
+        SchedulingActor(
+            taskStore: scheduledTaskStore,
+            executeTask: { task in
+                // Phase 1 stub — BackgroundAgentFactory replaces this
+                Log.agent.info("SchedulingActor stub: would execute '\(task.name)'")
+                return .noActionNeeded
+            }
+        )
+    }()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
             agent: agent,
@@ -221,6 +231,9 @@ final class DependencyContainer: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // Start scheduling polling loop
+        await schedulingActor.startPolling()
     }
 
     private func loadWhisperModelIfAvailable() async {

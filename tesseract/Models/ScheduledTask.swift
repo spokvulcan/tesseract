@@ -7,7 +7,7 @@ import Foundation
 
 // MARK: - ScheduledTaskError
 
-enum ScheduledTaskError: LocalizedError, Sendable {
+nonisolated enum ScheduledTaskError: LocalizedError, Sendable {
     case invalidCronExpression(String, underlying: String)
 
     var errorDescription: String? {
@@ -20,12 +20,12 @@ enum ScheduledTaskError: LocalizedError, Sendable {
 
 // MARK: - TaskCreator
 
-enum TaskCreator: Sendable, Equatable {
+nonisolated enum TaskCreator: Sendable, Equatable {
     case user
     case agent(reason: String)
 }
 
-extension TaskCreator: Codable {
+nonisolated extension TaskCreator: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, reason
     }
@@ -60,20 +60,30 @@ extension TaskCreator: Codable {
 
 // MARK: - TaskRunResult
 
-enum TaskRunResult: Sendable, Equatable {
+nonisolated enum TaskRunResult: Sendable, Equatable {
     case success(summary: String)
     case noActionNeeded
     case error(message: String)
     case interrupted
     case missed(at: Date)
+
+    var displaySummary: String {
+        switch self {
+        case .success(let s): s
+        case .noActionNeeded: "No action needed"
+        case .error(let m): "Error: \(m)"
+        case .interrupted: "Interrupted"
+        case .missed(let at): "Missed at \(at)"
+        }
+    }
 }
 
-extension TaskRunResult: Codable {
+nonisolated extension TaskRunResult: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, summary, message, at
     }
 
-    private static let iso8601Formatter: ISO8601DateFormatter = {
+    private nonisolated(unsafe) static let iso8601Formatter: ISO8601DateFormatter = {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return fmt
@@ -130,7 +140,7 @@ extension TaskRunResult: Codable {
 
 // MARK: - ScheduledTask
 
-struct ScheduledTask: Codable, Identifiable, Sendable, Equatable {
+nonisolated struct ScheduledTask: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
     var name: String
     var description: String
@@ -152,7 +162,7 @@ struct ScheduledTask: Codable, Identifiable, Sendable, Equatable {
 
 // MARK: - ScheduledTask Extensions
 
-extension ScheduledTask {
+nonisolated extension ScheduledTask {
 
     var parsedCronExpression: CronExpression? {
         try? CronExpression(parsing: cronExpression)
@@ -220,7 +230,7 @@ extension ScheduledTask {
 
 // MARK: - TaskRun
 
-struct TaskRun: Codable, Identifiable, Sendable, Equatable {
+nonisolated struct TaskRun: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
     let taskId: UUID
     let sessionId: UUID
@@ -236,7 +246,7 @@ struct TaskRun: Codable, Identifiable, Sendable, Equatable {
 
 // MARK: - ScheduledTaskSummary
 
-struct ScheduledTaskSummary: Codable, Identifiable, Sendable, Equatable {
+nonisolated struct ScheduledTaskSummary: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
     var name: String
     var cronExpression: String
@@ -276,7 +286,7 @@ struct ScheduledTaskSummary: Codable, Identifiable, Sendable, Equatable {
 
 // MARK: - ScheduledTaskIndex
 
-struct ScheduledTaskIndex: Codable, Sendable {
+nonisolated struct ScheduledTaskIndex: Codable, Sendable {
     let version: Int
     var tasks: [ScheduledTaskSummary]
 }

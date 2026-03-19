@@ -2158,3 +2158,255 @@ struct ScheduledTaskStoreTests {
         #expect(loaded[0].nextRunAt != divergent.nextRunAt)
     }
 }
+
+// MARK: - Scheduling Actor Tests
+
+@MainActor
+struct SchedulingActorTests {
+
+    @Test func detectsDueTasksAndExecutes() async throws {
+        let (scheduler, store, root) = makeSchedulingTestRig()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var task = try ScheduledTask.create(name: "Due", cronExpression: "* * * * *", prompt: "test")
+        task.nextRunAt = Date(timeIntervalSinceNow: -120)
+        store.save(task)
+
+        await scheduler.checkAndRunDueTasks()
+
+        let runs = store.loadRuns(for: task.id)
+        #expect(runs.count == 1)
+        #expect(runs[0].result == .noActionNeeded)
+    }
+
+    @Test func skipsFutureTasksAsNotDue() async throws {
+        let (scheduler, store, root) = makeSchedulingTestRig()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var task = try ScheduledTask.create(name: "Future", cronExpression: "* * * * *", prompt: "test")
+        task.nextRunAt = Date(timeIntervalSinceNow: 3600)
+        store.save(task)
+
+        await scheduler.checkAndRunDueTasks()
+
+        let runs = store.loadRuns(for: task.id)
+        #expect(runs.isEmpty)
+    }
+
+    @Test func skipsDisabledTasks() async throws {
+        let (scheduler, store, root) = makeSchedulingTestRig()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var task = try ScheduledTask.create(name: "Disabled", cronExpression: "* * * * *", prompt: "test")
+        task.nextRunAt = Date(timeIntervalSinceNow: -120)
+        task.enabled = false
+        store.save(task)
+
+        await scheduler.checkAndRunDueTasks()
+
+        let runs = store.loadRuns(for: task.id)
+        #expect(runs.isEmpty)
+    }
+
+    @Test func skipsExhaustedTasks() async throws {
+        let (scheduler, store, root) = makeSchedulingTestRig()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var task = try ScheduledTask.create(
+            name: "Exhausted", cronExpression: "* * * * *", prompt: "test", maxRuns: 3
+        )
+        task.nextRunAt = Date(timeIntervalSinceNow: -120)
+        task.runCount = 3
+        store.save(task)
+
+        await scheduler.checkAndRunDueTasks()
+
+        let runs = store.loadRuns(for: task.id)
+        #expect(runs.isEmpty)
+    }
+
+    @Test func pausePreventsDueTaskExecution() async throws {
+        let (scheduler, store, root) = makeSchedulingTestRig()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var task = try ScheduledTask.create(name: "Paused", cronExpression: "* * * * *", prompt: "test")
+        task.nextRunAt = Date(timeIntervalSinceNow: -120)
+        store.save(task)
+
+        await scheduler.pause()
+        await scheduler.checkAndRunDueTasks()
+
+        let runs = store.loadRuns(for: task.id)
+        #expect(runs.isEmpty)
+    }
+
+    @Test func missedRunUnderOneHourEnqueuesCatchUp() async throws {
+        let (scheduler, store, root) = makeSchedulingTestRig()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = Date()
+        let missedAt = now.addingTimeInterval(-1800) // 30 minutes ago
+        var task = try ScheduledTask.create(name: "Recent Miss", cronExpression: "0 9 * * *", prompt: "test")
+        task.nextRunAt = missedAt
+        store.save(task)
+
+        await scheduler.detectMissedRuns(now: now)
+
+        let runs = store.loadRuns(for: task.id)
+        #expect(runs.count == 1)
+        #expect(runs[0].result == .noActionNeeded) // Caught up via execution
+
+        let updated = store.loadTask(id: task.id)
+        #expect(updated?.nextRunAt != missedAt) // nextRunAt was advanced
+    }
+
+    @Test func missedRunOverOneHourLogsMissed() async throws {
+        let (scheduler, store, root) = makeSchedulingTestRig()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = Date()
+        let missedAt = now.addingTimeInterval(-7200) // 2 hours ago
+        var task = try ScheduledTask.create(name: "Old Miss", cronExpression: "0 9 * * *", prompt: "test")
+        task.nextRunAt = missedAt
+        store.save(task)
+
+        await scheduler.detectMissedRuns(now: now)
+
+        let runs = store.loadRuns(for: task.id)
+        #expect(runs.count == 1)
+        if case .missed = runs[0].result {
+            // Expected
+        } else {
+            Issue.record("Expected missed run result, got \(runs[0].result)")
+        }
+
+        let updated = store.loadTask(id: task.id)
+        #expect(updated?.nextRunAt != missedAt) // nextRunAt was advanced
+    }
+
+    @Test func catchUpOnlyOncePerTaskPerLaunch() async throws {
+        let (scheduler, store, root) = makeSchedulingTestRig()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = Date()
+        var task = try ScheduledTask.create(name: "One Catch-Up", cronExpression: "0 9 * * *", prompt: "test")
+        task.nextRunAt = now.addingTimeInterval(-1800) // 30 minutes ago
+        store.save(task)
+
+        // First detectMissedRuns — should catch up
+        await scheduler.detectMissedRuns(now: now)
+        var runs = store.loadRuns(for: task.id)
+        #expect(runs.count == 1)
+
+        // Reset nextRunAt to past again
+        if var current = store.loadTask(id: task.id) {
+            current.nextRunAt = now.addingTimeInterval(-1800)
+            store.save(current)
+        }
+
+        // Second detectMissedRuns — should NOT catch up again
+        await scheduler.detectMissedRuns(now: now)
+        runs = store.loadRuns(for: task.id)
+        #expect(runs.count == 1) // Still only 1 run
+    }
+
+    @Test func autoPausesAfterConsecutiveFailures() async throws {
+        let (scheduler, store, root) = makeSchedulingTestRig { _ in
+            .error(message: "test failure")
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var task = try ScheduledTask.create(name: "Flaky", cronExpression: "* * * * *", prompt: "test")
+        task.nextRunAt = Date(timeIntervalSinceNow: -120)
+        store.save(task)
+
+        for _ in 0..<5 {
+            if var current = store.loadTask(id: task.id) {
+                current.nextRunAt = Date(timeIntervalSinceNow: -120)
+                store.save(current)
+            }
+            await scheduler.checkAndRunDueTasks()
+        }
+
+        let updated = store.loadTask(id: task.id)
+        #expect(updated?.enabled == false)
+    }
+
+    @Test func successResetsFailureCount() async throws {
+        let counter = SchedulingCallCounter()
+        let (scheduler, store, root) = makeSchedulingTestRig { _ in
+            let n = counter.increment()
+            // Calls 1-3: error, call 4: success, calls 5-7: error
+            if n == 4 { return .success(summary: "ok") }
+            return .error(message: "fail")
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var task = try ScheduledTask.create(name: "Recoverable", cronExpression: "* * * * *", prompt: "test")
+        task.nextRunAt = Date(timeIntervalSinceNow: -120)
+        store.save(task)
+
+        for _ in 0..<7 {
+            if var current = store.loadTask(id: task.id) {
+                current.nextRunAt = Date(timeIntervalSinceNow: -120)
+                store.save(current)
+            }
+            await scheduler.checkAndRunDueTasks()
+        }
+
+        // Task should still be enabled (max consecutive errors was 3, not 5)
+        let updated = store.loadTask(id: task.id)
+        #expect(updated?.enabled == true)
+        let failures = await scheduler.consecutiveFailures(for: task.id)
+        #expect(failures == 3)
+    }
+
+    @Test func executesSequentially() async throws {
+        let recorder = SchedulingExecutionRecorder()
+        let (scheduler, store, root) = makeSchedulingTestRig { task in
+            recorder.record(task.id)
+            return .noActionNeeded
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var taskA = try ScheduledTask.create(name: "A", cronExpression: "* * * * *", prompt: "a")
+        taskA.nextRunAt = Date(timeIntervalSinceNow: -120)
+        store.save(taskA)
+
+        var taskB = try ScheduledTask.create(name: "B", cronExpression: "* * * * *", prompt: "b")
+        taskB.nextRunAt = Date(timeIntervalSinceNow: -60)
+        store.save(taskB)
+
+        await scheduler.checkAndRunDueTasks()
+
+        #expect(recorder.ids.count == 2)
+        #expect(recorder.ids[0] == taskA.id)
+        #expect(recorder.ids[1] == taskB.id)
+    }
+}
+
+// MARK: - Scheduling Test Helpers
+
+private final class SchedulingExecutionRecorder: @unchecked Sendable {
+    private(set) var ids: [UUID] = []
+    func record(_ id: UUID) { ids.append(id) }
+}
+
+private final class SchedulingCallCounter: @unchecked Sendable {
+    private var count = 0
+    func increment() -> Int {
+        count += 1
+        return count
+    }
+}
+
+@MainActor
+private func makeSchedulingTestRig(
+    executeTask: @escaping @Sendable (ScheduledTask) async -> TaskRunResult = { _ in .noActionNeeded }
+) -> (scheduler: SchedulingActor, store: ScheduledTaskStore, root: URL) {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("tesseract-scheduling-tests-\(UUID().uuidString)", isDirectory: true)
+    let store = ScheduledTaskStore(baseDirectory: root)
+    let scheduler = SchedulingActor(taskStore: store, executeTask: executeTask)
+    return (scheduler, store, root)
+}

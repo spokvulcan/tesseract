@@ -7,7 +7,7 @@ import Foundation
 
 // MARK: - CronError
 
-enum CronError: LocalizedError, Sendable {
+nonisolated enum CronError: LocalizedError, Sendable {
     case invalidFieldCount(Int)
     case invalidField(String, position: Int, reason: String)
     case valueOutOfRange(Int, validRange: ClosedRange<Int>, position: Int)
@@ -26,7 +26,7 @@ enum CronError: LocalizedError, Sendable {
 
 // MARK: - CronField
 
-indirect enum CronField: Sendable, Equatable {
+nonisolated indirect enum CronField: Sendable, Equatable {
     case any
     case value(Int)
     case range(Int, Int)
@@ -213,7 +213,7 @@ indirect enum CronField: Sendable, Equatable {
 
 // MARK: - CronField + Codable
 
-extension CronField: Codable {
+nonisolated extension CronField: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, value, low, high, base, step, fields
     }
@@ -268,7 +268,7 @@ extension CronField: Codable {
 
 // MARK: - CronExpression
 
-struct CronExpression: Codable, Sendable, Equatable {
+nonisolated struct CronExpression: Codable, Sendable, Equatable {
     let minute: CronField
     let hour: CronField
     let dayOfMonth: CronField
