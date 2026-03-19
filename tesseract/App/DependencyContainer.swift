@@ -64,6 +64,9 @@ final class DependencyContainer: ObservableObject {
             }
         )
     }()
+    lazy var schedulingService: SchedulingService = {
+        SchedulingService(actor: schedulingActor, store: scheduledTaskStore)
+    }()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
             agent: agent,
@@ -232,8 +235,8 @@ final class DependencyContainer: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Start scheduling polling loop
-        await schedulingActor.startPolling()
+        // Start scheduling service (includes polling loop)
+        await schedulingService.start()
     }
 
     private func loadWhisperModelIfAvailable() async {

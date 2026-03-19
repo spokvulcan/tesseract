@@ -21,6 +21,7 @@ actor SchedulingActor {
 
     private let taskStore: ScheduledTaskStore
     private let executeTask: @Sendable (ScheduledTask) async -> TaskRunResult
+    private var onRunningTaskChanged: (@MainActor @Sendable (UUID?) -> Void)?
 
     // MARK: - State
 
@@ -62,6 +63,10 @@ actor SchedulingActor {
         pollTask = nil
     }
 
+    func setOnRunningTaskChanged(_ callback: @escaping @MainActor @Sendable (UUID?) -> Void) {
+        onRunningTaskChanged = callback
+    }
+
     func pause() { isPaused = true }
     func resume() { isPaused = false }
 
@@ -95,12 +100,17 @@ actor SchedulingActor {
         while let task = executionQueue.first {
             guard !isPaused else { break }
             executionQueue.removeFirst()
-            await runTask(task)
+            // Re-read from store to catch pause/delete that happened after enqueue
+            guard let current = await taskStore.loadTask(id: task.id),
+                  current.enabled, !current.isExhausted else { continue }
+            await runTask(current)
         }
     }
 
     private func runTask(_ task: ScheduledTask) async {
         currentlyRunningTask = task
+        await onRunningTaskChanged?(task.id)
+
         let startedAt = Date()
         let result = await executeTask(task)
         let completedAt = Date()
@@ -116,6 +126,7 @@ actor SchedulingActor {
         await taskStore.updateAfterRun(taskId: task.id, run: run)
         await updateFailureTracking(taskId: task.id, result: result)
         currentlyRunningTask = nil
+        await onRunningTaskChanged?(nil)
     }
 
     // MARK: - Missed-Run Detection

@@ -290,3 +290,11 @@ nonisolated struct ScheduledTaskIndex: Codable, Sendable {
     let version: Int
     var tasks: [ScheduledTaskSummary]
 }
+
+// MARK: - HeartbeatStatus
+
+nonisolated enum HeartbeatStatus: Sendable, Equatable {
+    case idle
+    case checking
+    case lastRun(Date)
+}

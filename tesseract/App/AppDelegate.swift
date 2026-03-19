@@ -142,6 +142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observationTask?.cancel()
         observationTask = nil
 
+        Task { await container?.schedulingService.stop() }
+
         // Stop TTS generation and unload the model before exit() destroys MLX's
         // Metal device singleton. Pending GPU completion handlers would otherwise
         // crash trying to lock the destroyed mutex in Device::end_encoding.

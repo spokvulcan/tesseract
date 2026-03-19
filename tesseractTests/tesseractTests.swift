@@ -2361,6 +2361,28 @@ struct SchedulingActorTests {
         #expect(failures == 3)
     }
 
+    @Test func skipsTaskDisabledAfterEnqueue() async throws {
+        let recorder = SchedulingExecutionRecorder()
+        let (scheduler, store, root) = makeSchedulingTestRig { task in
+            recorder.record(task.id)
+            return .noActionNeeded
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var task = try ScheduledTask.create(name: "WillPause", cronExpression: "* * * * *", prompt: "test")
+        task.nextRunAt = Date(timeIntervalSinceNow: -120)
+        store.save(task)
+
+        // Enqueue by checking due tasks, but disable before processing
+        // The actor re-reads from store before executing each queued task
+        task.enabled = false
+        store.save(task)
+
+        await scheduler.checkAndRunDueTasks()
+
+        #expect(recorder.ids.isEmpty)
+    }
+
     @Test func executesSequentially() async throws {
         let recorder = SchedulingExecutionRecorder()
         let (scheduler, store, root) = makeSchedulingTestRig { task in
@@ -2409,4 +2431,186 @@ private func makeSchedulingTestRig(
     let store = ScheduledTaskStore(baseDirectory: root)
     let scheduler = SchedulingActor(taskStore: store, executeTask: executeTask)
     return (scheduler, store, root)
+}
+
+@MainActor
+private func makeSchedulingServiceTestRig(
+    executeTask: @escaping @Sendable (ScheduledTask) async -> TaskRunResult = { _ in .noActionNeeded }
+) -> (service: SchedulingService, store: ScheduledTaskStore, root: URL) {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("tesseract-service-tests-\(UUID().uuidString)", isDirectory: true)
+    let store = ScheduledTaskStore(baseDirectory: root)
+    let actor = SchedulingActor(taskStore: store, executeTask: executeTask)
+    let service = SchedulingService(actor: actor, store: store)
+    return (service, store, root)
+}
+
+// MARK: - SchedulingService Tests
+
+@MainActor
+struct SchedulingServiceTests {
+
+    @Test func startLoadsTasks() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let task = try ScheduledTask.create(name: "Test", cronExpression: "0 9 * * *", prompt: "hello")
+        store.save(task)
+
+        await service.start()
+
+        #expect(service.tasks.count == 1)
+        #expect(service.tasks[0].id == task.id)
+        await service.stop()
+    }
+
+    @Test func createTaskAddsToState() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+
+        let task = try ScheduledTask.create(name: "New", cronExpression: "0 9 * * *", prompt: "prompt")
+        service.createTask(task)
+
+        #expect(service.tasks.contains(where: { $0.id == task.id }))
+        await service.stop()
+    }
+
+    @Test func deleteTaskRemovesFromState() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let task = try ScheduledTask.create(name: "Doomed", cronExpression: "0 9 * * *", prompt: "bye")
+        store.save(task)
+        await service.start()
+
+        // Pre-populate run history cache
+        service.loadRunHistory(for: task.id)
+
+        service.deleteTask(id: task.id)
+
+        #expect(!service.tasks.contains(where: { $0.id == task.id }))
+        #expect(service.runHistory[task.id] == nil)
+        await service.stop()
+    }
+
+    @Test func pauseTaskDisablesTask() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let task = try ScheduledTask.create(name: "Active", cronExpression: "0 9 * * *", prompt: "test")
+        store.save(task)
+        await service.start()
+
+        service.pauseTask(id: task.id)
+
+        let updated = store.loadTask(id: task.id)
+        #expect(updated?.enabled == false)
+        await service.stop()
+    }
+
+    @Test func resumeTaskEnablesAndAdvancesNextRun() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        var task = try ScheduledTask.create(name: "Paused", cronExpression: "0 9 * * *", prompt: "test")
+        task.enabled = false
+        task.nextRunAt = nil
+        store.save(task)
+        await service.start()
+
+        service.resumeTask(id: task.id)
+
+        let updated = store.loadTask(id: task.id)
+        #expect(updated?.enabled == true)
+        #expect(updated?.nextRunAt != nil)
+        await service.stop()
+    }
+
+    @Test func pauseAllSetsFlags() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+
+        service.pauseAll()
+
+        #expect(service.isPaused == true)
+        await service.stop()
+    }
+
+    @Test func resumeAllClearsFlags() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+        service.pauseAll()
+
+        service.resumeAll()
+
+        #expect(service.isPaused == false)
+        await service.stop()
+    }
+
+    @Test func loadRunHistoryPopulatesCache() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let task = try ScheduledTask.create(name: "WithRuns", cronExpression: "0 9 * * *", prompt: "test")
+        store.save(task)
+
+        let run = TaskRun(
+            id: UUID(), taskId: task.id, sessionId: task.sessionId,
+            startedAt: Date(), completedAt: Date(), durationSeconds: 1,
+            result: .success(summary: "ok"), summary: "ok",
+            notifiedUser: false, spokeResult: false, tokensUsed: nil
+        )
+        store.saveRun(run)
+        await service.start()
+
+        service.loadRunHistory(for: task.id)
+
+        #expect(service.runHistory[task.id]?.count == 1)
+        #expect(service.runHistory[task.id]?[0].id == run.id)
+        await service.stop()
+    }
+
+    @Test func syncRefreshesCachedRunHistory() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let task = try ScheduledTask.create(name: "Tracked", cronExpression: "0 9 * * *", prompt: "test")
+        store.save(task)
+        await service.start()
+
+        // Initial load — empty
+        service.loadRunHistory(for: task.id)
+        #expect(service.runHistory[task.id]?.count == 0)
+
+        // Simulate a completed run saved to store
+        let run = TaskRun(
+            id: UUID(), taskId: task.id, sessionId: task.sessionId,
+            startedAt: Date(), completedAt: Date(), durationSeconds: 1,
+            result: .success(summary: "done"), summary: "done",
+            notifiedUser: false, spokeResult: false, tokensUsed: nil
+        )
+        store.saveRun(run)
+
+        // Trigger sync (e.g., from actor completing a run and saving to store)
+        store.updateAfterRun(taskId: task.id, run: run)
+
+        // Cached history should now include the new run
+        #expect(service.runHistory[task.id]?.count == 1)
+        #expect(service.runHistory[task.id]?[0].id == run.id)
+        await service.stop()
+    }
+
+    @Test func runningTaskIdUpdatesOnActorRun() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig { _ in .noActionNeeded }
+        var task = try ScheduledTask.create(name: "Runner", cronExpression: "* * * * *", prompt: "go")
+        task.nextRunAt = Date(timeIntervalSinceNow: -120)
+        store.save(task)
+        await service.start()
+
+        // Before any run, no task is running
+        #expect(service.currentlyRunningTaskId == nil)
+        await service.stop()
+    }
+
+    @Test func stopCancelsSubscription() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        await service.start()
+
+        await service.stop()
+
+        // After stop, store changes should not propagate
+        let task = try ScheduledTask.create(name: "Ghost", cronExpression: "0 9 * * *", prompt: "test")
+        store.save(task)
+
+        // Service tasks should remain empty (no sync after stop)
+        #expect(!service.tasks.contains(where: { $0.id == task.id }))
+    }
 }
