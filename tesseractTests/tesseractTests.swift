@@ -1687,3 +1687,474 @@ struct CronExpressionHumanReadableTests {
         }
     }
 }
+
+// MARK: - TaskCreator Codable Tests
+
+@MainActor
+struct TaskCreatorCodableTests {
+
+    @Test func roundTripsUserCase() throws {
+        let creator = TaskCreator.user
+        let data = try JSONEncoder().encode(creator)
+        let decoded = try JSONDecoder().decode(TaskCreator.self, from: data)
+        #expect(decoded == creator)
+    }
+
+    @Test func roundTripsAgentCase() throws {
+        let creator = TaskCreator.agent(reason: "Detected recurring pattern")
+        let data = try JSONEncoder().encode(creator)
+        let decoded = try JSONDecoder().decode(TaskCreator.self, from: data)
+        #expect(decoded == creator)
+    }
+
+    @Test func producesDiscriminatedUnionJSON() throws {
+        let user = TaskCreator.user
+        let userData = try JSONEncoder().encode(user)
+        let userJSON = try JSONSerialization.jsonObject(with: userData) as! [String: Any]
+        #expect(userJSON["type"] as? String == "user")
+        #expect(userJSON["reason"] == nil)
+
+        let agent = TaskCreator.agent(reason: "test reason")
+        let agentData = try JSONEncoder().encode(agent)
+        let agentJSON = try JSONSerialization.jsonObject(with: agentData) as! [String: Any]
+        #expect(agentJSON["type"] as? String == "agent")
+        #expect(agentJSON["reason"] as? String == "test reason")
+    }
+}
+
+// MARK: - TaskRunResult Codable Tests
+
+@MainActor
+struct TaskRunResultCodableTests {
+
+    @Test func roundTripsAllCases() throws {
+        let cases: [TaskRunResult] = [
+            .success(summary: "Completed check"),
+            .noActionNeeded,
+            .error(message: "Network failure"),
+            .interrupted,
+            .missed(at: Date(timeIntervalSince1970: 1742400000.123)),
+        ]
+
+        for result in cases {
+            let data = try JSONEncoder().encode(result)
+            let decoded = try JSONDecoder().decode(TaskRunResult.self, from: data)
+            #expect(decoded == result)
+        }
+    }
+
+    @Test func missedDatePreservesFractionalSeconds() throws {
+        let original = TaskRunResult.missed(at: Date(timeIntervalSince1970: 1742400000.456))
+        let data = try JSONEncoder().encode(original)
+        let json = String(data: data, encoding: .utf8)!
+        #expect(json.contains(".456"))
+
+        let decoded = try JSONDecoder().decode(TaskRunResult.self, from: data)
+        #expect(decoded == original)
+    }
+}
+
+// MARK: - ScheduledTask Tests
+
+@MainActor
+struct ScheduledTaskTests {
+
+    @Test func createValidatesAndComputesNextRunAt() throws {
+        let task = try ScheduledTask.create(
+            name: "Test Task",
+            cronExpression: "0 9 * * *",
+            prompt: "Do something"
+        )
+
+        #expect(task.name == "Test Task")
+        #expect(task.cronExpression == "0 9 * * *")
+        #expect(task.prompt == "Do something")
+        #expect(task.enabled)
+        #expect(task.runCount == 0)
+        #expect(task.nextRunAt != nil)
+        #expect(task.createdBy == .user)
+    }
+
+    @Test func createThrowsForInvalidCron() {
+        #expect(throws: ScheduledTaskError.self) {
+            try ScheduledTask.create(
+                name: "Bad",
+                cronExpression: "invalid cron",
+                prompt: "test"
+            )
+        }
+    }
+
+    @Test func isExhaustedLogic() throws {
+        var task = try ScheduledTask.create(
+            name: "Limited",
+            cronExpression: "* * * * *",
+            prompt: "test",
+            maxRuns: 3
+        )
+
+        #expect(!task.isExhausted)
+        task.runCount = 2
+        #expect(!task.isExhausted)
+        task.runCount = 3
+        #expect(task.isExhausted)
+    }
+
+    @Test func parsedCronExpressionNilForGarbage() {
+        let task = ScheduledTask(
+            id: UUID(), name: "Bad", description: "",
+            cronExpression: "not valid", prompt: "test",
+            enabled: true, createdBy: .user, createdAt: Date(),
+            lastRunAt: nil, lastRunResult: nil, nextRunAt: nil,
+            runCount: 0, maxRuns: nil, tags: [], notifyUser: true,
+            speakResult: false, sessionId: UUID()
+        )
+        #expect(task.parsedCronExpression == nil)
+    }
+
+    @Test func fullCodableRoundTrip() throws {
+        var task = try ScheduledTask.create(
+            name: "Round Trip",
+            cronExpression: "30 8 * * 1-5",
+            prompt: "Check status",
+            description: "Morning check",
+            createdBy: .agent(reason: "pattern detected"),
+            maxRuns: 10,
+            tags: ["monitoring"],
+            notifyUser: true,
+            speakResult: true
+        )
+        task.lastRunAt = Date()
+        task.lastRunResult = .success(summary: "All clear")
+        task.runCount = 2
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(task)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(ScheduledTask.self, from: data)
+
+        #expect(decoded.id == task.id)
+        #expect(decoded.name == task.name)
+        #expect(decoded.cronExpression == task.cronExpression)
+        #expect(decoded.createdBy == task.createdBy)
+        #expect(decoded.lastRunResult == task.lastRunResult)
+        #expect(decoded.tags == task.tags)
+        #expect(decoded.maxRuns == task.maxRuns)
+    }
+}
+
+// MARK: - ScheduledTaskIndex Codable Tests
+
+@MainActor
+struct ScheduledTaskIndexCodableTests {
+
+    @Test func roundTripsWrappedFormat() throws {
+        let summary = ScheduledTaskSummary(
+            id: UUID(), name: "Test", cronExpression: "0 9 * * *",
+            enabled: true, nextRunAt: Date(), createdBy: .user, sessionId: UUID()
+        )
+        let index = ScheduledTaskIndex(version: 1, tasks: [summary])
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(index)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(ScheduledTaskIndex.self, from: data)
+
+        #expect(decoded.version == 1)
+        #expect(decoded.tasks.count == 1)
+        #expect(decoded.tasks[0].id == summary.id)
+    }
+
+    @Test func jsonContainsVersionField() throws {
+        let index = ScheduledTaskIndex(version: 1, tasks: [])
+        let data = try JSONEncoder().encode(index)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(json["version"] as? Int == 1)
+        #expect(json["tasks"] as? [Any] != nil)
+    }
+}
+
+// MARK: - ScheduledTaskStore Tests
+
+@MainActor
+struct ScheduledTaskStoreTests {
+
+    private func makeTempStore() -> (store: ScheduledTaskStore, root: URL) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "tesseract-scheduled-task-tests-\(UUID().uuidString)", isDirectory: true
+            )
+        return (ScheduledTaskStore(baseDirectory: root), root)
+    }
+
+    @Test func saveAndLoadTask() throws {
+        let (store, root) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let task = try ScheduledTask.create(
+            name: "Save Test", cronExpression: "0 9 * * *", prompt: "test prompt"
+        )
+        store.save(task)
+
+        let loaded = store.loadTask(id: task.id)
+        #expect(loaded != nil)
+        #expect(loaded?.name == "Save Test")
+        #expect(loaded?.prompt == "test prompt")
+        #expect(store.tasks.count == 1)
+        #expect(store.tasks[0].id == task.id)
+    }
+
+    @Test func loadAllReturnsTasks() throws {
+        let (store, root) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let task1 = try ScheduledTask.create(
+            name: "Task 1", cronExpression: "0 9 * * *", prompt: "p1"
+        )
+        let task2 = try ScheduledTask.create(
+            name: "Task 2", cronExpression: "0 17 * * *", prompt: "p2"
+        )
+        store.save(task1)
+        store.save(task2)
+
+        let all = store.loadAll()
+        #expect(all.count == 2)
+        let names = Set(all.map(\.name))
+        #expect(names == ["Task 1", "Task 2"])
+    }
+
+    @Test func deleteRemovesTaskAndRuns() throws {
+        let (store, root) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let task = try ScheduledTask.create(
+            name: "Delete Me", cronExpression: "0 9 * * *", prompt: "test"
+        )
+        store.save(task)
+
+        let run = TaskRun(
+            id: UUID(), taskId: task.id, sessionId: UUID(),
+            startedAt: Date(), completedAt: Date(), durationSeconds: 5,
+            result: .success(summary: "done"), summary: "done",
+            notifiedUser: false, spokeResult: false, tokensUsed: nil
+        )
+        store.saveRun(run)
+
+        store.delete(id: task.id)
+        #expect(store.tasks.isEmpty)
+        #expect(store.loadTask(id: task.id) == nil)
+        #expect(store.loadRuns(for: task.id).isEmpty)
+    }
+
+    @Test func saveRunAndLoadRuns() throws {
+        let (store, root) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let taskId = UUID()
+        let run1 = TaskRun(
+            id: UUID(), taskId: taskId, sessionId: UUID(),
+            startedAt: Date(timeIntervalSince1970: 1000), completedAt: nil,
+            durationSeconds: nil, result: .success(summary: "r1"), summary: "r1",
+            notifiedUser: false, spokeResult: false, tokensUsed: nil
+        )
+        let run2 = TaskRun(
+            id: UUID(), taskId: taskId, sessionId: UUID(),
+            startedAt: Date(timeIntervalSince1970: 2000), completedAt: nil,
+            durationSeconds: nil, result: .noActionNeeded, summary: "r2",
+            notifiedUser: false, spokeResult: false, tokensUsed: nil
+        )
+        store.saveRun(run1)
+        store.saveRun(run2)
+
+        let runs = store.loadRuns(for: taskId)
+        #expect(runs.count == 2)
+        // Sorted newest-first
+        #expect(runs[0].summary == "r2")
+        #expect(runs[1].summary == "r1")
+    }
+
+    @Test func updateAfterRunAdvancesState() throws {
+        let (store, root) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let task = try ScheduledTask.create(
+            name: "Updatable", cronExpression: "0 9 * * *", prompt: "test"
+        )
+        store.save(task)
+
+        let run = TaskRun(
+            id: UUID(), taskId: task.id, sessionId: task.sessionId,
+            startedAt: Date(), completedAt: Date(), durationSeconds: 3,
+            result: .success(summary: "done"), summary: "done",
+            notifiedUser: false, spokeResult: false, tokensUsed: 100
+        )
+        store.updateAfterRun(taskId: task.id, run: run)
+
+        let updated = store.loadTask(id: task.id)
+        #expect(updated?.runCount == 1)
+        #expect(updated?.lastRunResult == .success(summary: "done"))
+        #expect(updated?.lastRunAt != nil)
+        #expect(updated?.nextRunAt != nil)
+    }
+
+    @Test func updateAfterRunAutoDisablesExhaustedTask() throws {
+        let (store, root) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let task = try ScheduledTask.create(
+            name: "One Shot", cronExpression: "* * * * *", prompt: "test", maxRuns: 1
+        )
+        store.save(task)
+
+        let run = TaskRun(
+            id: UUID(), taskId: task.id, sessionId: task.sessionId,
+            startedAt: Date(), completedAt: Date(), durationSeconds: 1,
+            result: .success(summary: "final"), summary: "final",
+            notifiedUser: false, spokeResult: false, tokensUsed: nil
+        )
+        store.updateAfterRun(taskId: task.id, run: run)
+
+        let updated = store.loadTask(id: task.id)
+        #expect(updated?.runCount == 1)
+        #expect(updated?.enabled == false)
+    }
+
+    @Test func storageVersionMismatchWipesData() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "tesseract-scheduled-task-tests-\(UUID().uuidString)", isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Create store and save a task
+        let store1 = ScheduledTaskStore(baseDirectory: root)
+        let task = try ScheduledTask.create(
+            name: "Survivor", cronExpression: "0 9 * * *", prompt: "test"
+        )
+        store1.save(task)
+        #expect(store1.tasks.count == 1)
+
+        // Corrupt the version file
+        let versionFile = root.appendingPathComponent(".storage_version")
+        try "999".write(to: versionFile, atomically: true, encoding: .utf8)
+
+        // Re-init should wipe
+        let store2 = ScheduledTaskStore(baseDirectory: root)
+        #expect(store2.tasks.isEmpty)
+    }
+
+    @Test func indexPrunesOrphanedEntries() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "tesseract-scheduled-task-tests-\(UUID().uuidString)", isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store1 = ScheduledTaskStore(baseDirectory: root)
+        let task = try ScheduledTask.create(
+            name: "Orphan", cronExpression: "0 9 * * *", prompt: "test"
+        )
+        store1.save(task)
+        #expect(store1.tasks.count == 1)
+
+        // Remove the backing file but leave the index
+        let taskFile = root
+            .appendingPathComponent("tasks", isDirectory: true)
+            .appendingPathComponent("\(task.id.uuidString).json")
+        try FileManager.default.removeItem(at: taskFile)
+
+        // Re-init should prune the orphan
+        let store2 = ScheduledTaskStore(baseDirectory: root)
+        #expect(store2.tasks.isEmpty)
+    }
+
+    @Test func indexPrunesCorruptTaskFiles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "tesseract-scheduled-task-tests-\(UUID().uuidString)", isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store1 = ScheduledTaskStore(baseDirectory: root)
+        let task = try ScheduledTask.create(
+            name: "Corrupt", cronExpression: "0 9 * * *", prompt: "test"
+        )
+        store1.save(task)
+        #expect(store1.tasks.count == 1)
+
+        // Corrupt the backing file (exists but not valid JSON)
+        let taskFile = root
+            .appendingPathComponent("tasks", isDirectory: true)
+            .appendingPathComponent("\(task.id.uuidString).json")
+        try "not json".write(to: taskFile, atomically: true, encoding: .utf8)
+
+        // Re-init should prune the corrupt entry
+        let store2 = ScheduledTaskStore(baseDirectory: root)
+        #expect(store2.tasks.isEmpty)
+    }
+
+    @Test func loadAllReconcilesnilNextRunAtFromIndex() throws {
+        let (store, root) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var task = try ScheduledTask.create(
+            name: "Exhausted", cronExpression: "0 9 * * *", prompt: "test", maxRuns: 1
+        )
+        // Simulate an exhausted task: index has nil nextRunAt
+        task.nextRunAt = nil
+        task.enabled = false
+        task.runCount = 1
+        store.save(task)
+        #expect(store.tasks[0].nextRunAt == nil)
+
+        // Overwrite the task file with a stale nextRunAt
+        var divergent = task
+        divergent.nextRunAt = Date(timeIntervalSince1970: 9999)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(divergent)
+        let taskFile = root
+            .appendingPathComponent("tasks", isDirectory: true)
+            .appendingPathComponent("\(task.id.uuidString).json")
+        try data.write(to: taskFile, options: .atomic)
+
+        // loadAll should use the index's nil, not the task file's stale date
+        let loaded = store.loadAll()
+        #expect(loaded.count == 1)
+        #expect(loaded[0].nextRunAt == nil)
+    }
+
+    @Test func loadAllReconcilesnextRunAtFromIndex() throws {
+        let (store, root) = makeTempStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let task = try ScheduledTask.create(
+            name: "Reconcile", cronExpression: "0 9 * * *", prompt: "test"
+        )
+        store.save(task)
+
+        // Simulate a crash-divergent state: manually overwrite the task file
+        // with a different nextRunAt, while the index retains the original
+        var divergent = task
+        divergent.nextRunAt = Date(timeIntervalSince1970: 9999)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(divergent)
+        let taskFile = root
+            .appendingPathComponent("tasks", isDirectory: true)
+            .appendingPathComponent("\(task.id.uuidString).json")
+        try data.write(to: taskFile, options: .atomic)
+
+        // loadAll should use the index's nextRunAt, not the task file's
+        let loaded = store.loadAll()
+        #expect(loaded.count == 1)
+        #expect(loaded[0].nextRunAt == task.nextRunAt)
+        #expect(loaded[0].nextRunAt != divergent.nextRunAt)
+    }
+}

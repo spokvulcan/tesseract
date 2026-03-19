@@ -107,6 +107,7 @@ extension View {
             .environment(container.agentCoordinator)
             .environment(container.agentEngine)
             .environmentObject(container.agentConversationStore)
+            .environmentObject(container.scheduledTaskStore)
     }
 
     /// Model management and image generation.

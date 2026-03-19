@@ -53,6 +53,7 @@ final class DependencyContainer: ObservableObject {
         selectedModelID: settingsManager.selectedAgentModelID
     )
     lazy var agentConversationStore = AgentConversationStore()
+    lazy var scheduledTaskStore = ScheduledTaskStore()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
             agent: agent,
