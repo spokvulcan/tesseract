@@ -2906,3 +2906,223 @@ struct CronToolTests {
         await service.stop()
     }
 }
+
+// MARK: - BackgroundSessionStore Tests
+
+private func makeBackgroundSessionTestDir() -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("tesseract-bgsession-tests-\(UUID().uuidString)", isDirectory: true)
+}
+
+struct BackgroundSessionStoreTests {
+
+    @Test func loadOrCreateNewSession() async throws {
+        let store = BackgroundSessionStore(baseDirectory: makeBackgroundSessionTestDir())
+        let sessionId = UUID()
+        let taskId = UUID()
+
+        let session = await store.loadOrCreate(
+            sessionId: sessionId, taskId: taskId,
+            taskName: "Test Task", sessionType: .cron
+        )
+
+        #expect(session.id == sessionId)
+        #expect(session.taskId == taskId)
+        #expect(session.displayName == "Test Task")
+        #expect(session.sessionType == .cron)
+        #expect(session.messages.isEmpty)
+        #expect(session.lastRunAt == nil)
+    }
+
+    @Test func loadOrCreateExistingSession() async throws {
+        let store = BackgroundSessionStore(baseDirectory: makeBackgroundSessionTestDir())
+        let sessionId = UUID()
+        let taskId = UUID()
+
+        // Create and save a session with a message
+        var session = await store.loadOrCreate(
+            sessionId: sessionId, taskId: taskId,
+            taskName: "Test Task", sessionType: .cron
+        )
+        let taggedMessage = TaggedMessage(
+            type: "user",
+            payload: ["content": .string("hello")]
+        )
+        session.messages = [taggedMessage]
+        session.lastRunAt = Date()
+        await store.save(session)
+
+        // Load it back
+        let loaded = await store.loadOrCreate(
+            sessionId: sessionId, taskId: taskId,
+            taskName: "Test Task", sessionType: .cron
+        )
+
+        #expect(loaded.id == sessionId)
+        #expect(loaded.messages.count == 1)
+        #expect(loaded.messages[0].type == "user")
+        #expect(loaded.lastRunAt != nil)
+    }
+
+    @Test func saveUpdatesIndex() async throws {
+        let store = BackgroundSessionStore(baseDirectory: makeBackgroundSessionTestDir())
+        let sessionId = UUID()
+        let taskId = UUID()
+
+        let session = BackgroundSession(
+            id: sessionId, sessionType: .cron, displayName: "Indexed",
+            taskId: taskId, messages: [], lastRunAt: nil, createdAt: Date()
+        )
+        await store.save(session)
+
+        let all = await store.listAll()
+        #expect(all.count == 1)
+        #expect(all[0].id == sessionId)
+        #expect(all[0].displayName == "Indexed")
+        #expect(all[0].messageCount == 0)
+    }
+
+    @Test func deleteRemovesFileAndIndex() async throws {
+        let dir = makeBackgroundSessionTestDir()
+        let store = BackgroundSessionStore(baseDirectory: dir)
+        let sessionId = UUID()
+        let taskId = UUID()
+
+        let session = BackgroundSession(
+            id: sessionId, sessionType: .cron, displayName: "ToDelete",
+            taskId: taskId, messages: [], lastRunAt: nil, createdAt: Date()
+        )
+        await store.save(session)
+        #expect(await store.listAll().count == 1)
+
+        await store.delete(sessionId: sessionId)
+
+        #expect(await store.listAll().isEmpty)
+        let fileExists = FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("\(sessionId.uuidString).json").path
+        )
+        #expect(!fileExists)
+    }
+
+    @Test func listAllReturnsAllSessions() async throws {
+        let store = BackgroundSessionStore(baseDirectory: makeBackgroundSessionTestDir())
+
+        for i in 0..<3 {
+            let session = BackgroundSession(
+                id: UUID(), sessionType: .cron, displayName: "Task \(i)",
+                taskId: UUID(), messages: [], lastRunAt: nil, createdAt: Date()
+            )
+            await store.save(session)
+        }
+
+        let all = await store.listAll()
+        #expect(all.count == 3)
+    }
+
+    @Test func storageVersionMigration() async throws {
+        let dir = makeBackgroundSessionTestDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // Write a bad version file
+        let versionURL = dir.appendingPathComponent(".storage_version")
+        try "999".write(to: versionURL, atomically: true, encoding: .utf8)
+
+        // Write a fake index that should be wiped
+        let indexURL = dir.appendingPathComponent("index.json")
+        try "{}".data(using: .utf8)!.write(to: indexURL, options: .atomic)
+
+        let store = BackgroundSessionStore(baseDirectory: dir)
+        let all = await store.listAll()
+        #expect(all.isEmpty)
+
+        // Version file should now match current
+        let version = try String(contentsOf: versionURL, encoding: .utf8)
+        #expect(version == "1")
+    }
+
+    @Test func messageRoundTrip() async throws {
+        let store = BackgroundSessionStore(baseDirectory: makeBackgroundSessionTestDir())
+        let sessionId = UUID()
+
+        // Encode a real UserMessage via SyncMessageCodec
+        let userMsg = UserMessage.create("background prompt")
+        let tagged = try SyncMessageCodec.encode(userMsg)
+
+        var session = BackgroundSession(
+            id: sessionId, sessionType: .cron, displayName: "RoundTrip",
+            taskId: UUID(), messages: [tagged], lastRunAt: Date(), createdAt: Date()
+        )
+        await store.save(session)
+
+        // Load back and decode
+        let loaded = await store.loadOrCreate(
+            sessionId: sessionId, taskId: UUID(),
+            taskName: "RoundTrip", sessionType: .cron
+        )
+        #expect(loaded.messages.count == 1)
+
+        let decoded = try SyncMessageCodec.decodeAll(loaded.messages)
+        #expect(decoded.count == 1)
+        let restoredUser = try #require(decoded[0] as? UserMessage)
+        #expect(restoredUser.content == "background prompt")
+    }
+}
+
+// MARK: - BackgroundPreamble Tests
+
+@MainActor
+struct BackgroundPreambleTests {
+
+    @Test func includesTaskNameAndContext() async throws {
+        let task = try ScheduledTask.create(
+            name: "Daily Report",
+            cronExpression: "0 9 * * *",
+            prompt: "Summarize today's changes"
+        )
+
+        let preamble = SystemPromptAssembler.backgroundPreamble(for: task)
+
+        #expect(preamble.contains("Daily Report"))
+        #expect(preamble.contains("Background Task Execution Context"))
+        // task.prompt is sent as a user message, not included in the preamble
+        #expect(!preamble.contains("Summarize today's changes"))
+    }
+
+    @Test func omitsEmptyDescription() async throws {
+        let task = try ScheduledTask.create(
+            name: "No Desc",
+            cronExpression: "0 9 * * *",
+            prompt: "do something"
+        )
+
+        let preamble = SystemPromptAssembler.backgroundPreamble(for: task)
+
+        #expect(!preamble.contains("Task description:"))
+    }
+
+    @Test func includesDescriptionWhenPresent() async throws {
+        let task = try ScheduledTask.create(
+            name: "With Desc",
+            cronExpression: "0 9 * * *",
+            prompt: "do something",
+            description: "A helpful task"
+        )
+
+        let preamble = SystemPromptAssembler.backgroundPreamble(for: task)
+
+        #expect(preamble.contains("Task description: A helpful task"))
+    }
+
+    @Test func includesSchedule() async throws {
+        let task = try ScheduledTask.create(
+            name: "Scheduled",
+            cronExpression: "30 14 * * 1-5",
+            prompt: "check status"
+        )
+
+        let preamble = SystemPromptAssembler.backgroundPreamble(for: task)
+
+        #expect(preamble.contains("30 14 * * 1-5"))
+        #expect(preamble.contains("Schedule:"))
+    }
+}

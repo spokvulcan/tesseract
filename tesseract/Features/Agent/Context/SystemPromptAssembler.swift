@@ -85,4 +85,31 @@ nonisolated enum SystemPromptAssembler: Sendable {
 
         return sections.joined(separator: "\n\n")
     }
+
+    // MARK: - Background Task Preamble
+
+    /// Generates the additional system prompt context for background scheduled task execution.
+    /// The task prompt itself is sent as a user message, not included here, to avoid duplication.
+    static func backgroundPreamble(for task: ScheduledTask) -> String {
+        var result = """
+            # Background Task Execution Context
+
+            You are running as a background scheduled task. This is NOT an interactive chat session.
+            Task name: \(task.name)
+            """
+        if !task.description.isEmpty {
+            result += "\nTask description: \(task.description)"
+        }
+        result += """
+
+            Schedule: \(task.humanReadableSchedule) (\(task.cronExpression))
+
+            Guidelines for background execution:
+            - Complete the task and provide a concise summary of what you did
+            - If no action is needed, say so clearly
+            - Do not ask questions — there is no user to respond
+            - Previous runs of this task share this conversation context
+            """
+        return result
+    }
 }

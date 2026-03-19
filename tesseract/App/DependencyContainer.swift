@@ -54,13 +54,35 @@ final class DependencyContainer: ObservableObject {
     )
     lazy var agentConversationStore = AgentConversationStore()
     lazy var scheduledTaskStore = ScheduledTaskStore()
+    lazy var backgroundSessionStore = BackgroundSessionStore()
+    lazy var backgroundAgentFactory: BackgroundAgentFactory = {
+        BackgroundAgentFactory(
+            agentEngine: agentEngine,
+            toolRegistry: newToolRegistry,
+            extensionHost: extensionHost,
+            sessionStore: backgroundSessionStore,
+            packageRegistry: packageRegistry,
+            settingsManager: settingsManager,
+            ensureModelLoaded: { [weak self] in
+                guard let self else { throw AgentEngineError.modelNotLoaded }
+                guard !self.agentEngine.isModelLoaded else { return }
+                let modelID = self.settingsManager.selectedAgentModelID
+                guard !self.agentEngine.isLoading,
+                      case .downloaded = self.modelDownloadManager.statuses[modelID],
+                      let path = self.modelDownloadManager.modelPath(for: modelID)
+                else { throw AgentEngineError.modelNotLoaded }
+                try await self.agentEngine.loadModel(from: path)
+            }
+        )
+    }()
     lazy var schedulingActor: SchedulingActor = {
         SchedulingActor(
             taskStore: scheduledTaskStore,
-            executeTask: { task in
-                // Phase 1 stub — BackgroundAgentFactory replaces this
-                Log.agent.info("SchedulingActor stub: would execute '\(task.name)'")
-                return .noActionNeeded
+            executeTask: { [weak self] task in
+                guard let factory = await MainActor.run(body: { self?.backgroundAgentFactory }) else {
+                    return .error(message: "DependencyContainer deallocated")
+                }
+                return await factory.executeAndPersist(task: task)
             }
         )
     }()
