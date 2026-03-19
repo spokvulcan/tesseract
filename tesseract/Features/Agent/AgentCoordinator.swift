@@ -50,8 +50,6 @@ final class AgentCoordinator {
     /// Cached streaming tool args to avoid re-parsing unchanged JSON on each tick.
     @ObservationIgnored private var lastStreamingToolArgs: [String] = []
     @ObservationIgnored private var lastStreamingToolDisplay: [(title: String, icon: String, argsFormatted: String)] = []
-    /// Notch text accumulator — only used for throttled notch updates.
-    @ObservationIgnored private var notchStreamLength: Int = 0
     /// Tracks if user manually collapsed the streaming header during this generation.
     @ObservationIgnored private var streamingManuallyCollapsed: Bool = false
     /// Stable ID for the streaming turn header — survives rebuilds so toggle state persists.
@@ -100,7 +98,6 @@ final class AgentCoordinator {
     private let settings: SettingsManager?
     private let postProcessor = TranscriptionPostProcessor()
     private let speechCoordinator: SpeechCoordinator?
-    private let notchController: AgentNotchPanelController?
     private let prepareForInference: (@MainActor () -> Void)?
     private let loadAgentModel: (@MainActor () async throws -> Void)?
     private let formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))?
@@ -135,8 +132,7 @@ final class AgentCoordinator {
         prepareForInference: (@MainActor () -> Void)? = nil,
         loadAgentModel: (@MainActor () async throws -> Void)? = nil,
         formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))? = nil,
-        speechCoordinator: SpeechCoordinator? = nil,
-        notchController: AgentNotchPanelController? = nil
+        speechCoordinator: SpeechCoordinator? = nil
     ) {
         self.agent = agent
         self.conversationStore = conversationStore
@@ -147,7 +143,6 @@ final class AgentCoordinator {
         self.loadAgentModel = loadAgentModel
         self.formatRawPrompt = formatRawPrompt
         self.speechCoordinator = speechCoordinator
-        self.notchController = notchController
 
         assembledSystemPrompt = agent.state.systemPrompt
 
@@ -184,8 +179,6 @@ final class AgentCoordinator {
             debugLogger.startSession()
             debugLogger.logSystemPrompt(agent.state.systemPrompt, tools: agent.state.tools)
         }
-
-        notchController?.updatePhase(.thinking)
 
         let userMessage = CoreMessage.user(UserMessage(content: trimmed))
         agent.prompt(userMessage)
@@ -261,7 +254,6 @@ final class AgentCoordinator {
         do {
             try audioCapture.startCapture()
             voiceState = .recording
-            notchController?.show()
             Log.agent.info("Voice input started")
         } catch {
             setVoiceError("Mic error: \(error.localizedDescription)")
@@ -283,7 +275,6 @@ final class AgentCoordinator {
         }
 
         voiceState = .transcribing
-        notchController?.updatePhase(.transcribing(preview: ""))
         Log.agent.info("Voice input stopped, transcribing \(String(format: "%.1f", audioData.duration))s audio")
 
         Task {
@@ -298,7 +289,6 @@ final class AgentCoordinator {
                 }
 
                 Log.agent.info("Voice transcribed: \(processedText)")
-                notchController?.updatePhase(.transcribing(preview: processedText))
                 voiceState = .idle
 
                 try await loadAgentModel?()
@@ -316,17 +306,12 @@ final class AgentCoordinator {
         }
         transcriptionEngine?.cancelTranscription()
         voiceState = .idle
-        notchController?.dismiss()
         Log.agent.info("Voice input cancelled")
     }
 
     private func setVoiceError(_ message: String) {
         voiceState = .error(message)
         Log.agent.warning("Voice error: \(message)")
-
-        if notchController?.isShowing == true {
-            notchController?.updatePhase(.error(message))
-        }
 
         voiceErrorResetTask?.cancel()
         voiceErrorResetTask = Task {
@@ -403,41 +388,35 @@ final class AgentCoordinator {
         switch event {
         case .agentStart:
             isGenerating = true
-            notchStreamLength = 0
             rebuildRows()
 
         case .contextTransformStart(let reason):
-            updatePhaseIndicator(reason)
+            if case .extensionTransform(let name) = reason {
+                Log.agent.info("Extension transform: \(name)")
+            }
 
         case .contextTransformEnd(let reason, let didMutate, _):
-            clearPhaseIndicator(reason: reason, didMutate: didMutate)
-            if didMutate { rebuildRows() }
-
-        case .messageUpdate(_, let delta):
-            // Notch throttling — read from streamMessage directly
-            if delta.textDelta != nil, notchController?.isShowing == true {
-                let currentLen = agent.state.streamMessage?.content.count ?? 0
-                if currentLen - notchStreamLength >= 10 {
-                    notchStreamLength = currentLen
-                    notchController?.updatePhase(.responding(text: agent.state.streamMessage?.content ?? ""))
+            if didMutate {
+                switch reason {
+                case .compaction:
+                    Log.agent.info("Context compaction applied")
+                case .extensionTransform(let name):
+                    Log.agent.info("Extension transform applied: \(name)")
                 }
+                rebuildRows()
             }
-            if delta.thinkingDelta != nil, notchController?.isShowing == true {
-                notchController?.updatePhase(.thinking)
-            }
+
+        case .messageUpdate:
             updateStreamingRows()
 
         case .toolExecutionStart(_, let toolName, _):
             Log.agent.info("Tool start: \(toolName)")
-            notchController?.updatePhase(.toolCall(name: toolName))
-            notchStreamLength = 0
             lastStreamingToolArgs = []
             lastStreamingToolDisplay = []
 
         case .toolExecutionEnd(_, let toolName, let result, _):
             let text = result.content.textContent
             Log.agent.info("Tool result [\(toolName)]: \(text.prefix(200))")
-            notchController?.updatePhase(.thinking)
 
         case .turnEnd(let message, let toolResults, let contextMessages):
             debugLogger.logTurn(
@@ -455,7 +434,6 @@ final class AgentCoordinator {
 
         case .agentEnd(_):
             isGenerating = false
-            notchStreamLength = 0
             lastStreamingToolArgs = []
             lastStreamingToolDisplay = []
             streamingManuallyCollapsed = false
@@ -463,12 +441,6 @@ final class AgentCoordinator {
             autoCollapseIfNeeded()
             rebuildRows()
             autoSpeakIfEnabled()
-
-            if let notchController, notchController.isShowing {
-                if let lastAsst = lastAssistantContent() {
-                    notchController.updatePhase(.complete(text: lastAsst))
-                }
-            }
 
         case .messageEnd:
             rebuildRows()
@@ -1013,23 +985,4 @@ final class AgentCoordinator {
         speechCoordinator?.speakText(content)
     }
 
-    private func updatePhaseIndicator(_ reason: ContextTransformReason) {
-        switch reason {
-        case .compaction:
-            notchController?.updatePhase(.thinking)
-        case .extensionTransform(let name):
-            Log.agent.info("Extension transform: \(name)")
-        }
-    }
-
-    private func clearPhaseIndicator(reason: ContextTransformReason, didMutate: Bool) {
-        if didMutate {
-            switch reason {
-            case .compaction:
-                Log.agent.info("Context compaction applied")
-            case .extensionTransform(let name):
-                Log.agent.info("Extension transform applied: \(name)")
-            }
-        }
-    }
 }

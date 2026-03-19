@@ -53,7 +53,6 @@ final class DependencyContainer: ObservableObject {
         selectedModelID: settingsManager.selectedAgentModelID
     )
     lazy var agentConversationStore = AgentConversationStore()
-    lazy var agentNotchController = AgentNotchPanelController()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
             agent: agent,
@@ -88,8 +87,7 @@ final class DependencyContainer: ObservableObject {
                 guard let self else { throw AgentEngineError.modelNotLoaded }
                 return try await self.agentEngine.formatRawPrompt(systemPrompt: systemPrompt, tools: tools)
             },
-            speechCoordinator: speechCoordinator,
-            notchController: agentNotchController
+            speechCoordinator: speechCoordinator
         )
     }()
 
@@ -157,15 +155,9 @@ final class DependencyContainer: ObservableObject {
         hotkeyManager.registerHotkey(
             id: "agent",
             combo: settingsManager.agentHotkey,
-            onDown: { [weak self] in self?.onAgentHotkeyDown() },
-            onUp: { [weak self] in self?.onAgentHotkeyUp() }
+            onDown: { [weak self] in self?.agentCoordinator.startVoiceInput() },
+            onUp: { [weak self] in self?.agentCoordinator.stopVoiceInputAndSend() }
         )
-
-        // Wire agent notch tap to navigate to agent window
-        agentNotchController.onTap = {
-            guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
-            appDelegate.navigateToAgent()
-        }
 
         // Register message codecs for the new persistence layer (Epic 2)
         await registerCoreMessageCodecs()
@@ -253,32 +245,6 @@ final class DependencyContainer: ObservableObject {
             overlayPanelController.setEnabled(false)
             fullScreenBorderController.setEnabled(true)
         }
-    }
-
-    private func onAgentHotkeyDown() {
-        agentCoordinator.startVoiceInput()
-        startAgentAudioLevelForwarding()
-    }
-
-    private func onAgentHotkeyUp() {
-        stopAgentAudioLevelForwarding()
-        agentCoordinator.stopVoiceInputAndSend()
-    }
-
-    private var agentAudioLevelTask: Task<Void, Never>?
-
-    private func startAgentAudioLevelForwarding() {
-        agentAudioLevelTask = Task { [weak self] in
-            guard let self else { return }
-            for await level in Observations({ self.audioCaptureEngine.audioLevel }) {
-                self.agentNotchController.state.phase = .listening(audioLevel: level)
-            }
-        }
-    }
-
-    private func stopAgentAudioLevelForwarding() {
-        agentAudioLevelTask?.cancel()
-        agentAudioLevelTask = nil
     }
 
     private func startSettingsObservation() {

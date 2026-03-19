@@ -18,16 +18,19 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT="$PROJECT_DIR/tesseract.xcodeproj"
 SCHEME="tesseract"
 BUNDLE_ID="app.tesseract.agent"
-DERIVED_DATA="$PROJECT_DIR/.build/DerivedData"
+# Uses Xcode's default DerivedData so CLI and GUI share the same build artifacts,
+# module cache, and resolved SPM packages.
 DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
 
 # --- Helpers ---------------------------------------------------------------
 
 find_app() {
     local configuration="${1:-Debug}"
-    local app_path="$DERIVED_DATA/Build/Products/$configuration/tesseract.app"
-    if [ ! -d "$app_path" ]; then
-        echo "Error: tesseract.app ($configuration) not found at $app_path. Run a matching build first." >&2
+    local app_path
+    # Search Xcode's default DerivedData (most recently modified first)
+    app_path=$(ls -dt $DERIVED_DATA_GLOB/Build/Products/"$configuration"/tesseract.app 2>/dev/null | head -1)
+    if [ -z "$app_path" ] || [ ! -d "$app_path" ]; then
+        echo "Error: tesseract.app ($configuration) not found in Xcode DerivedData. Run a matching build first." >&2
         return 1
     fi
     echo "$app_path"
@@ -79,8 +82,7 @@ print_data_paths() {
 cmd_resolve() {
     echo "Resolving package dependencies..."
     xcodebuild -resolvePackageDependencies \
-        -project "$PROJECT" -scheme "$SCHEME" \
-        -derivedDataPath "$DERIVED_DATA" 2>&1 \
+        -project "$PROJECT" -scheme "$SCHEME" 2>&1 \
     | grep -E "^(error:|warning:|Resolved)" || true
 }
 
@@ -88,19 +90,12 @@ cmd_build() {
     local configuration="${1:-Debug}"
     shift || true
 
-    # Ensure SPM packages (especially NIO C shim modules) are fully resolved
-    # before compilation starts. Without this, the build can race against
-    # clang compilation of C targets like CAsyncHTTPClient/CNIOLLHTTP.
-    cmd_resolve
-
     echo "Building tesseract ($configuration)..."
     local build_output
     local exit_code=0
     build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
         -configuration "$configuration" \
-        -derivedDataPath "$DERIVED_DATA" \
         -destination 'platform=macOS,arch=arm64' \
-        -disableAutomaticPackageResolution \
         -skipPackagePluginValidation \
         "$@" 2>&1) || exit_code=$?
 
@@ -193,9 +188,11 @@ cmd_archive() {
 
 cmd_clean() {
     echo "Cleaning build..."
-    xcodebuild clean -project "$PROJECT" -scheme "$SCHEME" -derivedDataPath "$DERIVED_DATA" 2>&1 | tail -1
+    xcodebuild clean -project "$PROJECT" -scheme "$SCHEME" 2>&1 | tail -1
     echo "Removing DerivedData..."
-    rm -rf "$DERIVED_DATA" $DERIVED_DATA_GLOB
+    rm -rf $DERIVED_DATA_GLOB
+    # Remove legacy CLI-only DerivedData if it still exists
+    rm -rf "$PROJECT_DIR/.build/DerivedData"
     echo "Clearing SPM module cache..."
     rm -rf ~/Library/Caches/org.swift.swiftpm
     echo "Clean complete."

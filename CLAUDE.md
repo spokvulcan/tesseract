@@ -32,7 +32,7 @@ Tests use Swift `Testing` framework (not XCTest), in `tesseractTests/`. Not requ
 
 The app uses Swift's `@Observable` (Observation framework) as the primary state model. Key types:
 
-- **`@Observable`**: `SettingsManager`, `DictationCoordinator`, `SpeechCoordinator`, `SpeechEngine`, `TranscriptionEngine`, `TranscriptionHistory`, `AudioCaptureEngine`, `AgentCoordinator`, `AgentEngine`, `Agent`, `AgentState`, `AgentNotchState`, `OverlayState`
+- **`@Observable`**: `SettingsManager`, `DictationCoordinator`, `SpeechCoordinator`, `SpeechEngine`, `TranscriptionEngine`, `TranscriptionHistory`, `AudioCaptureEngine`, `AgentCoordinator`, `AgentEngine`, `Agent`, `AgentState`, `OverlayState`
 - **Still `ObservableObject`** (lower-priority, not yet migrated): `DependencyContainer`, `PermissionsManager`, `ModelDownloadManager`, `AgentConversationStore`, `ImageGenEngine`, `ZImageGenEngine`, `AudioPlaybackManager`, `MenuBarManager`, `AudioDeviceManager`, `HotkeyManager`, `TextInjector`, `AudioLevelBuffer`
 - **Inject `@Observable` types** with `.environment(instance)`, consume with `@Environment(Type.self)`. Use `@Bindable var x = x` in body for `$x` bindings.
 - **Inject `ObservableObject` types** with `.environmentObject(instance)`, consume with `@EnvironmentObject`.
@@ -44,7 +44,7 @@ The app uses Swift's `@Observable` (Observation framework) as the primary state 
 - **DependencyContainer** (`App/`): `@MainActor`, lazy-initialized composition root. Wires all services. Scoped injection via `Core/ViewModifiers.swift` — 5 groups: core, dictation, speech, agent, model.
 - **AgentFactory** (`Features/Agent/AgentFactory.swift`): Extracts the multi-step agent bootstrap (package discovery, tool/skill registration, prompt assembly, compaction wiring) out of the container.
 - **Actor Isolation**: `WhisperActor` (WhisperKit), `LLMActor` (MLXLM), `TTSActor` (Qwen3TTS), `ContextManager` (compaction). All `@Observable`/`ObservableObject` classes are `@MainActor`.
-- **State Machines**: `DictationCoordinator`, `SpeechCoordinator`, `AgentCoordinator`, `AgentNotchState`.
+- **State Machines**: `DictationCoordinator`, `SpeechCoordinator`, `AgentCoordinator`.
 - **Settings**: `SettingsManager` is `@Observable @MainActor` with manual `UserDefaults` persistence (`didSet` + `register(defaults:)` in init). No singleton — injected via `DependencyContainer`.
 - **Platform Adapters** (`Platform/`): All AppKit bridge code — `HotkeyManager`, `TextInjector`, `MenuBarManager`, overlay/notch panel controllers, `OverlayScreenLocator`.
 - **Non-view Observation**: Uses Swift 6.2 `Observations` async sequences for observing `@Observable` state in non-SwiftUI code (DependencyContainer, AppDelegate, MenuBarManager).
