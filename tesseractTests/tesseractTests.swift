@@ -2919,17 +2919,12 @@ struct BackgroundSessionStoreTests {
     @Test func loadOrCreateNewSession() async throws {
         let store = BackgroundSessionStore(baseDirectory: makeBackgroundSessionTestDir())
         let sessionId = UUID()
-        let taskId = UUID()
 
-        let session = await store.loadOrCreate(
-            sessionId: sessionId, taskId: taskId,
-            taskName: "Test Task", sessionType: .cron
-        )
+        let session = await store.loadOrCreate(sessionId: sessionId)
 
         #expect(session.id == sessionId)
-        #expect(session.taskId == taskId)
-        #expect(session.displayName == "Test Task")
         #expect(session.sessionType == .cron)
+        #expect(session.displayName == "")
         #expect(session.messages.isEmpty)
         #expect(session.lastRunAt == nil)
     }
@@ -2940,10 +2935,10 @@ struct BackgroundSessionStoreTests {
         let taskId = UUID()
 
         // Create and save a session with a message
-        var session = await store.loadOrCreate(
-            sessionId: sessionId, taskId: taskId,
-            taskName: "Test Task", sessionType: .cron
-        )
+        var session = await store.loadOrCreate(sessionId: sessionId)
+        session.taskId = taskId
+        session.displayName = "Test Task"
+        session.sessionType = .cron
         let taggedMessage = TaggedMessage(
             type: "user",
             payload: ["content": .string("hello")]
@@ -2953,10 +2948,7 @@ struct BackgroundSessionStoreTests {
         await store.save(session)
 
         // Load it back
-        let loaded = await store.loadOrCreate(
-            sessionId: sessionId, taskId: taskId,
-            taskName: "Test Task", sessionType: .cron
-        )
+        let loaded = await store.loadOrCreate(sessionId: sessionId)
 
         #expect(loaded.id == sessionId)
         #expect(loaded.messages.count == 1)
@@ -3040,6 +3032,42 @@ struct BackgroundSessionStoreTests {
         #expect(version == "1")
     }
 
+    @Test func rebuildIndexFromSessionFiles() async throws {
+        let dir = makeBackgroundSessionTestDir()
+
+        // Use one store to save two sessions (creates index.json + session files)
+        let store1 = BackgroundSessionStore(baseDirectory: dir)
+        let id1 = UUID(), id2 = UUID()
+        let s1 = BackgroundSession(
+            id: id1, sessionType: .cron, displayName: "Task A",
+            taskId: UUID(), messages: [], lastRunAt: nil, createdAt: Date()
+        )
+        let s2 = BackgroundSession(
+            id: id2, sessionType: .cron, displayName: "Task B",
+            taskId: UUID(), messages: [], lastRunAt: Date(), createdAt: Date()
+        )
+        await store1.save(s1)
+        await store1.save(s2)
+        #expect(await store1.listAll().count == 2)
+
+        // Delete index.json — simulates corruption/accidental deletion
+        let indexURL = dir.appendingPathComponent("index.json")
+        try FileManager.default.removeItem(at: indexURL)
+        #expect(!FileManager.default.fileExists(atPath: indexURL.path))
+
+        // New store should rebuild from session files
+        let store2 = BackgroundSessionStore(baseDirectory: dir)
+        let rebuilt = await store2.listAll()
+        #expect(rebuilt.count == 2)
+
+        let ids = Set(rebuilt.map(\.id))
+        #expect(ids.contains(id1))
+        #expect(ids.contains(id2))
+
+        // Index should have been rewritten
+        #expect(FileManager.default.fileExists(atPath: indexURL.path))
+    }
+
     @Test func messageRoundTrip() async throws {
         let store = BackgroundSessionStore(baseDirectory: makeBackgroundSessionTestDir())
         let sessionId = UUID()
@@ -3055,10 +3083,7 @@ struct BackgroundSessionStoreTests {
         await store.save(session)
 
         // Load back and decode
-        let loaded = await store.loadOrCreate(
-            sessionId: sessionId, taskId: UUID(),
-            taskName: "RoundTrip", sessionType: .cron
-        )
+        let loaded = await store.loadOrCreate(sessionId: sessionId)
         #expect(loaded.messages.count == 1)
 
         let decoded = try SyncMessageCodec.decodeAll(loaded.messages)

@@ -80,13 +80,11 @@ final class BackgroundAgentFactory {
     private func createAgent(for task: ScheduledTask) async -> (Agent, BackgroundSession) {
         let selectedModelID = settingsManager.selectedAgentModelID
 
-        // 1. Load or create session
-        let session = await sessionStore.loadOrCreate(
-            sessionId: task.sessionId,
-            taskId: task.id,
-            taskName: task.name,
-            sessionType: .cron
-        )
+        // 1. Load or create session — populate metadata from task before save
+        var session = await sessionStore.loadOrCreate(sessionId: task.sessionId)
+        session.taskId = task.id
+        session.displayName = task.name
+        session.sessionType = .cron
 
         // 2. Assemble system prompt with cached context + fresh date/time + task preamble
         let basePrompt = SystemPromptAssembler.assemble(

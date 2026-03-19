@@ -61,15 +61,17 @@ actor BackgroundSessionStore {
             return []
         }
 
-        // Load index
+        // Try loading the index; fall back to scanning session files if missing or corrupt.
+        // Session files are the durable source of truth — index.json is a summary cache.
         let indexURL = baseDir.appendingPathComponent("index.json")
-        guard FileManager.default.fileExists(atPath: indexURL.path) else { return [] }
-        do {
-            let data = try Data(contentsOf: indexURL)
+        if let data = try? Data(contentsOf: indexURL),
+           let index = try? {
+               let decoder = JSONDecoder()
+               decoder.dateDecodingStrategy = .iso8601
+               return try decoder.decode(BackgroundSessionIndex.self, from: data)
+           }() {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            let index = try decoder.decode(BackgroundSessionIndex.self, from: data)
-
             let valid = index.sessions.filter { summary in
                 let fileURL = baseDir.appendingPathComponent("\(summary.id.uuidString).json")
                 guard let data = try? Data(contentsOf: fileURL) else { return false }
@@ -80,37 +82,64 @@ actor BackgroundSessionStore {
                 Log.agent.info(
                     "Pruned \(index.sessions.count - valid.count) orphaned/corrupt background session(s) from index"
                 )
-                // Re-save pruned index
-                let enc = JSONEncoder()
-                enc.dateEncodingStrategy = .iso8601
-                if let encoded = try? enc.encode(BackgroundSessionIndex(version: storageVersion, sessions: valid)) {
-                    try? encoded.write(to: indexURL, options: .atomic)
-                }
+                writeIndex(summaries: valid, to: indexURL)
             }
             return valid
-        } catch {
-            Log.agent.error("Failed to decode background session index: \(error)")
-            return []
+        }
+
+        // Index missing or corrupt — rebuild from session files on disk
+        let rebuilt = rebuildSummaries(in: baseDir)
+        if !rebuilt.isEmpty {
+            Log.agent.info("Rebuilt background session index from \(rebuilt.count) session file(s)")
+            writeIndex(summaries: rebuilt, to: indexURL)
+        }
+        return rebuilt
+    }
+
+    /// Scan the directory for `{uuid}.json` session files and build summaries.
+    private static func rebuildSummaries(in baseDir: URL) -> [BackgroundSessionSummary] {
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(
+            at: baseDir, includingPropertiesForKeys: nil
+        ) else { return [] }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        return contents.compactMap { url -> BackgroundSessionSummary? in
+            guard url.pathExtension == "json",
+                  url.lastPathComponent != "index.json",
+                  let data = try? Data(contentsOf: url),
+                  let session = try? decoder.decode(BackgroundSession.self, from: data)
+            else { return nil }
+            return BackgroundSessionSummary(from: session)
+        }
+    }
+
+    /// Write an index file atomically.
+    private static func writeIndex(summaries: [BackgroundSessionSummary], to indexURL: URL) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(
+            BackgroundSessionIndex(version: storageVersion, sessions: summaries)
+        ) {
+            try? data.write(to: indexURL, options: .atomic)
         }
     }
 
     // MARK: - Public API
 
-    /// Load an existing session or create a new one with empty messages.
-    func loadOrCreate(
-        sessionId: UUID,
-        taskId: UUID,
-        taskName: String,
-        sessionType: SessionType
-    ) -> BackgroundSession {
+    /// Load an existing session or create a new empty one for the given UUID.
+    /// Callers set metadata (taskId, displayName, sessionType) on the returned value before saving.
+    func loadOrCreate(sessionId: UUID) -> BackgroundSession {
         if let existing = loadFromDisk(sessionId: sessionId) {
             return existing
         }
         return BackgroundSession(
             id: sessionId,
-            sessionType: sessionType,
-            displayName: taskName,
-            taskId: taskId,
+            sessionType: .cron,
+            displayName: "",
+            taskId: UUID(),
             messages: [],
             lastRunAt: nil,
             createdAt: Date()
@@ -161,15 +190,7 @@ actor BackgroundSessionStore {
     }
 
     private func saveIndex() {
-        do {
-            let index = BackgroundSessionIndex(version: Self.storageVersion, sessions: sessions)
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(index)
-            try data.write(to: indexURL, options: .atomic)
-        } catch {
-            Log.agent.error("Failed to save background session index: \(error)")
-        }
+        Self.writeIndex(summaries: sessions, to: indexURL)
     }
 
     private func loadFromDisk(sessionId: UUID) -> BackgroundSession? {
