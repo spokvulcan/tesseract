@@ -2,7 +2,7 @@
 @preconcurrency import MLXLMCommon
 import MLXAudioCore
 
-public protocol SpeechGenerationModel: AnyObject {
+public protocol SpeechGenerationModel: AnyObject, Sendable {
     var sampleRate: Int { get }
 
     /// Random seed for deterministic generation. Set before calling generate/generateStream.

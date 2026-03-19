@@ -1,3 +1,6 @@
+# Local dependency symlinks
+Vendor/mlx-swift-lm
+
 # Xcode build artifacts
 build/
 DerivedData/
@@ -23,6 +26,9 @@ scripts/.venv/
 
 # WhisperKit model weights (too large for git)
 tesseract/Resources/Models/
+
+# Profiling artifacts
+*.profraw
 
 # macOS
 .DS_Store

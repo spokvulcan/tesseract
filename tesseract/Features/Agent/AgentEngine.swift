@@ -5,6 +5,12 @@ import MLXLMCommon
 import Tokenizers
 import os
 
+// MARK: - Sendable conformance for cross-actor transfer
+
+// UserInput is a value-type struct (strings, messages, tool specs) but MLXLMCommon
+// doesn't declare Sendable conformance. We need it to cross from @MainActor to LLMActor.
+extension UserInput: @retroactive @unchecked Sendable {}
+
 /// Errors thrown by ``AgentEngine`` during generation.
 enum AgentEngineError: LocalizedError {
     case modelNotLoaded

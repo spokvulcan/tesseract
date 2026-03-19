@@ -62,6 +62,8 @@ enum AgentFactory {
         )
 
         // 6. Build compaction transform
+        let generateParameters = AgentGenerateParameters.forModel(selectedModelID)
+
         let compactionTransform = makeCompactionTransform(
             contextManager: contextManager,
             contextWindow: 120_000,
@@ -69,7 +71,7 @@ enum AgentFactory {
                 let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
                 let task = Task { @MainActor in
                     do {
-                        let s = try engine.generate(prompt: prompt)
+                        let s = try engine.generate(prompt: prompt, parameters: generateParameters)
                         for try await gen in s {
                             continuation.yield(gen)
                         }
@@ -110,7 +112,8 @@ enum AgentFactory {
                         let engineStream = try engine.generate(
                             systemPrompt: systemPrompt,
                             messages: messages,
-                            tools: tools
+                            tools: tools,
+                            parameters: generateParameters
                         )
                         for try await generation in engineStream {
                             continuation.yield(generation)

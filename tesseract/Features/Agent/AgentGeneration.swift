@@ -16,6 +16,11 @@ struct AgentGenerateParameters: Sendable, Codable {
     var repetitionContextSize: Int = 20
     var presencePenalty: Float? = nil
 
+    /// Number of bits for KV cache quantization (4 or 8). nil disables quantization.
+    var kvBits: Int? = 8
+    /// Group size for KV cache quantization.
+    var kvGroupSize: Int = 64
+
     static let `default` = AgentGenerateParameters()
 
     /// Qwen3-4B-Instruct-2507 recommended parameters for non-thinking mode.

@@ -62,6 +62,8 @@ actor LLMActor {
 
         let genParams = GenerateParameters(
             maxTokens: parameters.maxTokens,
+            kvBits: parameters.kvBits,
+            kvGroupSize: parameters.kvGroupSize,
             temperature: parameters.temperature,
             topP: parameters.topP,
             topK: parameters.topK,
