@@ -1249,3 +1249,441 @@ struct ReadToolTrackerTests {
         #expect(try readUTF8PreservingBytes(from: fileURL) == "Hello, flow!")
     }
 }
+
+// MARK: - Cron Test Helpers
+
+private let cronTestTimeZone = TimeZone(identifier: "America/New_York")!
+
+private func cronDate(_ str: String) -> Date {
+    let fmt = DateFormatter()
+    fmt.dateFormat = "yyyy-MM-dd HH:mm"
+    fmt.timeZone = cronTestTimeZone
+    return fmt.date(from: str)!
+}
+
+private func cronComponents(_ date: Date) -> DateComponents {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = cronTestTimeZone
+    return cal.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+}
+
+// MARK: - CronField Parsing Tests
+
+@MainActor
+struct CronFieldParsingTests {
+
+    @Test func parsesAnyWildcard() throws {
+        let field = try CronField.parse("*", validRange: 0...59, position: 0)
+        #expect(field == .any)
+    }
+
+    @Test func parsesSingleValue() throws {
+        let field = try CronField.parse("5", validRange: 0...59, position: 0)
+        #expect(field == .value(5))
+    }
+
+    @Test func parsesRange() throws {
+        let field = try CronField.parse("1-5", validRange: 0...59, position: 0)
+        #expect(field == .range(1, 5))
+    }
+
+    @Test func parsesStepWithWildcard() throws {
+        let field = try CronField.parse("*/15", validRange: 0...59, position: 0)
+        #expect(field == .step(base: .any, 15))
+    }
+
+    @Test func parsesStepWithRange() throws {
+        let field = try CronField.parse("1-30/5", validRange: 0...59, position: 0)
+        #expect(field == .step(base: .range(1, 30), 5))
+    }
+
+    @Test func parsesList() throws {
+        let field = try CronField.parse("1,15,30", validRange: 0...59, position: 0)
+        #expect(field == .list([.value(1), .value(15), .value(30)]))
+    }
+
+    @Test func parsesListWithRanges() throws {
+        let field = try CronField.parse("1-5,10,20-25", validRange: 0...59, position: 0)
+        #expect(field == .list([.range(1, 5), .value(10), .range(20, 25)]))
+    }
+
+    @Test func normalizesDayOfWeek7To0() throws {
+        let field = try CronField.parse("7", validRange: 0...6, position: 4)
+        #expect(field == .value(0))
+    }
+
+    @Test func normalizesDayOfWeek7InRange() throws {
+        let field = try CronField.parse("5-7", validRange: 0...6, position: 4)
+        #expect(field == .range(5, 0))
+    }
+
+    @Test func wrapAroundRangeStepExpandsCorrectly() throws {
+        // 5-7/1 with dow normalization: 5-0, step 1 → should expand to [5, 6, 0]
+        let field = try CronField.parse("5-7/1", validRange: 0...6, position: 4)
+        let expanded = field.expandedValues(in: 0...6)
+        #expect(expanded == [5, 6, 0])
+        // Verify matches works for each day
+        #expect(field.matches(5, in: 0...6))  // Friday
+        #expect(field.matches(6, in: 0...6))  // Saturday
+        #expect(field.matches(0, in: 0...6))  // Sunday
+        #expect(!field.matches(1, in: 0...6)) // Monday
+    }
+
+    @Test func wrapAroundRangeStepWithStep2() throws {
+        // 5-7/2 with dow normalization: 5-0, step 2 → should expand to [5, 0]
+        let field = try CronField.parse("5-7/2", validRange: 0...6, position: 4)
+        let expanded = field.expandedValues(in: 0...6)
+        #expect(expanded == [5, 0])
+        #expect(field.matches(5, in: 0...6))   // Friday
+        #expect(!field.matches(6, in: 0...6))  // Saturday (skipped)
+        #expect(field.matches(0, in: 0...6))   // Sunday
+    }
+
+    @Test func throwsForOutOfRangeValue() throws {
+        #expect(throws: CronError.self) {
+            try CronField.parse("60", validRange: 0...59, position: 0)
+        }
+    }
+
+    @Test func throwsForNegativeValue() throws {
+        #expect(throws: CronError.self) {
+            try CronField.parse("-1", validRange: 0...59, position: 0)
+        }
+    }
+
+    @Test func throwsForZeroStep() throws {
+        #expect(throws: CronError.self) {
+            try CronField.parse("*/0", validRange: 0...59, position: 0)
+        }
+    }
+
+    @Test func throwsForNonNumericValue() throws {
+        #expect(throws: CronError.self) {
+            try CronField.parse("abc", validRange: 0...59, position: 0)
+        }
+    }
+
+    @Test func throwsForDescendingRangeOnNonDow() throws {
+        // 17-9 is invalid for hour (position 1) — descending ranges only allowed for dow
+        #expect(throws: CronError.self) {
+            try CronField.parse("17-9", validRange: 0...23, position: 1)
+        }
+        // Also invalid for minute
+        #expect(throws: CronError.self) {
+            try CronField.parse("45-10", validRange: 0...59, position: 0)
+        }
+        // Full expression check
+        #expect(throws: CronError.self) {
+            try CronExpression(parsing: "0 17-9 * * *")
+        }
+    }
+
+    @Test func allowsDescendingRangeOnDow() throws {
+        // 5-0 is valid for dow (position 4) — wrap-around from Fri to Sun
+        let field = try CronField.parse("5-0", validRange: 0...6, position: 4)
+        #expect(field == .range(5, 0))
+    }
+
+    @Test func throwsForTooFewFields() throws {
+        #expect(throws: CronError.self) {
+            try CronExpression(parsing: "* * *")
+        }
+    }
+
+    @Test func throwsForTooManyFields() throws {
+        #expect(throws: CronError.self) {
+            try CronExpression(parsing: "* * * * * *")
+        }
+    }
+}
+
+// MARK: - CronExpression Matching Tests
+
+@MainActor
+struct CronExpressionMatchingTests {
+
+    @Test func matchesExactTime() throws {
+        let cron = try CronExpression(parsing: "30 9 * * *")
+        #expect(cron.matches(cronDate("2026-03-19 09:30"), in: cronTestTimeZone))
+        #expect(!cron.matches(cronDate("2026-03-19 09:31"), in: cronTestTimeZone))
+    }
+
+    @Test func matchesWildcard() throws {
+        let cron = try CronExpression(parsing: "* * * * *")
+        #expect(cron.matches(cronDate("2026-03-19 14:22"), in: cronTestTimeZone))
+    }
+
+    @Test func matchesRange() throws {
+        let cron = try CronExpression(parsing: "0 9-17 * * *")
+        #expect(cron.matches(cronDate("2026-03-19 09:00"), in: cronTestTimeZone))
+        #expect(cron.matches(cronDate("2026-03-19 17:00"), in: cronTestTimeZone))
+        #expect(!cron.matches(cronDate("2026-03-19 18:00"), in: cronTestTimeZone))
+    }
+
+    @Test func matchesStep() throws {
+        let cron = try CronExpression(parsing: "*/15 * * * *")
+        #expect(cron.matches(cronDate("2026-03-19 09:00"), in: cronTestTimeZone))
+        #expect(cron.matches(cronDate("2026-03-19 09:15"), in: cronTestTimeZone))
+        #expect(cron.matches(cronDate("2026-03-19 09:30"), in: cronTestTimeZone))
+        #expect(!cron.matches(cronDate("2026-03-19 09:07"), in: cronTestTimeZone))
+    }
+
+    @Test func matchesList() throws {
+        let cron = try CronExpression(parsing: "0,30 * * * *")
+        #expect(cron.matches(cronDate("2026-03-19 09:00"), in: cronTestTimeZone))
+        #expect(cron.matches(cronDate("2026-03-19 09:30"), in: cronTestTimeZone))
+        #expect(!cron.matches(cronDate("2026-03-19 09:15"), in: cronTestTimeZone))
+    }
+
+    @Test func dayOrSemanticsBothConstrained() throws {
+        // dom=15 and dow=1 (Monday) — matches if either is true
+        let cron = try CronExpression(parsing: "0 9 15 * 1")
+        // 2026-03-15 is a Sunday — dom matches
+        #expect(cron.matches(cronDate("2026-03-15 09:00"), in: cronTestTimeZone))
+        // 2026-03-16 is a Monday — dow matches
+        #expect(cron.matches(cronDate("2026-03-16 09:00"), in: cronTestTimeZone))
+        // 2026-03-17 is a Tuesday, day 17 — neither matches
+        #expect(!cron.matches(cronDate("2026-03-17 09:00"), in: cronTestTimeZone))
+    }
+
+    @Test func dayAndSemanticsOneWildcard() throws {
+        // Only dow constrained (dom is *) — must match dow
+        let cron = try CronExpression(parsing: "0 9 * * 1")
+        // 2026-03-16 is a Monday
+        #expect(cron.matches(cronDate("2026-03-16 09:00"), in: cronTestTimeZone))
+        #expect(!cron.matches(cronDate("2026-03-17 09:00"), in: cronTestTimeZone))
+    }
+
+    @Test func matchesWeekdayRange() throws {
+        let cron = try CronExpression(parsing: "0 17 * * 1-5")
+        // 2026-03-19 is a Thursday (weekday)
+        #expect(cron.matches(cronDate("2026-03-19 17:00"), in: cronTestTimeZone))
+        // 2026-03-22 is a Sunday
+        #expect(!cron.matches(cronDate("2026-03-22 17:00"), in: cronTestTimeZone))
+    }
+}
+
+// MARK: - CronExpression Next Occurrence Tests
+
+@MainActor
+struct CronExpressionNextOccurrenceTests {
+
+    @Test func nextMinute() throws {
+        let cron = try CronExpression(parsing: "* * * * *")
+        let next = cron.nextOccurrence(after: cronDate("2026-03-19 09:30"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.hour == 9)
+        #expect(c.minute == 31)
+    }
+
+    @Test func nextSpecificTime() throws {
+        let cron = try CronExpression(parsing: "0 9 * * *")
+        let next = cron.nextOccurrence(after: cronDate("2026-03-19 09:30"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.day == 20)
+        #expect(c.hour == 9)
+        #expect(c.minute == 0)
+    }
+
+    @Test func nextWeekday() throws {
+        let cron = try CronExpression(parsing: "0 9 * * 1-5")
+        // 2026-03-20 is Friday. Next weekday is Monday 2026-03-23.
+        let next = cron.nextOccurrence(after: cronDate("2026-03-20 09:30"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.month == 3)
+        #expect(c.day == 23)
+        #expect(c.hour == 9)
+        #expect(c.minute == 0)
+    }
+
+    @Test func every15Minutes() throws {
+        let cron = try CronExpression(parsing: "*/15 * * * *")
+        let next = cron.nextOccurrence(after: cronDate("2026-03-19 09:07"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.hour == 9)
+        #expect(c.minute == 15)
+    }
+
+    @Test func monthBoundary() throws {
+        let cron = try CronExpression(parsing: "0 9 * * *")
+        // March 31 at 10AM — next day is April 1
+        let next = cron.nextOccurrence(after: cronDate("2026-03-31 10:00"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.month == 4)
+        #expect(c.day == 1)
+        #expect(c.hour == 9)
+    }
+
+    @Test func leapYearFeb29() throws {
+        let cron = try CronExpression(parsing: "0 0 29 2 *")
+        // 2028 is a leap year
+        let next = cron.nextOccurrence(after: cronDate("2026-03-01 00:00"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.year == 2028)
+        #expect(c.month == 2)
+        #expect(c.day == 29)
+    }
+
+    @Test func nonLeapYearSkipsFeb29() throws {
+        let cron = try CronExpression(parsing: "0 0 29 2 *")
+        // 2027 is not a leap year, should skip to 2028
+        let next = cron.nextOccurrence(after: cronDate("2027-01-01 00:00"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.year == 2028)
+        #expect(c.month == 2)
+        #expect(c.day == 29)
+    }
+
+    @Test func yearBoundaryJan1() throws {
+        let cron = try CronExpression(parsing: "0 0 1 1 *")
+        let next = cron.nextOccurrence(after: cronDate("2026-03-19 00:00"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.year == 2027)
+        #expect(c.month == 1)
+        #expect(c.day == 1)
+    }
+
+    @Test func lastMinuteOfYear() throws {
+        let cron = try CronExpression(parsing: "59 23 31 12 *")
+        let next = cron.nextOccurrence(after: cronDate("2026-03-19 00:00"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.year == 2026)
+        #expect(c.month == 12)
+        #expect(c.day == 31)
+        #expect(c.hour == 23)
+        #expect(c.minute == 59)
+    }
+
+    @Test func dayOrSemanticsFindsEarlier() throws {
+        // dom=15, dow=1 (Monday) — whichever comes first
+        let cron = try CronExpression(parsing: "0 9 15 * 1")
+        // After 2026-03-14 (Saturday): Monday 2026-03-16 or dom 2026-03-15 (Sunday)
+        // 15th comes first
+        let next = cron.nextOccurrence(after: cronDate("2026-03-14 10:00"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.day == 15)
+        #expect(c.hour == 9)
+    }
+}
+
+// MARK: - CronExpression DST Tests
+
+@MainActor
+struct CronExpressionDSTTests {
+
+    @Test func springForwardSkips2AM() throws {
+        // 2026-03-08 is US spring-forward: 2:00 AM doesn't exist
+        let cron = try CronExpression(parsing: "0 2 8 3 *")
+        let next = cron.nextOccurrence(after: cronDate("2026-03-07 12:00"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        // Should resolve to 3:00 AM (the next valid time after the gap)
+        #expect(c.month == 3)
+        #expect(c.day == 8)
+        #expect(c.hour == 3)
+        #expect(c.minute == 0)
+    }
+
+    @Test func springForwardNonzeroMinuteResolvesToGapEdge() throws {
+        // 2026-03-08 spring-forward: "30 2 8 3 *" means 2:30 AM which doesn't exist.
+        // Spec: resolve to first valid wall-clock time (3:00 AM), not shifted 3:30 AM.
+        let cron = try CronExpression(parsing: "30 2 8 3 *")
+        let next = cron.nextOccurrence(after: cronDate("2026-03-07 12:00"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        #expect(c.month == 3)
+        #expect(c.day == 8)
+        #expect(c.hour == 3)
+        #expect(c.minute == 0)
+    }
+
+    @Test func fallBackFirstOccurrence() throws {
+        // 2026-11-01 is US fall-back: 1:30 AM occurs twice
+        let cron = try CronExpression(parsing: "30 1 * * *")
+        let next = cron.nextOccurrence(after: cronDate("2026-10-31 23:00"), in: cronTestTimeZone)!
+        let c = cronComponents(next)
+        // Calendar returns first occurrence (EDT) by default
+        #expect(c.month == 11)
+        #expect(c.day == 1)
+        #expect(c.hour == 1)
+        #expect(c.minute == 30)
+    }
+}
+
+// MARK: - CronField Codable Tests
+
+@MainActor
+struct CronFieldCodableTests {
+
+    @Test func roundTripsAllFieldCases() throws {
+        let cases: [CronField] = [
+            .any,
+            .value(5),
+            .range(1, 5),
+            .step(base: .any, 15),
+            .step(base: .range(1, 30), 5),
+            .list([.value(1), .value(15), .range(20, 25)]),
+        ]
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        for field in cases {
+            let data = try encoder.encode(field)
+            let decoded = try decoder.decode(CronField.self, from: data)
+            #expect(decoded == field)
+        }
+    }
+
+    @Test func roundTripsFullExpression() throws {
+        let expr = try CronExpression(parsing: "*/15 9-17 1,15 * 1-5")
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        let data = try encoder.encode(expr)
+        let decoded = try decoder.decode(CronExpression.self, from: data)
+        #expect(decoded == expr)
+    }
+
+    @Test func producesDiscriminatedUnionJSON() throws {
+        let field = CronField.step(base: .any, 15)
+        let data = try JSONEncoder().encode(field)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(json["type"] as? String == "step")
+        #expect(json["step"] as? Int == 15)
+        let base = json["base"] as? [String: Any]
+        #expect(base?["type"] as? String == "any")
+    }
+}
+
+// MARK: - CronExpression Human Readable Tests
+
+@MainActor
+struct CronExpressionHumanReadableTests {
+
+    @Test func everyMinute() throws {
+        let cron = try CronExpression(parsing: "* * * * *")
+        #expect(cron.humanReadable == "Every minute")
+    }
+
+    @Test func everyDayAtTime() throws {
+        let cron = try CronExpression(parsing: "0 9 * * *")
+        #expect(cron.humanReadable == "Every day at 9:00 AM")
+    }
+
+    @Test func every15Minutes() throws {
+        let cron = try CronExpression(parsing: "*/15 * * * *")
+        #expect(cron.humanReadable == "Every 15 minutes")
+    }
+
+    @Test func weekdaysAtTime() throws {
+        let cron = try CronExpression(parsing: "0 17 * * 1-5")
+        #expect(cron.humanReadable == "Weekdays at 5:00 PM")
+    }
+
+    @Test func expressionRoundTrip() throws {
+        let expressions = ["* * * * *", "0 9 * * *", "*/15 * * * *", "0 17 * * 1-5", "0,30 9-17 1,15 * *"]
+        for expr in expressions {
+            let cron = try CronExpression(parsing: expr)
+            #expect(cron.expression == expr)
+        }
+    }
+}
