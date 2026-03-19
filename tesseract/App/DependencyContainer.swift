@@ -42,7 +42,7 @@ final class DependencyContainer: ObservableObject {
     lazy var packageRegistry = PackageRegistry()
     lazy var contextManager = ContextManager(settings: .standard)
     lazy var newToolRegistry: ToolRegistry = {
-        ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
+        ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost, schedulingService: schedulingService)
     }()
     lazy var agent: Agent = AgentFactory.makeAgent(
         engine: agentEngine,

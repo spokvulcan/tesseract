@@ -2614,3 +2614,295 @@ struct SchedulingServiceTests {
         #expect(!service.tasks.contains(where: { $0.id == task.id }))
     }
 }
+
+// MARK: - CronToolTests
+
+@MainActor
+struct CronToolTests {
+
+    // MARK: - cron_create
+
+    @Test func cronCreateValidTask() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+        let tool = createCronCreateTool(schedulingService: service)
+
+        let result = try await tool.execute("call-1", [
+            "name": .string("Morning report"),
+            "cron": .string("0 9 * * *"),
+            "prompt": .string("Summarize today's tasks"),
+        ], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("Created scheduled task 'Morning report'"))
+        #expect(text.contains("0 9 * * *"))
+        #expect(text.contains("Next run:"))
+        #expect(service.tasks.count == 1)
+        await service.stop()
+    }
+
+    @Test func cronCreateRejectsInvalidCron() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+        let tool = createCronCreateTool(schedulingService: service)
+
+        let result = try await tool.execute("call-1", [
+            "name": .string("Bad"),
+            "cron": .string("not a cron"),
+            "prompt": .string("test"),
+        ], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("Invalid cron expression"))
+        #expect(service.tasks.isEmpty)
+        await service.stop()
+    }
+
+    @Test func cronCreateRejectsShortInterval() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+        let tool = createCronCreateTool(schedulingService: service)
+
+        let result = try await tool.execute("call-1", [
+            "name": .string("Too frequent"),
+            "cron": .string("* * * * *"),
+            "prompt": .string("spam"),
+        ], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("5 minutes") || text.contains("300s"))
+        #expect(service.tasks.isEmpty)
+        await service.stop()
+    }
+
+    @Test func cronCreateRejectsMissingArgs() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+        let tool = createCronCreateTool(schedulingService: service)
+
+        let result = try await tool.execute("call-1", [
+            "cron": .string("0 9 * * *"),
+            "prompt": .string("test"),
+        ], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("Missing required parameter: name"))
+        await service.stop()
+    }
+
+    @Test func cronCreateForcesNotifyTrue() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+        let tool = createCronCreateTool(schedulingService: service)
+
+        _ = try await tool.execute("call-1", [
+            "name": .string("Silent"),
+            "cron": .string("0 9 * * *"),
+            "prompt": .string("test"),
+            "notify": .bool(false),
+        ], nil, nil)
+
+        #expect(service.tasks.count == 1)
+        #expect(service.tasks[0].notifyUser == true)
+        await service.stop()
+    }
+
+    @Test func cronCreateRejectsAt50Tasks() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        for i in 0..<50 {
+            let task = try ScheduledTask.create(
+                name: "Task \(i)", cronExpression: "0 \(i % 24) * * *", prompt: "p"
+            )
+            store.save(task)
+        }
+        await service.start()
+
+        let tool = createCronCreateTool(schedulingService: service)
+        let result = try await tool.execute("call-1", [
+            "name": .string("Overflow"),
+            "cron": .string("0 9 * * *"),
+            "prompt": .string("test"),
+        ], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("Maximum active tasks limit reached"))
+        await service.stop()
+    }
+
+    @Test func cronCreateSetsAgentCreator() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+        let tool = createCronCreateTool(schedulingService: service)
+
+        _ = try await tool.execute("call-1", [
+            "name": .string("Agent task"),
+            "cron": .string("0 9 * * *"),
+            "prompt": .string("do something"),
+        ], nil, nil)
+
+        #expect(service.tasks.count == 1)
+        if case .agent = service.tasks[0].createdBy {
+            // expected
+        } else {
+            Issue.record("Expected .agent creator, got \(service.tasks[0].createdBy)")
+        }
+        await service.stop()
+    }
+
+    @Test func cronCreateRejectsZeroMaxRuns() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+        let tool = createCronCreateTool(schedulingService: service)
+
+        let result = try await tool.execute("call-1", [
+            "name": .string("Zero runs"),
+            "cron": .string("0 9 * * *"),
+            "prompt": .string("test"),
+            "max_runs": .int(0),
+        ], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("max_runs must be at least 1"))
+        #expect(service.tasks.isEmpty)
+        await service.stop()
+    }
+
+    // MARK: - cron_list
+
+    @Test func cronListAllTasks() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let t1 = try ScheduledTask.create(name: "A", cronExpression: "0 9 * * *", prompt: "a")
+        let t2 = try ScheduledTask.create(name: "B", cronExpression: "0 18 * * *", prompt: "b")
+        store.save(t1)
+        store.save(t2)
+        await service.start()
+
+        let tool = createCronListTool(schedulingService: service)
+        let result = try await tool.execute("call-1", [:], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("2 scheduled task(s)"))
+        #expect(text.contains("A"))
+        #expect(text.contains("B"))
+        await service.stop()
+    }
+
+    @Test func cronListFiltersActive() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let active = try ScheduledTask.create(name: "Active", cronExpression: "0 9 * * *", prompt: "a")
+        var paused = try ScheduledTask.create(name: "Paused", cronExpression: "0 18 * * *", prompt: "b")
+        paused.enabled = false
+        store.save(active)
+        store.save(paused)
+        await service.start()
+
+        let tool = createCronListTool(schedulingService: service)
+        let result = try await tool.execute("call-1", ["filter": .string("active")], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("1 scheduled task(s)"))
+        #expect(text.contains("Active"))
+        #expect(!text.contains("Paused"))
+        await service.stop()
+    }
+
+    @Test func cronListFiltersPaused() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let active = try ScheduledTask.create(name: "Active", cronExpression: "0 9 * * *", prompt: "a")
+        var paused = try ScheduledTask.create(name: "Paused", cronExpression: "0 18 * * *", prompt: "b")
+        paused.enabled = false
+        store.save(active)
+        store.save(paused)
+        await service.start()
+
+        let tool = createCronListTool(schedulingService: service)
+        let result = try await tool.execute("call-1", ["filter": .string("paused")], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("1 scheduled task(s)"))
+        #expect(text.contains("Paused"))
+        #expect(!text.contains("Name: Active"))
+        await service.stop()
+    }
+
+    @Test func cronListFiltersMine() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let userTask = try ScheduledTask.create(
+            name: "User", cronExpression: "0 9 * * *", prompt: "a", createdBy: .user
+        )
+        let agentTask = try ScheduledTask.create(
+            name: "Agent", cronExpression: "0 18 * * *", prompt: "b",
+            createdBy: .agent(reason: "test")
+        )
+        store.save(userTask)
+        store.save(agentTask)
+        await service.start()
+
+        let tool = createCronListTool(schedulingService: service)
+        let result = try await tool.execute("call-1", ["filter": .string("mine")], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("1 scheduled task(s)"))
+        #expect(text.contains("Agent"))
+        #expect(!text.contains("Name: User"))
+        await service.stop()
+    }
+
+    @Test func cronListEmpty() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+
+        let tool = createCronListTool(schedulingService: service)
+        let result = try await tool.execute("call-1", [:], nil, nil)
+
+        #expect(result.content.textContent == "No scheduled tasks found.")
+        await service.stop()
+    }
+
+    // MARK: - cron_delete
+
+    @Test func cronDeleteExistingTask() async throws {
+        let (service, store, _) = makeSchedulingServiceTestRig()
+        let task = try ScheduledTask.create(name: "Doomed", cronExpression: "0 9 * * *", prompt: "bye")
+        store.save(task)
+        await service.start()
+
+        let tool = createCronDeleteTool(schedulingService: service)
+        let result = try await tool.execute("call-1", [
+            "task_id": .string(task.id.uuidString),
+        ], nil, nil)
+
+        let text = result.content.textContent
+        #expect(text.contains("Deleted task 'Doomed'"))
+        #expect(text.contains(task.id.uuidString))
+        #expect(service.tasks.isEmpty)
+        await service.stop()
+    }
+
+    @Test func cronDeleteInvalidUUID() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+
+        let tool = createCronDeleteTool(schedulingService: service)
+        let result = try await tool.execute("call-1", [
+            "task_id": .string("not-a-uuid"),
+        ], nil, nil)
+
+        #expect(result.content.textContent.contains("Invalid UUID format"))
+        await service.stop()
+    }
+
+    @Test func cronDeleteNonexistent() async throws {
+        let (service, _, _) = makeSchedulingServiceTestRig()
+        await service.start()
+
+        let fakeId = UUID()
+        let tool = createCronDeleteTool(schedulingService: service)
+        let result = try await tool.execute("call-1", [
+            "task_id": .string(fakeId.uuidString),
+        ], nil, nil)
+
+        #expect(result.content.textContent.contains("Task not found"))
+        await service.stop()
+    }
+}

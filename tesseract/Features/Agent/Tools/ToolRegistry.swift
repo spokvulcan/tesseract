@@ -10,8 +10,8 @@ final class ToolRegistry {
     private var builtInTools: [AgentToolDefinition]
     private var extensionTools: [AgentToolDefinition]
 
-    init(sandbox: PathSandbox, extensionHost: ExtensionHost) {
-        self.builtInTools = BuiltInToolFactory.createAll(sandbox: sandbox)
+    init(sandbox: PathSandbox, extensionHost: ExtensionHost, schedulingService: SchedulingService) {
+        self.builtInTools = BuiltInToolFactory.createAll(sandbox: sandbox, schedulingService: schedulingService)
         self.extensionTools = extensionHost.aggregatedTools()
     }
 

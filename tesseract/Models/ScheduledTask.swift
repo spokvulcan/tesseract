@@ -23,6 +23,18 @@ nonisolated enum ScheduledTaskError: LocalizedError, Sendable {
 nonisolated enum TaskCreator: Sendable, Equatable {
     case user
     case agent(reason: String)
+
+    var isAgent: Bool {
+        if case .agent = self { return true }
+        return false
+    }
+
+    var displayString: String {
+        switch self {
+        case .user: "user"
+        case .agent(let reason): "agent (\(reason))"
+        }
+    }
 }
 
 nonisolated extension TaskCreator: Codable {
