@@ -90,10 +90,14 @@ actor SchedulingActor {
 
     func startHeartbeat(intervalSeconds: TimeInterval = SchedulingActor.defaultHeartbeatIntervalSeconds) {
         guard heartbeatTask == nil else { return }
-        Log.agent.info("SchedulingActor: heartbeat started (interval: \(Int(intervalSeconds))s)")
+        let clamped = max(intervalSeconds, Self.minimumIntervalSeconds)
+        if clamped != intervalSeconds {
+            Log.agent.warning("SchedulingActor: heartbeat interval \(Int(intervalSeconds))s below minimum, clamped to \(Int(clamped))s")
+        }
+        Log.agent.info("SchedulingActor: heartbeat started (interval: \(Int(clamped))s)")
         heartbeatTask = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(intervalSeconds))
+                try? await Task.sleep(for: .seconds(clamped))
                 guard !Task.isCancelled else { break }
                 guard !isPaused else { continue }
                 await enqueueHeartbeat()

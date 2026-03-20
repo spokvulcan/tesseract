@@ -43,13 +43,16 @@ final class SchedulingService {
 
     @ObservationIgnored private let schedulingActor: SchedulingActor
     @ObservationIgnored private let taskStore: ScheduledTaskStore
+    @ObservationIgnored private let settings: SettingsManager
     @ObservationIgnored private var storeSink: AnyCancellable?
+    @ObservationIgnored private var observationTasks: [Task<Void, Never>] = []
 
     // MARK: - Init
 
-    init(actor: SchedulingActor, store: ScheduledTaskStore) {
+    init(actor: SchedulingActor, store: ScheduledTaskStore, settings: SettingsManager) {
         self.schedulingActor = actor
         self.taskStore = store
+        self.settings = settings
     }
 
     // MARK: - Lifecycle
@@ -80,20 +83,69 @@ final class SchedulingService {
         await schedulingActor.setOnHeartbeatStatusChanged { [weak self] status in
             self?.heartbeatStatus = status
         }
-        await schedulingActor.startHeartbeat()
+
+        // Restore heartbeat from persisted settings (SettingsManager already loaded from UserDefaults)
+        if settings.heartbeatEnabled {
+            await startHeartbeat(intervalSeconds: TimeInterval(settings.heartbeatIntervalMinutes) * 60)
+        }
+
+        startHeartbeatObservation()
+    }
+
+    // MARK: - Heartbeat Lifecycle
+
+    private func startHeartbeat(intervalSeconds: TimeInterval) async {
+        await schedulingActor.startHeartbeat(intervalSeconds: intervalSeconds)
+    }
+
+    private func stopHeartbeat() async {
+        await schedulingActor.stopHeartbeat()
+        heartbeatStatus = .idle
+    }
+
+    private func restartHeartbeat(intervalSeconds: TimeInterval) async {
+        await schedulingActor.stopHeartbeat()
+        await schedulingActor.startHeartbeat(intervalSeconds: intervalSeconds)
+    }
+
+    private func startHeartbeatObservation() {
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await enabled in Observations({ self.settings.heartbeatEnabled }) {
+                if enabled {
+                    let interval = TimeInterval(self.settings.heartbeatIntervalMinutes) * 60
+                    await self.startHeartbeat(intervalSeconds: interval)
+                } else {
+                    await self.stopHeartbeat()
+                }
+            }
+        })
+
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            var skipInitial = true
+            for await minutes in Observations({ self.settings.heartbeatIntervalMinutes }) {
+                if skipInitial { skipInitial = false; continue }
+                if self.settings.heartbeatEnabled {
+                    await self.restartHeartbeat(intervalSeconds: TimeInterval(minutes) * 60)
+                }
+            }
+        })
     }
 
     func stop() async {
-        cancelStoreSink()
+        cancelSubscriptions()
         await schedulingActor.stopPolling()
         await schedulingActor.stopHeartbeat()
     }
 
-    /// Cancel the Combine subscription synchronously. Called from `applicationWillTerminate`
+    /// Cancel subscriptions synchronously. Called from `applicationWillTerminate`
     /// (already on MainActor) before blocking on actor work to avoid deadlock.
-    func cancelStoreSink() {
+    func cancelSubscriptions() {
         storeSink?.cancel()
         storeSink = nil
+        for task in observationTasks { task.cancel() }
+        observationTasks.removeAll()
     }
 
     // MARK: - State Sync

@@ -317,6 +317,25 @@ struct RecordingSettingsSection: View {
                 }
             }
 
+            Section("Background Agent") {
+                Toggle("Heartbeat", isOn: $settings.heartbeatEnabled)
+
+                if settings.heartbeatEnabled {
+                    Picker("Interval", selection: $settings.heartbeatIntervalMinutes) {
+                        Text("5 minutes").tag(5)
+                        Text("10 minutes").tag(10)
+                        Text("15 minutes").tag(15)
+                        Text("30 minutes").tag(30)
+                        Text("60 minutes").tag(60)
+                        Text("120 minutes").tag(120)
+                    }
+                }
+
+                Text("Periodically evaluates your checklist and takes action in the background.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Duration") {
                 VStack(alignment: .leading) {
                     let minutes = Int(settings.maxRecordingDuration) / 60

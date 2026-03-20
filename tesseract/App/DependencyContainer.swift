@@ -104,7 +104,7 @@ final class DependencyContainer: ObservableObject {
         )
     }()
     lazy var schedulingService: SchedulingService = {
-        SchedulingService(actor: schedulingActor, store: scheduledTaskStore)
+        SchedulingService(actor: schedulingActor, store: scheduledTaskStore, settings: settingsManager)
     }()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
@@ -261,7 +261,7 @@ final class DependencyContainer: ObservableObject {
             }
         }
 
-        // Start scheduling service (includes polling loop)
+        // Start scheduling service (includes polling loop + heartbeat from persisted config)
         await schedulingService.start()
     }
 

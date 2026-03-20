@@ -39,6 +39,8 @@ final class SettingsManager {
         static let ttsStreamingEnabled = "ttsStreamingEnabled"
         static let agentAutoSpeak = "agentAutoSpeak"
         static let selectedAgentModelID = "selectedAgentModelID"
+        static let heartbeatEnabled = "heartbeatEnabled"
+        static let heartbeatIntervalMinutes = "heartbeatIntervalMinutes"
         static let maxRecordingDuration = "maxRecordingDuration"
         static let playSounds = "playSounds"
         static let showNotifications = "showNotifications"
@@ -218,6 +220,16 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(selectedAgentModelID, forKey: Key.selectedAgentModelID) }
     }
 
+    // MARK: - Scheduling Settings
+
+    var heartbeatEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(heartbeatEnabled, forKey: Key.heartbeatEnabled) }
+    }
+
+    var heartbeatIntervalMinutes: Int = 30 {
+        didSet { UserDefaults.standard.set(heartbeatIntervalMinutes, forKey: Key.heartbeatIntervalMinutes) }
+    }
+
     var ttsParameters: TTSParameters {
         get {
             TTSParameters(
@@ -289,6 +301,8 @@ final class SettingsManager {
             Key.ttsStreamingEnabled: true,
             Key.agentAutoSpeak: false,
             Key.selectedAgentModelID: ModelDefinition.defaultAgentModelID,
+            Key.heartbeatEnabled: true,
+            Key.heartbeatIntervalMinutes: 30,
             Key.maxRecordingDuration: 300.0,
             Key.playSounds: true,
             Key.showNotifications: true,
@@ -321,6 +335,8 @@ final class SettingsManager {
         ttsStreamingEnabled = ud.bool(forKey: Key.ttsStreamingEnabled)
         agentAutoSpeak = ud.bool(forKey: Key.agentAutoSpeak)
         selectedAgentModelID = ud.string(forKey: Key.selectedAgentModelID) ?? ModelDefinition.defaultAgentModelID
+        heartbeatEnabled = ud.bool(forKey: Key.heartbeatEnabled)
+        heartbeatIntervalMinutes = ud.integer(forKey: Key.heartbeatIntervalMinutes)
         maxRecordingDuration = ud.double(forKey: Key.maxRecordingDuration)
         playSounds = ud.bool(forKey: Key.playSounds)
         showNotifications = ud.bool(forKey: Key.showNotifications)
@@ -358,6 +374,8 @@ final class SettingsManager {
         ttsStreamingEnabled = true
         agentAutoSpeak = false
         selectedAgentModelID = ModelDefinition.defaultAgentModelID
+        heartbeatEnabled = true
+        heartbeatIntervalMinutes = 30
     }
 
     // MARK: - Private

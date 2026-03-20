@@ -139,8 +139,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Cancel store subscription synchronously (we're on MainActor)
-        container?.schedulingService.cancelStoreSink()
+        // Cancel subscriptions synchronously (we're on MainActor)
+        container?.schedulingService.cancelSubscriptions()
 
         // Persist interrupted task state asynchronously, then allow termination.
         // We use .terminateLater so MainActor stays free for the @MainActor-isolated

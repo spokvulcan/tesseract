@@ -25,12 +25,14 @@ Before diving into architecture, two contracts that shape every design decision:
 **"Persistent" means durable state on disk, restored on app launch.** It does NOT mean autonomous execution while the app is terminated.
 
 What persists across app restarts:
+
 - Task definitions (cron expression, prompt, enabled state, metadata)
 - Heartbeat configuration and checklist
 - Run history (per-run logs with timestamps, results, token counts)
 - Background session transcripts (full agent conversation for each task)
 
 What does NOT persist:
+
 - In-flight task execution (if app quits mid-run, the run is marked `interrupted`)
 - Timer state (rebuilt from task definitions on launch)
 
@@ -49,6 +51,7 @@ What does NOT persist:
 ### 2.2 Surfacing Contract
 
 **Background results never merge into the user's chat conversation.** They are surfaced through:
+
 - macOS notifications (clicking opens the background session)
 - Menu bar badge (unread count)
 - TTS speech (agent speaks the result proactively)
@@ -115,6 +118,7 @@ The user views background work by opening the background session — a full-tran
 Periodic, contextual check-ins. The agent wakes up, evaluates a checklist, and decides whether anything needs attention.
 
 **How it works:**
+
 1. Every N minutes (configurable, default 30m), the scheduler fires
 2. A background agent instance is created (or the existing heartbeat session is resumed)
 3. The agent reads `HEARTBEAT.md` — a markdown checklist of monitoring tasks
@@ -123,6 +127,7 @@ Periodic, contextual check-ins. The agent wakes up, evaluates a checklist, and d
 6. If something needs attention → agent acts, then notifies user
 
 **HEARTBEAT.md** (user-editable, stored at `~/Library/Application Support/Tesseract Agent/agent/scheduled-tasks/heartbeat.md`):
+
 ```markdown
 # Heartbeat Checklist
 
@@ -133,6 +138,7 @@ Periodic, contextual check-ins. The agent wakes up, evaluates a checklist, and d
 ```
 
 **Heartbeat configuration** (in settings or package config):
+
 ```json
 {
   "heartbeat": {
@@ -143,6 +149,7 @@ Periodic, contextual check-ins. The agent wakes up, evaluates a checklist, and d
 ```
 
 **Design notes:**
+
 - Heartbeat runs in a **dedicated background agent instance** (NOT the user's Agent)
 - The heartbeat session accumulates context over time (agent remembers previous heartbeats)
 - If heartbeat session gets too long, normal context compaction applies
@@ -155,6 +162,7 @@ Exact-time scheduling for specific tasks. Supports both user-created and agent-c
 **Cron expression format:** Standard 5-field (`minute hour day-of-month month day-of-week`)
 
 **Semantic contract:**
+
 - All times are interpreted in the **user's local timezone** (`TimeZone.current`)
 - **DST transitions**: When clocks spring forward, a task scheduled during the skipped hour is run at the first valid minute after the transition. When clocks fall back, a task scheduled during the repeated hour runs once (on the first occurrence)
 - **Day-of-month + day-of-week**: When both are constrained (not `*`), a date matches if **either** field matches (standard vixie-cron semantics)
@@ -162,6 +170,7 @@ Exact-time scheduling for specific tasks. Supports both user-created and agent-c
 - **NOT supported**: `L` (last), `W` (nearest weekday), `?`, named days/months (`MON`, `JAN`)
 
 **Examples:**
+
 ```
 0 9 * * *       → Every day at 9am — "Plan my three tasks for today"
 0 17 * * 1-5    → Weekdays at 5pm — "Review what I accomplished today"
@@ -170,6 +179,7 @@ Exact-time scheduling for specific tasks. Supports both user-created and agent-c
 ```
 
 **Task definition:**
+
 ```swift
 struct ScheduledTask: Codable, Identifiable, Sendable {
     let id: UUID
@@ -218,13 +228,36 @@ Three built-in tools for the agent to self-schedule (matching Claude Code's `Cro
   "name": "cron_create",
   "description": "Create a new scheduled task. Returns the task UUID for future reference.",
   "parameters": {
-    "name": { "type": "string", "description": "Short display name for the task" },
-    "description": { "type": "string", "description": "What this task does and why" },
-    "cron": { "type": "string", "description": "5-field cron expression (e.g. '0 9 * * *' for daily at 9am)" },
-    "prompt": { "type": "string", "description": "The instruction to execute when the task fires" },
-    "notify": { "type": "boolean", "description": "Send macOS notification on completion", "default": true },
-    "speak": { "type": "boolean", "description": "Speak the result via TTS", "default": false },
-    "max_runs": { "type": "integer", "description": "Maximum number of runs (omit for unlimited, 1 for one-shot)" }
+    "name": {
+      "type": "string",
+      "description": "Short display name for the task"
+    },
+    "description": {
+      "type": "string",
+      "description": "What this task does and why"
+    },
+    "cron": {
+      "type": "string",
+      "description": "5-field cron expression (e.g. '0 9 * * *' for daily at 9am)"
+    },
+    "prompt": {
+      "type": "string",
+      "description": "The instruction to execute when the task fires"
+    },
+    "notify": {
+      "type": "boolean",
+      "description": "Send macOS notification on completion",
+      "default": true
+    },
+    "speak": {
+      "type": "boolean",
+      "description": "Speak the result via TTS",
+      "default": false
+    },
+    "max_runs": {
+      "type": "integer",
+      "description": "Maximum number of runs (omit for unlimited, 1 for one-shot)"
+    }
   },
   "required": ["name", "prompt", "cron"]
 }
@@ -233,6 +266,7 @@ Three built-in tools for the agent to self-schedule (matching Claude Code's `Cro
 **Returns**: `{ "task_id": "550e8400-...", "name": "morning-planning", "next_run": "2025-03-16T09:00:00Z" }`
 
 **Agent self-scheduling example:**
+
 ```
 User: "Help me stay on track with my tasks today"
 Agent: "I'll schedule check-ins throughout the day."
@@ -262,7 +296,11 @@ Agent: "I'll schedule check-ins throughout the day."
   "name": "cron_list",
   "description": "List all scheduled tasks with their UUID, status, next run time, and recent history.",
   "parameters": {
-    "filter": { "type": "string", "enum": ["all", "active", "paused", "mine"], "default": "all" }
+    "filter": {
+      "type": "string",
+      "enum": ["all", "active", "paused", "mine"],
+      "default": "all"
+    }
   }
 }
 ```
@@ -276,8 +314,14 @@ Agent: "I'll schedule check-ins throughout the day."
   "name": "cron_delete",
   "description": "Delete a scheduled task by UUID.",
   "parameters": {
-    "task_id": { "type": "string", "description": "UUID of the task to delete" },
-    "reason": { "type": "string", "description": "Why this task is being deleted" }
+    "task_id": {
+      "type": "string",
+      "description": "UUID of the task to delete"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why this task is being deleted"
+    }
   },
   "required": ["task_id"]
 }
@@ -417,6 +461,7 @@ final class BackgroundAgentFactory {
 Sessions are identified by **UUID**, never by task name. Task names are display-only.
 
 Each `ScheduledTask` has a stable `sessionId: UUID` assigned at creation. This UUID is used for:
+
 - Persisting session transcripts on disk
 - Linking run logs to their session
 - Opening the session viewer in the UI
@@ -467,6 +512,7 @@ enum SessionType: String, Codable, Sendable {
 ```
 
 **Storage layout:**
+
 ```
 background-sessions/
 ├── index.json                    // Lightweight summaries for sidebar
@@ -482,7 +528,7 @@ The current app has fragmented model ownership: `DependencyContainer.prepareForI
 
 **Solution**: Introduce `InferenceArbiter` — a single authority that manages model loading, tracks busy/idle state across consumers, and only swaps out ImageGen when needed.
 
-```swift
+````swift
 /// Single authority for model ownership and GPU serialization.
 /// Replaces ad-hoc prepareForInference/prepareForSpeech callbacks.
 ///
@@ -630,9 +676,10 @@ final class InferenceArbiter {
     private func load(_ slot: ModelSlot, modelID: String? = nil) async throws { ... }
     private func unload(_ slot: ModelSlot) { ... }
 }
-```
+````
 
 **Rules for background tasks:**
+
 1. Background task fires → calls `arbiter.withExclusiveGPU(.llm) { ... }`
 2. Arbiter enqueues behind any active lease (FIFO), then grants exclusive GPU
 3. LLM is loaded if needed (no-op if already co-resident with correct model ID), ImageGen evicted if present
@@ -690,6 +737,7 @@ Every task records who created it (`TaskCreator.user` or `TaskCreator.agent(reas
 ### 7.3 Agent Scheduling Limits
 
 To prevent runaway schedule creation by the agent:
+
 - Agent cannot create more than 10 tasks in a single conversation turn
 - Agent cannot create tasks with intervals shorter than 5 minutes
 - All agent-created tasks start with `notifyUser: true` (user always knows)
@@ -720,6 +768,7 @@ scheduled-tasks/
 Both `ScheduledTaskStore` and `BackgroundSessionStore` use the same versioning pattern as `AgentConversationStore`: a `.storage_version` file checked on init, with wipe-and-recreate on mismatch. Both start at version 1.
 
 **index.json** — compact, loaded at startup:
+
 ```json
 {
   "version": 1,
@@ -738,6 +787,7 @@ Both `ScheduledTaskStore` and `BackgroundSessionStore` use the same versioning p
 ```
 
 **Run log** — per-run record:
+
 ```json
 {
   "id": "run-uuid",
@@ -757,6 +807,7 @@ Both `ScheduledTaskStore` and `BackgroundSessionStore` use the same versioning p
 ### 8.2 Startup Recovery
 
 On app launch, `SchedulingService.start()`:
+
 1. Check `.storage_version` — wipe and recreate on mismatch
 2. Load `index.json` — restore all task definitions with their **persisted** `nextRunAt`
 3. For each enabled task, evaluate missed-run policy against persisted `nextRunAt` (see section 2.1)
@@ -780,6 +831,7 @@ UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound
 ```
 
 Notification content:
+
 - **Title**: Task name (e.g., "Morning Planning")
 - **Body**: Summary (e.g., "3 tasks planned for today. Top priority: finish scheduling spec.")
 - **Action**: Clicking opens the app to the relevant background session
@@ -793,6 +845,7 @@ Notification content:
 ### 9.3 TTS Speech
 
 If `speakResult: true` on the task:
+
 - Agent speaks the result summary through the TTS system (Qwen3TTS)
 - Natural way for the agent to proactively talk to the user
 - "Hey, it's 9am. I've planned your day — your top priority is finishing the scheduling spec, then reviewing PR 42, then updating dependencies."
@@ -878,6 +931,7 @@ When user selects "Scheduled" in sidebar:
 When user clicks "View Session" on a task, they see the agent's background conversation — all the thinking, tool calls, and results from that task's runs. This is a read-only chat view showing full transparency into what the agent did.
 
 Uses the same chat view component as user conversations, but:
+
 - No input field (read-only in MVP)
 - Session header shows task name, schedule, and run count
 - Each run is visually separated (timestamp divider)
@@ -1034,6 +1088,7 @@ enum CronField: Codable, Sendable, Equatable {
 ```
 
 **Test coverage requirements:**
+
 - Every field type individually (value, range, step, list, any)
 - Day-of-month + day-of-week OR semantics
 - DST spring-forward and fall-back
@@ -1068,6 +1123,7 @@ The three scheduling tools (`cron_create`, `cron_list`, `cron_delete`) are regis
 ### 12.3 Extension Events
 
 New event types for the extension system:
+
 ```swift
 case scheduledTaskCreated(task)
 case scheduledTaskFired(task)
@@ -1095,33 +1151,37 @@ case heartbeatEnd(result)
 ## 13. Implementation Phases
 
 ### Phase 1: Foundation (Core Scheduling) — MVP
+
 - [x] `CronExpression` parser with full semantic contract + tests
 - [x] `ScheduledTask` model + `ScheduledTaskStore` persistence (with `.storage_version`)
 - [x] `SchedulingActor` with 60-second polling loop
-- [ ] `SchedulingService` (MainActor facade)
-- [ ] Three agent tools: `cron_create`, `cron_list`, `cron_delete`
-- [ ] `BackgroundAgentFactory` — isolated agent instances with full assembly pipeline parity
-- [ ] `BackgroundSessionStore` — separate from user conversations (with `.storage_version`)
-- [ ] `InferenceArbiter` — unified model ownership across LLM/TTS/ImageGen
-- [ ] Wait-until-idle when user is active (via arbiter)
+- [x] `SchedulingService` (MainActor facade)
+- [x] Three agent tools: `cron_create`, `cron_list`, `cron_delete`
+- [x] `BackgroundAgentFactory` — isolated agent instances with full assembly pipeline parity
+- [x] `BackgroundSessionStore` — separate from user conversations (with `.storage_version`)
+- [x] `InferenceArbiter` — unified model ownership across LLM/TTS/ImageGen
+- [x] Wait-until-idle when user is active (via arbiter)
 - [x] Sequential execution queue
-- [ ] Safety controls (global pause, max tasks, provenance, agent limits)
-- [ ] App lifecycle: persist on terminate, restore + catch-up on launch
+- [x] Safety controls (global pause, max tasks, provenance, agent limits)
+- [x] App lifecycle: persist on terminate, restore + catch-up on launch
 - [x] Missed-run policy: evaluate persisted `nextRunAt` before advancing, < 1h catch-up, >= 1h mark missed
 
 ### Phase 2: Heartbeat — MVP
-- [ ] `HEARTBEAT.md` file + default template + seeding
-- [ ] Heartbeat evaluation loop (read checklist → evaluate → act or OK)
-- [ ] Heartbeat session persistence (accumulating context)
-- [ ] Heartbeat configuration in settings
+
+- [x] `HEARTBEAT.md` file + default template + seeding
+- [x] Heartbeat evaluation loop (read checklist → evaluate → act or OK)
+- [x] Heartbeat session persistence (accumulating context)
+- [x] Heartbeat configuration in settings
 
 ### Phase 3: Notifications — MVP
+
 - [ ] `NotificationService` — macOS notification center integration
 - [ ] Runtime permission request
 - [ ] Menu bar badge (unread count)
 - [ ] TTS speech for results (`speakResult` flag)
 
 ### Phase 4: UI — MVP
+
 - [ ] Sidebar "Scheduled" section
 - [ ] Cron panel (task list, create/edit/delete/pause)
 - [ ] Global pause toggle
@@ -1130,6 +1190,7 @@ case heartbeatEnd(result)
 - [ ] Task detail/edit sheet
 
 ### Phase 5: Multi-Agent Council — Post-MVP
+
 - [ ] Executor + Reviewer agent pattern
 - [ ] Inter-agent conversation protocol
 - [ ] Council deliberation logs
@@ -1137,6 +1198,7 @@ case heartbeatEnd(result)
 - [ ] Agent persona configuration
 
 ### Phase 6: Agent Autonomy — Post-MVP
+
 - [ ] Agent "free time" concept (agent does what it wants during idle)
 - [ ] Sub-agent invocation tool
 - [ ] Agent-configurable personas
@@ -1154,7 +1216,7 @@ case heartbeatEnd(result)
    - (a) Sequential: executor runs, reviewer evaluates output
    - (b) Conversational: agents take turns in a shared session
    - (c) Structured: executor produces JSON output, reviewer grades it
-   Current lean: (b) conversational, since we already have the conversation primitives. Deferred to post-MVP.
+     Current lean: (b) conversational, since we already have the conversation primitives. Deferred to post-MVP.
 
 4. **Sub-agent invocation tool**: Future tool that lets an agent spawn another agent for a sub-task. Design TBD — depends on agent configuration system. Deferred to post-MVP.
 
@@ -1168,13 +1230,13 @@ case heartbeatEnd(result)
 
 ## 15. Reference: Industry Patterns
 
-| System | Mechanism | Persistence | Multi-Agent | Proactive Notify |
-|--------|-----------|-------------|-------------|-----------------|
-| Claude Code | /loop + Desktop cron | Session / OS-level | No | Hooks only |
-| OpenClaw | Heartbeat + Cron + Hooks | Self-hosted persistent | No | Yes (messaging channels) |
-| Devin | Autonomous task execution | Cloud | Sub-agent dispatch | GitHub comments |
-| Codex | Cloud sandbox jobs | Cloud | Parallel agents | Webhook |
-| **Tesseract (MVP)** | **Heartbeat + Cron** | **Local persistent** | **No (single agent)** | **Notification + TTS + Badge** |
-| **Tesseract (Post-MVP)** | **+ Agent Council** | **+ Context sharing** | **Yes (executor/reviewer)** | **+ Free time autonomy** |
+| System                   | Mechanism                 | Persistence            | Multi-Agent                 | Proactive Notify               |
+| ------------------------ | ------------------------- | ---------------------- | --------------------------- | ------------------------------ |
+| Claude Code              | /loop + Desktop cron      | Session / OS-level     | No                          | Hooks only                     |
+| OpenClaw                 | Heartbeat + Cron + Hooks  | Self-hosted persistent | No                          | Yes (messaging channels)       |
+| Devin                    | Autonomous task execution | Cloud                  | Sub-agent dispatch          | GitHub comments                |
+| Codex                    | Cloud sandbox jobs        | Cloud                  | Parallel agents             | Webhook                        |
+| **Tesseract (MVP)**      | **Heartbeat + Cron**      | **Local persistent**   | **No (single agent)**       | **Notification + TTS + Badge** |
+| **Tesseract (Post-MVP)** | **+ Agent Council**       | **+ Context sharing**  | **Yes (executor/reviewer)** | **+ Free time autonomy**       |
 
 Tesseract's approach is unique: fully local, persistent background sessions with full transparency, TTS proactive speech, and (post-MVP) multi-agent council with agent "free time." No other system combines all of these.
