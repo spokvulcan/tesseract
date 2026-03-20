@@ -6,6 +6,7 @@ struct AgentContentView: View {
     @Environment(AgentEngine.self) private var agentEngine
     @EnvironmentObject private var conversationStore: AgentConversationStore
     @Environment(SpeechCoordinator.self) private var speechCoordinator
+    @Environment(SchedulingService.self) private var schedulingService
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var inputText = ""
@@ -29,6 +30,10 @@ struct AgentContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if coordinator.isViewingBackgroundSession {
+                backgroundSessionBanner
+            }
+
             if agentEngine.isLoading {
                 AgentModelLoadingBanner()
             } else if !agentEngine.isModelLoaded && !isModelDownloaded {
@@ -49,18 +54,22 @@ struct AgentContentView: View {
             )
         }
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 0) {
-                if isSpeechActive {
-                    AgentSpeechIndicatorBar(onStop: {
-                        coordinator.stopSpeaking()
-                        speakingMessageID = nil
-                    })
-                }
+            if !coordinator.isViewingBackgroundSession {
+                VStack(spacing: 0) {
+                    if isSpeechActive {
+                        AgentSpeechIndicatorBar(onStop: {
+                            coordinator.stopSpeaking()
+                            speakingMessageID = nil
+                        })
+                    }
 
-                AgentInputBarView(inputText: $inputText)
+                    AgentInputBarView(inputText: $inputText)
+                }
             }
         }
-        .navigationTitle("Agent")
+        .navigationTitle(coordinator.isViewingBackgroundSession
+            ? (coordinator.viewingSessionName ?? "Background Session")
+            : "Agent")
         .onChange(of: speechCoordinator.state) { _, newState in
             if case .idle = newState { speakingMessageID = nil }
         }
@@ -105,6 +114,42 @@ struct AgentContentView: View {
                 .help(useMarkdown ? "Disable Markdown formatting" : "Enable Markdown formatting")
             }
         }
+        .onAppear {
+            consumePendingBackgroundSession()
+        }
+        .onChange(of: schedulingService.pendingBackgroundSessionId) { _, sessionId in
+            guard sessionId != nil else { return }
+            consumePendingBackgroundSession()
+        }
+    }
+
+    // MARK: - Background Session
+
+    private func consumePendingBackgroundSession() {
+        guard let sessionId = schedulingService.pendingBackgroundSessionId else { return }
+        schedulingService.pendingBackgroundSessionId = nil
+        Task {
+            await coordinator.openBackgroundSession(id: sessionId)
+        }
+    }
+
+    private var backgroundSessionBanner: some View {
+        HStack {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(.secondary)
+            Text("Viewing background session")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Dismiss") {
+                coordinator.dismissBackgroundSession()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
     }
 
     // MARK: - Conversation History Popover

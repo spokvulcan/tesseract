@@ -152,6 +152,22 @@ final class ScheduledTaskStore: ObservableObject {
         }
     }
 
+    func markRunNotified(runId: UUID, taskId: UUID) {
+        let taskRunsDir = runsDir.appendingPathComponent(taskId.uuidString, isDirectory: true)
+        let fileURL = taskRunsDir.appendingPathComponent("\(runId.uuidString).json")
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var run = try decoder.decode(TaskRun.self, from: data)
+            run.notifiedUser = true
+            saveRun(run)
+        } catch {
+            Log.agent.error("Failed to mark run \(runId) as notified: \(error)")
+        }
+    }
+
     func loadRuns(for taskId: UUID) -> [TaskRun] {
         let taskRunsDir = runsDir.appendingPathComponent(taskId.uuidString, isDirectory: true)
         guard let files = try? FileManager.default.contentsOfDirectory(

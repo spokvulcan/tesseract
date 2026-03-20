@@ -34,6 +34,9 @@ final class SchedulingService {
     private(set) var isPaused: Bool = false
     private(set) var heartbeatStatus: HeartbeatStatus = .idle
     private(set) var unreadResultCount: Int = 0
+    /// Set when a notification click requests opening a specific background session.
+    /// The Phase 4 session viewer will observe and consume this.
+    var pendingBackgroundSessionId: UUID? = nil
     private(set) var runHistory: [UUID: [TaskRun]] = [:]
     private var agentTasksCreatedThisTurn: Int = 0
 
@@ -47,12 +50,15 @@ final class SchedulingService {
     @ObservationIgnored private var storeSink: AnyCancellable?
     @ObservationIgnored private var observationTasks: [Task<Void, Never>] = []
 
+    @ObservationIgnored private let notificationService: NotificationService
+
     // MARK: - Init
 
-    init(actor: SchedulingActor, store: ScheduledTaskStore, settings: SettingsManager) {
+    init(actor: SchedulingActor, store: ScheduledTaskStore, settings: SettingsManager, notificationService: NotificationService) {
         self.schedulingActor = actor
         self.taskStore = store
         self.settings = settings
+        self.notificationService = notificationService
     }
 
     // MARK: - Lifecycle
@@ -68,8 +74,22 @@ final class SchedulingService {
             isPaused = await schedulingActor.isPaused
         }
 
+        // Register all callbacks BEFORE starting the polling loop so that
+        // missed-run catch-ups on launch go through the full notification path.
         await schedulingActor.setOnRunningTaskChanged { [weak self] taskId in
             self?.currentlyRunningTaskId = taskId
+        }
+
+        await schedulingActor.setOnHeartbeatStatusChanged { [weak self] status in
+            self?.heartbeatStatus = status
+        }
+
+        await schedulingActor.setOnTaskCompleted { [weak self] info in
+            guard let self else { return }
+            let didNotify = self.notificationService.postIfNeeded(for: info)
+            if didNotify && !info.isHeartbeat {
+                self.taskStore.markRunNotified(runId: info.runId, taskId: info.taskId)
+            }
         }
 
         storeSink = taskStore.$tasks
@@ -78,11 +98,8 @@ final class SchedulingService {
                 self?.syncFromStore()
             }
 
+        // Start polling AFTER callbacks are registered
         await schedulingActor.startPolling()
-
-        await schedulingActor.setOnHeartbeatStatusChanged { [weak self] status in
-            self?.heartbeatStatus = status
-        }
 
         // Restore heartbeat from persisted settings (SettingsManager already loaded from UserDefaults)
         if settings.heartbeatEnabled {

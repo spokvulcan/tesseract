@@ -69,6 +69,12 @@ struct TesseractApp: App {
                 await container.setup()
                 appDelegate.setupWithContainer(container, navigationSelection: $selectedNavigation)
 
+                // Forward any pending notification deep-link from cold launch
+                if let sessionId = appDelegate.pendingBackgroundSessionId {
+                    appDelegate.pendingBackgroundSessionId = nil
+                    container.schedulingService.pendingBackgroundSessionId = sessionId
+                }
+
                 // Show onboarding if needed
                 if !container.settingsManager.hasCompletedOnboarding {
                     showOnboarding = true

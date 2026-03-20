@@ -129,6 +129,11 @@ actor BackgroundSessionStore {
 
     // MARK: - Public API
 
+    /// Load an existing session by UUID. Returns nil if no session file exists on disk.
+    func load(sessionId: UUID) -> BackgroundSession? {
+        loadFromDisk(sessionId: sessionId)
+    }
+
     /// Load an existing session or create a new empty one for the given UUID.
     /// Callers set metadata (taskId, displayName, sessionType) on the returned value before saving.
     func loadOrCreate(sessionId: UUID) -> BackgroundSession {

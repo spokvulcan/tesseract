@@ -103,8 +103,9 @@ final class DependencyContainer: ObservableObject {
             }
         )
     }()
+    lazy var notificationService = NotificationService(settings: settingsManager)
     lazy var schedulingService: SchedulingService = {
-        SchedulingService(actor: schedulingActor, store: scheduledTaskStore, settings: settingsManager)
+        SchedulingService(actor: schedulingActor, store: scheduledTaskStore, settings: settingsManager, notificationService: notificationService)
     }()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
@@ -254,12 +255,25 @@ final class DependencyContainer: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Wire background session loader for notification deep-links
+        agentCoordinator.loadBackgroundSessionById = { [backgroundSessionStore] sessionId in
+            guard let session = await backgroundSessionStore.load(sessionId: sessionId) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            let messages = try SyncMessageCodec.decodeAll(session.messages)
+            return (messages, session.displayName)
+        }
+
         // Reset agent turn counter when a new agent run starts
         agentUnsubscribe = agent.subscribe { [weak schedulingService] event in
             if case .agentStart = event {
                 schedulingService?.resetAgentTurnCounter()
             }
         }
+
+        // Request notification authorization before starting the scheduling service so that
+        // missed-run catch-ups on launch can post notifications immediately.
+        await notificationService.requestAuthorization()
 
         // Start scheduling service (includes polling loop + heartbeat from persisted config)
         await schedulingService.start()

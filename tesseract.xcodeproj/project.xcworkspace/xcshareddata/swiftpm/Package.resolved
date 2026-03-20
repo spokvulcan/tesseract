@@ -34,7 +34,7 @@
       "location" : "https://github.com/spokvulcan/mlx-swift-lm.git",
       "state" : {
         "branch" : "perf/qwen35-generation-speed",
-        "revision" : "f9f69c0186089e3b6ca0e7b8f88330319669887e"
+        "revision" : "59501a4d9e756fc3cc8ca421eda8bc707fcb4ea2"
       }
     },
     {

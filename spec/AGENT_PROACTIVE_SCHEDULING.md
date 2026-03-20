@@ -1175,7 +1175,7 @@ case heartbeatEnd(result)
 
 ### Phase 3: Notifications — MVP
 
-- [ ] `NotificationService` — macOS notification center integration
+- [x] `NotificationService` — macOS notification center integration
 - [ ] Runtime permission request
 - [ ] Menu bar badge (unread count)
 - [ ] TTS speech for results (`speakResult` flag)

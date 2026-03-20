@@ -8,6 +8,7 @@ import AppKit
 import Observation
 import SwiftUI
 import MLX
+import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -17,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var trackedMainWindow: NSWindow?
     private var navigationSelection: Binding<NavigationItem?>?
     var onOpenWindow: (() -> Void)?
+    /// Stores the session ID from a notification click. Survives cold launch —
+    /// TesseractApp reads it after setup and forwards to schedulingService.
+    var pendingBackgroundSessionId: UUID?
     private var hasSetupWithContainer = false
     private var isRunningUnderTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -28,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Setup window lifecycle tracking
         setupWindowTracking()
+
+        // Register as notification delegate so we handle clicks and foreground presentation
+        UNUserNotificationCenter.current().delegate = self
 
         // Setup will be done by the App struct after container is created
     }
@@ -211,5 +218,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func navigateToAgent() {
         navigationSelection?.wrappedValue = .agent
         showMainWindow()
+    }
+}
+
+// MARK: - UNUserNotificationCenterDelegate
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let userInfo = response.notification.request.content.userInfo
+        let sessionIdString = userInfo[NotificationService.sessionIdKey] as? String
+
+        await MainActor.run {
+            navigateToAgent()
+
+            if let sessionIdString, let sessionId = UUID(uuidString: sessionIdString) {
+                if let service = container?.schedulingService {
+                    // Warm launch: forward directly, no need to store on AppDelegate
+                    service.pendingBackgroundSessionId = sessionId
+                } else {
+                    // Cold launch: stash for TesseractApp to forward after setup
+                    pendingBackgroundSessionId = sessionId
+                }
+            }
+        }
     }
 }

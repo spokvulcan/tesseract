@@ -43,6 +43,7 @@ actor SchedulingActor {
     private var caughtUpTaskIds: Set<UUID> = []
     private var heartbeatTask: Task<Void, Never>?
     private var onHeartbeatStatusChanged: (@MainActor @Sendable (HeartbeatStatus) -> Void)?
+    private var onTaskCompleted: (@MainActor @Sendable (TaskCompletionInfo) -> Void)?
 
     // MARK: - Init
 
@@ -84,6 +85,10 @@ actor SchedulingActor {
 
     func setOnHeartbeatStatusChanged(_ callback: @escaping @MainActor @Sendable (HeartbeatStatus) -> Void) {
         onHeartbeatStatusChanged = callback
+    }
+
+    func setOnTaskCompleted(_ callback: @escaping @MainActor @Sendable (TaskCompletionInfo) -> Void) {
+        onTaskCompleted = callback
     }
 
     // MARK: - Heartbeat
@@ -129,7 +134,7 @@ actor SchedulingActor {
             createdAt: Date(),
             lastRunAt: nil, lastRunResult: nil, nextRunAt: nil,
             runCount: 0, maxRuns: nil, tags: [],
-            notifyUser: false, speakResult: false,
+            notifyUser: true, speakResult: false,
             sessionId: Self.heartbeatSessionId
         )
 
@@ -216,6 +221,17 @@ actor SchedulingActor {
         )
 
         await taskStore.updateAfterRun(taskId: task.id, run: run)
+
+        await onTaskCompleted?(TaskCompletionInfo(
+            taskId: task.id,
+            taskName: task.name,
+            sessionId: task.sessionId,
+            runId: run.id,
+            result: result,
+            notifyUser: task.notifyUser,
+            isHeartbeat: false
+        ))
+
         await updateFailureTracking(taskId: task.id, result: result)
         currentlyRunningTask = nil
         currentRunStartedAt = nil
@@ -241,6 +257,17 @@ actor SchedulingActor {
 
         await onHeartbeatStatusChanged?(.lastRun(Date()))
         Log.agent.info("SchedulingActor: heartbeat completed — \(result.displaySummary)")
+
+        await onTaskCompleted?(TaskCompletionInfo(
+            taskId: task.id,
+            taskName: task.name,
+            sessionId: task.sessionId,
+            runId: UUID(),
+            result: result,
+            notifyUser: task.notifyUser,
+            isHeartbeat: true
+        ))
+
         currentlyRunningTask = nil
         currentRunStartedAt = nil
     }

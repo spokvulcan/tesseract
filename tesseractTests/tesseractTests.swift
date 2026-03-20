@@ -2429,7 +2429,12 @@ private func makeSchedulingTestRig(
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("tesseract-scheduling-tests-\(UUID().uuidString)", isDirectory: true)
     let store = ScheduledTaskStore(baseDirectory: root)
-    let scheduler = SchedulingActor(taskStore: store, executeTask: executeTask)
+    let scheduler = SchedulingActor(
+        taskStore: store,
+        executeTask: executeTask,
+        executeHeartbeat: { _ in .noActionNeeded },
+        persistInFlightSession: {}
+    )
     return (scheduler, store, root)
 }
 
@@ -2440,8 +2445,15 @@ private func makeSchedulingServiceTestRig(
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("tesseract-service-tests-\(UUID().uuidString)", isDirectory: true)
     let store = ScheduledTaskStore(baseDirectory: root)
-    let actor = SchedulingActor(taskStore: store, executeTask: executeTask)
-    let service = SchedulingService(actor: actor, store: store)
+    let settings = SettingsManager()
+    let actor = SchedulingActor(
+        taskStore: store,
+        executeTask: executeTask,
+        executeHeartbeat: { _ in .noActionNeeded },
+        persistInFlightSession: {}
+    )
+    let notificationService = NotificationService(settings: settings)
+    let service = SchedulingService(actor: actor, store: store, settings: settings, notificationService: notificationService)
     return (service, store, root)
 }
 
