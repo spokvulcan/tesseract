@@ -16,7 +16,7 @@ final class BackgroundAgentFactory {
     private let agentEngine: AgentEngine
     private let sessionStore: BackgroundSessionStore
     private let settingsManager: SettingsManager
-    private let ensureModelLoaded: @MainActor () async throws -> Void
+    private let arbiter: InferenceArbiter
 
     // Cached at init — after running the same bootstrap as AgentFactory steps 1-4
     private let cachedSkills: [SkillMetadata]
@@ -33,12 +33,12 @@ final class BackgroundAgentFactory {
         sessionStore: BackgroundSessionStore,
         packageRegistry: PackageRegistry,
         settingsManager: SettingsManager,
-        ensureModelLoaded: @escaping @MainActor () async throws -> Void
+        arbiter: InferenceArbiter
     ) {
         self.agentEngine = agentEngine
         self.sessionStore = sessionStore
         self.settingsManager = settingsManager
-        self.ensureModelLoaded = ensureModelLoaded
+        self.arbiter = arbiter
         self.agentRoot = PathSandbox.defaultRoot
 
         // 1. Bootstrap packages (same as AgentFactory step 1) — idempotent
@@ -188,53 +188,54 @@ final class BackgroundAgentFactory {
     /// Execute a scheduled task with a background agent and persist the transcript.
     /// This replaces the stub `executeTask` closure in `DependencyContainer`.
     func executeAndPersist(task: ScheduledTask) async -> TaskRunResult {
-        // Ensure the LLM is loaded before attempting generation
         do {
-            try await ensureModelLoaded()
+            // Arbiter handles model loading, ImageGen eviction, and GPU serialization.
+            // The lease covers the entire agent run (create + prompt + wait + persist).
+            return try await arbiter.withExclusiveGPU(.llm) {
+                let (agent, session) = await self.createAgent(for: task)
+
+                // Record message count before prompting so we can detect new output
+                let messageCountBefore = agent.context.messages.count
+
+                // Prompt the agent with the task instruction
+                agent.prompt(UserMessage.create(task.prompt))
+                await agent.waitForIdle()
+
+                // Extract result — only consider messages produced during THIS run.
+                // Require non-empty content: a tool-call-only assistant turn (empty content)
+                // indicates the model failed mid-turn before producing a final summary.
+                let newMessages = agent.context.messages.dropFirst(messageCountBefore)
+                let result: TaskRunResult
+                if let lastAssistant = newMessages.last(where: {
+                    guard let a = $0 as? AssistantMessage else { return false }
+                    return !a.content.isEmpty
+                }) as? AssistantMessage {
+                    let summary = String(lastAssistant.content.prefix(500))
+                    result = .success(summary: summary)
+                } else {
+                    // No new assistant text — generation failed or produced no output
+                    result = .error(message: "No response generated")
+                }
+
+                // Persist full session transcript
+                var updated = session
+                do {
+                    updated.messages = try SyncMessageCodec.encodeAll(
+                        agent.context.messages.map { $0 as any AgentMessageProtocol }
+                    )
+                } catch {
+                    Log.agent.error("Failed to encode background session messages for task \(task.id): \(error)")
+                }
+                updated.lastRunAt = Date()
+                await self.sessionStore.save(updated)
+
+                Log.agent.info("Background task '\(task.name)' completed: \(result.displaySummary)")
+                return result
+            }
         } catch {
             let message = "Model not available: \(error.localizedDescription)"
             Log.agent.error("Background task '\(task.name)' skipped: \(message)")
             return .error(message: message)
         }
-
-        let (agent, session) = await createAgent(for: task)
-
-        // Record message count before prompting so we can detect new output
-        let messageCountBefore = agent.context.messages.count
-
-        // Prompt the agent with the task instruction
-        agent.prompt(UserMessage.create(task.prompt))
-        await agent.waitForIdle()
-
-        // Extract result — only consider messages produced during THIS run.
-        // Require non-empty content: a tool-call-only assistant turn (empty content)
-        // indicates the model failed mid-turn before producing a final summary.
-        let newMessages = agent.context.messages.dropFirst(messageCountBefore)
-        let result: TaskRunResult
-        if let lastAssistant = newMessages.last(where: {
-            guard let a = $0 as? AssistantMessage else { return false }
-            return !a.content.isEmpty
-        }) as? AssistantMessage {
-            let summary = String(lastAssistant.content.prefix(500))
-            result = .success(summary: summary)
-        } else {
-            // No new assistant text — generation failed or produced no output
-            result = .error(message: "No response generated")
-        }
-
-        // Persist full session transcript
-        var updated = session
-        do {
-            updated.messages = try SyncMessageCodec.encodeAll(
-                agent.context.messages.map { $0 as any AgentMessageProtocol }
-            )
-        } catch {
-            Log.agent.error("Failed to encode background session messages for task \(task.id): \(error)")
-        }
-        updated.lastRunAt = Date()
-        await sessionStore.save(updated)
-
-        Log.agent.info("Background task '\(task.name)' completed: \(result.displaySummary)")
-        return result
     }
 }

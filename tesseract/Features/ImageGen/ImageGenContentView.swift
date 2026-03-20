@@ -10,6 +10,7 @@ import MLXImageGen
 struct ImageGenContentView: View {
     @EnvironmentObject private var imageGenEngine: ImageGenEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
+    @Environment(InferenceArbiter.self) private var arbiter
 
     @State private var prompt: String = ""
     @State private var selectedSize: ImageSize = .large
@@ -215,20 +216,23 @@ struct ImageGenContentView: View {
 
         Task {
             do {
-                // Load model on first generation
-                if !imageGenEngine.isModelLoaded {
-                    await loadModelIfNeeded()
-                    guard imageGenEngine.isModelLoaded else { return }
+                // Arbiter evicts co-resident LLM/TTS before granting exclusive GPU access
+                generatedImage = try await arbiter.withExclusiveGPU(.imageGen) {
+                    self.arbiter.releaseOtherImageEngine(keeping: .flux)
+                    if !self.imageGenEngine.isModelLoaded {
+                        await self.loadModelIfNeeded()
+                        guard self.imageGenEngine.isModelLoaded else { return nil }
+                    }
+                    return try await self.imageGenEngine.generateImage(
+                        prompt: prompt,
+                        width: selectedSize.width,
+                        height: selectedSize.height,
+                        numSteps: numSteps,
+                        zeroInitSteps: zeroInit ? 1 : 0,
+                        glyphInjection: glyphConfig,
+                        seed: seed
+                    )
                 }
-                generatedImage = try await imageGenEngine.generateImage(
-                    prompt: prompt,
-                    width: selectedSize.width,
-                    height: selectedSize.height,
-                    numSteps: numSteps,
-                    zeroInitSteps: zeroInit ? 1 : 0,
-                    glyphInjection: glyphConfig,
-                    seed: seed
-                )
             } catch {
                 errorMessage = error.localizedDescription
             }

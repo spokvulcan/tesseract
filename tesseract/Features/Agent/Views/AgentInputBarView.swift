@@ -8,20 +8,12 @@ import SwiftUI
 struct AgentInputBarView: View {
     @Binding var inputText: String
     @Environment(AgentCoordinator.self) private var coordinator
-    @Environment(AgentEngine.self) private var agentEngine
     @Environment(TranscriptionEngine.self) private var transcriptionEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @State private var isHoldingMic = false
     @State private var textHeight: CGFloat = 20
     @Environment(SettingsManager.self) private var settings
-
-    private var isModelDownloaded: Bool {
-        if case .downloaded = downloadManager.statuses[settings.selectedAgentModelID] {
-            return true
-        }
-        return false
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -221,25 +213,7 @@ struct AgentInputBarView: View {
     private func send() {
         let text = inputText
         inputText = ""
-
-        Task {
-            await loadModelIfNeeded()
-            guard agentEngine.isModelLoaded else { return }
-            coordinator.sendMessage(text)
-        }
-    }
-
-    private func loadModelIfNeeded() async {
-        guard isModelDownloaded,
-              !agentEngine.isModelLoaded,
-              !agentEngine.isLoading,
-              let path = downloadManager.modelPath(for: settings.selectedAgentModelID)
-        else { return }
-
-        do {
-            try await agentEngine.loadModel(from: path)
-        } catch {
-            coordinator.error = "Failed to load model: \(error.localizedDescription)"
-        }
+        // Model loading is handled by the InferenceArbiter inside sendMessage
+        coordinator.sendMessage(text)
     }
 }

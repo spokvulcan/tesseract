@@ -1,0 +1,251 @@
+//
+//  InferenceArbiter.swift
+//  tesseract
+//
+
+import Foundation
+import Observation
+import os
+
+/// Which model occupies a GPU slot.
+///
+/// Co-resident slots (`.llm`, `.tts`) can coexist in memory.
+/// Exclusive slots (`.imageGen`) evict all co-residents when loaded.
+enum ModelSlot: Sendable, Hashable, CustomStringConvertible {
+    case llm
+    case tts
+    case imageGen
+
+    var description: String {
+        switch self {
+        case .llm: "llm"
+        case .tts: "tts"
+        case .imageGen: "imageGen"
+        }
+    }
+}
+
+/// Single authority for model ownership and GPU serialization.
+///
+/// Replaces ad-hoc `prepareForInference`/`prepareForSpeech`/`ensureModelLoaded`
+/// callbacks with a scoped lease API. Only one consumer generates at a time.
+///
+/// Memory residency model:
+///   - LLM + TTS are co-resident (independently lazy-loaded, both allowed in
+///     memory simultaneously). Neither evicts the other.
+///   - ImageGen is exclusive (evicts co-resident models when loaded, and
+///     co-resident loads evict ImageGen). Prototype-only, hidden from UI.
+///   - STT (WhisperKit) runs on CoreML in a separate memory pool — not managed here.
+@Observable @MainActor
+final class InferenceArbiter {
+
+    /// Which slots are currently loaded. Derived from engine state so it cannot
+    /// desync if engines are loaded/unloaded outside the arbiter (e.g., AppDelegate teardown).
+    var loadedSlots: Set<ModelSlot> {
+        var slots: Set<ModelSlot> = []
+        if agentEngine.isModelLoaded { slots.insert(.llm) }
+        if speechEngine.isModelLoaded { slots.insert(.tts) }
+        if imageGenEngine.isModelLoaded || zimageGenEngine.isModelLoaded { slots.insert(.imageGen) }
+        return slots
+    }
+
+    /// The model ID currently loaded in the `.llm` slot.
+    /// When the user changes agent model, the next acquire detects the mismatch and reloads.
+    private var loadedLLMModelID: String?
+
+    /// FIFO waiter queue for GPU access. Each entry is identified by UUID
+    /// for cancellation-safe removal.
+    @ObservationIgnored private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, any Error>)] = []
+    @ObservationIgnored private var isLeased: Bool = false
+
+    // MARK: - Dependencies
+
+    private let agentEngine: AgentEngine
+    private let speechEngine: SpeechEngine
+    private let imageGenEngine: ImageGenEngine
+    private let zimageGenEngine: ZImageGenEngine
+    private let settingsManager: SettingsManager
+    private let modelDownloadManager: ModelDownloadManager
+
+    init(
+        agentEngine: AgentEngine,
+        speechEngine: SpeechEngine,
+        imageGenEngine: ImageGenEngine,
+        zimageGenEngine: ZImageGenEngine,
+        settingsManager: SettingsManager,
+        modelDownloadManager: ModelDownloadManager
+    ) {
+        self.agentEngine = agentEngine
+        self.speechEngine = speechEngine
+        self.imageGenEngine = imageGenEngine
+        self.zimageGenEngine = zimageGenEngine
+        self.settingsManager = settingsManager
+        self.modelDownloadManager = modelDownloadManager
+    }
+
+    // MARK: - Public API
+
+    /// Scoped exclusive GPU access. Waits for any active lease to complete
+    /// (FIFO order), ensures the required model is loaded, runs the closure,
+    /// and releases the lease on exit — including on throw.
+    ///
+    /// Cancellation:
+    ///   - While waiting in the queue: the waiter is removed and
+    ///     `CancellationError` is thrown without ever acquiring the lease.
+    ///   - After resumption but before ownership transfer: `Task.checkCancellation()`
+    ///     runs before `isLeased` is set, so a cancelled waiter cannot inherit
+    ///     the lease during handoff.
+    ///   - Once the lease is acquired: cancellation propagates normally through
+    ///     the body and the lease is released via `defer`.
+    func withExclusiveGPU<T: Sendable>(
+        _ slot: ModelSlot,
+        body: () async throws -> T
+    ) async throws -> T {
+        // Block if lease is held OR waiters exist (prevents queue bypass).
+        if isLeased || !waiters.isEmpty {
+            let waiterID = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                    if Task.isCancelled {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    waiters.append((id: waiterID, continuation: continuation))
+                }
+            } onCancel: {
+                // Runs concurrently — MainActor hop to safely mutate waiters.
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if let idx = self.waiters.firstIndex(where: { $0.id == waiterID }) {
+                        let removed = self.waiters.remove(at: idx)
+                        removed.continuation.resume(throwing: CancellationError())
+                    }
+                    // If already removed by the defer handoff (which removes
+                    // before resuming), firstIndex returns nil — no double-resume.
+                }
+            }
+        }
+
+        // A waiter may have been resumed just before cancellation won the race.
+        // Re-check before claiming the lease so cancelled waiters never inherit it.
+        try Task.checkCancellation()
+
+        // At this point we own the lease — set flag before any await.
+        isLeased = true
+        Log.general.info("InferenceArbiter: lease acquired for \(slot)")
+
+        defer {
+            // Atomic handoff: if waiters exist, keep isLeased = true and
+            // resume the next waiter directly. Only set isLeased = false
+            // when the queue is drained.
+            if !waiters.isEmpty {
+                let next = waiters.removeFirst()
+                Log.general.debug("InferenceArbiter: handing off lease, \(self.waiters.count) still queued")
+                next.continuation.resume()
+            } else {
+                isLeased = false
+                Log.general.info("InferenceArbiter: lease released for \(slot)")
+            }
+        }
+
+        // Ensure requested model is loaded (co-resident or exclusive)
+        try await ensureLoaded(slot)
+
+        return try await body()
+    }
+
+    /// Releases whichever image engine the caller does NOT need.
+    /// Call inside a `withExclusiveGPU(.imageGen)` body before loading your engine,
+    /// so that only one image pipeline is resident at a time.
+    enum ImageEngine { case flux, zImage }
+    func releaseOtherImageEngine(keeping: ImageEngine) {
+        switch keeping {
+        case .flux:
+            if zimageGenEngine.isModelLoaded { zimageGenEngine.releaseModel() }
+        case .zImage:
+            if imageGenEngine.isModelLoaded { imageGenEngine.releaseModel() }
+        }
+    }
+
+    // MARK: - Model Management
+
+    /// Load a model slot. Co-resident slots coexist; ImageGen is exclusive.
+    /// For `.llm`: also checks if the loaded model ID matches the current setting.
+    private func ensureLoaded(_ slot: ModelSlot) async throws {
+        switch slot {
+        case .llm:
+            let desiredModelID = settingsManager.selectedAgentModelID
+            if loadedSlots.contains(.llm) && loadedLLMModelID == desiredModelID {
+                return
+            }
+            // Model changed or not loaded — (re)load
+            if loadedSlots.contains(.imageGen) { unload(.imageGen) }
+            if loadedSlots.contains(.llm) { unload(.llm) }
+            try await loadSlot(.llm, modelID: desiredModelID)
+            loadedLLMModelID = desiredModelID
+
+        case .tts:
+            if loadedSlots.contains(.tts) { return }
+            if loadedSlots.contains(.imageGen) { unload(.imageGen) }
+            try await loadSlot(.tts)
+
+        case .imageGen:
+            // Exclusive — evict co-resident models (LLM, TTS).
+            // Don't early-return when an image engine is already loaded: the caller
+            // may need a different image engine (Flux vs Z-Image) and will load it
+            // inside the lease body. We only guarantee co-residents are cleared.
+            if loadedSlots.contains(.llm) { unload(.llm) }
+            if loadedSlots.contains(.tts) { unload(.tts) }
+            loadedLLMModelID = nil
+        }
+    }
+
+    private func loadSlot(_ slot: ModelSlot, modelID: String? = nil) async throws {
+        switch slot {
+        case .llm:
+            guard let modelID else {
+                throw AgentEngineError.modelNotLoaded
+            }
+            guard case .downloaded = modelDownloadManager.statuses[modelID],
+                  let path = modelDownloadManager.modelPath(for: modelID)
+            else {
+                Log.general.error("InferenceArbiter: LLM model '\(modelID)' not downloaded")
+                throw AgentEngineError.modelNotLoaded
+            }
+            Log.general.info("InferenceArbiter: loading LLM model '\(modelID)'")
+            try await agentEngine.loadModel(from: path)
+
+        case .tts:
+            Log.general.info("InferenceArbiter: loading TTS model")
+            try await speechEngine.loadModel()
+
+        case .imageGen:
+            // ImageGen loading requires a model path — callers must load manually
+            // for now since there's no standardized model ID for image gen.
+            // The arbiter manages eviction; ImageGen UI handles its own loading.
+            break
+        }
+    }
+
+    private func unload(_ slot: ModelSlot) {
+        switch slot {
+        case .llm:
+            agentEngine.unloadModel()
+            loadedLLMModelID = nil
+            Log.general.info("InferenceArbiter: unloaded LLM")
+
+        case .tts:
+            speechEngine.unloadModel()
+            Log.general.info("InferenceArbiter: unloaded TTS")
+
+        case .imageGen:
+            if imageGenEngine.isModelLoaded {
+                imageGenEngine.releaseModel()
+            }
+            if zimageGenEngine.isModelLoaded {
+                zimageGenEngine.releaseModel()
+            }
+            Log.general.info("InferenceArbiter: unloaded ImageGen")
+        }
+    }
+}

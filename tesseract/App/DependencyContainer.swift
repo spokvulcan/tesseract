@@ -55,6 +55,16 @@ final class DependencyContainer: ObservableObject {
     lazy var agentConversationStore = AgentConversationStore()
     lazy var scheduledTaskStore = ScheduledTaskStore()
     lazy var backgroundSessionStore = BackgroundSessionStore()
+    lazy var inferenceArbiter: InferenceArbiter = {
+        InferenceArbiter(
+            agentEngine: agentEngine,
+            speechEngine: speechEngine,
+            imageGenEngine: imageGenEngine,
+            zimageGenEngine: zimageGenEngine,
+            settingsManager: settingsManager,
+            modelDownloadManager: modelDownloadManager
+        )
+    }()
     lazy var backgroundAgentFactory: BackgroundAgentFactory = {
         BackgroundAgentFactory(
             agentEngine: agentEngine,
@@ -63,16 +73,7 @@ final class DependencyContainer: ObservableObject {
             sessionStore: backgroundSessionStore,
             packageRegistry: packageRegistry,
             settingsManager: settingsManager,
-            ensureModelLoaded: { [weak self] in
-                guard let self else { throw AgentEngineError.modelNotLoaded }
-                guard !self.agentEngine.isModelLoaded else { return }
-                let modelID = self.settingsManager.selectedAgentModelID
-                guard !self.agentEngine.isLoading,
-                      case .downloaded = self.modelDownloadManager.statuses[modelID],
-                      let path = self.modelDownloadManager.modelPath(for: modelID)
-                else { throw AgentEngineError.modelNotLoaded }
-                try await self.agentEngine.loadModel(from: path)
-            }
+            arbiter: inferenceArbiter
         )
     }()
     lazy var schedulingActor: SchedulingActor = {
@@ -96,29 +97,7 @@ final class DependencyContainer: ObservableObject {
             audioCapture: audioCaptureEngine,
             transcriptionEngine: transcriptionEngine,
             settings: settingsManager,
-            prepareForInference: { [weak self] in
-                guard let self else { return }
-                if imageGenEngine.isModelLoaded {
-                    imageGenEngine.releaseModel()
-                    Log.general.info("Released image gen model for agent inference")
-                }
-                if zimageGenEngine.isModelLoaded {
-                    zimageGenEngine.releaseModel()
-                    Log.general.info("Released Z-image gen model for agent inference")
-                }
-            },
-            loadAgentModel: { [weak self] in
-                guard let self else { return }
-                let modelID = self.settingsManager.selectedAgentModelID
-                guard case .downloaded = self.modelDownloadManager.statuses[modelID],
-                      !self.agentEngine.isLoading,
-                      let path = self.modelDownloadManager.modelPath(for: modelID)
-                else { return }
-                if self.agentEngine.isModelLoaded {
-                    self.agentEngine.unloadModel()
-                }
-                try await self.agentEngine.loadModel(from: path)
-            },
+            arbiter: inferenceArbiter,
             formatRawPrompt: { [weak self] systemPrompt, tools in
                 guard let self else { throw AgentEngineError.modelNotLoaded }
                 return try await self.agentEngine.formatRawPrompt(systemPrompt: systemPrompt, tools: tools)
@@ -142,7 +121,8 @@ final class DependencyContainer: ObservableObject {
             speechEngine: speechEngine,
             playbackManager: audioPlaybackManager,
             settings: settingsManager,
-            notchOverlay: ttsNotchPanelController
+            notchOverlay: ttsNotchPanelController,
+            arbiter: inferenceArbiter
         )
     }()
 

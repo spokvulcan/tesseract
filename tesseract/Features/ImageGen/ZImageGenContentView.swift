@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 struct ZImageGenContentView: View {
     @EnvironmentObject private var zimageGenEngine: ZImageGenEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
+    @Environment(InferenceArbiter.self) private var arbiter
 
     @State private var prompt: String = ""
     @State private var negativePrompt: String = ""
@@ -195,19 +196,23 @@ struct ZImageGenContentView: View {
 
         Task {
             do {
-                if !zimageGenEngine.isModelLoaded {
-                    await loadModelIfNeeded()
-                    guard zimageGenEngine.isModelLoaded else { return }
+                // Arbiter evicts co-resident LLM/TTS before granting exclusive GPU access
+                generatedImage = try await arbiter.withExclusiveGPU(.imageGen) {
+                    self.arbiter.releaseOtherImageEngine(keeping: .zImage)
+                    if !self.zimageGenEngine.isModelLoaded {
+                        await self.loadModelIfNeeded()
+                        guard self.zimageGenEngine.isModelLoaded else { return nil }
+                    }
+                    return try await self.zimageGenEngine.generateImage(
+                        prompt: prompt,
+                        negativePrompt: negPrompt,
+                        width: selectedSize.width,
+                        height: selectedSize.height,
+                        numSteps: numSteps,
+                        guidance: guidance,
+                        seed: seed
+                    )
                 }
-                generatedImage = try await zimageGenEngine.generateImage(
-                    prompt: prompt,
-                    negativePrompt: negPrompt,
-                    width: selectedSize.width,
-                    height: selectedSize.height,
-                    numSteps: numSteps,
-                    guidance: guidance,
-                    seed: seed
-                )
             } catch {
                 errorMessage = error.localizedDescription
             }

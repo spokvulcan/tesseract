@@ -98,10 +98,12 @@ final class AgentCoordinator {
     private let settings: SettingsManager?
     private let postProcessor = TranscriptionPostProcessor()
     private let speechCoordinator: SpeechCoordinator?
-    private let prepareForInference: (@MainActor () -> Void)?
-    private let loadAgentModel: (@MainActor () async throws -> Void)?
+    private let arbiter: InferenceArbiter?
     private let formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))?
     private let debugLogger = AgentDebugLogger()
+    /// The task that holds the arbiter lease for the current agent run.
+    /// Cancelled by `cancelGeneration()` to abort both queued waits and active runs.
+    @ObservationIgnored private var sendTask: Task<Void, Never>?
     @ObservationIgnored private var voiceErrorResetTask: Task<Void, Never>?
     @ObservationIgnored private var rawPromptFetchTask: Task<Void, Never>?
 
@@ -129,8 +131,7 @@ final class AgentCoordinator {
         audioCapture: (any AudioCapturing)? = nil,
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
-        prepareForInference: (@MainActor () -> Void)? = nil,
-        loadAgentModel: (@MainActor () async throws -> Void)? = nil,
+        arbiter: InferenceArbiter? = nil,
         formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))? = nil,
         speechCoordinator: SpeechCoordinator? = nil
     ) {
@@ -139,8 +140,7 @@ final class AgentCoordinator {
         self.audioCapture = audioCapture
         self.transcriptionEngine = transcriptionEngine
         self.settings = settings
-        self.prepareForInference = prepareForInference
-        self.loadAgentModel = loadAgentModel
+        self.arbiter = arbiter
         self.formatRawPrompt = formatRawPrompt
         self.speechCoordinator = speechCoordinator
 
@@ -173,18 +173,37 @@ final class AgentCoordinator {
         error = nil
         isGenerating = true
 
-        prepareForInference?()
-
         if agent.state.messages.isEmpty {
             debugLogger.startSession()
             debugLogger.logSystemPrompt(agent.state.systemPrompt, tools: agent.state.tools)
         }
 
         let userMessage = CoreMessage.user(UserMessage(content: trimmed))
-        agent.prompt(userMessage)
+
+        if let arbiter {
+            sendTask = Task {
+                do {
+                    try await arbiter.withExclusiveGPU(.llm) {
+                        self.agent.prompt(userMessage)
+                        await self.agent.waitForIdle()
+                    }
+                } catch is CancellationError {
+                    // Cancelled while queued or during run — clean up
+                    self.isGenerating = false
+                } catch {
+                    self.error = error.localizedDescription
+                    self.isGenerating = false
+                }
+                self.sendTask = nil
+            }
+        } else {
+            agent.prompt(userMessage)
+        }
     }
 
     func cancelGeneration() {
+        sendTask?.cancel()
+        sendTask = nil
         agent.abort()
     }
 
@@ -291,7 +310,7 @@ final class AgentCoordinator {
                 Log.agent.info("Voice transcribed: \(processedText)")
                 voiceState = .idle
 
-                try await loadAgentModel?()
+                // Model loading is handled by the arbiter inside sendMessage
                 sendMessage(processedText)
             } catch {
                 setVoiceError("Transcription failed")

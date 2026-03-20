@@ -111,12 +111,13 @@ extension View {
             .environmentObject(container.scheduledTaskStore)
     }
 
-    /// Model management and image generation.
+    /// Model management, image generation, and inference arbitration.
     @MainActor
     func injectModelDependencies(from container: DependencyContainer) -> some View {
         self
             .environmentObject(container.modelDownloadManager)
             .environmentObject(container.imageGenEngine)
             .environmentObject(container.zimageGenEngine)
+            .environment(container.inferenceArbiter)
     }
 }
