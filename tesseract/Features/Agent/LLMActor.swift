@@ -73,7 +73,12 @@ actor LLMActor {
             presencePenalty: parameters.presencePenalty
         )
 
-        return try await container.generate(input: prepared, parameters: genParams)
+        // withError converts C++ MLX errors (matmul shape mismatches, etc.) into
+        // throwable MLXError instead of fatalError. Covers the prefill phase;
+        // stream iteration errors are caught by AgentEngine's do/catch.
+        return try await withError {
+            try await container.generate(input: prepared, parameters: genParams)
+        }
     }
 
     /// Renders messages and tools through the Jinja chat template, returning the exact
@@ -134,8 +139,12 @@ actor LLMActor {
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let input = try await container.prepare(input: UserInput(prompt: "Hello"))
         let parameters = GenerateParameters(maxTokens: 1)
-        let stream = try await container.generate(input: input, parameters: parameters)
-        for await _ in stream {}
+        // Wrap in withError so C++ MLX errors (e.g. matmul shape mismatches) throw
+        // instead of calling fatalError via the default error handler.
+        try await withError {
+            let stream = try await container.generate(input: input, parameters: parameters)
+            for await _ in stream {}
+        }
 
         let tokenizer = try await AgentTokenizer(container: container)
         modelContainer = container
