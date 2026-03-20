@@ -7,6 +7,7 @@ import Foundation
 import Combine
 import AVFoundation
 import AppKit
+import UserNotifications
 
 enum PermissionState: Sendable {
     case unknown
@@ -20,10 +21,15 @@ enum PermissionState: Sendable {
 final class PermissionsManager: ObservableObject {
     @Published private(set) var microphonePermission: PermissionState = .unknown
     @Published private(set) var accessibilityPermission: PermissionState = .unknown
+    @Published private(set) var notificationPermission: PermissionState = .unknown
+
+    /// Called after notification authorization changes so NotificationService can sync its gate.
+    var onNotificationAuthorizationChanged: ((Bool) -> Void)?
 
     init() {
         checkMicrophonePermission()
         checkAccessibilityPermission()
+        // Notification permission is checked in DependencyContainer.setup() after authorization request
     }
 
     // MARK: - Microphone Permission
@@ -76,6 +82,59 @@ final class PermissionsManager: ObservableObject {
         }
     }
 
+    // MARK: - Notification Permission
+
+    /// Queries system notification authorization and updates `notificationPermission`.
+    /// Returns the resolved `PermissionState` and whether authorization is granted (for callers
+    /// that need to sync `NotificationService.isAuthorized`).
+    @discardableResult
+    func checkNotificationPermission() async -> Bool {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        let newState: PermissionState
+        let authorized: Bool
+        switch settings.authorizationStatus {
+        case .notDetermined:
+            newState = .unknown
+            authorized = false
+        case .denied:
+            newState = .denied
+            authorized = false
+        case .authorized, .provisional:
+            newState = .granted
+            authorized = true
+        @unknown default:
+            newState = .unknown
+            authorized = false
+        }
+        if notificationPermission != newState {
+            notificationPermission = newState
+        }
+        onNotificationAuthorizationChanged?(authorized)
+        return authorized
+    }
+
+    func requestNotificationPermission() async -> Bool {
+        notificationPermission = .requesting
+        do {
+            let granted = try await UNUserNotificationCenter.current()
+                .requestAuthorization(options: [.alert, .sound, .badge])
+            let newState: PermissionState = granted ? .granted : .denied
+            if notificationPermission != newState {
+                notificationPermission = newState
+            }
+            onNotificationAuthorizationChanged?(granted)
+            return granted
+        } catch {
+            if notificationPermission != .denied {
+                notificationPermission = .denied
+            }
+            onNotificationAuthorizationChanged?(false)
+            return false
+        }
+    }
+
+    // MARK: - System Settings
+
     func openSystemPreferences(for permission: String) {
         let urlString: String
         switch permission {
@@ -83,6 +142,8 @@ final class PermissionsManager: ObservableObject {
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
         case "accessibility":
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        case "notifications":
+            urlString = "x-apple.systempreferences:com.apple.preference.notifications"
         default:
             urlString = "x-apple.systempreferences:com.apple.preference.security"
         }

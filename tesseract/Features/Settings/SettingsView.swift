@@ -9,6 +9,7 @@ import SwiftUI
 
 struct GeneralSettingsSection: View {
     @Environment(SettingsManager.self) private var settings
+    @EnvironmentObject private var permissionsManager: PermissionsManager
 
     // Prevent disabling both dock and menu bar
     private var showInDockBinding: Binding<Bool> {
@@ -61,6 +62,10 @@ struct GeneralSettingsSection: View {
             Section("Feedback") {
                 Toggle("Play sounds", isOn: $settings.playSounds)
                 Toggle("Show notifications", isOn: $settings.showNotifications)
+
+                if settings.showNotifications {
+                    notificationPermissionRow
+                }
             }
 
             Section("Setup") {
@@ -93,6 +98,48 @@ struct GeneralSettingsSection: View {
         .formStyle(.grouped)
 
         .navigationTitle("General")
+    }
+
+    // MARK: - Notification Permission
+
+    @ViewBuilder
+    private var notificationPermissionRow: some View {
+        switch permissionsManager.notificationPermission {
+        case .granted:
+            Label("Notifications enabled", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.callout)
+
+        case .denied:
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Notifications disabled in System Settings", systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+                    .font(.callout)
+                Button("Open Notification Settings") {
+                    permissionsManager.openSystemPreferences(for: "notifications")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+        case .requesting:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Requesting permission...")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+        case .unknown, .restricted:
+            Button("Enable Notifications") {
+                Task {
+                    _ = await permissionsManager.requestNotificationPermission()
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
     }
 }
 

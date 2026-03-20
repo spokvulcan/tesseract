@@ -62,6 +62,12 @@ final class NotificationService {
         }
     }
 
+    /// Syncs `isAuthorized` from an externally-queried value. Called by AppDelegate/DependencyContainer
+    /// after `PermissionsManager.checkNotificationPermission()` to avoid a redundant system query.
+    func syncAuthorization(_ authorized: Bool) {
+        isAuthorized = authorized
+    }
+
     // MARK: - Category Registration
 
     private func registerCategories() {

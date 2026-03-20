@@ -138,7 +138,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        // Could preload model here if needed
+        // Re-check notification permission in case the user changed it in System Settings
+        Task {
+            guard let container else { return }
+            let authorized = await container.permissionsManager.checkNotificationPermission()
+            container.notificationService.syncAuthorization(authorized)
+        }
     }
 
     func applicationWillResignActive(_ notification: Notification) {

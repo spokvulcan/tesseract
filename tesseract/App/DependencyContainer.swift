@@ -271,9 +271,16 @@ final class DependencyContainer: ObservableObject {
             }
         }
 
+        // Sync notification authorization changes from PermissionsManager → NotificationService
+        permissionsManager.onNotificationAuthorizationChanged = { [weak self] authorized in
+            self?.notificationService.syncAuthorization(authorized)
+        }
+
         // Request notification authorization before starting the scheduling service so that
         // missed-run catch-ups on launch can post notifications immediately.
         await notificationService.requestAuthorization()
+        let authorized = await permissionsManager.checkNotificationPermission()
+        notificationService.syncAuthorization(authorized)
 
         // Start scheduling service (includes polling loop + heartbeat from persisted config)
         await schedulingService.start()
