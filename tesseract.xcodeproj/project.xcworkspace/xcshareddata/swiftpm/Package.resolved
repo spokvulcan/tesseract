@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/spokvulcan/mlx-swift-lm.git",
       "state" : {
-        "branch" : "feat/paroquant-support",
-        "revision" : "c7372aa3257a91c32464718324f7e3e3eccf3669"
+        "branch" : "perf/qwen35-generation-speed",
+        "revision" : "f9f69c0186089e3b6ca0e7b8f88330319669887e"
       }
     },
     {
