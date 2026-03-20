@@ -80,7 +80,10 @@ final class DependencyContainer: ObservableObject {
         SchedulingActor(
             taskStore: scheduledTaskStore,
             executeTask: { [weak self] task in
-                guard let factory = await MainActor.run(body: { self?.backgroundAgentFactory }) else {
+                guard let factory = await MainActor.run(body: {
+                    self?.schedulingService.resetAgentTurnCounter()
+                    return self?.backgroundAgentFactory
+                }) else {
                     return .error(message: "DependencyContainer deallocated")
                 }
                 return await factory.executeAndPersist(task: task)
@@ -130,6 +133,7 @@ final class DependencyContainer: ObservableObject {
     lazy var overlayPanelController = OverlayPanelController(settings: settingsManager)
     lazy var fullScreenBorderController = FullScreenBorderPanelController(settings: settingsManager)
     private var cancellables = Set<AnyCancellable>()
+    private var agentUnsubscribe: (@MainActor () -> Void)?
     private var observationTasks: [Task<Void, Never>] = []
 
     // Coordinator
@@ -236,6 +240,13 @@ final class DependencyContainer: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // Reset agent turn counter when a new agent run starts
+        agentUnsubscribe = agent.subscribe { [weak schedulingService] event in
+            if case .agentStart = event {
+                schedulingService?.resetAgentTurnCounter()
+            }
+        }
 
         // Start scheduling service (includes polling loop)
         await schedulingService.start()

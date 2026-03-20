@@ -2467,7 +2467,7 @@ struct SchedulingServiceTests {
         await service.start()
 
         let task = try ScheduledTask.create(name: "New", cronExpression: "0 9 * * *", prompt: "prompt")
-        service.createTask(task)
+        try service.createTask(task)
 
         #expect(service.tasks.contains(where: { $0.id == task.id }))
         await service.stop()
@@ -2510,7 +2510,7 @@ struct SchedulingServiceTests {
         store.save(task)
         await service.start()
 
-        service.resumeTask(id: task.id)
+        try service.resumeTask(id: task.id)
 
         let updated = store.loadTask(id: task.id)
         #expect(updated?.enabled == true)

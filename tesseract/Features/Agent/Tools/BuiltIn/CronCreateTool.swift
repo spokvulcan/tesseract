@@ -6,13 +6,6 @@
 import Foundation
 import MLXLMCommon
 
-// MARK: - Constants
-
-private nonisolated enum CronToolConstants {
-    static let maxActiveTasks = 50
-    static let minimumIntervalSeconds: TimeInterval = 300
-}
-
 private nonisolated(unsafe) let iso8601Formatter: ISO8601DateFormatter = {
     let fmt = ISO8601DateFormatter()
     fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -88,20 +81,12 @@ nonisolated func createCronCreateTool(schedulingService: SchedulingService) -> A
             if let first = parsed.nextOccurrence(after: epoch),
                let second = parsed.nextOccurrence(after: first) {
                 let gap = second.timeIntervalSince(first)
-                if gap < CronToolConstants.minimumIntervalSeconds {
+                if gap < SchedulingActor.minimumIntervalSeconds {
                     return .error("Schedule interval too short (\(Int(gap))s). Minimum interval is 5 minutes (300s).")
                 }
             }
 
-            // Max-tasks check
-            let activeCount = await MainActor.run {
-                schedulingService.tasks.filter(\.enabled).count
-            }
-            if activeCount >= CronToolConstants.maxActiveTasks {
-                return .error("Maximum active tasks limit reached (\(CronToolConstants.maxActiveTasks)). Disable or delete existing tasks first.")
-            }
-
-            // Create and save the task
+            // Create the task
             let task: ScheduledTask
             do {
                 task = try ScheduledTask.create(
@@ -118,8 +103,13 @@ nonisolated func createCronCreateTool(schedulingService: SchedulingService) -> A
                 return .error("Failed to create task: \(error.localizedDescription)")
             }
 
-            await MainActor.run {
-                schedulingService.createTask(task)
+            // Save — centralized validation (max active tasks, agent turn limit)
+            do {
+                try await MainActor.run {
+                    try schedulingService.createTask(task)
+                }
+            } catch {
+                return .error(error.localizedDescription)
             }
 
             let nextRunStr = task.nextRunAt.map { iso8601Formatter.string(from: $0) } ?? "unknown"

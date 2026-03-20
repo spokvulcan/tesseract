@@ -15,6 +15,9 @@ actor SchedulingActor {
     // MARK: - Constants
 
     static let maxConsecutiveFailures = 5
+    static let maxActiveTasks = 50
+    static let maxAgentTasksPerTurn = 10
+    static let minimumIntervalSeconds: TimeInterval = 300
     static let missedRunCatchUpThreshold: TimeInterval = 3600
 
     // MARK: - Dependencies

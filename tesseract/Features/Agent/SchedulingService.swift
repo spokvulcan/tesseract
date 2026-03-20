@@ -6,6 +6,24 @@
 import Combine
 import Foundation
 
+// MARK: - SchedulingError
+
+nonisolated enum SchedulingError: LocalizedError, Sendable {
+    case maxActiveTasksReached(limit: Int)
+    case agentTurnLimitReached(limit: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .maxActiveTasksReached(let limit):
+            "Maximum active tasks limit reached (\(limit)). Disable or delete existing tasks first."
+        case .agentTurnLimitReached(let limit):
+            "Agent limit reached: maximum \(limit) tasks per conversation turn."
+        }
+    }
+}
+
+// MARK: - SchedulingService
+
 @Observable @MainActor
 final class SchedulingService {
 
@@ -17,6 +35,9 @@ final class SchedulingService {
     private(set) var heartbeatStatus: HeartbeatStatus = .idle
     private(set) var unreadResultCount: Int = 0
     private(set) var runHistory: [UUID: [TaskRun]] = [:]
+    private var agentTasksCreatedThisTurn: Int = 0
+
+    private static let globalPauseKey = "scheduling.globalPause"
 
     // MARK: - Dependencies
 
@@ -35,7 +56,14 @@ final class SchedulingService {
 
     func start() async {
         tasks = taskStore.loadAll()
-        isPaused = await schedulingActor.isPaused
+
+        let wasPaused = UserDefaults.standard.bool(forKey: Self.globalPauseKey)
+        if wasPaused {
+            isPaused = true
+            await schedulingActor.pause()
+        } else {
+            isPaused = await schedulingActor.isPaused
+        }
 
         await schedulingActor.setOnRunningTaskChanged { [weak self] taskId in
             self?.currentlyRunningTaskId = taskId
@@ -74,12 +102,26 @@ final class SchedulingService {
 
     // MARK: - Task CRUD
 
-    func createTask(_ task: ScheduledTask) {
+    func createTask(_ task: ScheduledTask) throws {
+        try enforceActiveTaskLimit()
+        if task.createdBy.isAgent {
+            if agentTasksCreatedThisTurn >= SchedulingActor.maxAgentTasksPerTurn {
+                throw SchedulingError.agentTurnLimitReached(limit: SchedulingActor.maxAgentTasksPerTurn)
+            }
+            agentTasksCreatedThisTurn += 1
+        }
         taskStore.save(task)
         syncFromStore()
     }
 
-    func updateTask(_ task: ScheduledTask) {
+    func updateTask(_ task: ScheduledTask) throws {
+        // If enabling a previously-disabled task, enforce the active cap
+        if task.enabled {
+            let wasEnabled = tasks.first(where: { $0.id == task.id })?.enabled ?? false
+            if !wasEnabled {
+                try enforceActiveTaskLimit()
+            }
+        }
         taskStore.save(task)
         syncFromStore()
     }
@@ -96,24 +138,42 @@ final class SchedulingService {
         syncFromStore()
     }
 
-    func resumeTask(id: UUID) {
+    func resumeTask(id: UUID) throws {
         guard var task = taskStore.loadTask(id: id) else { return }
+        try enforceActiveTaskLimit()
         task.enabled = true
         task.nextRunAt = task.computeNextRunAt()
         taskStore.save(task)
         syncFromStore()
     }
 
+    // MARK: - Safety Checks
+
+    private func enforceActiveTaskLimit() throws {
+        let activeCount = tasks.filter(\.enabled).count
+        if activeCount >= SchedulingActor.maxActiveTasks {
+            throw SchedulingError.maxActiveTasksReached(limit: SchedulingActor.maxActiveTasks)
+        }
+    }
+
     // MARK: - Global Pause
 
     func pauseAll() {
         isPaused = true
+        UserDefaults.standard.set(true, forKey: Self.globalPauseKey)
         Task { await schedulingActor.pause() }
     }
 
     func resumeAll() {
         isPaused = false
+        UserDefaults.standard.set(false, forKey: Self.globalPauseKey)
         Task { await schedulingActor.resume() }
+    }
+
+    // MARK: - Agent Turn Counter
+
+    func resetAgentTurnCounter() {
+        agentTasksCreatedThisTurn = 0
     }
 
     // MARK: - Run History
