@@ -68,7 +68,12 @@ actor SchedulingActor {
     }
 
     func pause() { isPaused = true }
-    func resume() { isPaused = false }
+    func resume() {
+        isPaused = false
+        if !executionQueue.isEmpty && !isDraining {
+            Task { await processQueue() }
+        }
+    }
 
     // MARK: - Due-Task Detection
 
@@ -77,7 +82,6 @@ actor SchedulingActor {
         let allTasks = await taskStore.loadAll()
         let dueTasks = allTasks.filter { $0.enabled && !$0.isExhausted && isDue($0, at: now) }
         for task in dueTasks { enqueue(task) }
-        await processQueue()
     }
 
     private func isDue(_ task: ScheduledTask, at now: Date) -> Bool {
@@ -91,6 +95,9 @@ actor SchedulingActor {
         guard !executionQueue.contains(where: { $0.id == task.id }) else { return }
         guard currentlyRunningTask?.id != task.id else { return }
         executionQueue.append(task)
+        if !isDraining {
+            Task { await processQueue() }
+        }
     }
 
     private func processQueue() async {
@@ -159,7 +166,6 @@ actor SchedulingActor {
             updated.nextRunAt = task.computeNextRunAt(after: now)
             await taskStore.save(updated)
         }
-        await processQueue()
     }
 
     // MARK: - Safety Controls
