@@ -10,7 +10,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT="$PROJECT_DIR/tesseract.xcodeproj"
 SCHEME="tesseract"
 CONFIGURATION="Release"
-DERIVED_DATA="$PROJECT_DIR/.build/DerivedData"
+DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
 BENCH_DIR="$HOME/Library/Containers/app.tesseract.agent/Data/tmp/tesseract-debug/benchmark"
 LOG_FILE="$BENCH_DIR/latest.log"
 RESULTS_DIR="$BENCH_DIR/results"
@@ -18,17 +18,11 @@ REPO_RESULTS="$PROJECT_DIR/benchmarks/results"
 
 # Build Release directly (dev.sh build doesn't forward args)
 echo "Building tesseract ($CONFIGURATION)..."
-# Use Debug entitlements (has /private/tmp/ exception) with Release optimizations
 BUILD_OUTPUT=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
     -configuration "$CONFIGURATION" \
-    -derivedDataPath "$DERIVED_DATA" \
-    -destination 'platform=macOS,arch=arm64' \
-    -disableAutomaticPackageResolution \
+    -destination 'platform=macOS' \
     -skipPackagePluginValidation \
-    SWIFT_COMPILATION_MODE=incremental \
-    DEBUG_INFORMATION_FORMAT=dwarf \
-    ONLY_ACTIVE_ARCH=YES \
-    CODE_SIGN_ENTITLEMENTS=tesseract/tesseract.entitlements 2>&1) || {
+    2>&1) || {
     echo "$BUILD_OUTPUT" | tail -20
     echo "BUILD FAILED"
     exit 1
@@ -36,11 +30,11 @@ BUILD_OUTPUT=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
 echo "$BUILD_OUTPUT" | grep -E "^(\*\* BUILD)" || true
 echo "Build succeeded."
 
-# Find the built app
-APP="$DERIVED_DATA/Build/Products/$CONFIGURATION/tesseract.app"
+# Find the built app (search Xcode's default DerivedData, most recently modified first)
+APP=$(ls -dt $DERIVED_DATA_GLOB/Build/Products/$CONFIGURATION/tesseract.app 2>/dev/null | head -1)
 
-if [ ! -d "$APP" ]; then
-    echo "Error: tesseract.app not found at $APP"
+if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+    echo "Error: tesseract.app ($CONFIGURATION) not found in Xcode DerivedData."
     exit 1
 fi
 

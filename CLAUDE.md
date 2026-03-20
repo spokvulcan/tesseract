@@ -16,7 +16,7 @@ Tesseract Agent is a privacy-focused, fully offline AI assistant for macOS. All 
 
 ```bash
 scripts/dev.sh dev         # Build (Debug) + kill + relaunch — fast iteration (~10s)
-scripts/dev.sh dev-release # Build (Release, incremental) + kill + relaunch — perf testing
+scripts/dev.sh dev-release # Build (Release) + kill + relaunch — perf testing
 scripts/dev.sh build       # Build only
 scripts/dev.sh run         # Kill + relaunch (skip build)
 scripts/dev.sh log         # Tail app logs

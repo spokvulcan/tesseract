@@ -95,7 +95,7 @@ cmd_build() {
     local exit_code=0
     build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
         -configuration "$configuration" \
-        -destination 'platform=macOS,arch=arm64' \
+        -destination 'platform=macOS' \
         -skipPackagePluginValidation \
         "$@" 2>&1) || exit_code=$?
 
@@ -135,9 +135,7 @@ cmd_dev() {
 
 cmd_dev_release() {
     local configuration="Release"
-    cmd_build "$configuration" \
-        SWIFT_COMPILATION_MODE=incremental \
-        DEBUG_INFORMATION_FORMAT=dwarf
+    cmd_build "$configuration"
     echo ""
     cmd_run "$configuration"
     print_data_paths
@@ -145,9 +143,7 @@ cmd_dev_release() {
 
 cmd_dev_profile() {
     local configuration="Release"
-    cmd_build "$configuration" \
-        SWIFT_COMPILATION_MODE=incremental \
-        DEBUG_INFORMATION_FORMAT=dwarf
+    cmd_build "$configuration"
     echo ""
 
     local app_path
@@ -169,7 +165,6 @@ cmd_archive() {
         -project "$PROJECT" \
         -scheme "$SCHEME" \
         -archivePath "$archive_path" \
-        -xcconfig "$PROJECT_DIR/Config/AppleSilicon.xcconfig" \
         2>&1) || exit_code=$?
 
     echo "$archive_output" | grep -E "^(error:|warning:|Build |BUILD |\*\* ARCHIVE)" || true
@@ -193,8 +188,6 @@ cmd_clean() {
     rm -rf $DERIVED_DATA_GLOB
     # Remove legacy CLI-only DerivedData if it still exists
     rm -rf "$PROJECT_DIR/.build/DerivedData"
-    echo "Clearing SPM module cache..."
-    rm -rf ~/Library/Caches/org.swift.swiftpm
     echo "Clean complete."
 }
 
@@ -259,7 +252,7 @@ usage() {
     echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
     echo "  archive     Create release archive for App Store submission"
     echo "  resolve     Resolve SPM package dependencies"
-    echo "  clean       Clean build artifacts, derived data, and SPM cache"
+    echo "  clean       Clean build artifacts and derived data"
     echo "  log         Tail system log filtered to tesseract"
 }
 
