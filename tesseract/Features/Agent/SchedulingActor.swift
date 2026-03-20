@@ -229,6 +229,7 @@ actor SchedulingActor {
             runId: run.id,
             result: result,
             notifyUser: task.notifyUser,
+            speakResult: task.speakResult,
             isHeartbeat: false
         ))
 
@@ -265,6 +266,7 @@ actor SchedulingActor {
             runId: UUID(),
             result: result,
             notifyUser: task.notifyUser,
+            speakResult: task.speakResult,
             isHeartbeat: true
         ))
 

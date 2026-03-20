@@ -15,6 +15,7 @@ nonisolated struct TaskCompletionInfo: Sendable {
     let runId: UUID
     let result: TaskRunResult
     let notifyUser: Bool
+    let speakResult: Bool
     let isHeartbeat: Bool
 
     var summary: String { result.displaySummary }
@@ -106,12 +107,7 @@ final class NotificationService {
         }
 
         // Gate 5: Skip non-actionable results
-        switch info.result {
-        case .interrupted, .missed, .noActionNeeded:
-            return false
-        case .success, .error:
-            break
-        }
+        guard info.result.isActionable else { return false }
 
         let content = UNMutableNotificationContent()
         content.title = info.taskName

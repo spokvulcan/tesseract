@@ -153,6 +153,22 @@ final class ScheduledTaskStore: ObservableObject {
     }
 
     func markRunNotified(runId: UUID, taskId: UUID) {
+        updateRun(runId: runId, taskId: taskId, { $0.notifiedUser = true }, operation: "mark as notified")
+    }
+
+    func markRunSpoken(runId: UUID, taskId: UUID) {
+        updateRun(runId: runId, taskId: taskId, { $0.spokeResult = true }, operation: "mark as spoken")
+    }
+
+    func markRunCompletion(runId: UUID, taskId: UUID, notified: Bool, spoken: Bool) {
+        guard notified || spoken else { return }
+        updateRun(runId: runId, taskId: taskId, { run in
+            if notified { run.notifiedUser = true }
+            if spoken { run.spokeResult = true }
+        }, operation: "update completion flags")
+    }
+
+    private func updateRun(runId: UUID, taskId: UUID, _ mutate: (inout TaskRun) -> Void, operation: String) {
         let taskRunsDir = runsDir.appendingPathComponent(taskId.uuidString, isDirectory: true)
         let fileURL = taskRunsDir.appendingPathComponent("\(runId.uuidString).json")
 
@@ -161,10 +177,10 @@ final class ScheduledTaskStore: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             var run = try decoder.decode(TaskRun.self, from: data)
-            run.notifiedUser = true
+            mutate(&run)
             saveRun(run)
         } catch {
-            Log.agent.error("Failed to mark run \(runId) as notified: \(error)")
+            Log.agent.error("Failed to \(operation) run \(runId): \(error)")
         }
     }
 

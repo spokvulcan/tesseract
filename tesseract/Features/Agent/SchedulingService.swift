@@ -52,14 +52,16 @@ final class SchedulingService {
     @ObservationIgnored private var observationTasks: [Task<Void, Never>] = []
 
     @ObservationIgnored private let notificationService: NotificationService
+    @ObservationIgnored private let speechCoordinator: SpeechCoordinator
 
     // MARK: - Init
 
-    init(actor: SchedulingActor, store: ScheduledTaskStore, settings: SettingsManager, notificationService: NotificationService) {
+    init(actor: SchedulingActor, store: ScheduledTaskStore, settings: SettingsManager, notificationService: NotificationService, speechCoordinator: SpeechCoordinator) {
         self.schedulingActor = actor
         self.taskStore = store
         self.settings = settings
         self.notificationService = notificationService
+        self.speechCoordinator = speechCoordinator
     }
 
     // MARK: - Lifecycle
@@ -91,13 +93,20 @@ final class SchedulingService {
             if didNotify && !info.isHeartbeat {
                 self.taskStore.markRunNotified(runId: info.runId, taskId: info.taskId)
             }
+
+            // TTS: speak result if task opted in and result is actionable.
+            // Mark spokeResult only after TTS generation succeeds (via callback).
+            if info.speakResult && info.result.isActionable {
+                self.speechCoordinator.speakText(info.summary) { [weak self] in
+                    guard let self, !info.isHeartbeat else { return }
+                    self.taskStore.markRunSpoken(runId: info.runId, taskId: info.taskId)
+                }
+            }
+
             // Increment badge for actionable results (cron and heartbeat alike)
-            switch info.result {
-            case .success, .error:
+            if info.result.isActionable {
                 self.unreadResultCount += 1
                 self.unreadCountBySession[info.sessionId, default: 0] += 1
-            case .noActionNeeded, .interrupted, .missed:
-                break
             }
         }
 

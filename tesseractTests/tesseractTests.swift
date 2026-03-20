@@ -2453,7 +2453,13 @@ private func makeSchedulingServiceTestRig(
         persistInFlightSession: {}
     )
     let notificationService = NotificationService(settings: settings)
-    let service = SchedulingService(actor: actor, store: store, settings: settings, notificationService: notificationService)
+    let speechCoordinator = SpeechCoordinator(
+        textExtractor: TextExtractor(),
+        speechEngine: SpeechEngine(),
+        playbackManager: AudioPlaybackManager(),
+        settings: settings
+    )
+    let service = SchedulingService(actor: actor, store: store, settings: settings, notificationService: notificationService, speechCoordinator: speechCoordinator)
     return (service, store, root)
 }
 

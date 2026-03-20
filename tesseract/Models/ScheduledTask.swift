@@ -79,6 +79,13 @@ nonisolated enum TaskRunResult: Sendable, Equatable {
     case interrupted
     case missed(at: Date)
 
+    var isActionable: Bool {
+        switch self {
+        case .success, .error: true
+        case .noActionNeeded, .interrupted, .missed: false
+        }
+    }
+
     var displaySummary: String {
         switch self {
         case .success(let s): s

@@ -105,7 +105,7 @@ final class DependencyContainer: ObservableObject {
     }()
     lazy var notificationService = NotificationService(settings: settingsManager)
     lazy var schedulingService: SchedulingService = {
-        SchedulingService(actor: schedulingActor, store: scheduledTaskStore, settings: settingsManager, notificationService: notificationService)
+        SchedulingService(actor: schedulingActor, store: scheduledTaskStore, settings: settingsManager, notificationService: notificationService, speechCoordinator: speechCoordinator)
     }()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(

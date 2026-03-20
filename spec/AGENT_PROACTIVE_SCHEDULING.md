@@ -1178,7 +1178,7 @@ case heartbeatEnd(result)
 - [x] `NotificationService` — macOS notification center integration
 - [x] Runtime permission request
 - [x] Menu bar badge (unread count)
-- [ ] TTS speech for results (`speakResult` flag)
+- [x] TTS speech for results (`speakResult` flag)
 
 ### Phase 4: UI — MVP
 

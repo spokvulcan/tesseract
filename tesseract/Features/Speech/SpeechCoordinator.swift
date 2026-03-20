@@ -29,6 +29,7 @@ final class SpeechCoordinator {
     private var isLongFormActive = false
     private var pausedSegmentIndex: Int?
     private var segments: [TextSegment] = []
+    private var speechCompletionCallback: (@MainActor @Sendable () -> Void)?
 
     init(
         textExtractor: any TextExtracting,
@@ -48,6 +49,9 @@ final class SpeechCoordinator {
         playbackManager.onPlaybackFinished = { [weak self] in
             guard let self, !self.isLongFormActive else { return }
             self.state = .idle
+            let callback = self.speechCompletionCallback
+            self.speechCompletionCallback = nil
+            callback?()
         }
     }
 
@@ -58,23 +62,32 @@ final class SpeechCoordinator {
             return
         }
 
+        speechCompletionCallback = nil
         activeTask = Task {
             await captureAndSpeak()
         }
     }
 
     /// Speak text directly (for in-app usage)
-    func speakText(_ text: String) {
+    func speakText(_ text: String, onSuccess: (@MainActor @Sendable () -> Void)? = nil) {
         guard !text.isEmpty else { return }
 
         stop()
+        speechCompletionCallback = onSuccess
         activeTask = Task {
             await generateAndPlay(text: text)
+            // Only keep the callback alive if playback actually started.
+            // onPlaybackFinished will fire it on successful completion.
+            // Clear it for all other exits: cancellation, error, empty samples, etc.
+            if state != .playing && !isLongFormActive {
+                speechCompletionCallback = nil
+            }
         }
     }
 
     func stop() {
         Log.speech.info("[Coordinator] stop() called — state=\(String(describing: self.state))")
+        speechCompletionCallback = nil
         activeTask?.cancel()
         activeTask = nil
         playbackManager.stop()
@@ -171,10 +184,13 @@ final class SpeechCoordinator {
             }
 
             if completed {
-                // All segments done — GPU no longer needed
+                // All segments done — GPU no longer needed.
+                // Clear isLongFormActive BEFORE finishStreaming() because
+                // finishStreaming() may fire onPlaybackFinished synchronously
+                // when all buffers have already drained.
+                isLongFormActive = false
                 playbackManager.finishStreaming()
                 notchOverlay?.markGenerationComplete()
-                isLongFormActive = false
                 // onPlaybackFinished callback will set state = .idle
             }
         } catch is CancellationError {
