@@ -6,6 +6,7 @@ struct ScheduledTasksView: View {
     @Environment(SettingsManager.self) private var settings
     
     @State private var showingCreateSheet = false
+    @State private var taskToEdit: ScheduledTask?
     
     var body: some View {
         ScrollView {
@@ -29,11 +30,23 @@ struct ScheduledTasksView: View {
         }
         .navigationTitle("Scheduled Tasks")
         .sheet(isPresented: $showingCreateSheet) {
-            Text("Create Task Sheet (Coming Soon)")
-                .padding()
+            ScheduledTaskEditSheet(taskToEdit: nil)
+        }
+        .sheet(item: $taskToEdit) { task in
+            ScheduledTaskEditSheet(taskToEdit: task)
         }
         .onAppear {
             schedulingService.markResultsRead()
+        }
+    }
+
+    private func openBackgroundSession(_ sessionId: UUID) {
+        Task {
+            let opened = await agentCoordinator.openBackgroundSession(id: sessionId)
+            guard opened else { return }
+            if let appDelegate = NSApp.delegate as? AppDelegate {
+                appDelegate.navigateToAgent()
+            }
         }
     }
     
@@ -107,7 +120,9 @@ struct ScheduledTasksView: View {
     // MARK: - Heartbeat Card
     
     private var heartbeatCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let hasHeartbeatSession = !(schedulingService.runHistory[SchedulingActor.heartbeatSessionId] ?? []).isEmpty
+
+        return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 HStack(spacing: 12) {
                     ZStack {
@@ -162,6 +177,20 @@ struct ScheduledTasksView: View {
                     Spacer()
                 }
             }
+
+            HStack {
+                Button {
+                    openBackgroundSession(SchedulingActor.heartbeatSessionId)
+                } label: {
+                    Label("View Session", systemImage: "message")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(hasHeartbeatSession ? Color.accentColor : Color.secondary)
+                .font(.callout)
+                .disabled(!hasHeartbeatSession)
+
+                Spacer()
+            }
         }
         .padding(Theme.Spacing.lg)
         .glassEffect(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -193,7 +222,11 @@ struct ScheduledTasksView: View {
                 .background(.quinary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
             } else {
                 ForEach(schedulingService.tasks) { task in
-                    TaskRowView(task: task)
+                    TaskRowView(task: task, onEdit: {
+                        taskToEdit = task
+                    }, onViewSession: {
+                        openBackgroundSession(task.sessionId)
+                    })
                 }
             }
         }
@@ -203,7 +236,7 @@ struct ScheduledTasksView: View {
     
     private var runHistorySection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("Recent Run History")
+            Text("Run History")
                 .font(.headline)
                 .padding(.bottom, 4)
             
@@ -215,26 +248,59 @@ struct ScheduledTasksView: View {
                     .padding(.vertical, 20)
                     .frame(maxWidth: .infinity, alignment: .center)
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(allRuns.prefix(10))) { run in
-                        RunHistoryRowView(run: run, taskName: taskName(for: run.taskId))
-                        if run.id != allRuns.prefix(10).last?.id {
-                            Divider().padding(.leading, 12)
+                let groupedRuns = Dictionary(grouping: allRuns.prefix(50)) { Calendar.current.startOfDay(for: $0.startedAt) }
+                let sortedDays = groupedRuns.keys.sorted(by: >)
+                
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(sortedDays, id: \.self) { day in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(formatDay(day))
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 4)
+                            
+                            VStack(spacing: 0) {
+                                let dayRuns = groupedRuns[day] ?? []
+                                ForEach(dayRuns) { run in
+                                    RunHistoryRowView(run: run, taskName: taskName(for: run.taskId))
+                                    if run.id != dayRuns.last?.id {
+                                        Divider().padding(.leading, 12)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 8)
+                            .glassEffect(in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .shadow(color: .black.opacity(0.03), radius: 4, x: 0, y: 2)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(.quaternary, lineWidth: 0.5)
+                            }
                         }
                     }
-                }
-                .padding(.vertical, 8)
-                .glassEffect(in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: .black.opacity(0.03), radius: 4, x: 0, y: 2)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(.quaternary, lineWidth: 0.5)
                 }
             }
         }
     }
     
+    private func formatDay(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) {
+            return "Today"
+        } else if calendar.isDateInYesterday(date) {
+            return "Yesterday"
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .none
+            return formatter.string(from: date)
+        }
+    }
+    
     private func taskName(for id: UUID) -> String {
+        if id == SchedulingActor.heartbeatSessionId {
+            return "Heartbeat"
+        }
         if let task = schedulingService.tasks.first(where: { $0.id == id }) {
             return task.name
         }
@@ -246,8 +312,14 @@ struct ScheduledTasksView: View {
 
 struct TaskRowView: View {
     let task: ScheduledTask
+    let onEdit: () -> Void
+    let onViewSession: () -> Void
+    
     @Environment(SchedulingService.self) private var schedulingService
-    @Environment(AgentCoordinator.self) private var agentCoordinator
+
+    private var hasSession: Bool {
+        !(schedulingService.runHistory[task.id] ?? []).isEmpty
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -266,6 +338,20 @@ struct TaskRowView: View {
                                 .background(Color.purple.opacity(0.2))
                                 .foregroundStyle(.purple)
                                 .clipShape(Capsule())
+                        }
+
+                        if schedulingService.currentlyRunningTaskId == task.id {
+                            HStack(spacing: 4) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Running")
+                                    .font(.caption2.weight(.medium))
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.15))
+                            .foregroundStyle(.blue)
+                            .clipShape(Capsule())
                         }
                     }
                     
@@ -328,20 +414,25 @@ struct TaskRowView: View {
             
             HStack {
                 Button {
-                    Task {
-                        await agentCoordinator.openBackgroundSession(id: task.sessionId)
-                        if let appDelegate = NSApp.delegate as? AppDelegate {
-                            appDelegate.navigateToAgent()
-                        }
-                    }
+                    onViewSession()
                 } label: {
                     Label("View Session", systemImage: "message")
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.tint)
+                .foregroundStyle(hasSession ? Color.accentColor : Color.secondary)
                 .font(.callout)
+                .disabled(!hasSession)
                 
                 Spacer()
+                
+                Button {
+                    onEdit()
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 8)
                 
                 Button(role: .destructive) {
                     schedulingService.deleteTask(id: task.id)
@@ -376,16 +467,29 @@ struct RunHistoryRowView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 60, alignment: .leading)
+                .padding(.top, 2)
             
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
                     Text(taskName)
                         .font(.subheadline)
                         .fontWeight(.medium)
                     
                     Spacer()
                     
-                    resultBadge
+                    HStack(spacing: 8) {
+                        if let duration = run.durationSeconds {
+                            Text("\(duration)s")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
+                        if let tokens = run.tokensUsed {
+                            Text(formatTokens(tokens))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
+                        resultBadge
+                    }
                 }
                 
                 Text(run.summary)
@@ -398,44 +502,51 @@ struct RunHistoryRowView: View {
         .padding(.vertical, 8)
     }
     
+    private func formatTokens(_ count: Int) -> String {
+        if count >= 1000 {
+            return String(format: "%.1fK", Double(count) / 1000.0)
+        }
+        return "\(count)"
+    }
+    
     @ViewBuilder
     private var resultBadge: some View {
         switch run.result {
         case .success:
-            Text("Done")
-                .font(.caption2)
+            Text("done")
+                .font(.caption2.weight(.medium))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.green.opacity(0.2))
                 .foregroundStyle(.green)
                 .clipShape(Capsule())
         case .noActionNeeded:
-            Text("OK")
-                .font(.caption2)
+            Text("ok")
+                .font(.caption2.weight(.medium))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.secondary.opacity(0.2))
                 .foregroundStyle(.secondary)
                 .clipShape(Capsule())
         case .error:
-            Text("Error")
-                .font(.caption2)
+            Text("error")
+                .font(.caption2.weight(.medium))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.red.opacity(0.2))
                 .foregroundStyle(.red)
                 .clipShape(Capsule())
         case .interrupted:
-            Text("Interrupted")
-                .font(.caption2)
+            Text("interrupted")
+                .font(.caption2.weight(.medium))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.orange.opacity(0.2))
                 .foregroundStyle(.orange)
                 .clipShape(Capsule())
         case .missed:
-            Text("Missed")
-                .font(.caption2)
+            Text("missed")
+                .font(.caption2.weight(.medium))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(Color.gray.opacity(0.2))

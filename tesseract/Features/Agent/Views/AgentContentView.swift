@@ -137,22 +137,48 @@ struct AgentContentView: View {
     }
 
     private var backgroundSessionBanner: some View {
-        HStack {
-            Image(systemName: "clock.arrow.circlepath")
-                .foregroundStyle(.secondary)
-            Text("Viewing background session")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Dismiss") {
-                coordinator.dismissBackgroundSession()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+        let task = coordinator.viewingSessionId.flatMap { id in
+            schedulingService.tasks.first(where: { $0.sessionId == id })
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
+        
+        return VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "calendar.badge.clock")
+                            .foregroundStyle(.secondary)
+                        Text(task?.name ?? coordinator.viewingSessionName ?? "Background Session")
+                            .font(.headline)
+                        
+                        if let count = task?.runCount {
+                            Text("\(count) run\(count == 1 ? "" : "s")")
+                                .font(.caption2.weight(.medium))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.15))
+                                .clipShape(Capsule())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let schedule = task?.humanReadableSchedule {
+                        Text(schedule)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Button("Dismiss") {
+                    coordinator.dismissBackgroundSession()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.bar)
+            
+            Divider()
+        }
     }
 
     // MARK: - Conversation History Popover

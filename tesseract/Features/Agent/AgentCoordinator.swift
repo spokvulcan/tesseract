@@ -28,6 +28,7 @@ final class AgentCoordinator {
 
     // Background session viewing (read-only mode for notification deep-links)
     private(set) var isViewingBackgroundSession: Bool = false
+    private(set) var viewingSessionId: UUID?
     private(set) var viewingSessionName: String?
 
     // System prompt transparency
@@ -291,6 +292,7 @@ final class AgentCoordinator {
             clearAllCaches()
             rebuildRows()
             isViewingBackgroundSession = true
+            viewingSessionId = id
             viewingSessionName = name
             error = nil
             debugLogger.reset()
@@ -305,6 +307,7 @@ final class AgentCoordinator {
 
     func dismissBackgroundSession() {
         isViewingBackgroundSession = false
+        viewingSessionId = nil
         viewingSessionName = nil
         error = nil
         // Restore the previous conversation

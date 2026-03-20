@@ -1182,12 +1182,12 @@ case heartbeatEnd(result)
 
 ### Phase 4: UI — MVP
 
-- [ ] Sidebar "Scheduled" section
-- [ ] Cron panel (task list, create/edit/delete/pause)
-- [ ] Global pause toggle
-- [ ] Run history view
-- [ ] Background session viewer (read-only chat)
-- [ ] Task detail/edit sheet
+- [x] Sidebar "Scheduled" section
+- [x] Cron panel (task list, create/edit/delete/pause)
+- [x] Global pause toggle
+- [x] Run history view
+- [x] Background session viewer (read-only chat)
+- [x] Task detail/edit sheet
 
 ### Phase 5: Multi-Agent Council — Post-MVP
 

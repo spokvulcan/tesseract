@@ -245,7 +245,8 @@ actor SchedulingActor {
     /// currently-running task so shutdown can detect and handle it.
     private func runHeartbeat(_ task: ScheduledTask) async {
         currentlyRunningTask = task
-        currentRunStartedAt = Date()
+        let startedAt = Date()
+        currentRunStartedAt = startedAt
         await onHeartbeatStatusChanged?(.checking)
 
         let result = await executeHeartbeat(task)
@@ -256,14 +257,24 @@ actor SchedulingActor {
             return
         }
 
-        await onHeartbeatStatusChanged?(.lastRun(Date()))
+        let completedAt = Date()
+        let run = TaskRun(
+            id: UUID(), taskId: task.id, sessionId: task.sessionId,
+            startedAt: startedAt, completedAt: completedAt,
+            durationSeconds: Int(completedAt.timeIntervalSince(startedAt)),
+            result: result, summary: result.displaySummary,
+            notifiedUser: false, spokeResult: false, tokensUsed: nil
+        )
+        await taskStore.saveRun(run)
+
+        await onHeartbeatStatusChanged?(.lastRun(completedAt))
         Log.agent.info("SchedulingActor: heartbeat completed — \(result.displaySummary)")
 
         await onTaskCompleted?(TaskCompletionInfo(
             taskId: task.id,
             taskName: task.name,
             sessionId: task.sessionId,
-            runId: UUID(),
+            runId: run.id,
             result: result,
             notifyUser: task.notifyUser,
             speakResult: task.speakResult,

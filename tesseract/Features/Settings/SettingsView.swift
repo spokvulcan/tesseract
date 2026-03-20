@@ -365,6 +365,14 @@ struct RecordingSettingsSection: View {
             }
 
             Section("Background Agent") {
+                Toggle(
+                    "Pause All Scheduling",
+                    isOn: Binding(
+                        get: { container.schedulingService.isPaused },
+                        set: { if $0 { container.schedulingService.pauseAll() } else { container.schedulingService.resumeAll() } }
+                    )
+                )
+                
                 Toggle("Heartbeat", isOn: $settings.heartbeatEnabled)
 
                 if settings.heartbeatEnabled {

@@ -100,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarManager?.coordinator = container.dictationCoordinator
         menuBarManager?.history = container.transcriptionHistory
         menuBarManager?.speechCoordinator = container.speechCoordinator
+        menuBarManager?.schedulingService = container.schedulingService
         menuBarManager?.onShowMainWindow = { [weak self] in
             self?.showMainWindow()
         }

@@ -68,6 +68,7 @@ final class SchedulingService {
 
     func start() async {
         tasks = taskStore.loadAll()
+        refreshRunHistory()
 
         let wasPaused = UserDefaults.standard.bool(forKey: Self.globalPauseKey)
         if wasPaused {
@@ -90,7 +91,7 @@ final class SchedulingService {
         await schedulingActor.setOnTaskCompleted { [weak self] info in
             guard let self else { return }
             let didNotify = self.notificationService.postIfNeeded(for: info)
-            if didNotify && !info.isHeartbeat {
+            if didNotify {
                 self.taskStore.markRunNotified(runId: info.runId, taskId: info.taskId)
             }
 
@@ -98,7 +99,7 @@ final class SchedulingService {
             // Mark spokeResult only after TTS generation succeeds (via callback).
             if info.speakResult && info.result.isActionable {
                 self.speechCoordinator.speakText(info.summary) { [weak self] in
-                    guard let self, !info.isHeartbeat else { return }
+                    guard let self else { return }
                     self.taskStore.markRunSpoken(runId: info.runId, taskId: info.taskId)
                 }
             }
@@ -108,6 +109,8 @@ final class SchedulingService {
                 self.unreadResultCount += 1
                 self.unreadCountBySession[info.sessionId, default: 0] += 1
             }
+
+            self.refreshRunHistory()
         }
 
         storeSink = taskStore.$tasks
@@ -187,16 +190,18 @@ final class SchedulingService {
 
     private func syncFromStore() {
         tasks = taskStore.loadAll()
+        refreshRunHistory()
+    }
 
-        let taskIds = Set(tasks.map(\.id))
-        for key in runHistory.keys {
-            if !taskIds.contains(key) {
-                runHistory[key] = nil
-            } else if runHistory[key] != nil {
-                // Refresh cached histories so completed runs appear live
-                runHistory[key] = taskStore.loadRuns(for: key)
-            }
+    private func refreshRunHistory() {
+        var histories: [UUID: [TaskRun]] = [:]
+        for task in tasks {
+            histories[task.id] = taskStore.loadRuns(for: task.id)
         }
+        histories[SchedulingActor.heartbeatSessionId] = taskStore.loadRuns(
+            for: SchedulingActor.heartbeatSessionId
+        )
+        runHistory = histories
     }
 
     // MARK: - Task CRUD
@@ -223,6 +228,10 @@ final class SchedulingService {
         }
         taskStore.save(task)
         syncFromStore()
+    }
+
+    func loadTask(id: UUID) -> ScheduledTask? {
+        taskStore.loadTask(id: id)
     }
 
     func deleteTask(id: UUID) {
@@ -291,9 +300,4 @@ final class SchedulingService {
         unreadResultCount = max(unreadResultCount - count, 0)
     }
 
-    // MARK: - Run History
-
-    func loadRunHistory(for taskId: UUID) {
-        runHistory[taskId] = taskStore.loadRuns(for: taskId)
-    }
 }

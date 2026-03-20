@@ -13,10 +13,30 @@ struct ChatRowView: View {
         let _ = ChatViewPerf.signposter.emitEvent("ChatRowView.body")
         switch row.kind {
         case .user(let data):
-            HStack {
-                Spacer(minLength: 60)
-                UserBubble(data: data)
-                    .equatable()
+            if coordinator.isViewingBackgroundSession {
+                VStack(spacing: 12) {
+                    HStack {
+                        VStack { Divider() }
+                        Text(data.timestamp)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tertiary)
+                            .textCase(.uppercase)
+                        VStack { Divider() }
+                    }
+                    .padding(.vertical, 8)
+                    
+                    HStack {
+                        Spacer(minLength: 60)
+                        UserBubble(data: data)
+                            .equatable()
+                    }
+                }
+            } else {
+                HStack {
+                    Spacer(minLength: 60)
+                    UserBubble(data: data)
+                        .equatable()
+                }
             }
 
         case .assistantText(let data):
