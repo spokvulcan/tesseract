@@ -275,10 +275,11 @@ final class AgentCoordinator {
 
     // MARK: - Background Session Viewing
 
-    func openBackgroundSession(id: UUID) async {
+    @discardableResult
+    func openBackgroundSession(id: UUID) async -> Bool {
         guard let loader = loadBackgroundSessionById else {
             error = "Background session loading not available"
-            return
+            return false
         }
         do {
             let (messages, name) = try await loader(id)
@@ -294,9 +295,11 @@ final class AgentCoordinator {
             error = nil
             debugLogger.reset()
             Log.agent.info("Viewing background session '\(name)' with \(self.rows.count) rows")
+            return true
         } catch {
             self.error = "Failed to load background session"
             Log.agent.error("Failed to load background session \(id): \(error)")
+            return false
         }
     }
 

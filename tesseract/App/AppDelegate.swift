@@ -13,6 +13,7 @@ import UserNotifications
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var observationTask: Task<Void, Never>?
+    private var badgeObservationTask: Task<Void, Never>?
     var container: DependencyContainer?
     var menuBarManager: MenuBarManager?
     private weak var trackedMainWindow: NSWindow?
@@ -121,6 +122,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Subscribe to unread result count for menu bar badge
+        badgeObservationTask = Task { [weak self] in
+            guard let container = self?.container else { return }
+            for await count in Observations({ container.schedulingService.unreadResultCount }) {
+                self?.menuBarManager?.unreadBadgeCount = count
+            }
+        }
+
         // Apply initial dock visibility (didSet doesn't fire during SettingsManager.init)
         container.settingsManager.applyDockVisibility()
     }
@@ -172,6 +181,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         observationTask?.cancel()
         observationTask = nil
+        badgeObservationTask?.cancel()
+        badgeObservationTask = nil
 
         // Stop TTS generation and unload the model before exit() destroys MLX's
         // Metal device singleton. Pending GPU completion handlers would otherwise

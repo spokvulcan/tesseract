@@ -129,7 +129,10 @@ struct AgentContentView: View {
         guard let sessionId = schedulingService.pendingBackgroundSessionId else { return }
         schedulingService.pendingBackgroundSessionId = nil
         Task {
-            await coordinator.openBackgroundSession(id: sessionId)
+            let opened = await coordinator.openBackgroundSession(id: sessionId)
+            if opened {
+                schedulingService.markSessionRead(sessionId)
+            }
         }
     }
 

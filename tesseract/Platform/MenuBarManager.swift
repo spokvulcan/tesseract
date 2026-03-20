@@ -22,6 +22,7 @@ final class MenuBarManager: ObservableObject {
 
     @Published var isRecording = false
     @Published var hasHistory = false
+    var unreadBadgeCount: Int = 0 { didSet { updateBadge() } }
 
     let settings: SettingsManager
     weak var coordinator: DictationCoordinator?
@@ -84,6 +85,7 @@ final class MenuBarManager: ObservableObject {
         copyLastItem = nil
         speakItem = nil
         talkItem = nil
+        badgeLabel = nil
     }
 
     func updateState(from dictationState: DictationState) {
@@ -106,6 +108,54 @@ final class MenuBarManager: ObservableObject {
             image.isTemplate = true
             button.image = image
         }
+    }
+
+    private var badgeLabel: NSTextField?
+
+    private func updateBadge() {
+        guard let button = statusItem?.button else { return }
+
+        guard unreadBadgeCount > 0 else {
+            badgeLabel?.removeFromSuperview()
+            badgeLabel = nil
+            button.setAccessibilityValue(nil)
+            return
+        }
+
+        let text = unreadBadgeCount > 99 ? "99+" : "\(unreadBadgeCount)"
+        let badgeFont = NSFont.monospacedSystemFont(ofSize: 8, weight: .bold)
+
+        if let existing = badgeLabel {
+            // Update in place
+            existing.stringValue = text
+        } else {
+            // Create badge label once
+            let label = NSTextField(labelWithString: text)
+            label.font = badgeFont
+            label.textColor = .white
+            label.alignment = .center
+            label.backgroundColor = .systemRed
+            label.isBezeled = false
+            label.isEditable = false
+            label.wantsLayer = true
+            label.layer?.masksToBounds = true
+            label.layer?.backgroundColor = NSColor.systemRed.cgColor
+            button.addSubview(label)
+            badgeLabel = label
+        }
+
+        // Size and position badge
+        let textWidth = NSAttributedString(string: text, attributes: [.font: badgeFont]).size().width
+        let width = max(textWidth + 4, 14)
+        let height: CGFloat = 14
+        badgeLabel?.frame = NSRect(
+            x: button.bounds.width - width + 2,
+            y: button.bounds.height - height,
+            width: width,
+            height: height
+        )
+        badgeLabel?.layer?.cornerRadius = height / 2
+        button.setAccessibilityValue("\(unreadBadgeCount) unread")
     }
 
     private func updateMenuItems() {

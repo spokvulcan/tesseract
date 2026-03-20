@@ -34,6 +34,7 @@ final class SchedulingService {
     private(set) var isPaused: Bool = false
     private(set) var heartbeatStatus: HeartbeatStatus = .idle
     private(set) var unreadResultCount: Int = 0
+    @ObservationIgnored private var unreadCountBySession: [UUID: Int] = [:]
     /// Set when a notification click requests opening a specific background session.
     /// The Phase 4 session viewer will observe and consume this.
     var pendingBackgroundSessionId: UUID? = nil
@@ -89,6 +90,14 @@ final class SchedulingService {
             let didNotify = self.notificationService.postIfNeeded(for: info)
             if didNotify && !info.isHeartbeat {
                 self.taskStore.markRunNotified(runId: info.runId, taskId: info.taskId)
+            }
+            // Increment badge for actionable results (cron and heartbeat alike)
+            switch info.result {
+            case .success, .error:
+                self.unreadResultCount += 1
+                self.unreadCountBySession[info.sessionId, default: 0] += 1
+            case .noActionNeeded, .interrupted, .missed:
+                break
             }
         }
 
@@ -255,6 +264,22 @@ final class SchedulingService {
 
     func resetAgentTurnCounter() {
         agentTasksCreatedThisTurn = 0
+    }
+
+    // MARK: - Unread Badge
+
+    /// Clears the unread result count (e.g., when user views the Cron panel).
+    func markResultsRead() {
+        if unreadResultCount != 0 {
+            unreadResultCount = 0
+            unreadCountBySession.removeAll()
+        }
+    }
+
+    /// Clears unread results for a specific session (e.g., when user views that background session).
+    func markSessionRead(_ sessionId: UUID) {
+        guard let count = unreadCountBySession.removeValue(forKey: sessionId), count > 0 else { return }
+        unreadResultCount = max(unreadResultCount - count, 0)
     }
 
     // MARK: - Run History
