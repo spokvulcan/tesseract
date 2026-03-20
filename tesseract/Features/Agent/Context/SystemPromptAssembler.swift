@@ -112,4 +112,26 @@ nonisolated enum SystemPromptAssembler: Sendable {
             """
         return result
     }
+
+    // MARK: - Heartbeat Preamble
+
+    /// Generates the system prompt context for periodic heartbeat evaluation runs.
+    static func heartbeatPreamble() -> String {
+        """
+        # Heartbeat Evaluation Context
+
+        You are running as a periodic heartbeat check. This is NOT an interactive chat session.
+
+        Your job is to evaluate the checklist provided in the user message. For each item:
+        1. Use your available tools (read files, list directories, check scheduled tasks) to assess the current state
+        2. Determine if anything needs the user's attention
+
+        Guidelines:
+        - If everything looks fine and no action is needed, say "HEARTBEAT_OK" and give a brief summary
+        - If something needs attention, describe what you found and any actions you took
+        - Be concise — this runs periodically and the conversation accumulates
+        - Do not ask questions — there is no user to respond
+        - Previous heartbeat evaluations share this conversation context
+        """
+    }
 }

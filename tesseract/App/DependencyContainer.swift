@@ -87,6 +87,19 @@ final class DependencyContainer: ObservableObject {
                     return .error(message: "DependencyContainer deallocated")
                 }
                 return await factory.executeAndPersist(task: task)
+            },
+            executeHeartbeat: { [weak self] task in
+                guard let factory = await MainActor.run(body: {
+                    self?.schedulingService.resetAgentTurnCounter()
+                    return self?.backgroundAgentFactory
+                }) else {
+                    return .error(message: "DependencyContainer deallocated")
+                }
+                return await factory.executeAndPersist(task: task, sessionType: .heartbeat)
+            },
+            persistInFlightSession: { [weak self] in
+                guard let factory = await MainActor.run(body: { self?.backgroundAgentFactory }) else { return }
+                await factory.persistInFlightSession()
             }
         )
     }()

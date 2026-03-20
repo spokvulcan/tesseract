@@ -28,6 +28,7 @@ final class ScheduledTaskStore: ObservableObject {
         tasksDir = baseDir.appendingPathComponent("tasks", isDirectory: true)
         runsDir = baseDir.appendingPathComponent("runs", isDirectory: true)
         commonInit()
+        seedHeartbeatIfNeeded()
     }
 
     /// Test-friendly initializer that uses a custom base directory.
@@ -42,6 +43,39 @@ final class ScheduledTaskStore: ObservableObject {
         ensureDirectories()
         migrateStorageVersionIfNeeded()
         loadOrResetIndex()
+    }
+
+    // MARK: - Heartbeat
+
+    static let defaultHeartbeatTemplate = """
+    # Heartbeat Checklist
+
+    - Read tasks.md and check for tasks that have been pending too long — nudge the user to complete or reschedule them
+    - Review scheduled tasks with cron_list and flag any that are failing or paused
+    - Check if the user has completed any tasks today — if not, encourage them to pick one and start
+    - Read memories.md for any time-sensitive commitments or deadlines the user mentioned
+    - If it's late in the day and no tasks were completed, suggest a quick end-of-day review
+    """
+
+    var heartbeatFileURL: URL {
+        baseDir.appendingPathComponent("heartbeat.md")
+    }
+
+    func loadHeartbeatChecklist() -> String? {
+        let url = heartbeatFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func seedHeartbeatIfNeeded() {
+        let url = heartbeatFileURL
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try Self.defaultHeartbeatTemplate.write(to: url, atomically: true, encoding: .utf8)
+            Log.agent.info("Seeded default heartbeat checklist at \(url.path)")
+        } catch {
+            Log.agent.error("Failed to seed heartbeat checklist: \(error)")
+        }
     }
 
     // MARK: - Public API

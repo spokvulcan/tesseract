@@ -76,11 +76,17 @@ final class SchedulingService {
             }
 
         await schedulingActor.startPolling()
+
+        await schedulingActor.setOnHeartbeatStatusChanged { [weak self] status in
+            self?.heartbeatStatus = status
+        }
+        await schedulingActor.startHeartbeat()
     }
 
     func stop() async {
         cancelStoreSink()
         await schedulingActor.stopPolling()
+        await schedulingActor.stopHeartbeat()
     }
 
     /// Cancel the Combine subscription synchronously. Called from `applicationWillTerminate`

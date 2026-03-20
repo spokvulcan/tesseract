@@ -150,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             await actor?.stopPolling()
+            await actor?.stopHeartbeat()
             await actor?.persistInterruptedTask()
             NSApp.reply(toApplicationShouldTerminate: true)
         }

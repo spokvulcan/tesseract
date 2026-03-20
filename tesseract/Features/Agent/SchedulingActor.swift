@@ -19,11 +19,15 @@ actor SchedulingActor {
     static let maxAgentTasksPerTurn = 10
     static let minimumIntervalSeconds: TimeInterval = 300
     static let missedRunCatchUpThreshold: TimeInterval = 3600
+    static let heartbeatSessionId = UUID(uuidString: "00000001-0000-0000-0000-000000000001")!
+    static let defaultHeartbeatIntervalSeconds: TimeInterval = 1800
 
     // MARK: - Dependencies
 
     private let taskStore: ScheduledTaskStore
     private let executeTask: @Sendable (ScheduledTask) async -> TaskRunResult
+    private let executeHeartbeat: @Sendable (ScheduledTask) async -> TaskRunResult
+    private let persistInFlightSession: @Sendable () async -> Void
     private var onRunningTaskChanged: (@MainActor @Sendable (UUID?) -> Void)?
 
     // MARK: - State
@@ -37,15 +41,21 @@ actor SchedulingActor {
     private var isDraining: Bool = false
     private var consecutiveFailureCount: [UUID: Int] = [:]
     private var caughtUpTaskIds: Set<UUID> = []
+    private var heartbeatTask: Task<Void, Never>?
+    private var onHeartbeatStatusChanged: (@MainActor @Sendable (HeartbeatStatus) -> Void)?
 
     // MARK: - Init
 
     init(
         taskStore: ScheduledTaskStore,
-        executeTask: @escaping @Sendable (ScheduledTask) async -> TaskRunResult
+        executeTask: @escaping @Sendable (ScheduledTask) async -> TaskRunResult,
+        executeHeartbeat: @escaping @Sendable (ScheduledTask) async -> TaskRunResult,
+        persistInFlightSession: @escaping @Sendable () async -> Void
     ) {
         self.taskStore = taskStore
         self.executeTask = executeTask
+        self.executeHeartbeat = executeHeartbeat
+        self.persistInFlightSession = persistInFlightSession
     }
 
     // MARK: - Polling
@@ -70,6 +80,56 @@ actor SchedulingActor {
 
     func setOnRunningTaskChanged(_ callback: @escaping @MainActor @Sendable (UUID?) -> Void) {
         onRunningTaskChanged = callback
+    }
+
+    func setOnHeartbeatStatusChanged(_ callback: @escaping @MainActor @Sendable (HeartbeatStatus) -> Void) {
+        onHeartbeatStatusChanged = callback
+    }
+
+    // MARK: - Heartbeat
+
+    func startHeartbeat(intervalSeconds: TimeInterval = SchedulingActor.defaultHeartbeatIntervalSeconds) {
+        guard heartbeatTask == nil else { return }
+        Log.agent.info("SchedulingActor: heartbeat started (interval: \(Int(intervalSeconds))s)")
+        heartbeatTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(intervalSeconds))
+                guard !Task.isCancelled else { break }
+                guard !isPaused else { continue }
+                await enqueueHeartbeat()
+            }
+        }
+    }
+
+    func stopHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+
+    /// Builds the synthetic heartbeat task and drops it into the shared execution queue.
+    /// Actual execution is serialized with cron tasks via `processQueue`.
+    private func enqueueHeartbeat() async {
+        guard let checklist = await taskStore.loadHeartbeatChecklist() else {
+            Log.agent.debug("SchedulingActor: heartbeat skipped — no heartbeat.md")
+            return
+        }
+
+        let syntheticTask = ScheduledTask(
+            id: Self.heartbeatSessionId,
+            name: "Heartbeat",
+            description: "Periodic heartbeat evaluation",
+            cronExpression: "",
+            prompt: checklist,
+            enabled: true,
+            createdBy: .user,
+            createdAt: Date(),
+            lastRunAt: nil, lastRunResult: nil, nextRunAt: nil,
+            runCount: 0, maxRuns: nil, tags: [],
+            notifyUser: false, speakResult: false,
+            sessionId: Self.heartbeatSessionId
+        )
+
+        enqueue(syntheticTask)
     }
 
     func pause() { isPaused = true }
@@ -112,10 +172,16 @@ actor SchedulingActor {
         while let task = executionQueue.first {
             guard !isPaused else { break }
             executionQueue.removeFirst()
-            // Re-read from store to catch pause/delete that happened after enqueue
-            guard let current = await taskStore.loadTask(id: task.id),
-                  current.enabled, !current.isExhausted else { continue }
-            await runTask(current)
+
+            if task.id == Self.heartbeatSessionId {
+                // Heartbeat: synthetic task, not in store — run directly
+                await runHeartbeat(task)
+            } else {
+                // Cron: re-read from store to catch pause/delete that happened after enqueue
+                guard let current = await taskStore.loadTask(id: task.id),
+                      current.enabled, !current.isExhausted else { continue }
+                await runTask(current)
+            }
         }
     }
 
@@ -150,6 +216,29 @@ actor SchedulingActor {
         currentlyRunningTask = nil
         currentRunStartedAt = nil
         await onRunningTaskChanged?(nil)
+    }
+
+    // MARK: - Heartbeat Execution
+
+    /// Executes a heartbeat task within the shared queue, tracking it as the
+    /// currently-running task so shutdown can detect and handle it.
+    private func runHeartbeat(_ task: ScheduledTask) async {
+        currentlyRunningTask = task
+        currentRunStartedAt = Date()
+        await onHeartbeatStatusChanged?(.checking)
+
+        let result = await executeHeartbeat(task)
+
+        guard !isShuttingDown else {
+            currentlyRunningTask = nil
+            currentRunStartedAt = nil
+            return
+        }
+
+        await onHeartbeatStatusChanged?(.lastRun(Date()))
+        Log.agent.info("SchedulingActor: heartbeat completed — \(result.displaySummary)")
+        currentlyRunningTask = nil
+        currentRunStartedAt = nil
     }
 
     // MARK: - Missed-Run Detection
@@ -218,6 +307,18 @@ actor SchedulingActor {
     func persistInterruptedTask() async {
         isShuttingDown = true
         guard let task = currentlyRunningTask else { return }
+
+        // Flush accumulated session transcript before the app terminates.
+        // This preserves messages from the partial run for both cron and heartbeat.
+        await persistInFlightSession()
+
+        // Heartbeat is a synthetic task with no store entry — session flush above
+        // is sufficient. No TaskRun record to save.
+        if task.id == Self.heartbeatSessionId {
+            Log.agent.info("SchedulingActor: heartbeat interrupted during shutdown")
+            return
+        }
+
         let now = Date()
         let startedAt = currentRunStartedAt ?? now
         let run = TaskRun(

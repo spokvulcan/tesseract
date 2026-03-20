@@ -24,6 +24,12 @@ final class BackgroundAgentFactory {
     private let cachedTools: [AgentToolDefinition]
     private let agentRoot: URL
 
+    /// In-flight agent and session during `executeAndPersist`. Set at execution
+    /// start, cleared on completion. Used by `persistInFlightSession()` to flush
+    /// the accumulated transcript on shutdown before the app terminates.
+    private var inFlightAgent: Agent?
+    private var inFlightSession: BackgroundSession?
+
     // MARK: - Init
 
     init(
@@ -77,14 +83,14 @@ final class BackgroundAgentFactory {
 
     /// Create a fully configured `Agent` for the given scheduled task,
     /// returning it alongside the loaded session for later persistence.
-    private func createAgent(for task: ScheduledTask) async -> (Agent, BackgroundSession) {
+    private func createAgent(for task: ScheduledTask, sessionType: SessionType = .cron) async -> (Agent, BackgroundSession) {
         let selectedModelID = settingsManager.selectedAgentModelID
 
         // 1. Load or create session — populate metadata from task before save
         var session = await sessionStore.loadOrCreate(sessionId: task.sessionId)
         session.taskId = task.id
         session.displayName = task.name
-        session.sessionType = .cron
+        session.sessionType = sessionType
 
         // 2. Assemble system prompt with cached context + fresh date/time + task preamble
         let basePrompt = SystemPromptAssembler.assemble(
@@ -95,8 +101,14 @@ final class BackgroundAgentFactory {
             dateTime: Date(),
             agentRoot: agentRoot.path
         )
-        let systemPrompt = basePrompt + "\n\n"
-            + SystemPromptAssembler.backgroundPreamble(for: task)
+        let preamble: String
+        switch sessionType {
+        case .heartbeat:
+            preamble = SystemPromptAssembler.heartbeatPreamble()
+        case .cron:
+            preamble = SystemPromptAssembler.backgroundPreamble(for: task)
+        }
+        let systemPrompt = basePrompt + "\n\n" + preamble
 
         // 3. Build compaction transform — fresh ContextManager per run
         let generateParameters = AgentGenerateParameters.forModel(selectedModelID)
@@ -187,13 +199,21 @@ final class BackgroundAgentFactory {
 
     /// Execute a scheduled task with a background agent and persist the transcript.
     /// This replaces the stub `executeTask` closure in `DependencyContainer`.
-    func executeAndPersist(task: ScheduledTask) async -> TaskRunResult {
+    func executeAndPersist(task: ScheduledTask, sessionType: SessionType = .cron) async -> TaskRunResult {
+        defer {
+            inFlightAgent = nil
+            inFlightSession = nil
+        }
         do {
             // Deferred lease: waits until no foreground work is active, then acquires.
             // Re-waits if foreground work arrives while waiting, so background tasks
             // never wedge between consecutive user turns.
             return try await arbiter.withDeferredGPU(.llm) {
-                let (agent, session) = await self.createAgent(for: task)
+                let (agent, session) = await self.createAgent(for: task, sessionType: sessionType)
+
+                // Track in-flight state for shutdown persistence
+                self.inFlightAgent = agent
+                self.inFlightSession = session
 
                 // Record message count before prompting so we can detect new output
                 let messageCountBefore = agent.context.messages.count
@@ -237,6 +257,25 @@ final class BackgroundAgentFactory {
             let message = "Model not available: \(error.localizedDescription)"
             Log.agent.error("Background task '\(task.name)' skipped: \(message)")
             return .error(message: message)
+        }
+    }
+
+    // MARK: - Shutdown Persistence
+
+    /// Flush the in-flight background session transcript to disk.
+    /// Called from the shutdown path to preserve accumulated messages
+    /// before the app terminates mid-execution.
+    func persistInFlightSession() async {
+        guard let agent = inFlightAgent, var session = inFlightSession else { return }
+        do {
+            session.messages = try SyncMessageCodec.encodeAll(
+                agent.context.messages.map { $0 as any AgentMessageProtocol }
+            )
+            session.lastRunAt = Date()
+            await sessionStore.save(session)
+            Log.agent.info("Persisted in-flight background session '\(session.displayName ?? "unknown")'")
+        } catch {
+            Log.agent.error("Failed to persist in-flight background session: \(error)")
         }
     }
 }
