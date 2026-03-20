@@ -58,6 +58,10 @@ final class InferenceArbiter {
     @ObservationIgnored private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, any Error>)] = []
     @ObservationIgnored private var isLeased: Bool = false
 
+    /// Continuations waiting for the GPU to become fully idle (no lease, no queued waiters).
+    /// Used by background tasks to defer to foreground work.
+    @ObservationIgnored private var idleWaiters: [(id: UUID, continuation: CheckedContinuation<Void, Never>)] = []
+
     // MARK: - Dependencies
 
     private let agentEngine: AgentEngine
@@ -145,6 +149,12 @@ final class InferenceArbiter {
             } else {
                 isLeased = false
                 Log.general.info("InferenceArbiter: lease released for \(slot)")
+                // Signal background tasks waiting for idle
+                if !idleWaiters.isEmpty {
+                    let pending = idleWaiters
+                    idleWaiters.removeAll()
+                    for waiter in pending { waiter.continuation.resume() }
+                }
             }
         }
 
@@ -152,6 +162,53 @@ final class InferenceArbiter {
         try await ensureLoaded(slot)
 
         return try await body()
+    }
+
+    /// Like `withExclusiveGPU`, but defers to foreground work.
+    ///
+    /// The caller waits until no lease is held and no FIFO waiters are queued,
+    /// then acquires. If foreground work arrives while waiting, the caller
+    /// re-waits rather than competing in FIFO order. This prevents background
+    /// tasks from wedging between consecutive user turns.
+    func withDeferredGPU<T: Sendable>(
+        _ slot: ModelSlot,
+        body: () async throws -> T
+    ) async throws -> T {
+        // Loop: wait for idle, then re-check. If a foreground request arrived
+        // between the idle signal and our continuation running, loop back.
+        while isLeased || !waiters.isEmpty {
+            await suspendUntilIdle()
+            try Task.checkCancellation()
+        }
+        // GPU is idle with no foreground waiters — acquire immediately.
+        // On MainActor, no work can interleave between the loop exit and
+        // withExclusiveGPU's synchronous isLeased/waiters check.
+        return try await withExclusiveGPU(slot, body: body)
+    }
+
+    // MARK: - Idle Signaling
+
+    /// Suspends until the next idle signal. Called inside `withDeferredGPU`'s
+    /// retry loop. Does NOT check if currently idle — the caller handles that.
+    private func suspendUntilIdle() async {
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                if Task.isCancelled {
+                    continuation.resume()
+                    return
+                }
+                idleWaiters.append((id: waiterID, continuation: continuation))
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let idx = self.idleWaiters.firstIndex(where: { $0.id == waiterID }) {
+                    let removed = self.idleWaiters.remove(at: idx)
+                    removed.continuation.resume()
+                }
+            }
+        }
     }
 
     /// Releases whichever image engine the caller does NOT need.

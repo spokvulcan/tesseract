@@ -189,9 +189,10 @@ final class BackgroundAgentFactory {
     /// This replaces the stub `executeTask` closure in `DependencyContainer`.
     func executeAndPersist(task: ScheduledTask) async -> TaskRunResult {
         do {
-            // Arbiter handles model loading, ImageGen eviction, and GPU serialization.
-            // The lease covers the entire agent run (create + prompt + wait + persist).
-            return try await arbiter.withExclusiveGPU(.llm) {
+            // Deferred lease: waits until no foreground work is active, then acquires.
+            // Re-waits if foreground work arrives while waiting, so background tasks
+            // never wedge between consecutive user turns.
+            return try await arbiter.withDeferredGPU(.llm) {
                 let (agent, session) = await self.createAgent(for: task)
 
                 // Record message count before prompting so we can detect new output
