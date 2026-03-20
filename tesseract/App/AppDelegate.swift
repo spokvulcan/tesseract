@@ -138,11 +138,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Could unload model on memory pressure
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Cancel store subscription synchronously (we're on MainActor)
+        container?.schedulingService.cancelStoreSink()
+
+        // Persist interrupted task state asynchronously, then allow termination.
+        // We use .terminateLater so MainActor stays free for the @MainActor-isolated
+        // ScheduledTaskStore.saveRun call inside persistInterruptedTask.
+        let actor = container?.schedulingActor
+        guard actor != nil else { return .terminateNow }
+
+        Task {
+            await actor?.stopPolling()
+            await actor?.persistInterruptedTask()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         observationTask?.cancel()
         observationTask = nil
-
-        Task { await container?.schedulingService.stop() }
 
         // Stop TTS generation and unload the model before exit() destroys MLX's
         // Metal device singleton. Pending GPU completion handlers would otherwise

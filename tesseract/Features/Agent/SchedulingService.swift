@@ -79,9 +79,15 @@ final class SchedulingService {
     }
 
     func stop() async {
+        cancelStoreSink()
+        await schedulingActor.stopPolling()
+    }
+
+    /// Cancel the Combine subscription synchronously. Called from `applicationWillTerminate`
+    /// (already on MainActor) before blocking on actor work to avoid deadlock.
+    func cancelStoreSink() {
         storeSink?.cancel()
         storeSink = nil
-        await schedulingActor.stopPolling()
     }
 
     // MARK: - State Sync

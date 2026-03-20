@@ -31,6 +31,8 @@ actor SchedulingActor {
     private var pollTask: Task<Void, Never>?
     private(set) var isPaused: Bool = false
     private(set) var currentlyRunningTask: ScheduledTask?
+    private var currentRunStartedAt: Date?
+    private var isShuttingDown: Bool = false
     private var executionQueue: [ScheduledTask] = []
     private var isDraining: Bool = false
     private var consecutiveFailureCount: [UUID: Int] = [:]
@@ -119,12 +121,22 @@ actor SchedulingActor {
 
     private func runTask(_ task: ScheduledTask) async {
         currentlyRunningTask = task
+        currentRunStartedAt = Date()
         await onRunningTaskChanged?(task.id)
 
-        let startedAt = Date()
+        let startedAt = currentRunStartedAt!
         let result = await executeTask(task)
-        let completedAt = Date()
 
+        // If shutdown persisted an .interrupted record while we were suspended,
+        // skip the normal updateAfterRun to avoid a duplicate run record.
+        guard !isShuttingDown else {
+            currentlyRunningTask = nil
+            currentRunStartedAt = nil
+            await onRunningTaskChanged?(nil)
+            return
+        }
+
+        let completedAt = Date()
         let run = TaskRun(
             id: UUID(), taskId: task.id, sessionId: task.sessionId,
             startedAt: startedAt, completedAt: completedAt,
@@ -136,6 +148,7 @@ actor SchedulingActor {
         await taskStore.updateAfterRun(taskId: task.id, run: run)
         await updateFailureTracking(taskId: task.id, result: result)
         currentlyRunningTask = nil
+        currentRunStartedAt = nil
         await onRunningTaskChanged?(nil)
     }
 
@@ -195,6 +208,27 @@ actor SchedulingActor {
         Log.agent.info(
             "SchedulingActor: auto-paused task '\(task.name)' after \(Self.maxConsecutiveFailures) consecutive failures"
         )
+    }
+
+    // MARK: - Shutdown
+
+    /// Persists an `.interrupted` run record for the currently-running task (if any)
+    /// and advances `nextRunAt` so the same occurrence isn't replayed as missed on next launch.
+    /// Sets `isShuttingDown` so that `runTask` skips its own `updateAfterRun` if it resumes.
+    func persistInterruptedTask() async {
+        isShuttingDown = true
+        guard let task = currentlyRunningTask else { return }
+        let now = Date()
+        let startedAt = currentRunStartedAt ?? now
+        let run = TaskRun(
+            id: UUID(), taskId: task.id, sessionId: task.sessionId,
+            startedAt: startedAt, completedAt: now,
+            durationSeconds: Int(now.timeIntervalSince(startedAt)),
+            result: .interrupted, summary: TaskRunResult.interrupted.displaySummary,
+            notifiedUser: false, spokeResult: false, tokensUsed: nil
+        )
+        await taskStore.updateAfterRun(taskId: task.id, run: run)
+        Log.agent.info("SchedulingActor: persisted interrupted run for '\(task.name)'")
     }
 
     // MARK: - State Queries

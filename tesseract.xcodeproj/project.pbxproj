@@ -455,6 +455,8 @@
 				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Tesseract Agent uses Accessibility to register global keyboard shortcuts for dictation, text-to-speech, and agent voice input.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture voice for transcription";
+				INFOPLIST_KEY_NSSupportsAutomaticTermination = NO;
+				INFOPLIST_KEY_NSSupportsSuddenTermination = NO;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -506,6 +508,8 @@
 				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Tesseract Agent uses Accessibility to register global keyboard shortcuts for dictation, text-to-speech, and agent voice input.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture voice for transcription";
+				INFOPLIST_KEY_NSSupportsAutomaticTermination = NO;
+				INFOPLIST_KEY_NSSupportsSuddenTermination = NO;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
