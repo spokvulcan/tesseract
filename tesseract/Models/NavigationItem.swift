@@ -9,6 +9,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case dictation
     case speech
     case agent
+    case scheduled
     case image
     case zimage
     case general
@@ -17,7 +18,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
 
     var id: String { rawValue }
 
-    static let mainPages: [NavigationItem] = [.agent, .dictation, .speech]
+    static let mainPages: [NavigationItem] = [.agent, .scheduled, .dictation, .speech]
     static let settingsPages: [NavigationItem] = [.general, .recording, .model]
 
     var name: LocalizedStringResource {
@@ -25,6 +26,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .dictation: "Dictation"
         case .speech: "Speech"
         case .agent: "Agent"
+        case .scheduled: "Scheduled"
         case .image: "Image"
         case .zimage: "Z-Image"
         case .general: "General"
@@ -38,6 +40,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .dictation: "mic.fill"
         case .speech: "speaker.wave.3.fill"
         case .agent: "brain.head.profile"
+        case .scheduled: "calendar.badge.clock"
         case .image: "photo.fill"
         case .zimage: "photo.artframe"
         case .general: "gear"
@@ -55,6 +58,8 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
             SpeechContentView()
         case .agent:
             AgentContentView()
+        case .scheduled:
+            ScheduledTasksView()
         case .image:
             ImageGenContentView()
         case .zimage:

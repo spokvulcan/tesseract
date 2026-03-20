@@ -53,6 +53,9 @@ struct ContentView: View {
                 .environment(container.speechCoordinator)
                 .environment(container.transcriptionEngine)
                 .environmentObject(container.modelDownloadManager)
+        case .scheduled:
+            ScheduledTasksView()
+                .injectAgentDependencies(from: container)
         case .image:
             ImageGenContentView()
                 .injectModelDependencies(from: container)
