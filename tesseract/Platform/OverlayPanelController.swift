@@ -170,9 +170,8 @@ final class OverlayPanelController {
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
         }, completionHandler: {
-            // Ensure orderOut is called on MainActor
-            Task { @MainActor [weak panel] in
-                guard requestID == self.hideRequestID else { return }
+            Task { @MainActor [weak self, weak panel] in
+                guard let self, requestID == self.hideRequestID else { return }
                 panel?.orderOut(nil)
             }
         })
@@ -180,28 +179,28 @@ final class OverlayPanelController {
 
     private func startScreenObservation() {
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
-            .receive(on: RunLoop.main)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.refreshPanelLayout()
             }
             .store(in: &cancellables)
 
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
-            .receive(on: RunLoop.main)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.refreshPanelLayout()
             }
             .store(in: &cancellables)
 
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
-            .receive(on: RunLoop.main)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.refreshPanelLayout()
             }
             .store(in: &cancellables)
 
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidWakeNotification)
-            .receive(on: RunLoop.main)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.refreshPanelLayout()
             }
