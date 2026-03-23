@@ -16,6 +16,17 @@ LOG_FILE="$BENCH_DIR/latest.log"
 RESULTS_DIR="$BENCH_DIR/results"
 REPO_RESULTS="$PROJECT_DIR/benchmarks/results"
 
+# Clean stale module cache on config switch to avoid "Unable to find module dependency" errors
+DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+if [ -n "$DERIVED_DATA" ]; then
+    LAST_CONFIG=""
+    [ -f "$DERIVED_DATA/.last_config" ] && LAST_CONFIG=$(cat "$DERIVED_DATA/.last_config")
+    if [ -n "$LAST_CONFIG" ] && [ "$LAST_CONFIG" != "$CONFIGURATION" ]; then
+        echo "Configuration changed ($LAST_CONFIG → $CONFIGURATION), cleaning module cache..."
+        rm -rf "$DERIVED_DATA/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules" 2>/dev/null
+    fi
+fi
+
 # Build Release directly (dev.sh build doesn't forward args)
 echo "Building tesseract ($CONFIGURATION)..."
 BUILD_OUTPUT=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
@@ -23,11 +34,31 @@ BUILD_OUTPUT=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
     -destination 'platform=macOS' \
     -skipPackagePluginValidation \
     2>&1) || {
-    echo "$BUILD_OUTPUT" | tail -20
-    echo "BUILD FAILED"
-    exit 1
+    # Auto-recover from stale module cache
+    if echo "$BUILD_OUTPUT" | grep -q "Unable to find module dependency"; then
+        echo "Detected stale module cache. Cleaning and retrying..."
+        DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+        [ -n "$DERIVED_DATA" ] && rm -rf "$DERIVED_DATA/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules" 2>/dev/null
+        xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme "$SCHEME" 2>&1 | grep -E "^(error:|Resolved)" || true
+        BUILD_OUTPUT=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -destination 'platform=macOS' \
+            -skipPackagePluginValidation \
+            2>&1) || {
+            echo "$BUILD_OUTPUT" | tail -20
+            echo "BUILD FAILED after retry"
+            exit 1
+        }
+    else
+        echo "$BUILD_OUTPUT" | tail -20
+        echo "BUILD FAILED"
+        exit 1
+    fi
 }
 echo "$BUILD_OUTPUT" | grep -E "^(\*\* BUILD)" || true
+# Stamp the configuration
+DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+[ -n "$DERIVED_DATA" ] && echo "$CONFIGURATION" > "$DERIVED_DATA/.last_config"
 echo "Build succeeded."
 
 # Find the built app (search Xcode's default DerivedData, most recently modified first)

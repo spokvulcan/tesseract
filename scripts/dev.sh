@@ -90,6 +90,30 @@ cmd_build() {
     local configuration="${1:-Debug}"
     shift || true
 
+    # Detect configuration switch or missing SourcePackages — auto-clean to avoid
+    # stale C shim module errors (CAsyncHTTPClient, CNIOPosix, etc.)
+    local derived_data
+    derived_data=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+    if [ -n "$derived_data" ]; then
+        local config_stamp="$derived_data/.last_config"
+        local last_config=""
+        [ -f "$config_stamp" ] && last_config=$(cat "$config_stamp")
+
+        if [ -n "$last_config" ] && [ "$last_config" != "$configuration" ]; then
+            echo "Configuration changed ($last_config → $configuration), cleaning module cache..."
+            rm -rf "$derived_data/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules" 2>/dev/null
+        fi
+
+        # Check SourcePackages integrity — if checkouts are missing/empty, re-resolve
+        local checkouts="$derived_data/SourcePackages/checkouts"
+        if [ ! -d "$checkouts" ] || [ -z "$(ls -A "$checkouts" 2>/dev/null)" ]; then
+            echo "SourcePackages missing or empty, resolving..."
+            xcodebuild -resolvePackageDependencies \
+                -project "$PROJECT" -scheme "$SCHEME" 2>&1 \
+            | grep -E "^(error:|warning:|Resolved)" || true
+        fi
+    fi
+
     echo "Building tesseract ($configuration)..."
     local build_output
     local exit_code=0
@@ -103,12 +127,41 @@ cmd_build() {
     echo "$build_output" | grep -E "^(error:|warning:|Build |BUILD |\*\*)" || true
 
     if [ $exit_code -ne 0 ]; then
-        echo ""
-        echo "BUILD FAILED (exit code $exit_code)"
-        # Show the last 20 lines for context on failure
-        echo "$build_output" | tail -20
-        return $exit_code
+        # Auto-recover from "Unable to find module dependency" errors
+        if echo "$build_output" | grep -q "Unable to find module dependency"; then
+            echo ""
+            echo "Detected stale module cache. Cleaning and retrying..."
+            rm -rf "$derived_data/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules" 2>/dev/null
+            xcodebuild -resolvePackageDependencies \
+                -project "$PROJECT" -scheme "$SCHEME" 2>&1 \
+            | grep -E "^(error:|warning:|Resolved)" || true
+
+            exit_code=0
+            build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
+                -configuration "$configuration" \
+                -destination 'platform=macOS' \
+                -skipPackagePluginValidation \
+                "$@" 2>&1) || exit_code=$?
+
+            echo "$build_output" | grep -E "^(error:|warning:|Build |BUILD |\*\*)" || true
+
+            if [ $exit_code -ne 0 ]; then
+                echo ""
+                echo "BUILD FAILED after retry (exit code $exit_code)"
+                echo "$build_output" | tail -20
+                return $exit_code
+            fi
+        else
+            echo ""
+            echo "BUILD FAILED (exit code $exit_code)"
+            echo "$build_output" | tail -20
+            return $exit_code
+        fi
     fi
+
+    # Stamp the configuration for change detection
+    derived_data=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+    [ -n "$derived_data" ] && echo "$configuration" > "$derived_data/.last_config"
 
     echo ""
     echo "Build succeeded."
