@@ -73,12 +73,7 @@ actor LLMActor {
             presencePenalty: parameters.presencePenalty
         )
 
-        // withError converts C++ MLX errors (matmul shape mismatches, etc.) into
-        // throwable MLXError instead of fatalError. Covers the prefill phase;
-        // stream iteration errors are caught by AgentEngine's do/catch.
-        return try await withError {
-            try await container.generate(input: prepared, parameters: genParams)
-        }
+        return try await container.generate(input: prepared, parameters: genParams)
     }
 
     /// Renders messages and tools through the Jinja chat template, returning the exact
@@ -137,12 +132,13 @@ actor LLMActor {
     private func verifyAndStore(
         container: ModelContainer, directory: URL
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
-        let input = try await container.prepare(input: UserInput(prompt: "Hello"))
-        let parameters = GenerateParameters(maxTokens: 1)
         // Wrap in withError so C++ MLX errors (e.g. matmul shape mismatches) throw
         // instead of calling fatalError via the default error handler.
         try await withError {
-            let stream = try await container.generate(input: input, parameters: parameters)
+            let input = try await container.prepare(input: UserInput(prompt: "Hello"))
+            let stream = try await container.generate(
+                input: input, parameters: GenerateParameters(maxTokens: 1)
+            )
             for await _ in stream {}
         }
 
