@@ -1,18 +1,67 @@
 import Foundation
+import SwiftReadability
+import Demark
 
 // MARK: - WebContentExtractor
 
-/// Extracts readable text content from raw HTML using Foundation regex.
-/// Strips boilerplate (nav, ads, scripts, styles) and decodes entities.
+/// Extracts readable content from raw HTML.
+///
+/// Primary path: swift-readability (Mozilla Readability port) extracts the article,
+/// then Demark converts the clean HTML to markdown.
+/// Fallback: regex-based noise removal + tag stripping when Readability returns nil.
 nonisolated enum WebContentExtractor: Sendable {
 
     struct ExtractedContent: Sendable {
         let title: String
-        let text: String
+        let content: String
         let url: URL
     }
 
-    // MARK: - Static Regex Patterns
+    // MARK: - Public API
+
+    /// Extract readable content from HTML as markdown.
+    /// Uses swift-readability + Demark when possible, falls back to regex.
+    static func extract(html: String, url: URL) async -> ExtractedContent {
+        do {
+            if let result = try await extractWithReadability(html: html, url: url) {
+                return result
+            }
+        } catch {
+            Log.agent.debug("[WebContentExtractor] Readability/Demark failed, using regex fallback: \(error)")
+        }
+
+        return extractBasic(html: html, url: url)
+    }
+
+    // MARK: - Readability + Demark Pipeline
+
+    private static func extractWithReadability(html: String, url: URL) async throws -> ExtractedContent? {
+        let reader = Readability(html: html, url: url)
+        guard let article = try reader.parse() else { return nil }
+
+        let title = article.title ?? ""
+        let contentHTML = article.contentHTML
+
+        // Convert clean HTML to markdown via Demark (JSC engine, fast).
+        // Demark must be created on MainActor (ConversionRuntime is @MainActor).
+        let markdown = try await demarkConvert(contentHTML)
+
+        return ExtractedContent(title: title, content: markdown, url: url)
+    }
+
+    /// Singleton Demark instance on MainActor — avoids recreating JSC context per call.
+    @MainActor
+    private static let sharedDemark = Demark()
+
+    @MainActor
+    private static func demarkConvert(_ html: String) async throws -> String {
+        try await sharedDemark.convertToMarkdown(
+            html,
+            options: DemarkOptions(engine: .htmlToMd)
+        )
+    }
+
+    // MARK: - Regex Fallback Pipeline
 
     /// Extracts <title>...</title> content.
     private static let titleRegex = try! NSRegularExpression(
@@ -20,57 +69,48 @@ nonisolated enum WebContentExtractor: Sendable {
         options: .caseInsensitive
     )
 
-    /// Matches entire block elements that should be removed (tag + content).
-    /// Uses backreference `\1` to ensure closing tag matches opening tag name.
+    /// Matches entire noise block elements (tag + content) with backreference.
     private static let noiseBlockRegex = try! NSRegularExpression(
         pattern: #"<(script|style|nav|footer|header|aside|noscript|svg|iframe|form)\b[^>]*>[\s\S]*?</\1>"#,
         options: .caseInsensitive
     )
 
-    /// Matches self-closing or void noise elements (e.g., <script src="..."/>).
     private static let noiseSelfClosingRegex = try! NSRegularExpression(
         pattern: #"<(script|style|link|meta|svg|iframe)\b[^>]*/\s*>"#,
         options: .caseInsensitive
     )
 
-    /// Matches elements with noise classes. Uses backreference to match closing tag.
+    /// Matches elements with noise classes, backreference for closing tag.
     private static let noiseClassRegex = try! NSRegularExpression(
         pattern: #"<(\w+)[^>]+class="[^"]*\b(ad|ads|advert|banner|cookie|popup|modal|sidebar|comment|share|social|login|signup|newsletter|promo)\b[^"]*"[^>]*>[\s\S]*?</\1>"#,
         options: .caseInsensitive
     )
 
-    /// Matches HTML comments.
     private static let commentRegex = try! NSRegularExpression(
         pattern: #"<!--[\s\S]*?-->"#,
         options: []
     )
 
-    /// Collapses 3+ newlines to double newline in a single pass.
     private static let excessNewlinesRegex = try! NSRegularExpression(
         pattern: #"\n{3,}"#,
         options: []
     )
 
-    /// Collapses runs of horizontal whitespace (spaces/tabs) to a single space.
     private static let horizontalSpaceRegex = try! NSRegularExpression(
         pattern: #"[^\S\n]{2,}"#,
         options: []
     )
 
-    // MARK: - Public API
-
-    /// Extract readable text from HTML, stripping boilerplate.
-    static func extract(html: String, url: URL) -> ExtractedContent {
+    /// Regex-based fallback when Readability can't extract article content.
+    static func extractBasic(html: String, url: URL) -> ExtractedContent {
         let title = extractTitle(from: html)
         let cleaned = removeNoise(from: html)
         let text = HTMLUtilities.stripHTMLTags(cleaned)
         let decoded = HTMLUtilities.decodeHTMLEntities(text)
         let collapsed = collapseWhitespace(decoded)
 
-        return ExtractedContent(title: title, text: collapsed, url: url)
+        return ExtractedContent(title: title, content: collapsed, url: url)
     }
-
-    // MARK: - Extraction Steps (internal for testability)
 
     private static func extractTitle(from html: String) -> String {
         let nsHTML = html as NSString
@@ -104,7 +144,6 @@ nonisolated enum WebContentExtractor: Sendable {
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
 
-        // Collapse 3+ newlines → double newline (single regex pass)
         let nsResult1 = result as NSString
         result = excessNewlinesRegex.stringByReplacingMatches(
             in: result,
@@ -112,7 +151,6 @@ nonisolated enum WebContentExtractor: Sendable {
             withTemplate: "\n\n"
         )
 
-        // Collapse runs of horizontal whitespace → single space (single regex pass)
         let nsResult2 = result as NSString
         result = horizontalSpaceRegex.stringByReplacingMatches(
             in: result,

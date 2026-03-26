@@ -37,61 +37,61 @@ struct WebContentExtractorTests {
     """
 
     @Test func extractsTitleFromHTML() {
-        let result = WebContentExtractor.extract(html: Self.fullPageHTML, url: Self.sampleURL)
+        let result = WebContentExtractor.extractBasic(html: Self.fullPageHTML, url: Self.sampleURL)
         #expect(result.title == "Swift 6.2 Released — The Swift Blog")
     }
 
     @Test func stripsScriptAndStyleContent() {
-        let result = WebContentExtractor.extract(html: Self.fullPageHTML, url: Self.sampleURL)
-        #expect(!result.text.contains("analytics"))
-        #expect(!result.text.contains("trackPageView"))
-        #expect(!result.text.contains("font-family"))
+        let result = WebContentExtractor.extractBasic(html: Self.fullPageHTML, url: Self.sampleURL)
+        #expect(!result.content.contains("analytics"))
+        #expect(!result.content.contains("trackPageView"))
+        #expect(!result.content.contains("font-family"))
     }
 
     @Test func stripsNavAndFooter() {
-        let result = WebContentExtractor.extract(html: Self.fullPageHTML, url: Self.sampleURL)
+        let result = WebContentExtractor.extractBasic(html: Self.fullPageHTML, url: Self.sampleURL)
         // Nav links should be removed
-        #expect(!result.text.contains("Home | Blog"))
+        #expect(!result.content.contains("Home | Blog"))
         // Footer should be removed
-        #expect(!result.text.contains("2026 Apple Inc"))
+        #expect(!result.content.contains("2026 Apple Inc"))
     }
 
     @Test func preservesArticleContent() {
-        let result = WebContentExtractor.extract(html: Self.fullPageHTML, url: Self.sampleURL)
-        #expect(result.text.contains("Swift 6.2 Released"))
-        #expect(result.text.contains("excited to announce"))
-        #expect(result.text.contains("improved concurrency & performance"))
+        let result = WebContentExtractor.extractBasic(html: Self.fullPageHTML, url: Self.sampleURL)
+        #expect(result.content.contains("Swift 6.2 Released"))
+        #expect(result.content.contains("excited to announce"))
+        #expect(result.content.contains("improved concurrency & performance"))
     }
 
     @Test func decodesHTMLEntities() {
-        let result = WebContentExtractor.extract(html: Self.fullPageHTML, url: Self.sampleURL)
+        let result = WebContentExtractor.extractBasic(html: Self.fullPageHTML, url: Self.sampleURL)
         // &#x27; should become '
-        #expect(result.text.contains("We're excited"))
+        #expect(result.content.contains("We're excited"))
         // &amp; should become &
-        #expect(result.text.contains("concurrency & performance"))
+        #expect(result.content.contains("concurrency & performance"))
     }
 
     @Test func stripsAsideSidebar() {
-        let result = WebContentExtractor.extract(html: Self.fullPageHTML, url: Self.sampleURL)
-        #expect(!result.text.contains("Popular Posts"))
+        let result = WebContentExtractor.extractBasic(html: Self.fullPageHTML, url: Self.sampleURL)
+        #expect(!result.content.contains("Popular Posts"))
     }
 
     @Test func preservesURLInResult() {
-        let result = WebContentExtractor.extract(html: Self.fullPageHTML, url: Self.sampleURL)
+        let result = WebContentExtractor.extractBasic(html: Self.fullPageHTML, url: Self.sampleURL)
         #expect(result.url == Self.sampleURL)
     }
 
     @Test func handlesEmptyHTML() {
-        let result = WebContentExtractor.extract(html: "", url: Self.sampleURL)
+        let result = WebContentExtractor.extractBasic(html: "", url: Self.sampleURL)
         #expect(result.title == "")
-        #expect(result.text == "")
+        #expect(result.content == "")
     }
 
     @Test func handlesHTMLWithNoTitle() {
         let html = "<html><body><p>Just some text.</p></body></html>"
-        let result = WebContentExtractor.extract(html: html, url: Self.sampleURL)
+        let result = WebContentExtractor.extractBasic(html: html, url: Self.sampleURL)
         #expect(result.title == "")
-        #expect(result.text.contains("Just some text"))
+        #expect(result.content.contains("Just some text"))
     }
 
     @Test func handlesHTMLWithOnlyBoilerplate() {
@@ -102,23 +102,23 @@ struct WebContentExtractorTests {
         <nav>Navigation links</nav>
         </body></html>
         """
-        let result = WebContentExtractor.extract(html: html, url: Self.sampleURL)
-        #expect(!result.text.contains("lots of js"))
-        #expect(!result.text.contains("color: red"))
+        let result = WebContentExtractor.extractBasic(html: html, url: Self.sampleURL)
+        #expect(!result.content.contains("lots of js"))
+        #expect(!result.content.contains("color: red"))
     }
 
     @Test func collapsesExcessiveWhitespace() {
         let html = "<html><body><p>Line 1</p>\n\n\n\n\n<p>Line 2</p></body></html>"
-        let result = WebContentExtractor.extract(html: html, url: Self.sampleURL)
+        let result = WebContentExtractor.extractBasic(html: html, url: Self.sampleURL)
         // Should not have more than double newline
-        #expect(!result.text.contains("\n\n\n"))
+        #expect(!result.content.contains("\n\n\n"))
     }
 
     @Test func stripsHTMLComments() {
         let html = "<html><body><!-- This is a comment --><p>Visible text</p></body></html>"
-        let result = WebContentExtractor.extract(html: html, url: Self.sampleURL)
-        #expect(!result.text.contains("This is a comment"))
-        #expect(result.text.contains("Visible text"))
+        let result = WebContentExtractor.extractBasic(html: html, url: Self.sampleURL)
+        #expect(!result.content.contains("This is a comment"))
+        #expect(result.content.contains("Visible text"))
     }
 }
 
@@ -246,5 +246,82 @@ struct WhitespaceCollapseTests {
         let input = "Line 1\r\nLine 2\rLine 3"
         let result = WebContentExtractor.collapseWhitespace(input)
         #expect(result == "Line 1\nLine 2\nLine 3")
+    }
+}
+
+// MARK: - Readability + Demark Integration Tests
+
+@MainActor
+struct ReadabilityExtractionTests {
+
+    private static let sampleURL = URL(string: "https://example.com/article")!
+
+    /// Well-structured article HTML that Readability should handle.
+    private static let articleHTML = """
+    <!DOCTYPE html>
+    <html>
+    <head><title>Swift Concurrency Guide</title></head>
+    <body>
+        <nav><a href="/">Home</a></nav>
+        <article>
+            <h1>Swift Concurrency Guide</h1>
+            <p>Swift's concurrency model provides <strong>structured concurrency</strong> with async/await.</p>
+            <h2>async/await</h2>
+            <p>The <code>async</code> keyword marks a function that can suspend:</p>
+            <pre><code>func fetchData() async throws -&gt; Data {
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return data
+    }</code></pre>
+            <h2>Task Groups</h2>
+            <p>Use <a href="https://docs.swift.org">task groups</a> for parallel work.</p>
+            <ul>
+                <li>Structured concurrency</li>
+                <li>Automatic cancellation</li>
+            </ul>
+        </article>
+        <footer><p>Copyright 2026</p></footer>
+    </body>
+    </html>
+    """
+
+    @Test func readabilityExtractsTitle() async {
+        let result = await WebContentExtractor.extract(html: Self.articleHTML, url: Self.sampleURL)
+        #expect(result.title.contains("Swift Concurrency"))
+    }
+
+    @Test func readabilityProducesMarkdown() async {
+        let result = await WebContentExtractor.extract(html: Self.articleHTML, url: Self.sampleURL)
+        // Should contain markdown headings (from Demark)
+        #expect(result.content.contains("# ") || result.content.contains("## "))
+    }
+
+    @Test func readabilityPreservesCodeBlocks() async {
+        let result = await WebContentExtractor.extract(html: Self.articleHTML, url: Self.sampleURL)
+        #expect(result.content.contains("fetchData"))
+        #expect(result.content.contains("async"))
+    }
+
+    @Test func readabilityPreservesBoldText() async {
+        let result = await WebContentExtractor.extract(html: Self.articleHTML, url: Self.sampleURL)
+        // Demark should convert <strong> to **bold**
+        #expect(result.content.contains("**structured concurrency**") || result.content.contains("structured concurrency"))
+    }
+
+    @Test func readabilityPreservesList() async {
+        let result = await WebContentExtractor.extract(html: Self.articleHTML, url: Self.sampleURL)
+        #expect(result.content.contains("Structured concurrency"))
+        #expect(result.content.contains("Automatic cancellation"))
+    }
+
+    @Test func fallsBackForMinimalHTML() async {
+        // HTML too minimal for Readability — should fall back to regex
+        let html = "<html><body><p>Just a short paragraph.</p></body></html>"
+        let result = await WebContentExtractor.extract(html: html, url: Self.sampleURL)
+        #expect(result.content.contains("Just a short paragraph"))
+    }
+
+    @Test func preservesURL() async {
+        let result = await WebContentExtractor.extract(html: Self.articleHTML, url: Self.sampleURL)
+        #expect(result.url == Self.sampleURL)
     }
 }

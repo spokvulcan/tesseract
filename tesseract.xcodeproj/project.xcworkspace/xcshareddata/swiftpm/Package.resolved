@@ -1,5 +1,5 @@
 {
-  "originHash" : "65dee27b1ab8b3d4fbc37b32b2a213a24802977a774abb3d6beacb9e77dd524a",
+  "originHash" : "ea007e7930deadf37a58dd37a1f427b080b96c2aed7d5622ac25e79528793dbc",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "2fc4652fb4689eb24af10e55cabaa61d8ba774fd",
         "version" : "1.32.0"
+      }
+    },
+    {
+      "identity" : "demark",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/steipete/Demark.git",
+      "state" : {
+        "revision" : "9d12266c98f51099beec92e50483392869b12d77",
+        "version" : "1.1.0"
       }
     },
     {
@@ -236,6 +245,15 @@
       }
     },
     {
+      "identity" : "swift-readability",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/lake-of-fire/swift-readability",
+      "state" : {
+        "branch" : "main",
+        "revision" : "d4f0824f5f4496791d01a83493ffccf3dd89c4cf"
+      }
+    },
+    {
       "identity" : "swift-service-context",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-service-context.git",
@@ -278,6 +296,15 @@
       "state" : {
         "revision" : "341bfd4172f6a57119bfd49bafa11cf5d21fab75",
         "version" : "0.2.3"
+      }
+    },
+    {
+      "identity" : "swiftsoup",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/scinfu/SwiftSoup.git",
+      "state" : {
+        "revision" : "6c7915e16f729857aec3e99068c361e58a00ed68",
+        "version" : "2.13.4"
       }
     },
     {

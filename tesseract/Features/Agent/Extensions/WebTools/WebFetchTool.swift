@@ -164,9 +164,9 @@ nonisolated func createWebFetchTool() -> AgentToolDefinition {
 
             do {
                 let (html, finalURL) = try await fetchHTML(url: url)
-                let extracted = WebContentExtractor.extract(html: html, url: finalURL)
+                let extracted = await WebContentExtractor.extract(html: html, url: finalURL)
 
-                var content = extracted.text
+                var content = extracted.content
                 var wasTruncated = false
                 if content.count > maxChars {
                     content = truncateAtBoundary(content, maxChars: maxChars)
