@@ -45,6 +45,7 @@ final class SettingsManager {
         static let playSounds = "playSounds"
         static let showNotifications = "showNotifications"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
+        static let webAccessEnabled = "webAccessEnabled"
     }
 
     // MARK: - General Settings
@@ -263,6 +264,12 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(showNotifications, forKey: Key.showNotifications) }
     }
 
+    // MARK: - Agent Web Access
+
+    var webAccessEnabled = false {
+        didSet { UserDefaults.standard.set(webAccessEnabled, forKey: Key.webAccessEnabled) }
+    }
+
     // MARK: - Onboarding
 
     var hasCompletedOnboarding = false {
@@ -307,6 +314,7 @@ final class SettingsManager {
             Key.playSounds: true,
             Key.showNotifications: true,
             Key.hasCompletedOnboarding: false,
+            Key.webAccessEnabled: false,
         ])
 
         // Load persisted values (didSet does NOT fire during init).
@@ -341,6 +349,7 @@ final class SettingsManager {
         playSounds = ud.bool(forKey: Key.playSounds)
         showNotifications = ud.bool(forKey: Key.showNotifications)
         hasCompletedOnboarding = ud.bool(forKey: Key.hasCompletedOnboarding)
+        webAccessEnabled = ud.bool(forKey: Key.webAccessEnabled)
     }
 
     // MARK: - Methods
@@ -376,6 +385,7 @@ final class SettingsManager {
         selectedAgentModelID = ModelDefinition.defaultAgentModelID
         heartbeatEnabled = true
         heartbeatIntervalMinutes = 30
+        webAccessEnabled = false
     }
 
     // MARK: - Private

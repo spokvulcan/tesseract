@@ -50,7 +50,8 @@ final class DependencyContainer: ObservableObject {
         extensionHost: extensionHost,
         toolRegistry: newToolRegistry,
         contextManager: contextManager,
-        selectedModelID: settingsManager.selectedAgentModelID
+        selectedModelID: settingsManager.selectedAgentModelID,
+        settingsManager: settingsManager
     )
     lazy var agentConversationStore = AgentConversationStore()
     lazy var scheduledTaskStore = ScheduledTaskStore()

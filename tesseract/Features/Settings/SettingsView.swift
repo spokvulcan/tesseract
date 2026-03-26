@@ -364,6 +364,13 @@ struct RecordingSettingsSection: View {
                 }
             }
 
+            Section("Web Access") {
+                Toggle("Enable Web Search", isOn: $settings.webAccessEnabled)
+                Text("Search queries are sent to DuckDuckGo. No conversation data leaves your device.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Background Agent") {
                 Toggle(
                     "Pause All Scheduling",

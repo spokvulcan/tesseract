@@ -51,7 +51,8 @@ final class BackgroundAgentFactory {
         PackageBootstrap.bootstrap(
             packageRegistry: packageRegistry,
             extensionHost: extensionHost,
-            agentRoot: agentRoot
+            agentRoot: agentRoot,
+            settingsManager: settingsManager
         )
 
         // 2. Refresh extension tools after package bootstrap (AgentFactory step 2)

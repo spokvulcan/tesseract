@@ -90,20 +90,9 @@ cmd_build() {
     local configuration="${1:-Debug}"
     shift || true
 
-    # Detect configuration switch or missing SourcePackages — auto-clean to avoid
-    # stale C shim module errors (CAsyncHTTPClient, CNIOPosix, etc.)
     local derived_data
     derived_data=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
     if [ -n "$derived_data" ]; then
-        local config_stamp="$derived_data/.last_config"
-        local last_config=""
-        [ -f "$config_stamp" ] && last_config=$(cat "$config_stamp")
-
-        if [ -n "$last_config" ] && [ "$last_config" != "$configuration" ]; then
-            echo "Configuration changed ($last_config → $configuration), cleaning module cache..."
-            rm -rf "$derived_data/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules" 2>/dev/null
-        fi
-
         # Check SourcePackages integrity — if checkouts are missing/empty, re-resolve
         local checkouts="$derived_data/SourcePackages/checkouts"
         if [ ! -d "$checkouts" ] || [ -z "$(ls -A "$checkouts" 2>/dev/null)" ]; then
@@ -115,49 +104,57 @@ cmd_build() {
     fi
 
     echo "Building tesseract ($configuration)..."
-    local build_output
+    local build_log
+    build_log=$(mktemp)
     local exit_code=0
-    build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
+    xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
         -configuration "$configuration" \
         -destination 'platform=macOS' \
         -skipPackagePluginValidation \
-        "$@" 2>&1) || exit_code=$?
+        "$@" >"$build_log" 2>&1 || exit_code=$?
 
     # Show errors, warnings, and the final BUILD result
-    echo "$build_output" | grep -E "^(error:|warning:|Build |BUILD |\*\*)" || true
+    grep -E "^(error:|warning:|Build |BUILD |\*\*)" "$build_log" || true
 
     if [ $exit_code -ne 0 ]; then
-        # Auto-recover from "Unable to find module dependency" errors
-        if echo "$build_output" | grep -q "Unable to find module dependency"; then
+        # Auto-recover from "Unable to find module dependency" errors caused by
+        # Xcode GUI and xcodebuild CLI sharing DerivedData. The GUI's explicit
+        # precompiled module cache becomes stale for CLI builds. Cleaning just the
+        # module cache is insufficient — XCBuildData still references deleted modules.
+        # Instead, nuke all intermediates (build graph + module cache + object files)
+        # and rebuild. Build/Products and SourcePackages are preserved.
+        if grep -q "Unable to find module dependency\|missing required module" "$build_log"; then
             echo ""
-            echo "Detected stale module cache. Cleaning and retrying..."
-            rm -rf "$derived_data/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules" 2>/dev/null
-            xcodebuild -resolvePackageDependencies \
-                -project "$PROJECT" -scheme "$SCHEME" 2>&1 \
-            | grep -E "^(error:|warning:|Resolved)" || true
+            echo "Detected stale module cache. Cleaning intermediates and retrying..."
+            derived_data=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
+            [ -n "$derived_data" ] && rm -rf "$derived_data/Build/Intermediates.noindex" 2>/dev/null
 
             exit_code=0
-            build_output=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
+            xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
                 -configuration "$configuration" \
                 -destination 'platform=macOS' \
                 -skipPackagePluginValidation \
-                "$@" 2>&1) || exit_code=$?
+                "$@" >"$build_log" 2>&1 || exit_code=$?
 
-            echo "$build_output" | grep -E "^(error:|warning:|Build |BUILD |\*\*)" || true
+            grep -E "^(error:|warning:|Build |BUILD |\*\*)" "$build_log" || true
 
             if [ $exit_code -ne 0 ]; then
                 echo ""
                 echo "BUILD FAILED after retry (exit code $exit_code)"
-                echo "$build_output" | tail -20
+                tail -20 "$build_log"
+                rm -f "$build_log"
                 return $exit_code
             fi
         else
             echo ""
             echo "BUILD FAILED (exit code $exit_code)"
-            echo "$build_output" | tail -20
+            tail -20 "$build_log"
+            rm -f "$build_log"
             return $exit_code
         fi
     fi
+
+    rm -f "$build_log"
 
     # Stamp the configuration for change detection
     derived_data=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)

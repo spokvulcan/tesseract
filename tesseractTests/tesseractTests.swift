@@ -2497,9 +2497,6 @@ struct SchedulingServiceTests {
         store.save(task)
         await service.start()
 
-        // Pre-populate run history cache
-        service.loadRunHistory(for: task.id)
-
         service.deleteTask(id: task.id)
 
         #expect(!service.tasks.contains(where: { $0.id == task.id }))
@@ -2557,7 +2554,7 @@ struct SchedulingServiceTests {
         await service.stop()
     }
 
-    @Test func loadRunHistoryPopulatesCache() async throws {
+    @Test func startPopulatesRunHistory() async throws {
         let (service, store, _) = makeSchedulingServiceTestRig()
         let task = try ScheduledTask.create(name: "WithRuns", cronExpression: "0 9 * * *", prompt: "test")
         store.save(task)
@@ -2571,8 +2568,6 @@ struct SchedulingServiceTests {
         store.saveRun(run)
         await service.start()
 
-        service.loadRunHistory(for: task.id)
-
         #expect(service.runHistory[task.id]?.count == 1)
         #expect(service.runHistory[task.id]?[0].id == run.id)
         await service.stop()
@@ -2584,8 +2579,7 @@ struct SchedulingServiceTests {
         store.save(task)
         await service.start()
 
-        // Initial load — empty
-        service.loadRunHistory(for: task.id)
+        // Initial — no runs yet
         #expect(service.runHistory[task.id]?.count == 0)
 
         // Simulate a completed run saved to store

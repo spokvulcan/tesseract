@@ -16,7 +16,8 @@ enum PackageBootstrap {
     static func bootstrap(
         packageRegistry: PackageRegistry,
         extensionHost: ExtensionHost,
-        agentRoot: URL
+        agentRoot: URL,
+        settingsManager: SettingsManager
     ) {
         // 1. Discover and load packages from bundled and user directories.
         let bundledDir = Bundle.main.url(forResource: "AgentPackages", withExtension: nil)
@@ -52,6 +53,14 @@ enum PackageBootstrap {
                 Log.agent.warning("[PackageBootstrap] Unknown extension identifier: \(extId)")
             }
         }
+
+        // Register standalone extensions (not package-managed)
+        if settingsManager.webAccessEnabled {
+            let webExt = WebToolsExtension()
+            extensionHost.register(webExt)
+            registeredPaths.append(webExt.path)
+        }
+
         packageManagedExtensionPaths = registeredPaths
     }
 
