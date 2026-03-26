@@ -66,33 +66,6 @@ nonisolated enum DuckDuckGoClient: Sendable {
         options: []
     )
 
-    /// Matches any HTML tag for stripping.
-    private static let htmlTagRegex = try! NSRegularExpression(
-        pattern: #"<[^>]+>"#,
-        options: []
-    )
-
-    /// Matches &#NNN; decimal numeric entities.
-    private static let numericEntityRegex = try! NSRegularExpression(
-        pattern: #"&#(\d+);"#,
-        options: []
-    )
-
-    /// Matches &#xHHH; hex numeric entities.
-    private static let hexEntityRegex = try! NSRegularExpression(
-        pattern: #"&#x([0-9a-fA-F]+);"#,
-        options: .caseInsensitive
-    )
-
-    /// Named HTML entities lookup (static to avoid recreating on every decode call).
-    private static let namedEntities: [String: String] = [
-        "&amp;": "&", "&lt;": "<", "&gt;": ">",
-        "&quot;": "\"", "&apos;": "'", "&#39;": "'",
-        "&nbsp;": " ", "&mdash;": "—", "&ndash;": "–",
-        "&laquo;": "«", "&raquo;": "»", "&hellip;": "…",
-        "&copy;": "©", "&reg;": "®", "&trade;": "™",
-    ]
-
     /// Ephemeral session — no persistent cookies or cache.
     private static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -241,18 +214,9 @@ nonisolated enum DuckDuckGoClient: Sendable {
 
     /// Strip HTML tags and decode entities from extracted text.
     static func cleanHTMLText(_ html: String) -> String {
-        let nsString = html as NSString
-        let range = NSRange(location: 0, length: nsString.length)
+        let stripped = HTMLUtilities.stripHTMLTags(html)
+        let decoded = HTMLUtilities.decodeHTMLEntities(stripped)
 
-        // Strip HTML tags
-        let stripped = htmlTagRegex.stringByReplacingMatches(
-            in: html, range: range, withTemplate: ""
-        )
-
-        // Decode HTML entities
-        let decoded = decodeHTMLEntities(stripped)
-
-        // Collapse whitespace
         return decoded
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
@@ -262,41 +226,6 @@ nonisolated enum DuckDuckGoClient: Sendable {
 
     /// Decode common HTML entities and numeric character references.
     static func decodeHTMLEntities(_ string: String) -> String {
-        var result = string
-        for (entity, replacement) in namedEntities {
-            result = result.replacingOccurrences(of: entity, with: replacement)
-        }
-
-        // Decimal numeric entities: &#NNN;
-        result = replaceNumericEntities(in: result, regex: numericEntityRegex, radix: 10)
-
-        // Hex numeric entities: &#xHHH;
-        result = replaceNumericEntities(in: result, regex: hexEntityRegex, radix: 16)
-
-        return result
-    }
-
-    /// Replace numeric character references (decimal or hex) with their Unicode characters.
-    private static func replaceNumericEntities(
-        in string: String, regex: NSRegularExpression, radix: Int
-    ) -> String {
-        let nsString = string as NSString
-        let range = NSRange(location: 0, length: nsString.length)
-        let matches = regex.matches(in: string, range: range)
-
-        // Process matches in reverse to preserve ranges
-        var result = string
-        for match in matches.reversed() {
-            guard match.numberOfRanges >= 2,
-                  let numberRange = Range(match.range(at: 1), in: result),
-                  let fullRange = Range(match.range(at: 0), in: result),
-                  let codePoint = UInt32(result[numberRange], radix: radix),
-                  let scalar = Unicode.Scalar(codePoint)
-            else { continue }
-
-            result.replaceSubrange(fullRange, with: String(scalar))
-        }
-
-        return result
+        HTMLUtilities.decodeHTMLEntities(string)
     }
 }

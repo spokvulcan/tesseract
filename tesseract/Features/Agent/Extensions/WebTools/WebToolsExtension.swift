@@ -2,8 +2,8 @@ import Foundation
 
 // MARK: - WebToolsExtension
 
-/// Extension providing web search (and later web fetch) tools.
-/// Registered in PackageBootstrap when web access is available.
+/// Extension providing web search and web fetch tools.
+/// Registered in PackageBootstrap when web access is enabled.
 final class WebToolsExtension: AgentExtension, @unchecked Sendable {
     let path = "web-tools"
     let commands: [String: RegisteredCommand] = [:]
@@ -13,8 +13,10 @@ final class WebToolsExtension: AgentExtension, @unchecked Sendable {
 
     init() {
         let searchTool = createWebSearchTool()
+        let fetchTool = createWebFetchTool()
         tools = [
             searchTool.name: searchTool,
+            fetchTool.name: fetchTool,
         ]
     }
 }
