@@ -5,6 +5,9 @@ import MLXLMCommon
 
 nonisolated enum WebFetchError: LocalizedError, Sendable {
     case invalidURL
+    case urlTooLong
+    case credentialsInURL
+    case privateAddress
     case httpError(statusCode: Int)
     case decodingFailed
     case networkError(String)
@@ -13,7 +16,10 @@ nonisolated enum WebFetchError: LocalizedError, Sendable {
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL: "Invalid URL"
+        case .invalidURL: "Invalid URL. Must be an http:// or https:// URL."
+        case .urlTooLong: "URL exceeds maximum length (2000 characters)"
+        case .credentialsInURL: "URLs with embedded credentials are not allowed"
+        case .privateAddress: "Cannot fetch private/internal network addresses"
         case .httpError(let code): "HTTP error \(code)"
         case .decodingFailed: "Failed to decode response as text"
         case .networkError(let msg): "Network error: \(msg)"
@@ -24,15 +30,87 @@ nonisolated enum WebFetchError: LocalizedError, Sendable {
     }
 }
 
+// MARK: - URL Validation
+
+/// Validates URLs before fetching — scheme, length, credentials, SSRF prevention.
+private nonisolated func validateURL(_ url: URL) throws {
+    // Scheme: only http/https
+    guard let scheme = url.scheme?.lowercased(),
+          scheme == "http" || scheme == "https" else {
+        throw WebFetchError.invalidURL
+    }
+
+    // Length: max 2,000 characters
+    guard url.absoluteString.count <= 2_000 else {
+        throw WebFetchError.urlTooLong
+    }
+
+    // No credentials in URL
+    guard url.user == nil && url.password == nil else {
+        throw WebFetchError.credentialsInURL
+    }
+
+    // Block private/internal addresses (SSRF prevention)
+    guard let host = url.host?.lowercased() else {
+        throw WebFetchError.invalidURL
+    }
+    guard !isPrivateAddress(host) else {
+        throw WebFetchError.privateAddress
+    }
+}
+
+/// Check if a hostname resolves to a private/internal address.
+private nonisolated func isPrivateAddress(_ host: String) -> Bool {
+    // Localhost variants
+    if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" {
+        return true
+    }
+    // 0.0.0.0
+    if host == "0.0.0.0" {
+        return true
+    }
+    // IPv4 private ranges
+    if host.hasPrefix("10.") || host.hasPrefix("192.168.") || host.hasPrefix("169.254.") {
+        return true
+    }
+    // 172.16.0.0/12
+    if host.hasPrefix("172.") {
+        let parts = host.split(separator: ".")
+        if parts.count >= 2, let second = Int(parts[1]), (16...31).contains(second) {
+            return true
+        }
+    }
+    // IPv6 private (fc00::/7 — starts with fc or fd)
+    if host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("[fc") || host.hasPrefix("[fd") {
+        return true
+    }
+    // .local domains
+    if host.hasSuffix(".local") || host.hasSuffix(".internal") {
+        return true
+    }
+    return false
+}
+
+/// Upgrade HTTP to HTTPS (best-effort).
+private nonisolated func upgradeToHTTPS(_ url: URL) -> URL {
+    guard url.scheme?.lowercased() == "http" else { return url }
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.scheme = "https"
+    return components?.url ?? url
+}
+
 // MARK: - HTTP Fetching
 
-/// Ephemeral session for web fetch — no persistent cookies or cache.
+/// Ephemeral session — no persistent cookies, cache, or credentials.
 private let fetchSession: URLSession = {
     let config = URLSessionConfiguration.ephemeral
     config.httpAdditionalHeaders = [
         "User-Agent": "TesseractAgent/1.0 (macOS; Apple Silicon)",
         "Accept": "text/html, text/plain, */*",
     ]
+    config.httpCookieAcceptPolicy = .never
+    config.httpShouldSetCookies = false
+    config.urlCredentialStorage = nil
     config.waitsForConnectivity = false
     return URLSession(configuration: config)
 }()
@@ -107,23 +185,17 @@ private func encodingFromIANA(_ name: String) -> String.Encoding? {
 // MARK: - Truncation
 
 /// Truncate text at a paragraph or line boundary.
-/// Prefers cutting at `\n\n`, then `\n`, then hard cut at maxChars.
 nonisolated func truncateAtBoundary(_ text: String, maxChars: Int) -> String {
     guard text.count > maxChars else { return text }
 
     let prefix = String(text.prefix(maxChars))
 
-    // Try to cut at last paragraph break
     if let range = prefix.range(of: "\n\n", options: .backwards) {
         return String(prefix[..<range.lowerBound])
     }
-
-    // Try to cut at last line break
     if let range = prefix.range(of: "\n", options: .backwards) {
         return String(prefix[..<range.lowerBound])
     }
-
-    // Hard cut
     return prefix
 }
 
@@ -153,18 +225,44 @@ nonisolated func createWebFetchTool() -> AgentToolDefinition {
                 return .error("Missing required argument: url")
             }
 
-            guard let url = URL(string: urlString),
-                  let scheme = url.scheme?.lowercased(),
-                  scheme == "http" || scheme == "https"
-            else {
+            guard let url = URL(string: urlString) else {
                 return .error("Invalid URL. Must be an http:// or https:// URL.")
             }
 
+            // Validate URL (scheme, length, credentials, SSRF)
+            do {
+                try validateURL(url)
+            } catch {
+                return .error(error.localizedDescription)
+            }
+
+            // Upgrade HTTP → HTTPS
+            let fetchURL = upgradeToHTTPS(url)
             let maxChars = ToolArgExtractor.int(argsJSON, key: "max_chars") ?? 50_000
 
+            // Check cache first
+            let cacheKey = fetchURL.absoluteString
+            if let cached = await WebFetchCache.shared.get(url: cacheKey) {
+                var content = cached.content
+                var wasTruncated = false
+                if content.count > maxChars {
+                    content = truncateAtBoundary(content, maxChars: maxChars)
+                    wasTruncated = true
+                }
+                var output = "Title: \(cached.title)\nURL: \(cached.url.absoluteString)\n\n"
+                output += content
+                if wasTruncated {
+                    output += "\n\n[Content truncated at \(maxChars) characters]"
+                }
+                return .text(output)
+            }
+
             do {
-                let (html, finalURL) = try await fetchHTML(url: url)
+                let (html, finalURL) = try await fetchHTML(url: fetchURL)
                 let extracted = await WebContentExtractor.extract(html: html, url: finalURL)
+
+                // Cache the result
+                await WebFetchCache.shared.set(url: cacheKey, content: extracted)
 
                 var content = extracted.content
                 var wasTruncated = false

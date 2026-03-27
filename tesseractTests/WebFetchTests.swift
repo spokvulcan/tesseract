@@ -198,6 +198,86 @@ struct WebFetchToolTests {
         let text = result.content.textContent
         #expect(text.contains("Invalid URL"))
     }
+
+    @Test func returnsErrorForLocalhostURL() async throws {
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("t5", ["url": .string("http://localhost:8080/admin")], nil, nil)
+        let text = result.content.textContent
+        #expect(text.contains("private"))
+    }
+
+    @Test func returnsErrorForPrivateIPURL() async throws {
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("t6", ["url": .string("http://192.168.1.1/config")], nil, nil)
+        let text = result.content.textContent
+        #expect(text.contains("private"))
+    }
+
+    @Test func returnsErrorFor10xPrivateIP() async throws {
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("t7", ["url": .string("http://10.0.0.1/internal")], nil, nil)
+        let text = result.content.textContent
+        #expect(text.contains("private"))
+    }
+
+    @Test func returnsErrorForCredentialsInURL() async throws {
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("t8", ["url": .string("https://user:pass@example.com/")], nil, nil)
+        let text = result.content.textContent
+        #expect(text.contains("credentials"))
+    }
+
+    @Test func returnsErrorForVeryLongURL() async throws {
+        let tool = createWebFetchTool()
+        let longURL = "https://example.com/" + String(repeating: "a", count: 2000)
+        let result = try await tool.execute("t9", ["url": .string(longURL)], nil, nil)
+        let text = result.content.textContent
+        #expect(text.contains("length"))
+    }
+}
+
+// MARK: - SSRF Prevention Tests
+
+@MainActor
+struct SSRFPreventionTests {
+
+    @Test func blocksLoopbackIPv4() async throws {
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("s1", ["url": .string("http://127.0.0.1/")], nil, nil)
+        #expect(result.content.textContent.contains("private"))
+    }
+
+    @Test func blocksLoopbackIPv6() async throws {
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("s2", ["url": .string("http://[::1]/")], nil, nil)
+        #expect(result.content.textContent.contains("private"))
+    }
+
+    @Test func blocks172PrivateRange() async throws {
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("s3", ["url": .string("http://172.16.0.1/")], nil, nil)
+        #expect(result.content.textContent.contains("private"))
+    }
+
+    @Test func blocks169LinkLocal() async throws {
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("s4", ["url": .string("http://169.254.1.1/")], nil, nil)
+        #expect(result.content.textContent.contains("private"))
+    }
+
+    @Test func blocksLocalDomain() async throws {
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("s5", ["url": .string("http://myserver.local/")], nil, nil)
+        #expect(result.content.textContent.contains("private"))
+    }
+
+    @Test func allowsPublicURL() async throws {
+        // This shouldn't be blocked by SSRF check (it will fail on network, not validation)
+        let tool = createWebFetchTool()
+        let result = try await tool.execute("s6", ["url": .string("https://93.184.216.34/")], nil, nil)
+        // Should NOT contain "private" — should fail with network error instead
+        #expect(!result.content.textContent.contains("private"))
+    }
 }
 
 // MARK: - WebToolsExtension Updated Tests
@@ -393,5 +473,59 @@ struct SPADetectionTests {
         """
         let padded = html + String(repeating: " ", count: 10_000)
         #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "", rawHTML: padded))
+    }
+}
+
+// MARK: - Dynamic Tool Toggle Tests
+
+@MainActor
+struct DynamicToolToggleTests {
+
+    /// Helper: create a minimal set of mock tool definitions for testing.
+    private static func mockTools() -> [AgentToolDefinition] {
+        let readTool = AgentToolDefinition(
+            name: "read",
+            label: "Read",
+            description: "Read a file",
+            parameterSchema: JSONSchema(type: "object", properties: [:], required: []),
+            execute: { _, _, _, _ in .text("ok") }
+        )
+        let searchTool = createWebSearchTool()
+        let fetchTool = createWebFetchTool()
+        return [readTool, searchTool, fetchTool]
+    }
+
+    private static let webToolNames: Set<String> = ["web_search", "web_fetch"]
+
+    @Test func filteringExcludesWebToolsWhenDisabled() {
+        let allTools = Self.mockTools()
+        let filtered = allTools.filter { !Self.webToolNames.contains($0.name) }
+        #expect(filtered.count == 1)
+        #expect(filtered[0].name == "read")
+    }
+
+    @Test func filteringIncludesAllToolsWhenEnabled() {
+        let allTools = Self.mockTools()
+        // When enabled, pass all tools through
+        #expect(allTools.count == 3)
+        #expect(allTools.contains(where: { $0.name == "web_search" }))
+        #expect(allTools.contains(where: { $0.name == "web_fetch" }))
+        #expect(allTools.contains(where: { $0.name == "read" }))
+    }
+
+    @Test func webToolNamesMatchExtensionTools() {
+        let ext = WebToolsExtension()
+        // The names we filter on must match the actual tool names
+        #expect(ext.tools["web_search"]?.name == "web_search")
+        #expect(ext.tools["web_fetch"]?.name == "web_fetch")
+        // Verify no unexpected tools
+        #expect(ext.tools.count == 2)
+    }
+
+    @Test func extensionAlwaysRegistersBothTools() {
+        // WebToolsExtension should always provide both tools regardless of settings
+        let ext = WebToolsExtension()
+        #expect(ext.tools.keys.contains("web_search"))
+        #expect(ext.tools.keys.contains("web_fetch"))
     }
 }

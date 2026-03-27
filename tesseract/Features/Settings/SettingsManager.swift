@@ -266,7 +266,7 @@ final class SettingsManager {
 
     // MARK: - Agent Web Access
 
-    var webAccessEnabled = false {
+    var webAccessEnabled = true {
         didSet { UserDefaults.standard.set(webAccessEnabled, forKey: Key.webAccessEnabled) }
     }
 
@@ -314,7 +314,7 @@ final class SettingsManager {
             Key.playSounds: true,
             Key.showNotifications: true,
             Key.hasCompletedOnboarding: false,
-            Key.webAccessEnabled: false,
+            Key.webAccessEnabled: true,
         ])
 
         // Load persisted values (didSet does NOT fire during init).
@@ -385,7 +385,7 @@ final class SettingsManager {
         selectedAgentModelID = ModelDefinition.defaultAgentModelID
         heartbeatEnabled = true
         heartbeatIntervalMinutes = 30
-        webAccessEnabled = false
+        webAccessEnabled = true
     }
 
     // MARK: - Private

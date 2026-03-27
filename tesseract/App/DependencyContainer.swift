@@ -120,7 +120,8 @@ final class DependencyContainer: ObservableObject {
                 guard let self else { throw AgentEngineError.modelNotLoaded }
                 return try await self.agentEngine.formatRawPrompt(systemPrompt: systemPrompt, tools: tools)
             },
-            speechCoordinator: speechCoordinator
+            speechCoordinator: speechCoordinator,
+            toolRegistry: newToolRegistry
         )
     }()
 

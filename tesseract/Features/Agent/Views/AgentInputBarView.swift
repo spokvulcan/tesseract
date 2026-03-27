@@ -51,7 +51,17 @@ struct AgentInputBarView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Add attachment")
-                    
+
+                    Button {
+                        settings.webAccessEnabled.toggle()
+                    } label: {
+                        Image(systemName: "globe")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(settings.webAccessEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    }
+                    .buttonStyle(.plain)
+                    .help(settings.webAccessEnabled ? "Web search enabled — click to disable" : "Web search disabled — click to enable")
+
                     Button { } label: {
                         Text("Aa")
                             .font(.system(size: 15, weight: .medium))

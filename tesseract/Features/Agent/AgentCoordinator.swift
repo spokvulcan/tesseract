@@ -101,6 +101,7 @@ final class AgentCoordinator {
     private let audioCapture: (any AudioCapturing)?
     private let transcriptionEngine: (any Transcribing)?
     private let settings: SettingsManager?
+    private let toolRegistry: ToolRegistry?
     private let postProcessor = TranscriptionPostProcessor()
     private let speechCoordinator: SpeechCoordinator?
     private let arbiter: InferenceArbiter?
@@ -139,7 +140,8 @@ final class AgentCoordinator {
         settings: SettingsManager? = nil,
         arbiter: InferenceArbiter? = nil,
         formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))? = nil,
-        speechCoordinator: SpeechCoordinator? = nil
+        speechCoordinator: SpeechCoordinator? = nil,
+        toolRegistry: ToolRegistry? = nil
     ) {
         self.agent = agent
         self.conversationStore = conversationStore
@@ -149,6 +151,7 @@ final class AgentCoordinator {
         self.arbiter = arbiter
         self.formatRawPrompt = formatRawPrompt
         self.speechCoordinator = speechCoordinator
+        self.toolRegistry = toolRegistry
 
         assembledSystemPrompt = agent.state.systemPrompt
 
@@ -186,6 +189,9 @@ final class AgentCoordinator {
 
         let userMessage = CoreMessage.user(UserMessage(content: trimmed))
 
+        // Sync active tools based on current web access setting
+        syncToolsForWebAccess()
+
         if let arbiter {
             sendTask = Task {
                 do {
@@ -204,6 +210,18 @@ final class AgentCoordinator {
             }
         } else {
             agent.prompt(userMessage)
+        }
+    }
+
+    /// Filter active tools based on webAccessEnabled setting.
+    /// Called before each prompt so the LLM sees the current tool set.
+    private func syncToolsForWebAccess() {
+        guard let toolRegistry else { return }
+        let allTools = toolRegistry.allTools
+        if settings?.webAccessEnabled == true {
+            agent.updateTools(allTools)
+        } else {
+            agent.updateTools(allTools.filter { $0.name != "web_search" && $0.name != "web_fetch" })
         }
     }
 

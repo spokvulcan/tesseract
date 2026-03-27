@@ -88,6 +88,15 @@ final class Agent {
         state.tools = tools
     }
 
+    // MARK: - Tool Management
+
+    /// Update the active tool set. Called before each prompt to reflect dynamic settings.
+    func updateTools(_ tools: [AgentToolDefinition]) {
+        guard state.phase == .idle else { return }
+        context.tools = tools
+        state.tools = tools
+    }
+
     // MARK: - Message State Management
 
     /// Load persisted messages into the agent's context and state.
