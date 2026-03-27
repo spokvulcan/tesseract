@@ -29,3 +29,11 @@ Input comes via speech-to-text which frequently produces errors. Before acting o
 4. **Destructive actions** (delete, overwrite, bulk edits) always require confirmation, even if intent is clear.
 
 For the full protocol with examples, read the `clarification-protocol` skill.
+
+### Web Research
+
+When the user asks for current or factual information:
+1. Search, then **fetch at least 2-3 actual pages** — never answer from search snippets alone.
+2. Cross-reference sources and cite URLs.
+
+For the full research protocol, read the `web-research` skill.

@@ -7,7 +7,7 @@ nonisolated func createWebSearchTool() -> AgentToolDefinition {
     AgentToolDefinition(
         name: "web_search",
         label: "Web Search",
-        description: "Search the web using DuckDuckGo. Returns titles, URLs, and snippets for each result. Use this when you need current information, documentation, recent events, or facts beyond your training data.",
+        description: "Search the web using DuckDuckGo. Returns titles, URLs, and brief snippets for selecting pages to fetch with web_fetch. Use this when you need current information, documentation, recent events, or facts beyond your training data.",
         parameterSchema: JSONSchema(
             type: "object",
             properties: [
