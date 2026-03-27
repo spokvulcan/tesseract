@@ -20,17 +20,81 @@ nonisolated enum WebContentExtractor: Sendable {
     // MARK: - Public API
 
     /// Extract readable content from HTML as markdown.
-    /// Uses swift-readability + Demark when possible, falls back to regex.
+    /// Pipeline: Readability+Demark → SPA detection+WebPage render → regex fallback.
     static func extract(html: String, url: URL) async -> ExtractedContent {
+        // 1. Try Readability + Demark on the raw HTML (fast path)
+        var fastResult: ExtractedContent?
         do {
-            if let result = try await extractWithReadability(html: html, url: url) {
-                return result
-            }
+            fastResult = try await extractWithReadability(html: html, url: url)
         } catch {
-            Log.agent.debug("[WebContentExtractor] Readability/Demark failed, using regex fallback: \(error)")
+            Log.agent.debug("[WebContentExtractor] Readability/Demark failed: \(error)")
         }
 
+        // 2. If we got content, check if it looks suspiciously thin (possible SPA)
+        if let result = fastResult {
+            if isSuspectedSPA(extractedContent: result.content, rawHTML: html) {
+                if let rendered = await renderAndExtract(url: url) {
+                    return rendered
+                }
+            }
+            return result
+        }
+
+        // 3. Readability returned nil — check if SPA before falling back to regex
+        if isSuspectedSPA(extractedContent: "", rawHTML: html) {
+            if let rendered = await renderAndExtract(url: url) {
+                return rendered
+            }
+        }
+
+        // 4. Final fallback: regex-based extraction
         return extractBasic(html: html, url: url)
+    }
+
+    // MARK: - SPA Detection
+
+    private static let spaMarkers = [
+        "<div id=\"root\"></div>",
+        "<div id=\"app\"></div>",
+        "<div id=\"__next\"></div>",
+        "<div id=\"__nuxt\"></div>",
+    ]
+
+    /// Heuristic: large HTML but minimal extracted text suggests JS-rendered content.
+    static func isSuspectedSPA(extractedContent: String, rawHTML: String) -> Bool {
+        let textLen = extractedContent.trimmingCharacters(in: .whitespacesAndNewlines).count
+        let htmlLen = rawHTML.utf8.count
+
+        // Strong signal: very little text from large HTML
+        if textLen < 200 && htmlLen > 10_000 {
+            return true
+        }
+
+        // SPA framework markers in HTML with little text
+        if textLen < 500 {
+            if spaMarkers.contains(where: { rawHTML.range(of: $0, options: .caseInsensitive) != nil }) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    // MARK: - WebPage Render Fallback
+
+    /// Render the page with WebPage API and re-extract from the rendered DOM.
+    private static func renderAndExtract(url: URL) async -> ExtractedContent? {
+        do {
+            let renderedHTML = try await HeadlessRenderer.shared.render(url: url)
+            if let result = try await extractWithReadability(html: renderedHTML, url: url) {
+                return result
+            }
+            // Readability failed on rendered HTML too — try regex on it
+            return extractBasic(html: renderedHTML, url: url)
+        } catch {
+            Log.agent.debug("[WebContentExtractor] WebPage render failed for \(url): \(error)")
+            return nil
+        }
     }
 
     // MARK: - Readability + Demark Pipeline

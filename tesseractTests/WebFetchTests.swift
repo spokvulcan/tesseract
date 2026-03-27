@@ -325,3 +325,73 @@ struct ReadabilityExtractionTests {
         #expect(result.url == Self.sampleURL)
     }
 }
+
+// MARK: - SPA Detection Tests
+
+@MainActor
+struct SPADetectionTests {
+
+    @Test func detectsReactSPA() {
+        let html = """
+        <!DOCTYPE html><html><head><title>My App</title></head>
+        <body><div id="root"></div>
+        <script src="/static/js/main.abc123.js"></script>
+        </body></html>
+        """
+        // Large HTML (padded), minimal text, React marker
+        let padded = html + String(repeating: " ", count: 10_000)
+        #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "", rawHTML: padded))
+    }
+
+    @Test func detectsNextJSSPA() {
+        let html = """
+        <!DOCTYPE html><html><head></head>
+        <body><div id="__next"></div></body></html>
+        """
+        let padded = html + String(repeating: " ", count: 10_000)
+        #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "Loading...", rawHTML: padded))
+    }
+
+    @Test func detectsVueSPA() {
+        let html = """
+        <!DOCTYPE html><html><head></head>
+        <body><div id="app"></div></body></html>
+        """
+        let padded = html + String(repeating: " ", count: 10_000)
+        #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "", rawHTML: padded))
+    }
+
+    @Test func detectsLargeHTMLWithNoText() {
+        // No SPA markers, but large HTML with very little extracted text
+        let html = String(repeating: "<div class=\"wrapper\">", count: 500) + String(repeating: "</div>", count: 500)
+        #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "Loading", rawHTML: html))
+    }
+
+    @Test func doesNotTriggerForNormalPage() {
+        let html = "<html><body><p>Normal content here.</p></body></html>"
+        let content = "Normal content here. This is a well-structured article with enough text to be considered real content by the heuristic."
+        // 100+ chars of content from small HTML — not an SPA
+        #expect(!WebContentExtractor.isSuspectedSPA(extractedContent: content, rawHTML: html))
+    }
+
+    @Test func doesNotTriggerForSmallHTML() {
+        // Small HTML even with no text — not an SPA, just a small page
+        let html = "<html><body></body></html>"
+        #expect(!WebContentExtractor.isSuspectedSPA(extractedContent: "", rawHTML: html))
+    }
+
+    @Test func doesNotTriggerForContentRichPage() {
+        // Large HTML but also lots of extracted content — not an SPA
+        let html = String(repeating: "<p>paragraph</p>", count: 1000)
+        let content = String(repeating: "paragraph ", count: 1000)
+        #expect(!WebContentExtractor.isSuspectedSPA(extractedContent: content, rawHTML: html))
+    }
+
+    @Test func markerDetectionIsCaseInsensitive() {
+        let html = """
+        <html><body><DIV ID="root"></DIV></body></html>
+        """
+        let padded = html + String(repeating: " ", count: 10_000)
+        #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "", rawHTML: padded))
+    }
+}
