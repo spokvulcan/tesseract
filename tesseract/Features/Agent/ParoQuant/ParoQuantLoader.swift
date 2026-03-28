@@ -47,7 +47,7 @@ nonisolated private func detectQuantMethod(directory: URL) -> String? {
     return method
 }
 
-/// The custom loader is only meant for z-lab/Qwen3.5-4B-PARO's VLM wrapper.
+/// The custom loader is meant for z-lab Qwen3.5 PARO models (4B and 9B) with VLM wrappers.
 nonisolated private func isSupportedParoQuantModel(directory: URL, configData: Data) -> Bool {
     guard let json = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
           let qc = json["quantization_config"] as? [String: Any],
@@ -58,6 +58,8 @@ nonisolated private func isSupportedParoQuantModel(directory: URL, configData: D
     let supportedDirectoryNames: Set<String> = [
         "z-lab_Qwen3.5-4B-PARO",
         "Qwen3.5-4B-PARO",
+        "z-lab_Qwen3.5-9B-PARO",
+        "Qwen3.5-9B-PARO",
     ]
     if supportedDirectoryNames.contains(directory.lastPathComponent) {
         return true
@@ -396,7 +398,7 @@ nonisolated enum ParoQuantError: LocalizedError {
         case .missingConfig:
             return "Missing quantization_config in config.json for ParoQuant model"
         case .unsupportedModel:
-            return "The custom ParoQuant loader only supports z-lab/Qwen3.5-4B-PARO"
+            return "The custom ParoQuant loader only supports z-lab Qwen3.5 PARO models (4B and 9B)"
         case .missingTensor(let key):
             return "Missing required ParoQuant tensor: \(key)"
         case .invalidTensorShape(let key, let expected, let actual):

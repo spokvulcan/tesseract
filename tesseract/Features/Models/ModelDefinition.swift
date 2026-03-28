@@ -123,6 +123,30 @@ extension ModelDefinition {
             sizeDescription: "~3.8 GB",
             dependencies: []
         ),
+        ModelDefinition(
+            id: "qwen3.5-9b-paro",
+            displayName: "Qwen3.5-9B PARO (INT4)",
+            description: "ParoQuant INT4 — 9B parameters, near-FP16 quality. Hybrid-attention, 262K context. Requires ~12 GB unified memory with TTS.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "z-lab/Qwen3.5-9B-PARO",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~8.6 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3.5-9b-optiq",
+            displayName: "Qwen3.5-9B OptiQ (4.5-bit)",
+            description: "Mixed-precision INT4/INT8 — sensitivity-driven per-layer quantization at 4.5 BPW. Hybrid-attention, 262K context. Requires ~12 GB unified memory with TTS.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "mlx-community/Qwen3.5-9B-OptiQ-4bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~5.8 GB",
+            dependencies: []
+        ),
     ]
 
     static let imageGenerationModels: [ModelDefinition] = [

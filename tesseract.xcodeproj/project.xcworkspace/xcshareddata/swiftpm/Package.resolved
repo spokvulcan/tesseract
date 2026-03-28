@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ml-explore/mlx-swift",
       "state" : {
-        "revision" : "6ba4827fb82c97d012eec9ab4b2de21f85c3b33d",
-        "version" : "0.30.6"
+        "revision" : "2512c5bebfd801c817b5d07828cbfdc44c76fab4",
+        "version" : "0.31.2"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/spokvulcan/mlx-swift-lm.git",
       "state" : {
-        "branch" : "perf/qwen35-generation-speed",
-        "revision" : "59501a4d9e756fc3cc8ca421eda8bc707fcb4ea2"
+        "branch" : "feat/paroquant-support",
+        "revision" : "05d68a3797b0ff653150ea8bd69d9d689067c13d"
       }
     },
     {
