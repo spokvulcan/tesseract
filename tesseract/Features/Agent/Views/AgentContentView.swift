@@ -1,26 +1,15 @@
 import SwiftUI
-import os
 
 struct AgentContentView: View {
     @Environment(AgentCoordinator.self) private var coordinator
-    @Environment(AgentEngine.self) private var agentEngine
     @EnvironmentObject private var conversationStore: AgentConversationStore
     @Environment(SpeechCoordinator.self) private var speechCoordinator
     @Environment(SchedulingService.self) private var schedulingService
-    @EnvironmentObject private var downloadManager: ModelDownloadManager
-
     @State private var inputText = ""
     @State private var showingHistory = false
     @State private var speakingMessageID: UUID?
     @Environment(SettingsManager.self) private var settings
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
-
-    private var isModelDownloaded: Bool {
-        if case .downloaded = downloadManager.statuses[settings.selectedAgentModelID] {
-            return true
-        }
-        return false
-    }
 
     private var isSpeechActive: Bool {
         if case .idle = speechCoordinator.state { return false }
@@ -34,24 +23,15 @@ struct AgentContentView: View {
                 backgroundSessionBanner
             }
 
-            if agentEngine.isLoading {
-                AgentModelLoadingBanner()
-            } else if !agentEngine.isModelLoaded && !isModelDownloaded {
-                AgentModelNotDownloadedBanner()
-            }
-
-            if let error = coordinator.error {
-                AgentErrorBanner(message: error, onDismiss: { coordinator.error = nil })
-            }
-
-            if case .error(let message) = coordinator.voiceState {
-                AgentVoiceErrorBanner(message: message)
-            }
-
             AgentConversationListView(
                 speakingMessageID: $speakingMessageID,
                 isSpeechActive: isSpeechActive
             )
+            .overlay(alignment: .bottom) {
+                AgentInputStatusStrip()
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.bottom, Theme.Spacing.xs)
+            }
         }
         .safeAreaInset(edge: .bottom) {
             if !coordinator.isViewingBackgroundSession {

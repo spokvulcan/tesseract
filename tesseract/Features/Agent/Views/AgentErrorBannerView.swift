@@ -5,79 +5,126 @@
 
 import SwiftUI
 
-struct AgentModelLoadingBanner: View {
+struct AgentInputStatusStrip: View {
     @Environment(AgentEngine.self) private var agentEngine
+    @Environment(AgentCoordinator.self) private var coordinator
+    @Environment(SettingsManager.self) private var settings
+    @EnvironmentObject private var downloadManager: ModelDownloadManager
 
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text(agentEngine.loadingStatus.isEmpty ? "Loading model…" : agentEngine.loadingStatus)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+    private var isModelDownloaded: Bool {
+        if case .downloaded = downloadManager.statuses[settings.selectedAgentModelID] {
+            return true
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(.bar)
+        return false
     }
-}
 
-struct AgentModelNotDownloadedBanner: View {
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            Text("Download an agent model from the Models page to use the agent.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-}
+    private enum Status: Equatable {
+        case error(String)
+        case voiceError(String)
+        case loading(String)
+        case notDownloaded
 
-struct AgentErrorBanner: View {
-    let message: String
-    let onDismiss: () -> Void
-
-    var body: some View {
-        HStack {
-            Image(systemName: "exclamationmark.circle.fill")
-                .foregroundStyle(.red)
-            Text(message)
-                .font(.callout)
-                .lineLimit(2)
-            Spacer()
-            Button {
-                onDismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
+        var tint: Color {
+            switch self {
+            case .error: .red
+            case .voiceError: .orange
+            case .loading: .blue
+            case .notDownloaded: .yellow
             }
-            .buttonStyle(.plain)
         }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, 6)
-        .background(.red.opacity(0.1))
     }
-}
 
-struct AgentVoiceErrorBanner: View {
-    let message: String
+    private var currentStatus: Status? {
+        if let error = coordinator.error {
+            return .error(error)
+        }
+        if case .error(let message) = coordinator.voiceState {
+            return .voiceError(message)
+        }
+        if agentEngine.isLoading {
+            let text = agentEngine.loadingStatus.isEmpty ? "Loading model\u{2026}" : agentEngine.loadingStatus
+            return .loading(text)
+        }
+        if !agentEngine.isModelLoaded && !isModelDownloaded {
+            return .notDownloaded
+        }
+        return nil
+    }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "mic.slash.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        if let status = currentStatus {
+            HStack(spacing: Theme.Spacing.sm) {
+                statusIcon(status)
+                statusLabel(status)
+                Spacer(minLength: 0)
+                if case .error = status {
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            coordinator.error = nil
+                        }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18, height: 18)
+                            .background(.quaternary, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, Theme.Spacing.sm)
+            .background {
+                let shape = RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
+                shape.fill(.ultraThinMaterial)
+                    .overlay {
+                        shape.fill(status.tint.opacity(0.06))
+                    }
+                    .overlay {
+                        shape.strokeBorder(.quaternary, lineWidth: 0.5)
+                    }
+            }
+            .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+            .transition(.blurReplace.combined(with: .opacity))
+            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: currentStatus)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 6)
-        .background(.orange.opacity(0.1))
-        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    @ViewBuilder
+    private func statusIcon(_ status: Status) -> some View {
+        switch status {
+        case .error:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(.red)
+                .symbolRenderingMode(.hierarchical)
+        case .voiceError:
+            Image(systemName: "mic.slash.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+                .symbolRenderingMode(.hierarchical)
+        case .loading:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(.blue)
+        case .notDownloaded:
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(.yellow)
+                .symbolRenderingMode(.hierarchical)
+        }
+    }
+
+    private func statusLabel(_ status: Status) -> some View {
+        let (text, style): (String, AnyShapeStyle) = switch status {
+        case .error(let m), .voiceError(let m): (m, AnyShapeStyle(.primary.opacity(0.7)))
+        case .loading(let t): (t, AnyShapeStyle(.secondary))
+        case .notDownloaded: ("Download an agent model to get started", AnyShapeStyle(.secondary))
+        }
+        return Text(text)
+            .font(.caption)
+            .foregroundStyle(style)
+            .lineLimit(1)
     }
 }
 
