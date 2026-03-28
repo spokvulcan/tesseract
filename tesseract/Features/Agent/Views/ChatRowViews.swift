@@ -27,47 +27,73 @@ private struct StepGutter: View {
     }
 }
 
+// MARK: - Copy Button
+
+private struct CopyButton: View {
+    let text: String
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - User Bubble
 
 struct UserBubble: View, Equatable {
     let data: UserRow
 
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
+    @State private var isHovering = false
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
         let _ = ChatViewPerf.signposter.emitEvent("UserBubble.body")
-        HStack(alignment: .bottom, spacing: 8) {
-            if useMarkdown {
-                StructuredText(markdown: data.content)
-                    .textual.structuredTextStyle(.default)
-                    .textual.textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Text(data.content)
-                    .font(.system(size: 15))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(alignment: .bottom, spacing: 8) {
+                if useMarkdown {
+                    StructuredText(markdown: data.content)
+                        .textual.structuredTextStyle(.default)
+                        .textual.textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(data.content)
+                        .font(.system(size: 15))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
-            Text(data.timestamp)
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.7))
-                .padding(.bottom, 2)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color(red: 0.79, green: 0.28, blue: 0.65))
-        .foregroundStyle(.white)
-        .clipShape(
-            .rect(
-                topLeadingRadius: 18,
-                bottomLeadingRadius: 18,
-                bottomTrailingRadius: 4,
-                topTrailingRadius: 18
+                Text(data.timestamp)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.bottom, 2)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color(red: 0.79, green: 0.28, blue: 0.65))
+            .foregroundStyle(.white)
+            .clipShape(
+                .rect(
+                    topLeadingRadius: 18,
+                    bottomLeadingRadius: 18,
+                    bottomTrailingRadius: 4,
+                    topTrailingRadius: 18
+                )
             )
-        )
+
+            CopyButton(text: data.content)
+                .opacity(isHovering ? 1 : 0)
+                .animation(.easeInOut(duration: 0.15), value: isHovering)
+        }
+        .onHover { isHovering = $0 }
     }
 }
 
@@ -88,56 +114,59 @@ struct AssistantBubble: View, Equatable {
 
     var body: some View {
         let _ = ChatViewPerf.signposter.emitEvent("AssistantBubble.body")
-        HStack(alignment: .bottom, spacing: 8) {
-            VStack(alignment: .leading, spacing: 6) {
-                if useMarkdown {
-                    StructuredText(markdown: data.content)
-                        .textual.structuredTextStyle(.gitHub)
-                        .textual.textSelection(.enabled)
-                } else {
-                    Text(data.content)
-                        .font(.system(size: 15))
-                        .textSelection(.enabled)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            HStack(spacing: 4) {
-                ZStack {
-                    if (isHovering && onPlay != nil) || isSpeaking {
-                        Button {
-                            isSpeaking ? onStop?() : onPlay?()
-                        } label: {
-                            Image(systemName: isSpeaking ? "stop.circle.fill" : "play.circle.fill")
-                                .foregroundStyle(isSpeaking ? .red : .secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .transition(.opacity)
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(alignment: .bottom, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    if useMarkdown {
+                        StructuredText(markdown: data.content)
+                            .textual.structuredTextStyle(.gitHub)
+                            .textual.textSelection(.enabled)
+                    } else {
+                        Text(data.content)
+                            .font(.system(size: 15))
+                            .textSelection(.enabled)
                     }
                 }
-                .frame(width: 16, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Text(data.timestamp)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .padding(.bottom, 2)
             }
-            .padding(.bottom, 2)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .padding(.top, data.hasStepsAbove ? 4 : 0)
-        .background(Color(white: 0.15))
-        .clipShape(
-            .rect(
-                topLeadingRadius: 18,
-                bottomLeadingRadius: 4,
-                bottomTrailingRadius: 18,
-                topTrailingRadius: 18
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .padding(.top, data.hasStepsAbove ? 4 : 0)
+            .background(Color(white: 0.15))
+            .clipShape(
+                .rect(
+                    topLeadingRadius: 18,
+                    bottomLeadingRadius: 4,
+                    bottomTrailingRadius: 18,
+                    topTrailingRadius: 18
+                )
             )
-        )
-        .onHover { hovering in
-            isHovering = hovering
+
+            HStack(spacing: 8) {
+                CopyButton(text: data.content)
+
+                if onPlay != nil || isSpeaking {
+                    Button {
+                        isSpeaking ? onStop?() : onPlay?()
+                    } label: {
+                        Image(systemName: isSpeaking ? "stop.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(isSpeaking ? .red : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .opacity(isHovering || isSpeaking ? 1 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
+            .animation(.easeInOut(duration: 0.15), value: isSpeaking)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onHover { isHovering = $0 }
     }
 }
 
