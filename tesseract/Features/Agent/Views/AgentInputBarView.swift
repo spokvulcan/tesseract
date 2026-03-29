@@ -63,22 +63,6 @@ struct AgentInputBarView: View {
                     .help(settings.webAccessEnabled ? "Web search enabled — click to disable" : "Web search disabled — click to enable")
 
                     Button { } label: {
-                        Text("Aa")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Format text")
-                    
-                    Button { } label: {
-                        Image(systemName: "face.smiling")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Emoji")
-                    
-                    Button { } label: {
                         Image(systemName: "at")
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(.secondary)
