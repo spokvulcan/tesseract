@@ -35,7 +35,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.3")),
-        .package(url: "https://github.com/spokvulcan/mlx-swift-lm.git", branch: "feat/paroquant-support"),
+        .package(url: "https://github.com/spokvulcan/mlx-swift-lm.git", branch: "test/tesseract-integration"),
         .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMajor(from: "1.1.6")),
         .package(url: "https://github.com/huggingface/swift-huggingface.git", .upToNextMajor(from: "0.6.0"))
     ],

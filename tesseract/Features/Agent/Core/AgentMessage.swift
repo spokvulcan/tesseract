@@ -1,4 +1,32 @@
+import CoreImage
 import Foundation
+
+// MARK: - ImageAttachment
+
+/// An image attached to a user message.
+///
+/// Equatable/Hashable compare by `id` only — avoids byte-by-byte Data comparison
+/// during SwiftUI diffing and row cache equality checks.
+nonisolated struct ImageAttachment: Sendable, Codable, Equatable, Hashable, Identifiable {
+    let id: UUID
+    let data: Data
+    let mimeType: String
+    let filename: String?
+
+    init(id: UUID = UUID(), data: Data, mimeType: String, filename: String? = nil) {
+        self.id = id
+        self.data = data
+        self.mimeType = mimeType
+        self.filename = filename
+    }
+
+    var ciImage: CIImage? {
+        CIImage(data: data)
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
 
 // MARK: - ToolCallInfo
 
@@ -15,7 +43,7 @@ nonisolated struct ToolCallInfo: Sendable, Codable, Hashable, Identifiable {
 /// Transient — not persisted. Built from higher-level message types via `toLLMMessage()`.
 nonisolated enum LLMMessage: Sendable, Equatable {
     case system(content: String)
-    case user(content: String)
+    case user(content: String, images: [ImageAttachment] = [])
     case assistant(content: String, toolCalls: [ToolCallInfo]?)
     case toolResult(toolCallId: String, content: String)
 }
@@ -31,20 +59,34 @@ protocol AgentMessageProtocol: Sendable {
 
 // MARK: - UserMessage
 
-/// A message from the user (text input or transcribed voice).
+/// A message from the user (text input or transcribed voice), optionally with image attachments.
 nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let content: String
+    let images: [ImageAttachment]
     let timestamp: Date
 
-    init(id: UUID = UUID(), content: String, timestamp: Date = Date()) {
+    init(id: UUID = UUID(), content: String, images: [ImageAttachment] = [], timestamp: Date = Date()) {
         self.id = id
         self.content = content
+        self.images = images
         self.timestamp = timestamp
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        content = try container.decode(String.self, forKey: .content)
+        images = try container.decodeIfPresent([ImageAttachment].self, forKey: .images) ?? []
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, content, images, timestamp
+    }
+
     func toLLMMessage() -> LLMMessage? {
-        .user(content: content)
+        .user(content: content, images: images)
     }
 }
 

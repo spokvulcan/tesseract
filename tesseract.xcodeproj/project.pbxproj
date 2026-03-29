@@ -10,6 +10,7 @@
 		84126A693D3CC21A4C1CE996 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 787096BB3B2974DC1B24B59C /* Textual */; };
 		E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111012F41A000003C1B55 /* MLXLLM */; };
 		E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111032F41A000003C1B55 /* MLXLMCommon */; };
+		E0A111042F41A000003C1B55 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111052F41A000003C1B55 /* MLXVLM */; };
 		E0A5AC022F50B000003C1B55 /* AgentPackages in Resources */ = {isa = PBXBuildFile; fileRef = E0A5AC012F50B000003C1B55 /* AgentPackages */; };
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
 		E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudio */; };
@@ -70,6 +71,7 @@
 				E0DF77002F3FC000003C1B55 /* MLXImageGen in Frameworks */,
 				E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */,
 				E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */,
+				E0A111042F41A000003C1B55 /* MLXVLM in Frameworks */,
 				84126A693D3CC21A4C1CE996 /* Textual in Frameworks */,
 				AAE67E6C2F80A000003C1B55 /* SwiftReadability in Frameworks */,
 				A9FF2A6C2F80A000003C1B55 /* Demark in Frameworks */,
@@ -139,6 +141,7 @@
 				E0DF77012F3FC000003C1B55 /* MLXImageGen */,
 				E0A111012F41A000003C1B55 /* MLXLLM */,
 				E0A111032F41A000003C1B55 /* MLXLMCommon */,
+				E0A111052F41A000003C1B55 /* MLXVLM */,
 				787096BB3B2974DC1B24B59C /* Textual */,
 				AD72427E2F80A000003C1B55 /* SwiftReadability */,
 				A1C54C8E2F80A000003C1B55 /* Demark */,
@@ -732,6 +735,10 @@
 		E0A111032F41A000003C1B55 /* MLXLMCommon */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = MLXLMCommon;
+		};
+		E0A111052F41A000003C1B55 /* MLXVLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MLXVLM;
 		};
 		E0C655412F2EA000003C1B55 /* WhisperKit */ = {
 			isa = XCSwiftPackageProductDependency;

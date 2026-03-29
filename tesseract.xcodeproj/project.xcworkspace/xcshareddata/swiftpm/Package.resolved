@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/spokvulcan/mlx-swift-lm.git",
       "state" : {
-        "branch" : "feat/paroquant-support",
-        "revision" : "05d68a3797b0ff653150ea8bd69d9d689067c13d"
+        "branch" : "test/tesseract-integration",
+        "revision" : "85b3adda84fe4c95172c78e0fe99f9d8fe72a0db"
       }
     },
     {

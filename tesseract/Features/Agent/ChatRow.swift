@@ -32,6 +32,7 @@ struct ChatRow: Identifiable, Equatable, Sendable {
 
 struct UserRow: Equatable, Sendable {
     let content: String
+    let images: [ImageAttachment]
     let timestamp: String
     let messageID: UUID
 }

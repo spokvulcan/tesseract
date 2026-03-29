@@ -21,8 +21,13 @@ func toLLMCommonMessages(_ messages: [LLMMessage]) -> [Chat.Message] {
         switch message {
         case .system(let content):
             .system(content)
-        case .user(let content):
-            .user(content)
+        case .user(let content, let images):
+            .user(
+                content,
+                images: images.compactMap { attachment in
+                    attachment.ciImage.map { .ciImage($0) }
+                }
+            )
         case .assistant(let content, let toolCalls):
             .assistant(reconstructAssistantContent(content, toolCalls: toolCalls))
         case .toolResult(_, let content):
@@ -93,8 +98,8 @@ private func formatToolCallParameterValue(_ value: JSONValue) -> String {
 // MARK: - Message Factory Helpers
 
 extension UserMessage {
-    static func create(_ content: String) -> UserMessage {
-        UserMessage(content: content)
+    static func create(_ content: String, images: [ImageAttachment] = []) -> UserMessage {
+        UserMessage(content: content, images: images)
     }
 }
 

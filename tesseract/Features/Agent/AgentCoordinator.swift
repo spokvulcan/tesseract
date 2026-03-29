@@ -66,6 +66,7 @@ final class AgentCoordinator {
     private struct TurnRef {
         let id: UUID
         let userContent: String?
+        let userImages: [ImageAttachment]
         let userTimestamp: String?
         let compactionText: String?
     }
@@ -173,11 +174,11 @@ final class AgentCoordinator {
 
     // MARK: - Send Message
 
-    func sendMessage(_ text: String) {
+    func sendMessage(_ text: String, images: [ImageAttachment] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || !images.isEmpty else { return }
 
-        Log.agent.info("User message (\(trimmed.count) chars): \(trimmed)")
+        Log.agent.info("User message (\(trimmed.count) chars, \(images.count) images): \(trimmed)")
 
         error = nil
         isGenerating = true
@@ -187,7 +188,7 @@ final class AgentCoordinator {
             debugLogger.logSystemPrompt(agent.state.systemPrompt, tools: agent.state.tools)
         }
 
-        let userMessage = CoreMessage.user(UserMessage(content: trimmed))
+        let userMessage = CoreMessage.user(UserMessage(content: trimmed, images: images))
 
         // Sync active tools based on current web access setting
         syncToolsForWebAccess()
@@ -578,6 +579,7 @@ final class AgentCoordinator {
                 let ref = TurnRef(
                     id: turnID,
                     userContent: user?.content,
+                    userImages: user?.images ?? [],
                     userTimestamp: user.map { timeFormatter.string(from: $0.timestamp) },
                     compactionText: compaction.map { "[Context compacted — \($0.tokensBefore) tokens summarized]" }
                 )
@@ -585,7 +587,7 @@ final class AgentCoordinator {
             } else {
                 if currentTurn == nil {
                     let turnID = msg.messageUUID
-                    let ref = TurnRef(id: turnID, userContent: nil, userTimestamp: nil, compactionText: nil)
+                    let ref = TurnRef(id: turnID, userContent: nil, userImages: [], userTimestamp: nil, compactionText: nil)
                     currentTurn = Turn(id: turnID, messages: [], ref: ref)
                 }
                 currentTurn?.messages.append(msg)
@@ -738,6 +740,7 @@ final class AgentCoordinator {
                     id: turnRef.id.uuidString,
                     kind: .user(UserRow(
                         content: content,
+                        images: turnRef.userImages,
                         timestamp: timestamp,
                         messageID: turnRef.id
                     ))

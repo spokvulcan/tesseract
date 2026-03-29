@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AgentInputBarView: View {
     @Binding var inputText: String
@@ -13,12 +14,15 @@ struct AgentInputBarView: View {
 
     @State private var isHoldingMic = false
     @State private var textHeight: CGFloat = 20
+    @State private var pendingImages: [ImageAttachment] = []
     @Environment(SettingsManager.self) private var settings
+
+    private static let supportedImageTypes: [UTType] = [.png, .jpeg, .gif, .webP, .tiff]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topLeading) {
-                if inputText.isEmpty {
+                if inputText.isEmpty && pendingImages.isEmpty {
                     Text("Message…")
                         .font(.system(size: 15))
                         .foregroundColor(.secondary)
@@ -26,23 +30,42 @@ struct AgentInputBarView: View {
                         .padding(.top, 16)
                         .allowsHitTesting(false)
                 }
-                
+
                 AgentScrollableTextField(
                     text: $inputText,
                     dynamicHeight: $textHeight,
                     onCommit: { send() },
+                    onImagePaste: { attachments in
+                        pendingImages.append(contentsOf: attachments)
+                    },
                     isEnabled: !(coordinator.voiceState == .recording || coordinator.voiceState == .transcribing)
                 )
                 .frame(height: min(max(textHeight, 20), 150))
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
-                .padding(.bottom, 12)
+                .padding(.bottom, pendingImages.isEmpty ? 12 : 4)
             }
-            
+
+            // Image preview strip
+            if !pendingImages.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(pendingImages) { attachment in
+                            ImageThumbnailView(attachment: attachment) {
+                                pendingImages.removeAll { $0.id == attachment.id }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .frame(height: 64)
+                .padding(.bottom, 4)
+            }
+
             HStack(spacing: 16) {
-                // Formatting and attachment actions (mocked for visual fidelity)
+                // Formatting and attachment actions
                 HStack(spacing: 14) {
-                    Button { } label: {
+                    Button { openImagePicker() } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(.secondary)
@@ -50,7 +73,7 @@ struct AgentInputBarView: View {
                             .background(.quinary, in: Circle())
                     }
                     .buttonStyle(.plain)
-                    .help("Add attachment")
+                    .help("Add image")
 
                     Button {
                         settings.webAccessEnabled.toggle()
@@ -69,7 +92,7 @@ struct AgentInputBarView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Mention")
-                    
+
                     Button { } label: {
                         Image(systemName: "slash.circle")
                             .font(.system(size: 16, weight: .medium))
@@ -78,13 +101,13 @@ struct AgentInputBarView: View {
                     .buttonStyle(.plain)
                     .help("Commands")
                 }
-                
+
                 Spacer()
-                
+
                 // Active input controls
                 HStack(spacing: 12) {
                     micButton
-                    
+
                     if coordinator.isGenerating {
                         Button {
                             coordinator.cancelGeneration()
@@ -119,6 +142,10 @@ struct AgentInputBarView: View {
                 .strokeBorder(.quaternary, lineWidth: 0.5)
         }
         .padding(Theme.Spacing.md)
+        .onDrop(of: [.image], isTargeted: nil) { providers in
+            handleDrop(providers)
+            return true
+        }
     }
 
     // MARK: - Mic Button
@@ -198,7 +225,7 @@ struct AgentInputBarView: View {
     }
 
     private var canSend: Bool {
-        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImages.isEmpty)
             && !coordinator.isGenerating
     }
 
@@ -206,8 +233,93 @@ struct AgentInputBarView: View {
 
     private func send() {
         let text = inputText
+        let images = pendingImages
         inputText = ""
-        // Model loading is handled by the InferenceArbiter inside sendMessage
-        coordinator.sendMessage(text)
+        pendingImages = []
+        coordinator.sendMessage(text, images: images)
+    }
+
+    /// 10 MB max per image — larger files are silently skipped.
+    private static let maxImageBytes = 10 * 1024 * 1024
+
+    private func openImagePicker() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = Self.supportedImageTypes
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = "Select images to attach"
+        panel.begin { response in
+            guard response == .OK else { return }
+            let attachments = panel.urls.compactMap { url -> ImageAttachment? in
+                guard let data = try? Data(contentsOf: url),
+                      data.count <= Self.maxImageBytes else { return nil }
+                let mimeType = url.mimeTypeForImage ?? "image/png"
+                return ImageAttachment(data: data, mimeType: mimeType, filename: url.lastPathComponent)
+            }
+            DispatchQueue.main.async {
+                pendingImages.append(contentsOf: attachments)
+            }
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) {
+        for provider in providers {
+            let registeredTypes = provider.registeredTypeIdentifiers
+            let mimeType = registeredTypes.lazy
+                .compactMap { UTType($0)?.preferredMIMEType }
+                .first ?? "image/png"
+
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                guard let data, data.count <= Self.maxImageBytes else { return }
+                let attachment = ImageAttachment(data: data, mimeType: mimeType, filename: "dropped-image")
+                DispatchQueue.main.async {
+                    pendingImages.append(attachment)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Image Thumbnail
+
+private struct ImageThumbnailView: View {
+    let attachment: ImageAttachment
+    let onRemove: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            if let nsImage = NSImage(data: attachment.data) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 56, height: 56)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.quaternary)
+                    .frame(width: 56, height: 56)
+                    .overlay {
+                        Image(systemName: "photo")
+                            .foregroundStyle(.secondary)
+                    }
+            }
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white, .black.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .offset(x: 6, y: -6)
+        }
+    }
+}
+
+// MARK: - URL Image MIME Type Helper
+
+private extension URL {
+    var mimeTypeForImage: String? {
+        guard let utType = UTType(filenameExtension: pathExtension) else { return nil }
+        return utType.preferredMIMEType
     }
 }

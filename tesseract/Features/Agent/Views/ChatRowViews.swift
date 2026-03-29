@@ -58,23 +58,48 @@ struct UserBubble: View, Equatable {
     var body: some View {
         let _ = ChatViewPerf.signposter.emitEvent("UserBubble.body")
         VStack(alignment: .trailing, spacing: 4) {
-            HStack(alignment: .bottom, spacing: 8) {
-                if useMarkdown {
-                    StructuredText(markdown: data.content)
-                        .textual.structuredTextStyle(.default)
-                        .textual.textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Text(data.content)
-                        .font(.system(size: 15))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 8) {
+                if !data.images.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(data.images) { attachment in
+                            if let nsImage = NSImage(data: attachment.data) {
+                                Image(nsImage: nsImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(maxWidth: 200, maxHeight: 200)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
                 }
 
-                Text(data.timestamp)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .padding(.bottom, 2)
+                if !data.content.isEmpty {
+                    HStack(alignment: .bottom, spacing: 8) {
+                        if useMarkdown {
+                            StructuredText(markdown: data.content)
+                                .textual.structuredTextStyle(.default)
+                                .textual.textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Text(data.content)
+                                .font(.system(size: 15))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        Text(data.timestamp)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.bottom, 2)
+                    }
+                } else {
+                    HStack {
+                        Spacer()
+                        Text(data.timestamp)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)

@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import MLXLLM
+import MLXVLM
 import MLXLMCommon
 import Tokenizers
 import os
