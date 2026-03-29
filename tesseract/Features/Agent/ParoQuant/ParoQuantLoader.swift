@@ -3,6 +3,7 @@ import Hub
 import MLX
 import MLXLLM
 import MLXLMCommon
+import MLXVLM
 import MLXNN
 import Tokenizers
 
@@ -356,30 +357,57 @@ nonisolated private struct ParoQuantInputProcessor: UserInputProcessor {
 nonisolated func loadParoQuantModel(
     from directory: URL, toolCallFormat: ToolCallFormat?
 ) async throws -> ModelContainer {
-    // Use the library's loader (with pre-rotation + caching)
+    // Use VLM type registry so Qwen3.5 loads with its vision tower.
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
-        typeRegistry: LLMModelFactory.shared.typeRegistry,
+        typeRegistry: VLMModelFactory.shared.typeRegistry,
         toolCallFormat: toolCallFormat
     )
 
-    // Fix up the message generator — the library uses DefaultMessageGenerator
-    // because it can't access LLMModel from MLXLMCommon. We override with the
-    // proper model-specific generator.
+    // Create VLM processor for vision support; falls back to text-only if unavailable.
+    let vlmProcessor = await loadVLMProcessor(from: directory, container: container)
+
     await container.update { context in
-        let messageGenerator: MessageGenerator =
-            if let llmModel = context.model as? LLMModel {
-                llmModel.messageGenerator(tokenizer: context.tokenizer)
-            } else {
-                DefaultMessageGenerator()
-            }
-        context.processor = ParoQuantInputProcessor(
-            tokenizer: context.tokenizer, configuration: context.configuration,
-            messageGenerator: messageGenerator
-        )
+        if let vlmProcessor {
+            context.processor = vlmProcessor
+        } else {
+            let messageGenerator: MessageGenerator =
+                if let llmModel = context.model as? LLMModel {
+                    llmModel.messageGenerator(tokenizer: context.tokenizer)
+                } else {
+                    DefaultMessageGenerator()
+                }
+            context.processor = ParoQuantInputProcessor(
+                tokenizer: context.tokenizer, configuration: context.configuration,
+                messageGenerator: messageGenerator
+            )
+        }
     }
 
     return container
+}
+
+/// Attempts to create a VLM processor from the model directory's `preprocessor_config.json`.
+/// Returns `nil` if the config is absent (expected for text-only models).
+private func loadVLMProcessor(
+    from directory: URL, container: ModelContainer
+) async -> (any UserInputProcessor)? {
+    let configURL = directory.appendingPathComponent("preprocessor_config.json")
+    guard let configData = try? Data(contentsOf: configURL),
+          let baseConfig = try? JSONDecoder().decode(
+              BaseProcessorConfiguration.self, from: configData) else {
+        return nil
+    }
+    do {
+        let tokenizer = await container.perform { $0.tokenizer }
+        return try await VLMProcessorTypeRegistry.shared.createModel(
+            configuration: configData,
+            processorType: baseConfig.processorClass,
+            tokenizer: tokenizer)
+    } catch {
+        Log.agent.warning("VLM processor creation failed, using text-only fallback: \(error)")
+        return nil
+    }
 }
 
 // MARK: - Errors
