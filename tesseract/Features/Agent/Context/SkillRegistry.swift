@@ -192,19 +192,19 @@ nonisolated enum SkillRegistry: Sendable {
         )
     }
 
+    /// Return the body content of a skill file, stripping YAML frontmatter.
+    /// If no frontmatter is present, returns the full text.
+    static func bodyContent(of text: String) -> String {
+        guard let (_, body) = splitFrontmatter(text) else { return text }
+        return body.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Extract key-value pairs from YAML frontmatter (between `---` delimiters).
     /// Handles simple `key: value` pairs only (no nested YAML).
     private static func extractFrontmatter(_ text: String) -> [String: String]? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("---") else { return nil }
+        guard let (yaml, _) = splitFrontmatter(text) else { return nil }
 
-        // Find the closing ---
-        let afterOpening = trimmed.index(trimmed.startIndex, offsetBy: 3)
-        let rest = trimmed[afterOpening...]
-
-        guard let closingRange = rest.range(of: "\n---") else { return nil }
-
-        let frontmatterBlock = rest[..<closingRange.lowerBound]
+        let frontmatterBlock = yaml
         var result: [String: String] = [:]
 
         for line in frontmatterBlock.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -223,6 +223,22 @@ nonisolated enum SkillRegistry: Sendable {
         }
 
         return result.isEmpty ? nil : result
+    }
+
+    /// Split text into YAML frontmatter and body at the `---` delimiters.
+    /// Returns nil if no valid frontmatter is present.
+    private static func splitFrontmatter(_ text: String) -> (yaml: Substring, body: Substring)? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("---") else { return nil }
+
+        let afterOpening = trimmed.index(trimmed.startIndex, offsetBy: 3)
+        let rest = trimmed[afterOpening...]
+
+        guard let closingRange = rest.range(of: "\n---") else { return nil }
+
+        let yaml = rest[..<closingRange.lowerBound]
+        let body = rest[closingRange.upperBound...]
+        return (yaml, body)
     }
 
     /// Remove surrounding single or double quotes from a string.

@@ -34,11 +34,28 @@ struct AgentInputBarView: View {
                 AgentScrollableTextField(
                     text: $inputText,
                     dynamicHeight: $textHeight,
-                    onCommit: { send() },
+                    onCommit: { handleCommit() },
                     onImagePaste: { attachments in
                         pendingImages.append(contentsOf: attachments)
                     },
-                    isEnabled: !(coordinator.voiceState == .recording || coordinator.voiceState == .transcribing)
+                    isEnabled: !(coordinator.voiceState == .recording || coordinator.voiceState == .transcribing),
+                    onArrowUp: {
+                        guard coordinator.showCommandPopup else { return false }
+                        coordinator.commandSelectedIndex = max(0, coordinator.commandSelectedIndex - 1)
+                        return true
+                    },
+                    onArrowDown: {
+                        guard coordinator.showCommandPopup else { return false }
+                        let count = coordinator.commandFilteredResults.count
+                        coordinator.commandSelectedIndex = min(count - 1, coordinator.commandSelectedIndex + 1)
+                        return true
+                    },
+                    onEscape: {
+                        guard coordinator.showCommandPopup else { return false }
+                        coordinator.dismissCommandPopup()
+                        inputText = ""
+                        return true
+                    }
                 )
                 .frame(height: min(max(textHeight, 20), 150))
                 .padding(.horizontal, 16)
@@ -85,18 +102,17 @@ struct AgentInputBarView: View {
                     .buttonStyle(.plain)
                     .help(settings.webAccessEnabled ? "Web search enabled — click to disable" : "Web search disabled — click to enable")
 
-                    Button { } label: {
-                        Image(systemName: "at")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Mention")
-
-                    Button { } label: {
+                    Button {
+                        if coordinator.showCommandPopup {
+                            coordinator.dismissCommandPopup()
+                        } else {
+                            inputText = "/"
+                            coordinator.updateCommandPopup(for: "/")
+                        }
+                    } label: {
                         Image(systemName: "slash.circle")
                             .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(coordinator.showCommandPopup ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                     }
                     .buttonStyle(.plain)
                     .help("Commands")
@@ -140,6 +156,18 @@ struct AgentInputBarView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(.quaternary, lineWidth: 0.5)
+        }
+        .onChange(of: inputText) { _, newValue in
+            coordinator.updateCommandPopup(for: newValue)
+        }
+        .onAppear {
+            coordinator.onVoiceTranscription = { text in
+                if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    inputText = text
+                } else {
+                    inputText += " " + text
+                }
+            }
         }
         .padding(Theme.Spacing.md)
         .onDrop(of: [.image], isTargeted: nil) { providers in
@@ -217,7 +245,7 @@ struct AgentInputBarView: View {
             return "Voice input unavailable during generation"
         }
         switch coordinator.voiceState {
-        case .recording: return "Release to send"
+        case .recording: return "Release to transcribe"
         case .transcribing: return "Transcribing…"
         case .error(let msg): return msg
         default: return "Hold to speak"
@@ -227,6 +255,25 @@ struct AgentInputBarView: View {
     private var canSend: Bool {
         (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImages.isEmpty)
             && !coordinator.isGenerating
+    }
+
+    // MARK: - Slash Command Helpers
+
+    private func selectCommand(_ command: SlashCommand) {
+        inputText = coordinator.autocompleteCommand(command)
+    }
+
+    private func handleCommit() {
+        // If popup is showing, Enter autocompletes the selected command
+        if coordinator.showCommandPopup {
+            let filtered = coordinator.commandFilteredResults
+            if filtered.indices.contains(coordinator.commandSelectedIndex) {
+                selectCommand(filtered[coordinator.commandSelectedIndex])
+                return
+            }
+        }
+        // Otherwise send (command parsing happens in coordinator.sendMessage)
+        send()
     }
 
     // MARK: - Actions

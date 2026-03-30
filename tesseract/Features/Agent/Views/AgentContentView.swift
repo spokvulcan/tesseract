@@ -43,7 +43,34 @@ struct AgentContentView: View {
                         })
                     }
 
-                    AgentInputBarView(inputText: $inputText)
+                    ZStack(alignment: .bottom) {
+                        if coordinator.showCommandPopup {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    coordinator.dismissCommandPopup()
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+
+                        VStack(spacing: 0) {
+                            if coordinator.showCommandPopup, !coordinator.commandFilteredResults.isEmpty {
+                                SlashCommandPopupView(
+                                    commands: coordinator.commandFilteredResults,
+                                    selectedIndex: coordinator.commandSelectedIndex,
+                                    onSelect: { command in
+                                        selectCommandFromPopup(command)
+                                    }
+                                )
+                                .padding(.horizontal, Theme.Spacing.md + 16)
+                                .padding(.bottom, 4)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
+
+                            AgentInputBarView(inputText: $inputText)
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.15), value: coordinator.showCommandPopup)
                 }
             }
         }
@@ -101,6 +128,12 @@ struct AgentContentView: View {
             guard sessionId != nil else { return }
             consumePendingBackgroundSession()
         }
+    }
+
+    // MARK: - Slash Command Popup
+
+    private func selectCommandFromPopup(_ command: SlashCommand) {
+        inputText = coordinator.autocompleteCommand(command)
     }
 
     // MARK: - Background Session

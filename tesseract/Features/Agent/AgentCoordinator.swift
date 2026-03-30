@@ -109,6 +109,18 @@ final class AgentCoordinator {
     private let formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))?
     @ObservationIgnored var loadBackgroundSessionById: (@MainActor (UUID) async throws -> (messages: [any AgentMessageProtocol & Sendable], name: String))?
     private let debugLogger = AgentDebugLogger()
+
+    // MARK: - Slash Commands
+
+    private(set) var commandRegistry = SlashCommandRegistry()
+    var showCommandPopup: Bool = false
+    var commandSelectedIndex: Int = 0
+    var commandFilteredResults: [SlashCommand] = []
+    private let extensionHost: ExtensionHost?
+    private let packageRegistry: PackageRegistry?
+    private let contextManager: ContextManager?
+    private let contextWindow: Int
+    private let summarize: (@Sendable (String) async throws -> String)?
     /// The task that holds the arbiter lease for the current agent run.
     /// Cancelled by `cancelGeneration()` to abort both queued waits and active runs.
     @ObservationIgnored private var sendTask: Task<Void, Never>?
@@ -142,7 +154,12 @@ final class AgentCoordinator {
         arbiter: InferenceArbiter? = nil,
         formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))? = nil,
         speechCoordinator: SpeechCoordinator? = nil,
-        toolRegistry: ToolRegistry? = nil
+        toolRegistry: ToolRegistry? = nil,
+        extensionHost: ExtensionHost? = nil,
+        packageRegistry: PackageRegistry? = nil,
+        contextManager: ContextManager? = nil,
+        contextWindow: Int = 120_000,
+        summarize: (@Sendable (String) async throws -> String)? = nil
     ) {
         self.agent = agent
         self.conversationStore = conversationStore
@@ -153,10 +170,16 @@ final class AgentCoordinator {
         self.formatRawPrompt = formatRawPrompt
         self.speechCoordinator = speechCoordinator
         self.toolRegistry = toolRegistry
+        self.extensionHost = extensionHost
+        self.packageRegistry = packageRegistry
+        self.contextManager = contextManager
+        self.contextWindow = contextWindow
+        self.summarize = summarize
 
         assembledSystemPrompt = agent.state.systemPrompt
 
         subscribeToAgentEvents()
+        rebuildCommandRegistry()
 
         conversationStore.loadMostRecent()
         if let current = conversationStore.currentConversation {
@@ -174,9 +197,23 @@ final class AgentCoordinator {
 
     // MARK: - Send Message
 
-    func sendMessage(_ text: String, images: [ImageAttachment] = []) {
+    func sendMessage(_ text: String, images: [ImageAttachment] = [], bypassCommandParsing: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !images.isEmpty else { return }
+
+        if !bypassCommandParsing && images.isEmpty {
+            let parseResult = SlashCommandParser.parse(trimmed, registry: commandRegistry)
+            switch parseResult {
+            case .matched(let command, let arguments):
+                executeCommand(command, arguments: arguments)
+                return
+            case .unknown(let name):
+                error = "Unknown command: /\(name)"
+                return
+            case .notACommand, .partial:
+                break
+            }
+        }
 
         Log.agent.info("User message (\(trimmed.count) chars, \(images.count) images): \(trimmed)")
 
@@ -230,6 +267,134 @@ final class AgentCoordinator {
         sendTask?.cancel()
         sendTask = nil
         agent.abort()
+    }
+
+    // MARK: - Slash Command Execution
+
+    /// Update popup state based on current input text.
+    func updateCommandPopup(for inputText: String) {
+        if let prefix = SlashCommandParser.autocompletePrefix(inputText) {
+            if !showCommandPopup { showCommandPopup = true }
+            commandFilteredResults = commandRegistry.filter(prefix: prefix)
+        } else {
+            if showCommandPopup { showCommandPopup = false }
+        }
+        if commandSelectedIndex != 0 {
+            commandSelectedIndex = 0
+        }
+    }
+
+    func dismissCommandPopup() {
+        showCommandPopup = false
+        commandFilteredResults = []
+        commandSelectedIndex = 0
+    }
+
+    /// Autocomplete a command into the input text (used by both keyboard and click).
+    func autocompleteCommand(_ command: SlashCommand) -> String {
+        dismissCommandPopup()
+        return "/\(command.name) "
+    }
+
+    /// Rebuild the command registry from current skills and extensions.
+    private func rebuildCommandRegistry() {
+        let agentRoot = PathSandbox.defaultRoot
+        let skillsDir = agentRoot.appendingPathComponent("skills")
+        let packageSkillFiles: [URL]
+        if let packageRegistry {
+            packageSkillFiles = PackageBootstrap.cachedSkillPaths(from: packageRegistry, agentRoot: agentRoot)
+        } else {
+            packageSkillFiles = []
+        }
+        let skills = SkillRegistry.discover(locations: [skillsDir], packageSkillFiles: packageSkillFiles)
+        commandRegistry.rebuild(skills: skills, extensionHost: extensionHost)
+    }
+
+    func executeCommand(_ command: SlashCommand, arguments: String = "") {
+        Log.agent.info("Slash command: /\(command.name) \(arguments)")
+
+        switch command.source {
+        case .builtIn:
+            executeBuiltIn(command.name, arguments: arguments)
+        case .skill(let filePath):
+            executeSkill(filePath: filePath, skillName: command.name, arguments: arguments)
+        case .extension(let extensionPath):
+            executeExtensionCommand(command.name, extensionPath: extensionPath, arguments: arguments)
+        }
+    }
+
+    private func executeBuiltIn(_ name: String, arguments: String) {
+        switch name {
+        case "compact":
+            triggerCompaction(instructions: arguments.isEmpty ? nil : arguments)
+        case "new", "clear":
+            newConversation()
+        default:
+            error = "Unknown built-in command: /\(name)"
+        }
+    }
+
+    private func triggerCompaction(instructions: String?) {
+        guard !agent.state.messages.isEmpty else {
+            error = "Nothing to compact"
+            return
+        }
+        guard let contextManager, let summarize else {
+            error = "Compaction not available"
+            return
+        }
+
+        isGenerating = true
+        agent.forceCompact(
+            contextManager: contextManager,
+            contextWindow: contextWindow,
+            summarize: summarize
+        )
+    }
+
+    private func executeSkill(filePath: String, skillName: String, arguments: String) {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
+              let fullText = String(data: data, encoding: .utf8) else {
+            error = "Failed to load skill: \(filePath)"
+            return
+        }
+
+        let body = SkillRegistry.bodyContent(of: fullText)
+        let skillDir = URL(fileURLWithPath: filePath).deletingLastPathComponent().path
+
+        var message = """
+        <skill name="\(skillName)" location="\(filePath)">
+        References are relative to \(skillDir).
+
+        \(body)
+        </skill>
+        """
+
+        if !arguments.isEmpty {
+            message += "\n\n\(arguments)"
+        }
+
+        sendMessage(message, bypassCommandParsing: true)
+    }
+
+    private func executeExtensionCommand(
+        _ name: String,
+        extensionPath: String,
+        arguments: String
+    ) {
+        guard let ext = extensionHost?.getExtension(path: extensionPath),
+              let cmd = ext.commands[name] else {
+            error = "Extension command not found: /\(name)"
+            return
+        }
+        Task {
+            do {
+                let context = StubExtensionContext(cwd: PathSandbox.defaultRoot.path)
+                try await cmd.execute(arguments, context)
+            } catch {
+                self.error = "Command failed: \(error.localizedDescription)"
+            }
+        }
     }
 
     // MARK: - Conversation Management
@@ -361,6 +526,9 @@ final class AgentCoordinator {
         }
     }
 
+    /// Called when voice transcription completes, to populate the input bar.
+    @ObservationIgnored var onVoiceTranscription: ((String) -> Void)?
+
     func stopVoiceInputAndSend() {
         guard voiceState == .recording else { return }
         guard let audioCapture, let transcriptionEngine else {
@@ -392,8 +560,7 @@ final class AgentCoordinator {
                 Log.agent.info("Voice transcribed: \(processedText)")
                 voiceState = .idle
 
-                // Model loading is handled by the arbiter inside sendMessage
-                sendMessage(processedText)
+                self.onVoiceTranscription?(processedText)
             } catch {
                 setVoiceError("Transcription failed")
                 Log.agent.error("Voice transcription error: \(error)")
@@ -505,6 +672,10 @@ final class AgentCoordinator {
                     Log.agent.info("Extension transform applied: \(name)")
                 }
                 rebuildRows()
+            }
+            // Reset isGenerating for standalone compaction (not part of an agent loop)
+            if case .compaction = reason, agent.state.phase == .idle {
+                isGenerating = false
             }
 
         case .messageUpdate:
@@ -1088,4 +1259,18 @@ final class AgentCoordinator {
         speechCoordinator?.speakText(content)
     }
 
+}
+
+// MARK: - StubExtensionContext
+
+/// Minimal ExtensionContext for slash command execution.
+/// A full implementation will be added when the extension runner is wired.
+private struct StubExtensionContext: ExtensionContext, Sendable {
+    let cwd: String
+    var model: AgentModelRef? { nil }
+    func isIdle() -> Bool { true }
+    func abort() {}
+    func getSystemPrompt() -> String { "" }
+    func getContextUsage() -> ContextUsage? { nil }
+    func compact(options: CompactOptions?) {}
 }

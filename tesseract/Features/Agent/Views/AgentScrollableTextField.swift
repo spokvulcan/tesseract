@@ -7,6 +7,10 @@ struct AgentScrollableTextField: NSViewRepresentable {
     var onCommit: () -> Void
     var onImagePaste: (([ImageAttachment]) -> Void)?
     var isEnabled: Bool = true
+    /// Return true if the arrow key was consumed (e.g. by popup navigation).
+    var onArrowUp: (() -> Bool)?
+    var onArrowDown: (() -> Bool)?
+    var onEscape: (() -> Bool)?
     
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -53,12 +57,8 @@ struct AgentScrollableTextField: NSViewRepresentable {
         let textView = nsView.documentView as! NSTextView
         
         if textView.string != text {
-            // Preserve selection range if possible
-            let selectedRange = textView.selectedRange()
             textView.string = text
-            if selectedRange.location <= text.utf16.count {
-                textView.setSelectedRange(selectedRange)
-            }
+            textView.setSelectedRange(NSRange(location: text.utf16.count, length: 0))
             context.coordinator.recalculateHeight(textView: textView)
         }
         
@@ -117,6 +117,15 @@ struct AgentScrollableTextField: NSViewRepresentable {
                     parent.onCommit()
                     return true
                 }
+            }
+            if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                if parent.onArrowUp?() == true { return true }
+            }
+            if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                if parent.onArrowDown?() == true { return true }
+            }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                if parent.onEscape?() == true { return true }
             }
             return false
         }

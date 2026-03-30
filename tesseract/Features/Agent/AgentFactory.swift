@@ -69,28 +69,10 @@ enum AgentFactory {
         let compactionTransform = makeCompactionTransform(
             contextManager: contextManager,
             contextWindow: 120_000,
-            summarize: { prompt in
-                let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
-                let task = Task { @MainActor in
-                    do {
-                        let s = try engine.generate(prompt: prompt, parameters: generateParameters)
-                        for try await gen in s {
-                            continuation.yield(gen)
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
-                    }
-                }
-                continuation.onTermination = { _ in task.cancel() }
-                var result = ""
-                for try await gen in stream {
-                    if case .text(let chunk) = gen {
-                        result += chunk
-                    }
-                }
-                return result
-            }
+            summarize: makeSummarizeClosure(
+                engine: engine,
+                parametersProvider: { generateParameters }
+            )
         )
 
         // 7. Create agent config

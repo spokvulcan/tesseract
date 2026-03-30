@@ -152,6 +152,57 @@ final class Agent {
         }
     }
 
+    /// Force context compaction outside of the normal agent loop.
+    /// Used by the `/compact` slash command.
+    func forceCompact(
+        contextManager: ContextManager,
+        contextWindow: Int,
+        summarize: @escaping @Sendable (String) async throws -> String
+    ) {
+        guard state.phase == .idle else { return }
+        guard !context.messages.isEmpty else { return }
+
+        state.phase = .transformingContext(.compaction)
+
+        let messages = context.messages
+        let emit = makeEmitter()
+        emit(.contextTransformStart(reason: .compaction))
+
+        runTask = Task { [weak self] in
+            do {
+                let compacted = try await contextManager.compact(
+                    messages: messages,
+                    contextWindow: contextWindow,
+                    summarize: summarize
+                )
+                await MainActor.run {
+                    guard let self else { return }
+                    self.context.messages = compacted
+                    self.state.messages = compacted.map { $0 as any AgentMessageProtocol }
+                    emit(.contextTransformEnd(
+                        reason: .compaction,
+                        didMutate: true,
+                        messages: compacted
+                    ))
+                    self.state.phase = .idle
+                    self.runTask = nil
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    emit(.contextTransformEnd(
+                        reason: .compaction,
+                        didMutate: false,
+                        messages: nil
+                    ))
+                    self.state.phase = .idle
+                    self.state.error = error.localizedDescription
+                    self.runTask = nil
+                }
+            }
+        }
+    }
+
     /// Cancel in-progress generation.
     func abort() {
         cancellationToken?.cancel()

@@ -272,6 +272,44 @@ nonisolated func makeCompactionTransform(
     )
 }
 
+// MARK: - Summarize Closure Factory
+
+/// Creates a `@Sendable` summarize closure that collects streamed text from the
+/// agent engine. Used by compaction (both automatic and `/compact`) and background agents.
+///
+/// - Parameters:
+///   - engine: The agent engine to generate summaries with.
+///   - parametersProvider: Closure that returns current generate parameters (evaluated at call time
+///     to pick up model changes).
+nonisolated func makeSummarizeClosure(
+    engine: AgentEngine,
+    parametersProvider: @escaping @MainActor () -> AgentGenerateParameters
+) -> @Sendable (String) async throws -> String {
+    return { prompt in
+        let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+        let task = Task { @MainActor in
+            do {
+                let params = parametersProvider()
+                let s = try engine.generate(prompt: prompt, parameters: params)
+                for try await gen in s {
+                    continuation.yield(gen)
+                }
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+        continuation.onTermination = { _ in task.cancel() }
+        var chunks: [String] = []
+        for try await gen in stream {
+            if case .text(let chunk) = gen {
+                chunks.append(chunk)
+            }
+        }
+        return chunks.joined()
+    }
+}
+
 // MARK: - TokenEstimator
 
 /// Coarse token estimation for compaction decisions.

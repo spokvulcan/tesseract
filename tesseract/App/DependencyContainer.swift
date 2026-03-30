@@ -121,7 +121,17 @@ final class DependencyContainer: ObservableObject {
                 return try await self.agentEngine.formatRawPrompt(systemPrompt: systemPrompt, tools: tools)
             },
             speechCoordinator: speechCoordinator,
-            toolRegistry: newToolRegistry
+            toolRegistry: newToolRegistry,
+            extensionHost: extensionHost,
+            packageRegistry: packageRegistry,
+            contextManager: contextManager,
+            contextWindow: 120_000,
+            summarize: makeSummarizeClosure(
+                engine: agentEngine,
+                parametersProvider: { [settingsManager] in
+                    AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
+                }
+            )
         )
     }()
 
