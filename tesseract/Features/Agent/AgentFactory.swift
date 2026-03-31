@@ -33,7 +33,6 @@ enum AgentFactory {
 
         // 2. Refresh extension tools after package bootstrap
         toolRegistry.refreshExtensionTools(from: extensionHost)
-        let tools = toolRegistry.allTools
 
         // 3. Discover skills from agent root + packages (sandbox-local paths)
         let skillsDir = agentRoot.appendingPathComponent("skills")
@@ -45,7 +44,14 @@ enum AgentFactory {
             packageSkillFiles: cachedSkillPaths
         )
 
-        // 4. Load context files (AGENTS.md, CLAUDE.md, APPEND_SYSTEM.md, etc.)
+        // 3b. Register the use_skill tool (needs discovered skills)
+        let skillTool = createSkillTool(skills: skills)
+        toolRegistry.appendBuiltInTool(skillTool)
+
+        // 4. Get all tools (now includes use_skill)
+        let tools = toolRegistry.allTools
+
+        // 5. Load context files (AGENTS.md, CLAUDE.md, APPEND_SYSTEM.md, etc.)
         let contextLoader = ContextLoader(agentRoot: agentRoot)
         let loadedContext = contextLoader.load(
             packageContextFiles: packageRegistry.allContextFilePaths,
@@ -53,7 +59,7 @@ enum AgentFactory {
             packageSystemOverrides: []
         )
 
-        // 5. Assemble system prompt with full context
+        // 6. Assemble system prompt with full context
         let systemPrompt = SystemPromptAssembler.assemble(
             defaultPrompt: SystemPromptAssembler.defaultCorePrompt,
             loadedContext: loadedContext,
@@ -63,7 +69,7 @@ enum AgentFactory {
             agentRoot: agentRoot.path
         )
 
-        // 6. Build compaction transform
+        // 7. Build compaction transform
         let generateParameters = AgentGenerateParameters.forModel(selectedModelID)
 
         let compactionTransform = makeCompactionTransform(
@@ -75,7 +81,7 @@ enum AgentFactory {
             )
         )
 
-        // 7. Create agent config
+        // 8. Create agent config
         let config = AgentLoopConfig(
             model: AgentModelRef(id: selectedModelID),
             convertToLlm: { msgs in msgs.compactMap { $0.toLLMMessage() } },
@@ -84,7 +90,7 @@ enum AgentFactory {
             getFollowUpMessages: nil
         )
 
-        // 8. Create Agent
+        // 9. Create Agent
         return Agent(
             config: config,
             systemPrompt: systemPrompt,

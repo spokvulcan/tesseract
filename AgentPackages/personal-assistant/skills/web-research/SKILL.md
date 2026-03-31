@@ -1,9 +1,11 @@
 ---
 name: web-research
-description: Use this skill when answering questions that require current, factual, or verifiable information from the web.
+description: "MANDATORY when the user asks about news, current events, latest updates, prices, weather, scores, releases, or any question requiring up-to-date or verifiable web information. Load this skill BEFORE calling web_search or web_fetch."
 ---
 
 # Web Research
+
+**You MUST follow this workflow whenever you use `web_search` or `web_fetch`.** Do not skip steps.
 
 ## Core Rule
 
@@ -11,60 +13,38 @@ description: Use this skill when answering questions that require current, factu
 
 ## Workflow
 
-### 1. Plan search queries
+### 1. Search with 2-3 queries from different angles
 
-Before searching, decide on 2-3 queries from different angles:
-- Official/primary source query (e.g., "Swift 6.2 release notes")
+- Primary source query (e.g., "Swift 6.2 release notes site:swift.org")
 - Community/analysis query (e.g., "Swift 6.2 new features overview")
-- Stats/data query if needed (e.g., "product X benchmark comparison 2026")
+- Data query if relevant (e.g., "product X benchmark 2026")
 
-### 2. Search and select URLs
+Run `web_search` for each. Scan results for official sources, recent dates, and reputable outlets. Do NOT extract data from snippets — use them only to pick URLs.
 
-Run `web_search` for your first query. Scan results for:
-- **Official sources** (docs, patch notes, manufacturer sites) — prefer these
-- **Recent dates** in titles or snippets — prefer these
-- **Reputable secondary sources** (major news outlets, established wikis, stats sites)
+### 2. Fetch at least 2-3 pages (MANDATORY)
 
-Do NOT extract data from snippets. Use them only to choose which URLs to fetch.
+Use `web_fetch` on the best URLs. This step is not optional.
+- Start with the most authoritative URL
+- If a fetch returns thin content, try the next URL
+- Use `max_chars: 20000` to keep context manageable
 
-### 3. Fetch actual pages (MANDATORY)
+### 3. Check freshness
 
-Fetch **at least 2-3 pages** using `web_fetch` before answering. This is not optional.
-- Start with the most authoritative URL from search results
-- If the first fetch gives thin content or fails, try alternative URLs
-- Use `max_chars: 20000` to keep context manageable; use higher values only when you need comprehensive detail from a single long page
+Look for publication dates, version numbers, and "last updated" timestamps in fetched content. If the newest source is over 6 months old for a time-sensitive topic, tell the user.
 
-### 4. Check freshness
+### 4. Cross-reference and cite
 
-When reading fetched content, look for:
-- Publication or update dates
-- Version numbers, patch numbers, timestamps
-- Language like "as of [date]" or "last updated"
-
-If the newest source is more than 6 months old for a time-sensitive topic, tell the user: "The most recent source I found is from [date]."
-
-### 5. Cross-reference
-
-Compare facts across your fetched sources. If sources disagree:
-- State the disagreement
-- Prefer the more authoritative or more recent source
-- Never silently pick one version
-
-### 6. Cite sources
-
-Every factual claim must have a source URL. Format:
-- Inline: "The base damage was reduced to 300 ([source](url))"
-- Or a Sources section at the end with numbered references
+Compare facts across fetched pages. If sources disagree, state the disagreement and prefer the more authoritative or recent one. Every factual claim must have a source URL — either inline or in a Sources section.
 
 ## Error Recovery
 
-- **Fetch fails or returns thin content**: Try the next URL from search results. If multiple fetches fail, run a refined search query.
-- **No relevant results**: Try alternative query phrasing. Broaden or narrow the search terms.
-- **All sources are old**: State this clearly. Do NOT fill gaps with your training data — say "I couldn't find current information on [topic]."
+- **Fetch fails**: Try the next URL. If multiple fail, run a refined search.
+- **No results**: Rephrase the query. Broaden or narrow terms.
+- **All sources are old**: Say so. Do NOT fill gaps with training data.
 
 ## What NOT To Do
 
-- Do NOT answer factual questions from search snippets alone
-- Do NOT present your training data as current facts when the user asked for current information
-- Do NOT run many searches without fetching any pages — this is the failure mode this skill exists to prevent
+- Do NOT answer from search snippets alone — always fetch actual pages
+- Do NOT present training data as current facts
+- Do NOT call web_search repeatedly without fetching any pages
 - Do NOT assume a snippet's date reflects current reality

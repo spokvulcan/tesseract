@@ -31,6 +31,12 @@ final class ToolRegistry {
         allTools.map { $0.toolSpec }
     }
 
+    /// Append a built-in tool after initialization (e.g., skill tool that
+    /// depends on discovered data not available at init time).
+    func appendBuiltInTool(_ tool: AgentToolDefinition) {
+        builtInTools.append(tool)
+    }
+
     /// Refresh extension tools (e.g., after extension registration changes).
     func refreshExtensionTools(from host: ExtensionHost) {
         self.extensionTools = host.aggregatedTools()

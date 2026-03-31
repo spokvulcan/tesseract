@@ -61,30 +61,27 @@ nonisolated enum SkillRegistry: Sendable {
 
     // MARK: - Prompt Formatting
 
-    /// Format discovered skills as plain-text markdown for the system prompt.
+    /// Format discovered skills as an authoritative system prompt section.
     /// Only includes skills where `disableModelInvocation` is false.
+    /// Directs the model to use the `use_skill` tool for loading.
     static func formatForPrompt(_ skills: [SkillMetadata]) -> String {
         let eligible = skills.filter { !$0.disableModelInvocation }
         guard !eligible.isEmpty else { return "" }
 
         var lines = """
-            # Skills
+            ## Skills (mandatory)
+            Before replying, scan the skills below. If one clearly matches your task, \
+            load it with use_skill(name: "skill-name") and follow its instructions.
 
-            Skills are markdown instruction files on disk — they are NOT tools and cannot be called.
-            When a task matches a skill's description, use the read tool to load the skill file before proceeding.
-            Never guess how a specific workflow should be done — always read the skill first.
-
-            To load a skill, call the read tool with its file path, for example:
-              read(path: "\(eligible.first!.filePath)")
-
-            Available skills:
+            <available_skills>
             """
 
         for skill in eligible {
-            lines += "\n- \(skill.name): \(skill.description) (file: \(skill.filePath))"
+            lines += "\n  - \(skill.name): \(skill.description)"
         }
 
-        lines += "\n\nWhen a skill file references a relative path, resolve it against that skill's directory (the parent of its file path shown above)."
+        lines += "\n</available_skills>"
+        lines += "\n\nIf none match, proceed normally without loading a skill."
         return lines
     }
 

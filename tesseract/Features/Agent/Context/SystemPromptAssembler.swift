@@ -40,8 +40,8 @@ nonisolated enum SystemPromptAssembler: Sendable {
     /// Assembly order (spec J.3):
     /// 1. Base prompt (SYSTEM.md override or default)
     /// 2. APPEND_SYSTEM.md content
-    /// 3. Context files as "# Project Context" sections
-    /// 4. Skills listing (only when a `read` tool is available)
+    /// 3. Skills listing (only when a `use_skill` tool is available)
+    /// 4. Context files as "# Project Context" sections
     /// 5. Date/time
     /// 6. Working directory
     static func assemble(
@@ -62,19 +62,19 @@ nonisolated enum SystemPromptAssembler: Sendable {
             sections.append(append)
         }
 
-        // 3. Context files
-        for (path, content) in loadedContext.contextFiles {
-            let filename = (path as NSString).lastPathComponent
-            sections.append("# Project Context: \(filename)\n\n\(content)")
-        }
-
-        // 4. Skills listing (only if the model has a read tool to load them)
-        let hasReadTool = tools.contains { $0.name == "read" }
-        if hasReadTool {
+        // 3. Skills listing (only if the model has the use_skill tool)
+        let hasSkillTool = tools.contains { $0.name == skillToolName }
+        if hasSkillTool {
             let skillsListing = SkillRegistry.formatForPrompt(skills)
             if !skillsListing.isEmpty {
                 sections.append(skillsListing)
             }
+        }
+
+        // 4. Context files
+        for (path, content) in loadedContext.contextFiles {
+            let filename = (path as NSString).lastPathComponent
+            sections.append("# Project Context: \(filename)\n\n\(content)")
         }
 
         // 5. Date/time
