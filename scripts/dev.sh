@@ -28,17 +28,17 @@ find_app() {
     local configuration="${1:-Debug}"
     local app_path
     # Search Xcode's default DerivedData (most recently modified first)
-    app_path=$(ls -dt $DERIVED_DATA_GLOB/Build/Products/"$configuration"/tesseract.app 2>/dev/null | head -1)
+    app_path=$(ls -dt $DERIVED_DATA_GLOB/Build/Products/"$configuration"/Tesseract\ Agent.app 2>/dev/null | head -1)
     if [ -z "$app_path" ] || [ ! -d "$app_path" ]; then
-        echo "Error: tesseract.app ($configuration) not found in Xcode DerivedData. Run a matching build first." >&2
+        echo "Error: Tesseract Agent.app ($configuration) not found in Xcode DerivedData. Run a matching build first." >&2
         return 1
     fi
     echo "$app_path"
 }
 
 kill_app() {
-    if pkill -x tesseract 2>/dev/null; then
-        echo "Killed running tesseract process."
+    if pkill -x "Tesseract Agent" 2>/dev/null; then
+        echo "Killed running Tesseract Agent process."
         sleep 0.5
     fi
 }
@@ -248,7 +248,7 @@ cmd_log() {
     # Whitelist: our subsystem + print()/NSLog from our process (empty subsystem).
     # To reveal <private> values, mark interpolations as public: \(path, privacy: .public)
     log stream \
-        --predicate 'subsystem == "app.tesseract.agent" OR (process == "tesseract" AND subsystem == "")' \
+        --predicate 'subsystem == "app.tesseract.agent" OR (process == "Tesseract Agent" AND subsystem == "")' \
         --level debug \
         --style compact 2>&1 \
     | while IFS= read -r line; do
