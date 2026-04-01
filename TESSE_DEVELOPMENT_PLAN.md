@@ -28,7 +28,7 @@ All inference happens locally. No accounts, no telemetry, no cloud dependency.
 | ML Runtime | MLX (Apple's ML framework for Apple Silicon) |
 | ASR | WhisperKit (CoreML, Whisper Large V3 Turbo) |
 | TTS | Qwen3-TTS 1.7B via mlx-audio-swift (vendored) |
-| LLM | Nanbeige4.1-3B / Qwen3-4B variants via mlx-swift-lm |
+| LLM | Qwen3.5-4B / 9B variants via mlx-swift-lm |
 | Image Gen | FLUX.2-klein-4B / Z-Image 6B via mlx-image-swift (vendored) |
 | Distribution | Mac App Store (sandboxed) |
 
@@ -97,7 +97,7 @@ All inference happens locally. No accounts, no telemetry, no cloud dependency.
 | Dynamic Island notch overlay | **Done** | `AgentNotch/` (8-phase state machine) |
 | Global agent hotkey (Control+Space) | **Done** | Triggers voice interaction from anywhere |
 | Benchmark framework | **Done** | 7 scenarios, 100% pass rate (7/7) |
-| 4 agent models supported | **Done** | Nanbeige4.1-3B, Qwen3-4B ×3 variants |
+| 4 agent models supported | **Done** | Qwen3.5-4B / 9B ×4 variants |
 | UI refactor (@EnvironmentObject) | **Done** | Replaced 12-param dependency passing |
 
 ---
@@ -199,11 +199,10 @@ Goal: Make image gen production-ready if the decision is to ship it.
 | Category | Model | Size | Status |
 |----------|-------|------|--------|
 | **ASR** | Whisper Large V3 Turbo | ~1.5 GB | Shipping |
-| **TTS** | Qwen3-TTS VoiceDesign 1.7B | ~3.6 GB | Shipping |
-| **Agent** | Nanbeige4.1-3B (8-bit) | ~4.2 GB | Shipping |
-| **Agent** | Qwen3-4B Instruct 2507 | ~4.5 GB | Shipping (default) |
-| **Agent** | Qwen3-4B Thinking 2507 | ~4.5 GB | Shipping |
-| **Agent** | Qwen3-4B Opus Distill | ~3.8 GB | Shipping |
+| **TTS** | Qwen3-TTS VoiceDesign 1.7B | ~4.2 GB | Shipping |
+| **Agent** | Qwen3.5-4B PARO | ~3.5 GB | Shipping (default) |
+| **Agent** | Qwen3.5-9B PARO | ~8 GB | Shipping |
+| **Agent** | Qwen3.5-4B (8-bit) | ~5 GB | Shipping |
 | **Image** | FLUX.2-klein-4B | ~8 GB | Hidden, untested |
 | **Image** | Z-Image 6B | ~12 GB | Hidden, untested |
 

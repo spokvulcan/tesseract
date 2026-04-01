@@ -153,7 +153,7 @@ actor LLMActor {
     /// Detected models:
     /// - Qwen3.5: `enable_thinking` defaults to true, template ends with `<think>\n`
     /// - Qwen3 Thinking / Opus Distill: unconditionally append `<think>\n`
-    /// - Qwen3 Instruct / Nanbeige: no thinking in prompt → returns false
+    /// - Qwen3 Instruct: no thinking in prompt → returns false
     private static func detectPromptStartsThinking(directory: URL) -> Bool {
         let templateURL = directory.appendingPathComponent("chat_template.jinja")
         guard let template = try? String(contentsOf: templateURL, encoding: .utf8) else {

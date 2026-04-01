@@ -65,7 +65,6 @@ Python does AWQ conversion BEFORE sanitize; the Swift loader matches this order 
 |---|---|---|---|
 | **qwen3.5-4b** (default) | `mlx-community/Qwen3.5-4B-MLX-8bit` | MLX affine 8-bit | 5 GB |
 | **qwen3.5-4b-paro** | `z-lab/Qwen3.5-4B-PARO` | ParoQuant INT4 | 3.8 GB |
-| nanbeige4.1-3b | `mlx-community/Nanbeige4.1-3B-8bit` | MLX affine 8-bit | 4.2 GB |
 
 ---
 

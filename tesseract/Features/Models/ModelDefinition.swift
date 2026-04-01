@@ -58,14 +58,14 @@ struct ModelDefinition: Identifiable, Sendable {
 }
 
 extension ModelDefinition {
-    static let defaultAgentModelID = "qwen3.5-4b"
+    static let defaultAgentModelID = "qwen3.5-4b-paro"
 
     // Image generation models are kept here but excluded from `all` until the feature is ready.
     static let all: [ModelDefinition] = [
         ModelDefinition(
             id: "whisper-large-v3-turbo",
-            displayName: "Whisper Large V3 Turbo",
-            description: "State-of-the-art multilingual transcription model. 100+ languages.",
+            displayName: "Whisper Turbo",
+            description: "Fast and accurate voice-to-text. Supports 100+ languages.",
             category: .speechToText,
             source: .huggingFace(
                 repo: "argmaxinc/whisperkit-coreml",
@@ -77,74 +77,50 @@ extension ModelDefinition {
         ),
         ModelDefinition(
             id: "qwen3-tts-voicedesign",
-            displayName: "Qwen3-TTS VoiceDesign",
-            description: "1.7B parameter text-to-speech with voice design capabilities.",
+            displayName: "Voice Engine",
+            description: "Natural-sounding text-to-speech with customizable voice.",
             category: .textToSpeech,
             source: .huggingFace(
                 repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
-                requiredExtension: "safetensors"
-            ),
-            sizeDescription: "~3.6 GB",
-            dependencies: []
-        ),
-        ModelDefinition(
-            id: "nanbeige4.1-3b",
-            displayName: "Nanbeige4.1-3B",
-            description: "3B parameter bilingual agent model with tool calling and reasoning.",
-            category: .agent,
-            source: .huggingFace(
-                repo: "mlx-community/Nanbeige4.1-3B-8bit",
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~4.2 GB",
             dependencies: []
         ),
         ModelDefinition(
+            id: "qwen3.5-4b-paro",
+            displayName: "Qwen3.5-4B PARO",
+            description: "Compact and fast agent. Great balance of quality and speed.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "z-lab/Qwen3.5-4B-PARO",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~3.5 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3.5-9b-paro",
+            displayName: "Qwen3.5-9B PARO",
+            description: "Larger, smarter agent. Needs more memory (~10 GB with voice).",
+            category: .agent,
+            source: .huggingFace(
+                repo: "z-lab/Qwen3.5-9B-PARO",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~8 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
             id: "qwen3.5-4b",
             displayName: "Qwen3.5-4B",
-            description: "4B hybrid-attention model with 256K context. Tool calling with think blocks.",
+            description: "Standard agent model. Reliable general-purpose assistant.",
             category: .agent,
             source: .huggingFace(
                 repo: "mlx-community/Qwen3.5-4B-MLX-8bit",
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~5 GB",
-            dependencies: []
-        ),
-        ModelDefinition(
-            id: "qwen3.5-4b-paro",
-            displayName: "Qwen3.5-4B PARO (INT4)",
-            description: "ParoQuant INT4 — near-FP16 quality at half the size of 8-bit. Hybrid-attention, 256K context.",
-            category: .agent,
-            source: .huggingFace(
-                repo: "z-lab/Qwen3.5-4B-PARO",
-                requiredExtension: "safetensors"
-            ),
-            sizeDescription: "~3.8 GB",
-            dependencies: []
-        ),
-        ModelDefinition(
-            id: "qwen3.5-9b-paro",
-            displayName: "Qwen3.5-9B PARO (INT4)",
-            description: "ParoQuant INT4 — 9B parameters, near-FP16 quality. Hybrid-attention, 262K context. Requires ~12 GB unified memory with TTS.",
-            category: .agent,
-            source: .huggingFace(
-                repo: "z-lab/Qwen3.5-9B-PARO",
-                requiredExtension: "safetensors"
-            ),
-            sizeDescription: "~8.6 GB",
-            dependencies: []
-        ),
-        ModelDefinition(
-            id: "qwen3.5-9b-optiq",
-            displayName: "Qwen3.5-9B OptiQ (4.5-bit)",
-            description: "Mixed-precision INT4/INT8 — sensitivity-driven per-layer quantization at 4.5 BPW. Hybrid-attention, 262K context. Requires ~12 GB unified memory with TTS.",
-            category: .agent,
-            source: .huggingFace(
-                repo: "mlx-community/Qwen3.5-9B-OptiQ-4bit",
-                requiredExtension: "safetensors"
-            ),
-            sizeDescription: "~5.8 GB",
             dependencies: []
         ),
     ]

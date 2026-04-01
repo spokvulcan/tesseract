@@ -3,9 +3,7 @@ import MLXLMCommon
 
 /// Parameters controlling text generation behavior.
 ///
-/// Defaults match the official Nanbeige4.1-3B recommendations:
-/// temperature=0.6, top_p=0.95, repeat_penalty=1.0 (disabled), max_tokens=131072.
-/// See: https://huggingface.co/Nanbeige/Nanbeige4.1-3B
+/// Defaults: temperature=0.6, top_p=0.95, repeat_penalty disabled, max_tokens=131072.
 struct AgentGenerateParameters: Sendable, Codable {
     var maxTokens: Int = 131_072
     var temperature: Float = 0.6

@@ -14,14 +14,14 @@ enum AgentTokenizerError: LocalizedError {
     }
 }
 
-/// Wraps the HuggingFace tokenizer loaded with Nanbeige4.1-3B, providing named
-/// access to ChatML special tokens and encode/decode operations.
+/// Wraps the HuggingFace tokenizer, providing named access to ChatML special
+/// tokens and encode/decode operations.
 ///
 /// All special token IDs are resolved once at initialization from the tokenizer
 /// vocabulary. Encode and decode delegate to the model container's actor-isolated tokenizer.
 struct AgentTokenizer: Sendable {
 
-    /// Resolved special token IDs for Nanbeige4.1-3B ChatML format.
+    /// Resolved special token IDs for ChatML format.
     struct SpecialTokens: Sendable {
         /// `<|im_start|>` — ChatML message/role start delimiter (also BOS).
         let imStart: Int

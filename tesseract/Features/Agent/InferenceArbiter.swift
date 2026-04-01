@@ -51,7 +51,7 @@ final class InferenceArbiter {
 
     /// The model ID currently loaded in the `.llm` slot.
     /// When the user changes agent model, the next acquire detects the mismatch and reloads.
-    private var loadedLLMModelID: String?
+    private(set) var loadedLLMModelID: String?
 
     /// FIFO waiter queue for GPU access. Each entry is identified by UUID
     /// for cancellation-safe removal.
