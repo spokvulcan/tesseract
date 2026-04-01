@@ -287,6 +287,7 @@ struct ToolCallRowView: View, Equatable {
     let rowID: String
 
     @Environment(AgentCoordinator.self) private var coordinator
+    @State private var isHovering = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.data == rhs.data && lhs.rowID == rhs.rowID
@@ -298,21 +299,35 @@ struct ToolCallRowView: View, Equatable {
             StepGutter(iconName: data.iconName, iconColor: data.isError ? .red : .secondary, isLast: data.isLast)
 
             VStack(alignment: .leading, spacing: 0) {
-                Button(action: { coordinator.toggleDetailExpanded(rowID) }) {
-                    HStack(spacing: 8) {
-                        Text(data.displayTitle)
-                            .font(.system(size: 13))
-                            .foregroundStyle(data.isError ? .red : .secondary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(data.isDetailExpanded ? 90 : 0))
+                HStack(spacing: 8) {
+                    Button(action: { coordinator.toggleDetailExpanded(rowID) }) {
+                        HStack(spacing: 8) {
+                            Text(data.displayTitle)
+                                .font(.system(size: 13))
+                                .foregroundStyle(data.isError ? .red : .secondary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.tertiary)
+                                .rotationEffect(.degrees(data.isDetailExpanded ? 90 : 0))
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 0)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+
+                    if data.filePath != nil {
+                        Button(action: openContainingFolder) {
+                            Image(systemName: "folder")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show in Finder")
+                        .opacity(isHovering ? 1 : 0)
+                        .animation(.easeInOut(duration: 0.15), value: isHovering)
+                    }
                 }
-                .buttonStyle(.plain)
+                .padding(.vertical, 0)
 
                 if data.isDetailExpanded {
                     VStack(alignment: .leading, spacing: 12) {
@@ -360,6 +375,18 @@ struct ToolCallRowView: View, Equatable {
             .padding(.bottom, data.isLast ? 0 : 8)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .onHover { isHovering = $0 }
+    }
+
+    private func openContainingFolder() {
+        guard let path = data.filePath else { return }
+        let fileURL: URL
+        if path.hasPrefix("/") {
+            fileURL = URL(fileURLWithPath: path).standardizedFileURL
+        } else {
+            fileURL = PathSandbox.defaultRoot.appendingPathComponent(path).standardizedFileURL
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([fileURL])
     }
 }
 

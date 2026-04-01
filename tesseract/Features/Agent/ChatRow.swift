@@ -57,11 +57,13 @@ struct ToolCallRow: Equatable, Sendable {
     let isError: Bool
     let isLast: Bool
     let isDetailExpanded: Bool
+    let filePath: String?
 
     func togglingDetail() -> ToolCallRow {
         ToolCallRow(displayTitle: displayTitle, iconName: iconName,
                     argumentsFormatted: argumentsFormatted, resultContent: resultContent,
-                    isError: isError, isLast: isLast, isDetailExpanded: !isDetailExpanded)
+                    isError: isError, isLast: isLast, isDetailExpanded: !isDetailExpanded,
+                    filePath: filePath)
     }
 }
 

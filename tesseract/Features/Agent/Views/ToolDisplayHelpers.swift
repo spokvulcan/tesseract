@@ -80,13 +80,26 @@ enum ToolDisplayHelpers {
         return "No arguments"
     }
 
+    /// Extracts the file path from tool arguments for file-centric tools.
+    static func filePath(forTool name: String, arguments: [String: JSONValue]?) -> String? {
+        guard let args = arguments else { return nil }
+        switch name.lowercased() {
+        case "read", "read_file", "write", "write_file", "edit", "edit_file":
+            if let path = args.string(for: "path"), !path.isEmpty { return path }
+            return nil
+        default:
+            return nil
+        }
+    }
+
     /// All display properties for a tool call, computed once.
-    static func displayProps(for info: ToolCallInfo) -> (title: String, icon: String, argsFormatted: String) {
+    static func displayProps(for info: ToolCallInfo) -> (title: String, icon: String, argsFormatted: String, filePath: String?) {
         let args = info.parsedArguments
         return (
             title: titleForTool(info.name, arguments: args),
             icon: iconForTool(info.name),
-            argsFormatted: formatArguments(args)
+            argsFormatted: formatArguments(args),
+            filePath: filePath(forTool: info.name, arguments: args)
         )
     }
 }

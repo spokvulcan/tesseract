@@ -54,7 +54,7 @@ final class AgentCoordinator {
     @ObservationIgnored private var autoExpandedTurnID: UUID?
     /// Cached streaming tool args to avoid re-parsing unchanged JSON on each tick.
     @ObservationIgnored private var lastStreamingToolArgs: [String] = []
-    @ObservationIgnored private var lastStreamingToolDisplay: [(title: String, icon: String, argsFormatted: String)] = []
+    @ObservationIgnored private var lastStreamingToolDisplay: [(title: String, icon: String, argsFormatted: String, filePath: String?)] = []
     /// Tracks if user manually collapsed the streaming header during this generation.
     @ObservationIgnored private var streamingManuallyCollapsed: Bool = false
     /// Stable ID for the streaming turn header — survives rebuilds so toggle state persists.
@@ -90,7 +90,8 @@ final class AgentCoordinator {
         enum StepKind {
             case thinking(content: String)
             case toolCall(displayTitle: String, iconName: String,
-                          argumentsFormatted: String, resultContent: String?, isError: Bool)
+                          argumentsFormatted: String, resultContent: String?, isError: Bool,
+                          filePath: String?)
             case text(content: String)
         }
     }
@@ -873,7 +874,8 @@ final class AgentCoordinator {
                         iconName: props.icon,
                         argumentsFormatted: props.argsFormatted,
                         resultContent: result?.content.textContent,
-                        isError: result?.isError ?? false
+                        isError: result?.isError ?? false,
+                        filePath: props.filePath
                     )
                 ))
             }
@@ -970,7 +972,7 @@ final class AgentCoordinator {
                                 id: step.rowID,
                                 kind: .thinking(ThinkingRow(content: content, isLast: isLast))
                             ))
-                        case .toolCall(let title, let icon, let args, let result, let isError):
+                        case .toolCall(let title, let icon, let args, let result, let isError, let filePath):
                             newRows.append(ChatRow(
                                 id: step.rowID,
                                 kind: .toolCall(ToolCallRow(
@@ -980,7 +982,8 @@ final class AgentCoordinator {
                                     resultContent: result,
                                     isError: isError,
                                     isLast: isLast,
-                                    isDetailExpanded: expandedDetails.contains(step.rowID)
+                                    isDetailExpanded: expandedDetails.contains(step.rowID),
+                                    filePath: filePath
                                 ))
                             ))
                         case .text(let content):
@@ -1110,7 +1113,7 @@ final class AgentCoordinator {
 
         // Streaming tool calls
         for (index, info) in stream.toolCalls.enumerated() {
-            let props: (title: String, icon: String, argsFormatted: String)
+            let props: (title: String, icon: String, argsFormatted: String, filePath: String?)
             if index < lastStreamingToolArgs.count, lastStreamingToolArgs[index] == info.argumentsJSON {
                 props = lastStreamingToolDisplay[index]
             } else {
@@ -1133,7 +1136,8 @@ final class AgentCoordinator {
                     resultContent: nil,
                     isError: false,
                     isLast: index == stream.toolCalls.count - 1 && trimmedStreamContent.isEmpty,
-                    isDetailExpanded: false
+                    isDetailExpanded: false,
+                    filePath: props.filePath
                 ))
             ))
         }
