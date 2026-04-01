@@ -18,7 +18,7 @@ nonisolated enum SystemPromptAssembler: Sendable {
         - Use ls to discover project structure
         - Always read a file before editing it
         - Use edit for targeted changes — old_text must match the file exactly
-        - Use write only for creating new files or complete rewrites
+        - Use write to create new files or append content — pass overwrite: true only for complete rewrites after reading the file
         - Be concise in responses
         - Reference file paths clearly
         """

@@ -551,12 +551,30 @@ struct WriteToolTests {
 
         _ = try await tool.execute(
             "write-3",
-            writeToolArgs(path: "overwrite.txt", content: "Replacement"),
+            writeToolArgs(path: "overwrite.txt", content: "Replacement", overwrite: true),
             nil,
             nil
         )
 
         #expect(try readUTF8PreservingBytes(from: fileURL) == "Replacement")
+    }
+
+    @Test func appendsToExistingFileByDefault() async throws {
+        let (tool, _, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("append-test.txt")
+        try "Hello".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let result = try await tool.execute(
+            "write-6",
+            writeToolArgs(path: "append-test.txt", content: ", World!"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully appended"))
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "Hello, World!")
     }
 
     @Test func reportsUtf16LengthLikePi() async throws {
@@ -1024,11 +1042,15 @@ private func editToolArgs(path: String, oldText: String, newText: String) -> [St
     ]
 }
 
-private func writeToolArgs(path: String, content: String) -> [String: JSONValue] {
-    [
+private func writeToolArgs(path: String, content: String, overwrite: Bool? = nil) -> [String: JSONValue] {
+    var args: [String: JSONValue] = [
         "path": .string(path),
         "content": .string(content),
     ]
+    if let overwrite {
+        args["overwrite"] = .bool(overwrite)
+    }
+    return args
 }
 
 private func lsToolArgs(path: String? = nil, limit: Int? = nil) -> [String: JSONValue] {
@@ -1106,7 +1128,7 @@ struct WriteToolReadGuardTests {
         #expect(result.content.textContent.contains("Successfully wrote"))
     }
 
-    @Test func writeExistingFileWithoutReadReturnsError() async throws {
+    @Test func appendExistingFileWithoutReadSucceeds() async throws {
         let (tool, _, root) = try makeWriteToolTestRig()
         defer { removeReadToolTestRig(root) }
 
@@ -1115,7 +1137,25 @@ struct WriteToolReadGuardTests {
 
         let result = try await tool.execute(
             "wg-2",
-            writeToolArgs(path: "existing.txt", content: "overwrite"),
+            writeToolArgs(path: "existing.txt", content: " appended"),
+            nil,
+            nil
+        )
+
+        #expect(result.content.textContent.contains("Successfully appended"))
+        #expect(try readUTF8PreservingBytes(from: fileURL) == "original appended")
+    }
+
+    @Test func overwriteExistingFileWithoutReadReturnsError() async throws {
+        let (tool, _, root) = try makeWriteToolTestRig()
+        defer { removeReadToolTestRig(root) }
+
+        let fileURL = root.appendingPathComponent("existing.txt")
+        try "original".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let result = try await tool.execute(
+            "wg-2b",
+            writeToolArgs(path: "existing.txt", content: "overwrite", overwrite: true),
             nil,
             nil
         )
@@ -1123,7 +1163,7 @@ struct WriteToolReadGuardTests {
         #expect(result.content.textContent.contains("must read"))
     }
 
-    @Test func writeExistingFileAfterReadSucceeds() async throws {
+    @Test func overwriteExistingFileAfterReadSucceeds() async throws {
         let (tool, tracker, root) = try makeWriteToolTestRig()
         defer { removeReadToolTestRig(root) }
 
@@ -1133,7 +1173,7 @@ struct WriteToolReadGuardTests {
 
         let result = try await tool.execute(
             "wg-3",
-            writeToolArgs(path: "existing.txt", content: "overwrite"),
+            writeToolArgs(path: "existing.txt", content: "overwrite", overwrite: true),
             nil,
             nil
         )
