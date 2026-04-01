@@ -15,11 +15,8 @@ struct AgentSystemPromptView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header button
             Button(action: {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    isExpanded.toggle()
-                }
+                isExpanded.toggle()
             }) {
                 HStack(spacing: 4) {
                     Text("System Prompt")
@@ -36,13 +33,13 @@ struct AgentSystemPromptView: View {
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                        .animation(.easeInOut(duration: 0.2), value: isExpanded)
                 }
                 .padding(.vertical, 4)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            // Expanded content
             if isExpanded {
                 VStack(alignment: .leading, spacing: 8) {
                     Picker("", selection: $selectedTab) {
@@ -61,7 +58,6 @@ struct AgentSystemPromptView: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
                 .padding(.top, 4)
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .task(id: hasRawPrompt) {

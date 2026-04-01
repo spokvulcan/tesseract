@@ -31,14 +31,6 @@ struct AgentConversationListView: View {
                         speakingMessageID: $speakingMessageID,
                         isSpeechActive: isSpeechActive
                     )
-                    .onGeometryChange(for: CGFloat.self) { proxy in
-                        proxy.size.height
-                    } action: { _, newHeight in
-                        if row.heightCacheable {
-                            coordinator.cacheRowHeight(newHeight, for: row.id)
-                        }
-                    }
-                    .frame(height: row.heightCacheable ? coordinator.cachedHeight(for: row.id) : nil)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
                 }

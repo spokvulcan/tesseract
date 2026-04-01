@@ -6,9 +6,8 @@ import MLXLMCommon
 /// Thin UI bridge that delegates to ``Agent`` (new core loop).
 ///
 /// `agent.state.messages` is the **single source of truth**. The coordinator
-/// derives `rows: [ChatRow]` for view consumption via a two-tier cache:
-/// 1. Immutable `TurnDisplayData` keyed by message IDs (computed once per cache miss)
-/// 2. Overlay state (expansion) stamped during assembly without recomputing strings
+/// derives `rows: [ChatRow]` for view consumption via `rebuildRows()`, which
+/// walks messages once and directly produces flat, equatable rows for SwiftUI's List.
 @Observable @MainActor
 final class AgentCoordinator {
 
@@ -36,65 +35,20 @@ final class AgentCoordinator {
     private(set) var rawChatMLPrompt: String?
     private(set) var systemPromptTokenCount: Int?
 
-    // MARK: - Turn Cache
+    // MARK: - UI Interaction State
 
-    /// Immutable content cache keyed by turnID. Stores pre-computed display strings.
-    @ObservationIgnored private var turnDisplayCache: [UUID: TurnDisplayData] = [:]
-    /// Ordered turn references — computed once in `rebuildRows()`, reused by `assembleRowsFromCache()`.
-    @ObservationIgnored private var turnOrder: [TurnRef] = []
     /// Expanded turn headers (step timeline visible).
     @ObservationIgnored private var expandedTurns: Set<UUID> = []
     /// Expanded tool call details (arguments/results visible), keyed by row ID.
     @ObservationIgnored private var expandedDetails: Set<String> = []
-    /// Cached measured row heights — stabilizes List's height estimation for off-screen cells.
-    @ObservationIgnored private var rowHeightCache: [String: CGFloat] = [:]
     /// Throttle streaming row updates.
     @ObservationIgnored private var lastStreamingUpdate: ContinuousClock.Instant = .now
     /// Turn that was auto-expanded for generation — auto-collapse on agentEnd.
     @ObservationIgnored private var autoExpandedTurnID: UUID?
-    /// Cached streaming tool args to avoid re-parsing unchanged JSON on each tick.
-    @ObservationIgnored private var lastStreamingToolArgs: [String] = []
-    @ObservationIgnored private var lastStreamingToolDisplay: [(title: String, icon: String, argsFormatted: String, filePath: String?)] = []
     /// Tracks if user manually collapsed the streaming header during this generation.
     @ObservationIgnored private var streamingManuallyCollapsed: Bool = false
     /// Stable ID for the streaming turn header — survives rebuilds so toggle state persists.
     private static let streamingTurnID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-
-    // MARK: - Cache Data Types
-
-    /// Lightweight turn reference for ordered iteration — no message content, just metadata for row assembly.
-    private struct TurnRef {
-        let id: UUID
-        let userContent: String?
-        let userImages: [ImageAttachment]
-        let userTimestamp: String?
-        let compactionText: String?
-    }
-
-    /// Immutable content for one assistant turn. No overlay state — that's stamped during assembly.
-    private struct TurnDisplayData {
-        let turnID: UUID
-        let messageIDs: [UUID]
-        let headerStepCount: Int
-        let steps: [StepDisplayData]
-        let answerContent: String?
-        let answerTimestamp: String?
-        let answerMessageID: UUID?
-    }
-
-    /// Pure content for one step — no expansion state.
-    private struct StepDisplayData {
-        let rowID: String
-        let kind: StepKind
-
-        enum StepKind {
-            case thinking(content: String)
-            case toolCall(displayTitle: String, iconName: String,
-                          argumentsFormatted: String, resultContent: String?, isError: Bool,
-                          filePath: String?)
-            case text(content: String)
-        }
-    }
 
     // MARK: - Dependencies
 
@@ -411,7 +365,7 @@ final class AgentCoordinator {
         }
         conversationStore.createNew()
         agent.resetMessages([])
-        clearAllCaches()
+        resetState()
         error = nil
         rawChatMLPrompt = nil
         systemPromptTokenCount = nil
@@ -433,7 +387,7 @@ final class AgentCoordinator {
         } else {
             agent.resetMessages([])
         }
-        clearAllCaches()
+        resetState()
         rebuildRows()
         error = nil
         debugLogger.reset()
@@ -449,7 +403,7 @@ final class AgentCoordinator {
             } else {
                 agent.resetMessages([])
             }
-            clearAllCaches()
+            resetState()
             rebuildRows()
             debugLogger.reset()
         }
@@ -474,7 +428,7 @@ final class AgentCoordinator {
                 persistCurrentConversation()
             }
             agent.loadMessages(messages)
-            clearAllCaches()
+            resetState()
             rebuildRows()
             isViewingBackgroundSession = true
             viewingSessionId = id
@@ -501,7 +455,7 @@ final class AgentCoordinator {
         } else {
             agent.resetMessages([])
         }
-        clearAllCaches()
+        resetState()
         rebuildRows()
     }
 
@@ -610,15 +564,12 @@ final class AgentCoordinator {
     // MARK: - Expand/Collapse
 
     func toggleTurnExpanded(_ turnID: UUID) {
-        let beforeCount = rows.count
-        let expanding = !expandedTurns.contains(turnID)
         expandedTurns.formSymmetricDifference([turnID])
         // Track manual collapse of the streaming header
         if turnID == Self.streamingTurnID && !expandedTurns.contains(Self.streamingTurnID) {
             streamingManuallyCollapsed = true
         }
-        assembleRowsFromCache()
-        Log.agent.debug("[Perf] toggleTurnExpanded: \(expanding ? "EXPAND" : "COLLAPSE") turn \(turnID) | rows \(beforeCount) → \(rows.count) (Δ\(rows.count - beforeCount))")
+        rebuildRows()
     }
 
     func toggleDetailExpanded(_ rowID: String) {
@@ -629,18 +580,6 @@ final class AgentCoordinator {
             rows[idx] = ChatRow(id: rowID, kind: .toolCall(data.togglingDetail()))
         }
         Log.agent.debug("[Perf] toggleDetailExpanded: \(rowID) | rows \(beforeCount) → \(rows.count)")
-    }
-
-    // MARK: - Row Height Cache
-
-    /// Returns the cached height for a row, or nil if not yet measured.
-    func cachedHeight(for rowID: String) -> CGFloat? {
-        rowHeightCache[rowID]
-    }
-
-    /// Caches a measured row height. Called from the view layer via onGeometryChange.
-    func cacheRowHeight(_ height: CGFloat, for rowID: String) {
-        rowHeightCache[rowID] = height
     }
 
     // MARK: - Event Subscription
@@ -684,8 +623,6 @@ final class AgentCoordinator {
 
         case .toolExecutionStart(_, let toolName, _):
             Log.agent.info("Tool start: \(toolName)")
-            lastStreamingToolArgs = []
-            lastStreamingToolDisplay = []
 
         case .toolExecutionEnd(_, let toolName, let result, _):
             let text = result.content.textContent
@@ -707,8 +644,6 @@ final class AgentCoordinator {
 
         case .agentEnd(_):
             isGenerating = false
-            lastStreamingToolArgs = []
-            lastStreamingToolDisplay = []
             streamingManuallyCollapsed = false
             expandedTurns.remove(Self.streamingTurnID)
             autoCollapseIfNeeded()
@@ -725,7 +660,7 @@ final class AgentCoordinator {
 
     // MARK: - Row Building
 
-    /// Full rebuild: groups messages into turns, validates cache, stores turn order, assembles rows.
+    /// Single-pass row builder: groups messages into turns and directly produces `[ChatRow]`.
     private func rebuildRows() {
         let perfState = ChatViewPerf.signposter.beginInterval("rebuildRows")
 
@@ -735,7 +670,10 @@ final class AgentCoordinator {
         struct Turn {
             let id: UUID
             var messages: [any AgentMessageProtocol]
-            var ref: TurnRef
+            var userContent: String?
+            var userImages: [ImageAttachment]
+            var userTimestamp: String?
+            var compactionText: String?
         }
 
         var turns: [Turn] = []
@@ -748,321 +686,215 @@ final class AgentCoordinator {
             if user != nil || compaction != nil {
                 if let t = currentTurn { turns.append(t) }
                 let turnID = msg.messageUUID
-                let ref = TurnRef(
-                    id: turnID,
+                currentTurn = Turn(
+                    id: turnID, messages: [msg],
                     userContent: user?.content,
                     userImages: user?.images ?? [],
                     userTimestamp: user.map { timeFormatter.string(from: $0.timestamp) },
                     compactionText: compaction.map { "[Context compacted — \($0.tokensBefore) tokens summarized]" }
                 )
-                currentTurn = Turn(id: turnID, messages: [msg], ref: ref)
             } else {
                 if currentTurn == nil {
-                    let turnID = msg.messageUUID
-                    let ref = TurnRef(id: turnID, userContent: nil, userImages: [], userTimestamp: nil, compactionText: nil)
-                    currentTurn = Turn(id: turnID, messages: [], ref: ref)
+                    currentTurn = Turn(id: msg.messageUUID, messages: [], userContent: nil, userImages: [], userTimestamp: nil, compactionText: nil)
                 }
                 currentTurn?.messages.append(msg)
             }
         }
         if let t = currentTurn { turns.append(t) }
 
-        // Validate cache for each turn
-        var activeTurnIDs: Set<UUID> = []
-        var newTurnOrder: [TurnRef] = []
-        var cacheHits = 0
-        var cacheMisses = 0
-
-        for turn in turns {
-            activeTurnIDs.insert(turn.id)
-            newTurnOrder.append(turn.ref)
-
-            // Compaction-only turns don't need cache — they only emit a .system row
-            if turn.ref.compactionText != nil && turn.ref.userContent == nil { continue }
-
-            let messageIDs = turn.messages.map { $0.messageUUID }
-
-            if let cached = turnDisplayCache[turn.id],
-               cached.messageIDs == messageIDs {
-                cacheHits += 1
-                continue // Cache hit
-            }
-
-            cacheMisses += 1
-            turnDisplayCache[turn.id] = computeTurnDisplayData(
-                turnID: turn.id, messages: turn.messages, messageIDs: messageIDs
-            )
-        }
-
-        // Prune stale entries
-        let staleTurnIDs = Set(turnDisplayCache.keys).subtracting(activeTurnIDs)
-        for id in staleTurnIDs {
-            turnDisplayCache.removeValue(forKey: id)
-        }
+        // Prune expansion state against active turns
+        let activeTurnIDs = Set(turns.map(\.id))
         var validTurnIDs = activeTurnIDs
-        // Preserve streaming turn expansion state during generation — it's not a committed turn
         if isGenerating { validTurnIDs.insert(Self.streamingTurnID) }
         expandedTurns = expandedTurns.intersection(validTurnIDs)
 
-        if !expandedDetails.isEmpty {
-            let allStepRowIDs = Set(turnDisplayCache.values.flatMap { $0.steps.map(\.rowID) })
-            expandedDetails = expandedDetails.intersection(allStepRowIDs)
-        }
-
-        turnOrder = newTurnOrder
-        assembleRowsFromCache()
-
-        Log.agent.debug("[Perf] rebuildRows: \(allMessages.count) msgs → \(turns.count) turns → \(rows.count) rows | cache \(cacheHits) hit / \(cacheMisses) miss | pruned \(staleTurnIDs.count)")
-        ChatViewPerf.signposter.endInterval("rebuildRows", perfState)
-    }
-
-    /// Computes immutable display data for one turn from protocol messages.
-    private func computeTurnDisplayData(turnID: UUID, messages: [any AgentMessageProtocol], messageIDs: [UUID]) -> TurnDisplayData {
-        let perfState = ChatViewPerf.signposter.beginInterval("computeTurnDisplayData")
-        defer { ChatViewPerf.signposter.endInterval("computeTurnDisplayData", perfState) }
-        var steps: [StepDisplayData] = []
-        var answerContent: String?
-        var answerTimestamp: String?
-        var answerMessageID: UUID?
-
-        // Build tool result lookup: toolCallId → ToolResultMessage
-        var toolResultMap: [String: ToolResultMessage] = [:]
-        for msg in messages {
-            if let tr = msg.asToolResult {
-                toolResultMap[tr.toolCallId] = tr
-            }
-        }
-
-        // Find last assistant message for final answer detection
-        let lastAssistantMsg = messages.last(where: { $0.asAssistant != nil })?.asAssistant
-
-        for msg in messages {
-            // Skip compaction (handled as .system row), user, and bare tool results
-            if msg is CompactionSummaryMessage { continue }
-            if msg.asUser != nil || msg.asToolResult != nil { continue }
-
-            guard let asst = msg.asAssistant else { continue }
-
-            // Thinking
-            if let thinking = asst.thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !thinking.isEmpty {
-                steps.append(StepDisplayData(
-                    rowID: "\(asst.id)-thinking",
-                    kind: .thinking(content: thinking)
-                ))
-            }
-
-            let isFinalAnswer = asst.id == lastAssistantMsg?.id && asst.toolCalls.isEmpty
-            let trimmedContent = asst.content.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if !trimmedContent.isEmpty && !isFinalAnswer {
-                steps.append(StepDisplayData(
-                    rowID: "\(asst.id)-text",
-                    kind: .text(content: trimmedContent)
-                ))
-            }
-
-            // Tool calls — match results by toolCallId
-            for (index, info) in asst.toolCalls.enumerated() {
-                let props = ToolDisplayHelpers.displayProps(for: info)
-                let result = toolResultMap[info.id]
-
-                steps.append(StepDisplayData(
-                    rowID: "\(asst.id)-tool-\(index)",
-                    kind: .toolCall(
-                        displayTitle: props.title,
-                        iconName: props.icon,
-                        argumentsFormatted: props.argsFormatted,
-                        resultContent: result?.content.textContent,
-                        isError: result?.isError ?? false,
-                        filePath: props.filePath
-                    )
-                ))
-            }
-
-            // Final answer
-            if isFinalAnswer && !trimmedContent.isEmpty {
-                answerContent = trimmedContent
-                answerTimestamp = timeFormatter.string(from: asst.timestamp)
-                answerMessageID = asst.id
-            }
-        }
-
-        return TurnDisplayData(
-            turnID: turnID,
-            messageIDs: messageIDs,
-            headerStepCount: steps.count,
-            steps: steps,
-            answerContent: answerContent,
-            answerTimestamp: answerTimestamp,
-            answerMessageID: answerMessageID
-        )
-    }
-
-    /// Stamps overlay state (expansion) onto immutable cached content to produce `rows`.
-    /// Iterates stored `turnOrder` — no message walk needed.
-    private func assembleRowsFromCache() {
-        let perfState = ChatViewPerf.signposter.beginInterval("assembleRowsFromCache")
-        let oldRowIDs = Set(rows.map(\.id))
+        // Build rows directly
         var newRows: [ChatRow] = []
+        let needsDetailPruning = !expandedDetails.isEmpty
+        var allToolCallRowIDs: Set<String> = []
 
-        for turnRef in turnOrder {
+        for (turnIndex, turn) in turns.enumerated() {
             // User row
-            if let content = turnRef.userContent, let timestamp = turnRef.userTimestamp {
+            if let content = turn.userContent, let timestamp = turn.userTimestamp {
                 newRows.append(ChatRow(
-                    id: turnRef.id.uuidString,
+                    id: turn.id.uuidString,
                     kind: .user(UserRow(
                         content: content,
-                        images: turnRef.userImages,
+                        images: turn.userImages,
                         timestamp: timestamp,
-                        messageID: turnRef.id
+                        messageID: turn.id
                     ))
                 ))
             }
 
             // System (compaction) row
-            if let text = turnRef.compactionText {
+            if let text = turn.compactionText {
                 newRows.append(ChatRow(
-                    id: turnRef.id.uuidString + "-system",
+                    id: turn.id.uuidString + "-system",
                     kind: .system(SystemRow(content: text))
                 ))
             }
 
-            guard let cached = turnDisplayCache[turnRef.id] else { continue }
+            // Process assistant messages into steps + final answer
+            var toolResultMap: [String: ToolResultMessage] = [:]
+            for msg in turn.messages {
+                if let tr = msg.asToolResult { toolResultMap[tr.toolCallId] = tr }
+            }
+            let lastAssistantMsg = turn.messages.last(where: { $0.asAssistant != nil })?.asAssistant
 
-            let isExpanded = expandedTurns.contains(turnRef.id)
-            let isLastTurn = turnRef.id == turnOrder.last?.id
+            var steps: [ChatRow] = []
+            var answerContent: String?
+            var answerTimestamp: String?
+            var answerMessageID: UUID?
 
-            let isActiveTurn = isGenerating && isLastTurn
+            for msg in turn.messages {
+                if msg is CompactionSummaryMessage { continue }
+                if msg.asUser != nil || msg.asToolResult != nil { continue }
+                guard let asst = msg.asAssistant else { continue }
 
-            // For the active turn during generation, emit the streaming header FIRST,
-            // then committed steps under it, then live streaming steps — one unified section.
-            if isActiveTurn {
-                let (liveSteps, _) = streamingStepCount()
-                appendStreamingHeader(to: &newRows, totalStepCount: cached.headerStepCount + liveSteps)
+                // Thinking
+                if let thinking = asst.thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !thinking.isEmpty {
+                    let rowID = "\(asst.id)-thinking"
+                    steps.append(ChatRow(id: rowID, kind: .thinking(ThinkingRow(content: thinking, isLast: false))))
+                }
+
+                let isFinalAnswer = asst.id == lastAssistantMsg?.id && asst.toolCalls.isEmpty
+                let trimmedContent = asst.content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // Intermediate text (not the final answer)
+                if !trimmedContent.isEmpty && !isFinalAnswer {
+                    let rowID = "\(asst.id)-text"
+                    steps.append(ChatRow(id: rowID, kind: .toolText(ToolTextRow(content: trimmedContent, isLast: false))))
+                }
+
+                // Tool calls
+                for (index, info) in asst.toolCalls.enumerated() {
+                    let props = ToolDisplayHelpers.displayProps(for: info)
+                    let result = toolResultMap[info.id]
+                    let rowID = "\(asst.id)-tool-\(index)"
+                    if needsDetailPruning { allToolCallRowIDs.insert(rowID) }
+                    steps.append(ChatRow(id: rowID, kind: .toolCall(ToolCallRow(
+                        displayTitle: props.title,
+                        iconName: props.icon,
+                        argumentsFormatted: props.argsFormatted,
+                        resultContent: result?.content.textContent,
+                        isError: result?.isError ?? false,
+                        isLast: false,
+                        isDetailExpanded: expandedDetails.contains(rowID),
+                        filePath: props.filePath
+                    ))))
+                }
+
+                // Final answer
+                if isFinalAnswer && !trimmedContent.isEmpty {
+                    answerContent = trimmedContent
+                    answerTimestamp = timeFormatter.string(from: asst.timestamp)
+                    answerMessageID = asst.id
+                }
             }
 
-            // Turn header — for non-active turns only (active turn uses the streaming header above)
-            if cached.headerStepCount > 0 && !isActiveTurn {
+            let isLastTurn = turnIndex == turns.count - 1
+            let isActiveTurn = isGenerating && isLastTurn
+            let isExpanded = expandedTurns.contains(turn.id)
+            let liveSteps = isActiveTurn ? streamingStepCount() : 0
+
+            // Streaming header for active turn
+            if isActiveTurn {
+                appendStreamingHeader(to: &newRows, totalStepCount: steps.count + liveSteps)
+            }
+
+            // Turn header for completed turns
+            if !steps.isEmpty && !isActiveTurn {
                 newRows.append(ChatRow(
-                    id: "\(turnRef.id)-header",
+                    id: "\(turn.id)-header",
                     kind: .turnHeader(TurnHeaderRow(
-                        stepCount: cached.headerStepCount,
+                        stepCount: steps.count,
                         isGenerating: false,
-                        turnID: turnRef.id,
+                        turnID: turn.id,
                         isExpanded: isExpanded
                     ))
                 ))
             }
 
-            // Step rows
-            if cached.headerStepCount > 0 {
+            // Step rows (if expanded)
+            if !steps.isEmpty {
                 let showSteps = isActiveTurn
                     ? expandedTurns.contains(Self.streamingTurnID)
                     : isExpanded
                 if showSteps {
-                    // When live streaming steps follow, the last committed step is not truly last
-                    let (liveSteps, _) = isActiveTurn ? streamingStepCount() : (0, "")
-                    let hasLiveStepsAfter = isActiveTurn && liveSteps > 0
-                    for (index, step) in cached.steps.enumerated() {
-                        let isLast = index == cached.steps.count - 1 && !hasLiveStepsAfter
-                        switch step.kind {
-                        case .thinking(let content):
-                            newRows.append(ChatRow(
-                                id: step.rowID,
-                                kind: .thinking(ThinkingRow(content: content, isLast: isLast))
-                            ))
-                        case .toolCall(let title, let icon, let args, let result, let isError, let filePath):
-                            newRows.append(ChatRow(
-                                id: step.rowID,
-                                kind: .toolCall(ToolCallRow(
-                                    displayTitle: title,
-                                    iconName: icon,
-                                    argumentsFormatted: args,
-                                    resultContent: result,
-                                    isError: isError,
-                                    isLast: isLast,
-                                    isDetailExpanded: expandedDetails.contains(step.rowID),
-                                    filePath: filePath
-                                ))
-                            ))
-                        case .text(let content):
-                            newRows.append(ChatRow(
-                                id: step.rowID,
-                                kind: .toolText(ToolTextRow(content: content, isLast: isLast))
-                            ))
-                        }
+                    let hasLiveStepsAfter = liveSteps > 0
+                    for (index, step) in steps.enumerated() {
+                        let isLast = index == steps.count - 1 && !hasLiveStepsAfter
+                        newRows.append(isLast ? step.withIsLast(true) : step)
                     }
                 }
             }
 
-            // Live streaming step rows — after committed steps, before answer
+            // Live streaming step rows
             if isActiveTurn {
                 appendStreamingStepRows(to: &newRows)
             }
 
             // Answer row
-            if let content = cached.answerContent,
-               let timestamp = cached.answerTimestamp,
-               let messageID = cached.answerMessageID {
+            if let content = answerContent,
+               let timestamp = answerTimestamp,
+               let messageID = answerMessageID {
                 newRows.append(ChatRow(
                     id: messageID.uuidString + "-answer",
                     kind: .assistantText(AssistantTextRow(
                         content: content,
                         timestamp: timestamp,
                         messageID: messageID,
-                        hasStepsAbove: cached.headerStepCount > 0
+                        hasStepsAbove: !steps.isEmpty
                     ))
                 ))
             }
         }
 
-        // Streaming rows for turns with no committed cache (e.g. first message, no turnEnd yet)
-        if isGenerating && turnOrder.last.flatMap({ turnDisplayCache[$0.id] }) == nil {
-            let (liveSteps, _) = streamingStepCount()
-            if liveSteps > 0 {
-                appendStreamingHeader(to: &newRows, totalStepCount: liveSteps)
-                appendStreamingStepRows(to: &newRows)
-            } else if agent.state.streamMessage == nil {
-                newRows.append(ChatRow(id: "streaming-indicator", kind: .streamingIndicator))
-            } else {
-                // Has streamMessage but no steps — plain text streaming answer
-                appendStreamingStepRows(to: &newRows)
-                if newRows.last?.id.hasPrefix("streaming-") != true {
+        // Streaming rows for turns with no committed assistant messages yet
+        if isGenerating {
+            let lastTurnHasAssistant = turns.last.map { turn in
+                turn.messages.contains(where: { $0.asAssistant != nil })
+            } ?? false
+            if !lastTurnHasAssistant {
+                let liveSteps = streamingStepCount()
+                if liveSteps > 0 {
+                    appendStreamingHeader(to: &newRows, totalStepCount: liveSteps)
+                    appendStreamingStepRows(to: &newRows)
+                } else if agent.state.streamMessage == nil {
                     newRows.append(ChatRow(id: "streaming-indicator", kind: .streamingIndicator))
+                } else {
+                    appendStreamingStepRows(to: &newRows)
+                    if newRows.last?.id.hasPrefix("streaming-") != true {
+                        newRows.append(ChatRow(id: "streaming-indicator", kind: .streamingIndicator))
+                    }
                 }
             }
         }
 
-        // Row diff analysis
-        let newRowIDs = Set(newRows.map(\.id))
-        let inserted = newRowIDs.subtracting(oldRowIDs)
-        let removed = oldRowIDs.subtracting(newRowIDs)
-        if !inserted.isEmpty || !removed.isEmpty {
-            Log.agent.debug("[Perf] assembleRows: \(rows.count) → \(newRows.count) rows | +\(inserted.count) -\(removed.count)")
-            if !inserted.isEmpty, inserted.count <= 20 {
-                Log.agent.debug("[Perf]   inserted: \(inserted.sorted().joined(separator: ", "))")
-            }
-            if !removed.isEmpty, removed.count <= 20 {
-                Log.agent.debug("[Perf]   removed: \(removed.sorted().joined(separator: ", "))")
-            }
+        // Prune expandedDetails against actual tool call row IDs
+        if needsDetailPruning {
+            expandedDetails = expandedDetails.intersection(allToolCallRowIDs)
         }
 
         rows = newRows
-        ChatViewPerf.signposter.endInterval("assembleRowsFromCache", perfState)
+
+        Log.agent.debug("[Perf] rebuildRows: \(allMessages.count) msgs → \(turns.count) turns → \(newRows.count) rows")
+        ChatViewPerf.signposter.endInterval("rebuildRows", perfState)
     }
 
     /// Counts live streaming steps from the current `streamMessage`.
-    private func streamingStepCount() -> (steps: Int, trimmedContent: String) {
-        guard let stream = agent.state.streamMessage else { return (0, "") }
-        let trimmed = stream.content.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func streamingStepCount() -> Int {
+        guard let stream = agent.state.streamMessage else { return 0 }
         var count = 0
         if let thinking = stream.thinking, !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             count += 1
         }
         count += stream.toolCalls.count
+        let trimmed = stream.content.trimmingCharacters(in: .whitespacesAndNewlines)
         if !stream.toolCalls.isEmpty && !trimmed.isEmpty { count += 1 }
-        return (count, trimmed)
+        return count
     }
 
     /// Emits the unified streaming header row. Returns whether the header was emitted.
@@ -1113,19 +945,7 @@ final class AgentCoordinator {
 
         // Streaming tool calls
         for (index, info) in stream.toolCalls.enumerated() {
-            let props: (title: String, icon: String, argsFormatted: String, filePath: String?)
-            if index < lastStreamingToolArgs.count, lastStreamingToolArgs[index] == info.argumentsJSON {
-                props = lastStreamingToolDisplay[index]
-            } else {
-                props = ToolDisplayHelpers.displayProps(for: info)
-                if index < lastStreamingToolArgs.count {
-                    lastStreamingToolArgs[index] = info.argumentsJSON
-                    lastStreamingToolDisplay[index] = props
-                } else {
-                    lastStreamingToolArgs.append(info.argumentsJSON)
-                    lastStreamingToolDisplay.append(props)
-                }
-            }
+            let props = ToolDisplayHelpers.displayProps(for: info)
 
             newRows.append(ChatRow(
                 id: "streaming-tool-\(index)",
@@ -1158,17 +978,14 @@ final class AgentCoordinator {
         }
     }
 
-    /// Throttled streaming update: replaces only streaming rows at the tail.
+    /// Throttled streaming update — rebuilds rows to include latest streaming content.
     private func updateStreamingRows() {
         let now = ContinuousClock.now
         guard now - lastStreamingUpdate >= .milliseconds(50) else { return }
         lastStreamingUpdate = now
 
         ChatViewPerf.signposter.emitEvent("updateStreamingRows")
-
-        // Streaming header is interleaved with committed steps, so we reassemble
-        // the full row list. assembleRowsFromCache is O(turns) with no string work.
-        assembleRowsFromCache()
+        rebuildRows()
         streamingRowVersion &+= 1
     }
 
@@ -1203,16 +1020,11 @@ final class AgentCoordinator {
 
     // MARK: - Private Helpers
 
-    private func clearAllCaches() {
-        turnDisplayCache.removeAll()
-        turnOrder = []
+    private func resetState() {
         expandedTurns.removeAll()
         expandedDetails.removeAll()
-        rowHeightCache.removeAll()
         autoExpandedTurnID = nil
         streamingManuallyCollapsed = false
-        lastStreamingToolArgs = []
-        lastStreamingToolDisplay = []
         rows = []
         isGenerating = false
     }

@@ -18,14 +18,21 @@ struct ChatRow: Identifiable, Equatable, Sendable {
         case streamingIndicator
     }
 
-    /// Whether this row's height can be cached for List estimation stability.
-    /// Excludes rows with local expansion state or streaming content.
-    var heightCacheable: Bool {
+    /// Returns a copy with `isLast` stamped on step-row kinds (thinking, toolCall, toolText).
+    func withIsLast(_ isLast: Bool) -> ChatRow {
         switch kind {
-        case .user, .assistantText, .toolText, .system, .turnHeader:
-            return true
-        case .thinking, .toolCall, .streamingText, .streamingIndicator:
-            return false
+        case .thinking(let d):
+            ChatRow(id: id, kind: .thinking(ThinkingRow(content: d.content, isLast: isLast)))
+        case .toolCall(let d):
+            ChatRow(id: id, kind: .toolCall(ToolCallRow(
+                displayTitle: d.displayTitle, iconName: d.iconName,
+                argumentsFormatted: d.argumentsFormatted, resultContent: d.resultContent,
+                isError: d.isError, isLast: isLast,
+                isDetailExpanded: d.isDetailExpanded, filePath: d.filePath)))
+        case .toolText(let d):
+            ChatRow(id: id, kind: .toolText(ToolTextRow(content: d.content, isLast: isLast)))
+        default:
+            self
         }
     }
 }
