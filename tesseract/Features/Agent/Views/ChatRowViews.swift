@@ -56,19 +56,15 @@ struct UserBubble: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("UserBubble.body")
+        #endif
         VStack(alignment: .trailing, spacing: 4) {
             VStack(alignment: .leading, spacing: 8) {
                 if !data.images.isEmpty {
                     HStack(spacing: 8) {
                         ForEach(data.images) { attachment in
-                            if let nsImage = NSImage(data: attachment.data) {
-                                Image(nsImage: nsImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(maxWidth: 200, maxHeight: 200)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                            }
+                            AsyncImageAttachmentView(attachment: attachment)
                         }
                     }
                 }
@@ -138,7 +134,9 @@ struct AssistantBubble: View, Equatable {
     }
 
     var body: some View {
+        #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("AssistantBubble.body")
+        #endif
         VStack(alignment: .trailing, spacing: 4) {
             HStack(alignment: .bottom, spacing: 8) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -203,7 +201,9 @@ struct StreamingBubble: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("StreamingBubble.body")
+        #endif
         Text(data.content)
             .font(.system(size: 15))
             .textSelection(.enabled)
@@ -231,7 +231,9 @@ struct ThinkingRowView: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("ThinkingRowView.body")
+        #endif
         HStack(alignment: .top, spacing: 12) {
             StepGutter(iconName: "brain", isLast: data.isLast)
 
@@ -294,7 +296,9 @@ struct ToolCallRowView: View, Equatable {
     }
 
     var body: some View {
+        #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("ToolCallRowView.body")
+        #endif
         HStack(alignment: .top, spacing: 12) {
             StepGutter(iconName: data.iconName, iconColor: data.isError ? .red : .secondary, isLast: data.isLast)
 
@@ -398,7 +402,9 @@ struct ToolTextRowView: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("ToolTextRowView.body")
+        #endif
         HStack(alignment: .top, spacing: 12) {
             StepGutter(iconName: "text.bubble", isLast: data.isLast)
 
@@ -422,7 +428,9 @@ struct TurnHeaderView: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
+        #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("TurnHeaderView.body")
+        #endif
         Button(action: { coordinator.toggleTurnExpanded(data.turnID) }) {
             HStack(spacing: 4) {
                 Text("\(data.stepCount) step\(data.stepCount == 1 ? "" : "s")")
@@ -443,5 +451,35 @@ struct TurnHeaderView: View, Equatable {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Async Image Attachment
+
+/// Decodes image data off the main thread to avoid blocking scroll.
+struct AsyncImageAttachmentView: View {
+    let attachment: ImageAttachment
+    @State private var nsImage: NSImage?
+
+    var body: some View {
+        Group {
+            if let nsImage {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(white: 0.2))
+                    .overlay(ProgressView().controlSize(.small))
+            }
+        }
+        .frame(maxWidth: 200, maxHeight: 200)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .task(id: attachment.id) {
+            let data = attachment.data
+            nsImage = await Task.detached {
+                NSImage(data: data)
+            }.value
+        }
     }
 }

@@ -10,7 +10,9 @@ struct ChatRowView: View {
     @Environment(AgentCoordinator.self) private var coordinator
 
     var body: some View {
+        #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("ChatRowView.body")
+        #endif
         switch row.kind {
         case .user(let data):
             if coordinator.isViewingBackgroundSession {

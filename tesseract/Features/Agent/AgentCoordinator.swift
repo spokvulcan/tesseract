@@ -47,6 +47,8 @@ final class AgentCoordinator {
     @ObservationIgnored private var autoExpandedTurnID: UUID?
     /// Tracks if user manually collapsed the streaming header during this generation.
     @ObservationIgnored private var streamingManuallyCollapsed: Bool = false
+    /// Index in `rows` where the active (last) turn starts — used for incremental streaming patches.
+    @ObservationIgnored private var activeTurnRowIndex: Int = 0
     /// Stable ID for the streaming turn header — survives rebuilds so toggle state persists.
     private static let streamingTurnID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
@@ -714,6 +716,9 @@ final class AgentCoordinator {
         var allToolCallRowIDs: Set<String> = []
 
         for (turnIndex, turn) in turns.enumerated() {
+            let isLastTurn = turnIndex == turns.count - 1
+            if isLastTurn { activeTurnRowIndex = newRows.count }
+
             // User row
             if let content = turn.userContent, let timestamp = turn.userTimestamp {
                 newRows.append(ChatRow(
@@ -794,7 +799,6 @@ final class AgentCoordinator {
                 }
             }
 
-            let isLastTurn = turnIndex == turns.count - 1
             let isActiveTurn = isGenerating && isLastTurn
             let isExpanded = expandedTurns.contains(turn.id)
             let liveSteps = isActiveTurn ? streamingStepCount() : 0
@@ -978,15 +982,165 @@ final class AgentCoordinator {
         }
     }
 
-    /// Throttled streaming update — rebuilds rows to include latest streaming content.
+    /// Throttled streaming update — patches only the active turn's rows.
     private func updateStreamingRows() {
         let now = ContinuousClock.now
         guard now - lastStreamingUpdate >= .milliseconds(50) else { return }
         lastStreamingUpdate = now
 
         ChatViewPerf.signposter.emitEvent("updateStreamingRows")
-        rebuildRows()
+        patchStreamingTail()
         streamingRowVersion &+= 1
+    }
+
+    /// Fast path: rebuilds only the active (last) turn's rows + streaming rows.
+    /// Prior turns are immutable during streaming, so we splice onto the stable prefix.
+    private func patchStreamingTail() {
+        guard isGenerating, activeTurnRowIndex <= rows.count else {
+            rebuildRows()
+            return
+        }
+
+        let allMessages = agent.state.messages
+
+        // Find the last turn's messages — walk back from the end to find the turn boundary
+        var lastTurnStart = allMessages.count
+        for i in stride(from: allMessages.count - 1, through: 0, by: -1) {
+            let msg = allMessages[i]
+            if msg.asUser != nil || msg is CompactionSummaryMessage {
+                lastTurnStart = i
+                break
+            }
+        }
+
+        let lastTurnMessages = Array(allMessages[lastTurnStart...])
+        let user = lastTurnMessages.first?.asUser
+        let compaction = lastTurnMessages.first as? CompactionSummaryMessage
+        let turnID = lastTurnMessages.first?.messageUUID ?? UUID()
+
+        // Build the tail rows for the active turn
+        var tailRows: [ChatRow] = []
+
+        // User row
+        if let user, !user.content.isEmpty {
+            tailRows.append(ChatRow(
+                id: turnID.uuidString,
+                kind: .user(UserRow(
+                    content: user.content,
+                    images: user.images,
+                    timestamp: timeFormatter.string(from: user.timestamp),
+                    messageID: turnID
+                ))
+            ))
+        }
+
+        // System (compaction) row
+        if let compaction {
+            tailRows.append(ChatRow(
+                id: turnID.uuidString + "-system",
+                kind: .system(SystemRow(content: "[Context compacted — \(compaction.tokensBefore) tokens summarized]"))
+            ))
+        }
+
+        // Process assistant messages for the active turn
+        var toolResultMap: [String: ToolResultMessage] = [:]
+        for msg in lastTurnMessages {
+            if let tr = msg.asToolResult { toolResultMap[tr.toolCallId] = tr }
+        }
+        let lastAssistantMsg = lastTurnMessages.last(where: { $0.asAssistant != nil })?.asAssistant
+
+        var steps: [ChatRow] = []
+        var answerContent: String?
+        var answerTimestamp: String?
+        var answerMessageID: UUID?
+
+        for msg in lastTurnMessages {
+            if msg is CompactionSummaryMessage { continue }
+            if msg.asUser != nil || msg.asToolResult != nil { continue }
+            guard let asst = msg.asAssistant else { continue }
+
+            if let thinking = asst.thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !thinking.isEmpty {
+                let rowID = "\(asst.id)-thinking"
+                steps.append(ChatRow(id: rowID, kind: .thinking(ThinkingRow(content: thinking, isLast: false))))
+            }
+
+            let isFinalAnswer = asst.id == lastAssistantMsg?.id && asst.toolCalls.isEmpty
+            let trimmedContent = asst.content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if !trimmedContent.isEmpty && !isFinalAnswer {
+                let rowID = "\(asst.id)-text"
+                steps.append(ChatRow(id: rowID, kind: .toolText(ToolTextRow(content: trimmedContent, isLast: false))))
+            }
+
+            for (index, info) in asst.toolCalls.enumerated() {
+                let props = ToolDisplayHelpers.displayProps(for: info)
+                let result = toolResultMap[info.id]
+                let rowID = "\(asst.id)-tool-\(index)"
+                steps.append(ChatRow(id: rowID, kind: .toolCall(ToolCallRow(
+                    displayTitle: props.title, iconName: props.icon,
+                    argumentsFormatted: props.argsFormatted,
+                    resultContent: result?.content.textContent,
+                    isError: result?.isError ?? false, isLast: false,
+                    isDetailExpanded: expandedDetails.contains(rowID),
+                    filePath: props.filePath
+                ))))
+            }
+
+            if isFinalAnswer && !trimmedContent.isEmpty {
+                answerContent = trimmedContent
+                answerTimestamp = timeFormatter.string(from: asst.timestamp)
+                answerMessageID = asst.id
+            }
+        }
+
+        let liveSteps = streamingStepCount()
+        let hasCommittedContent = !steps.isEmpty || answerContent != nil
+
+        if hasCommittedContent {
+            // Streaming header + committed steps + streaming steps + answer
+            appendStreamingHeader(to: &tailRows, totalStepCount: steps.count + liveSteps)
+
+            if !steps.isEmpty {
+                let showSteps = expandedTurns.contains(Self.streamingTurnID)
+                if showSteps {
+                    let hasLiveStepsAfter = liveSteps > 0
+                    for (index, step) in steps.enumerated() {
+                        let isLast = index == steps.count - 1 && !hasLiveStepsAfter
+                        tailRows.append(isLast ? step.withIsLast(true) : step)
+                    }
+                }
+            }
+
+            appendStreamingStepRows(to: &tailRows)
+
+            if let content = answerContent, let timestamp = answerTimestamp, let messageID = answerMessageID {
+                tailRows.append(ChatRow(
+                    id: messageID.uuidString + "-answer",
+                    kind: .assistantText(AssistantTextRow(
+                        content: content, timestamp: timestamp,
+                        messageID: messageID, hasStepsAbove: !steps.isEmpty
+                    ))
+                ))
+            }
+        } else {
+            // No committed assistant messages yet — same logic as rebuildRows()
+            if liveSteps > 0 {
+                appendStreamingHeader(to: &tailRows, totalStepCount: liveSteps)
+                appendStreamingStepRows(to: &tailRows)
+            } else if agent.state.streamMessage == nil {
+                tailRows.append(ChatRow(id: "streaming-indicator", kind: .streamingIndicator))
+            } else {
+                appendStreamingStepRows(to: &tailRows)
+                if tailRows.last?.id.hasPrefix("streaming-") != true {
+                    tailRows.append(ChatRow(id: "streaming-indicator", kind: .streamingIndicator))
+                }
+            }
+        }
+
+        // Splice: keep stable prefix, replace active turn tail
+        let spliceIndex = min(activeTurnRowIndex, rows.count)
+        rows.replaceSubrange(spliceIndex..., with: tailRows)
     }
 
     // MARK: - System Prompt
@@ -1025,6 +1179,7 @@ final class AgentCoordinator {
         expandedDetails.removeAll()
         autoExpandedTurnID = nil
         streamingManuallyCollapsed = false
+        activeTurnRowIndex = 0
         rows = []
         isGenerating = false
     }

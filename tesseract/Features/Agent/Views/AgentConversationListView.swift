@@ -13,17 +13,9 @@ struct AgentConversationListView: View {
     var body: some View {
         ScrollViewReader { proxy in
             List {
-                if !coordinator.assembledSystemPrompt.isEmpty {
-                    AgentSystemPromptView()
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
-                }
+                SystemPromptSection()
 
-                if coordinator.rows.isEmpty && !coordinator.isGenerating {
-                    emptyState
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
-                }
+                EmptyStateSection()
 
                 ForEach(coordinator.rows) { row in
                     ChatRowView(
@@ -61,28 +53,64 @@ struct AgentConversationListView: View {
                     }
                 }
             }
-            .onChange(of: coordinator.streamingRowVersion) { _, _ in
-                // Fires when streaming content grows within a stable last row ID.
-                if isNearBottom, let id = lastRowID {
-                    proxy.scrollTo(id, anchor: .bottom)
-                }
-            }
+            // Separate view to isolate streamingRowVersion observation from the List body
+            .overlay { StreamingScrollTrigger(proxy: proxy, isNearBottom: isNearBottom) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
 
-    // MARK: - Empty State
+// MARK: - Isolated Observation Sub-Views
 
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 40))
-                .foregroundStyle(.quaternary)
-            Text("Start a conversation")
-                .font(.title3)
-                .foregroundStyle(.secondary)
+/// Reads only `assembledSystemPrompt` — changes don't trigger ForEach diffing.
+private struct SystemPromptSection: View {
+    @Environment(AgentCoordinator.self) private var coordinator
+
+    var body: some View {
+        if !coordinator.assembledSystemPrompt.isEmpty {
+            AgentSystemPromptView()
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 80)
+    }
+}
+
+/// Self-contained empty state — keeps logic out of the main List body.
+private struct EmptyStateSection: View {
+    @Environment(AgentCoordinator.self) private var coordinator
+
+    var body: some View {
+        if coordinator.rows.isEmpty && !coordinator.isGenerating {
+            VStack(spacing: 8) {
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.quaternary)
+                Text("Start a conversation")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 80)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+        }
+    }
+}
+
+/// Reads only `streamingRowVersion` — fires scroll-to-bottom without re-evaluating the List body.
+private struct StreamingScrollTrigger: View {
+    let proxy: ScrollViewProxy
+    let isNearBottom: Bool
+
+    @Environment(AgentCoordinator.self) private var coordinator
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: coordinator.streamingRowVersion) { _, _ in
+                if isNearBottom, let id = coordinator.rows.last?.id {
+                    proxy.scrollTo(id, anchor: .bottom)
+                }
+            }
     }
 }
