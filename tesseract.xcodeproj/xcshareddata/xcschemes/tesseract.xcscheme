@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "E0C6548F2F2E946A003C1B55"
-               BuildableName = "tesseract.app"
+               BuildableName = "Tesseract Agent.app"
                BlueprintName = "tesseract"
                ReferencedContainer = "container:tesseract.xcodeproj">
             </BuildableReference>
@@ -46,7 +46,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "E0C6548F2F2E946A003C1B55"
-            BuildableName = "tesseract.app"
+            BuildableName = "Tesseract Agent.app"
             BlueprintName = "tesseract"
             ReferencedContainer = "container:tesseract.xcodeproj">
          </BuildableReference>
@@ -80,7 +80,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "E0C6548F2F2E946A003C1B55"
-            BuildableName = "tesseract.app"
+            BuildableName = "Tesseract Agent.app"
             BlueprintName = "tesseract"
             ReferencedContainer = "container:tesseract.xcodeproj">
          </BuildableReference>
@@ -97,7 +97,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "E0C6548F2F2E946A003C1B55"
-            BuildableName = "tesseract.app"
+            BuildableName = "Tesseract Agent.app"
             BlueprintName = "tesseract"
             ReferencedContainer = "container:tesseract.xcodeproj">
          </BuildableReference>
