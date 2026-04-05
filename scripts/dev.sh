@@ -215,6 +215,7 @@ cmd_archive() {
         -project "$PROJECT" \
         -scheme "$SCHEME" \
         -archivePath "$archive_path" \
+        ARCHS=arm64 \
         2>&1) || exit_code=$?
 
     echo "$archive_output" | grep -E "^(error:|warning:|Build |BUILD |\*\* ARCHIVE)" || true

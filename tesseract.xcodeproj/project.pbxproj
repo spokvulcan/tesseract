@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		84126A693D3CC21A4C1CE996 /* Textual in Frameworks */ = {isa = PBXBuildFile; productRef = 787096BB3B2974DC1B24B59C /* Textual */; };
+		A9FF2A6C2F80A000003C1B55 /* Demark in Frameworks */ = {isa = PBXBuildFile; productRef = A1C54C8E2F80A000003C1B55 /* Demark */; };
+		AAE67E6C2F80A000003C1B55 /* SwiftReadability in Frameworks */ = {isa = PBXBuildFile; productRef = AD72427E2F80A000003C1B55 /* SwiftReadability */; };
 		E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111012F41A000003C1B55 /* MLXLLM */; };
 		E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111032F41A000003C1B55 /* MLXLMCommon */; };
 		E0A111042F41A000003C1B55 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111052F41A000003C1B55 /* MLXVLM */; };
@@ -15,8 +17,6 @@
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
 		E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudio */; };
 		E0DF77002F3FC000003C1B55 /* MLXImageGen in Frameworks */ = {isa = PBXBuildFile; productRef = E0DF77012F3FC000003C1B55 /* MLXImageGen */; };
-		AAE67E6C2F80A000003C1B55 /* SwiftReadability in Frameworks */ = {isa = PBXBuildFile; productRef = AD72427E2F80A000003C1B55 /* SwiftReadability */; };
-		A9FF2A6C2F80A000003C1B55 /* Demark in Frameworks */ = {isa = PBXBuildFile; productRef = A1C54C8E2F80A000003C1B55 /* Demark */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -38,7 +38,7 @@
 
 /* Begin PBXFileReference section */
 		E0A5AC012F50B000003C1B55 /* AgentPackages */ = {isa = PBXFileReference; lastKnownFileType = folder; path = AgentPackages; sourceTree = "<group>"; };
-		E0C654902F2E946A003C1B55 /* tesseract.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = tesseract.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E0C654902F2E946A003C1B55 /* tesseract.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = tesseract.app; path = "Tesseract Agent.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0C6549F2F2E946B003C1B55 /* tesseractTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tesseractTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0C654A92F2E946B003C1B55 /* tesseractUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tesseractUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -312,6 +312,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -371,7 +372,6 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				ARCHS = arm64;
 			};
 			name = Debug;
 		};
@@ -379,6 +379,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -430,7 +431,6 @@
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
-				ARCHS = arm64;
 			};
 			name = Release;
 		};
@@ -462,10 +462,10 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = tesseract/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Tesseract Agent";
 				INFOPLIST_KEY_CFBundleName = "Tesseract Agent";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Tesseract Agent uses Accessibility to register global keyboard shortcuts for dictation, text-to-speech, and agent voice input.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture voice for transcription";
 				INFOPLIST_KEY_NSSupportsAutomaticTermination = NO;
@@ -515,10 +515,10 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = tesseract/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Tesseract Agent";
 				INFOPLIST_KEY_CFBundleName = "Tesseract Agent";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
-				INFOPLIST_KEY_NSAccessibilityUsageDescription = "Tesseract Agent uses Accessibility to register global keyboard shortcuts for dictation, text-to-speech, and agent voice input.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used to capture voice for transcription";
 				INFOPLIST_KEY_NSSupportsAutomaticTermination = NO;
@@ -688,6 +688,22 @@
 				minimumVersion = 0.3.1;
 			};
 		};
+		A8F92BD32F80A000003C1B55 /* XCRemoteSwiftPackageReference "Demark" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/steipete/Demark.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+		AA6841922F80A000003C1B55 /* XCRemoteSwiftPackageReference "swift-readability" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/lake-of-fire/swift-readability";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 		E0B999882F59F4DA00F80663 /* XCRemoteSwiftPackageReference "textual" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/textual";
@@ -704,22 +720,6 @@
 				kind = branch;
 			};
 		};
-		AA6841922F80A000003C1B55 /* XCRemoteSwiftPackageReference "swift-readability" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/lake-of-fire/swift-readability";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-		A8F92BD32F80A000003C1B55 /* XCRemoteSwiftPackageReference "Demark" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/steipete/Demark.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -727,6 +727,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 2EE88EC58D52DCCACA5960B0 /* XCRemoteSwiftPackageReference "textual" */;
 			productName = Textual;
+		};
+		A1C54C8E2F80A000003C1B55 /* Demark */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A8F92BD32F80A000003C1B55 /* XCRemoteSwiftPackageReference "Demark" */;
+			productName = Demark;
+		};
+		AD72427E2F80A000003C1B55 /* SwiftReadability */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA6841922F80A000003C1B55 /* XCRemoteSwiftPackageReference "swift-readability" */;
+			productName = SwiftReadability;
 		};
 		E0A111012F41A000003C1B55 /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -754,16 +764,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E0DF77022F3FC000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-image-swift" */;
 			productName = MLXImageGen;
-		};
-		AD72427E2F80A000003C1B55 /* SwiftReadability */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = AA6841922F80A000003C1B55 /* XCRemoteSwiftPackageReference "swift-readability" */;
-			productName = SwiftReadability;
-		};
-		A1C54C8E2F80A000003C1B55 /* Demark */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A8F92BD32F80A000003C1B55 /* XCRemoteSwiftPackageReference "Demark" */;
-			productName = Demark;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
