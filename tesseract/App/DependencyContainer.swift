@@ -403,5 +403,10 @@ final class DependencyContainer: ObservableObject {
             }
             try await writer.send(.jsonBody(data))
         }
+
+        let completionHandler = CompletionHandler(arbiter: inferenceArbiter, engine: agentEngine)
+        httpServer.route(.POST, "/v1/chat/completions") { request, writer in
+            try await completionHandler.handle(request: request, writer: writer)
+        }
     }
 }
