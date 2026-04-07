@@ -13,13 +13,14 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case image
     case zimage
     case general
+    case server
     case model
     case recording
 
     var id: String { rawValue }
 
     static let mainPages: [NavigationItem] = [.agent, .scheduled, .dictation, .speech]
-    static let settingsPages: [NavigationItem] = [.general, .recording, .model]
+    static let settingsPages: [NavigationItem] = [.general, .server, .recording, .model]
 
     var name: LocalizedStringResource {
         switch self {
@@ -30,6 +31,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .image: "Image"
         case .zimage: "Z-Image"
         case .general: "General"
+        case .server: "Server API"
         case .model: "Models"
         case .recording: "Preferences"
         }
@@ -44,6 +46,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .image: "photo.fill"
         case .zimage: "photo.artframe"
         case .general: "gear"
+        case .server: "server.rack"
         case .model: "brain"
         case .recording: "slider.horizontal.3"
         }
@@ -66,6 +69,8 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
             ZImageGenContentView()
         case .general:
             GeneralSettingsSection()
+        case .server:
+            ServerSettingsView()
         case .model:
             ModelsPageView()
         case .recording:

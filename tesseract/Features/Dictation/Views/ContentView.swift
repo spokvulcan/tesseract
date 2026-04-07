@@ -64,6 +64,9 @@ struct ContentView: View {
                 .injectModelDependencies(from: container)
         case .general:
             GeneralSettingsSection()
+        case .server:
+            ServerSettingsView()
+                .injectCoreDependencies(from: container)
         case .model:
             ModelsPageView()
                 .environmentObject(container)
