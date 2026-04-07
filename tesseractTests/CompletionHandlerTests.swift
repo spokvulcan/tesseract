@@ -228,6 +228,119 @@ struct HTTPServerIntegrationTests {
         #expect(handlerDone.isSet)
     }
 
+    // MARK: - Prefill Disconnect
+
+    @Test func prefillDisconnectCancelsGeneration() async throws {
+        // Exercises the exact task-group pattern from runStreamingCompletion:
+        // keepalive detects disconnect → throws → cancels generation child task.
+        let generationCancelled = LeaseAcquiredSignal()
+        let handlerExited = LeaseAcquiredSignal()
+
+        let server = HTTPServer(port: 0)
+        server.route(.GET, "/prefill-disconnect") { _, writer in
+            let sse = SSEWriter(writer)
+            try await sse.open()
+
+            // Send initial role chunk so the client can connect
+            await sse.send(["role": "assistant"] as [String: String])
+
+            // Simulate the CompletionHandler task group pattern:
+            // keepalive monitors for disconnect, generation blocks on prefill.
+            struct Disconnected: Error {}
+
+            do {
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    // Keepalive: check connection every 100ms (fast for testing)
+                    group.addTask {
+                        while true {
+                            try await Task.sleep(nanoseconds: 100_000_000)
+                            try Task.checkCancellation()
+                            guard await sse.keepalive("keepalive") else {
+                                throw Disconnected()
+                            }
+                        }
+                    }
+
+                    // Fake "generation" that blocks for 30s (simulating prefill)
+                    group.addTask {
+                        do {
+                            try await Task.sleep(nanoseconds: 30_000_000_000)
+                        } catch is CancellationError {
+                            generationCancelled.set()
+                        }
+                    }
+
+                    try await group.next()
+                    group.cancelAll()
+                }
+            } catch is Disconnected {
+                // Expected: keepalive detected client gone
+            } catch {}
+
+            handlerExited.set()
+        }
+        let port = try await startOnRandomPort(server)
+
+        // Connect and read the initial chunk, then disconnect by stopping server
+        let readTask = Task {
+            let (bytes, _) = try await URLSession.shared.bytes(
+                from: URL(string: "http://127.0.0.1:\(port)/prefill-disconnect")!
+            )
+            for try await line in bytes.lines {
+                if line.hasPrefix("data: {") { break }
+            }
+        }
+
+        try? await readTask.value
+        server.stop()
+
+        // The keepalive should detect disconnect within ~200ms, cancel generation
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(generationCancelled.isSet)
+        #expect(handlerExited.isSet)
+    }
+
+    @Test func midStreamDisconnectBreaksGenerationLoop() async throws {
+        // Verify that failed sse.send() breaks the labeled generation loop,
+        // not just the switch statement.
+        let loopExited = LeaseAcquiredSignal()
+
+        let server = HTTPServer(port: 0)
+        server.route(.GET, "/midstream-disconnect") { _, writer in
+            let sse = SSEWriter(writer)
+            try await sse.open()
+
+            generation: for i in 1...500 {
+                guard await sse.send(["n": "\(i)"] as [String: String]) else {
+                    break generation
+                }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+                if Task.isCancelled { break generation }
+            }
+            loopExited.set()
+        }
+        let port = try await startOnRandomPort(server)
+
+        // Read a few chunks then disconnect
+        let readTask = Task {
+            let (bytes, _) = try await URLSession.shared.bytes(
+                from: URL(string: "http://127.0.0.1:\(port)/midstream-disconnect")!
+            )
+            var count = 0
+            for try await line in bytes.lines {
+                if line.hasPrefix("data: {") { count += 1 }
+                if count >= 3 { break }
+            }
+        }
+
+        try? await readTask.value
+        server.stop()
+
+        try await Task.sleep(nanoseconds: 500_000_000)
+        // Loop must have exited — not still running 500 iterations
+        #expect(loopExited.isSet)
+    }
+
     // MARK: - Helpers
 
     /// Start server on a random available port, return the actual port.
