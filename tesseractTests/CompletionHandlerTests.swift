@@ -29,9 +29,8 @@ struct CompletionHandlerTests {
     @Test func timeoutThrowsWhenBodyNeverSignals() async {
         do {
             try await CompletionHandler.withAcquisitionTimeout(
-                timeoutNanoseconds: 50_000_000 // 50ms
+                timeoutNanoseconds: 50_000_000
             ) { _ in
-                // Simulate waiting in arbiter queue — never signal
                 try await Task.sleep(nanoseconds: 5_000_000_000)
             }
             Issue.record("Expected LeaseTimeoutError")
@@ -46,15 +45,13 @@ struct CompletionHandlerTests {
         let completed = LeaseAcquiredSignal()
 
         try await CompletionHandler.withAcquisitionTimeout(
-            timeoutNanoseconds: 100_000_000 // 100ms
+            timeoutNanoseconds: 100_000_000
         ) { signal in
             signal.set()
-            // Simulate generation that takes longer than timeout
-            try await Task.sleep(nanoseconds: 300_000_000) // 300ms > 100ms
+            try await Task.sleep(nanoseconds: 300_000_000)
             completed.set()
         }
 
-        // Body must complete — timeout should not have cancelled it
         #expect(completed.isSet)
     }
 
@@ -62,7 +59,7 @@ struct CompletionHandlerTests {
         let completed = LeaseAcquiredSignal()
 
         try await CompletionHandler.withAcquisitionTimeout(
-            timeoutNanoseconds: 1_000_000_000 // 1s
+            timeoutNanoseconds: 1_000_000_000
         ) { signal in
             signal.set()
             completed.set()
@@ -83,7 +80,7 @@ struct CompletionHandlerTests {
             }
             Issue.record("Expected BodyError")
         } catch is BodyError {
-            // Body error propagates, not LeaseTimeoutError
+            // Expected
         } catch {
             Issue.record("Unexpected error type: \(error)")
         }
@@ -96,7 +93,6 @@ struct CompletionHandlerTests {
             try await CompletionHandler.withAcquisitionTimeout(
                 timeoutNanoseconds: 1_000_000_000
             ) { _ in
-                // Error before signaling (e.g. arbiter load failure)
                 throw EarlyError()
             }
             Issue.record("Expected EarlyError")
@@ -107,3 +103,171 @@ struct CompletionHandlerTests {
         }
     }
 }
+
+// MARK: - HTTPServer Integration Tests
+
+@MainActor
+struct HTTPServerIntegrationTests {
+
+    @Test func healthEndpointReturnsOK() async throws {
+        let server = HTTPServer(port: 0)
+        server.route(.GET, "/health") { _, writer in
+            try await writer.send(.json(["status": "ok"] as [String: String]))
+        }
+        let port = try await startOnRandomPort(server)
+        defer { server.stop() }
+
+        let (data, response) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/health")!
+        )
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 200)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: String]
+        #expect(json["status"] == "ok")
+    }
+
+    @Test func notFoundForUnknownPath() async throws {
+        let server = HTTPServer(port: 0)
+        let port = try await startOnRandomPort(server)
+        defer { server.stop() }
+
+        let (data, response) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/nonexistent")!
+        )
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 404)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let error = json["error"] as? [String: Any]
+        #expect(error?["code"] as? Int == 404)
+    }
+
+    @Test func methodNotAllowedReturnsAllowHeader() async throws {
+        let server = HTTPServer(port: 0)
+        server.route(.POST, "/only-post") { _, writer in
+            try await writer.send(.json(["ok": true] as [String: Bool]))
+        }
+        let port = try await startOnRandomPort(server)
+        defer { server.stop() }
+
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/only-post")!)
+        request.httpMethod = "GET"
+        let (_, response) = try await URLSession.shared.data(for: request)
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 405)
+        #expect(http.value(forHTTPHeaderField: "Allow")?.contains("POST") == true)
+    }
+
+    @Test func sseStreamDeliversChunksAndDone() async throws {
+        let server = HTTPServer(port: 0)
+        server.route(.GET, "/test-sse") { _, writer in
+            let sse = SSEWriter(writer)
+            try await sse.open()
+            for i in 1...3 {
+                await sse.send(["n": "\(i)"] as [String: String])
+            }
+            await sse.done()
+        }
+        let port = try await startOnRandomPort(server)
+        defer { server.stop() }
+
+        let (bytes, response) = try await URLSession.shared.bytes(
+            from: URL(string: "http://127.0.0.1:\(port)/test-sse")!
+        )
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 200)
+
+        var lines: [String] = []
+        for try await line in bytes.lines {
+            lines.append(line)
+            if line == "data: [DONE]" { break }
+        }
+
+        let dataLines = lines.filter { $0.hasPrefix("data: {") }
+        #expect(dataLines.count == 3)
+        #expect(lines.last == "data: [DONE]")
+    }
+
+    @Test func sseWriterDetectsDisconnect() async throws {
+        // Verify that SSEWriter.send returns false when the connection fails,
+        // and that the handler does not run all 200 iterations.
+        let chunksSent = LeaseAcquiredSignal() // reuse as "at least some sent" flag
+        let handlerDone = LeaseAcquiredSignal()
+
+        let server = HTTPServer(port: 0)
+        server.route(.GET, "/slow-sse") { _, writer in
+            let sse = SSEWriter(writer)
+            try await sse.open()
+            var sent = 0
+            for i in 1...200 {
+                let ok = await sse.send(["n": "\(i)"] as [String: String])
+                if !ok { break }
+                sent += 1
+                if sent == 2 { chunksSent.set() }
+                try? await Task.sleep(nanoseconds: 10_000_000)
+            }
+            handlerDone.set()
+        }
+        let port = try await startOnRandomPort(server)
+
+        // Connect, read 1 chunk to confirm stream works, then stop server
+        let readTask = Task {
+            let (bytes, _) = try await URLSession.shared.bytes(
+                from: URL(string: "http://127.0.0.1:\(port)/slow-sse")!
+            )
+            for try await line in bytes.lines {
+                if line.hasPrefix("data: {") { break }
+            }
+        }
+
+        try? await readTask.value
+        // Server stop cancels connection tasks, causing writes to fail
+        server.stop()
+
+        try await Task.sleep(nanoseconds: 500_000_000)
+        // Handler must have exited (not still running all 200 iterations)
+        #expect(handlerDone.isSet)
+    }
+
+    // MARK: - Helpers
+
+    /// Start server on a random available port, return the actual port.
+    private func startOnRandomPort(_ server: HTTPServer) async throws -> UInt16 {
+        // Port 0 isn't supported by NWListener, so find a free port
+        let port = try findFreePort()
+        await server.updatePort(port)
+        await server.start()
+        // Brief pause for listener to become ready
+        try await Task.sleep(nanoseconds: 100_000_000)
+        return port
+    }
+
+    private func findFreePort() throws -> UInt16 {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw PortError() }
+        defer { close(fd) }
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = INADDR_LOOPBACK.bigEndian
+
+        let bindResult = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bindResult == 0 else { throw PortError() }
+
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &len)
+            }
+        }
+        guard nameResult == 0 else { throw PortError() }
+
+        return UInt16(bigEndian: addr.sin_port)
+    }
+}
+
+private struct PortError: Error {}

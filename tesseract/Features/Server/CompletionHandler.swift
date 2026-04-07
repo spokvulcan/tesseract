@@ -73,32 +73,22 @@ struct CompletionHandler: Sendable {
         writer: HTTPResponseWriter
     ) async {
         if request.stream == true {
-            // T11 will implement streaming
-            try? await writer.send(.serviceUnavailable("Streaming not yet implemented"))
-            return
+            await runStreamingCompletion(request, writer: writer)
+        } else {
+            await runNonStreamingCompletion(request, writer: writer)
         }
-
-        await runNonStreamingCompletion(request, writer: writer)
     }
 
-    /// Non-streaming: accumulate all generation events, then send a single JSON response.
-    private func runNonStreamingCompletion(
-        _ request: OpenAI.ChatCompletionRequest,
-        writer: HTTPResponseWriter
-    ) async {
+    /// Convert request, read model state, and start generation in one MainActor hop.
+    private func startGeneration(
+        _ request: OpenAI.ChatCompletionRequest
+    ) async -> Result<(String, AsyncThrowingStream<AgentGeneration, Error>), Error> {
         let (systemPrompt, messages) = MessageConverter.convertMessages(request.messages)
         let toolSpecs = MessageConverter.convertToolDefinitions(request.tools)
 
-        var params = AgentGenerateParameters.forModel("")
-        if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
-        if let temp = request.temperature { params.temperature = Float(temp) }
-        if let topP = request.top_p { params.topP = Float(topP) }
-
-        // Read model ID and start generation in a single MainActor hop
-        let result: Result<(String, AsyncThrowingStream<AgentGeneration, Error>), Error>
-        result = await MainActor.run {
+        return await MainActor.run {
             let modelID = arbiter.loadedLLMModelID ?? ""
-            params = AgentGenerateParameters.forModel(modelID)
+            var params = AgentGenerateParameters.forModel(modelID)
             if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
             if let temp = request.temperature { params.temperature = Float(temp) }
             if let topP = request.top_p { params.topP = Float(topP) }
@@ -114,10 +104,16 @@ struct CompletionHandler: Sendable {
                 return .failure(error)
             }
         }
+    }
 
+    /// Non-streaming: accumulate all generation events, then send a single JSON response.
+    private func runNonStreamingCompletion(
+        _ request: OpenAI.ChatCompletionRequest,
+        writer: HTTPResponseWriter
+    ) async {
         let modelID: String
         let generationStream: AsyncThrowingStream<AgentGeneration, Error>
-        switch result {
+        switch await startGeneration(request) {
         case .success(let (id, stream)):
             modelID = id
             generationStream = stream
@@ -210,6 +206,221 @@ struct CompletionHandler: Sendable {
         try? await writer.send(.jsonBody(data))
     }
 
+    // MARK: - Streaming Completion
+
+    /// Streaming: emit SSE chunks as generation events arrive.
+    private func runStreamingCompletion(
+        _ request: OpenAI.ChatCompletionRequest,
+        writer: HTTPResponseWriter
+    ) async {
+        let modelID: String
+        let generationStream: AsyncThrowingStream<AgentGeneration, Error>
+        switch await startGeneration(request) {
+        case .success(let (id, stream)):
+            modelID = id
+            generationStream = stream
+        case .failure(let error):
+            Log.server.error("Streaming generation failed to start: \(error)")
+            try? await writer.send(.serviceUnavailable("Generation failed: \(error.localizedDescription)"))
+            return
+        }
+
+        let sse = SSEWriter(writer)
+        do { try await sse.open() } catch {
+            Log.server.error("Failed to open SSE stream: \(error)")
+            return
+        }
+
+        let completionID = "chatcmpl-\(UUID().uuidString)"
+        let created = Int(Date().timeIntervalSince1970)
+        let model = request.model ?? modelID
+        let includeUsage = request.stream_options?.include_usage == true
+
+        // Emit initial chunk with role
+        guard await sse.send(makeChunk(
+            id: completionID, model: model, created: created,
+            delta: OpenAI.ChunkDelta(role: .assistant)
+        )) else {
+            await sse.done()
+            return
+        }
+
+        // Run generation and keepalive concurrently. If the client disconnects
+        // during prefill, the keepalive write fails and throws ClientDisconnected,
+        // cancelling the generation task and releasing the arbiter lease promptly.
+        let streamResult: StreamResult
+        do {
+            streamResult = try await withThrowingTaskGroup(of: StreamResult?.self) { group in
+                // Keepalive: SSE comments every 5s, throws on disconnect
+                group.addTask {
+                    while true {
+                        try await Task.sleep(nanoseconds: 5_000_000_000)
+                        try Task.checkCancellation()
+                        guard await sse.keepalive("keepalive") else {
+                            throw ClientDisconnected()
+                        }
+                    }
+                }
+
+                // Generation: stream events, return accumulated state
+                group.addTask {
+                    await self.streamGenerationEvents(
+                        generationStream, sse: sse,
+                        completionID: completionID, model: model, created: created
+                    )
+                }
+
+                // First non-nil result is the generation task finishing
+                let result = try await group.next() ?? nil
+                group.cancelAll()
+                return result ?? StreamResult()
+            }
+        } catch is ClientDisconnected {
+            Log.server.debug("Client disconnected during streaming")
+            return
+        } catch is CancellationError {
+            return
+        } catch {
+            Log.server.error("Streaming generation error: \(error)")
+            return
+        }
+
+        // Skip final chunk if client disconnected mid-stream
+        guard await !sse.isDisconnected else { return }
+
+        var finishReason: OpenAI.FinishReason = .stop
+        if streamResult.hasToolCalls {
+            finishReason = .tool_calls
+        } else if let info = streamResult.info, let maxTokens = request.effectiveMaxTokens,
+                  info.generationTokenCount >= maxTokens {
+            finishReason = .length
+        }
+
+        var finalChunk = makeChunk(
+            id: completionID, model: model, created: created,
+            delta: OpenAI.ChunkDelta(),
+            finishReason: finishReason
+        )
+        if includeUsage, let info = streamResult.info {
+            finalChunk.usage = OpenAI.Usage(
+                prompt_tokens: info.promptTokenCount,
+                completion_tokens: info.generationTokenCount,
+                total_tokens: info.promptTokenCount + info.generationTokenCount,
+                prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: 0)
+            )
+        }
+        await sse.send(finalChunk)
+        await sse.done()
+    }
+
+    private func makeChunk(
+        id: String,
+        model: String,
+        created: Int,
+        delta: OpenAI.ChunkDelta,
+        finishReason: OpenAI.FinishReason? = nil
+    ) -> OpenAI.ChatCompletionChunk {
+        OpenAI.ChatCompletionChunk(
+            id: id,
+            model: model,
+            created: created,
+            system_fingerprint: "tesseract-1.0-mlx",
+            choices: [
+                OpenAI.ChatCompletionChunkChoice(
+                    index: 0,
+                    delta: delta,
+                    finish_reason: finishReason
+                ),
+            ]
+        )
+    }
+
+    // MARK: - Stream Event Loop
+
+    private struct StreamResult: Sendable {
+        var hasToolCalls = false
+        var info: AgentGeneration.Info?
+    }
+
+    /// Consume generation events, emit SSE chunks, return accumulated metadata.
+    private func streamGenerationEvents(
+        _ stream: AsyncThrowingStream<AgentGeneration, Error>,
+        sse: SSEWriter,
+        completionID: String,
+        model: String,
+        created: Int
+    ) async -> StreamResult {
+        var result = StreamResult()
+        var toolCallIndex = 0
+
+        do {
+            generation: for try await event in stream {
+                switch event {
+                case .text(let chunk):
+                    guard await sse.send(makeChunk(
+                        id: completionID, model: model, created: created,
+                        delta: OpenAI.ChunkDelta(content: chunk)
+                    )) else { break generation }
+
+                case .thinkStart:
+                    guard await sse.send(makeChunk(
+                        id: completionID, model: model, created: created,
+                        delta: OpenAI.ChunkDelta(content: "<think>")
+                    )) else { break generation }
+
+                case .thinking(let chunk):
+                    guard await sse.send(makeChunk(
+                        id: completionID, model: model, created: created,
+                        delta: OpenAI.ChunkDelta(content: chunk)
+                    )) else { break generation }
+
+                case .thinkEnd:
+                    guard await sse.send(makeChunk(
+                        id: completionID, model: model, created: created,
+                        delta: OpenAI.ChunkDelta(content: "</think>")
+                    )) else { break generation }
+
+                case .thinkReclassify:
+                    break
+
+                case .toolCall(let call):
+                    let index = toolCallIndex
+                    toolCallIndex += 1
+                    result.hasToolCalls = true
+                    let openAICalls = ToolCallConverter.convertToOpenAI([call])
+                    guard let oaiCall = openAICalls.first else { continue }
+
+                    guard await sse.send(makeChunk(
+                        id: completionID, model: model, created: created,
+                        delta: OpenAI.ChunkDelta(tool_calls: [
+                            OpenAI.ToolCall(id: oaiCall.id, type: "function",
+                                function: OpenAI.FunctionCall(name: oaiCall.function?.name, arguments: ""),
+                                index: index),
+                        ])
+                    )) else { break generation }
+
+                    guard await sse.send(makeChunk(
+                        id: completionID, model: model, created: created,
+                        delta: OpenAI.ChunkDelta(tool_calls: [
+                            OpenAI.ToolCall(function: OpenAI.FunctionCall(arguments: oaiCall.function?.arguments),
+                                index: index),
+                        ])
+                    )) else { break generation }
+
+                case .malformedToolCall(let raw):
+                    Log.server.warning("Malformed tool call in stream: \(raw)")
+
+                case .info(let i):
+                    result.info = i
+                }
+            }
+        } catch {
+            Log.server.error("Streaming generation error: \(error)")
+        }
+
+        return result
+    }
+
     /// Timeout that covers only lease acquisition + model loading, not generation.
     ///
     /// The timer task sleeps for the timeout duration, then checks whether the
@@ -265,3 +476,4 @@ final class LeaseAcquiredSignal: Sendable {
 }
 
 struct LeaseTimeoutError: Error {}
+private struct ClientDisconnected: Error {}
