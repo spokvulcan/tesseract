@@ -104,6 +104,9 @@ final class DependencyContainer: ObservableObject {
             }
         )
     }()
+    // HTTP Server
+    lazy var httpServer = HTTPServer(port: UInt16(clamping: max(1, settingsManager.serverPort)))
+
     lazy var notificationService = NotificationService(settings: settingsManager)
     lazy var schedulingService: SchedulingService = {
         SchedulingService(actor: schedulingActor, store: scheduledTaskStore, settings: settingsManager, notificationService: notificationService, speechCoordinator: speechCoordinator)
@@ -296,6 +299,24 @@ final class DependencyContainer: ObservableObject {
 
         // Start scheduling service (includes polling loop + heartbeat from persisted config)
         await schedulingService.start()
+
+        // Observe server toggle/port changes (Observations emits current value immediately)
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await enabled in Observations({ self.settingsManager.isServerEnabled }) {
+                if enabled {
+                    await self.httpServer.start()
+                } else {
+                    self.httpServer.stop()
+                }
+            }
+        })
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await port in Observations({ self.settingsManager.serverPort }) {
+                await self.httpServer.updatePort(UInt16(clamping: max(1, port)))
+            }
+        })
     }
 
     private func loadWhisperModelIfAvailable() async {

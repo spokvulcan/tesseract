@@ -113,17 +113,35 @@ final class AgentEngine {
         parameters: AgentGenerateParameters = .default
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
         Log.agent.debug("generate(llmMessages:) — \(messages.count) messages, \(tools?.count ?? 0) tools")
+        return try generate(
+            systemPrompt: systemPrompt,
+            messages: messages,
+            toolSpecs: tools?.map { $0.toolSpec },
+            parameters: parameters
+        )
+    }
 
-        // 1. Convert LLMMessage → Chat.Message, prepending the system prompt
+    /// Generate from structured messages with raw tool specs (schema-only, no execute closures).
+    ///
+    /// Used by the HTTP server where clients supply tool schemas for prompt rendering
+    /// but the server never executes them — the model output tells the client which tools to call.
+    func generate(
+        systemPrompt: String,
+        messages: [LLMMessage],
+        toolSpecs: [ToolSpec]?,
+        parameters: AgentGenerateParameters = .default
+    ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
+        Log.agent.debug("generate(toolSpecs:) — \(messages.count) messages, \(toolSpecs?.count ?? 0) tool specs")
+        let input = Self.buildUserInput(systemPrompt: systemPrompt, messages: messages, toolSpecs: toolSpecs)
+        return try startGeneration(input: input, parameters: parameters)
+    }
+
+    /// Build a `UserInput` from a system prompt, messages, and optional raw tool specs.
+    /// Extracted for testability — callers can verify tool specs are forwarded without a loaded model.
+    static func buildUserInput(systemPrompt: String, messages: [LLMMessage], toolSpecs: [ToolSpec]?) -> UserInput {
         var chatMessages = [Chat.Message.system(systemPrompt)]
         chatMessages.append(contentsOf: toLLMCommonMessages(messages))
-
-        // 2. Convert AgentToolDefinition → ToolSpec ([String: any Sendable])
-        let toolSpecs: [ToolSpec]? = tools?.map { $0.toolSpec }
-
-        // 3. Build UserInput and delegate to shared generation logic
-        let input = UserInput(chat: chatMessages, tools: toolSpecs)
-        return try startGeneration(input: input, parameters: parameters)
+        return UserInput(chat: chatMessages, tools: toolSpecs)
     }
 
     /// Formats a system prompt + tools through the chat template, returning the raw ChatML string and token count.
