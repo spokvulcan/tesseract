@@ -8,7 +8,7 @@
 import Foundation
 import Testing
 import MLXLMCommon
-@testable import tesseract
+@testable import Tesseract_Agent
 
 @MainActor
 struct ToolArgumentNormalizerTests {

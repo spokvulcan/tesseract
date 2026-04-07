@@ -46,6 +46,8 @@ final class SettingsManager {
         static let showNotifications = "showNotifications"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
         static let webAccessEnabled = "webAccessEnabled"
+        static let isServerEnabled = "isServerEnabled"
+        static let serverPort = "serverPort"
     }
 
     // MARK: - General Settings
@@ -270,6 +272,16 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(webAccessEnabled, forKey: Key.webAccessEnabled) }
     }
 
+    // MARK: - Server Settings
+
+    var isServerEnabled = false {
+        didSet { UserDefaults.standard.set(isServerEnabled, forKey: Key.isServerEnabled) }
+    }
+
+    var serverPort: Int = 8321 {
+        didSet { UserDefaults.standard.set(serverPort, forKey: Key.serverPort) }
+    }
+
     // MARK: - Onboarding
 
     var hasCompletedOnboarding = false {
@@ -315,6 +327,8 @@ final class SettingsManager {
             Key.showNotifications: true,
             Key.hasCompletedOnboarding: false,
             Key.webAccessEnabled: true,
+            Key.isServerEnabled: false,
+            Key.serverPort: 8321,
         ])
 
         // Load persisted values (didSet does NOT fire during init).
@@ -350,6 +364,8 @@ final class SettingsManager {
         showNotifications = ud.bool(forKey: Key.showNotifications)
         hasCompletedOnboarding = ud.bool(forKey: Key.hasCompletedOnboarding)
         webAccessEnabled = ud.bool(forKey: Key.webAccessEnabled)
+        isServerEnabled = ud.bool(forKey: Key.isServerEnabled)
+        serverPort = ud.integer(forKey: Key.serverPort)
     }
 
     // MARK: - Methods
@@ -386,6 +402,8 @@ final class SettingsManager {
         heartbeatEnabled = true
         heartbeatIntervalMinutes = 30
         webAccessEnabled = true
+        isServerEnabled = false
+        serverPort = 8321
     }
 
     // MARK: - Private
