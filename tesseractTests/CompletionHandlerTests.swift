@@ -187,6 +187,45 @@ struct HTTPServerIntegrationTests {
         #expect(lines.last == "data: [DONE]")
     }
 
+    @Test func sseStreamSupportsReasoningChunks() async throws {
+        let server = HTTPServer(port: 0)
+        server.route(.GET, "/test-reasoning-sse") { _, writer in
+            let sse = SSEWriter(writer)
+            try await sse.open()
+
+            await sse.sendRaw(
+                #"{"choices":[{"delta":{"reasoning_content":"Thinking...","role":"assistant"},"index":0}],"created":1712345678,"id":"chatcmpl-reason","model":"qwen3.5-4b-paro","object":"chat.completion.chunk"}"#
+            )
+            await sse.sendRaw(
+                #"{"choices":[{"delta":{"content":"Hello"},"index":0}],"created":1712345678,"id":"chatcmpl-reason","model":"qwen3.5-4b-paro","object":"chat.completion.chunk"}"#
+            )
+            await sse.done()
+        }
+        let port = try await startOnRandomPort(server)
+        defer { server.stop() }
+
+        let (bytes, response) = try await URLSession.shared.bytes(
+            from: URL(string: "http://127.0.0.1:\(port)/test-reasoning-sse")!
+        )
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 200)
+
+        var payloads: [OpenAI.ChatCompletionChunk] = []
+        for try await line in bytes.lines {
+            guard line.hasPrefix("data: ") else { continue }
+            if line == "data: [DONE]" { break }
+
+            let json = Data(line.dropFirst(6).utf8)
+            payloads.append(try JSONDecoder().decode(OpenAI.ChatCompletionChunk.self, from: json))
+        }
+
+        #expect(payloads.count == 2)
+        #expect(payloads[0].choices[0].delta.reasoning_content == "Thinking...")
+        #expect(payloads[0].choices[0].delta.content == nil)
+        #expect(payloads[1].choices[0].delta.content == "Hello")
+        #expect(payloads.allSatisfy { $0.choices[0].delta.content != "<think>" })
+    }
+
     @Test func sseWriterDetectsDisconnect() async throws {
         // Verify that SSEWriter.send returns false when the connection fails,
         // and that the handler does not run all 200 iterations.

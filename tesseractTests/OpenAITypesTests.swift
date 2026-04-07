@@ -237,6 +237,14 @@ struct OpenAITypesTests {
         #expect(toolArgs.choices[0].delta.tool_calls?[0].id == nil)
         #expect(toolArgs.choices[0].delta.tool_calls?[0].function?.arguments == #"{"command": "ls"}"#)
 
+        // Reasoning chunk
+        let reasoningJSON = """
+        {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{"reasoning_content":"Thinking..."},"finish_reason":null}]}
+        """
+        let reasoning = try JSONDecoder().decode(OpenAI.ChatCompletionChunk.self, from: Data(reasoningJSON.utf8))
+        #expect(reasoning.choices[0].delta.reasoning_content == "Thinking...")
+        #expect(reasoning.choices[0].delta.content == nil)
+
         // Final chunk with finish_reason and usage
         let finalJSON = """
         {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":150,"completion_tokens":42,"total_tokens":192,"prompt_tokens_details":{"cached_tokens":120}}}
@@ -323,6 +331,31 @@ struct OpenAITypesTests {
         #expect(decoded.choices[0].message.tool_calls?[0].function?.name == "bash")
     }
 
+    @Test func encodesResponseWithReasoningContent() throws {
+        let response = OpenAI.ChatCompletionResponse(
+            id: "chatcmpl-reason",
+            model: "qwen3.5-9b-paro",
+            created: 1712345678,
+            choices: [
+                OpenAI.ChatCompletionChoice(
+                    index: 0,
+                    finish_reason: .stop,
+                    message: OpenAI.ResponseMessage(
+                        role: .assistant,
+                        content: "Final answer",
+                        reasoning_content: "Thinking..."
+                    )
+                )
+            ]
+        )
+
+        let data = try JSONEncoder().encode(response)
+        let decoded = try JSONDecoder().decode(OpenAI.ChatCompletionResponse.self, from: data)
+
+        #expect(decoded.choices[0].message.content == "Final answer")
+        #expect(decoded.choices[0].message.reasoning_content == "Thinking...")
+    }
+
     // MARK: - Streaming Chunk
 
     @Test func encodesStreamingChunk() throws {
@@ -370,6 +403,26 @@ struct OpenAITypesTests {
         #expect(decoded.choices[0].delta.tool_calls?.count == 1)
         #expect(decoded.choices[0].delta.tool_calls?[0].index == 0)
         #expect(decoded.choices[0].delta.tool_calls?[0].function?.name == "bash")
+    }
+
+    @Test func encodesStreamingReasoningChunk() throws {
+        let chunk = OpenAI.ChatCompletionChunk(
+            id: "chatcmpl-stream",
+            model: "qwen3.5-9b-paro",
+            created: 1712345678,
+            choices: [
+                OpenAI.ChatCompletionChunkChoice(
+                    index: 0,
+                    delta: OpenAI.ChunkDelta(reasoning_content: "Thinking...")
+                )
+            ]
+        )
+
+        let data = try JSONEncoder().encode(chunk)
+        let decoded = try JSONDecoder().decode(OpenAI.ChatCompletionChunk.self, from: data)
+
+        #expect(decoded.choices[0].delta.reasoning_content == "Thinking...")
+        #expect(decoded.choices[0].delta.content == nil)
     }
 
     @Test func encodesFinalChunkWithUsage() throws {

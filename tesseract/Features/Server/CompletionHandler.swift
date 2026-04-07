@@ -157,12 +157,6 @@ struct CompletionHandler: Sendable {
             return
         }
 
-        // Build response
-        var content = textContent
-        if !thinkingContent.isEmpty {
-            content = "<think>\(thinkingContent)</think>\(textContent)"
-        }
-
         let finishReason: OpenAI.FinishReason
         if !toolCalls.isEmpty {
             finishReason = .tool_calls
@@ -186,7 +180,8 @@ struct CompletionHandler: Sendable {
                     finish_reason: finishReason,
                     message: OpenAI.ResponseMessage(
                         role: .assistant,
-                        content: content.isEmpty ? nil : content,
+                        content: textContent.isEmpty ? nil : textContent,
+                        reasoning_content: thinkingContent.isEmpty ? nil : thinkingContent,
                         tool_calls: openAIToolCalls
                     )
                 ),
@@ -363,22 +358,16 @@ struct CompletionHandler: Sendable {
                     )) else { break generation }
 
                 case .thinkStart:
-                    guard await sse.send(makeChunk(
-                        id: completionID, model: model, created: created,
-                        delta: OpenAI.ChunkDelta(content: "<think>")
-                    )) else { break generation }
+                    break
 
                 case .thinking(let chunk):
                     guard await sse.send(makeChunk(
                         id: completionID, model: model, created: created,
-                        delta: OpenAI.ChunkDelta(content: chunk)
+                        delta: OpenAI.ChunkDelta(reasoning_content: chunk)
                     )) else { break generation }
 
                 case .thinkEnd:
-                    guard await sse.send(makeChunk(
-                        id: completionID, model: model, created: created,
-                        delta: OpenAI.ChunkDelta(content: "</think>")
-                    )) else { break generation }
+                    break
 
                 case .thinkReclassify:
                     break

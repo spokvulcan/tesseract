@@ -179,7 +179,20 @@ enum OpenAI {
     struct ResponseMessage: Codable, Sendable {
         var role: ChatRole
         var content: String?
+        var reasoning_content: String?
         var tool_calls: [ToolCall]?
+
+        init(
+            role: ChatRole,
+            content: String? = nil,
+            reasoning_content: String? = nil,
+            tool_calls: [ToolCall]? = nil
+        ) {
+            self.role = role
+            self.content = content
+            self.reasoning_content = reasoning_content
+            self.tool_calls = tool_calls
+        }
     }
 
     enum FinishReason: String, Codable, Sendable {
@@ -209,7 +222,20 @@ enum OpenAI {
     struct ChunkDelta: Codable, Sendable {
         var role: ChatRole?
         var content: String?
+        var reasoning_content: String?
         var tool_calls: [ToolCall]?
+
+        init(
+            role: ChatRole? = nil,
+            content: String? = nil,
+            reasoning_content: String? = nil,
+            tool_calls: [ToolCall]? = nil
+        ) {
+            self.role = role
+            self.content = content
+            self.reasoning_content = reasoning_content
+            self.tool_calls = tool_calls
+        }
     }
 
     // MARK: - Usage
