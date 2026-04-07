@@ -300,6 +300,9 @@ final class DependencyContainer: ObservableObject {
         // Start scheduling service (includes polling loop + heartbeat from persisted config)
         await schedulingService.start()
 
+        // Register HTTP server routes
+        registerHTTPRoutes()
+
         // Observe server toggle/port changes (Observations emits current value immediately)
         observationTasks.append(Task { [weak self] in
             guard let self else { return }
@@ -370,5 +373,35 @@ final class DependencyContainer: ObservableObject {
                 self.hotkeyManager.updateRegisteredHotkey(id: "agent", combo: hotkey)
             }
         })
+    }
+
+    private func registerHTTPRoutes() {
+        httpServer.route(.GET, "/health") { _, writer in
+            try await writer.send(.json(["status": "ok"] as [String: String]))
+        }
+
+        let engine = agentEngine
+        let arbiter = inferenceArbiter
+        httpServer.route(.GET, "/v1/models") { _, writer in
+            // Encodable conformance requires MainActor context (Swift 6.2 isolation inference)
+            let data: Data = await MainActor.run {
+                let models: [OpenAI.ModelObject]
+                if engine.isModelLoaded, let modelID = arbiter.loadedLLMModelID {
+                    models = [OpenAI.ModelObject(
+                        id: modelID,
+                        type: "llm",
+                        owned_by: "tesseract",
+                        max_context_length: 131_072,
+                        loaded_context_length: 131_072,
+                        state: "loaded"
+                    )]
+                } else {
+                    models = []
+                }
+                return (try? JSONEncoder().encode(OpenAI.ModelListResponse(data: models)))
+                    ?? Data("{}".utf8)
+            }
+            try await writer.send(.jsonBody(data))
+        }
     }
 }

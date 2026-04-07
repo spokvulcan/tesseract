@@ -56,6 +56,17 @@ struct HTTPResponse: Sendable {
         )
     }
 
+    /// JSON response from pre-encoded Data. Use when encoding must happen in an
+    /// isolated context (e.g. MainActor) due to Swift 6.2 conformance inference.
+    static func jsonBody(_ body: Data, status: Int = 200) -> HTTPResponse {
+        HTTPResponse(
+            statusCode: status,
+            statusText: statusText(for: status),
+            headers: [("Content-Type", "application/json")],
+            body: body
+        )
+    }
+
     static func error(status: Int, message: String) -> HTTPResponse {
         let errorBody = OpenAIError(
             error: .init(message: message, type: errorType(for: status), code: status)
@@ -117,37 +128,42 @@ private struct OpenAIError: Encodable {
 /// Wraps an `NWConnection` to provide async single-shot and streaming response writing.
 final class HTTPResponseWriter: @unchecked Sendable {
     private let connection: NWConnection
-    private var headersSent = false
+    private var responseSent = false
+    private var streaming = false
 
     nonisolated init(connection: NWConnection) {
         self.connection = connection
     }
 
-    /// Send a complete response. If streaming has already started, closes the
-    /// stream instead — a second status line would corrupt the connection.
+    /// Send a complete single-shot response. No-op if a response was already
+    /// sent or a stream is open. If streaming, terminates the stream instead.
     func send(_ response: HTTPResponse) async throws {
-        if headersSent {
+        if streaming {
             try? await finish()
             return
         }
-        headersSent = true
+        guard !responseSent else { return }
+        responseSent = true
         try await writeAll(response.serialized())
     }
 
-    /// Begin a streaming response (sends status line + headers).
+    /// Begin a chunked streaming response (sends status line + headers).
     func beginStreaming(
         statusCode: Int = 200,
         headers: [(name: String, value: String)] = []
     ) async throws {
-        guard !headersSent else { return }
-        headersSent = true
+        guard !responseSent, !streaming else { return }
+        responseSent = true
+        streaming = true
 
         var head = "HTTP/1.1 \(statusCode) \(HTTPResponse.statusText(for: statusCode))\r\n"
         for (name, value) in headers {
             head += "\(name): \(value)\r\n"
         }
         head += "Transfer-Encoding: chunked\r\n"
-        head += "Connection: close\r\n"
+        if !headers.contains(where: { $0.name.lowercased() == "connection" }) {
+            head += "Connection: close\r\n"
+        }
         head += "\r\n"
         try await writeAll(Data(head.utf8))
     }
@@ -161,8 +177,10 @@ final class HTTPResponseWriter: @unchecked Sendable {
         try await writeAll(chunk)
     }
 
-    /// Send the terminal chunk to end a chunked response.
+    /// Send the terminal chunk to end a chunked response. No-op if not streaming.
     func finish() async throws {
+        guard streaming else { return }
+        streaming = false
         try await writeAll(Data("0\r\n\r\n".utf8))
     }
 
@@ -172,6 +190,87 @@ final class HTTPResponseWriter: @unchecked Sendable {
                 if let error { cont.resume(throwing: error) }
                 else { cont.resume() }
             })
+        }
+    }
+}
+
+// MARK: - SSE Writer
+
+/// Formats and sends Server-Sent Events over an `HTTPResponseWriter`.
+///
+/// Usage:
+/// ```
+/// let sse = SSEWriter(writer)
+/// try await sse.open()
+/// await sse.send(someEncodable)
+/// await sse.keepalive("prefill 1024/4096")
+/// await sse.done()
+/// ```
+actor SSEWriter {
+    private let writer: HTTPResponseWriter
+    private let encoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.outputFormatting = .sortedKeys
+        return e
+    }()
+    private var closed = false
+
+    init(_ writer: HTTPResponseWriter) {
+        self.writer = writer
+    }
+
+    /// Send SSE headers and begin the chunked stream.
+    func open() async throws {
+        try await writer.beginStreaming(headers: [
+            ("Content-Type", "text/event-stream"),
+            ("Cache-Control", "no-cache"),
+            ("Connection", "keep-alive"),
+        ])
+    }
+
+    /// Send a JSON-encoded SSE data line: `data: {json}\n\n`
+    @discardableResult
+    func send(_ value: some Encodable) async -> Bool {
+        var line = Data("data: ".utf8)
+        do { line.append(try encoder.encode(value)) }
+        catch { return false }
+        line.append(Data("\n\n".utf8))
+        return await write(line)
+    }
+
+    /// Send a raw SSE data line: `data: {string}\n\n`
+    @discardableResult
+    func sendRaw(_ string: String) async -> Bool {
+        await write(Data("data: \(string)\n\n".utf8))
+    }
+
+    /// Send an SSE comment (ignored by clients): `: {text}\n\n`
+    @discardableResult
+    func keepalive(_ text: String = "keepalive") async -> Bool {
+        await write(Data(": \(text)\n\n".utf8))
+    }
+
+    /// Send the `data: [DONE]` sentinel and close the stream.
+    func done() async {
+        guard !closed else { return }
+        closed = true
+        try? await writer.writeChunk(Data("data: [DONE]\n\n".utf8))
+        try? await writer.finish()
+    }
+
+    /// Whether a write has failed (client disconnected).
+    var isDisconnected: Bool { closed }
+
+    // MARK: - Private
+
+    private func write(_ data: Data) async -> Bool {
+        guard !closed else { return false }
+        do {
+            try await writer.writeChunk(data)
+            return true
+        } catch {
+            closed = true
+            return false
         }
     }
 }
