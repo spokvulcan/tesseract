@@ -1,6 +1,3 @@
-# Local dependency symlinks
-Vendor/mlx-swift-lm
-
 # Xcode build artifacts
 build/
 DerivedData/
