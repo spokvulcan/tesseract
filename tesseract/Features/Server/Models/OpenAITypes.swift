@@ -7,7 +7,7 @@ import Foundation
 
 /// Namespace for OpenAI-compatible API types.
 /// Avoids name collisions with internal types (e.g. `ToolCall` from MLXLMCommon).
-enum OpenAI {
+nonisolated enum OpenAI {
 
     // MARK: - Chat Completion Request
 
@@ -24,7 +24,7 @@ enum OpenAI {
         var stream_options: StreamOptions?
         var stop: StopSequence?
 
-        var effectiveMaxTokens: Int? {
+        nonisolated var effectiveMaxTokens: Int? {
             max_completion_tokens ?? max_tokens
         }
     }
@@ -71,6 +71,30 @@ enum OpenAI {
         var content: MessageContent?
         var tool_calls: [ToolCall]?
         var tool_call_id: String?
+        var reasoning_content: String?
+        var reasoning: String?
+
+        init(
+            role: ChatRole,
+            content: MessageContent? = nil,
+            tool_calls: [ToolCall]? = nil,
+            tool_call_id: String? = nil,
+            reasoning_content: String? = nil,
+            reasoning: String? = nil
+        ) {
+            self.role = role
+            self.content = content
+            self.tool_calls = tool_calls
+            self.tool_call_id = tool_call_id
+            self.reasoning_content = reasoning_content
+            self.reasoning = reasoning
+        }
+
+        nonisolated var resolvedReasoningContent: String? {
+            let value = reasoning_content ?? reasoning
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (trimmed?.isEmpty ?? true) ? nil : trimmed
+        }
     }
 
     enum ChatRole: String, Codable, Sendable {
@@ -103,7 +127,7 @@ enum OpenAI {
             }
         }
 
-        var textValue: String? {
+        nonisolated var textValue: String? {
             switch self {
             case .text(let s):
                 return s

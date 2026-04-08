@@ -228,6 +228,7 @@
 				E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */,
 				E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */,
 				E0DF77022F3FC000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-image-swift" */,
+				E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */,
 				E0B999882F59F4DA00F80663 /* XCRemoteSwiftPackageReference "textual" */,
 				2EE88EC58D52DCCACA5960B0 /* XCRemoteSwiftPackageReference "textual" */,
 				AA6841922F80A000003C1B55 /* XCRemoteSwiftPackageReference "swift-readability" */,
@@ -669,6 +670,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Vendor/mlx-swift-lm";
+		};
 		E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "Vendor/mlx-audio-swift";
@@ -740,14 +745,17 @@
 		};
 		E0A111012F41A000003C1B55 /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */;
 			productName = MLXLLM;
 		};
 		E0A111032F41A000003C1B55 /* MLXLMCommon */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */;
 			productName = MLXLMCommon;
 		};
 		E0A111052F41A000003C1B55 /* MLXVLM */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */;
 			productName = MLXVLM;
 		};
 		E0C655412F2EA000003C1B55 /* WhisperKit */ = {

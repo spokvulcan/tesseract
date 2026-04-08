@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import MLXLMCommon
 import Testing
 @testable import Tesseract_Agent
 
@@ -107,8 +108,9 @@ struct MessageConverterTests {
         }
 
         // Assistant with tool calls
-        if case .assistant(let content, let toolCalls) = converted[1] {
+        if case .assistant(let content, let reasoning, let toolCalls) = converted[1] {
             #expect(content == "I'll read that file.")
+            #expect(reasoning == nil)
             #expect(toolCalls?.count == 1)
             #expect(toolCalls?[0].id == "call_abc123")
             #expect(toolCalls?[0].name == "read")
@@ -140,8 +142,9 @@ struct MessageConverterTests {
 
         let (_, converted) = MessageConverter.convertMessages(messages)
 
-        if case .assistant(let content, let toolCalls) = converted[0] {
+        if case .assistant(let content, let reasoning, let toolCalls) = converted[0] {
             #expect(content == "Just text")
+            #expect(reasoning == nil)
             #expect(toolCalls == nil)
         } else {
             Issue.record("Expected .assistant")
@@ -161,7 +164,7 @@ struct MessageConverterTests {
 
         let (_, converted) = MessageConverter.convertMessages(messages)
 
-        if case .assistant(_, let toolCalls) = converted[0] {
+        if case .assistant(_, _, let toolCalls) = converted[0] {
             #expect(toolCalls?.count == 1)
             #expect(toolCalls?[0].name == "bash")
             #expect(!toolCalls![0].id.isEmpty)
@@ -183,11 +186,33 @@ struct MessageConverterTests {
         if case .user(let content, _) = converted[0] {
             #expect(content == "")
         }
-        if case .assistant(let content, _) = converted[1] {
+        if case .assistant(let content, let reasoning, let toolCalls) = converted[1] {
             #expect(content == "")
+            #expect(reasoning == nil)
+            #expect(toolCalls == nil)
         }
         if case .toolResult(_, let content) = converted[2] {
             #expect(content == "")
+        }
+    }
+
+    @Test func convertsAssistantReasoningContent() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(
+                role: .assistant,
+                content: .text("Final answer"),
+                reasoning_content: "Step-by-step"
+            ),
+        ]
+
+        let (_, converted) = MessageConverter.convertMessages(messages)
+
+        if case .assistant(let content, let reasoning, let toolCalls) = converted[0] {
+            #expect(content == "Final answer")
+            #expect(reasoning == "Step-by-step")
+            #expect(toolCalls == nil)
+        } else {
+            Issue.record("Expected .assistant")
         }
     }
 
@@ -215,6 +240,155 @@ struct MessageConverterTests {
         } else {
             Issue.record("Expected .user")
         }
+    }
+
+    @Test func normalizesTextOnlyConversationForPrefixCache() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .system, content: .text("First system")),
+            .init(role: .system, content: .text("Second system")),
+            .init(role: .user, content: .text("Hello")),
+            .init(role: .assistant, content: .text("Hi there")),
+            .init(role: .system, content: .text("Mid-system")),
+            .init(role: .user, content: .parts([
+                .init(type: .text, text: "Follow-up"),
+                .init(type: .text, text: "question"),
+            ])),
+        ]
+
+        let conversation = MessageConverter.normalizeTextOnlyConversation(messages)
+
+        #expect(conversation?.systemPrompt == "First system\n\nSecond system")
+        #expect(conversation?.messages.count == 4)
+        #expect(conversation?.messages[0] == .init(role: .user, content: "Hello"))
+        #expect(conversation?.messages[1] == .init(role: .assistant, content: "Hi there"))
+        #expect(conversation?.messages[2] == .init(role: .system, content: "Mid-system"))
+        #expect(conversation?.messages[3] == .init(role: .user, content: "Follow-up\nquestion"))
+    }
+
+    @Test func prefixCacheConversationReconstructsAssistantReasoningAndToolCalls() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .text("Inspect the file")),
+            .init(
+                role: .assistant,
+                content: .text("I found the issue."),
+                tool_calls: [
+                    .init(
+                        id: "call_1",
+                        type: "function",
+                        function: .init(name: "read", arguments: #"{"path":"main.swift"}"#)
+                    ),
+                ],
+                reasoning_content: "I should read the relevant file first."
+            ),
+        ]
+
+        let conversation = MessageConverter.normalizeTextOnlyConversation(messages)
+        let history = conversation?.historyMessages ?? []
+
+        #expect(history.count == 2)
+        guard history.count == 2 else { return }
+        #expect(history[1].role == .assistant)
+        #expect(history[1].content.contains("<think>\nI should read the relevant file first.\n</think>"))
+        #expect(history[1].content.contains("I found the issue."))
+        #expect(history[1].content.contains("<tool_call>\n<function=read>\n"))
+        #expect(history[1].content.contains("<parameter=path>\nmain.swift\n</parameter>"))
+    }
+
+    @Test func textOnlyNormalizationRejectsImages() {
+        let pngData = Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString()
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .parts([
+                .init(type: .text, text: "Look"),
+                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(pngData)")),
+            ])),
+        ]
+
+        #expect(MessageConverter.normalizeTextOnlyConversation(messages) == nil)
+    }
+
+    @Test func textNormalizationKeepsAssistantToolCallsAndToolResults() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .text("Hello")),
+            .init(
+                role: .assistant,
+                content: .text("Calling a tool"),
+                tool_calls: [
+                    .init(
+                        id: "call_1",
+                        type: "function",
+                        function: .init(name: "bash", arguments: "{}")
+                    ),
+                ],
+                reasoning_content: "Need to inspect the file first."
+            ),
+            .init(role: .tool, content: .text("tool output"), tool_call_id: "call_1"),
+        ]
+
+        let conversation = MessageConverter.normalizeTextOnlyConversation(messages)
+
+        #expect(conversation?.messages.count == 3)
+        #expect(conversation?.messages[0] == .init(role: .user, content: "Hello"))
+        #expect(conversation?.messages[1] == .assistant(
+            content: "Calling a tool",
+            reasoning: "Need to inspect the file first.",
+            toolCalls: [HTTPPrefixCacheToolCall(name: "bash", argumentsJSON: "{}")]
+        ))
+        #expect(conversation?.messages[2] == .init(role: .tool, content: "tool output"))
+    }
+
+    @Test func prefixCacheEligibilityIncludesToolDefinitionDigest() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .text("Hello")),
+        ]
+        let tools: [OpenAI.ToolDefinition] = [
+            .init(
+                type: "function",
+                function: .init(name: "read")
+            ),
+        ]
+
+        let eligibility = MessageConverter.analyzePrefixCacheEligibility(
+            messages,
+            tools: tools
+        )
+
+        #expect(eligibility.conversation?.toolDefinitionsDigest != HTTPPrefixCacheConversation.emptyToolDefinitionsDigest)
+    }
+
+    @Test func prefixCacheEligibilityAllowsAssistantToolCalls() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .text("Hello")),
+            .init(
+                role: .assistant,
+                content: .text("Calling a tool"),
+                tool_calls: [
+                    .init(
+                        id: "call_1",
+                        type: "function",
+                        function: .init(name: "bash", arguments: "{}")
+                    ),
+                ]
+            ),
+        ]
+
+        let eligibility = MessageConverter.analyzePrefixCacheEligibility(messages)
+
+        #expect(eligibility.conversation?.messages.count == 2)
+        #expect(eligibility.conversation?.messages[1] == .assistant(
+            content: "Calling a tool",
+            toolCalls: [HTTPPrefixCacheToolCall(name: "bash", argumentsJSON: "{}")]
+        ))
+    }
+
+    @Test func textNormalizationAcceptsToolResults() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .text("Hello")),
+            .init(role: .tool, content: .text("nope"), tool_call_id: "call_1"),
+        ]
+
+        let conversation = MessageConverter.normalizeTextOnlyConversation(messages)
+        #expect(conversation?.messages.count == 2)
+        #expect(conversation?.messages[1] == .init(role: .tool, content: "nope"))
     }
 
     // MARK: - Image Content

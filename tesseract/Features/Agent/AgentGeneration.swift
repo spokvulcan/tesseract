@@ -18,6 +18,12 @@ struct AgentGenerateParameters: Sendable, Codable {
     var kvBits: Int? = 8
     /// Group size for KV cache quantization.
     var kvGroupSize: Int = 64
+    /// Token chunk size for prompt prefill. Smaller values reduce per-step peak
+    /// memory at the cost of more chunked iterations. MLX's default is 512;
+    /// we use 256 to halve the peak intermediate-tensor footprint during long
+    /// (>10 K token) prefills, which previously pushed the process to ~44 GB
+    /// peak on Apple Silicon and triggered OOM kills.
+    var prefillStepSize: Int = 256
 
     static let `default` = AgentGenerateParameters()
 
@@ -67,7 +73,7 @@ struct AgentGenerateParameters: Sendable, Codable {
 }
 
 /// Events emitted during streaming text generation.
-enum AgentGeneration: Sendable {
+nonisolated enum AgentGeneration: Sendable {
     /// A chunk of decoded text from the model.
     case text(String)
 
@@ -90,7 +96,7 @@ enum AgentGeneration: Sendable {
     /// Completion metrics emitted once generation finishes.
     case info(Info)
 
-    struct Info: Sendable {
+    nonisolated struct Info: Sendable {
         let promptTokenCount: Int
         let generationTokenCount: Int
         let promptTime: TimeInterval
@@ -103,7 +109,7 @@ enum AgentGeneration: Sendable {
     }
 
     /// Bridge from ``ToolCallParser/Event`` to ``AgentGeneration``.
-    init(parserEvent: ToolCallParser.Event) {
+    nonisolated init(parserEvent: ToolCallParser.Event) {
         switch parserEvent {
         case .text(let text): self = .text(text)
         case .toolCall(let call): self = .toolCall(call)

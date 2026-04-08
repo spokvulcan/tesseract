@@ -300,7 +300,7 @@ OpenAI message roles map to the internal `LLMMessage` types:
 |---|---|---|
 | `system` | System prompt parameter | Extracted from messages, passed as system prompt |
 | `user` | `.user(content)` | Text or multipart (text + images) |
-| `assistant` | `.assistant(content, toolCalls?)` | Content may include thinking blocks |
+| `assistant` | `.assistant(content, reasoning, toolCalls?)` | Content, reasoning, and tool calls are canonicalized into the exact prompt form the model saw |
 | `tool` | `.toolResult(id, content)` | Matched by `tool_call_id` |
 
 Image handling: `image_url` content parts with `data:` URIs are decoded and passed as `ImageAttachment` to the model.
@@ -309,8 +309,10 @@ Image handling: `image_url` content parts with `data:` URIs are decoded and pass
 
 Qwen3.5 models produce `<think>...</think>` blocks. The server handles these transparently:
 
-- **In streaming**: Thinking tokens are streamed as regular `content` delta. The `<think>` and `</think>` tags appear in the content stream. OpenCode treats all content as displayable text.
-- **In non-streaming**: Thinking content is included in `message.content`. Optionally, if the model produced thinking, it can be split into a separate `message.reasoning` field (this is what mlx_lm.server does, and OpenCode reads it).
+- **In streaming**: Thinking tokens are emitted as `reasoning_content` deltas. Regular answer text stays in `content`.
+- **In non-streaming**: Thinking content is emitted as `message.reasoning_content`, while final answer text stays in `message.content`.
+- **Request compatibility**: Assistant replay messages may provide either `reasoning_content` or the alias `reasoning`. Tesseract accepts both and prefers `reasoning_content` when both are present.
+- **OpenCode recommendation**: For local-provider configs, prefer `reasoning: true` and `interleaved.field = "reasoning_content"` so replayed assistant turns preserve model thinking explicitly instead of relying on session repair.
 
 ---
 
@@ -1122,6 +1124,8 @@ Research-only task. No code changes to Tesseract.
 - Whether forking is required or if extension/subclass works
 - Proposed minimal API: which methods/properties need to be exposed
 - Risk assessment: does exposing the cache break any invariants?
+
+Research note: see `docs/mlx-swift-lm-kv-cache-audit.md` for the completed audit against the pinned `spokvulcan/mlx-swift-lm@test/tesseract-integration` revision. The main corrections are that the fork already exposes public cache save/restore APIs, and Tesseract's `qwen3_5` path is a hybrid `MambaCache` + KV-cache model rather than a pure append-only KV stack.
 
 ---
 

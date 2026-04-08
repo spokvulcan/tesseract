@@ -7,6 +7,39 @@ import Foundation
 import MLXLMCommon
 import Tokenizers
 
+nonisolated enum HTTPPrefixCacheEligibility: Sendable, Equatable, CustomStringConvertible {
+    case eligible(HTTPPrefixCacheConversation)
+    case nonTextSystemMessage(index: Int)
+    case nonTextUserMessage(index: Int)
+    case nonTextAssistantMessage(index: Int)
+    case nonTextToolMessage(index: Int)
+
+    var conversation: HTTPPrefixCacheConversation? {
+        switch self {
+        case .eligible(let conversation):
+            conversation
+        default:
+            nil
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .eligible(let conversation):
+            let lastRole = conversation.lastMessage.map { "\($0.role)" } ?? "none"
+            return "eligible(messages=\(conversation.messages.count), lastRole=\(lastRole))"
+        case .nonTextSystemMessage(let index):
+            return "nonTextSystemMessage(index=\(index))"
+        case .nonTextUserMessage(let index):
+            return "nonTextUserMessage(index=\(index))"
+        case .nonTextAssistantMessage(let index):
+            return "nonTextAssistantMessage(index=\(index))"
+        case .nonTextToolMessage(let index):
+            return "nonTextToolMessage(index=\(index))"
+        }
+    }
+}
+
 /// Converts between OpenAI-compatible API types and internal `LLMMessage` types.
 enum MessageConverter {
 
@@ -18,11 +51,12 @@ enum MessageConverter {
     /// the system prompt. System messages that appear mid-conversation are preserved in-place
     /// as `.system` entries in the returned messages array.
     static func convertMessages(_ messages: [OpenAI.ChatMessage]) -> (systemPrompt: String?, messages: [LLMMessage]) {
+        let reorderedMessages = reorderToolResultMessages(messages)
         var systemPrompt: String?
         var result: [LLMMessage] = []
         var hasNonSystemMessage = false
 
-        for message in messages {
+        for message in reorderedMessages {
             switch message.role {
             case .system:
                 let text = message.content?.textValue ?? ""
@@ -46,16 +80,13 @@ enum MessageConverter {
             case .assistant:
                 hasNonSystemMessage = true
                 let content = message.content?.textValue ?? ""
-                let infos = message.tool_calls?.compactMap { call -> ToolCallInfo? in
-                    guard let name = call.function?.name else { return nil }
-                    return ToolCallInfo(
-                        id: call.id ?? UUID().uuidString,
-                        name: name,
-                        argumentsJSON: call.function?.arguments ?? "{}"
-                    )
-                }
+                let infos = convertAssistantToolCalls(message.tool_calls)
                 let toolCalls = infos?.isEmpty == false ? infos : nil
-                result.append(.assistant(content: content, toolCalls: toolCalls))
+                result.append(.assistant(
+                    content: content,
+                    reasoning: message.resolvedReasoningContent,
+                    toolCalls: toolCalls
+                ))
 
             case .tool:
                 hasNonSystemMessage = true
@@ -66,6 +97,82 @@ enum MessageConverter {
         }
 
         return (systemPrompt, reorderToolResults(result))
+    }
+
+    /// Normalize a text-based OpenAI-style request into the canonical conversation shape
+    /// used by the HTTP prefix cache.
+    ///
+    /// Returns `nil` for requests that contain any non-text content parts.
+    static func normalizeTextOnlyConversation(
+        _ messages: [OpenAI.ChatMessage],
+        tools: [OpenAI.ToolDefinition]? = nil
+    ) -> HTTPPrefixCacheConversation? {
+        analyzePrefixCacheEligibility(messages, tools: tools).conversation
+    }
+
+    /// Returns the HTTP prefix-cache eligibility decision with the first incompatible
+    /// content reason preserved for debug logging.
+    static func analyzePrefixCacheEligibility(
+        _ messages: [OpenAI.ChatMessage],
+        tools: [OpenAI.ToolDefinition]? = nil,
+        templateContextDigest: String = HTTPPrefixCacheConversation.defaultTemplateContextDigest
+    ) -> HTTPPrefixCacheEligibility {
+        let reorderedMessages = reorderToolResultMessages(messages)
+        var systemPrompt: String?
+        var result: [HTTPPrefixCacheMessage] = []
+        var hasNonSystemMessage = false
+
+        for (index, message) in reorderedMessages.enumerated() {
+            switch message.role {
+            case .system:
+                guard let text = extractTextOnlyContent(message.content) else {
+                    return .nonTextSystemMessage(index: index)
+                }
+                if !hasNonSystemMessage {
+                    if let existing = systemPrompt {
+                        systemPrompt = existing + "\n\n" + text
+                    } else {
+                        systemPrompt = text
+                    }
+                } else {
+                    result.append(.init(role: .system, content: text))
+                }
+
+            case .user:
+                hasNonSystemMessage = true
+                guard let text = extractTextOnlyContent(message.content) else {
+                    return .nonTextUserMessage(index: index)
+                }
+                result.append(.init(role: .user, content: text))
+
+            case .assistant:
+                hasNonSystemMessage = true
+                guard let text = extractTextOnlyContent(message.content) else {
+                    return .nonTextAssistantMessage(index: index)
+                }
+                result.append(.assistant(
+                    content: text,
+                    reasoning: message.resolvedReasoningContent,
+                    toolCalls: (convertAssistantToolCalls(message.tool_calls) ?? []).map {
+                        HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
+                    }
+                ))
+
+            case .tool:
+                hasNonSystemMessage = true
+                guard let text = extractTextOnlyContent(message.content) else {
+                    return .nonTextToolMessage(index: index)
+                }
+                result.append(.init(role: .tool, content: text))
+            }
+        }
+
+        return .eligible(HTTPPrefixCacheConversation(
+            systemPrompt: systemPrompt,
+            messages: result,
+            toolDefinitionsDigest: toolDefinitionDigest(tools),
+            templateContextDigest: templateContextDigest
+        ))
     }
 
     // MARK: - Tool Result Reordering
@@ -83,7 +190,7 @@ enum MessageConverter {
         var i = 0
         while i < result.count {
             // Find an assistant message with tool calls
-            guard case .assistant(_, let toolCalls) = result[i],
+            guard case .assistant(_, _, let toolCalls) = result[i],
                   let toolCalls, !toolCalls.isEmpty else {
                 i += 1
                 continue
@@ -217,6 +324,112 @@ enum MessageConverter {
 
             return (texts.joined(separator: "\n"), images)
         }
+    }
+
+    /// Extract text content only; returns `nil` if the message contains any non-text parts.
+    private static func extractTextOnlyContent(_ content: OpenAI.MessageContent?) -> String? {
+        guard let content else { return "" }
+
+        switch content {
+        case .text(let string):
+            return string
+
+        case .parts(let parts):
+            var texts: [String] = []
+            for part in parts {
+                switch part.type {
+                case .text:
+                    texts.append(part.text ?? "")
+                case .image_url:
+                    return nil
+                }
+            }
+            return texts.joined(separator: "\n")
+        }
+    }
+
+    private static func convertAssistantToolCalls(
+        _ toolCalls: [OpenAI.ToolCall]?
+    ) -> [ToolCallInfo]? {
+        toolCalls?.compactMap { call -> ToolCallInfo? in
+            guard let name = call.function?.name else { return nil }
+            return ToolCallInfo(
+                id: call.id ?? UUID().uuidString,
+                name: name,
+                argumentsJSON: canonicalizeHTTPPrefixCacheToolArgumentsJSON(
+                    call.function?.arguments ?? "{}"
+                )
+            )
+        }
+    }
+
+    private static func reorderToolResultMessages(_ messages: [OpenAI.ChatMessage]) -> [OpenAI.ChatMessage] {
+        var result = messages
+        var index = 0
+
+        while index < result.count {
+            guard result[index].role == .assistant,
+                  let toolCalls = result[index].tool_calls,
+                  !toolCalls.isEmpty else {
+                index += 1
+                continue
+            }
+
+            let resultStart = index + 1
+            var resultEnd = resultStart
+            while resultEnd < result.count, result[resultEnd].role == .tool {
+                resultEnd += 1
+            }
+
+            let toolResults = Array(result[resultStart..<resultEnd])
+            guard toolResults.count > 1 else {
+                index = resultEnd
+                continue
+            }
+
+            var resultsByID: [String: OpenAI.ChatMessage] = [:]
+            for message in toolResults {
+                if let toolCallID = message.tool_call_id, !toolCallID.isEmpty {
+                    resultsByID[toolCallID] = message
+                }
+            }
+
+            var reordered: [OpenAI.ChatMessage] = []
+            for toolCall in toolCalls {
+                if let toolCallID = toolCall.id,
+                   let matched = resultsByID.removeValue(forKey: toolCallID) {
+                    reordered.append(matched)
+                }
+            }
+
+            for message in toolResults {
+                if let toolCallID = message.tool_call_id {
+                    if resultsByID.removeValue(forKey: toolCallID) != nil {
+                        reordered.append(message)
+                    }
+                } else {
+                    reordered.append(message)
+                }
+            }
+
+            result.replaceSubrange(resultStart..<resultEnd, with: reordered)
+            index = resultStart + reordered.count
+        }
+
+        return result
+    }
+
+    private static func toolDefinitionDigest(_ tools: [OpenAI.ToolDefinition]?) -> String {
+        guard let tools, !tools.isEmpty else {
+            return HTTPPrefixCacheConversation.emptyToolDefinitionsDigest
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(tools) else {
+            return HTTPPrefixCacheConversation.emptyToolDefinitionsDigest
+        }
+        return httpPrefixCacheDigest(for: data)
     }
 }
 

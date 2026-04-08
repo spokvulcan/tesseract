@@ -1,5 +1,5 @@
 {
-  "originHash" : "ea007e7930deadf37a58dd37a1f427b080b96c2aed7d5622ac25e79528793dbc",
+  "originHash" : "d41a476ee9cca13fb9603d2642d5eb09ec88a4f8d4b225f140e3c0024d8c8d3c",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -35,15 +35,6 @@
       "state" : {
         "revision" : "2512c5bebfd801c817b5d07828cbfdc44c76fab4",
         "version" : "0.31.2"
-      }
-    },
-    {
-      "identity" : "mlx-swift-lm",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/spokvulcan/mlx-swift-lm.git",
-      "state" : {
-        "branch" : "test/tesseract-integration",
-        "revision" : "85b3adda84fe4c95172c78e0fe99f9d8fe72a0db"
       }
     },
     {

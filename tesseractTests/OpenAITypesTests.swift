@@ -125,6 +125,79 @@ struct OpenAITypesTests {
         #expect(request.effectiveMaxTokens == 512)
     }
 
+    @Test func decodesAssistantReasoningContentInRequestMessages() throws {
+        let json = """
+        {
+          "messages": [
+            {
+              "role": "assistant",
+              "content": "Final answer",
+              "reasoning_content": "Hidden chain of thought"
+            }
+          ]
+        }
+        """
+
+        let request = try JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+
+        #expect(request.messages.count == 1)
+        #expect(request.messages[0].reasoning_content == "Hidden chain of thought")
+        #expect(request.messages[0].resolvedReasoningContent == "Hidden chain of thought")
+    }
+
+    @Test func decodesAssistantReasoningAliasInRequestMessages() throws {
+        let json = """
+        {
+          "messages": [
+            {
+              "role": "assistant",
+              "content": "Final answer",
+              "reasoning": "Alias reasoning"
+            }
+          ]
+        }
+        """
+
+        let request = try JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+
+        #expect(request.messages.count == 1)
+        #expect(request.messages[0].reasoning == "Alias reasoning")
+        #expect(request.messages[0].resolvedReasoningContent == "Alias reasoning")
+    }
+
+    @Test func resolvedReasoningContentTrimsSurroundingWhitespace() {
+        let trailing = OpenAI.ChatMessage(
+            role: .assistant,
+            content: .text("Hi"),
+            reasoning_content: "Thinking about it.\n"
+        )
+        #expect(trailing.resolvedReasoningContent == "Thinking about it.")
+
+        let surrounding = OpenAI.ChatMessage(
+            role: .assistant,
+            content: .text("Hi"),
+            reasoning_content: "  Thinking about it.  "
+        )
+        #expect(surrounding.resolvedReasoningContent == "Thinking about it.")
+
+        let whitespaceOnly = OpenAI.ChatMessage(
+            role: .assistant,
+            content: .text("Hi"),
+            reasoning_content: "  \n\n  "
+        )
+        #expect(whitespaceOnly.resolvedReasoningContent == nil)
+
+        let empty = OpenAI.ChatMessage(
+            role: .assistant,
+            content: .text("Hi"),
+            reasoning_content: ""
+        )
+        #expect(empty.resolvedReasoningContent == nil)
+
+        let nilReasoning = OpenAI.ChatMessage(role: .assistant, content: .text("Hi"))
+        #expect(nilReasoning.resolvedReasoningContent == nil)
+    }
+
     @Test func stopSequenceDecodesStringAndArray() throws {
         let singleJSON = """
         { "messages": [{ "role": "user", "content": "hi" }], "stop": "\\n" }

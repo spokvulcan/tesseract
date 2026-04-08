@@ -568,7 +568,13 @@ private func dispatchRoute(
     writer: HTTPResponseWriter,
     routes: [HTTPServer.Route]
 ) async {
-    Log.server.debug("\(request.method.rawValue) \(request.path)")
+    if request.path == "/v1/chat/completions" {
+        Log.server.info(
+            "HTTP request — method=\(request.method.rawValue) path=\(request.path) bodyBytes=\(request.body?.count ?? 0)"
+        )
+    } else {
+        Log.server.debug("\(request.method.rawValue) \(request.path)")
+    }
 
     let pathMatches = routes.filter { $0.path == request.path }
 

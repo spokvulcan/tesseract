@@ -28,70 +28,17 @@ func toLLMCommonMessages(_ messages: [LLMMessage]) -> [Chat.Message] {
                     attachment.ciImage.map { .ciImage($0) }
                 }
             )
-        case .assistant(let content, let toolCalls):
-            .assistant(reconstructAssistantContent(content, toolCalls: toolCalls))
+        case .assistant(let content, let reasoning, let toolCalls):
+            .assistant(reconstructAssistantPromptContent(
+                content,
+                reasoning: reasoning,
+                toolCalls: toolCalls?.map {
+                    HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
+                } ?? []
+            ))
         case .toolResult(_, let content):
             .tool(content)
         }
-    }
-}
-
-// MARK: - Tool Call Reconstruction
-
-/// Append `<tool_call>` XML tags to assistant content so the model sees what it called.
-///
-/// Produces Qwen 3.5's XML function format inside `<tool_call>` boundaries:
-/// ```
-/// <tool_call>
-/// <function=tool_name>
-/// <parameter=key>
-/// value
-/// </parameter>
-/// </function>
-/// </tool_call>
-/// ```
-private func reconstructAssistantContent(
-    _ content: String, toolCalls: [ToolCallInfo]?
-) -> String {
-    guard let toolCalls, !toolCalls.isEmpty else { return content }
-    var result = content
-    for call in toolCalls {
-        result += "\n<tool_call>\n<function=\(call.name)>\n"
-
-        if let arguments = ToolArgumentNormalizer.decode(call.argumentsJSON) {
-            for key in arguments.keys.sorted() {
-                guard let value = arguments[key] else { continue }
-                result += "<parameter=\(key)>\n"
-                result += formatToolCallParameterValue(value)
-                result += "\n</parameter>\n"
-            }
-        }
-
-        result += "</function>\n</tool_call>"
-    }
-    return result
-}
-
-private func formatToolCallParameterValue(_ value: JSONValue) -> String {
-    switch value {
-    case .string(let string):
-        return string
-    case .int(let int):
-        return String(int)
-    case .double(let double):
-        return String(double)
-    case .bool(let bool):
-        return bool ? "True" : "False"
-    case .null:
-        return "None"
-    case .array, .object:
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(value),
-              let json = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return json
     }
 }
 

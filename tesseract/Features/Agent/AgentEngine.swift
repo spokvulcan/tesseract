@@ -136,6 +136,47 @@ final class AgentEngine {
         return try startGeneration(input: input, parameters: parameters)
     }
 
+    /// Start HTTP-server generation, opportunistically reusing a cached prefix when the
+    /// request can be canonicalized into the text-based HTTP prefix-cache shape.
+    func generateServerTextCompletion(
+        modelID: String,
+        systemPrompt: String,
+        messages: [LLMMessage],
+        toolSpecs: [ToolSpec]?,
+        prefixCacheConversation: HTTPPrefixCacheConversation?,
+        parameters: AgentGenerateParameters = .default
+    ) async throws -> HTTPServerGenerationStart {
+        guard isModelLoaded else {
+            throw AgentEngineError.modelNotLoaded
+        }
+
+        if let prefixCacheConversation,
+           let start = try await llmActor.generateServerTextCompletion(
+                modelID: modelID,
+                conversation: prefixCacheConversation,
+                toolSpecs: toolSpecs,
+                parameters: parameters
+           ) {
+            Log.agent.info(
+                "HTTP completion using prefix-cache path — model=\(modelID) cachedTokens=\(start.cachedTokenCount)"
+            )
+            return startManagedHTTPGeneration(start)
+        }
+
+        Log.agent.info(
+            "HTTP completion using standard generation path — model=\(modelID) "
+            + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCacheConversation=\(prefixCacheConversation != nil)"
+        )
+
+        let stream = try generate(
+            systemPrompt: systemPrompt,
+            messages: messages,
+            toolSpecs: toolSpecs,
+            parameters: parameters
+        )
+        return HTTPServerGenerationStart(stream: stream, cachedTokenCount: 0)
+    }
+
     /// Build a `UserInput` from a system prompt, messages, and optional raw tool specs.
     /// Extracted for testability — callers can verify tool specs are forwarded without a loaded model.
     static func buildUserInput(systemPrompt: String, messages: [LLMMessage], toolSpecs: [ToolSpec]?) -> UserInput {
@@ -308,5 +349,40 @@ final class AgentEngine {
         continuation.onTermination = { _ in task.cancel() }
 
         return stream
+    }
+
+    private func startManagedHTTPGeneration(
+        _ start: HTTPServerGenerationStart
+    ) -> HTTPServerGenerationStart {
+        isGenerating = true
+
+        let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+
+        let task = Task { @MainActor [weak self] in
+            defer {
+                self?.isGenerating = false
+                self?.generationTask = nil
+            }
+
+            do {
+                for try await event in start.stream {
+                    try Task.checkCancellation()
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            } catch is CancellationError {
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
+            }
+        }
+
+        generationTask = task
+        continuation.onTermination = { _ in task.cancel() }
+
+        return HTTPServerGenerationStart(
+            stream: stream,
+            cachedTokenCount: start.cachedTokenCount
+        )
     }
 }

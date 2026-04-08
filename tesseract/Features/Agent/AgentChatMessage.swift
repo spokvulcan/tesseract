@@ -58,7 +58,7 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
         switch role {
         case .system: .system(content: content)
         case .user: .user(content: content)
-        case .assistant: .assistant(content: content, toolCalls: nil)
+        case .assistant: .assistant(content: content, reasoning: thinking, toolCalls: nil)
         case .tool: .toolResult(toolCallId: toolCallId ?? "", content: content)
         }
     }

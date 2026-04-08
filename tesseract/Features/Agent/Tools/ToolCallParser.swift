@@ -17,10 +17,10 @@ import MLXLMCommon
 /// }
 /// for event in parser.finalize() { ... }
 /// ```
-final class ToolCallParser {
+nonisolated final class ToolCallParser {
 
     /// Events emitted as chunks are processed.
-    enum Event: Sendable {
+    nonisolated enum Event: Sendable {
         /// Regular text content (not part of a tag).
         case text(String)
         /// A successfully parsed tool call.
@@ -50,7 +50,7 @@ final class ToolCallParser {
     /// - Parameter startsInsideThinkBlock: When `true`, the parser assumes the generation
     ///   begins inside a `<think>` block (e.g. Qwen3.5 chat template appends `<think>\n`
     ///   to the prompt). Initial chunks are emitted as `.thinking` events.
-    init(startsInsideThinkBlock: Bool = false) {
+    nonisolated init(startsInsideThinkBlock: Bool = false) {
         if startsInsideThinkBlock {
             self.insideThinkBlock = true
             self.pendingThinkStart = true
@@ -58,7 +58,7 @@ final class ToolCallParser {
     }
 
     /// Process a chunk of streaming text and return any events.
-    func processChunk(_ chunk: String) -> [Event] {
+    nonisolated func processChunk(_ chunk: String) -> [Event] {
         buffer += chunk
         var events: [Event] = []
         if pendingThinkStart {
@@ -71,7 +71,7 @@ final class ToolCallParser {
 
     /// Flush any remaining buffered text as events.
     /// Call this when generation is complete.
-    func finalize() -> [Event] {
+    nonisolated func finalize() -> [Event] {
         var events: [Event] = []
 
         if pendingThinkStart {

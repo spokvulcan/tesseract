@@ -44,7 +44,7 @@ nonisolated struct ToolCallInfo: Sendable, Codable, Hashable, Identifiable {
 nonisolated enum LLMMessage: Sendable, Equatable {
     case system(content: String)
     case user(content: String, images: [ImageAttachment] = [])
-    case assistant(content: String, toolCalls: [ToolCallInfo]?)
+    case assistant(content: String, reasoning: String? = nil, toolCalls: [ToolCallInfo]?)
     case toolResult(toolCallId: String, content: String)
 }
 
@@ -115,7 +115,11 @@ nonisolated struct AssistantMessage: AgentMessageProtocol, Codable, Equatable, I
     }
 
     func toLLMMessage() -> LLMMessage? {
-        .assistant(content: content, toolCalls: toolCalls.isEmpty ? nil : toolCalls)
+        .assistant(
+            content: content,
+            reasoning: thinking,
+            toolCalls: toolCalls.isEmpty ? nil : toolCalls
+        )
     }
 }
 

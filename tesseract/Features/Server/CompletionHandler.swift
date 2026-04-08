@@ -12,6 +12,7 @@ struct CompletionHandler: Sendable {
 
     /// Maximum seconds to wait for the inference lease before returning 503.
     static let leaseTimeoutSeconds: UInt64 = 60
+    private static let sessionReplayStore = HTTPPrefixCacheSessionReplayStore()
 
     private let arbiter: InferenceArbiter
     private let engine: AgentEngine
@@ -19,6 +20,12 @@ struct CompletionHandler: Sendable {
     init(arbiter: InferenceArbiter, engine: AgentEngine) {
         self.arbiter = arbiter
         self.engine = engine
+    }
+
+    private struct StartedGeneration {
+        let modelID: String
+        let stream: AsyncThrowingStream<AgentGeneration, Error>
+        let cachedTokenCount: Int
     }
 
     /// Entry point called by the HTTP server route.
@@ -41,11 +48,17 @@ struct CompletionHandler: Sendable {
             return
         }
 
+        let sessionAffinity = request.header("x-session-affinity")
+
         do {
             try await withAcquisitionTimeout { signal in
                 try await arbiter.withExclusiveGPU(.llm) {
                     signal.set()
-                    await self.runCompletion(completionRequest, writer: writer)
+                    await self.runCompletion(
+                        completionRequest,
+                        sessionAffinity: sessionAffinity,
+                        writer: writer
+                    )
                 }
             }
         } catch is CancellationError {
@@ -70,53 +83,91 @@ struct CompletionHandler: Sendable {
 
     private func runCompletion(
         _ request: OpenAI.ChatCompletionRequest,
+        sessionAffinity: String?,
         writer: HTTPResponseWriter
     ) async {
         if request.stream == true {
-            await runStreamingCompletion(request, writer: writer)
+            await runStreamingCompletion(
+                request,
+                sessionAffinity: sessionAffinity,
+                writer: writer
+            )
         } else {
-            await runNonStreamingCompletion(request, writer: writer)
+            await runNonStreamingCompletion(
+                request,
+                sessionAffinity: sessionAffinity,
+                writer: writer
+            )
         }
     }
 
     /// Convert request, read model state, and start generation in one MainActor hop.
     private func startGeneration(
-        _ request: OpenAI.ChatCompletionRequest
-    ) async -> Result<(String, AsyncThrowingStream<AgentGeneration, Error>), Error> {
-        let (systemPrompt, messages) = MessageConverter.convertMessages(request.messages)
+        _ request: OpenAI.ChatCompletionRequest,
+        sessionAffinity: String?
+    ) async -> Result<StartedGeneration, Error> {
+        let repairedRequest = await Self.sessionReplayStore.repair(
+            messages: request.messages,
+            sessionAffinity: sessionAffinity
+        )
+        let (systemPrompt, messages) = MessageConverter.convertMessages(repairedRequest.messages)
         let toolSpecs = MessageConverter.convertToolDefinitions(request.tools)
+        let prefixCacheEligibility = MessageConverter.analyzePrefixCacheEligibility(
+            repairedRequest.messages,
+            tools: request.tools
+        )
+        let prefixCacheConversation = prefixCacheEligibility.conversation
+        let modelID = await MainActor.run {
+            arbiter.loadedLLMModelID ?? ""
+        }
+        var params = AgentGenerateParameters.forModel(modelID)
+        if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
+        if let temp = request.temperature { params.temperature = Float(temp) }
+        if let topP = request.top_p { params.topP = Float(topP) }
 
-        return await MainActor.run {
-            let modelID = arbiter.loadedLLMModelID ?? ""
-            var params = AgentGenerateParameters.forModel(modelID)
-            if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
-            if let temp = request.temperature { params.temperature = Float(temp) }
-            if let topP = request.top_p { params.topP = Float(topP) }
-            do {
-                let stream = try engine.generate(
-                    systemPrompt: systemPrompt ?? "",
-                    messages: messages,
-                    toolSpecs: toolSpecs,
-                    parameters: params
-                )
-                return .success((modelID, stream))
-            } catch {
-                return .failure(error)
-            }
+        Log.server.info(
+            "HTTP completion reasoning sources — sessionAffinityPresent=\(sessionAffinity != nil) "
+            + "client=\(repairedRequest.clientCount) "
+            + "sessionRecovered=\(repairedRequest.sessionRecoveredCount) "
+            + "missing=\(repairedRequest.missingCount)"
+        )
+        Log.server.info(
+            "HTTP completion start — model=\(request.model ?? modelID) stream=\(request.stream == true) "
+            + "messages=\(repairedRequest.messages.count) normalizedMessages=\(messages.count) "
+            + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCache=\(prefixCacheEligibility) "
+            + "maxTokens=\(params.maxTokens)"
+        )
+
+        do {
+            let start = try await engine.generateServerTextCompletion(
+                modelID: modelID,
+                systemPrompt: systemPrompt ?? "",
+                messages: messages,
+                toolSpecs: toolSpecs,
+                prefixCacheConversation: prefixCacheConversation,
+                parameters: params
+            )
+            return .success(.init(
+                modelID: modelID,
+                stream: start.stream,
+                cachedTokenCount: start.cachedTokenCount
+            ))
+        } catch {
+            Log.server.error("HTTP completion failed to start generation: \(error)")
+            return .failure(error)
         }
     }
 
     /// Non-streaming: accumulate all generation events, then send a single JSON response.
     private func runNonStreamingCompletion(
         _ request: OpenAI.ChatCompletionRequest,
+        sessionAffinity: String?,
         writer: HTTPResponseWriter
     ) async {
-        let modelID: String
-        let generationStream: AsyncThrowingStream<AgentGeneration, Error>
-        switch await startGeneration(request) {
-        case .success(let (id, stream)):
-            modelID = id
-            generationStream = stream
+        let start: StartedGeneration
+        switch await startGeneration(request, sessionAffinity: sessionAffinity) {
+        case .success(let started):
+            start = started
         case .failure(let error):
             Log.server.error("Generation failed to start: \(error)")
             try? await writer.send(.serviceUnavailable("Generation failed: \(error.localizedDescription)"))
@@ -130,7 +181,7 @@ struct CompletionHandler: Sendable {
         var info: AgentGeneration.Info?
 
         do {
-            for try await event in generationStream {
+            for try await event in start.stream {
                 switch event {
                 case .text(let chunk):
                     textContent += chunk
@@ -157,6 +208,15 @@ struct CompletionHandler: Sendable {
             return
         }
 
+        await Self.sessionReplayStore.record(
+            sessionAffinity: sessionAffinity,
+            assistantMessage: makeReplayAssistantMessage(
+                textContent: textContent,
+                thinkingContent: thinkingContent,
+                toolCalls: toolCalls
+            )
+        )
+
         let finishReason: OpenAI.FinishReason
         if !toolCalls.isEmpty {
             finishReason = .tool_calls
@@ -171,7 +231,7 @@ struct CompletionHandler: Sendable {
 
         let response = OpenAI.ChatCompletionResponse(
             id: "chatcmpl-\(UUID().uuidString)",
-            model: request.model ?? modelID,
+            model: request.model ?? start.modelID,
             created: Int(Date().timeIntervalSince1970),
             system_fingerprint: "tesseract-1.0-mlx",
             choices: [
@@ -190,7 +250,7 @@ struct CompletionHandler: Sendable {
                 prompt_tokens: info?.promptTokenCount ?? 0,
                 completion_tokens: info?.generationTokenCount ?? 0,
                 total_tokens: (info?.promptTokenCount ?? 0) + (info?.generationTokenCount ?? 0),
-                prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: 0)
+                prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: start.cachedTokenCount)
             )
         )
 
@@ -198,6 +258,11 @@ struct CompletionHandler: Sendable {
         let data: Data = await MainActor.run {
             (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
         }
+        Log.server.info(
+            "HTTP completion finished — stream=false finishReason=\(finishReason.rawValue) "
+            + "promptTokens=\(info?.promptTokenCount ?? 0) completionTokens=\(info?.generationTokenCount ?? 0) "
+            + "cachedTokens=\(start.cachedTokenCount)"
+        )
         try? await writer.send(.jsonBody(data))
     }
 
@@ -206,14 +271,13 @@ struct CompletionHandler: Sendable {
     /// Streaming: emit SSE chunks as generation events arrive.
     private func runStreamingCompletion(
         _ request: OpenAI.ChatCompletionRequest,
+        sessionAffinity: String?,
         writer: HTTPResponseWriter
     ) async {
-        let modelID: String
-        let generationStream: AsyncThrowingStream<AgentGeneration, Error>
-        switch await startGeneration(request) {
-        case .success(let (id, stream)):
-            modelID = id
-            generationStream = stream
+        let start: StartedGeneration
+        switch await startGeneration(request, sessionAffinity: sessionAffinity) {
+        case .success(let started):
+            start = started
         case .failure(let error):
             Log.server.error("Streaming generation failed to start: \(error)")
             try? await writer.send(.serviceUnavailable("Generation failed: \(error.localizedDescription)"))
@@ -228,7 +292,7 @@ struct CompletionHandler: Sendable {
 
         let completionID = "chatcmpl-\(UUID().uuidString)"
         let created = Int(Date().timeIntervalSince1970)
-        let model = request.model ?? modelID
+        let model = request.model ?? start.modelID
         let includeUsage = request.stream_options?.include_usage == true
 
         // Emit initial chunk with role
@@ -260,7 +324,7 @@ struct CompletionHandler: Sendable {
                 // Generation: stream events, return accumulated state
                 group.addTask {
                     await self.streamGenerationEvents(
-                        generationStream, sse: sse,
+                        start.stream, sse: sse,
                         completionID: completionID, model: model, created: created
                     )
                 }
@@ -283,6 +347,15 @@ struct CompletionHandler: Sendable {
         // Skip final chunk if client disconnected mid-stream
         guard await !sse.isDisconnected else { return }
 
+        await Self.sessionReplayStore.record(
+            sessionAffinity: sessionAffinity,
+            assistantMessage: makeReplayAssistantMessage(
+                textContent: streamResult.textContent,
+                thinkingContent: streamResult.thinkingContent,
+                toolCalls: streamResult.toolCalls
+            )
+        )
+
         var finishReason: OpenAI.FinishReason = .stop
         if streamResult.hasToolCalls {
             finishReason = .tool_calls
@@ -301,9 +374,15 @@ struct CompletionHandler: Sendable {
                 prompt_tokens: info.promptTokenCount,
                 completion_tokens: info.generationTokenCount,
                 total_tokens: info.promptTokenCount + info.generationTokenCount,
-                prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: 0)
+                prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: start.cachedTokenCount)
             )
         }
+        Log.server.info(
+            "HTTP completion finished — stream=true finishReason=\(finishReason.rawValue) "
+            + "promptTokens=\(streamResult.info?.promptTokenCount ?? 0) "
+            + "completionTokens=\(streamResult.info?.generationTokenCount ?? 0) "
+            + "cachedTokens=\(start.cachedTokenCount)"
+        )
         await sse.send(finalChunk)
         await sse.done()
     }
@@ -335,6 +414,9 @@ struct CompletionHandler: Sendable {
     private struct StreamResult: Sendable {
         var hasToolCalls = false
         var info: AgentGeneration.Info?
+        var textContent = ""
+        var thinkingContent = ""
+        var toolCalls: [ToolCall] = []
     }
 
     /// Consume generation events, emit SSE chunks, return accumulated metadata.
@@ -352,6 +434,7 @@ struct CompletionHandler: Sendable {
             generation: for try await event in stream {
                 switch event {
                 case .text(let chunk):
+                    result.textContent += chunk
                     guard await sse.send(makeChunk(
                         id: completionID, model: model, created: created,
                         delta: OpenAI.ChunkDelta(content: chunk)
@@ -361,6 +444,7 @@ struct CompletionHandler: Sendable {
                     break
 
                 case .thinking(let chunk):
+                    result.thinkingContent += chunk
                     guard await sse.send(makeChunk(
                         id: completionID, model: model, created: created,
                         delta: OpenAI.ChunkDelta(reasoning_content: chunk)
@@ -370,12 +454,15 @@ struct CompletionHandler: Sendable {
                     break
 
                 case .thinkReclassify:
+                    result.textContent += result.thinkingContent
+                    result.thinkingContent = ""
                     break
 
                 case .toolCall(let call):
                     let index = toolCallIndex
                     toolCallIndex += 1
                     result.hasToolCalls = true
+                    result.toolCalls.append(call)
                     let openAICalls = ToolCallConverter.convertToOpenAI([call])
                     guard let oaiCall = openAICalls.first else { continue }
 
@@ -408,6 +495,23 @@ struct CompletionHandler: Sendable {
         }
 
         return result
+    }
+
+    private func makeReplayAssistantMessage(
+        textContent: String,
+        thinkingContent: String,
+        toolCalls: [ToolCall]
+    ) -> HTTPPrefixCacheMessage {
+        HTTPPrefixCacheMessage.assistant(
+            content: textContent,
+            reasoning: thinkingContent.isEmpty ? nil : thinkingContent,
+            toolCalls: toolCalls.map {
+                HTTPPrefixCacheToolCall(
+                    name: $0.function.name,
+                    arguments: $0.function.arguments
+                )
+            }
+        )
     }
 
     /// Timeout that covers only lease acquisition + model loading, not generation.
