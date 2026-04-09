@@ -1,5 +1,7 @@
 import Foundation
+import HuggingFace
 import MLX
+import MLXHuggingFace
 import MLXLMCommon
 import Tokenizers
 import os
@@ -86,8 +88,15 @@ actor LLMActor {
             return try await verifyAndStore(container: container, directory: directory)
         }
 
-        let config = ModelConfiguration(directory: directory, toolCallFormat: format)
-        let container = try await loadModelContainer(configuration: config)
+        let container = try await loadModelContainer(
+            from: directory,
+            using: #huggingFaceTokenizerLoader()
+        )
+        if let format {
+            await container.update { context in
+                context.configuration.toolCallFormat = format
+            }
+        }
         return try await verifyAndStore(container: container, directory: directory)
     }
 
@@ -409,7 +418,7 @@ actor LLMActor {
             let tokens = try context.tokenizer.applyChatTemplate(
                 messages: messages, tools: tools
             )
-            return context.tokenizer.decode(tokens: tokens, skipSpecialTokens: false)
+            return context.tokenizer.decode(tokenIds: tokens, skipSpecialTokens: false)
         }
     }
 
@@ -425,7 +434,7 @@ actor LLMActor {
             let tokens = try context.tokenizer.applyChatTemplate(
                 messages: messages, tools: tools
             )
-            let text = context.tokenizer.decode(tokens: tokens, skipSpecialTokens: false)
+            let text = context.tokenizer.decode(tokenIds: tokens, skipSpecialTokens: false)
             return (text, tokens.count)
         }
     }

@@ -76,7 +76,7 @@ struct AgentTokenizer: Sendable {
     /// Decodes token IDs back to text, optionally stripping special tokens from the output.
     func decode(_ tokens: [Int], skipSpecialTokens: Bool) async -> String {
         await container.perform { context in
-            context.tokenizer.decode(tokens: tokens, skipSpecialTokens: skipSpecialTokens)
+            context.tokenizer.decode(tokenIds: tokens, skipSpecialTokens: skipSpecialTokens)
         }
     }
 

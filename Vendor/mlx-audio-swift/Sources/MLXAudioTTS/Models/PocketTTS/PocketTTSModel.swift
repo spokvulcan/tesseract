@@ -1,5 +1,4 @@
 import Foundation
-import Hub
 import HuggingFace
 @preconcurrency import MLX
 import MLXAudioCore

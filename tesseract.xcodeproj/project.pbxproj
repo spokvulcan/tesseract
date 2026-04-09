@@ -17,6 +17,7 @@
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
 		E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudio */; };
 		E0DF77002F3FC000003C1B55 /* MLXImageGen in Frameworks */ = {isa = PBXBuildFile; productRef = E0DF77012F3FC000003C1B55 /* MLXImageGen */; };
+		D1A111002F41A000003C1B55 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = D1A111012F41A000003C1B55 /* MLXHuggingFace */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +73,7 @@
 				E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */,
 				E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */,
 				E0A111042F41A000003C1B55 /* MLXVLM in Frameworks */,
+				D1A111002F41A000003C1B55 /* MLXHuggingFace in Frameworks */,
 				84126A693D3CC21A4C1CE996 /* Textual in Frameworks */,
 				AAE67E6C2F80A000003C1B55 /* SwiftReadability in Frameworks */,
 				A9FF2A6C2F80A000003C1B55 /* Demark in Frameworks */,
@@ -142,6 +144,7 @@
 				E0A111012F41A000003C1B55 /* MLXLLM */,
 				E0A111032F41A000003C1B55 /* MLXLMCommon */,
 				E0A111052F41A000003C1B55 /* MLXVLM */,
+				D1A111012F41A000003C1B55 /* MLXHuggingFace */,
 				787096BB3B2974DC1B24B59C /* Textual */,
 				AD72427E2F80A000003C1B55 /* SwiftReadability */,
 				A1C54C8E2F80A000003C1B55 /* Demark */,
@@ -772,6 +775,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E0DF77022F3FC000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-image-swift" */;
 			productName = MLXImageGen;
+		};
+		D1A111012F41A000003C1B55 /* MLXHuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */;
+			productName = MLXHuggingFace;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

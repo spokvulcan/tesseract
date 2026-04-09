@@ -1,5 +1,4 @@
 import Foundation
-import Hub
 import HuggingFace
 @preconcurrency import MLX
 import MLXAudioCodecs
@@ -25,7 +24,7 @@ public final class MarvisTTSModel: Module {
     
     private let model: CSMModel
     private let _promptURLs: [URL]?
-    private let _textTokenizer: Tokenizer
+    private let _textTokenizer: Tokenizers.Tokenizer
     private let _audio_tokenizer: MimiTokenizer
     private let _streamingDecoder: MimiStreamingDecoder
     
@@ -33,7 +32,7 @@ public final class MarvisTTSModel: Module {
         config: CSMModelArgs,
         repoId: String,
         promptURLs: [URL]? = nil,
-        textTokenizer: Tokenizer,
+        textTokenizer: Tokenizers.Tokenizer,
         audioTokenizer: MimiTokenizer
     ) {
         _ = repoId
@@ -48,25 +47,6 @@ public final class MarvisTTSModel: Module {
         model.resetCaches()
     }
 
-    public convenience init(
-        config: CSMModelArgs,
-        hub: HubApi = .shared,
-        repoId: String,
-        promptURLs: [URL]? = nil,
-        progressHandler: @escaping (Progress) -> Void
-    ) async throws {
-        let textTokenizer = try await loadTokenizer(configuration: ModelConfiguration(id: repoId), hub: hub)
-        let codec = try await Mimi.fromPretrained(progressHandler: progressHandler)
-        let audioTokenizer = MimiTokenizer(codec)
-        self.init(
-            config: config,
-            repoId: repoId,
-            promptURLs: promptURLs,
-            textTokenizer: textTokenizer,
-            audioTokenizer: audioTokenizer
-        )
-    }
-    
     private func tokenizeTextSegment(text: String, speaker: Int) -> (MLXArray, MLXArray) {
         let K = model.args.audioNumCodebooks
         let frameW = K + 1
@@ -150,7 +130,7 @@ public final class MarvisTTSModel: Module {
 public extension MarvisTTSModel {
     static func fromPretrained(
         _ modelRepo: String = "Marvis-AI/marvis-tts-250m-v0.2-MLX-6bit",
-        progressHandler: @escaping (Progress) -> Void = { _ in }
+        progressHandler: @Sendable @escaping (Progress) -> Void = { _ in }
     ) async throws -> MarvisTTSModel {
         Memory.cacheLimit = 100 * 1024 * 1024
 
@@ -211,21 +191,12 @@ public extension MarvisTTSModel {
         }
         
         let parameters = ModuleParameters.unflattened(weights)
-        try model.update(parameters: parameters, verify: [.all])
+        try model.update(parameters: parameters, verify: .all)
         
         eval(model)
         return model
     }
 
-    static func fromPretrained(
-        hub: HubApi = .shared,
-        repoId: String = "Marvis-AI/marvis-tts-250m-v0.2-MLX-6bit",
-        progressHandler: @escaping (Progress) -> Void
-    ) async throws -> MarvisTTSModel {
-        _ = hub
-        return try await fromPretrained(repoId, progressHandler: progressHandler)
-    }
-    
     private static func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
         var out: [String: MLXArray] = [:]
         out.reserveCapacity(weights.count)

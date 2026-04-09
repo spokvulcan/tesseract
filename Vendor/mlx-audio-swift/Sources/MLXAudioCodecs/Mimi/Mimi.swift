@@ -1,10 +1,9 @@
 import Foundation
-import Hub
+import HuggingFace
 import MLX
 import MLXAudioCore
 import MLXNN
 import MLXLMCommon
-import Tokenizers
 
 // MARK: - Configs
 
@@ -233,7 +232,7 @@ public final class MimiStreamingDecoder {
 }
 
 public extension Mimi {
-    static func fromPretrained(repoId: String = "kyutai/moshiko-pytorch-bf16", filename: String = "tokenizer-e351c8d8-checkpoint125.safetensors", progressHandler: @escaping (Progress) -> Void) async throws -> Mimi {
+    static func fromPretrained(repoId: String = "kyutai/moshiko-pytorch-bf16", filename: String = "tokenizer-e351c8d8-checkpoint125.safetensors", progressHandler: @Sendable @escaping (Progress) -> Void) async throws -> Mimi {
         print("[Mimi] Starting Mimi model loading from \(repoId)")
 
         print("[Mimi] Creating configuration...")
@@ -247,7 +246,28 @@ public extension Mimi {
 
         print("[Mimi] Downloading/snapshotting weights file...")
         let snapshotStart = CFAbsoluteTimeGetCurrent()
-        let weightFileURL = try await Hub.snapshot(from: repoId, matching: filename, progressHandler: progressHandler).appending(path: filename)
+        guard let repoID = Repo.ID(rawValue: repoId) else {
+            throw NSError(
+                domain: "Mimi",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid repository ID: \(repoId)"]
+            )
+        }
+        let client = HubClient.default
+        let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
+        let modelDir = URL.applicationSupportDirectory
+            .appendingPathComponent(ModelUtils.storageDirectoryName)
+            .appendingPathComponent(modelSubdir)
+        try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        _ = try await client.downloadSnapshot(
+            of: repoID,
+            kind: .model,
+            to: modelDir,
+            revision: "main",
+            matching: [filename],
+            progressHandler: progressHandler
+        )
+        let weightFileURL = modelDir.appending(path: filename)
         let snapshotTime = CFAbsoluteTimeGetCurrent() - snapshotStart
         print(String(format: "[Mimi] Weights file snapshot completed in %.2f seconds", snapshotTime))
 
