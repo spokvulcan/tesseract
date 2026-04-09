@@ -61,11 +61,14 @@ DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
 [ -n "$DERIVED_DATA" ] && echo "$CONFIGURATION" > "$DERIVED_DATA/.last_config"
 echo "Build succeeded."
 
-# Find the built app (search Xcode's default DerivedData, most recently modified first)
-APP=$(ls -dt $DERIVED_DATA_GLOB/Build/Products/$CONFIGURATION/tesseract.app 2>/dev/null | head -1)
+# Find the built app (search Xcode's default DerivedData, most recently modified first).
+# The product was renamed from `tesseract.app` to `Tesseract Agent.app` (commit dfc7bcc0).
+# Note: $DERIVED_DATA_GLOB and $CONFIGURATION must NOT be quoted so the `tesseract-*`
+# glob expands; the literal "Tesseract Agent.app" tail is quoted to survive the space.
+APP=$(ls -dt $DERIVED_DATA_GLOB/Build/Products/$CONFIGURATION/"Tesseract Agent.app" 2>/dev/null | head -1 || true)
 
 if [ -z "$APP" ] || [ ! -d "$APP" ]; then
-    echo "Error: tesseract.app ($CONFIGURATION) not found in Xcode DerivedData."
+    echo "Error: 'Tesseract Agent.app' ($CONFIGURATION) not found in Xcode DerivedData."
     exit 1
 fi
 
@@ -97,7 +100,8 @@ set -- "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
 echo "Running benchmark (sweep: $SWEEP)..."
 echo "App: $APP"
 
-# Kill any existing tesseract instance
+# Kill any existing tesseract instance (process is named "Tesseract Agent" after the rename)
+killall "Tesseract Agent" 2>/dev/null || true
 killall tesseract 2>/dev/null || true
 sleep 0.5
 
