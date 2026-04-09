@@ -27,7 +27,10 @@ final class BenchmarkRunner {
         let engine = AgentEngine()
         let modelDir = try resolveModelDirectory()
         log("Loading model from: \(modelDir.path)")
-        try await engine.loadModel(from: modelDir)
+        // Benchmarks are text-only (no images in any scenario), so always load
+        // the fast LLM container. This avoids the VLM Qwen35 non-chunking prefill
+        // regression that affects long text prompts.
+        try await engine.loadModel(from: modelDir, visionMode: false)
         log("Model loaded successfully")
 
         let scenarios = BenchmarkScenarios.filtered(by: config.scenarioIDs)
@@ -71,7 +74,8 @@ final class BenchmarkRunner {
                 log("  [\(status)] \(scenario.id): \(scenario.description) — " +
                     "tools: \(String(format: "%.0f%%", result.summary.toolAccuracy * 100)), " +
                     "dups: \(String(format: "%.0f%%", result.summary.duplicateRate * 100)), " +
-                    "\(String(format: "%.1f", result.summary.avgTokPerSec)) tok/s")
+                    "\(String(format: "%.1f", result.summary.avgTokPerSec)) tok/s " +
+                    "[mem active=\(String(format: "%.0f", mem.activeMB))MB peak=\(String(format: "%.0f", mem.peakMB))MB]")
             }
 
             let aggregate = BenchmarkEvaluator.computeAggregate(

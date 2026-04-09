@@ -50,16 +50,22 @@ final class AgentEngine {
 
     /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
     ///
-    /// - Parameter directory: Local path containing model weights, config, and tokenizer files
-    ///   (as downloaded by ``ModelDownloadManager``).
-    func loadModel(from directory: URL) async throws {
+    /// - Parameters:
+    ///   - directory: Local path containing model weights, config, and tokenizer files
+    ///     (as downloaded by ``ModelDownloadManager``).
+    ///   - visionMode: When `true`, loads the VLM variant of ParoQuant models (supports
+    ///     image attachments but has slower prefill). When `false`, loads the LLM variant
+    ///     with fast chunked prefill. Ignored for non-ParoQuant models.
+    func loadModel(from directory: URL, visionMode: Bool) async throws {
         guard !isModelLoaded, !isLoading else { return }
 
         isLoading = true
         loadingStatus = "Loading model…"
 
         do {
-            let (tokenizer, startsThinking) = try await llmActor.loadModel(from: directory)
+            let (tokenizer, startsThinking) = try await llmActor.loadModel(
+                from: directory, visionMode: visionMode
+            )
 
             let st = tokenizer.specialTokens
             Log.agent.info(

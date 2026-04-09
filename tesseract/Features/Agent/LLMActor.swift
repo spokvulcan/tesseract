@@ -74,17 +74,29 @@ actor LLMActor {
     /// Reads the model's `config.json` to detect the model type and configure the
     /// appropriate tool call format (e.g., `.xmlFunction` for Qwen3.5).
     ///
+    /// - Parameters:
+    ///   - directory: Local path containing model weights, config, and tokenizer files.
+    ///   - visionMode: When `true`, loads the VLM variant of ParoQuant models (supports
+    ///     image attachments but has ~3.4× slower prefill on long text prompts). When
+    ///     `false`, loads the LLM variant with fast chunked prefill. Ignored for
+    ///     non-ParoQuant models.
     /// - Returns: The resolved ``AgentTokenizer`` and whether the template starts inside a think block.
     @discardableResult
-    func loadModel(from directory: URL) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
+    func loadModel(
+        from directory: URL,
+        visionMode: Bool
+    ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let format = Self.detectToolCallFormat(directory: directory)
-        Log.agent.info("Tool call format: \(format.map { "\($0)" } ?? "json (default)")")
+        Log.agent.info(
+            "Loading model — visionMode=\(visionMode) "
+            + "format=\(format.map { "\($0)" } ?? "json (default)")"
+        )
 
         if isParoQuantModel(directory: directory) {
-            Log.agent.info("Detected ParoQuant model, using custom load path")
-            let container = try await loadParoQuantModel(
-                from: directory, toolCallFormat: format
-            )
+            Log.agent.info("Detected ParoQuant model — using \(visionMode ? "VLM" : "LLM") path")
+            let container: ModelContainer = visionMode
+                ? try await loadParoQuantVLMContainer(from: directory, toolCallFormat: format)
+                : try await loadParoQuantLLMContainer(from: directory, toolCallFormat: format)
             return try await verifyAndStore(container: container, directory: directory)
         }
 

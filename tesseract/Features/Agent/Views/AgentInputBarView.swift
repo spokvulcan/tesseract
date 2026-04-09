@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 struct AgentInputBarView: View {
     @Binding var inputText: String
     @Environment(AgentCoordinator.self) private var coordinator
+    @Environment(AgentEngine.self) private var agentEngine
     @Environment(TranscriptionEngine.self) private var transcriptionEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
@@ -18,6 +19,13 @@ struct AgentInputBarView: View {
     @Environment(SettingsManager.self) private var settings
 
     private static let supportedImageTypes: [UTType] = [.png, .jpeg, .gif, .webP, .tiff]
+
+    /// Whether controls that depend on a loaded model should be disabled.
+    /// The vision toggle disables itself during both generation and model loading
+    /// (model loading happens during a vision mode switch).
+    private var isModelBusy: Bool {
+        coordinator.isGenerating || agentEngine.isLoading
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -36,6 +44,9 @@ struct AgentInputBarView: View {
                     dynamicHeight: $textHeight,
                     onCommit: { handleCommit() },
                     onImagePaste: { attachments in
+                        // Silently drop pasted images when vision mode is off —
+                        // the container doesn't support them.
+                        guard settings.visionModeEnabled else { return }
                         pendingImages.append(contentsOf: attachments)
                     },
                     isEnabled: !(coordinator.voiceState == .recording || coordinator.voiceState == .transcribing),
@@ -82,6 +93,9 @@ struct AgentInputBarView: View {
             HStack(spacing: 16) {
                 // Formatting and attachment actions
                 HStack(spacing: 14) {
+                    // Image attach button — kept visible in both modes to avoid
+                    // layout jumps when the vision toggle flips. Disabled when
+                    // vision mode is off since the text-only container drops images.
                     Button { openImagePicker() } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 14, weight: .semibold))
@@ -90,7 +104,23 @@ struct AgentInputBarView: View {
                             .background(.quinary, in: Circle())
                     }
                     .buttonStyle(.plain)
-                    .help("Add image")
+                    .help(settings.visionModeEnabled
+                          ? "Add image"
+                          : "Enable vision mode to attach images")
+                    .disabled(!settings.visionModeEnabled || isModelBusy)
+
+                    Button {
+                        coordinator.setVisionModeEnabled(!settings.visionModeEnabled)
+                    } label: {
+                        Image(systemName: "photo")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(settings.visionModeEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    }
+                    .buttonStyle(.plain)
+                    .help(settings.visionModeEnabled
+                          ? "Vision mode enabled — click to switch to fast text-only"
+                          : "Vision mode disabled (text-only, fast prefill) — click to enable image support")
+                    .disabled(isModelBusy)
 
                     Button {
                         settings.webAccessEnabled.toggle()
@@ -160,6 +190,13 @@ struct AgentInputBarView: View {
         .onChange(of: inputText) { _, newValue in
             coordinator.updateCommandPopup(for: newValue)
         }
+        .onChange(of: settings.visionModeEnabled) { _, newValue in
+            // Clear any queued images when the user disables vision — the
+            // LLM container would silently drop them.
+            if !newValue {
+                pendingImages = []
+            }
+        }
         .onAppear {
             coordinator.onVoiceTranscription = { text in
                 if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -171,6 +208,8 @@ struct AgentInputBarView: View {
         }
         .padding(Theme.Spacing.md)
         .onDrop(of: [.image], isTargeted: nil) { providers in
+            // Silently ignore image drops when vision mode is off.
+            guard settings.visionModeEnabled else { return false }
             handleDrop(providers)
             return true
         }
