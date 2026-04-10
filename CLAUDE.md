@@ -24,7 +24,24 @@ scripts/dev.sh clean       # Clean build artifacts
 scripts/dev.sh archive     # Create .xcarchive for App Store
 ```
 
-Tests use Swift `Testing` framework (not XCTest), in `tesseractTests/`. Not required during MVP — focus on build verification.
+## Tests
+
+Tests use Swift `Testing` framework (not XCTest), in `tesseractTests/`. Run before committing changes to server, caching, or agent engine code.
+
+```bash
+# Run specific test suites (recommended — avoids flaky SchedulingActorTests crash):
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -only-testing:tesseractTests/HTTPPrefixCacheSpikeTests \
+  -only-testing:tesseractTests/CompletionHandlerTests \
+  -only-testing:tesseractTests/MessageConverterTests \
+  -only-testing:tesseractTests/OpenAITypesTests \
+  -only-testing:tesseractTests/AgentEngineToolSpecTests \
+  -only-testing:tesseractTests/EditToolTests
+
+# Run all tests (may crash due to SchedulingActorTests.executesSequentially flaky OOB):
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -only-testing:tesseractTests
+```
 
 ## Architecture
 
