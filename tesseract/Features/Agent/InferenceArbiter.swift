@@ -49,9 +49,20 @@ final class InferenceArbiter {
         return slots
     }
 
-    /// The model ID currently loaded in the `.llm` slot.
-    /// When the user changes agent model, the next acquire detects the mismatch and reloads.
-    private(set) var loadedLLMModelID: String?
+    /// Identity of the currently-loaded `.llm` slot — model ID + vision mode.
+    /// Kept as a single struct so the two keys can never drift out of sync.
+    /// The next lease acquisition compares against the current settings and
+    /// triggers a reload on any mismatch.
+    struct LoadedLLMState: Equatable {
+        let modelID: String
+        let visionMode: Bool
+    }
+
+    private(set) var loadedLLMState: LoadedLLMState?
+
+    /// The model ID currently loaded in the `.llm` slot, or `nil` if unloaded.
+    /// Thin accessor over `loadedLLMState` — retained for existing call sites.
+    var loadedLLMModelID: String? { loadedLLMState?.modelID }
 
     /// FIFO waiter queue for GPU access. Each entry is identified by UUID
     /// for cancellation-safe removal.
@@ -227,19 +238,22 @@ final class InferenceArbiter {
     // MARK: - Model Management
 
     /// Load a model slot. Co-resident slots coexist; ImageGen is exclusive.
-    /// For `.llm`: also checks if the loaded model ID matches the current setting.
+    /// For `.llm`: also checks if the loaded model ID and vision mode match the current settings.
     private func ensureLoaded(_ slot: ModelSlot) async throws {
         switch slot {
         case .llm:
-            let desiredModelID = settingsManager.selectedAgentModelID
-            if loadedSlots.contains(.llm) && loadedLLMModelID == desiredModelID {
+            let desired = LoadedLLMState(
+                modelID: settingsManager.selectedAgentModelID,
+                visionMode: settingsManager.visionModeEnabled
+            )
+            if loadedSlots.contains(.llm) && loadedLLMState == desired {
                 return
             }
-            // Model changed or not loaded — (re)load
+            // Model or vision mode changed, or not loaded — (re)load
             if loadedSlots.contains(.imageGen) { unload(.imageGen) }
             if loadedSlots.contains(.llm) { unload(.llm) }
-            try await loadSlot(.llm, modelID: desiredModelID)
-            loadedLLMModelID = desiredModelID
+            try await loadSlot(.llm, modelID: desired.modelID, visionMode: desired.visionMode)
+            loadedLLMState = desired
 
         case .tts:
             if loadedSlots.contains(.tts) { return }
@@ -253,11 +267,15 @@ final class InferenceArbiter {
             // inside the lease body. We only guarantee co-residents are cleared.
             if loadedSlots.contains(.llm) { unload(.llm) }
             if loadedSlots.contains(.tts) { unload(.tts) }
-            loadedLLMModelID = nil
+            loadedLLMState = nil
         }
     }
 
-    private func loadSlot(_ slot: ModelSlot, modelID: String? = nil) async throws {
+    private func loadSlot(
+        _ slot: ModelSlot,
+        modelID: String? = nil,
+        visionMode: Bool = false
+    ) async throws {
         switch slot {
         case .llm:
             guard let modelID else {
@@ -269,8 +287,8 @@ final class InferenceArbiter {
                 Log.general.error("InferenceArbiter: LLM model '\(modelID)' not downloaded")
                 throw AgentEngineError.modelNotLoaded
             }
-            Log.general.info("InferenceArbiter: loading LLM model '\(modelID)'")
-            try await agentEngine.loadModel(from: path)
+            Log.general.info("InferenceArbiter: loading LLM model '\(modelID)' visionMode=\(visionMode)")
+            try await agentEngine.loadModel(from: path, visionMode: visionMode)
 
         case .tts:
             Log.general.info("InferenceArbiter: loading TTS model")
@@ -288,7 +306,7 @@ final class InferenceArbiter {
         switch slot {
         case .llm:
             agentEngine.unloadModel()
-            loadedLLMModelID = nil
+            loadedLLMState = nil
             Log.general.info("InferenceArbiter: unloaded LLM")
 
         case .tts:

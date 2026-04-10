@@ -226,6 +226,55 @@ final class AgentCoordinator {
         agent.abort()
     }
 
+    // MARK: - Vision Mode Toggle
+
+    /// Handles a user-initiated vision mode toggle from the composer.
+    ///
+    /// Flips `SettingsManager.visionModeEnabled`, then triggers an eager model
+    /// reload via the arbiter's empty-body lease flow — `withExclusiveGPU(.llm)`
+    /// calls `ensureLoaded(.llm)` which detects the visionMode mismatch and
+    /// reloads into the new mode. The UI is responsible for disabling the
+    /// toggle button while `isGenerating` or `agentEngine.isLoading`, so this
+    /// method mostly needs to handle the reload lifecycle.
+    ///
+    /// On failure: reverts the setting, attempts a reload to the previous mode
+    /// (graceful degradation), and surfaces an error message.
+    func setVisionModeEnabled(_ enabled: Bool) {
+        guard !isGenerating else {
+            Log.agent.info("Vision mode toggle ignored — generation in progress")
+            return
+        }
+        guard let arbiter, let settings else {
+            Log.agent.warning("Vision mode toggle ignored — arbiter or settings unavailable")
+            return
+        }
+        guard settings.visionModeEnabled != enabled else { return }
+
+        let previous = settings.visionModeEnabled
+        settings.visionModeEnabled = enabled
+        Log.agent.info("Vision mode toggle → \(enabled); triggering reload")
+
+        Task { @MainActor in
+            do {
+                // Empty-body lease trick: withExclusiveGPU runs ensureLoaded(.llm)
+                // before the body, which detects the visionMode change and reloads.
+                try await arbiter.withExclusiveGPU(.llm) { }
+                Log.agent.info("Vision mode switched to \(enabled)")
+            } catch {
+                Log.agent.error("Vision mode switch failed — \(error.localizedDescription)")
+                // Revert the setting and attempt to reload with the previous value
+                // so the user isn't left with an unloaded model.
+                settings.visionModeEnabled = previous
+                do {
+                    try await arbiter.withExclusiveGPU(.llm) { }
+                    self.error = "Vision mode unavailable: \(error.localizedDescription)"
+                } catch let fallbackError {
+                    self.error = "Model reload failed: \(fallbackError.localizedDescription)"
+                }
+            }
+        }
+    }
+
     // MARK: - Slash Command Execution
 
     /// Update popup state based on current input text.

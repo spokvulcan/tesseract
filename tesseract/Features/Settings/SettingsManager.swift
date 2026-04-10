@@ -46,6 +46,7 @@ final class SettingsManager {
         static let showNotifications = "showNotifications"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
         static let webAccessEnabled = "webAccessEnabled"
+        static let visionModeEnabled = "visionModeEnabled"
         static let isServerEnabled = "isServerEnabled"
         static let serverPort = "serverPort"
     }
@@ -272,6 +273,16 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(webAccessEnabled, forKey: Key.webAccessEnabled) }
     }
 
+    // MARK: - Agent Vision Mode
+
+    /// When true, the agent loads the VLM Qwen3.5 container which supports image
+    /// attachments but has ~3.4× slower prefill on long text prompts. Default false
+    /// — users opt-in via the composer toggle when they need to attach an image.
+    /// Changing this triggers a model reload via `InferenceArbiter.ensureLoaded(.llm)`.
+    var visionModeEnabled = false {
+        didSet { UserDefaults.standard.set(visionModeEnabled, forKey: Key.visionModeEnabled) }
+    }
+
     // MARK: - Server Settings
 
     var isServerEnabled = false {
@@ -327,6 +338,7 @@ final class SettingsManager {
             Key.showNotifications: true,
             Key.hasCompletedOnboarding: false,
             Key.webAccessEnabled: true,
+            Key.visionModeEnabled: false,
             Key.isServerEnabled: false,
             Key.serverPort: 8321,
         ])
@@ -364,6 +376,7 @@ final class SettingsManager {
         showNotifications = ud.bool(forKey: Key.showNotifications)
         hasCompletedOnboarding = ud.bool(forKey: Key.hasCompletedOnboarding)
         webAccessEnabled = ud.bool(forKey: Key.webAccessEnabled)
+        visionModeEnabled = ud.bool(forKey: Key.visionModeEnabled)
         isServerEnabled = ud.bool(forKey: Key.isServerEnabled)
         serverPort = ud.integer(forKey: Key.serverPort)
     }
@@ -402,6 +415,7 @@ final class SettingsManager {
         heartbeatEnabled = true
         heartbeatIntervalMinutes = 30
         webAccessEnabled = true
+        visionModeEnabled = false
         isServerEnabled = false
         serverPort = 8321
     }

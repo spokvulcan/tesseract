@@ -32,7 +32,7 @@ public final class Qwen3TTSFullModel: Module, SpeechGenerationModel, @unchecked 
     let config: Qwen3TTSModelConfig
     let talker: Qwen3TTSTalkerForConditionalGeneration
     var speechTokenizer: Qwen3TTSSpeechTokenizer?
-    var tokenizer: Tokenizer?
+    var tokenizer: Tokenizers.Tokenizer?
 
     // Voice prefix KV cache: instruct tokens are text-independent under causal attention,
     // so we cache them once per voice description and restore for each new text.

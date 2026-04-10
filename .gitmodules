@@ -1,4 +1,4 @@
 [submodule "Vendor/mlx-swift-lm"]
 	path = Vendor/mlx-swift-lm
 	url = git@github.com:spokvulcan/mlx-swift-lm.git
-	branch = test/tesseract-integration
+	branch = test/tesseract-integration-v3

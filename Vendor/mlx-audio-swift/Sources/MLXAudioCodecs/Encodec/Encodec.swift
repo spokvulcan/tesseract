@@ -6,9 +6,10 @@
 //
 
 import Foundation
+import HuggingFace
 import MLX
+import MLXAudioCore
 import MLXNN
-import Hub
 
 // MARK: - Encodec Encoder
 
@@ -399,11 +400,19 @@ public class Encodec: Module {
 
     /// Load a pretrained Encodec model from HuggingFace Hub.
     public static func fromPretrained(_ pathOrRepo: String) async throws -> Encodec {
-        let hub = HubApi()
-        let repo = Hub.Repo(id: pathOrRepo)
+        guard let repoID = Repo.ID(rawValue: pathOrRepo) else {
+            throw NSError(
+                domain: "Encodec",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid repository ID: \(pathOrRepo)"]
+            )
+        }
 
-        // Download model files
-        let modelURL = try await hub.snapshot(from: repo, matching: ["*.json", "*.safetensors"])
+        // Download model files via the v3 swift-huggingface client
+        let modelURL = try await ModelUtils.resolveOrDownloadModel(
+            repoID: repoID,
+            requiredExtension: "safetensors"
+        )
 
         // Load config
         let configURL = modelURL.appendingPathComponent("config.json")

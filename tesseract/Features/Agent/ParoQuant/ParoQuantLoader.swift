@@ -1,6 +1,7 @@
 import Foundation
-import Hub
+import HuggingFace
 import MLX
+import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import MLXVLM
@@ -320,7 +321,7 @@ nonisolated private func isCheckpointQuantizedLayer(
 /// Local UserInputProcessor for ParoQuant models.
 /// Mirrors the private `LLMUserInputProcessor` from MLXLLM.
 nonisolated private struct ParoQuantInputProcessor: UserInputProcessor {
-    let tokenizer: Tokenizer
+    let tokenizer: MLXLMCommon.Tokenizer
     let configuration: ModelConfiguration
     let messageGenerator: MessageGenerator
 
@@ -331,7 +332,7 @@ nonisolated private struct ParoQuantInputProcessor: UserInputProcessor {
                 messages: messages, tools: input.tools,
                 additionalContext: input.additionalContext)
             return LMInput(tokens: MLXArray(promptTokens))
-        } catch TokenizerError.missingChatTemplate {
+        } catch MLXLMCommon.TokenizerError.missingChatTemplate {
             Log.agent.warning(
                 "Tokenizer is missing a chat template for the ParoQuant model; falling back to plain text prompt formatting"
             )
@@ -344,44 +345,71 @@ nonisolated private struct ParoQuantInputProcessor: UserInputProcessor {
     }
 }
 
-// MARK: - Load Entry Point
+// MARK: - Load Entry Points
 
+/// Install a text-only `ParoQuantInputProcessor` on the container, using the
+/// model's own `messageGenerator` when available. Used by the LLM loader and
+/// as the VLM loader's fallback when `preprocessor_config.json` is absent.
+nonisolated private func installTextOnlyProcessor(on container: ModelContainer) async {
+    await container.update { context in
+        let messageGenerator: MessageGenerator =
+            if let llmModel = context.model as? LLMModel {
+                llmModel.messageGenerator(tokenizer: context.tokenizer)
+            } else {
+                DefaultMessageGenerator()
+            }
+        context.processor = ParoQuantInputProcessor(
+            tokenizer: context.tokenizer, configuration: context.configuration,
+            messageGenerator: messageGenerator
+        )
+    }
+}
 
-/// Load a ParoQuant model, returning a ModelContainer.
+/// Load a text-only ParoQuant container via the LLM type registry.
 ///
-/// Delegates to MLXLMCommon's `loadParoQuantModel` which handles:
-/// - AutoAWQ weight conversion
-/// - Rotation layer patching
-/// - Pre-rotation of weights (bakes Givens rotation into quantized weights for +23% throughput)
-/// - Caching pre-rotated weights to disk for fast subsequent loads
-nonisolated func loadParoQuantModel(
+/// Qwen3.5 resolves to `MLXLLM.Qwen35Model`, which inherits `LLMModel.prepare`
+/// with chunked prefill (~1300 tok/s on Qwen3.5-4B PARO). Uses
+/// `ParoQuantInputProcessor` (text-only) — this container should never receive
+/// an image; the caller is responsible for routing image-bearing turns to the
+/// VLM container loaded by `loadParoQuantVLMContainer`.
+///
+/// Delegates to MLXLMCommon's `loadParoQuantModel` which handles AutoAWQ weight
+/// conversion, rotation layer patching, and pre-rotation caching.
+nonisolated func loadParoQuantLLMContainer(
     from directory: URL, toolCallFormat: ToolCallFormat?
 ) async throws -> ModelContainer {
-    // Use VLM type registry so Qwen3.5 loads with its vision tower.
+    let container = try await MLXLMCommon.loadParoQuantModel(
+        from: directory,
+        typeRegistry: LLMModelFactory.shared.typeRegistry,
+        tokenizerLoader: #huggingFaceTokenizerLoader(),
+        toolCallFormat: toolCallFormat
+    )
+    await installTextOnlyProcessor(on: container)
+    return container
+}
+
+/// Load a vision-capable ParoQuant container via the VLM type registry.
+///
+/// Qwen3.5 resolves to `MLXVLM.Qwen35`, whose `prepare` handles image-text
+/// merging but runs prefill un-chunked (~390 tok/s on long text prompts).
+/// This container should only be loaded when the user has explicitly enabled
+/// vision mode; text-only turns should use `loadParoQuantLLMContainer`.
+nonisolated func loadParoQuantVLMContainer(
+    from directory: URL, toolCallFormat: ToolCallFormat?
+) async throws -> ModelContainer {
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
         typeRegistry: VLMModelFactory.shared.typeRegistry,
+        tokenizerLoader: #huggingFaceTokenizerLoader(),
         toolCallFormat: toolCallFormat
     )
 
-    // Create VLM processor for vision support; falls back to text-only if unavailable.
-    let vlmProcessor = await loadVLMProcessor(from: directory, container: container)
-
-    await container.update { context in
-        if let vlmProcessor {
+    if let vlmProcessor = await loadVLMProcessor(from: directory, container: container) {
+        await container.update { context in
             context.processor = vlmProcessor
-        } else {
-            let messageGenerator: MessageGenerator =
-                if let llmModel = context.model as? LLMModel {
-                    llmModel.messageGenerator(tokenizer: context.tokenizer)
-                } else {
-                    DefaultMessageGenerator()
-                }
-            context.processor = ParoQuantInputProcessor(
-                tokenizer: context.tokenizer, configuration: context.configuration,
-                messageGenerator: messageGenerator
-            )
         }
+    } else {
+        await installTextOnlyProcessor(on: container)
     }
 
     return container
