@@ -306,35 +306,20 @@ struct CheckpointCaptureTests {
 
     // MARK: - 16. defaultExtensionDelegatesToBasePrepare
 
-    @Test func defaultExtensionDelegatesToBasePrepare() {
-        // LanguageModel.swift:219-225 provides a default prepareWithCheckpoints()
-        // that delegates to prepare() and returns (result, []).
-        // SpeculativeTokenIterator (Evaluate.swift:858,871) calls prepare() directly,
-        // confirming non-LLM models don't get checkpoint capture.
-        //
-        // Structural verification: any LanguageModel that doesn't override
-        // prepareWithCheckpoints() inherits the extension that returns empty snapshots.
-        // The LLMModel extension (LLMModel.swift:43-69) is the only override for
-        // text-only models; Qwen35 VLM (MLXVLM/Qwen35.swift) is the VLM override.
-        //
-        // Cannot instantiate a mock LanguageModel without Module (MLXNN) conformance.
-        // Contract verified by compilation + code inspection.
+    @Test(.disabled("Requires LanguageModel mock — Module conformance non-trivial"))
+    func defaultExtensionDelegatesToBasePrepare() {
+        // LanguageModel extension at LanguageModel.swift:219-225 delegates
+        // to prepare() and returns (result, []).
+        // LLMModel (LLMModel.swift:43-69) and Qwen35 VLM are the only overrides.
     }
 
     // MARK: - 17. specIteratorStillCallsBasePrepare
 
-    @Test func specIteratorStillCallsBasePrepare() {
-        // SpeculativeTokenIterator.prepare() at Evaluate.swift:858 calls
-        // mainModel.prepare() and at line 871 calls draftModel.prepare() —
-        // NOT prepareWithCheckpoints(). Speculative decoding has no checkpoint capture.
-        //
-        // This is intentional: speculative decoding operates on draft + main model pairs
-        // where checkpoint capture adds complexity with no benefit (the draft model's
-        // cache is ephemeral and the main model's cache is rebuilt each verify step).
-        //
-        // Verified by code inspection. If prepare() is ever changed to
-        // prepareWithCheckpoints() in SpeculativeTokenIterator, this test should fail
-        // to compile (signature mismatch) or be updated with justification.
+    @Test(.disabled("Requires LanguageModel mock — Module conformance non-trivial"))
+    func specIteratorStillCallsBasePrepare() {
+        // SpeculativeTokenIterator.prepare() calls mainModel.prepare()
+        // and draftModel.prepare() — NOT prepareWithCheckpoints().
+        // Verified by code inspection at Evaluate.swift:858,871.
     }
 
     // MARK: - Additional edge cases
