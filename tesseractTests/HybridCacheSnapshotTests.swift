@@ -2,7 +2,6 @@ import Foundation
 import MLX
 import MLXLMCommon
 import Testing
-@testable import Tesseract_Agent
 
 struct HybridCacheSnapshotTests {
 
