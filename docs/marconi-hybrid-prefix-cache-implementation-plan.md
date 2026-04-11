@@ -1,9 +1,9 @@
 # Marconi-Style Hybrid Prefix Cache — Implementation Plan
 
-**Date:** 2026-04-11 (v8 — development-ready)
-**Status:** Draft — refine before execution
+**Date:** 2026-04-11 (v9 — paper/repo aligned, development-ready)
+**Status:** Ready for development
 **Prerequisite reading:** `docs/mlx-swift-lm-prefill-memory-research.md` (§4.7, §7.5–7.6)
-**References:** [Marconi paper](https://assets.amazon.science/96/d4/ee6df8f84a34b49a71f9c39212f2/marconi-prefix-caching-for-the-era-of-hybrid-llms.pdf), [SGLang MambaRadixCache](https://pytorch.org/blog/hybrid-models-meet-sglang-more-than-full-attention/), [mlx-lm #1072](https://github.com/ml-explore/mlx-lm/pull/1072)
+**References:** [Marconi paper](https://assets.amazon.science/96/d4/ee6df8f84a34b49a71f9c39212f2/marconi-prefix-caching-for-the-era-of-hybrid-llms.pdf), [Marconi reference repo](https://github.com/ruipeterpan/marconi), [SGLang MambaRadixCache](https://pytorch.org/blog/hybrid-models-meet-sglang-more-than-full-attention/), [mlx-lm #1072](https://github.com/ml-explore/mlx-lm/pull/1072)
 
 ---
 
@@ -71,6 +71,15 @@
 | 26 | Accepted Mamba divergence on normalized leaf hits conflicts with the bitwise-logit-equality correctness gate in Phase 2 and benchmark PC8. | Logit-equivalence tests and PC8 benchmark explicitly scoped to **mid-prefill checkpoint restore only** (where no normalization occurs). Leaf hits from normalized conversations excluded — they use the same accepted-divergence contract as the current prototype. New test validates the divergence is bounded. |
 | 27 | "Open Questions (Resolve Before Phase 1)" section lists unresolved prerequisites that are actually answerable now. | Section rewritten as "Implementation Notes" with resolved answers for each, or downgraded to "verify during implementation" with concrete verification steps. No open blockers remain. |
 
+### v9 blockers (resolved — paper/repo alignment)
+
+| # | Blocker | Resolution |
+|---|---------|-----------|
+| 28 | Snapshot size estimates were hand-waved and inconsistent with the actual local Qwen3.5 cache shapes, so memory-budget guidance was not trustworthy. | Replaced them with shape-derived sizing from the local model config: 4K unquantized snapshot ≈ 202 MiB, 8K ≈ 330 MiB, 16K ≈ 586 MiB. |
+| 29 | Phase 2 speculative admission allows exact-path extensions and multiple branch-point candidates, but Marconi admits at most one speculative intermediate checkpoint per sequence. | Task 2.1 now matches speculative insertion: create at most one `.branchPoint` candidate, only when insertion would split an existing edge and create a new intermediate radix node. Exact-path extensions rely on the leaf checkpoint only. |
+| 30 | Phase 2 eviction is underspecified versus Marconi: no recency transform, no min-max normalization, no parent-relative FLOP delta, no eligible-node filter, no single-child collapse rule. | Task 2.3 now specifies the full utility-scored eviction policy: candidates are snapshot nodes with `<= 1` child, utility uses normalized recency plus `alpha *` normalized FLOP efficiency, and single-child nodes collapse after snapshot eviction to preserve radix compression. |
+| 31 | Task 2.4 replaced Marconi's adaptive `alpha` tuning with a manual sweep, so the plan no longer aligned with the paper/reference repo. | Restored a paper/repo-aligned bootstrap tuner: start with `alpha = 0`, wait for first eviction, use a bootstrap window of `5x` the first-eviction request count (repo default within the paper's 5-15x range), then grid-search `alpha in {0.0, 0.1, ..., 2.0}` by replaying the window. |
+
 **API:** `Memory.clearCache()` (not `MLX.GPU.clearCache()`).
 
 ---
@@ -110,9 +119,9 @@ Replace `HTTPPrefixCacheSpike` with a token-level radix tree supporting full hyb
 │  ┌──────────────────────┐   ┌──────────────────────────────┐    │
 │  │   TokenRadixTree      │   │  EvictionPolicy               │    │
 │  │                        │   │  Phase 1: type-based LRU      │    │
-│  │  Node {                │   │  Phase 2: + FLOP-aware score  │    │
-│  │    edgeTokens          │   │                                │    │
-│  │    children            │   │  system > leaf > branch-point  │    │
+│  │  Node {                │   │  Phase 2: Marconi utility     │    │
+│  │    edgeTokens          │   │  over eligible nodes          │    │
+│  │    children            │   │  score = norm(R)+a*norm(F/B)  │    │
 │  │    snapshot?           │   └──────────────────────────────┘    │
 │  │    checkpointType      │                                      │
 │  │    tokenOffset         │   ┌──────────────────────────────┐    │
@@ -270,7 +279,7 @@ Real HTTP conversations are alternating sequences (ChatML format from `Chat.swif
 
 Tool definitions are NOT inside the system message — they're passed as a separate `tools` parameter to `applyChatTemplate(messages:tools:)` (`Tokenizer.swift:16-20`) and rendered by the Jinja template as their own section. The high-value shared prefix is **system prompt + tool definitions**, not system prompt alone.
 
-**Type A — Stable-prefix boundary:** The token offset where system message(s) + tool definitions end. This is the longest prefix shared across ALL requests that use the same system prompt AND the same tools. Detectable via two-probe technique (see Task 1.3). Highest eviction priority (keep longest).
+**Type A — Stable-prefix boundary:** The token offset where system message(s) + tool definitions end. This is the longest prefix shared across ALL requests that use the same system prompt AND the same tools. Detectable via two-probe technique (see Task 1.3). Highest eviction priority in **Phase 1**.
 
 When tools change between requests, the token sequences diverge at the tool-definition section. The radix tree handles this correctly — different tokens = different paths = separate snapshots. The stable-prefix checkpoint only applies when both system prompt and tools match.
 
@@ -359,7 +368,7 @@ struct HybridCacheSnapshot: Sendable {
     let createdAt: ContinuousClock.Instant
 
     enum CheckpointType: Comparable {
-        case system         // highest priority (keep longest)
+        case system         // stable-prefix reuse; highest priority in Phase 1 only
         case leaf           // standard conversation-prefix reuse
         case branchPoint    // Phase 2: speculative Marconi checkpoint
     }
@@ -655,8 +664,13 @@ final class TokenRadixTree {
     /// Remove a leaf node and clean up empty ancestors.
     func evictNode(node: RadixTreeNode)
 
-    /// All snapshot-bearing nodes for eviction scoring.
-    func allSnapshotNodes() -> [RadixTreeNode]
+    /// Snapshot-bearing nodes eligible for Marconi eviction scoring.
+    /// Candidate rule: node has a snapshot AND childCount <= 1.
+    func eligibleEvictionNodes() -> [RadixTreeNode]
+
+    /// Collapse a snapshot-less node with exactly one child to preserve radix compression.
+    /// Concatenates the node's edgeTokens into the child edge and re-links parent/child.
+    func collapseSingleChildNode(_ node: RadixTreeNode)
 }
 ```
 
@@ -664,6 +678,10 @@ final class TokenRadixTree {
 - Tokens `[0..5000]` match, snapshot at offset 4000: → return snapshot at 4000. Re-prefill 1000 tokens.
 - Tokens `[0..5000]` match, snapshot at offset 5000: → return snapshot at 5000. Re-prefill 0 tokens.
 - Tokens `[0..3000]` match, only snapshot at offset 4000: → 4000 > 3000, NOT usable. Return nil (or shallower snapshot).
+
+**Access-time rule:** On lookup hit, update `lastAccessTime` on the returned node only. Do **not** touch ancestors. This matches Marconi's recency policy and avoids making shared ancestors look artificially hot.
+
+**Collapse rule:** If eviction removes a snapshot from a node that now has no snapshot and exactly one child, collapse the node into the child so the radix tree stays compressed. In this design, collapse changes only path structure; the child snapshot already contains the full cache state for its own `tokenOffset`.
 
 **Tests 1.4 — `TokenRadixTreeTests.swift`:**
 
@@ -680,8 +698,10 @@ final class TokenRadixTree {
 | 9 | `evictLeafCleansAncestors` | Evict only leaf → empty ancestors removed |
 | 10 | `evictLeafPreservesSiblings` | Evict one sibling → other sibling and shared ancestor preserved |
 | 11 | `totalSnapshotBytesAccurate` | After insert/evict, counter matches actual |
-| 12 | `findBestSnapshotUpdatesAccessTime` | Lookup touches the returned node |
+| 12 | `findBestSnapshotOnlyUpdatesReturnedNode` | Lookup updates returned node's timestamp, not ancestors |
 | 13 | `50KTokenSequence` | Large insert/lookup works |
+| 14 | `eligibleEvictionNodesExcludeMultiChildNodes` | Shared-prefix nodes with 2+ children are protected from Phase 2 scoring |
+| 15 | `collapseSingleChildNodeMergesEdges` | Snapshot-less intermediate node with one child collapses cleanly |
 
 ### Task 1.5: `PrefixCacheManager` (public API)
 
@@ -743,7 +763,8 @@ final class PrefixCacheManager {
 
     /// Determine checkpoint offsets for the upcoming prefill.
     /// Phase 1: stable-prefix boundary only (if known and not already stored).
-    /// Phase 2: + speculative branch points from radix tree analysis.
+    /// Phase 2: + at most one speculative branch point from radix tree analysis,
+    /// matching Marconi's speculative insertion rule.
     ///
     /// NOTE: the leaf checkpoint is NOT planned here. It is captured post-generation
     /// from the final cache and stored separately via storeLeaf(). Only mid-prefill
@@ -796,7 +817,7 @@ final class PrefixCacheManager {
 3. `tree.storeSnapshot(leafSnapshot, atOffset: storedTokens.count)` — at the leaf node
 4. `evictToFitBudget()` if over memory
 
-**Eviction priority (Phase 1):** Type-based LRU. Evict `.leaf` first, then `.branchPoint` (Phase 2), then `.system` last. Within same type, evict least-recently-accessed.
+**Eviction priority (Phase 1 only):** Type-based LRU. Evict `.leaf` first, then `.branchPoint` (Phase 2), then `.system` last. Within the same type, evict least-recently-accessed. **Phase 2 replaces this heuristic** with Marconi's global utility score over eligible nodes (`childCount <= 1`).
 
 **Tests 1.5 — `PrefixCacheManagerTests.swift`:**
 
@@ -1073,22 +1094,23 @@ Memory.clearCache()
 
 ---
 
-## Phase 2 — Marconi Extensions: Branch-Point Checkpointing & FLOP-Aware Eviction
+## Phase 2 — Marconi Extensions: Branch-Point Checkpointing & Utility-Scored Eviction
 
 ### Task 2.1: Speculative insertion at admission time
 
 **File:** `tesseract/Features/Server/PrefixCacheManager.swift`
 
-Extend `planCheckpoints()` to analyze the radix tree for branch points:
-1. Walk the tree with the new token sequence
-2. If the walk diverges from an existing stored path → mark divergence offset as checkpoint candidate (type `.branchPoint`)
-3. If the new sequence extends an existing path → extension start is a candidate
+Extend `planCheckpoints()` to perform **Marconi speculative insertion**:
+1. Walk the tree with the new token sequence as if inserting it.
+2. If insertion would **split an existing edge** (the shared prefix continues inside a compressed edge, then diverges), mark the split offset as a `.branchPoint` checkpoint candidate.
+3. If the new sequence only **extends an existing path at a node boundary**, do **not** create a `.branchPoint` checkpoint. The leaf checkpoint already covers this case.
+4. Admit **at most one** `.branchPoint` candidate per request. Combined with the leaf checkpoint, this preserves Marconi's "max 2 checkpoints per sequence" rule.
 
 ```swift
 // In planCheckpoints() — Phase 2 addition:
-if let divergenceOffset = tree.findDivergenceFromExistingPath(tokens: tokens) {
-    if !tree.hasSnapshotAt(offset: divergenceOffset) {
-        plan.append((offset: divergenceOffset, type: .branchPoint))
+if let splitOffset = tree.findIntermediateSplitOffsetForInsertion(tokens: tokens) {
+    if !tree.hasSnapshotAt(offset: splitOffset) {
+        plan.append((offset: splitOffset, type: .branchPoint))
     }
 }
 ```
@@ -1097,11 +1119,12 @@ if let divergenceOffset = tree.findDivergenceFromExistingPath(tokens: tokens) {
 
 | # | Test | What it validates |
 |---|------|-------------------|
-| 1 | `divergenceFromExistingPathCreatesCandidate` | [1,2,3,4] stored, [1,2,5,6] → candidate at offset 2 |
-| 2 | `extensionOfExistingPathCreatesCandidate` | [1,2,3] stored, [1,2,3,4,5] → candidate at offset 3 |
-| 3 | `coldTreeNoSpeculativeCandidates` | Empty tree → no branch-point candidates |
-| 4 | `existingSnapshotNotReCandidate` | Offset 2 already has snapshot → not re-planned |
-| 5 | `multipleBranchPointsDetected` | Three stored paths, divergence from two → two candidates |
+| 1 | `divergenceInsideCompressedEdgeCreatesCandidate` | [1,2,3,4] stored, [1,2,5,6] → split at offset 2 |
+| 2 | `exactPathExtensionDoesNotCreateBranchPoint` | [1,2,3] stored, [1,2,3,4,5] → no speculative checkpoint |
+| 3 | `nodeBoundaryDivergenceDoesNotCreateIntermediateCheckpoint` | Existing node [1,2], new child [1,2,9] → leaf only, no `.branchPoint` |
+| 4 | `coldTreeNoSpeculativeCandidates` | Empty tree → no branch-point candidates |
+| 5 | `existingSnapshotNotReCandidate` | Split offset already has snapshot → not re-planned |
+| 6 | `atMostOneBranchPointPerSequence` | Complex tree, single insertion → at most one speculative candidate |
 
 ### Task 2.2: Logit-equivalence verification harness
 
@@ -1132,27 +1155,114 @@ For **leaf hits from normalized conversations**, the Mamba normalization diverge
 
 ```swift
 struct EvictionScore: Comparable {
-    let recency: Double
-    let flopEfficiency: Double       // FLOPs_saved / memory_bytes
-    let combined: Double             // recency + α × flopEfficiency
-    static var alpha: Double = 0.5
+    let rawRecency: Double
+    let rawFlopEfficiency: Double
+    let normalizedRecency: Double
+    let normalizedFlopEfficiency: Double
+    let utility: Double              // normalizedRecency + alpha * normalizedFlopEfficiency
+    static var alpha: Double = 0.0   // pure recency until Task 2.4 tunes alpha
 }
 ```
 
-Eviction order: `.leaf` first, then `.branchPoint`, then `.system` last. Within type: lowest combined score first.
+**Candidate set (Marconi rule):** score **only** nodes that (a) have a snapshot and (b) have `childCount <= 1`. Nodes with `2+` children represent shared prefixes and are protected from eviction scoring.
+
+**Per-node FLOP formulas (Appendix A / `utils.py` in the reference repo):**
+- `F_attn(L, D) = 8 * L * D^2 + 4 * L^2 * D`
+- `F_mlp(L, D) = 16 * L * D^2`
+- `F_ssm(L, D, N) = 12 * L * D^2 + 16 * L * D * N + 10 * L * D`
+
+**Per-node state-size formulas:**
+- Generic Marconi attention formula: `M_attn(L, D_kv) = 4 * L * D_kv` bytes, where `D_kv = kvHeads * headDim`
+- For local Qwen3.5-4B attention: `kvHeads = 8`, `headDim = 128`, so `D_kv = 1024` and `M_attn(L) = 4 * L * 1024`
+- Local Qwen3.5 GatedDeltaNet stores two arrays in `MambaCache.state`:
+  - conv state: `[B, convKernel - 1, convDim]`
+  - recurrent state: `[B, numVHeads, headVDim, headKDim]`
+- Therefore `M_ssm = 2 * ((convKernel - 1) * convDim + numVHeads * headVDim * headKDim)` bytes per layer for `B = 1`
+
+**Parent-relative FLOPs saved (Marconi rule):**
+- Let `L_total = node.tokenOffset`
+- Let `L_parent = node.parent?.tokenOffset ?? 0`
+- Let `deltaL = L_total - L_parent`
+- `deltaF(node) =`
+  `numSSMLayers * F_ssm(deltaL, D, N)`
+  `+ numAttentionLayers * (F_attn(L_total, D) - F_attn(L_parent, D))`
+  `+ numMLPLayers * (F_mlp(L_total, D) - F_mlp(L_parent, D))`
+- `rawFlopEfficiency(node) = deltaF(node) / snapshot.memoryBytes`
+
+`snapshot.memoryBytes` is the correct denominator for this design because each snapshot stores the **full hybrid cache** at that node's offset, not a delta from its parent. FLOP scoring should use the measured bytes from the captured snapshot; the formulas above are for reasoning and test expectations.
+
+**Recency transform:**
+- `ageSeconds = max(now - node.lastAccessTime, epsilon)`
+- `rawRecency(node) = 1 / ageSeconds`
+
+**Normalization (repo-aligned min-max):**
+
+```swift
+func normalize(_ values: [Double]) -> [Double] {
+    guard values.count > 1 else { return Array(repeating: 1.0, count: values.count) }
+    guard let minValue = values.min(), let maxValue = values.max(), minValue != maxValue else {
+        return Array(repeating: 1.0, count: values.count)
+    }
+    return values.map { ($0 - minValue) / (maxValue - minValue) }
+}
+```
+
+For each eviction pass:
+1. Gather eligible nodes across **all partitions**
+2. Compute `rawRecency` and `rawFlopEfficiency`
+3. Min-max normalize both vectors independently
+4. Compute `utility = normalizedRecency + alpha * normalizedFlopEfficiency`
+5. Evict the **minimum-utility** node
+
+**Eviction mechanics:**
+- `childCount == 0`: delete leaf node and clean empty ancestors
+- `childCount == 1`: evict the node's snapshot, then collapse the snapshot-less node into its child to preserve radix compression
+
+This replaces the Phase 1 type-priority heuristic. Checkpoint type still exists for diagnostics and Phase 1 policy, but it is **not** part of the Marconi Phase 2 utility score.
 
 **Tests 2.3:**
 
 | # | Test | What it validates |
 |---|------|-------------------|
-| 1 | `longerSnapshotsScoreHigher` | 8K snapshot > 2K at same recency |
-| 2 | `recentAccessBoostsScore` | Recent > stale at same length |
-| 3 | `systemSurvivesLongest` | System evicted last |
-| 4 | `memoryBudgetRespected` | After eviction, total ≤ budget |
+| 1 | `candidateSetExcludesMultiChildNodes` | Shared-prefix nodes with `2+` children are never scored |
+| 2 | `parentRelativeFlopsUsed` | Same total length, longer unique suffix after parent → higher `deltaF` |
+| 3 | `minMaxNormalizationHandlesDegenerateCase` | All-equal inputs normalize to `1.0` |
+| 4 | `recentAccessBoostsUtility` | Newer node gets higher normalized recency |
+| 5 | `higherFlopEfficiencyBoostsUtility` | At equal recency, higher FLOPs/byte wins |
+| 6 | `lowestUtilityEvictedAcrossPartitions` | Global minimum utility is evicted, not just within one tree |
+| 7 | `singleChildEvictionCollapsesNode` | Snapshot eviction on a 1-child node preserves compressed radix structure |
+| 8 | `memoryBudgetRespected` | Repeated lowest-utility eviction brings usage under budget |
 
-### Task 2.4: Benchmark α parameter
+### Task 2.4: Adaptive `alpha` tuning (paper/repo-aligned)
 
-**Manual test:** Run benchmark scenarios with α ∈ {0.0, 0.25, 0.5, 1.0, 2.0}. Measure TTFT, hit rate, peak memory. Find knee of curve.
+**New file:** `tesseract/Features/Server/AlphaTuner.swift`
+
+Marconi starts with pure recency and tunes `alpha` retrospectively:
+
+1. Start with `alpha = 0.0`
+2. On the **first** call to `evictToFitBudget()`, record `requestsBeforeFirstEviction`
+3. Set `bootstrapWindowSize = 5 * requestsBeforeFirstEviction`
+   - The paper describes a `5-15x` bootstrap range
+   - The reference repo uses `bootstrap_multiplier = 5`
+4. Snapshot the radix-tree state at the start of the bootstrap window
+5. Collect request history for the window as `(inputTokens, outputTokens)` tuples
+6. Replay the window for `alpha in {0.0, 0.1, ..., 2.0}`
+7. Choose the `alpha` with the highest **total FLOPs saved**
+   - Tie-breaker: higher token hit rate
+8. Adopt the tuned `alpha` for subsequent evictions
+
+For this on-device design, one tuning pass is enough for development readiness. Continuous retuning can be added later if workload drift becomes visible in benchmarks.
+
+**Tests 2.4:**
+
+| # | Test | What it validates |
+|---|------|-------------------|
+| 1 | `startsAtZeroBeforeFirstEviction` | Cache behaves like pure-recency scoring before tuning |
+| 2 | `bootstrapWindowUsesFiveTimesFirstEvictionCount` | Tuning window matches repo default multiplier |
+| 3 | `gridSearchChoosesBestAlphaByFlopsSaved` | Replayed window selects the top-FLOPs-saved `alpha` |
+| 4 | `tunedAlphaUsedForSubsequentEvictions` | After tuning, eviction utility uses the chosen `alpha` |
+
+**Manual validation:** Run benchmark scenarios with the tuned `alpha` and compare against fixed `alpha = 0.0` and `alpha = 2.0`. Confirm the tuned value is near the knee of the TTFT/hit-rate curve on the target workload.
 
 ---
 
@@ -1240,10 +1350,10 @@ Phase 0 (Memory.clearCache fix)
 Phase 1 (partitioned radix tree + checkpoint-during-prefill via TokenIterator + stable prefix)
     │
     ▼
-Phase 2 (Marconi: speculative branch-point + FLOP-aware eviction)
+Phase 2 (Marconi: speculative branch-point + utility-scored eviction + alpha tuning)
     │
     ▼
-Phase 3 (two-pass prefill + tuning + hardening)
+Phase 3 (two-pass prefill + production hardening)
 ```
 
 All phases are sequential. Phase 1 includes the modified `prepare()` loop (previously deferred to Phase 2) because Mamba state capture during prefill is a prerequisite for any hybrid checkpoint.
@@ -1252,13 +1362,10 @@ All phases are sequential. Phase 1 includes the modified `prepare()` loop (previ
 
 ## Test Summary
 
-| Phase | Unit Tests | Integration Tests | E2E (model) | Manual |
-|-------|-----------|-------------------|-------------|--------|
-| 0 | 0 | 0 | 0 | 3 |
-| 1 | 14 + 13 + 7 + 13 + 18 + 11 = 76 | 6 (migration) | 1 | 1 |
-| 2 | 5 + 8 + 4 = 17 | 0 | 0 | 1 |
-| 3 | 5 + 3 = 8 | 0 | 11 (benchmark) | 1 |
-| **Total** | **101** | **6** | **12** | **6** |
+- Phase 0: 3 manual validation steps for memory behavior.
+- Phase 1: 72 new unit tests across snapshot/prepare/detector/radix/manager, 18 integration tests for the end-to-end cache path, migration of the existing normalization-focused `HTTPPrefixCacheSpikeTests`, 1 model-backed E2E scenario.
+- Phase 2: 28 new unit tests across speculative admission, correctness gating, Marconi utility scoring, and adaptive `alpha` tuning, plus 1 manual benchmark validation pass.
+- Phase 3: 8 unit tests for two-pass prefill and prefill-step heuristics, 11 model-backed benchmark scenarios, and 1 manual validation pass.
 
 ---
 
@@ -1271,7 +1378,8 @@ All phases are sequential. Phase 1 includes the modified `prepare()` loop (previ
 | Variable chunk sizes hurt prefill throughput | Low | Low | Small chunks (< prefillStepSize) only at checkpoint boundaries. Vast majority of chunks are full-size. |
 | QuantizedKVCache restore with wrong groupSize/bits | Low | High | Parse from metaState, not defaults. Test 1.1#14 validates. |
 | Stable-prefix detection fails for non-ChatML templates | Medium | Medium | Two-probe technique + verification step (`fullTokens[0..<boundary] == probeA[0..<boundary]`) catches mismatches. Falls back to no stable-prefix checkpoint. |
-| Snapshot memory exceeds budget | Low | Medium | Auto-sizing + aggressive type-based eviction. 3-4 snapshots max within budget. |
+| Snapshot memory exceeds budget | Medium | Medium | Budgeting now uses corrected sizing formulas from the local Qwen3.5 cache shapes: a 4K unquantized snapshot is ~202 MiB. Auto-sizing and Marconi utility-scored eviction must use measured `snapshot.memoryBytes`, not rough MB estimates. |
+| Adaptive `alpha` tuning picks an unstable value on a short trace | Low | Medium | Start with `alpha = 0`, require a bootstrap window of `5x` the first-eviction request count, tie-break on token hit rate, and allow fallback to `alpha = 0` if the bootstrap trace is too small to tune confidently. |
 | Upstream mlx-swift-lm changes conflict | Medium | Medium | Minimize vendor changes. `prepareWithCheckpoints()` is a protocol extension (existing `prepare()` untouched). `GenerateParameters.checkpointAtOffsets`/`checkpointBaseOffset` are new optional fields with defaults. Only `LLMModel`, `Qwen35`, and `TokenIterator.prepare()` modified. |
 | Cross-config contamination (wrong kvBits snapshot returned) | Low | High | `CachePartitionKey` isolates trees by `(modelID, kvBits, kvGroupSize)`. Tests 1.5#15-17 validate. |
 | TokenIterator contract breaks in future mlx-swift-lm updates | Low | Medium | `capturedSnapshots` property is additive. Protocol extension is non-breaking — all existing conformers keep working via default impl. |
@@ -1282,14 +1390,24 @@ All phases are sequential. Phase 1 includes the modified `prepare()` loop (previ
 
 ## Implementation Notes (previously Open Questions — all resolved or downgraded)
 
-1. **eval(cache) completeness:** `eval(cache)` in the prefill loop calls `MLX.eval()` on all cache state arrays (both KVCacheSimple keys/values and MambaCache conv/recurrent state). This forces synchronous evaluation of the lazy compute graph. After `eval(cache)`, all arrays are fully materialized — safe to snapshot. **Verify during implementation:** add an assertion `assert(cache.flatMap(\.state).allSatisfy { !$0.isTracing })` after eval in debug builds.
+1. **eval(cache) completeness:** `eval(cache)` in the prefill loop forces the lazy graph for cache state arrays (both KV and Mamba state) before snapshot capture. After `eval(cache)`, it is safe to deep-copy `cache.flatMap(\.state)`. **Verify during implementation:** capture a snapshot immediately after `eval(cache)`, call `Memory.clearCache()`, and confirm the copied arrays remain valid and bitwise-stable. Do not rely on a debug-only `isTracing` API.
 
-2. **Snapshot size profiling:** Estimates based on Qwen3.5-4B architecture (24 Mamba + 8 attention layers):
-   - MambaCache: fixed ~50 MB total (24 layers × ~2 MB each, independent of token count)
-   - KVCacheSimple per attention layer at N tokens: ~`N × 2 × heads × head_dim × dtype_bytes`. At 8 attention layers, 4K tokens, fp16: ~256 MB
-   - **Stable prefix (~4K tokens):** ~300 MB. **Leaf (~8K):** ~550 MB. **Leaf (~16K):** ~1.1 GB.
-   - With kvBits=8 (QuantizedKVCache): ~50% smaller for attention layers.
-   - **Verify during implementation:** log `snapshot.memoryBytes` on first capture.
+2. **Snapshot size profiling:** Derive sizes from the **actual local cache shapes**, not only from the paper's generic symbols. Local Qwen3.5-4B config constants from `Qwen35.swift` are `hiddenSize = 4096`, `attentionHeads = 32`, `kvHeads = 8`, `linearNumValueHeads = 64`, `linearNumKeyHeads = 16`, `linearValueHeadDim = 128`, `linearKeyHeadDim = 192`, `linearConvKernelDim = 4`, with `32` total layers = `24` SSM + `8` attention:
+   - Attention KV state per layer uses GQA, so size is based on `kvHeads * headDim`, **not** `hiddenSize`
+   - `headDim = hiddenSize / attentionHeads = 128`
+   - `D_kv = kvHeads * headDim = 8 * 128 = 1024`
+   - Attention KV bytes per layer at sequence length `L`: `M_attn(L) = 4 * L * D_kv = 4 * L * 1024`
+   - At `L = 4096`: `4 * 4096 * 1024 = 16,777,216` bytes = `16 MiB` per attention layer
+   - `8` attention layers: `4K ≈ 128 MiB`, `8K ≈ 256 MiB`, `16K ≈ 512 MiB`
+   - GatedDeltaNet conv cache shape: `[B, convKernel - 1, convDim] = [1, 3, 14336]`
+   - Conv bytes per SSM layer: `1 * 3 * 14336 * 2 = 86,016` bytes
+   - GatedDelta recurrent state shape from `gatedDeltaUpdate()`: `[B, Hv, Dv, Dk] = [1, 64, 128, 192]`
+   - Recurrent bytes per SSM layer: `1 * 64 * 128 * 192 * 2 = 3,145,728` bytes
+   - Total SSM bytes per layer: `3,231,744` bytes ≈ `3.08 MiB`
+   - `24` SSM layers: ≈ `73.97 MiB`, independent of sequence length
+   - **Total unquantized snapshot:** `4K ≈ 202 MiB`, `8K ≈ 330 MiB`, `16K ≈ 586 MiB`
+   - With `kvBits = 8`, only the attention portion should shrink materially; use measured `snapshot.memoryBytes` as the source of truth because quantized packing overhead depends on runtime representation.
+   - **Verify during implementation:** log `snapshot.memoryBytes` on first capture and compare against these shape-derived estimates.
 
 3. **Chat template determinism:** The Jinja chat template is deterministic for identical inputs — no random or time-dependent elements. The `processor.prepare()` pipeline (tokenize → template render → re-tokenize) is stateless. **No risk** for the radix tree as long as normalization is applied before tokenization (which it is).
 
@@ -1304,4 +1422,4 @@ All phases are sequential. Phase 1 includes the modified `prepare()` loop (previ
 
 6. **Stored conversation construction:** The current code already builds the stored conversation in `LLMActor.generateServerTextCompletion()` (`LLMActor.swift:298-318`) by appending the generated assistant turn to the conversation. `historyMessages` reconstructs `[Chat.Message]` from this. The new flow uses the same construction for re-tokenization. **Verify during implementation:** confirm `storedConversation.historyMessages` produces the same messages as what the next request will send.
 
-7. **Normalization trim magnitude:** Whitespace normalization typically removes 1-5 tokens (trailing newlines on assistant content). The Mamba state divergence for <5 tokens of whitespace is negligible — whitespace tokens have minimal impact on recurrent state. Test 2.2#9 validates this with a bounded-divergence check. **If divergence exceeds 0.01:** disable leaf caching for hybrid models, use stable-prefix checkpoints only.
+7. **Normalization trim magnitude:** Whitespace normalization typically removes 1-5 tokens (for example trailing newlines on assistant content). Treat the impact on Mamba state as an **empirical assumption**, not a guaranteed mathematical property. Test 2.2#9 is the gate: if `max |logit_cached - logit_uncached|` ever exceeds `0.01`, disable leaf caching for hybrid models and keep only stable-prefix / branch-point checkpoints.
