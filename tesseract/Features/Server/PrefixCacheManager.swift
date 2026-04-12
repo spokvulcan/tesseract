@@ -3,7 +3,7 @@ import MLXLMCommon
 
 /// Partition key for isolating radix trees by runtime configuration.
 ///
-/// Tool/template digests from HTTPPrefixCacheKey are intentionally dropped:
+/// Tool/template digests are intentionally NOT part of the partition key:
 /// different tools/context → different tokens → different radix paths → naturally isolated.
 struct CachePartitionKey: Hashable, Sendable {
     let modelID: String

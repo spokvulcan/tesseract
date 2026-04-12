@@ -616,7 +616,7 @@ actor LLMActor {
             // 2. Extract flat token sequence for radix tree operations.
             let fullTokens = Self.extractTokenSequence(fullInput.text.tokens)
 
-            // 3. Build partition key (replaces HTTPPrefixCacheKey for cache routing).
+            // 3. Build partition key for radix-tree routing.
             let partitionKey = CachePartitionKey(
                 modelID: modelID,
                 kvBits: parameters.kvBits,

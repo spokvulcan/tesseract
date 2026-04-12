@@ -1109,8 +1109,8 @@ end-to-end against production OpenCode workloads on Qwen3.5-4B-paro.
 | 1.4  | `aecd1e1a` | `TokenRadixTree` (compressed prefix lookup) |
 | 1.5  | `988f625a` | `PrefixCacheManager` with partitioned radix lookup |
 | 1.6  | `7ac40d3c` | Integration into `LLMActor` + `CompletionHandler` |
-| 1.7 (implicit in 1.6) | — | `HTTPPrefixCacheSpikeTests` migration not required; legacy store retained only for diagnostic types |
-| 1.8  | `5acd5039` | Final integration fix: **cross-turn reuse + swift-jinja determinism** |
+| 1.8  | `5acd5039` | Cross-turn reuse + swift-jinja determinism fix |
+| 1.7  | (post-1.8) | `HTTPPrefixCacheSpikeStore` and supporting types deleted; tests migrated to normalization + `isPrefix` coverage only |
 
 ### What the final session (1.8) actually fixed
 
@@ -1319,8 +1319,8 @@ Production code:
 - `tesseract/Features/Server/HTTPRequestLogger.swift` — file-based request body logging
 - `Vendor/mlx-swift-lm/Libraries/MLXLMCommon/HybridCacheSnapshot.swift` — multi-type cache snapshot
 
-Legacy code **kept** for diagnostic types only, not on the critical path:
-- `tesseract/Features/Server/HTTPPrefixCacheSpike.swift` — `HTTPPrefixCacheConversation`, `HTTPPrefixCacheMessage`, `HTTPPrefixCacheToolCall`, and the offset helpers are still referenced by `LLMActor` for conversation normalization and cache-state inspection. The old `HTTPPrefixCacheSpikeStore` actor is unused but kept around to avoid touching `HTTPPrefixCacheSpikeTests` (Task 1.7 would have migrated those; skipped because the legacy types still provide value).
+Legacy file **retained** for the normalization layer, not the cache itself:
+- `tesseract/Features/Server/HTTPPrefixCacheSpike.swift` — after Task 1.7, this file only contains the normalization types (`HTTPPrefixCacheConversation`, `HTTPPrefixCacheMessage`, `HTTPPrefixCacheToolCall`, `HTTPPrefixCacheAssistantSignature`) and the cache-state inspection helpers (`httpPrefixCacheReportedTokenCount`, `httpPrefixCacheHasReusableState`, `httpPrefixCacheOffsets`). These are still actively used by `LLMActor` (post-generation normalization of the stored assistant turn, cache-offset math for the trim-to-align step) and by `HTTPPrefixCacheSessionReplayStore` (reasoning recovery on cross-request client mismatches). The `HTTPPrefixCacheSpikeStore` actor, `HTTPPrefixCacheKey`/`Match`/`Lookup`/`Entry` types, `HTTPPrefixCacheMismatchReport`, and the `diagnosePrefixMismatch` method were all deleted in Task 1.7 — they were dead code after Task 1.6 replaced them with the radix tree. File name kept for git history continuity.
 
 Tests:
 - `tesseractTests/HybridCacheSnapshotTests.swift` — Task 1.1
