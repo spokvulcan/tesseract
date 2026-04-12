@@ -5,7 +5,7 @@ import MLXLMCommon
 ///
 /// Tool/template digests from HTTPPrefixCacheKey are intentionally dropped:
 /// different tools/context → different tokens → different radix paths → naturally isolated.
-struct CachePartitionKey: Hashable {
+struct CachePartitionKey: Hashable, Sendable {
     let modelID: String
     let kvBits: Int?
     let kvGroupSize: Int
@@ -30,18 +30,19 @@ final class PrefixCacheManager {
         let reason: LookupReason
 
         /// Restore the cached KV/Mamba state. Each call produces an independent deep copy.
-        func restoreCache() -> [any KVCache]? {
+        /// Nonisolated because it operates only on the snapshot's deep-copy data.
+        nonisolated func restoreCache() -> [any KVCache]? {
             guard let snapshot, let key = partitionKey else { return nil }
             return snapshot.restore(kvBitsHint: key.kvBits, kvGroupSizeHint: key.kvGroupSize)
         }
     }
 
-    enum LookupReason: CustomStringConvertible {
+    enum LookupReason: CustomStringConvertible, Sendable {
         case hit(snapshotOffset: Int, totalTokens: Int, type: HybridCacheSnapshot.CheckpointType)
         case missNoEntries
         case missNoSnapshotInPrefix
 
-        var description: String {
+        nonisolated var description: String {
             switch self {
             case .hit(let offset, let total, let type):
                 "hit(\(type) at \(offset)/\(total))"
@@ -65,9 +66,12 @@ final class PrefixCacheManager {
         guard let (node, sharedLen) = tree.findBestSnapshot(tokens: tokens),
               let snapshot = node.snapshot
         else {
+            // No snapshot-bearing node, but the tree may still match a prefix.
+            // Report the actual token-level match depth for miss diagnostics.
+            let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
             return LookupResult(
-                snapshot: nil, partitionKey: nil,
-                snapshotTokenOffset: 0, sharedPrefixLength: 0,
+                snapshot: nil, partitionKey: partitionKey,
+                snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
                 reason: .missNoSnapshotInPrefix
             )
         }

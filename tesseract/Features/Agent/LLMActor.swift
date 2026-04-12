@@ -25,6 +25,15 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let promptTokenCount: Int
     /// Number of leading tokens skipped because the cache already covered them.
     let skippedPrefillTokens: Int
+
+    // -- Post-generation store context (radix tree flow) --
+
+    /// Flat token sequence for the full prompt (1D extraction from potentially 2D VLM tensor).
+    let fullTokens: [Int]
+    /// Snapshots captured during prefill at checkpoint offsets (e.g. stable-prefix boundary).
+    let capturedSnapshots: [HybridCacheSnapshot]
+    /// Partition key used for cache routing.
+    let partitionKey: CachePartitionKey
 }
 
 /// Actor-isolated wrapper that owns the LLM model and runs inference off the MainActor.
@@ -59,12 +68,15 @@ actor LLMActor {
     /// extra slot costs ~0.5–1 GB.
     private enum Defaults {
         static let cacheLimitMB = 2048
-        static let httpPrefixCacheCapacity = 4
+        /// Memory budget for the prefix cache. Each snapshot costs ~200–600 MiB
+        /// depending on context length. 3 GiB fits ~5–15 snapshots for typical
+        /// Qwen3.5 workloads (system + leaf per concurrent conversation).
+        static let prefixCacheMemoryBudgetBytes = 3 * 1024 * 1024 * 1024 // 3 GiB
     }
 
     private var modelContainer: ModelContainer?
     private(set) var agentTokenizer: AgentTokenizer?
-    private let httpPrefixCache = HTTPPrefixCacheSpikeStore(capacity: Defaults.httpPrefixCacheCapacity)
+    private var _prefixCache: PrefixCacheManager?
     private var promptStartsThinking = false
 
     var isLoaded: Bool { modelContainer != nil }
@@ -146,71 +158,33 @@ actor LLMActor {
             throw AgentEngineError.modelNotLoaded
         }
         guard let lastMessage = conversation.lastMessage else {
-            Log.agent.info("HTTP prefix cache bypass — model=\(modelID) reason=empty-conversation")
+            Log.agent.info("Prefix cache bypass — model=\(modelID) reason=empty-conversation")
             return nil
         }
         guard lastMessage.role != .assistant else {
             Log.agent.info(
-                "HTTP prefix cache bypass — model=\(modelID) reason=last-message-assistant"
+                "Prefix cache bypass — model=\(modelID) reason=last-message-assistant"
             )
             return nil
         }
 
-        let cacheKey = HTTPPrefixCacheKey(
-            modelID: modelID,
-            kvBits: parameters.kvBits,
-            kvGroupSize: parameters.kvGroupSize,
-            toolDefinitionsDigest: conversation.toolDefinitionsDigest,
-            templateContextDigest: conversation.templateContextDigest
-        )
-        let lookup = await httpPrefixCache.lookup(conversation: conversation, key: cacheKey)
-        let usableMatch = lookup.match
-
-        if let usableMatch {
-            Log.agent.info(
-                "HTTP prefix cache HIT — model=\(modelID) cachedTokens=\(usableMatch.cachedTokenCount) "
-                + "requestMessages=\(conversation.messages.count) cachedMessages=\(usableMatch.conversation.messages.count) "
-                + "entriesForKey=\(lookup.keyedEntryCount)"
-            )
-            if let report = lookup.mismatchReport {
-                // A strictly longer entry exists but didn't match — log why so we can
-                // diagnose cases where the cache is stuck reusing a short prefix.
-                // Split across lines so `log stream --style compact` (default ~200 char
-                // truncation) doesn't drop the preview content.
-                Self.logMismatchReport(prefix: "HTTP prefix cache HIT longer-entry mismatch", report: report)
-            }
-        } else {
-            Log.agent.info(
-                "HTTP prefix cache MISS — model=\(modelID) reason=\(lookup.reason) "
-                + "requestMessages=\(conversation.messages.count) entriesForKey=\(lookup.keyedEntryCount)"
-            )
-            if let report = lookup.mismatchReport {
-                Self.logMismatchReport(prefix: "HTTP prefix cache MISS detail", report: report)
-            }
-        }
-
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
 
+        let prefixCache = await ensurePrefixCache()
         let mlxStart = try await makeHTTPPrefixCacheGeneration(
             container: container,
             conversation: conversation,
-            match: usableMatch,
+            modelID: modelID,
             parameters: Self.makeGenerateParameters(from: parameters),
-            toolSpecs: toolSpecs
-        )
-        Log.agent.info(
-            "HTTP prefix cache prefill plan — model=\(modelID) "
-            + "promptTokens=\(mlxStart.promptTokenCount) "
-            + "skippedPrefillTokens=\(mlxStart.skippedPrefillTokens) "
-            + "newTokensToPrefill=\(mlxStart.promptTokenCount - mlxStart.skippedPrefillTokens) "
-            + "matchUsed=\(usableMatch != nil)"
+            toolSpecs: toolSpecs,
+            prefixCache: prefixCache
         )
 
         let mlxStartBox = UnsafeSendableBox(mlxStart)
         let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
         let startsInsideThinkBlock = promptStartsThinking
 
-        let task = Task { [httpPrefixCache, conversation, cacheKey, container, toolSpecs] in
+        let task = Task { [conversation, container, toolSpecs] in
             let mlxStart = mlxStartBox.value
             var textContent = ""
             var thinkingContent = ""
@@ -308,92 +282,120 @@ actor LLMActor {
                     }
                 }
 
+                // -- Post-generation: store snapshots in radix tree --
+
+                // Store mid-prefill snapshots (e.g. stable-prefix boundary) unconditionally.
+                // These are captured during prefill and independent of the leaf path — if
+                // final-cache recovery or leaf capture fails, the stable-prefix checkpoint
+                // still saves future requests from a full re-prefill.
+                if !Task.isCancelled, !mlxStart.capturedSnapshots.isEmpty {
+                    await MainActor.run {
+                        prefixCache.storeSnapshots(
+                            promptTokens: mlxStart.fullTokens,
+                            capturedSnapshots: mlxStart.capturedSnapshots,
+                            partitionKey: mlxStart.partitionKey
+                        )
+                    }
+                }
+
                 if !Task.isCancelled,
-                   let finalCache = await mlxStart.finalCacheHandle.takeFinalCache() {
-                    // HTTPPrefixCacheMessage.assistant() normalizes whitespace-only
-                    // content to "" so the stored entry can prefix-match echoes from
-                    // clients (OpenCode) that strip such content.
+                   let finalCache = await mlxStart.finalCacheHandle.takeFinalCache()
+                {
+                    let cacheOffsets = httpPrefixCacheOffsets(finalCache)
+                    guard httpPrefixCacheHasReusableState(finalCache) else {
+                        Log.agent.info(
+                            "Prefix cache store skipped — model=\(modelID) reason=no-reusable-cache-state "
+                            + "cacheOffsets=\(cacheOffsets)"
+                        )
+                        continuation.finish()
+                        return
+                    }
+
+                    // 1. Build stored conversation (prompt + generated assistant turn).
                     let storedConversation = conversation.appendingAssistant(.assistant(
                         content: textContent,
                         reasoning: thinkingContent,
                         toolCalls: toolCalls
                     ))
-                    let cacheOffsets = httpPrefixCacheOffsets(finalCache)
-                    let fallbackTokenCount = httpPrefixCacheReportedTokenCount(finalCache)
-                    if httpPrefixCacheHasReusableState(finalCache) {
-                        let cachedTokenCount = await Self.measureHTTPPrefixCacheTokenCount(
-                            container: container,
-                            conversation: storedConversation,
-                            toolSpecs: toolSpecs,
-                            fallback: fallbackTokenCount
-                        )
 
-                        // If content normalization shortened the stored conversation
-                        // (whitespace-only assistant content → ""), the actual cache
-                        // offset is HIGHER than the re-tokenized cachedTokenCount.
-                        // Trim the trimmable layers (KVCacheSimple/Quantized) so the
-                        // attention offset matches what the next request will compute,
-                        // and the slicing math on lookup stays consistent.
-                        // Mamba layers cannot be trimmed; their state is left as-is
-                        // (small recurrent divergence — acceptable for the prototype).
-                        let actualOffsetBefore = fallbackTokenCount
-                        if actualOffsetBefore > cachedTokenCount {
-                            let trimAmount = actualOffsetBefore - cachedTokenCount
-                            var trimmedLayerCount = 0
-                            for layer in finalCache where layer.isTrimmable {
-                                let actuallyTrimmed = layer.trim(trimAmount)
-                                if actuallyTrimmed > 0 {
-                                    trimmedLayerCount += 1
-                                }
+                    // 3. Re-tokenize stored conversation → flat token sequence.
+                    guard let storedTokens = await Self.measureStoredTokenSequence(
+                        container: container,
+                        conversation: storedConversation,
+                        toolSpecs: toolSpecs
+                    ) else {
+                        Log.agent.warning(
+                            "Prefix cache leaf store skipped — model=\(modelID) reason=tokenization-failed"
+                        )
+                        continuation.finish()
+                        return
+                    }
+
+                    // 4. Offset-alignment: trim attention KV if normalization shortened
+                    //    the stored conversation (whitespace-only assistant content → "").
+                    //    Mamba layers cannot be trimmed; their state is left as-is
+                    //    (small recurrent divergence — acceptable).
+                    let actualCacheOffset = httpPrefixCacheReportedTokenCount(finalCache)
+                    if actualCacheOffset > storedTokens.count {
+                        let trimAmount = actualCacheOffset - storedTokens.count
+                        var trimmedLayerCount = 0
+                        for layer in finalCache where layer.isTrimmable {
+                            let actuallyTrimmed = layer.trim(trimAmount)
+                            if actuallyTrimmed > 0 {
+                                trimmedLayerCount += 1
                             }
-                            let actualOffsetAfter = httpPrefixCacheReportedTokenCount(finalCache)
-                            Log.agent.info(
-                                "HTTP prefix cache offset trim — model=\(modelID) "
-                                + "trimAmount=\(trimAmount) "
-                                + "offsetBefore=\(actualOffsetBefore) offsetAfter=\(actualOffsetAfter) "
-                                + "trimmedLayers=\(trimmedLayerCount)/\(finalCache.count) "
-                                + "(reason=normalized assistant content shortened conversation)"
+                        }
+                        Log.agent.info(
+                            "Prefix cache offset trim — model=\(modelID) "
+                            + "trimAmount=\(trimAmount) "
+                            + "offsetBefore=\(actualCacheOffset) offsetAfter=\(storedTokens.count) "
+                            + "trimmedLayers=\(trimmedLayerCount)/\(finalCache.count)"
+                        )
+                    }
+
+                    // 5. Capture leaf snapshot from the final (trimmed) cache.
+                    if let leafSnapshot = HybridCacheSnapshot.capture(
+                        cache: finalCache,
+                        offset: storedTokens.count,
+                        type: .leaf
+                    ) {
+                        await MainActor.run {
+                            prefixCache.storeLeaf(
+                                storedTokens: storedTokens,
+                                leafSnapshot: leafSnapshot,
+                                partitionKey: mlxStart.partitionKey
                             )
                         }
 
-                        await httpPrefixCache.store(
-                            conversation: storedConversation,
-                            key: cacheKey,
-                            cachedTokenCount: cachedTokenCount,
-                            cache: finalCache
-                        )
                         // Release the MLX free buffer pool back to the OS so it
                         // doesn't accumulate transient prefill intermediates
-                        // across requests. The next allocation pays a small
-                        // cost going to the OS but steady-state RSS stays
-                        // bounded. Without this we observed peakMemMB climbing
-                        // monotonically (25 GB → 44 GB → OOM kill) on long
-                        // prefill chains.
+                        // across requests.
                         Memory.clearCache()
-                        let snapshot = await httpPrefixCache.snapshot()
+
+                        let stats = await MainActor.run { prefixCache.stats }
                         let activeMB = Float(Memory.activeMemory) / 1e6
                         let peakMB = Float(Memory.peakMemory) / 1e6
                         Log.agent.info(
-                            "HTTP prefix cache STORE — model=\(modelID) cachedTokens=\(cachedTokenCount) "
+                            "Prefix cache STORE — model=\(modelID) "
+                            + "leafTokens=\(storedTokens.count) "
                             + "conversationMessages=\(conversation.messages.count + 1) "
                             + "responseCharacters=\(textContent.count) toolCalls=\(toolCalls.count) "
-                            + "reasoningCharacters=\(thinkingContent.count) "
                             + "cacheOffsets=\(cacheOffsets) "
-                            + "entries=\(snapshot.entryCount)/\(snapshot.capacity) "
-                            + "totalCachedTokens=\(snapshot.totalCachedTokens) "
+                            + "snapshots=\(stats.snapshotCount) "
+                            + "partitions=\(stats.partitionCount) "
+                            + "totalSnapshotMB=\(String(format: "%.0f", Float(stats.totalSnapshotBytes) / 1e6)) "
                             + "activeMemMB=\(String(format: "%.0f", activeMB)) "
                             + "peakMemMB=\(String(format: "%.0f", peakMB))"
                         )
                     } else {
                         Log.agent.info(
-                            "HTTP prefix cache store skipped — model=\(modelID) reason=no-reusable-cache-state "
-                            + "conversationMessages=\(conversation.messages.count + 1) "
-                            + "cacheOffsets=\(cacheOffsets)"
+                            "Prefix cache leaf capture skipped — model=\(modelID) "
+                            + "reason=unsupported-cache-type cacheOffsets=\(cacheOffsets)"
                         )
                     }
                 } else if !Task.isCancelled {
                     Log.agent.warning(
-                        "HTTP prefix cache store skipped — model=\(modelID) reason=no-final-cache"
+                        "Prefix cache store skipped — model=\(modelID) reason=no-final-cache"
                     )
                 }
 
@@ -456,7 +458,7 @@ actor LLMActor {
         modelContainer = nil
         agentTokenizer = nil
         promptStartsThinking = false
-        await httpPrefixCache.clear()
+        _prefixCache = nil
     }
 
     /// Frees unreferenced MLX buffers between tool rounds.
@@ -467,6 +469,27 @@ actor LLMActor {
     /// Returns current MLX memory usage in MB.
     func memoryStats() -> (activeMB: Float, peakMB: Float) {
         (Float(Memory.activeMemory) / 1e6, Float(Memory.peakMemory) / 1e6)
+    }
+
+    // MARK: - Prefix Cache Helpers
+
+    /// Lazily creates and returns the `PrefixCacheManager`. Initialization requires
+    /// a MainActor hop because PrefixCacheManager is `@MainActor`.
+    private func ensurePrefixCache() async -> PrefixCacheManager {
+        if let existing = _prefixCache { return existing }
+        let cache = await PrefixCacheManager(memoryBudgetBytes: Defaults.prefixCacheMemoryBudgetBytes)
+        _prefixCache = cache
+        return cache
+    }
+
+    /// Extract a flat `[Int]` token sequence from an MLXArray that may be 1D `[seq]`
+    /// (LLM-only) or 2D `[batch, seq]` (VLM). Uses the first batch element for 2D.
+    private static func extractTokenSequence(_ tokens: MLXArray) -> [Int] {
+        if tokens.ndim <= 1 {
+            return tokens.asArray(Int.self)
+        } else {
+            return tokens[0].asArray(Int.self)
+        }
     }
 
     // MARK: - Private
@@ -490,18 +513,16 @@ actor LLMActor {
         modelContainer = container
         agentTokenizer = tokenizer
         promptStartsThinking = startsThinking
-        await httpPrefixCache.clear()
+        _prefixCache = nil
         return (tokenizer, startsThinking)
     }
 
-    /// Build the lower-level MLX generation pipeline for the HTTP prefix cache path.
+    /// Build the lower-level MLX generation pipeline using the radix-tree prefix cache.
     ///
-    /// Always renders the FULL conversation through the chat template. When a cache
-    /// match is available and the cache offset is strictly less than the full prompt
-    /// token count, slices the rendered tokens at `cacheOffset` so MLX prefill only
-    /// processes the new suffix. The cache provides the K/V state for the leading
-    /// `cacheOffset` tokens, and Qwen3.5's attention layers use `cache.offset` to
-    /// position-encode (RoPE) the new tokens correctly.
+    /// Flow: tokenize full conversation → extract flat token sequence → detect stable
+    /// prefix boundary → radix tree lookup → plan checkpoints → slice suffix on hit →
+    /// set checkpoint params → create TokenIterator (captures snapshots during prefill)
+    /// → start generation stream.
     ///
     /// Bypasses `ChatSession` because its `init(cache:)` path renders only the new
     /// message and drops intermediate history, which produces incoherent output when
@@ -510,69 +531,103 @@ actor LLMActor {
     private func makeHTTPPrefixCacheGeneration(
         container: ModelContainer,
         conversation: HTTPPrefixCacheConversation,
-        match: HTTPPrefixCacheMatch?,
+        modelID: String,
         parameters: GenerateParameters,
-        toolSpecs: [ToolSpec]?
+        toolSpecs: [ToolSpec]?,
+        prefixCache: PrefixCacheManager
     ) async throws -> HTTPPrefixCacheGeneration {
-        // Capture the Sendable conversation by value; build the non-Sendable
-        // [Chat.Message] history INSIDE the closure to avoid a Sendable warning.
-        let matchBox = match.map { UnsafeSendableBox($0) }
-
         return try await container.perform { context in
+            // 1. Tokenize the full conversation (BEFORE cache lookup).
             let history = conversation.historyMessages
-            let userInput = UserInput(chat: history, tools: toolSpecs)
-            let fullInput = try await context.processor.prepare(input: userInput)
+            let fullInput = try await context.processor.prepare(
+                input: UserInput(chat: history, tools: toolSpecs)
+            )
             // Sequence length is always the LAST dim. For LLM models tokens are
-            // 1D `[seq]`, for VLM models (ParoQuant Qwen35) they are 2D
-            // `[batch, seq]`. Both cases use `dim(-1)` for the seq length.
+            // 1D [seq], for VLM models (ParoQuant Qwen35) they are 2D [batch, seq].
             let fullTokenCount = fullInput.text.tokens.dim(-1)
             let tokenNDim = fullInput.text.tokens.ndim
 
-            let inputForGeneration: LMInput
-            let cacheToUse: [KVCache]?
-            let skippedTokens: Int
+            // 2. Extract flat token sequence for radix tree operations.
+            let fullTokens = Self.extractTokenSequence(fullInput.text.tokens)
 
-            if let match = matchBox?.value {
-                let cacheOffset = httpPrefixCacheReportedTokenCount(match.cache)
-                if cacheOffset > 0 && cacheOffset < fullTokenCount {
-                    // Slice the sequence dim (always the last one). The Text
-                    // subscript slices dim 0 by default, which is the BATCH dim
-                    // for 2D inputs — that would produce an empty tensor and
-                    // crash QuantizedEmbedding.reshape downstream.
-                    let slicedTokens: MLXArray
-                    if tokenNDim <= 1 {
-                        slicedTokens = fullInput.text.tokens[cacheOffset...]
-                    } else {
-                        slicedTokens = fullInput.text.tokens[0..., cacheOffset...]
-                    }
-                    // Drop the mask on the slice — for our HTTP path the
-                    // input is always pure text and downstream code recreates
-                    // attention masks from the cache offset, so an
-                    // out-of-bounds mask would actively confuse the model.
-                    let slicedText = LMInput.Text(tokens: slicedTokens, mask: nil)
-                    inputForGeneration = LMInput(text: slicedText)
-                    cacheToUse = match.cache
-                    skippedTokens = cacheOffset
+            // 3. Build partition key (replaces HTTPPrefixCacheKey for cache routing).
+            let partitionKey = CachePartitionKey(
+                modelID: modelID,
+                kvBits: parameters.kvBits,
+                kvGroupSize: parameters.kvGroupSize
+            )
+
+            // 4. Detect stable prefix boundary (system + tools) via two-probe technique.
+            let stablePrefixOffset = try StablePrefixDetector.detect(
+                systemPrompt: conversation.systemPrompt,
+                toolSpecs: toolSpecs,
+                fullTokens: fullTokens,
+                tokenizer: context.tokenizer
+            )
+
+            // 5–6. Radix tree lookup + checkpoint planning (single MainActor hop).
+            let (lookupResult, initialCheckpointPlan) = await MainActor.run {
+                let lookup = prefixCache.lookup(tokens: fullTokens, partitionKey: partitionKey)
+                let plan = prefixCache.planCheckpoints(
+                    tokens: fullTokens,
+                    stablePrefixOffset: stablePrefixOffset,
+                    partitionKey: partitionKey
+                )
+                return (lookup, plan)
+            }
+            var checkpointPlan = initialCheckpointPlan
+
+            // 7. Determine input for generation and cache to restore.
+            let inputForGeneration: LMInput
+            let cacheToUse: [any KVCache]?
+            let skippedTokens: Int
+            let checkpointBaseOffset: Int
+
+            if let snapshot = lookupResult.snapshot, snapshot.tokenOffset > 0,
+               snapshot.tokenOffset < fullTokenCount
+            {
+                // HIT: restore cache, prefill only the suffix.
+                let cacheOffset = snapshot.tokenOffset
+                let slicedTokens: MLXArray
+                if tokenNDim <= 1 {
+                    slicedTokens = fullInput.text.tokens[cacheOffset...]
                 } else {
-                    // Cache offset is 0 (no reusable state) or covers the entire
-                    // request — fall back to a fresh full prefill.
-                    inputForGeneration = fullInput
-                    cacheToUse = nil
-                    skippedTokens = 0
+                    slicedTokens = fullInput.text.tokens[0..., cacheOffset...]
                 }
+                // Drop the mask — for our HTTP path the input is always pure text
+                // and downstream code recreates attention masks from cache offset.
+                inputForGeneration = LMInput(text: LMInput.Text(tokens: slicedTokens, mask: nil))
+                cacheToUse = lookupResult.restoreCache()
+                skippedTokens = cacheOffset
+                checkpointBaseOffset = cacheOffset
+                // Only capture checkpoints in the SUFFIX (ones before snapshot already stored).
+                checkpointPlan = checkpointPlan.filter { $0.offset > cacheOffset }
             } else {
+                // MISS: full prefill.
                 inputForGeneration = fullInput
                 cacheToUse = nil
                 skippedTokens = 0
+                checkpointBaseOffset = 0
             }
 
+            // 8. Set checkpoint offsets on parameters — flows into TokenIterator → prepare().
+            var genParams = parameters
+            genParams.checkpointAtOffsets = Set(checkpointPlan.map(\.offset))
+            genParams.checkpointBaseOffset = checkpointBaseOffset
+
+            // 9. Create TokenIterator — this calls model.prepare() internally with checkpoints.
+            // NO separate prepare() call. TokenIterator owns prefill.
             let iterator = try TokenIterator(
                 input: inputForGeneration,
                 model: context.model,
                 cache: cacheToUse,
-                parameters: parameters
+                parameters: genParams
             )
 
+            // 10. Read captured snapshots (populated by prepare() inside TokenIterator.init).
+            let capturedSnapshots = iterator.capturedSnapshots
+
+            // 11. Start generation stream.
             let (stream, task, finalCacheHandle) = MLXLMCommon.generateTaskWithFinalCache(
                 promptTokenCount: fullTokenCount,
                 modelConfiguration: context.configuration,
@@ -580,36 +635,26 @@ actor LLMActor {
                 iterator: iterator
             )
 
+            Log.agent.info(
+                "Prefix cache \(lookupResult.reason) — model=\(modelID) "
+                + "promptTokens=\(fullTokenCount) "
+                + "skippedPrefillTokens=\(skippedTokens) "
+                + "newTokensToPrefill=\(fullTokenCount - skippedTokens) "
+                + "sharedPrefixLength=\(lookupResult.sharedPrefixLength) "
+                + "requestMessages=\(conversation.messages.count) "
+                + "capturedCheckpoints=\(capturedSnapshots.count)"
+            )
+
             return HTTPPrefixCacheGeneration(
                 stream: stream,
                 completion: task,
                 finalCacheHandle: finalCacheHandle,
                 promptTokenCount: fullTokenCount,
-                skippedPrefillTokens: skippedTokens
+                skippedPrefillTokens: skippedTokens,
+                fullTokens: fullTokens,
+                capturedSnapshots: capturedSnapshots,
+                partitionKey: partitionKey
             )
-        }
-    }
-
-    /// Emit a mismatch report as a series of short lines so the default
-    /// `log stream --style compact` truncation doesn't drop the content preview.
-    /// One line per logical field; an additional `previewStored=` /
-    /// `previewRequest=` pair is split out for content/reasoning/toolCall fields.
-    private static func logMismatchReport(prefix: String, report: HTTPPrefixCacheMismatchReport) {
-        switch report {
-        case .messageFieldMismatch(let i, let role, let field, let sl, let rl, let sh, let rh, let sp, let rp):
-            Log.agent.info(
-                "\(prefix) — message[\(i)](\(role)).\(field) storedLen=\(sl) reqLen=\(rl) storedHash=\(sh) reqHash=\(rh)"
-            )
-            Log.agent.info("\(prefix) — message[\(i)] storedPreview=\"\(sp)\"")
-            Log.agent.info("\(prefix) — message[\(i)] reqPreview=\"\(rp)\"")
-        case .toolCallArgumentsMismatch(let mi, let ti, let toolName, let sl, let rl, let sh, let rh, let sp, let rp):
-            Log.agent.info(
-                "\(prefix) — message[\(mi)].toolCalls[\(ti)] tool=\(toolName) storedLen=\(sl) reqLen=\(rl) storedHash=\(sh) reqHash=\(rh)"
-            )
-            Log.agent.info("\(prefix) — message[\(mi)].toolCalls[\(ti)] storedPreview=\"\(sp)\"")
-            Log.agent.info("\(prefix) — message[\(mi)].toolCalls[\(ti)] reqPreview=\"\(rp)\"")
-        default:
-            Log.agent.info("\(prefix) — \(report)")
         }
     }
 
@@ -631,24 +676,26 @@ actor LLMActor {
         )
     }
 
-    private static func measureHTTPPrefixCacheTokenCount(
+    /// Re-tokenize the stored conversation (prompt + generated response) and return
+    /// the flat token sequence. Used for storing the leaf snapshot under the correct
+    /// radix path. Returns `nil` on tokenization failure.
+    private static func measureStoredTokenSequence(
         container: ModelContainer,
         conversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?,
-        fallback: Int
-    ) async -> Int {
+        toolSpecs: [ToolSpec]?
+    ) async -> [Int]? {
         do {
-            let prepared = try await container.prepare(input: UserInput(
-                chat: conversation.historyMessages,
-                tools: toolSpecs
-            ))
-            return prepared.text.tokens.size
+            return try await container.perform { context in
+                let prepared = try await context.processor.prepare(
+                    input: UserInput(chat: conversation.historyMessages, tools: toolSpecs)
+                )
+                return Self.extractTokenSequence(prepared.text.tokens)
+            }
         } catch {
             Log.agent.warning(
-                "HTTP prefix cache token count fallback — error=\(error.localizedDescription) "
-                + "fallbackTokens=\(fallback)"
+                "Stored token sequence measurement failed — error=\(error.localizedDescription)"
             )
-            return fallback
+            return nil
         }
     }
 

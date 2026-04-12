@@ -88,6 +88,29 @@ final class TokenRadixTree {
         return (node: node, sharedPrefixLength: bestPrefixLength)
     }
 
+    /// Returns how many leading tokens from `tokens` match the tree, regardless of
+    /// whether any snapshot exists along the path. Useful for miss diagnostics.
+    func findSharedPrefixLength(tokens: [Int]) -> Int {
+        var current = root
+        var pos = 0
+
+        while pos < tokens.count {
+            guard let child = current.children[tokens[pos]] else { break }
+
+            let edge = child.edgeTokens
+            var edgePos = 0
+            while edgePos < edge.count && pos < tokens.count && edge[edgePos] == tokens[pos] {
+                edgePos += 1
+                pos += 1
+            }
+
+            if edgePos < edge.count { break }
+            current = child
+        }
+
+        return pos
+    }
+
     // MARK: - Insert
 
     /// Insert a path for the token sequence. Does NOT store a snapshot.

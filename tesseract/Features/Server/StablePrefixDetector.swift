@@ -18,7 +18,7 @@ struct StablePrefixDetector {
     /// - systemPrompt is nil or empty
     /// - Probes produce zero common prefix
     /// - Common prefix doesn't match the start of fullTokens
-    static func detect(
+    nonisolated static func detect(
         systemPrompt: String?,
         toolSpecs: [ToolSpec]?,
         additionalContext: [String: any Sendable]? = nil,
@@ -69,7 +69,7 @@ struct StablePrefixDetector {
 
     // MARK: - Private
 
-    private static func tokenizeProbe(
+    private nonisolated static func tokenizeProbe(
         systemPrompt: String,
         userContent: String,
         toolSpecs: [ToolSpec]?,
