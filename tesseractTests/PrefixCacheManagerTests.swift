@@ -146,12 +146,21 @@ struct PrefixCacheManagerTests {
         // `memoryBytes` → exactly one eviction is needed to fit within
         // `snapBytes`.
         let leafTokens = Array(20...29)
-        mgr.storeLeaf(
+        let diagnostics = mgr.storeLeaf(
             storedTokens: leafTokens,
             leafSnapshot: makeUniformSnapshot(offset: leafTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
 
+        #expect(diagnostics.evictions.count == 1)
+        let eviction = diagnostics.evictions[0]
+        #expect(eviction.strategy == .utility)
+        #expect(eviction.offset == sysTokens.count)
+        #expect(eviction.checkpointType == .system)
+        #expect(eviction.freedBytes == snapBytes)
+        #expect(eviction.normalizedRecency != nil)
+        #expect(eviction.normalizedFlopEfficiency == 0)
+        #expect(eviction.utility != nil)
         #expect(mgr.stats.snapshotCount == 1)
         let leafResult = mgr.lookup(tokens: leafTokens, partitionKey: defaultKey)
         #expect(leafResult.snapshotTokenOffset == leafTokens.count)
@@ -426,11 +435,17 @@ struct PrefixCacheManagerTests {
         let snapBytes = makeSnapshot(offset: 10, type: .system).memoryBytes
         let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 100)
 
-        // root → [1..10] (system snap, childCount==2 after both inserts)
+        // root → [1..10] (system snap)
         //            → [11..15]
         //            → [21..25] (leaf)
+        //            → [31..35]
+        //
+        // The extra snapshot-less suffix keeps the system node multi-child
+        // even after the leaf snapshot is evicted, so the second drain is
+        // forced onto the fallback path.
         let pathA = Array(1...15)
         let pathB = Array(1...10) + Array(21...25)
+        let pathC = Array(1...10) + Array(31...35)
         mgr.storeSnapshots(
             promptTokens: pathA,
             capturedSnapshots: [makeSnapshot(offset: 10, type: .system)],
@@ -441,17 +456,31 @@ struct PrefixCacheManagerTests {
             leafSnapshot: makeSnapshot(offset: pathB.count, type: .leaf),
             partitionKey: defaultKey
         )
+        mgr.storeSnapshots(
+            promptTokens: pathC,
+            capturedSnapshots: [makeSnapshot(offset: 10, type: .system)],
+            partitionKey: defaultKey
+        )
 
         // Tighten to one snapshot — the eligible leaf is evicted by utility
         // scoring, leaving only the branch-node system snapshot.
         mgr.memoryBudgetBytes = snapBytes
-        mgr.evictToFitBudget()
+        let utilityEvictions = mgr.evictToFitBudget()
+        #expect(utilityEvictions.count == 1)
+        #expect(utilityEvictions[0].strategy == .utility)
         #expect(mgr.stats.snapshotCount == 1)
 
         // Tighten to zero. The remaining snapshot is on a multi-child node
         // (not in the eligible set), so the fallback drops it.
         mgr.memoryBudgetBytes = 0
-        mgr.evictToFitBudget()
+        let fallbackEvictions = mgr.evictToFitBudget()
+        #expect(fallbackEvictions.count == 1)
+        let fallback = fallbackEvictions[0]
+        #expect(fallback.strategy == .fallback)
+        #expect(fallback.checkpointType == .system)
+        #expect(fallback.normalizedRecency == nil)
+        #expect(fallback.normalizedFlopEfficiency == nil)
+        #expect(fallback.utility == nil)
         #expect(mgr.totalSnapshotBytes == 0)
         #expect(mgr.stats.snapshotCount == 0)
     }

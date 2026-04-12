@@ -22,6 +22,10 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let stream: AsyncStream<Generation>
     let completion: Task<Void, Never>
     let finalCacheHandle: FinalizedKVCacheHandle
+    let diagnosticsContext: PrefixCacheDiagnostics.Context
+    let lookupMs: TimeInterval
+    let restoreMs: TimeInterval
+    let prefillMs: TimeInterval
     /// Total prompt tokens (full conversation, ignoring slicing).
     let promptTokenCount: Int
     /// Number of leading tokens skipped because the cache already covered them.
@@ -74,6 +78,7 @@ actor LLMActor {
     private(set) var agentTokenizer: AgentTokenizer?
     private var _prefixCache: PrefixCacheManager?
     private var promptStartsThinking = false
+    private var modelWeightBytes: Int64 = 0
     private var defaultPrefixCacheMemoryBudgetBytes =
         Defaults.fallbackPrefixCacheMemoryBudgetBytes
 
@@ -169,12 +174,14 @@ actor LLMActor {
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
 
         let prefixCache = await ensurePrefixCache()
+        let requestID = UUID()
         // Canonicalize tools once so the leaf re-tokenization uses the same dict
         // iteration order as the prefill path inside makeHTTPPrefixCacheGeneration.
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
         let mlxStart = try await makeHTTPPrefixCacheGeneration(
             container: container,
             conversation: conversation,
+            requestID: requestID,
             modelID: modelID,
             parameters: Self.makeGenerateParameters(from: parameters),
             toolSpecs: canonicalTools,
@@ -184,10 +191,11 @@ actor LLMActor {
         let mlxStartBox = UnsafeSendableBox(mlxStart)
         let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
         let startsInsideThinkBlock = promptStartsThinking
-        let requestID = UUID()
+        let loadedModelWeightBytes = modelWeightBytes
 
-        let task = Task { [conversation, container, canonicalTools, requestID] in
+        let task = Task { [conversation, container, canonicalTools, requestID, loadedModelWeightBytes] in
             let mlxStart = mlxStartBox.value
+            let diagnosticsContext = mlxStart.diagnosticsContext
             var textContent = ""
             var thinkingContent = ""
             var toolCalls: [HTTPPrefixCacheToolCall] = []
@@ -231,6 +239,12 @@ actor LLMActor {
                     }
                 }
 
+                func logEvictions(_ evictions: [PrefixCacheManager.EvictionEvent]) {
+                    for event in evictions {
+                        diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
+                    }
+                }
+
                 for await item in mlxStart.stream {
                     if Task.isCancelled {
                         break
@@ -269,6 +283,12 @@ actor LLMActor {
 
                 if let completionInfo {
                     handle(.info(completionInfo))
+                    diagnosticsContext.log(PrefixCacheDiagnostics.TTFTEvent(
+                        lookupMs: mlxStart.lookupMs,
+                        restoreMs: mlxStart.restoreMs,
+                        prefillMs: mlxStart.prefillMs,
+                        totalPromptMs: completionInfo.promptTime
+                    ))
                     Log.agent.info(
                         "Generation complete — \(completionInfo.generationTokenCount) tokens, "
                         + "\(String(format: "%.1f", completionInfo.tokensPerSecond)) tok/s"
@@ -292,7 +312,7 @@ actor LLMActor {
                 // still saves future requests from a full re-prefill.
                 var storedSnapshotsForTuner: [HybridCacheSnapshot] = []
                 if !Task.isCancelled, !mlxStart.capturedSnapshots.isEmpty {
-                    await MainActor.run {
+                    let diagnostics = await MainActor.run {
                         prefixCache.storeSnapshots(
                             promptTokens: mlxStart.fullTokens,
                             capturedSnapshots: mlxStart.capturedSnapshots,
@@ -300,6 +320,7 @@ actor LLMActor {
                             requestID: requestID
                         )
                     }
+                    logEvictions(diagnostics.evictions)
                     storedSnapshotsForTuner = mlxStart.capturedSnapshots
                 }
 
@@ -313,8 +334,10 @@ actor LLMActor {
                           let finalCache = await mlxStart.finalCacheHandle.takeFinalCache()
                     else {
                         if !Task.isCancelled {
-                            Log.agent.warning(
-                                "Prefix cache store skipped — model=\(modelID) reason=no-final-cache"
+                            diagnosticsContext.logSkip(
+                                stage: "store",
+                                reason: "no-final-cache",
+                                level: .warning
                             )
                         }
                         break leafBlock
@@ -322,9 +345,10 @@ actor LLMActor {
 
                     let cacheOffsets = httpPrefixCacheOffsets(finalCache)
                     guard httpPrefixCacheHasReusableState(finalCache) else {
-                        Log.agent.info(
-                            "Prefix cache store skipped — model=\(modelID) reason=no-reusable-cache-state "
-                            + "cacheOffsets=\(cacheOffsets)"
+                        diagnosticsContext.logSkip(
+                            stage: "store",
+                            reason: "no-reusable-cache-state",
+                            extraFields: [("cacheOffsets", "\(cacheOffsets)")]
                         )
                         break leafBlock
                     }
@@ -342,8 +366,10 @@ actor LLMActor {
                         conversation: storedConversation,
                         toolSpecs: canonicalTools
                     ) else {
-                        Log.agent.warning(
-                            "Prefix cache leaf store skipped — model=\(modelID) reason=tokenization-failed"
+                        diagnosticsContext.logSkip(
+                            stage: "leafStore",
+                            reason: "tokenization-failed",
+                            level: .warning
                         )
                         break leafBlock
                     }
@@ -370,11 +396,14 @@ actor LLMActor {
                     let actualCacheOffset = httpPrefixCacheReportedTokenCount(finalCache)
                     if actualCacheOffset > storedTokens.count {
                         let trimAmount = actualCacheOffset - storedTokens.count
-                        Log.agent.info(
-                            "Prefix cache leaf store skipped — model=\(modelID) "
-                            + "reason=normalization-trim trimAmount=\(trimAmount) "
-                            + "offsetBefore=\(actualCacheOffset) "
-                            + "canonicalCount=\(storedTokens.count)"
+                        diagnosticsContext.logSkip(
+                            stage: "leafStore",
+                            reason: "normalization-trim",
+                            extraFields: [
+                                ("trimAmount", "\(trimAmount)"),
+                                ("offsetBefore", "\(actualCacheOffset)"),
+                                ("canonicalCount", "\(storedTokens.count)"),
+                            ]
                         )
                         break leafBlock
                     }
@@ -387,25 +416,33 @@ actor LLMActor {
                         offset: storedTokens.count,
                         type: .leaf
                     ) else {
-                        Log.agent.info(
-                            "Prefix cache leaf capture skipped — model=\(modelID) "
-                            + "reason=unsupported-cache-type cacheOffsets=\(cacheOffsets)"
+                        diagnosticsContext.logSkip(
+                            stage: "leafCapture",
+                            reason: "unsupported-cache-type",
+                            extraFields: [("cacheOffsets", "\(cacheOffsets)")]
                         )
                         break leafBlock
                     }
+                    diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
+                        offset: leafSnapshot.tokenOffset,
+                        checkpointType: leafSnapshot.checkpointType,
+                        bytes: leafSnapshot.memoryBytes,
+                        duringPrefill: false,
+                        source: "leaf"
+                    ))
 
                     // Coalesce storeLeaf + stats read in one MainActor
                     // hop — saves one cross-actor switch on the success
                     // path (the request hot path).
-                    let stats = await MainActor.run {
+                    let diagnostics = await MainActor.run {
                         prefixCache.storeLeaf(
                             storedTokens: storedTokens,
                             leafSnapshot: leafSnapshot,
                             partitionKey: mlxStart.partitionKey,
                             requestID: requestID
                         )
-                        return prefixCache.stats
                     }
+                    logEvictions(diagnostics.evictions)
                     leafStoreForTuner = AlphaTuner.LeafStore(
                         storedTokens: storedTokens,
                         bytes: leafSnapshot.memoryBytes
@@ -415,21 +452,6 @@ actor LLMActor {
                     // doesn't accumulate transient prefill intermediates
                     // across requests.
                     Memory.clearCache()
-
-                    let activeMB = Float(Memory.activeMemory) / 1e6
-                    let peakMB = Float(Memory.peakMemory) / 1e6
-                    Log.agent.info(
-                        "Prefix cache STORE — model=\(modelID) "
-                        + "leafTokens=\(storedTokens.count) "
-                        + "conversationMessages=\(conversation.messages.count + 1) "
-                        + "responseCharacters=\(textContent.count) toolCalls=\(toolCalls.count) "
-                        + "cacheOffsets=\(cacheOffsets) "
-                        + "snapshots=\(stats.snapshotCount) "
-                        + "partitions=\(stats.partitionCount) "
-                        + "totalSnapshotMB=\(String(format: "%.0f", Float(stats.totalSnapshotBytes) / 1e6)) "
-                        + "activeMemMB=\(String(format: "%.0f", activeMB)) "
-                        + "peakMemMB=\(String(format: "%.0f", peakMB))"
-                    )
                 }
 
                 // Record the request lifecycle for the alpha tuner. Fires
@@ -438,7 +460,7 @@ actor LLMActor {
                 // successful leaf stores.
                 let capturedSnapshots = storedSnapshotsForTuner
                 let leafCapture = leafStoreForTuner
-                await MainActor.run {
+                let (finalStats, finalBudgetBytes) = await MainActor.run {
                     prefixCache.recordRequest(
                         partitionKey: mlxStart.partitionKey,
                         promptTokens: mlxStart.fullTokens,
@@ -446,7 +468,16 @@ actor LLMActor {
                         leafStore: leafCapture,
                         requestID: requestID
                     )
+                    return (prefixCache.stats, prefixCache.memoryBudgetBytes)
                 }
+                diagnosticsContext.log(PrefixCacheDiagnostics.MemoryEvent(
+                    stats: finalStats,
+                    budgetBytes: finalBudgetBytes,
+                    modelWeightBytes: loadedModelWeightBytes,
+                    activeMlxBytes: Int64(clamping: Memory.activeMemory),
+                    peakMlxBytes: Int64(clamping: Memory.peakMemory),
+                    mlxCacheLimitBytes: Int64(clamping: Memory.cacheLimit)
+                ))
 
                 continuation.finish()
             } catch is CancellationError {
@@ -507,6 +538,7 @@ actor LLMActor {
         modelContainer = nil
         agentTokenizer = nil
         promptStartsThinking = false
+        modelWeightBytes = 0
         _prefixCache = nil
         defaultPrefixCacheMemoryBudgetBytes = Defaults.fallbackPrefixCacheMemoryBudgetBytes
     }
@@ -685,6 +717,7 @@ actor LLMActor {
         modelContainer = container
         agentTokenizer = tokenizer
         promptStartsThinking = startsThinking
+        self.modelWeightBytes = modelWeightBytes
         defaultPrefixCacheMemoryBudgetBytes = prefixCacheBudgetBytes
         _prefixCache = nil
         return (tokenizer, startsThinking)
@@ -717,6 +750,7 @@ actor LLMActor {
     private func makeHTTPPrefixCacheGeneration(
         container: ModelContainer,
         conversation: HTTPPrefixCacheConversation,
+        requestID: UUID,
         modelID: String,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
@@ -730,8 +764,20 @@ actor LLMActor {
 
         // Capture promptStartsThinking for the non-MainActor closure below.
         let promptStartsThinking = self.promptStartsThinking
+        let diagnosticsContext = PrefixCacheDiagnostics.Context(
+            requestID: requestID,
+            modelID: modelID,
+            kvBits: parameters.kvBits,
+            kvGroupSize: parameters.kvGroupSize
+        )
 
         return try await container.perform { context in
+            func measure<T>(_ work: () throws -> T) rethrows -> (T, TimeInterval) {
+                let started = Date.timeIntervalSinceReferenceDate
+                let value = try work()
+                return (value, Date.timeIntervalSinceReferenceDate - started)
+            }
+
             // 1. Tokenize the full conversation (BEFORE cache lookup).
             let history = conversation.historyMessages
             let fullInput = try await context.processor.prepare(
@@ -796,6 +842,7 @@ actor LLMActor {
             }
 
             // 5–6. Radix tree lookup + checkpoint planning (single MainActor hop).
+            let lookupStarted = Date.timeIntervalSinceReferenceDate
             let (lookupResult, initialCheckpointPlan) = await MainActor.run {
                 prefixCache.lookupAndPlanCheckpoints(
                     tokens: fullTokens,
@@ -804,6 +851,7 @@ actor LLMActor {
                     partitionKey: partitionKey
                 )
             }
+            let lookupMs = Date.timeIntervalSinceReferenceDate - lookupStarted
             var checkpointPlan = initialCheckpointPlan
 
             // 7. Determine input for generation and cache to restore.
@@ -811,6 +859,7 @@ actor LLMActor {
             let cacheToUse: [any KVCache]?
             let skippedTokens: Int
             let checkpointBaseOffset: Int
+            let restoreMs: TimeInterval
 
             if let snapshot = lookupResult.snapshot, snapshot.tokenOffset > 0,
                snapshot.tokenOffset < fullTokenCount
@@ -826,7 +875,11 @@ actor LLMActor {
                 // Drop the mask — for our HTTP path the input is always pure text
                 // and downstream code recreates attention masks from cache offset.
                 inputForGeneration = LMInput(text: LMInput.Text(tokens: slicedTokens, mask: nil))
-                cacheToUse = lookupResult.restoreCache()
+                let (restoredCache, measuredRestoreMs) = measure {
+                    lookupResult.restoreCache()
+                }
+                cacheToUse = restoredCache
+                restoreMs = measuredRestoreMs
                 skippedTokens = cacheOffset
                 checkpointBaseOffset = cacheOffset
                 // Only capture checkpoints in the SUFFIX (ones before snapshot already stored).
@@ -835,6 +888,7 @@ actor LLMActor {
                 // MISS: full prefill.
                 inputForGeneration = fullInput
                 cacheToUse = nil
+                restoreMs = 0
                 skippedTokens = 0
                 checkpointBaseOffset = 0
             }
@@ -850,15 +904,36 @@ actor LLMActor {
 
             // 9. Create TokenIterator — this calls model.prepare() internally with checkpoints.
             // NO separate prepare() call. TokenIterator owns prefill.
-            let iterator = try TokenIterator(
-                input: inputForGeneration,
-                model: context.model,
-                cache: cacheToUse,
-                parameters: genParams
-            )
+            let (iterator, prefillMs) = try measure {
+                try TokenIterator(
+                    input: inputForGeneration,
+                    model: context.model,
+                    cache: cacheToUse,
+                    parameters: genParams
+                )
+            }
 
             // 10. Read captured snapshots (populated by prepare() inside TokenIterator.init).
             let capturedSnapshots = iterator.capturedSnapshots
+            diagnosticsContext.log(PrefixCacheDiagnostics.LookupEvent(
+                reason: lookupResult.reason,
+                promptTokens: fullTokenCount,
+                sharedPrefixLength: lookupResult.sharedPrefixLength,
+                skippedPrefillTokens: skippedTokens,
+                newTokensToPrefill: fullTokenCount - skippedTokens,
+                lookupMs: lookupMs,
+                restoreMs: restoreMs,
+                plannedCheckpoints: checkpointPlan
+            ))
+            for snapshot in capturedSnapshots {
+                diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
+                    offset: snapshot.tokenOffset,
+                    checkpointType: snapshot.checkpointType,
+                    bytes: snapshot.memoryBytes,
+                    duringPrefill: true,
+                    source: "prefill"
+                ))
+            }
 
             // 11. Start generation stream.
             let (stream, task, finalCacheHandle) = MLXLMCommon.generateTaskWithFinalCache(
@@ -868,20 +943,14 @@ actor LLMActor {
                 iterator: iterator
             )
 
-            Log.agent.info(
-                "Prefix cache \(lookupResult.reason) — model=\(modelID) "
-                + "promptTokens=\(fullTokenCount) "
-                + "skippedPrefillTokens=\(skippedTokens) "
-                + "newTokensToPrefill=\(fullTokenCount - skippedTokens) "
-                + "sharedPrefixLength=\(lookupResult.sharedPrefixLength) "
-                + "requestMessages=\(conversation.messages.count) "
-                + "capturedCheckpoints=\(capturedSnapshots.count)"
-            )
-
             return HTTPPrefixCacheGeneration(
                 stream: stream,
                 completion: task,
                 finalCacheHandle: finalCacheHandle,
+                diagnosticsContext: diagnosticsContext,
+                lookupMs: lookupMs,
+                restoreMs: restoreMs,
+                prefillMs: prefillMs,
                 promptTokenCount: fullTokenCount,
                 skippedPrefillTokens: skippedTokens,
                 fullTokens: fullTokens,

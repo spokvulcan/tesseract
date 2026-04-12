@@ -45,6 +45,46 @@ final class PrefixCacheManager {
         self.alphaTuner = alphaTuner
     }
 
+    struct CacheStats: Sendable {
+        let partitionCount: Int
+        let totalNodeCount: Int
+        let totalSnapshotBytes: Int
+        /// Per-checkpoint-type snapshot counts. Aggregates the incremental
+        /// counters from each partition's `TokenRadixTree`.
+        let snapshotsByType: [HybridCacheSnapshot.CheckpointType: Int]
+
+        nonisolated var snapshotCount: Int { snapshotsByType.values.reduce(0, +) }
+    }
+
+    struct EvictionEvent: Sendable {
+        enum Strategy: String, Sendable {
+            case utility
+            case fallback
+        }
+
+        let strategy: Strategy
+        let offset: Int
+        let checkpointType: HybridCacheSnapshot.CheckpointType
+        let freedBytes: Int
+        let budgetBytes: Int
+        let snapshotBytesAfter: Int
+        let normalizedRecency: Double?
+        let normalizedFlopEfficiency: Double?
+        let utility: Double?
+    }
+
+    struct StoreDiagnostics: Sendable {
+        let evictions: [EvictionEvent]
+        let stats: CacheStats
+    }
+
+    private struct EvictionCandidate {
+        let tree: TokenRadixTree
+        let node: RadixTreeNode
+        let strategy: EvictionEvent.Strategy
+        let score: EvictionScore?
+    }
+
     // MARK: - Lookup
 
     struct LookupResult {
@@ -245,13 +285,16 @@ final class PrefixCacheManager {
     // MARK: - Store
 
     /// Store mid-prefill snapshots captured during prepareWithCheckpoints().
+    @discardableResult
     func storeSnapshots(
         promptTokens: [Int],
         capturedSnapshots: [HybridCacheSnapshot],
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
-    ) {
-        guard !capturedSnapshots.isEmpty else { return }
+    ) -> StoreDiagnostics {
+        guard !capturedSnapshots.isEmpty else {
+            return StoreDiagnostics(evictions: [], stats: stats)
+        }
 
         let tree = getOrCreateTree(for: partitionKey)
         tree.insertPath(tokens: promptTokens)
@@ -260,24 +303,29 @@ final class PrefixCacheManager {
             tree.storeSnapshot(snapshot, forTokens: promptTokens, atOffset: snapshot.tokenOffset)
         }
 
-        evictToFitBudget(requestID: requestID)
+        let evictions = evictToFitBudget(requestID: requestID)
+        return StoreDiagnostics(evictions: evictions, stats: stats)
     }
 
     /// Store the leaf snapshot under post-response tokens.
     /// `storedTokens` = re-tokenized (prompt + generated response).
+    @discardableResult
     func storeLeaf(
         storedTokens: [Int],
         leafSnapshot: HybridCacheSnapshot,
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
-    ) {
-        guard leafSnapshot.tokenOffset == storedTokens.count else { return }
+    ) -> StoreDiagnostics {
+        guard leafSnapshot.tokenOffset == storedTokens.count else {
+            return StoreDiagnostics(evictions: [], stats: stats)
+        }
 
         let tree = getOrCreateTree(for: partitionKey)
         let node = tree.insertPath(tokens: storedTokens)
         tree.storeSnapshot(leafSnapshot, on: node)
 
-        evictToFitBudget(requestID: requestID)
+        let evictions = evictToFitBudget(requestID: requestID)
+        return StoreDiagnostics(evictions: evictions, stats: stats)
     }
 
     /// Reseed a snapshot at `path` with an explicit `lastAccessTime`.
@@ -372,24 +420,36 @@ final class PrefixCacheManager {
     /// Marconi utility scoring (`EvictionPolicy`) for eligible nodes and
     /// falls back to oldest-first when only multi-child branch snapshots
     /// remain.
-    func evictToFitBudget(requestID: UUID? = nil) {
+    @discardableResult
+    func evictToFitBudget(requestID: UUID? = nil) -> [EvictionEvent] {
         // Pin a single clock reading and a single sorted tree order so all
         // iterations in one drain share the same recency anchor and
         // tie-break ordering.
         let now: ContinuousClock.Instant = .now
         let orderedTrees = trees.sorted { $0.key < $1.key }.map(\.value)
-        var didEvictAnything = false
+        var events: [EvictionEvent] = []
         while totalSnapshotBytes > memoryBudgetBytes {
-            guard let (tree, node) = findEvictionCandidate(now: now, orderedTrees: orderedTrees)
+            guard let candidate = findEvictionCandidate(now: now, orderedTrees: orderedTrees),
+                  let snapshot = candidate.node.snapshot
             else { break }
 
-            tree.evictSnapshot(node: node)
-            didEvictAnything = true
+            candidate.tree.evictSnapshot(node: candidate.node)
+            events.append(EvictionEvent(
+                strategy: candidate.strategy,
+                offset: candidate.node.tokenOffset,
+                checkpointType: snapshot.checkpointType,
+                freedBytes: snapshot.memoryBytes,
+                budgetBytes: memoryBudgetBytes,
+                snapshotBytesAfter: totalSnapshotBytes,
+                normalizedRecency: candidate.score?.normalizedRecency,
+                normalizedFlopEfficiency: candidate.score?.normalizedFlopEfficiency,
+                utility: candidate.score?.utility
+            ))
 
-            if node.isLeaf {
-                tree.evictNode(node: node)
-            } else if node.childCount == 1, node.snapshot == nil {
-                tree.collapseSingleChildNode(node)
+            if candidate.node.isLeaf {
+                candidate.tree.evictNode(node: candidate.node)
+            } else if candidate.node.childCount == 1, candidate.node.snapshot == nil {
+                candidate.tree.collapseSingleChildNode(candidate.node)
             }
         }
         // Mark the first request that ever triggered eviction. The
@@ -397,27 +457,17 @@ final class PrefixCacheManager {
         // after the request has finished all stores, so the bootstrap
         // start state includes a later leaf store if the first drain
         // happened during mid-prefill capture.
-        if didEvictAnything,
+        if !events.isEmpty,
            let alphaTuner,
            case .waitingForFirstEviction = alphaTuner.phase,
            pendingBootstrapBoundary == nil
         {
             pendingBootstrapBoundary = requestID.map(PendingBootstrapBoundary.request) ?? .unscoped
         }
+        return events
     }
 
     // MARK: - Stats
-
-    struct CacheStats: Sendable {
-        let partitionCount: Int
-        let totalNodeCount: Int
-        let totalSnapshotBytes: Int
-        /// Per-checkpoint-type snapshot counts. Aggregates the incremental
-        /// counters from each partition's `TokenRadixTree`.
-        let snapshotsByType: [HybridCacheSnapshot.CheckpointType: Int]
-
-        nonisolated var snapshotCount: Int { snapshotsByType.values.reduce(0, +) }
-    }
 
     var stats: CacheStats {
         var nodes = 0
@@ -461,7 +511,7 @@ final class PrefixCacheManager {
     private func findEvictionCandidate(
         now: ContinuousClock.Instant,
         orderedTrees: [TokenRadixTree]
-    ) -> (tree: TokenRadixTree, node: RadixTreeNode)? {
+    ) -> EvictionCandidate? {
         var nodeToTree: [ObjectIdentifier: TokenRadixTree] = [:]
         var candidates: [RadixTreeNode] = []
         for tree in orderedTrees {
@@ -474,12 +524,25 @@ final class PrefixCacheManager {
         if let victim = EvictionPolicy.selectVictim(candidates: candidates, now: now),
            let tree = nodeToTree[ObjectIdentifier(victim.node)]
         {
-            return (tree: tree, node: victim.node)
+            return EvictionCandidate(
+                tree: tree,
+                node: victim.node,
+                strategy: .utility,
+                score: victim.score
+            )
         }
 
         return orderedTrees
             .lazy
             .flatMap { tree in tree.allSnapshotNodes().lazy.map { (tree: tree, node: $0) } }
             .min(by: { $0.node.lastAccessTime < $1.node.lastAccessTime })
+            .map { candidate in
+                EvictionCandidate(
+                    tree: candidate.tree,
+                    node: candidate.node,
+                    strategy: .fallback,
+                    score: nil
+                )
+            }
     }
 }
