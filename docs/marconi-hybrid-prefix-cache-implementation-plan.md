@@ -1263,6 +1263,52 @@ matching the Marconi paper's ~98% hit-rate target for agentic workloads.
    by the eviction policy. Phase 2 adds per-node FLOP cost tracking and
    the `alpha * norm(F/B) + norm(R)` utility score.
 
+6. **Main-agent / subagent cross-eviction (observed in production).**
+   Main agent and subagent share a partition (partition key is
+   `(modelID, kvBits, kvGroupSize)` — same model → same partition). When
+   a subagent runs a long deep-research loop (40+ turns, ~25–30K tokens
+   each), its own checkpoints hit frequently and stay fresh, while the
+   main agent's much taller 76K-token checkpoint sits untouched and its
+   LRU timestamp goes stale. Type-based LRU eviction then picks the
+   stale-but-valuable main-agent snapshot over the fresh-but-small
+   subagent snapshots.
+
+   **Observed symptom (production, 2026-04-12 session):**
+   Main agent builds up to `skippedPrefillTokens=76711` over 50 turns
+   (99.7% hit rate), then delegates to a subagent with a different
+   toolset (`toolDefinitions=11` vs subagent's `toolDefinitions=5`).
+   After the subagent's 40-turn research loop completes and main agent
+   resumes, the next main-agent request reports
+   `sharedPrefixLength=24` — only the bare `<|im_start|>system\n# Tools
+   \n\n<tools>\n` header matches. Full 76K-token re-prefill required.
+
+   **Why this is a Phase 1 limitation, not a bug:**
+   LRU cannot distinguish "this checkpoint is worth 76K × N_layers × D
+   FLOPs" from "this checkpoint is worth 5K × N_layers × D FLOPs". The
+   cache evicts the larger-value checkpoint because it hasn't been
+   accessed recently. **Marconi's utility score fixes this exactly**:
+   `utility = norm(R) + alpha * norm(F/B)` where F is the FLOP savings
+   per hit. The 76K checkpoint's F is ~15× the subagent's F, so its
+   utility stays high even when R drops. Task 2.3 implements this.
+
+   **Important for parallel subagents (future use case):**
+   The target workload is 3–4 subagents running simultaneously alongside
+   a long main-agent conversation (80K+ tokens). Under Phase 1 LRU,
+   whichever partition is actively hot at any given moment squeezes the
+   others out. Under Phase 2 utility-scored eviction, all the tall
+   prefixes coexist because their F values dominate the score. This is
+   the motivating scenario for Task 2.3 and should be the acceptance
+   criterion for Phase 2 completion.
+
+   Workarounds available **within** Phase 1 for users hitting this:
+   - Raise `Defaults.prefixCacheMemoryBudgetBytes` in `LLMActor.swift`
+     from 3 GiB to 6–8 GiB if unified memory allows. Each additional GiB
+     buys roughly 2–5 more snapshot slots, enough for main + 3 subagents
+     to coexist without eviction pressure. Cost: proportional increase
+     in steady-state RSS.
+   - Keep it at 3 GiB and accept that main-agent prefixes are lost after
+     long subagent work. Phase 2 is the real fix.
+
 ### File inventory (Phase 1 final state)
 
 Production code:
@@ -1435,6 +1481,8 @@ This replaces the Phase 1 type-priority heuristic. Checkpoint type still exists 
 | 6 | `lowestUtilityEvictedAcrossPartitions` | Global minimum utility is evicted, not just within one tree |
 | 7 | `singleChildEvictionCollapsesNode` | Snapshot eviction on a 1-child node preserves compressed radix structure |
 | 8 | `memoryBudgetRespected` | Repeated lowest-utility eviction brings usage under budget |
+| 9 | `tallMainAgentSurvivesSubagentChurn` | **Regression test for Phase 1 limitation #6.** Simulate a main-agent checkpoint at offset 76K coexisting with many subagent checkpoints at offset 20–30K. Subagent checkpoints are accessed frequently (recent), main-agent checkpoint is accessed rarely (stale). Under utility scoring with `alpha > 0`, the main-agent checkpoint must survive eviction because its F/B ratio dominates. Under Phase 1 LRU, it would be evicted; Phase 2 must not regress to that behavior. |
+| 10 | `parallelSubagentsCoexistWithMainAgent` | **Acceptance criterion for Phase 2.** Simulate 1 main agent (80K checkpoint) + 3 subagents (25K checkpoints each) all under a shared budget just tight enough to require eviction. All 4 tall-prefix checkpoints must remain in the cache (shorter leaf-like entries are evicted first). Validates that `norm(F/B)` weighting is sufficient to preserve tall context prefixes across sessions. |
 
 ### Task 2.4: Adaptive `alpha` tuning (paper/repo-aligned)
 
