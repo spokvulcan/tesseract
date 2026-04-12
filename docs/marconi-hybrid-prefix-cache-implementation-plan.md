@@ -1434,26 +1434,30 @@ if let splitOffset = tree.findIntermediateSplitOffsetForInsertion(tokens: tokens
 
 ### Task 2.2: Logit-equivalence verification harness
 
-**The most critical correctness gate.** Required before any further phases.
+**The most critical correctness gate.** Required before any further phases. Implemented as `HybridCacheCorrectnessRunner` (loaded-model harness driven via `scripts/dev.sh hybrid-cache-correctness`); not a unit test.
 
 **Scope:** Logit-equivalence tests apply to **mid-prefill checkpoint restores** (stable prefix, branch points) where no normalization-offset trimming occurs. These checkpoints capture and restore state exactly — bitwise logit match is required.
 
-For **leaf hits from normalized conversations**, the Mamba normalization divergence (blocker #22) means bitwise equality is not guaranteed. Leaf hits use a weaker **bounded-divergence** contract: `max |logit_cached - logit_uncached| < 0.01`. This matches the current prototype's accepted divergence (`LLMActor.swift:349-355`).
+For **leaf hits from normalized conversations**, the Mamba normalization divergence (blocker #22) means bitwise equality is not guaranteed. The original spec proposed a `max|logit_diff| < 0.01` bound; **this turned out to be empirically wrong on Qwen3.5**: the Mamba state mismatch perturbs raw logits by ~10 even at `trim = 1`, while leaving the argmax stable. Argmax stability is sufficient for greedy decoding but not for sampled decoding, and the HTTP server propagates the request's `temperature`/`top_p` which may be > 0.
 
-**Tests 2.2 — `HybridCacheCorrectnessTests.swift` (requires model):**
+**Production response (`LLMActor.swift` around line 337):** the offset-alignment block now **skips the leaf store entirely** when normalization would require any non-zero `trimAmount`. The trade-off is lost cache hits on whitespace-normalized conversations in exchange for sampler-agnostic correctness — Tesseract's primary workload is greedy by default and trim is rare in normal ChatML round-trips, so the hit-rate impact is empirically minimal (verified by `PrefixCacheE2ERunner` Step 5, which still passes the cross-turn cache-hit assertion after the guard). Test 9 in this harness now serves as a **diagnostic** showing the divergence math that justifies the guard — it simulates the (now-unreachable in production) trim-and-restore path and characterizes the drift envelope on the current model.
+
+**Tests 2.2 — `HybridCacheCorrectnessRunner` (requires model, ~80s on Qwen3.5-4B):**
 
 | # | Test | What it validates |
 |---|------|-------------------|
-| 1 | `CRITICAL_midPrefillRestoreMatchesFullPrefill` | Mid-prefill snapshot (no normalization): full prefill logits == restore-at-K + suffix logits. K = N/4, N/2, 3N/4. **Bitwise match required.** |
-| 2 | `restoreAtExactMatch` | Restore at full length → no suffix → logits match |
-| 3 | `divergentSuffixAfterRestore` | Checkpoint at K, different suffix → model processes correctly |
+| 1 | `midPrefillRestoreMatchesFullPrefill` | **CRITICAL.** Mid-prefill snapshot (no normalization): full prefill logits == restore-at-K + suffix logits. K = N/4, N/2, 3N/4. Bitwise match required. |
+| 2 | `restoreAtExactMatch` | Capture at K = N (full prompt length). Live and restored caches forward the same sentinel token; logits must match bitwise. Validates the K = N round-trip path independent of any suffix prefill. |
+| 3 | `divergentSuffixAfterRestore` | Checkpoint at K, prefill a divergent suffix on the restored cache; resulting logits must be finite and span vocab (smoke test only — no reference comparison since prompts diverge). |
 | 4 | `mambaStateRestoredExactly` | Mid-prefill: MambaCache.state arrays bitwise match pre-checkpoint |
 | 5 | `attentionKVRestoredExactly` | After restore: offset, keys, values match |
 | 6 | `quantizedKVCacheRestoredExactly` | After restore: wq, scales, biases match; groupSize/bits correct |
 | 7 | `multipleRestoresFromSameSnapshot` | Two restores → identical logits (isolation) |
-| 8 | `longContext16KRestore` | Checkpoint at 8K, suffix 8K → logits match full 16K |
-| 9 | `leafHitWithNormalizationDivergenceBounded` | Leaf hit where normalization trimmed attention but not Mamba: `max\|logit_diff\| < 0.01` |
+| 8 | `longContext16KRestore` | 16K-token prompt, checkpoint at 8K, suffix 8K → logits match full 16K bitwise |
+| 9 | `leafHitWithNormalizationDivergenceBounded` | **Diagnostic only — production no longer reaches this path** (LLMActor skips leaf store on `trimAmount > 0`). Simulates the trim-and-restore math, sweeps `trim ∈ {1, 2, 4}`, logs measured `maxAbsDiff` and argmax stability. Pass: argmax stable at `trim = 1` (Phase 1 historical assumption). The original `max\|diff\| < 0.01` bound was unreachable; see scope note above. |
 | 10 | `leafHitWithoutNormalizationMatchesBitwise` | Leaf hit where no trimming occurred (0 trim amount): logits match exactly |
+
+**Possible follow-up (deferred):** the current production guard is conservative — it skips leaf store on **any** trim regardless of the future request's sampling mode. A more permissive variant would tag the snapshot with `requiresGreedy` and only skip the lookup when the new request is sampled, preserving cache hits for greedy clients on normalized conversations. Tag-based gating requires a `HybridCacheSnapshot` schema change; not worth implementing until measured hit-rate data shows the conservative skip is hurting real workloads.
 
 ### Task 2.3: FLOP-aware eviction
 

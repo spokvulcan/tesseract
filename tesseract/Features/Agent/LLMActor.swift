@@ -334,29 +334,41 @@ actor LLMActor {
                         return
                     }
 
-                    // 4. Offset-alignment: trim attention KV if normalization shortened
-                    //    the stored conversation (whitespace-only assistant content → "").
-                    //    Mamba layers cannot be trimmed; their state is left as-is
-                    //    (small recurrent divergence — acceptable).
+                    // 4. Offset-alignment guard: if normalization shortened the
+                    //    stored conversation (whitespace-only assistant content → ""),
+                    //    we can only trim attention K/V — Mamba's recurrent state
+                    //    can't be unwound. Trimming the cache and capturing it as a
+                    //    leaf produces a snapshot whose attention is aligned to
+                    //    `storedTokens.count` but whose Mamba state is from the
+                    //    full pre-trim offset. On Qwen3.5 the resulting leaf hit
+                    //    perturbs raw logits by ~10 even at trim=1: argmax stays
+                    //    stable (greedy decoding survives), but the rest of the
+                    //    distribution drifts in a way that affects sampled
+                    //    decoding. Since the HTTP server propagates the request's
+                    //    `temperature`/`top_p` and we can't predict future request
+                    //    sampling params at store time, the safe choice is to
+                    //    skip the leaf store entirely when normalization would
+                    //    require any trim. Lost cache hits on whitespace-normalized
+                    //    conversations are the trade-off for sampler-agnostic
+                    //    correctness. Verified by `HybridCacheCorrectnessRunner`
+                    //    test 9 — see the `leafHitWithNormalizationDivergence...`
+                    //    diagnostics for the empirical drift measurements.
                     let actualCacheOffset = httpPrefixCacheReportedTokenCount(finalCache)
                     if actualCacheOffset > storedTokens.count {
                         let trimAmount = actualCacheOffset - storedTokens.count
-                        var trimmedLayerCount = 0
-                        for layer in finalCache where layer.isTrimmable {
-                            let actuallyTrimmed = layer.trim(trimAmount)
-                            if actuallyTrimmed > 0 {
-                                trimmedLayerCount += 1
-                            }
-                        }
                         Log.agent.info(
-                            "Prefix cache offset trim — model=\(modelID) "
-                            + "trimAmount=\(trimAmount) "
-                            + "offsetBefore=\(actualCacheOffset) offsetAfter=\(storedTokens.count) "
-                            + "trimmedLayers=\(trimmedLayerCount)/\(finalCache.count)"
+                            "Prefix cache leaf store skipped — model=\(modelID) "
+                            + "reason=normalization-trim trimAmount=\(trimAmount) "
+                            + "offsetBefore=\(actualCacheOffset) "
+                            + "canonicalCount=\(storedTokens.count)"
                         )
+                        continuation.finish()
+                        return
                     }
 
-                    // 5. Capture leaf snapshot from the final (trimmed) cache.
+                    // 5. Capture leaf snapshot from the final cache. The guard
+                    //    above ensures the cache's offset matches `storedTokens.count`
+                    //    exactly — no per-layer trimming is needed.
                     if let leafSnapshot = HybridCacheSnapshot.capture(
                         cache: finalCache,
                         offset: storedTokens.count,
@@ -547,6 +559,19 @@ actor LLMActor {
             return sendableDict(from: v)
         }
         return nil
+    }
+
+    /// Run a closure with the loaded `ModelContainer`. Used by loaded-model
+    /// runners (`PrefixCacheE2ERunner`, `HybridCacheCorrectnessRunner`) that
+    /// need raw forward-pass access via `container.perform { context in ... }`
+    /// without going through the agent generation pipeline.
+    func withModelContainer<T: Sendable>(
+        _ body: @Sendable (ModelContainer) async throws -> T
+    ) async throws -> T {
+        guard let container = modelContainer else {
+            throw AgentEngineError.modelNotLoaded
+        }
+        return try await body(container)
     }
 
     // MARK: - Private

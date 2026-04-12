@@ -205,10 +205,12 @@ cmd_dev_profile() {
     print_data_paths
 }
 
-# Task 1.8 HybridPrefixCacheE2E verification.
-# Launches the app in the foreground with --prefix-cache-e2e; runner exits
-# with non-zero on any failed check. Shows the latest log + report path.
-cmd_prefix_cache_e2e() {
+# Build the app, kill any running instance, then exec the binary with the
+# given CLI flag. Tails the runner's `latest.log` and propagates the binary's
+# exit code. Used by all loaded-model verification subcommands.
+_run_loaded_model_check() {
+    local flag="$1"
+    local report_subdir="$2"
     local configuration="Debug"
     cmd_build "$configuration"
     echo ""
@@ -218,11 +220,11 @@ cmd_prefix_cache_e2e() {
     kill_app
 
     local binary="$app_path/Contents/MacOS/Tesseract Agent"
-    echo "Running --prefix-cache-e2e against: $binary"
-    local report_dir="$HOME/Library/Containers/app.tesseract.agent/Data/tmp/tesseract-debug/benchmark/prefix-cache-e2e"
+    echo "Running $flag against: $binary"
+    local report_dir="$HOME/Library/Containers/app.tesseract.agent/Data/tmp/tesseract-debug/benchmark/$report_subdir"
 
     local exit_code=0
-    "$binary" --prefix-cache-e2e || exit_code=$?
+    "$binary" "$flag" || exit_code=$?
 
     if [ -f "$report_dir/latest.log" ]; then
         echo ""
@@ -232,6 +234,14 @@ cmd_prefix_cache_e2e() {
     echo ""
     echo "Report dir: $report_dir"
     return $exit_code
+}
+
+cmd_prefix_cache_e2e() {
+    _run_loaded_model_check --prefix-cache-e2e prefix-cache-e2e
+}
+
+cmd_hybrid_cache_correctness() {
+    _run_loaded_model_check --hybrid-cache-correctness hybrid-cache-correctness
 }
 
 cmd_archive() {
@@ -330,7 +340,8 @@ usage() {
     echo "  dev         Build + kill + run using Debug (fast iteration)"
     echo "  dev-release Build + kill + run using Release (perf testing)"
     echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
-    echo "  prefix-cache-e2e  Build + run Task 1.8 HybridPrefixCacheE2E (loaded-model cache verification)"
+    echo "  prefix-cache-e2e         Build + run Task 1.8 HybridPrefixCacheE2E (loaded-model cache verification)"
+    echo "  hybrid-cache-correctness Build + run Task 2.2 logit-equivalence harness (mid-prefill restore bitwise check)"
     echo "  archive     Create release archive for App Store submission"
     echo "  resolve     Resolve SPM package dependencies"
     echo "  clean       Clean build artifacts and derived data"
@@ -345,7 +356,8 @@ case "${1:-}" in
     dev)         cmd_dev ;;
     dev-release) cmd_dev_release ;;
     dev-profile) cmd_dev_profile ;;
-    prefix-cache-e2e) cmd_prefix_cache_e2e ;;
+    prefix-cache-e2e)         cmd_prefix_cache_e2e ;;
+    hybrid-cache-correctness) cmd_hybrid_cache_correctness ;;
     archive)     cmd_archive ;;
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;

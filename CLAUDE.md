@@ -57,9 +57,10 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 
 **Loaded-model verification** (not a unit test — runs against a real model):
 ```bash
-scripts/dev.sh prefix-cache-e2e   # builds, runs PrefixCacheE2ERunner, prints report
+scripts/dev.sh prefix-cache-e2e          # Task 1.8 PrefixCacheE2ERunner — TTFT/output equivalence proxy
+scripts/dev.sh hybrid-cache-correctness  # Task 2.2 HybridCacheCorrectnessRunner — bitwise logit + state equivalence
 ```
-Exits non-zero on any failed check. Run before releases and after any change to `LLMActor`, `PrefixCacheManager`, `HybridCacheSnapshot`, or `StablePrefixDetector`.
+Both exit non-zero on any failed check. Run before releases and after any change to `LLMActor`, `PrefixCacheManager`, `HybridCacheSnapshot`, or `StablePrefixDetector`. The correctness runner is the stronger gate (bitwise tensor comparison via raw `ModelContainer.perform` access); the e2e runner exercises the full HTTP path and is the right shape for catching pipeline regressions the correctness runner can't see.
 
 ## Architecture
 

@@ -30,30 +30,38 @@ struct TesseractApp: App {
     @State private var selectedNavigation: NavigationItem? = .agent
 
     init() {
-        if CommandLine.arguments.contains("--benchmark") {
+        let args = CommandLine.arguments
+        if args.contains("--benchmark") {
             Task { @MainActor in
-                let runner = BenchmarkRunner()
-                do {
-                    try await runner.run()
-                } catch {
-                    Log.agent.error("Benchmark failed: \(error)")
-                }
+                do { try await BenchmarkRunner().run() }
+                catch { Log.agent.error("Benchmark failed: \(error)") }
                 exit(0)
             }
-        } else if CommandLine.arguments.contains("--prefix-cache-e2e") {
-            // Task 1.8 HybridPrefixCacheE2E verification. Reuses BenchmarkRunner's
-            // model-resolution plumbing but drives the `generateServerTextCompletion`
-            // path with logit-equivalence assertions rather than scenario turns.
-            Task { @MainActor in
-                let runner = BenchmarkRunner()
-                let e2e = PrefixCacheE2ERunner(runner: runner)
-                do {
-                    try await e2e.run()
-                    exit(0)
-                } catch {
-                    Log.agent.error("Prefix cache E2E failed: \(error)")
-                    exit(1)
-                }
+        } else if args.contains("--prefix-cache-e2e") {
+            Self.runHarness("Prefix cache E2E") {
+                try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--hybrid-cache-correctness") {
+            Self.runHarness("Hybrid cache correctness") {
+                try await HybridCacheCorrectnessRunner(runner: BenchmarkRunner()).run()
+            }
+        }
+    }
+
+    /// Spawn a `@MainActor` task that runs a loaded-model verification
+    /// harness, exits 0 on success, exits 1 on failure (after logging).
+    @MainActor
+    private static func runHarness(
+        _ label: String,
+        run: @MainActor @escaping () async throws -> Void
+    ) {
+        Task { @MainActor in
+            do {
+                try await run()
+                exit(0)
+            } catch {
+                Log.agent.error("\(label) failed: \(error)")
+                exit(1)
             }
         }
     }

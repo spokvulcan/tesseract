@@ -183,6 +183,16 @@ final class AgentEngine {
         return HTTPServerGenerationStart(stream: stream, cachedTokenCount: 0)
     }
 
+    /// Run a closure with the loaded `ModelContainer`. Used by loaded-model
+    /// runners that need raw forward-pass access via
+    /// `container.perform { context in ... }` outside the agent generation
+    /// pipeline (e.g. `HybridCacheCorrectnessRunner`).
+    func withModelContainer<T: Sendable>(
+        _ body: @Sendable (ModelContainer) async throws -> T
+    ) async throws -> T {
+        try await llmActor.withModelContainer(body)
+    }
+
     /// Build a `UserInput` from a system prompt, messages, and optional raw tool specs.
     /// Extracted for testability — callers can verify tool specs are forwarded without a loaded model.
     static func buildUserInput(systemPrompt: String, messages: [LLMMessage], toolSpecs: [ToolSpec]?) -> UserInput {
