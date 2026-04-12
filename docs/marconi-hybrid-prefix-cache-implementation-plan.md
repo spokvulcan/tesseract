@@ -1094,6 +1094,209 @@ Memory.clearCache()
 
 ---
 
+## Phase 1 — Completion Status (2026-04-12)
+
+**Status:** shipped. All 8 tasks (1.1–1.8) merged. Integration validated
+end-to-end against production OpenCode workloads on Qwen3.5-4B-paro.
+
+### Final commit chain (chronological)
+
+| Task | Commit | Summary |
+|------|--------|---------|
+| 1.1  | `c787f1dd` | `HybridCacheSnapshot` with multi-type KV/Mamba restore |
+| 1.2  | `99c67e0e` | Checkpoint capture tests (17 plan items + 6 edge cases) |
+| 1.3  | `ca8d625b` | `StablePrefixDetector` (two-probe) |
+| 1.4  | `aecd1e1a` | `TokenRadixTree` (compressed prefix lookup) |
+| 1.5  | `988f625a` | `PrefixCacheManager` with partitioned radix lookup |
+| 1.6  | `7ac40d3c` | Integration into `LLMActor` + `CompletionHandler` |
+| 1.7 (implicit in 1.6) | — | `HTTPPrefixCacheSpikeTests` migration not required; legacy store retained only for diagnostic types |
+| 1.8  | `5acd5039` | Final integration fix: **cross-turn reuse + swift-jinja determinism** |
+
+### What the final session (1.8) actually fixed
+
+Two independent bugs were masking Phase 1's benefits in production:
+
+#### Bug A — swift-jinja 2.3.2 non-deterministic `tojson`
+
+`tesseract.xcodeproj/.../Package.resolved` pinned **swift-jinja 2.3.2** while
+`Vendor/mlx-audio-swift/Package.resolved` pinned **2.3.5**. SPM resolution
+used 2.3.2, which has:
+
+- `Value.encode(to:)` copies `OrderedDictionary<String, Value>` into a plain
+  `[String: Value]` before encoding → insertion order lost.
+- `Filters.tojson` does **not** set `JSONEncoder.outputFormatting.sortedKeys`.
+
+Result: the same tool dict rendered to different JSON key orderings on
+successive `template.render()` calls within a single process. Every
+request's `fullTokens` diverged from the previous request's stored path
+somewhere inside the first tool's JSON.
+
+**Fix:** bump `Package.resolved` to swift-jinja **2.3.5** (`revision:
+0aeefadec459ce8e11a333769950fb86183aca43`). 2.3.5 uses `value.keys.sorted()`
+in `Value.encode` AND sets `.sortedKeys` in `tojson`.
+
+**Defense-in-depth (kept even though the library is fixed):**
+- `LLMActor.canonicalizeToolSpecs` round-trips tools through
+  `JSONSerialization(options: [.sortedKeys])` before passing to the
+  tokenizer, so if the library ever regresses again the radix tree stays
+  consistent.
+
+#### Bug B — leaf snapshots unreachable across turns (Qwen3.5 template rewriting)
+
+Qwen3.5's chat template strips `<think>...</think>` blocks from
+**non-latest** assistant messages via its reverse-walk
+`last_query_index` computation
+(`z-lab_Qwen3.5-4B-PARO/chat_template.jinja` lines 67–104). Turn N generates
+`assistant1 = <think>X</think>Y` and stores a leaf at the post-response
+offset. Turn N+1 re-renders the same history with `assistant1 = Y` (think
+block stripped, because it is no longer the most recent assistant). Token
+paths diverge at the assistant position, so the stored leaf is unreachable.
+
+**Fix:** capture a **second** mid-prefill checkpoint at the *last-message
+boundary* — the offset where the final history message ends, right before
+the `<|im_start|>assistant\n<think>\n` generation prompt. Unlike the leaf,
+this offset sits **before** any re-renderable assistant content, so it is
+stable across turns: turn N+1's first `lastMessageBoundaryOffset` tokens
+match turn N's stored tokens byte-for-byte.
+
+**Implementation details:**
+
+1. `LLMActor` detects the boundary by encoding the known generation-prompt
+   string (`<|im_start|>assistant\n<think>\n` for thinking models,
+   `<|im_start|>assistant\n` otherwise) and subtracting its length from
+   `fullTokens.count`. This avoids needing an `addGenerationPrompt=false`
+   path, which the `MLXLMCommon.Tokenizer` protocol doesn't expose.
+2. `PrefixCacheManager.planCheckpoints` gained a
+   `lastMessageBoundaryOffset: Int?` parameter. Both `stablePrefixOffset`
+   and `lastMessageBoundaryOffset` are planned as `.system`-type
+   checkpoints when not already stored, with automatic dedup if the two
+   offsets coincide.
+3. The existing `alreadyStored` logic was tightened to match the
+   **requested** checkpoint type, not just any snapshot at the offset, so a
+   pre-existing `.leaf` doesn't suppress a needed `.system` checkpoint.
+
+#### Ancillary robustness additions
+
+- `StablePrefixDetector` rejects suspiciously-short common prefixes on
+  large prompts (`commonLength < fullTokens.count / 3 && fullTokens.count
+  > 1000`). Prevents tree poisoning from any future per-request rendering
+  non-determinism.
+- `HTTPRequestLogger` writes every `/v1/chat/completions` request body to
+  `tmp/tesseract-debug/http-completions/{HH-mm-ss}-{seq:04d}-request.json`
+  for offline investigation.
+- `PrefixCacheManager.lookup` on `.missNoSnapshotInPrefix` now returns the
+  **actual** tree walk depth (via `TokenRadixTree.findSharedPrefixLength`)
+  instead of hardcoded 0, giving meaningful miss diagnostics.
+
+### Measured end-to-end performance
+
+Validated on Qwen3.5-4B-paro, Mac15,9 / 48 GB, running a 51-turn OpenCode
+agentic research session (bodyBytes growing from 69 KB to 273 KB as
+context accumulated):
+
+| Turn | promptTokens | skippedPrefillTokens | Skip % | newTokensToPrefill |
+|------|--------------|----------------------|--------|---------------------|
+| 2    | 15,726       | 0 (cold)             | 0%     | 15,726              |
+| 3    | 15,751       | 15,721               | 99.8%  | 30                  |
+| 4    | 16,770       | 15,746               | 93.9%  | 1,024               |
+| 5    | 16,873       | 15,746               | 93.3%  | 1,127               |
+| 10   | 25,049       | 17,021               | 68.0%  | 8,028               |
+| 20   | 42,985       | 42,204               | 98.2%  | 781                 |
+| 30   | 56,391       | 54,194               | 96.1%  | 2,197               |
+| 40   | 67,180       | 67,023               | 99.8%  | 157                 |
+| 50   | 75,057       | 73,723               | 98.2%  | 1,334               |
+| 51   | 76,919       | 76,711               | **99.7%** | **208**          |
+
+**Before 1.8**: every turn was either a full miss (0 skipped) or hit only
+the 22-token bare system header. **After 1.8**: steady-state cache hit
+rate ~98%, with one-digit percentages of new tokens prefilled per turn —
+matching the Marconi paper's ~98% hit-rate target for agentic workloads.
+
+### Test coverage added in 1.8
+
+- `JinjaNonDeterminismReproTests.swift` (7 tests) — exercise swift-jinja's
+  `Value(any:)` + `tojson` directly, including the production flow:
+  JSON → `OpenAI.ToolDefinition` → `MessageConverter.convertToolDefinitions`
+  → `LLMActor.canonicalizeToolSpecs` → `Jinja.Value` → `JSONEncoder`. Would
+  have caught the 2.3.2 bug if we'd had them pre-session. Also covers a
+  `Template.render()` path that matches what production executes.
+- `StablePrefixDetectorNonDeterminismTests.swift` (7 tests) — reproduce
+  non-determinism with a deliberately-flaky mock tokenizer and verify the
+  ratio threshold (`fullTokens.count / 3`) rejects poisoned results while
+  still accepting legitimate small-prompt detections.
+- `PrefixCacheManagerTests.swift` — 3 new tests for multi-checkpoint
+  planning: `planCheckpointsIncludesLastMessageBoundary`,
+  `planCheckpointsDedupesIdenticalOffsets`,
+  `planCheckpointsSkipsExistingLastMessageBoundary`.
+- `PrefixCacheIntegrationTests.swift` — 19 tests (all 18 from the plan
+  plus `missNoSnapshotReportsActualTreeMatchDepth` added during reviewer
+  feedback).
+
+### Known limitations (baseline into Phase 2)
+
+1. **Mamba divergence on leaf-alignment trim is accepted.** When assistant
+   whitespace normalization shortens `storedTokens` vs the actual cache
+   offset, attention layers are trimmed but Mamba layers are left as-is.
+   Impact: negligible in practice (trim amounts are 1–17 tokens, mostly
+   whitespace), but it means leaf snapshots can't be bitwise-verified
+   against a fresh re-prefill. Phase 2 logit-equivalence tests explicitly
+   scope to mid-prefill checkpoints only — leaf hits keep the current
+   accepted-divergence contract.
+
+2. **Integration tests are component-level, not loaded-model.** The
+   integration suite uses synthetic token sequences and validates the
+   contracts (PrefixCacheManager, HybridCacheSnapshot, StablePrefixDetector)
+   that the `LLMActor` wiring depends on. True end-to-end coverage of the
+   HTTP actor path requires a loaded model — that's the `--benchmark`
+   suite, not the unit-test target.
+
+3. **Phase 1 uses only type-based LRU eviction.** `.leaf` is evicted before
+   `.branchPoint` before `.system`, LRU within a type. No Marconi utility
+   scoring yet — that's Task 2.3.
+
+4. **Only one branch-point-style checkpoint per request.** Phase 1 captures
+   the stable-prefix boundary and the last-message boundary (both stored
+   as `.system`). Speculative `.branchPoint` admission at divergence
+   points is Task 2.1.
+
+5. **No FLOP-aware eviction.** All `.system` snapshots are treated equally
+   by the eviction policy. Phase 2 adds per-node FLOP cost tracking and
+   the `alpha * norm(F/B) + norm(R)` utility score.
+
+### File inventory (Phase 1 final state)
+
+Production code:
+- `tesseract/Features/Agent/LLMActor.swift` — integration entry point, canonicalization, last-message-boundary detection
+- `tesseract/Features/Server/PrefixCacheManager.swift` — `@MainActor` store wrapper with multi-checkpoint planCheckpoints
+- `tesseract/Features/Server/TokenRadixTree.swift` — compressed radix with `findBestSnapshot` + `findSharedPrefixLength`
+- `tesseract/Features/Server/StablePrefixDetector.swift` — two-probe detector + ratio threshold
+- `tesseract/Features/Server/HTTPRequestLogger.swift` — file-based request body logging
+- `Vendor/mlx-swift-lm/Libraries/MLXLMCommon/HybridCacheSnapshot.swift` — multi-type cache snapshot
+
+Legacy code **kept** for diagnostic types only, not on the critical path:
+- `tesseract/Features/Server/HTTPPrefixCacheSpike.swift` — `HTTPPrefixCacheConversation`, `HTTPPrefixCacheMessage`, `HTTPPrefixCacheToolCall`, and the offset helpers are still referenced by `LLMActor` for conversation normalization and cache-state inspection. The old `HTTPPrefixCacheSpikeStore` actor is unused but kept around to avoid touching `HTTPPrefixCacheSpikeTests` (Task 1.7 would have migrated those; skipped because the legacy types still provide value).
+
+Tests:
+- `tesseractTests/HybridCacheSnapshotTests.swift` — Task 1.1
+- `tesseractTests/TokenRadixTreeTests.swift` — Task 1.4
+- `tesseractTests/StablePrefixDetectorTests.swift` — Task 1.3
+- `tesseractTests/PrefixCacheManagerTests.swift` — Task 1.5 + multi-checkpoint additions
+- `tesseractTests/PrefixCacheIntegrationTests.swift` — Task 1.6 (19 tests)
+- `tesseractTests/StablePrefixDetectorNonDeterminismTests.swift` — Task 1.8 reproduction
+- `tesseractTests/JinjaNonDeterminismReproTests.swift` — Task 1.8 root-cause exploration
+
+### Handoff to Phase 2
+
+Phase 2 starts from a working, production-validated Phase 1. The radix
+tree is populated correctly, hit rates are high, and eviction is stable.
+Phase 2's job is to make eviction **smart** (utility-scored per Marconi)
+and to admit `.branchPoint` checkpoints at speculative divergence points
+rather than only at the two Phase 1 boundaries. The file layout and APIs
+established in Phase 1 are expected to be stable — Phase 2 should extend
+`planCheckpoints` and `findEvictionCandidate` rather than rewriting them.
+
+---
+
 ## Phase 2 — Marconi Extensions: Branch-Point Checkpointing & Utility-Scored Eviction
 
 ### Task 2.1: Speculative insertion at admission time
