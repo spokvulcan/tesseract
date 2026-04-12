@@ -186,8 +186,9 @@ actor LLMActor {
         let mlxStartBox = UnsafeSendableBox(mlxStart)
         let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
         let startsInsideThinkBlock = promptStartsThinking
+        let requestID = UUID()
 
-        let task = Task { [conversation, container, canonicalTools] in
+        let task = Task { [conversation, container, canonicalTools, requestID] in
             let mlxStart = mlxStartBox.value
             var textContent = ""
             var thinkingContent = ""
@@ -291,27 +292,43 @@ actor LLMActor {
                 // These are captured during prefill and independent of the leaf path — if
                 // final-cache recovery or leaf capture fails, the stable-prefix checkpoint
                 // still saves future requests from a full re-prefill.
+                var storedSnapshotsForTuner: [HybridCacheSnapshot] = []
                 if !Task.isCancelled, !mlxStart.capturedSnapshots.isEmpty {
                     await MainActor.run {
                         prefixCache.storeSnapshots(
                             promptTokens: mlxStart.fullTokens,
                             capturedSnapshots: mlxStart.capturedSnapshots,
-                            partitionKey: mlxStart.partitionKey
+                            partitionKey: mlxStart.partitionKey,
+                            requestID: requestID
                         )
                     }
+                    storedSnapshotsForTuner = mlxStart.capturedSnapshots
                 }
 
-                if !Task.isCancelled,
-                   let finalCache = await mlxStart.finalCacheHandle.takeFinalCache()
-                {
+                // Leaf store, wrapped so any skip path falls through to
+                // the request-end recordRequest call below — the alpha
+                // tuner needs to see every request, not just the ones
+                // whose leaf store completed.
+                var leafStoreForTuner: AlphaTuner.LeafStore? = nil
+                leafBlock: do {
+                    guard !Task.isCancelled,
+                          let finalCache = await mlxStart.finalCacheHandle.takeFinalCache()
+                    else {
+                        if !Task.isCancelled {
+                            Log.agent.warning(
+                                "Prefix cache store skipped — model=\(modelID) reason=no-final-cache"
+                            )
+                        }
+                        break leafBlock
+                    }
+
                     let cacheOffsets = httpPrefixCacheOffsets(finalCache)
                     guard httpPrefixCacheHasReusableState(finalCache) else {
                         Log.agent.info(
                             "Prefix cache store skipped — model=\(modelID) reason=no-reusable-cache-state "
                             + "cacheOffsets=\(cacheOffsets)"
                         )
-                        continuation.finish()
-                        return
+                        break leafBlock
                     }
 
                     // 1. Build stored conversation (prompt + generated assistant turn).
@@ -330,8 +347,7 @@ actor LLMActor {
                         Log.agent.warning(
                             "Prefix cache leaf store skipped — model=\(modelID) reason=tokenization-failed"
                         )
-                        continuation.finish()
-                        return
+                        break leafBlock
                     }
 
                     // 4. Offset-alignment guard: if normalization shortened the
@@ -362,55 +378,75 @@ actor LLMActor {
                             + "offsetBefore=\(actualCacheOffset) "
                             + "canonicalCount=\(storedTokens.count)"
                         )
-                        continuation.finish()
-                        return
+                        break leafBlock
                     }
 
                     // 5. Capture leaf snapshot from the final cache. The guard
                     //    above ensures the cache's offset matches `storedTokens.count`
                     //    exactly — no per-layer trimming is needed.
-                    if let leafSnapshot = HybridCacheSnapshot.capture(
+                    guard let leafSnapshot = HybridCacheSnapshot.capture(
                         cache: finalCache,
                         offset: storedTokens.count,
                         type: .leaf
-                    ) {
-                        await MainActor.run {
-                            prefixCache.storeLeaf(
-                                storedTokens: storedTokens,
-                                leafSnapshot: leafSnapshot,
-                                partitionKey: mlxStart.partitionKey
-                            )
-                        }
-
-                        // Release the MLX free buffer pool back to the OS so it
-                        // doesn't accumulate transient prefill intermediates
-                        // across requests.
-                        Memory.clearCache()
-
-                        let stats = await MainActor.run { prefixCache.stats }
-                        let activeMB = Float(Memory.activeMemory) / 1e6
-                        let peakMB = Float(Memory.peakMemory) / 1e6
-                        Log.agent.info(
-                            "Prefix cache STORE — model=\(modelID) "
-                            + "leafTokens=\(storedTokens.count) "
-                            + "conversationMessages=\(conversation.messages.count + 1) "
-                            + "responseCharacters=\(textContent.count) toolCalls=\(toolCalls.count) "
-                            + "cacheOffsets=\(cacheOffsets) "
-                            + "snapshots=\(stats.snapshotCount) "
-                            + "partitions=\(stats.partitionCount) "
-                            + "totalSnapshotMB=\(String(format: "%.0f", Float(stats.totalSnapshotBytes) / 1e6)) "
-                            + "activeMemMB=\(String(format: "%.0f", activeMB)) "
-                            + "peakMemMB=\(String(format: "%.0f", peakMB))"
-                        )
-                    } else {
+                    ) else {
                         Log.agent.info(
                             "Prefix cache leaf capture skipped — model=\(modelID) "
                             + "reason=unsupported-cache-type cacheOffsets=\(cacheOffsets)"
                         )
+                        break leafBlock
                     }
-                } else if !Task.isCancelled {
-                    Log.agent.warning(
-                        "Prefix cache store skipped — model=\(modelID) reason=no-final-cache"
+
+                    // Coalesce storeLeaf + stats read in one MainActor
+                    // hop — saves one cross-actor switch on the success
+                    // path (the request hot path).
+                    let stats = await MainActor.run {
+                        prefixCache.storeLeaf(
+                            storedTokens: storedTokens,
+                            leafSnapshot: leafSnapshot,
+                            partitionKey: mlxStart.partitionKey,
+                            requestID: requestID
+                        )
+                        return prefixCache.stats
+                    }
+                    leafStoreForTuner = AlphaTuner.LeafStore(
+                        storedTokens: storedTokens,
+                        bytes: leafSnapshot.memoryBytes
+                    )
+
+                    // Release the MLX free buffer pool back to the OS so it
+                    // doesn't accumulate transient prefill intermediates
+                    // across requests.
+                    Memory.clearCache()
+
+                    let activeMB = Float(Memory.activeMemory) / 1e6
+                    let peakMB = Float(Memory.peakMemory) / 1e6
+                    Log.agent.info(
+                        "Prefix cache STORE — model=\(modelID) "
+                        + "leafTokens=\(storedTokens.count) "
+                        + "conversationMessages=\(conversation.messages.count + 1) "
+                        + "responseCharacters=\(textContent.count) toolCalls=\(toolCalls.count) "
+                        + "cacheOffsets=\(cacheOffsets) "
+                        + "snapshots=\(stats.snapshotCount) "
+                        + "partitions=\(stats.partitionCount) "
+                        + "totalSnapshotMB=\(String(format: "%.0f", Float(stats.totalSnapshotBytes) / 1e6)) "
+                        + "activeMemMB=\(String(format: "%.0f", activeMB)) "
+                        + "peakMemMB=\(String(format: "%.0f", peakMB))"
+                    )
+                }
+
+                // Record the request lifecycle for the alpha tuner. Fires
+                // for every request, including the leaf-skipped paths
+                // — the tuner needs the full workload trace, not just
+                // successful leaf stores.
+                let capturedSnapshots = storedSnapshotsForTuner
+                let leafCapture = leafStoreForTuner
+                await MainActor.run {
+                    prefixCache.recordRequest(
+                        partitionKey: mlxStart.partitionKey,
+                        promptTokens: mlxStart.fullTokens,
+                        capturedSnapshots: capturedSnapshots,
+                        leafStore: leafCapture,
+                        requestID: requestID
                     )
                 }
 
@@ -490,9 +526,17 @@ actor LLMActor {
 
     /// Lazily creates and returns the `PrefixCacheManager`. Initialization requires
     /// a MainActor hop because PrefixCacheManager is `@MainActor`.
+    /// The production cache attaches an `AlphaTuner` so eviction `alpha`
+    /// adapts to the workload after the first eviction fires. Reset the
+    /// global `EvictionPolicy.alpha` when creating a fresh cache so a
+    /// previous cache's tuned value doesn't leak into the new tuner.
     private func ensurePrefixCache() async -> PrefixCacheManager {
         if let existing = _prefixCache { return existing }
-        let cache = await PrefixCacheManager(memoryBudgetBytes: Defaults.prefixCacheMemoryBudgetBytes)
+        await MainActor.run { EvictionPolicy.alpha = 0.0 }
+        let cache = await PrefixCacheManager(
+            memoryBudgetBytes: Defaults.prefixCacheMemoryBudgetBytes,
+            alphaTuner: AlphaTuner()
+        )
         _prefixCache = cache
         return cache
     }

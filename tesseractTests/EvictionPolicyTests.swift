@@ -64,8 +64,7 @@ struct EvictionPolicyTests {
     }
 
     private func resetPolicyDefaults() {
-        EvictionPolicy.alpha = 0.0
-        EvictionPolicy.modelProfile = .qwen35_4B_PARO
+        PrefixCacheTestFixtures.resetPolicyDefaults()
     }
 
     private func makeUniformSnapshot(

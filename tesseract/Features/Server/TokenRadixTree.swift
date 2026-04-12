@@ -263,6 +263,20 @@ final class TokenRadixTree {
         return result
     }
 
+    /// Reconstruct the absolute token path from `root` to `node` by
+    /// concatenating each ancestor's `edgeTokens` in walk order. Used
+    /// by the snapshot inventory builder so the alpha tuner can reseed
+    /// a sandbox cache with the same paths.
+    func pathToNode(_ node: RadixTreeNode) -> [Int] {
+        var segments: [[Int]] = []
+        var current: RadixTreeNode? = node
+        while let n = current, n !== root {
+            segments.append(n.edgeTokens)
+            current = n.parent
+        }
+        return segments.reversed().flatMap { $0 }
+    }
+
     // MARK: - Speculative branch-point detection
 
     /// Dry-run insertion: returns the absolute token offset at which

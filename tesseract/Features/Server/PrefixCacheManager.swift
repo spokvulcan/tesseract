@@ -22,11 +22,27 @@ struct CachePartitionKey: Hashable, Sendable, Comparable {
 
 @MainActor
 final class PrefixCacheManager {
-    private var trees: [CachePartitionKey: TokenRadixTree] = [:]
-    var memoryBudgetBytes: Int
+    private enum PendingBootstrapBoundary {
+        case unscoped
+        case request(UUID)
+    }
 
-    init(memoryBudgetBytes: Int) {
+    private var trees: [CachePartitionKey: TokenRadixTree] = [:]
+    /// Set by `evictToFitBudget` when the first-ever drain happens
+    /// inside an in-flight request. Production passes a per-request ID
+    /// so only the matching request-end `recordRequest` call can start
+    /// bootstrapping; direct manager tests can omit the ID and use the
+    /// `.unscoped` fallback.
+    private var pendingBootstrapBoundary: PendingBootstrapBoundary?
+    var memoryBudgetBytes: Int
+    /// Optional adaptive `alpha` tuner. Production caches attach one;
+    /// test/replay caches pass `nil` to avoid recursive recording when
+    /// the tuner itself spins up sandboxed caches during grid search.
+    let alphaTuner: AlphaTuner?
+
+    init(memoryBudgetBytes: Int, alphaTuner: AlphaTuner? = nil) {
         self.memoryBudgetBytes = memoryBudgetBytes
+        self.alphaTuner = alphaTuner
     }
 
     // MARK: - Lookup
@@ -168,7 +184,8 @@ final class PrefixCacheManager {
     func storeSnapshots(
         promptTokens: [Int],
         capturedSnapshots: [HybridCacheSnapshot],
-        partitionKey: CachePartitionKey
+        partitionKey: CachePartitionKey,
+        requestID: UUID? = nil
     ) {
         guard !capturedSnapshots.isEmpty else { return }
 
@@ -179,15 +196,16 @@ final class PrefixCacheManager {
             tree.storeSnapshot(snapshot, forTokens: promptTokens, atOffset: snapshot.tokenOffset)
         }
 
-        evictToFitBudget()
+        evictToFitBudget(requestID: requestID)
     }
 
     /// Store the leaf snapshot under post-response tokens.
-    /// storedTokens = re-tokenized (prompt + generated response).
+    /// `storedTokens` = re-tokenized (prompt + generated response).
     func storeLeaf(
         storedTokens: [Int],
         leafSnapshot: HybridCacheSnapshot,
-        partitionKey: CachePartitionKey
+        partitionKey: CachePartitionKey,
+        requestID: UUID? = nil
     ) {
         guard leafSnapshot.tokenOffset == storedTokens.count else { return }
 
@@ -195,7 +213,93 @@ final class PrefixCacheManager {
         let node = tree.insertPath(tokens: storedTokens)
         tree.storeSnapshot(leafSnapshot, on: node)
 
-        evictToFitBudget()
+        evictToFitBudget(requestID: requestID)
+    }
+
+    /// Reseed a snapshot at `path` with an explicit `lastAccessTime`.
+    /// Used by `AlphaTuner` to restore the production cache state into a
+    /// sandbox replay cache while preserving the relative recency of
+    /// each restored snapshot.
+    func restoreSnapshot(
+        path: [Int],
+        snapshot: HybridCacheSnapshot,
+        partitionKey: CachePartitionKey,
+        lastAccessTime: ContinuousClock.Instant
+    ) {
+        let tree = getOrCreateTree(for: partitionKey)
+        let node = tree.insertPath(tokens: path)
+        tree.storeSnapshot(snapshot, on: node)
+        node.lastAccessTime = lastAccessTime
+    }
+
+    // MARK: - Tuner integration
+
+    /// Forward a request lifecycle record to the attached `AlphaTuner`,
+    /// if any. Called once per request from the agent layer after all
+    /// store-side activity (mid-prefill captures, leaf store or skip)
+    /// has completed. The manager builds the `RequestRecord` from raw
+    /// inputs so the agent layer doesn't have to know about
+    /// `AlphaTuner.SnapshotMetadata`.
+    func recordRequest(
+        partitionKey: CachePartitionKey,
+        promptTokens: [Int],
+        capturedSnapshots: [HybridCacheSnapshot],
+        leafStore: AlphaTuner.LeafStore?,
+        requestID: UUID? = nil
+    ) {
+        guard let alphaTuner else { return }
+        switch pendingBootstrapBoundary {
+        case .unscoped?:
+            pendingBootstrapBoundary = nil
+            if case .waitingForFirstEviction = alphaTuner.phase {
+                alphaTuner.notifyFirstEviction(startingInventory: collectSnapshotInventory())
+                return
+            }
+        case .request(let pendingRequestID)? where pendingRequestID == requestID:
+            pendingBootstrapBoundary = nil
+            if case .waitingForFirstEviction = alphaTuner.phase {
+                alphaTuner.notifyFirstEviction(startingInventory: collectSnapshotInventory())
+                return
+            }
+        default:
+            break
+        }
+
+        let metadata = capturedSnapshots.map { snap in
+            AlphaTuner.SnapshotMetadata(
+                offset: snap.tokenOffset,
+                bytes: snap.memoryBytes,
+                type: snap.checkpointType
+            )
+        }
+        alphaTuner.recordRequest(AlphaTuner.RequestRecord(
+            partitionKey: partitionKey,
+            promptTokens: promptTokens,
+            midPrefillSnapshots: metadata,
+            leafStore: leafStore
+        ))
+    }
+
+    /// Walk every partition's snapshot inventory and return a flat list
+    /// of `InventoryEntry` records. Used by the alpha tuner to seed the
+    /// replay simulation with the production cache state at
+    /// bootstrap-window start.
+    func collectSnapshotInventory() -> [AlphaTuner.InventoryEntry] {
+        var result: [AlphaTuner.InventoryEntry] = []
+        for (key, tree) in trees {
+            for node in tree.allSnapshotNodes() {
+                guard let snap = node.snapshot else { continue }
+                result.append(AlphaTuner.InventoryEntry(
+                    partitionKey: key,
+                    path: tree.pathToNode(node),
+                    offset: node.tokenOffset,
+                    bytes: snap.memoryBytes,
+                    type: snap.checkpointType,
+                    lastAccessTime: node.lastAccessTime
+                ))
+            }
+        }
+        return result
     }
 
     // MARK: - Eviction
@@ -204,23 +308,37 @@ final class PrefixCacheManager {
     /// Marconi utility scoring (`EvictionPolicy`) for eligible nodes and
     /// falls back to oldest-first when only multi-child branch snapshots
     /// remain.
-    func evictToFitBudget() {
+    func evictToFitBudget(requestID: UUID? = nil) {
         // Pin a single clock reading and a single sorted tree order so all
         // iterations in one drain share the same recency anchor and
         // tie-break ordering.
         let now: ContinuousClock.Instant = .now
         let orderedTrees = trees.sorted { $0.key < $1.key }.map(\.value)
+        var didEvictAnything = false
         while totalSnapshotBytes > memoryBudgetBytes {
             guard let (tree, node) = findEvictionCandidate(now: now, orderedTrees: orderedTrees)
             else { break }
 
             tree.evictSnapshot(node: node)
+            didEvictAnything = true
 
             if node.isLeaf {
                 tree.evictNode(node: node)
             } else if node.childCount == 1, node.snapshot == nil {
                 tree.collapseSingleChildNode(node)
             }
+        }
+        // Mark the first request that ever triggered eviction. The
+        // actual inventory snapshot is deferred until `recordRequest`,
+        // after the request has finished all stores, so the bootstrap
+        // start state includes a later leaf store if the first drain
+        // happened during mid-prefill capture.
+        if didEvictAnything,
+           let alphaTuner,
+           case .waitingForFirstEviction = alphaTuner.phase,
+           pendingBootstrapBoundary == nil
+        {
+            pendingBootstrapBoundary = requestID.map(PendingBootstrapBoundary.request) ?? .unscoped
         }
     }
 
