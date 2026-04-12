@@ -18,12 +18,12 @@ struct AgentGenerateParameters: Sendable, Codable {
     var kvBits: Int? = 8
     /// Group size for KV cache quantization.
     var kvGroupSize: Int = 64
-    /// Token chunk size for prompt prefill. Smaller values reduce per-step peak
-    /// memory at the cost of more chunked iterations. MLX's default is 512;
-    /// we use 256 to halve the peak intermediate-tensor footprint during long
-    /// (>10 K token) prefills, which previously pushed the process to ~44 GB
-    /// peak on Apple Silicon and triggered OOM kills.
-    var prefillStepSize: Int = 256
+    /// Token chunk size for prompt prefill. Larger values improve throughput at
+    /// the cost of higher per-step peak memory. Our Phase 3.2 benchmark on the
+    /// production prefix-cache path found 1024 to be the fastest cold-prefill
+    /// default that still keeps peak memory well below the larger 2048/4096
+    /// settings, so that is the production default.
+    var prefillStepSize: Int = 1024
 
     static let `default` = AgentGenerateParameters()
 

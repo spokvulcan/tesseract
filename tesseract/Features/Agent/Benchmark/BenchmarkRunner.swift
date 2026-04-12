@@ -536,6 +536,10 @@ final class BenchmarkRunner {
         return ModelDefinition.all.first(where: { $0.id == targetID })?.displayName ?? targetID
     }
 
+    var resolvedHardwareDescription: String {
+        hardwareString()
+    }
+
     /// The config this runner was instantiated with. Exposed so E2E runners
     /// (e.g. PrefixCacheE2ERunner) can read `outputDir`/`modelDir` overrides
     /// from the same CLI flags the main benchmark path uses.

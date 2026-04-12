@@ -244,6 +244,10 @@ cmd_hybrid_cache_correctness() {
     _run_loaded_model_check --hybrid-cache-correctness hybrid-cache-correctness
 }
 
+cmd_prefill_step_benchmark() {
+    _run_loaded_model_check --prefill-step-benchmark prefill-step-benchmark
+}
+
 cmd_archive() {
     local archive_path="$PROJECT_DIR/build/Tesseract.xcarchive"
     echo "Archiving tesseract for App Store (arm64 only)..."
@@ -342,6 +346,7 @@ usage() {
     echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
     echo "  prefix-cache-e2e         Build + run Task 1.8 HybridPrefixCacheE2E (loaded-model cache verification)"
     echo "  hybrid-cache-correctness Build + run Task 2.2 logit-equivalence harness (mid-prefill restore bitwise check)"
+    echo "  prefill-step-benchmark   Build + run Task 3.2 prefill-step-size benchmark sweep"
     echo "  archive     Create release archive for App Store submission"
     echo "  resolve     Resolve SPM package dependencies"
     echo "  clean       Clean build artifacts and derived data"
@@ -358,6 +363,7 @@ case "${1:-}" in
     dev-profile) cmd_dev_profile ;;
     prefix-cache-e2e)         cmd_prefix_cache_e2e ;;
     hybrid-cache-correctness) cmd_hybrid_cache_correctness ;;
+    prefill-step-benchmark)   cmd_prefill_step_benchmark ;;
     archive)     cmd_archive ;;
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;
