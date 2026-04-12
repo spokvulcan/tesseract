@@ -29,19 +29,37 @@ scripts/dev.sh archive     # Create .xcarchive for App Store
 Tests use Swift `Testing` framework (not XCTest), in `tesseractTests/`. Run before committing changes to server, caching, or agent engine code.
 
 ```bash
-# Run specific test suites (recommended — avoids flaky SchedulingActorTests crash):
+# Server + agent suites (recommended — avoids flaky SchedulingActorTests crash):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -only-testing:tesseractTests/HTTPPrefixCacheSpikeTests \
+  -only-testing:tesseractTests/HTTPPrefixCacheSessionReplayTests \
   -only-testing:tesseractTests/CompletionHandlerTests \
   -only-testing:tesseractTests/MessageConverterTests \
   -only-testing:tesseractTests/OpenAITypesTests \
   -only-testing:tesseractTests/AgentEngineToolSpecTests \
   -only-testing:tesseractTests/EditToolTests
 
+# Prefix cache suites (radix tree + hybrid snapshot + stable prefix detector):
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -only-testing:tesseractTests/HybridCacheSnapshotTests \
+  -only-testing:tesseractTests/TokenRadixTreeTests \
+  -only-testing:tesseractTests/StablePrefixDetectorTests \
+  -only-testing:tesseractTests/PrefixCacheManagerTests \
+  -only-testing:tesseractTests/PrefixCacheIntegrationTests \
+  -only-testing:tesseractTests/CheckpointCaptureTests \
+  -only-testing:tesseractTests/StablePrefixDetectorNonDeterminismTests \
+  -only-testing:tesseractTests/JinjaNonDeterminismReproTests
+
 # Run all tests (may crash due to SchedulingActorTests.executesSequentially flaky OOB):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -only-testing:tesseractTests
 ```
+
+**Loaded-model verification** (not a unit test — runs against a real model):
+```bash
+scripts/dev.sh prefix-cache-e2e   # builds, runs PrefixCacheE2ERunner, prints report
+```
+Exits non-zero on any failed check. Run before releases and after any change to `LLMActor`, `PrefixCacheManager`, `HybridCacheSnapshot`, or `StablePrefixDetector`.
 
 ## Architecture
 
@@ -88,7 +106,13 @@ The app uses Swift's `@Observable` (Observation framework) as the primary state 
 
 **Events**: 13 types (lifecycle, turns, transforms, streaming, tool execution). Buffered thread-safely, drained on MainActor.
 
-**Benchmarks**: `--benchmark` flag runs 14 scenarios (S1–S4, S6–S15). Reports to sandbox tmp dir.
+**HTTP server** (`Features/Server/`): OpenAI-compatible `/v1/chat/completions` on `127.0.0.1:8321`. Design in `docs/HTTP_SERVER_SPEC.md`. Request path: `CompletionHandler` → `MessageConverter` → `AgentEngine.generateServerTextCompletion` → `LLMActor`. Arbitration via `InferenceArbiter` (single in-flight). Request bodies mirrored to `tmp/tesseract-debug/http-completions/` by `HTTPRequestLogger` for offline investigation.
+
+**Prefix cache** (`Features/Server/{PrefixCacheManager,TokenRadixTree,StablePrefixDetector}.swift`): token-level radix tree on the HTTP hot path. Captures two checkpoints per request — stable-prefix (system+tools) and last-message boundary — to enable cross-turn reuse on the Qwen3.5 template. Memory budget in `LLMActor.swift` `Defaults.prefixCacheMemoryBudgetBytes`. Full design and rationale (partition strategy, eviction, Mamba-specific alignment, Phase 2 roadmap) in `docs/marconi-hybrid-prefix-cache-implementation-plan.md` — read that before touching any of the cache types.
+
+**Benchmarks**:
+- `--benchmark` runs 14 scenario-turn tests (S1–S4, S6–S15) against a loaded model, writes JSON reports to `tmp/tesseract-debug/benchmark/`.
+- `--prefix-cache-e2e` runs the Task 1.8 HybridPrefixCacheE2E loaded-model verification: Request A (cold) → Request B (warm stable-prefix hit) → unload → reload → Request B (cold again) → assert byte-identical greedy output. Correctness gate for the radix tree; ~6 seconds.
 
 **Conversations**: `AgentConversationStore` — index.json + `{uuid}.json` at `~/Library/Application Support/Tesseract Agent/agent/conversations/`.
 
@@ -125,4 +149,5 @@ private let logger = Logger(subsystem: "app.tesseract.agent", category: "mylib")
 - `TESSE_DEVELOPMENT_PLAN.md` — Roadmap
 - `ARCHITECTURE.md` — System architecture
 - `docs/macos26-swiftui-architecture-review.md` — Architecture review and modernization plan (Observation migration, Window scene, modularity decisions)
+- `docs/marconi-hybrid-prefix-cache-implementation-plan.md` — Prefix cache design (Phase 1 shipped 2026-04-12; Phase 2 is Marconi utility-scored eviction). Read this before touching `LLMActor.generateServerTextCompletion`, `PrefixCacheManager`, `TokenRadixTree`, `StablePrefixDetector`, or `HybridCacheSnapshot`.
 - `docs/` — TTS streaming/performance, image gen, agent prompt engineering research, tool call XML reconstruction

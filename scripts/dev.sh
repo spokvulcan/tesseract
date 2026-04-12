@@ -205,6 +205,35 @@ cmd_dev_profile() {
     print_data_paths
 }
 
+# Task 1.8 HybridPrefixCacheE2E verification.
+# Launches the app in the foreground with --prefix-cache-e2e; runner exits
+# with non-zero on any failed check. Shows the latest log + report path.
+cmd_prefix_cache_e2e() {
+    local configuration="Debug"
+    cmd_build "$configuration"
+    echo ""
+
+    local app_path
+    app_path=$(find_app "$configuration") || return 1
+    kill_app
+
+    local binary="$app_path/Contents/MacOS/Tesseract Agent"
+    echo "Running --prefix-cache-e2e against: $binary"
+    local report_dir="$HOME/Library/Containers/app.tesseract.agent/Data/tmp/tesseract-debug/benchmark/prefix-cache-e2e"
+
+    local exit_code=0
+    "$binary" --prefix-cache-e2e || exit_code=$?
+
+    if [ -f "$report_dir/latest.log" ]; then
+        echo ""
+        echo "── latest.log ──"
+        cat "$report_dir/latest.log"
+    fi
+    echo ""
+    echo "Report dir: $report_dir"
+    return $exit_code
+}
+
 cmd_archive() {
     local archive_path="$PROJECT_DIR/build/Tesseract.xcarchive"
     echo "Archiving tesseract for App Store (arm64 only)..."
@@ -301,6 +330,7 @@ usage() {
     echo "  dev         Build + kill + run using Debug (fast iteration)"
     echo "  dev-release Build + kill + run using Release (perf testing)"
     echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
+    echo "  prefix-cache-e2e  Build + run Task 1.8 HybridPrefixCacheE2E (loaded-model cache verification)"
     echo "  archive     Create release archive for App Store submission"
     echo "  resolve     Resolve SPM package dependencies"
     echo "  clean       Clean build artifacts and derived data"
@@ -315,6 +345,7 @@ case "${1:-}" in
     dev)         cmd_dev ;;
     dev-release) cmd_dev_release ;;
     dev-profile) cmd_dev_profile ;;
+    prefix-cache-e2e) cmd_prefix_cache_e2e ;;
     archive)     cmd_archive ;;
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;
