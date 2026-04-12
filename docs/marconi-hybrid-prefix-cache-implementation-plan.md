@@ -1109,8 +1109,9 @@ end-to-end against production OpenCode workloads on Qwen3.5-4B-paro.
 | 1.4  | `aecd1e1a` | `TokenRadixTree` (compressed prefix lookup) |
 | 1.5  | `988f625a` | `PrefixCacheManager` with partitioned radix lookup |
 | 1.6  | `7ac40d3c` | Integration into `LLMActor` + `CompletionHandler` |
-| 1.8  | `5acd5039` | Cross-turn reuse + swift-jinja determinism fix |
-| 1.7  | (post-1.8) | `HTTPPrefixCacheSpikeStore` and supporting types deleted; tests migrated to normalization + `isPrefix` coverage only |
+| 1.6b | `5acd5039` | Cross-turn reuse + swift-jinja determinism fix (completed in-place on 1.6's integration) |
+| 1.7  | `851032aa` | `HTTPPrefixCacheSpikeStore` and supporting types deleted; tests migrated to normalization + `isPrefix` coverage only |
+| 1.8  | (this session) | `HybridPrefixCacheE2E` loaded-model verification — `PrefixCacheE2ERunner`, invoked via `--prefix-cache-e2e` CLI flag |
 
 ### What the final session (1.8) actually fixed
 
@@ -1207,12 +1208,49 @@ context accumulated):
 | 50   | 75,057       | 73,723               | 98.2%  | 1,334               |
 | 51   | 76,919       | 76,711               | **99.7%** | **208**          |
 
-**Before 1.8**: every turn was either a full miss (0 skipped) or hit only
-the 22-token bare system header. **After 1.8**: steady-state cache hit
+**Before 1.6b**: every turn was either a full miss (0 skipped) or hit only
+the 22-token bare system header. **After 1.6b**: steady-state cache hit
 rate ~98%, with one-digit percentages of new tokens prefilled per turn —
 matching the Marconi paper's ~98% hit-rate target for agentic workloads.
 
-### Test coverage added in 1.8
+### Task 1.8 — Loaded-model verification
+
+`PrefixCacheE2ERunner` (`--prefix-cache-e2e` CLI flag) implements the
+HybridPrefixCacheE2E scenario from the plan against a real loaded model
+(Qwen3.5-4B PARO on Mac15,9). Runs independently of the scenario-turn
+benchmark suite because it validates correctness, not tool accuracy.
+
+**7 checks, all passing (2026-04-12 run):**
+
+| Check | Value | Pass criterion |
+|-------|-------|----------------|
+| `requestA_cold_start` | `cachedTokens=0` | Must be 0 |
+| `requestB_hits_stable_prefix` | `cachedTokens=432` | Must be > 0 |
+| `requestB_ttft_dropped` | `ttftB/ttftA=0.153` (464ms → 71ms, **6.5× speedup**) | Must be < 0.6 |
+| `requestB2_cold_after_reload` | `cachedTokens=0` | Must be 0 after unload/reload |
+| **`greedy_output_equivalence`** | **byte-identical 126 chars** between warm and cold runs | Must match the full common-prefix length under greedy decoding |
+| `normalization_roundtrip_hits_cache` | `cachedTokens=440` on second identical request | Must be > 0 |
+| `checkpoint_skips_more_than_system_header` | `cachedTokens=440` (covers full system+tools, not just `<|im_start|>system\n`) | Must be > 100 |
+
+The `greedy_output_equivalence` check is the critical correctness gate.
+Under greedy decoding (`temperature=0, topK=1`), byte-identical outputs
+prove the logit argmax at each step matched between the cached and cold
+prefill paths, which is the sufficient-by-proxy bitwise logit equality
+requirement in the plan. Because we can't reach the raw logit tensor
+through `AgentEngine`'s public API, greedy output comparison is the
+tightest public-API gate available. Any drift in `HybridCacheSnapshot`
+capture/restore would almost immediately flip an argmax within the
+first few generated tokens.
+
+Report format: JSON at `tmp/tesseract-debug/benchmark/prefix-cache-e2e/e2e_YYYY-MM-DD_HH-mm-ss.json`
+with per-check `pass`/`detail` and full measurement dump (TTFT, cached
+tokens, generated text prefix). Log file alongside.
+
+Run time: ~6 seconds (2 model loads, 4 generation passes, short 32-token
+max). Run manually before releases or after any changes to `LLMActor`,
+`PrefixCacheManager`, `HybridCacheSnapshot`, or `StablePrefixDetector`.
+
+### Test coverage added in 1.6b
 
 - `JinjaNonDeterminismReproTests.swift` (7 tests) — exercise swift-jinja's
   `Value(any:)` + `tojson` directly, including the production flow:
@@ -1243,12 +1281,16 @@ matching the Marconi paper's ~98% hit-rate target for agentic workloads.
    scope to mid-prefill checkpoints only — leaf hits keep the current
    accepted-divergence contract.
 
-2. **Integration tests are component-level, not loaded-model.** The
-   integration suite uses synthetic token sequences and validates the
-   contracts (PrefixCacheManager, HybridCacheSnapshot, StablePrefixDetector)
-   that the `LLMActor` wiring depends on. True end-to-end coverage of the
-   HTTP actor path requires a loaded model — that's the `--benchmark`
-   suite, not the unit-test target.
+2. **Unit-test coverage is component-level; loaded-model coverage lives
+   in the benchmark runner.** The `tesseractTests` suite uses synthetic
+   token sequences and validates the contracts (`PrefixCacheManager`,
+   `HybridCacheSnapshot`, `StablePrefixDetector`) that the `LLMActor`
+   wiring depends on. True end-to-end coverage of the HTTP actor path
+   with a real model lives in `PrefixCacheE2ERunner` (Task 1.8),
+   invoked via `--prefix-cache-e2e` on the Tesseract CLI. Not a unit
+   test — runs for ~6 seconds with real inference, writes a JSON
+   report, and exits with non-zero status on any failed check. Run
+   manually before releases or after cache-related changes.
 
 3. **Phase 1 uses only type-based LRU eviction.** `.leaf` is evicted before
    `.branchPoint` before `.system`, LRU within a type. No Marconi utility
@@ -1317,6 +1359,7 @@ Production code:
 - `tesseract/Features/Server/TokenRadixTree.swift` — compressed radix with `findBestSnapshot` + `findSharedPrefixLength`
 - `tesseract/Features/Server/StablePrefixDetector.swift` — two-probe detector + ratio threshold
 - `tesseract/Features/Server/HTTPRequestLogger.swift` — file-based request body logging
+- `tesseract/Features/Agent/Benchmark/PrefixCacheE2ERunner.swift` — Task 1.8 loaded-model verification
 - `Vendor/mlx-swift-lm/Libraries/MLXLMCommon/HybridCacheSnapshot.swift` — multi-type cache snapshot
 
 Legacy file **retained** for the normalization layer, not the cache itself:

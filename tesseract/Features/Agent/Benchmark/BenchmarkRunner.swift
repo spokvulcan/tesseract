@@ -503,7 +503,7 @@ final class BenchmarkRunner {
 
     // MARK: - Model Resolution
 
-    private func resolveModelDirectory() throws -> URL {
+    func resolveModelDirectory() throws -> URL {
         if let dir = config.modelDir {
             return dir
         }
@@ -531,10 +531,15 @@ final class BenchmarkRunner {
         return modelDir
     }
 
-    private var resolvedModelName: String {
+    var resolvedModelName: String {
         let targetID = config.resolvedModelID
         return ModelDefinition.all.first(where: { $0.id == targetID })?.displayName ?? targetID
     }
+
+    /// The config this runner was instantiated with. Exposed so E2E runners
+    /// (e.g. PrefixCacheE2ERunner) can read `outputDir`/`modelDir` overrides
+    /// from the same CLI flags the main benchmark path uses.
+    var activeConfig: BenchmarkConfig { config }
 
     // MARK: - Logging
 

@@ -40,6 +40,21 @@ struct TesseractApp: App {
                 }
                 exit(0)
             }
+        } else if CommandLine.arguments.contains("--prefix-cache-e2e") {
+            // Task 1.8 HybridPrefixCacheE2E verification. Reuses BenchmarkRunner's
+            // model-resolution plumbing but drives the `generateServerTextCompletion`
+            // path with logit-equivalence assertions rather than scenario turns.
+            Task { @MainActor in
+                let runner = BenchmarkRunner()
+                let e2e = PrefixCacheE2ERunner(runner: runner)
+                do {
+                    try await e2e.run()
+                    exit(0)
+                } catch {
+                    Log.agent.error("Prefix cache E2E failed: \(error)")
+                    exit(1)
+                }
+            }
         }
     }
 
