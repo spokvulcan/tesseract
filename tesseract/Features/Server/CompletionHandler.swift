@@ -50,6 +50,16 @@ struct CompletionHandler: Sendable {
 
         let sessionAffinity = request.header("x-session-affinity")
 
+        // File-based request logging — writes the raw request body to
+        // tmp/tesseract-debug/http-completions/ for offline investigation of
+        // prefix cache misses and tokenization drift.
+        let logPrefix = HTTPRequestLogger.shared.logRequest(
+            body: body, sessionAffinity: sessionAffinity
+        )
+        Log.server.info(
+            "HTTP request logged — prefix=\(logPrefix) dir=\(HTTPRequestLogger.shared.directoryURL.path)"
+        )
+
         do {
             try await withAcquisitionTimeout { signal in
                 try await arbiter.withExclusiveGPU(.llm) {

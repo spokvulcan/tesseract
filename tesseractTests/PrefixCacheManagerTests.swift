@@ -464,4 +464,67 @@ struct PrefixCacheManagerTests {
         #expect(plan.count == 1)
         #expect(plan[0].type == .system)
     }
+
+    // MARK: - Last-message boundary checkpoint
+
+    /// `lastMessageBoundaryOffset` adds a second `.system`-type checkpoint
+    /// alongside the stable prefix. Both are planned when neither is already
+    /// stored. This captures the "end of last user message" point, which is
+    /// stable across conversation turns (unlike the leaf, which changes due
+    /// to template re-rendering of past assistants).
+    @Test func planCheckpointsIncludesLastMessageBoundary() {
+        let mgr = makeManager()
+        let tokens = Array(1...1000)
+
+        let plan = mgr.planCheckpoints(
+            tokens: tokens,
+            stablePrefixOffset: 100,
+            lastMessageBoundaryOffset: 800,
+            partitionKey: defaultKey
+        )
+
+        #expect(plan.count == 2)
+        #expect(plan.contains { $0.offset == 100 && $0.type == .system })
+        #expect(plan.contains { $0.offset == 800 && $0.type == .system })
+    }
+
+    /// When the stable prefix and last-message boundary happen to be at the
+    /// same offset (short conversations with just system+tools), only one
+    /// checkpoint is planned — no duplicate.
+    @Test func planCheckpointsDedupesIdenticalOffsets() {
+        let mgr = makeManager()
+        let tokens = Array(1...1000)
+
+        let plan = mgr.planCheckpoints(
+            tokens: tokens,
+            stablePrefixOffset: 500,
+            lastMessageBoundaryOffset: 500,
+            partitionKey: defaultKey
+        )
+
+        #expect(plan.count == 1)
+        #expect(plan[0].offset == 500)
+    }
+
+    /// If a system snapshot already exists at the last-message boundary, the
+    /// planner skips it (no re-capture needed).
+    @Test func planCheckpointsSkipsExistingLastMessageBoundary() {
+        let mgr = makeManager()
+        let tokens = Array(1...1000)
+
+        // Pre-store a system snapshot at the boundary.
+        let sysSnap = makeSnapshot(offset: 700, type: .system)
+        mgr.storeSnapshots(promptTokens: tokens, capturedSnapshots: [sysSnap], partitionKey: defaultKey)
+
+        let plan = mgr.planCheckpoints(
+            tokens: tokens,
+            stablePrefixOffset: 100,
+            lastMessageBoundaryOffset: 700,
+            partitionKey: defaultKey
+        )
+
+        // Only the stable prefix gets planned — the boundary is already stored.
+        #expect(plan.count == 1)
+        #expect(plan[0].offset == 100)
+    }
 }

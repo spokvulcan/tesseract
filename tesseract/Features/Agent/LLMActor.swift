@@ -171,12 +171,15 @@ actor LLMActor {
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
 
         let prefixCache = await ensurePrefixCache()
+        // Canonicalize tools once so the leaf re-tokenization uses the same dict
+        // iteration order as the prefill path inside makeHTTPPrefixCacheGeneration.
+        let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
         let mlxStart = try await makeHTTPPrefixCacheGeneration(
             container: container,
             conversation: conversation,
             modelID: modelID,
             parameters: Self.makeGenerateParameters(from: parameters),
-            toolSpecs: toolSpecs,
+            toolSpecs: canonicalTools,
             prefixCache: prefixCache
         )
 
@@ -184,7 +187,7 @@ actor LLMActor {
         let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
         let startsInsideThinkBlock = promptStartsThinking
 
-        let task = Task { [conversation, container, toolSpecs] in
+        let task = Task { [conversation, container, canonicalTools] in
             let mlxStart = mlxStartBox.value
             var textContent = ""
             var thinkingContent = ""
@@ -322,7 +325,7 @@ actor LLMActor {
                     guard let storedTokens = await Self.measureStoredTokenSequence(
                         container: container,
                         conversation: storedConversation,
-                        toolSpecs: toolSpecs
+                        toolSpecs: canonicalTools
                     ) else {
                         Log.agent.warning(
                             "Prefix cache leaf store skipped — model=\(modelID) reason=tokenization-failed"
@@ -492,6 +495,60 @@ actor LLMActor {
         }
     }
 
+    /// Canonicalize tool specs by round-tripping through `JSONSerialization` with
+    /// `.sortedKeys`. Returns dicts with deterministic key ordering, so downstream
+    /// Jinja `tojson` calls produce the same token sequence on every invocation.
+    /// Without this, swift-jinja's `Value(any:)` path has non-deterministic dict
+    /// iteration that makes token-level prefix caching unreliable.
+    /// Internal (not private) so tests can exercise it directly.
+    nonisolated static func canonicalizeToolSpecs(_ tools: [ToolSpec]?) -> [ToolSpec]? {
+        guard let tools else { return nil }
+        return tools.map { canonicalizeToolDict($0) }
+    }
+
+    nonisolated static func canonicalizeToolDict(_ dict: ToolSpec) -> ToolSpec {
+        guard JSONSerialization.isValidJSONObject(dict),
+              let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return dict
+        }
+        return sendableDict(from: parsed)
+    }
+
+    /// Recursively rebuild a JSON-decoded `[String: Any]` as `[String: any Sendable]`.
+    /// Every JSON primitive has a Sendable counterpart; we explicitly narrow each.
+    private nonisolated static func sendableDict(from dict: [String: Any]) -> [String: any Sendable] {
+        var result: [String: any Sendable] = [:]
+        for (key, value) in dict {
+            if let narrowed = sendableJSONValue(from: value) {
+                result[key] = narrowed
+            }
+        }
+        return result
+    }
+
+    private nonisolated static func sendableJSONValue(from value: Any) -> (any Sendable)? {
+        if value is NSNull { return "" as String }  // JSON null → empty string (closest Sendable equivalent)
+        if let v = value as? String { return v }
+        if let v = value as? Bool { return v }
+        if let v = value as? Int { return v }
+        if let v = value as? Double { return v }
+        if let v = value as? NSNumber {
+            // Foundation may box booleans as NSNumber; disambiguate.
+            if CFGetTypeID(v) == CFBooleanGetTypeID() { return v.boolValue }
+            if v.stringValue.contains(".") { return v.doubleValue }
+            return v.intValue
+        }
+        if let v = value as? [Any] {
+            return v.compactMap { sendableJSONValue(from: $0) }
+        }
+        if let v = value as? [String: Any] {
+            return sendableDict(from: v)
+        }
+        return nil
+    }
+
     // MARK: - Private
 
     /// Verifies the model with a 1-token generation, stores it, and returns the tokenizer.
@@ -536,11 +593,20 @@ actor LLMActor {
         toolSpecs: [ToolSpec]?,
         prefixCache: PrefixCacheManager
     ) async throws -> HTTPPrefixCacheGeneration {
+        // Canonicalize tools once so the stable-prefix detector and the real
+        // prefill tokenize against identical dict representations. Historically
+        // swift-jinja <2.3.5 had non-deterministic `tojson` key ordering; the
+        // canonicalization is kept as defense-in-depth and costs almost nothing.
+        let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
+
+        // Capture promptStartsThinking for the non-MainActor closure below.
+        let promptStartsThinking = self.promptStartsThinking
+
         return try await container.perform { context in
             // 1. Tokenize the full conversation (BEFORE cache lookup).
             let history = conversation.historyMessages
             let fullInput = try await context.processor.prepare(
-                input: UserInput(chat: history, tools: toolSpecs)
+                input: UserInput(chat: history, tools: canonicalTools)
             )
             // Sequence length is always the LAST dim. For LLM models tokens are
             // 1D [seq], for VLM models (ParoQuant Qwen35) they are 2D [batch, seq].
@@ -557,13 +623,48 @@ actor LLMActor {
                 kvGroupSize: parameters.kvGroupSize
             )
 
-            // 4. Detect stable prefix boundary (system + tools) via two-probe technique.
+            // 4a. Detect stable prefix boundary (system + tools) via two-probe technique.
             let stablePrefixOffset = try StablePrefixDetector.detect(
                 systemPrompt: conversation.systemPrompt,
-                toolSpecs: toolSpecs,
+                toolSpecs: canonicalTools,
                 fullTokens: fullTokens,
                 tokenizer: context.tokenizer
             )
+
+            // 4b. Detect the last-message boundary: the offset where the final
+            // history message ends, right before the assistant-generation
+            // prompt (e.g. `<|im_start|>assistant\n<think>\n` for Qwen3.5).
+            //
+            // WHY: templates like Qwen3.5 re-render non-latest assistant
+            // messages WITHOUT their `<think>...</think>` blocks (via the
+            // template's `last_query_index` logic). Turn N stored a leaf at
+            // the full post-generation offset, but turn N+1 tokenizes the
+            // same history with old assistants stripped of think blocks, so
+            // the leaf path is unreachable. A checkpoint at the last-message
+            // boundary (before the current-turn assistant prompt) IS stable
+            // across turns: turn N+1 has the same prefix up to its own last
+            // user message, regardless of think-block rewriting.
+            //
+            // HOW: the MLXLMCommon `Tokenizer` protocol doesn't expose
+            // `addGenerationPrompt`, so we can't re-tokenize without the
+            // suffix. Instead we compute the suffix length by encoding the
+            // known generation-prompt string and subtracting. The gen prompt
+            // is the fixed trailing string appended by the Jinja template.
+            let genPromptStr = promptStartsThinking
+                ? "<|im_start|>assistant\n<think>\n"
+                : "<|im_start|>assistant\n"
+            let genPromptTokens = context.tokenizer.encode(
+                text: genPromptStr, addSpecialTokens: false
+            )
+            let lastMessageBoundaryOffset: Int?
+            if genPromptTokens.count > 0,
+               fullTokens.count > genPromptTokens.count,
+               Array(fullTokens.suffix(genPromptTokens.count)).elementsEqual(genPromptTokens)
+            {
+                lastMessageBoundaryOffset = fullTokens.count - genPromptTokens.count
+            } else {
+                lastMessageBoundaryOffset = nil
+            }
 
             // 5–6. Radix tree lookup + checkpoint planning (single MainActor hop).
             let (lookupResult, initialCheckpointPlan) = await MainActor.run {
@@ -571,6 +672,7 @@ actor LLMActor {
                 let plan = prefixCache.planCheckpoints(
                     tokens: fullTokens,
                     stablePrefixOffset: stablePrefixOffset,
+                    lastMessageBoundaryOffset: lastMessageBoundaryOffset,
                     partitionKey: partitionKey
                 )
                 return (lookup, plan)

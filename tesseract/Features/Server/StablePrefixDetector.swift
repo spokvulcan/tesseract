@@ -8,9 +8,8 @@ import MLXLMCommon
 /// messages through the same chat template and tools, then find where they
 /// diverge. The common prefix = system + tools boundary.
 ///
-/// This is robust for ANY template format (ChatML, Llama, custom) because
-/// it compares token-by-token between two known-different inputs rather than
-/// searching for sentinel tokens or template-specific markers.
+/// Template-agnostic — works for ChatML, Llama, or any format because it
+/// compares token sequences token-by-token.
 struct StablePrefixDetector {
 
     /// Returns the token offset where the stable prefix (system + tools) ends.
@@ -18,6 +17,8 @@ struct StablePrefixDetector {
     /// - systemPrompt is nil or empty
     /// - Probes produce zero common prefix
     /// - Common prefix doesn't match the start of fullTokens
+    /// - Common prefix is suspiciously short for a large prompt (suggests
+    ///   non-deterministic template rendering, e.g. swift-jinja tojson variance)
     nonisolated static func detect(
         systemPrompt: String?,
         toolSpecs: [ToolSpec]?,
@@ -61,6 +62,19 @@ struct StablePrefixDetector {
         guard fullTokens.count >= commonLength,
               fullTokens[0..<commonLength].elementsEqual(probeA[0..<commonLength])
         else {
+            return nil
+        }
+
+        // Reject suspiciously-short stable prefixes for large prompts.
+        // swift-jinja's `tojson` filter occasionally produces non-deterministic
+        // key ordering for nested dicts, causing probes to diverge inside the
+        // tools block. On large prompts (>1000 tokens), a legitimate stable
+        // prefix should cover at least a third of the tokens — system prompts
+        // and tool definitions dominate those prompts. Smaller ratios indicate
+        // probe divergence is an artifact, not a real user-content boundary.
+        // Skip this check for small prompts (unit tests, trivial messages)
+        // where the user content itself may be a large fraction.
+        if fullTokens.count > 1000 && commonLength < fullTokens.count / 3 {
             return nil
         }
 

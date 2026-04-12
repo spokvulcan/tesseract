@@ -92,28 +92,55 @@ final class PrefixCacheManager {
     // MARK: - Checkpoint Planning
 
     /// Determine checkpoint offsets for the upcoming prefill.
-    /// Phase 1: stable-prefix boundary only (if known and not already stored).
+    ///
+    /// Captures up to two mid-prefill snapshots:
+    /// - `stablePrefixOffset`: where `system + tools` end (shared across
+    ///   conversations, any request with the same system/tools can hit).
+    /// - `lastMessageBoundaryOffset`: where the last message ends, right
+    ///   before the assistant-generation prompt. Templates (e.g. Qwen3.5)
+    ///   re-render old assistants differently once they're no longer the
+    ///   latest turn, so a leaf stored at the full-prompt offset doesn't
+    ///   match future requests. A checkpoint at the last-message boundary
+    ///   is stable across turns and enables cross-turn prefix reuse.
+    ///
     /// Leaf checkpoint is NOT planned — captured post-generation via storeLeaf().
+    /// Existing snapshots at the same offset are skipped.
     func planCheckpoints(
         tokens: [Int],
         stablePrefixOffset: Int?,
+        lastMessageBoundaryOffset: Int? = nil,
         partitionKey: CachePartitionKey
     ) -> [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] {
         var plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] = []
+        let tree = trees[partitionKey]
 
-        guard let offset = stablePrefixOffset, offset > 0, offset < tokens.count else {
-            return plan
+        /// Returns true if a snapshot of the requested type already exists at
+        /// exactly `offset`. A snapshot of a different type (e.g. a leaf stored
+        /// at the stable prefix offset) does NOT count — we still want to
+        /// capture a proper system snapshot there.
+        func alreadyStored(offset: Int, type: HybridCacheSnapshot.CheckpointType) -> Bool {
+            guard let tree,
+                  let (node, _) = tree.findBestSnapshot(
+                      tokens: Array(tokens[0..<offset]), updateAccess: false)
+            else { return false }
+            return node.tokenOffset == offset && node.snapshot?.checkpointType == type
         }
 
-        if let tree = trees[partitionKey],
-           let (node, _) = tree.findBestSnapshot(tokens: Array(tokens[0..<offset]), updateAccess: false),
-           node.tokenOffset == offset,
-           node.snapshot?.checkpointType == .system
+        if let offset = stablePrefixOffset, offset > 0, offset < tokens.count,
+           !alreadyStored(offset: offset, type: .system)
         {
-            return plan
+            plan.append((offset: offset, type: .system))
         }
 
-        plan.append((offset: offset, type: .system))
+        if let offset = lastMessageBoundaryOffset,
+           offset > 0,
+           offset < tokens.count,
+           offset != stablePrefixOffset,  // avoid duplicate with stable prefix
+           !alreadyStored(offset: offset, type: .system)
+        {
+            plan.append((offset: offset, type: .system))
+        }
+
         return plan
     }
 
