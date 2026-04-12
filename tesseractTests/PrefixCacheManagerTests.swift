@@ -19,6 +19,13 @@ struct PrefixCacheManagerTests {
         return HybridCacheSnapshot.capture(cache: [kv], offset: offset, type: type)!
     }
 
+    private func makeUniformSnapshot(
+        offset: Int,
+        type: HybridCacheSnapshot.CheckpointType = .system
+    ) -> HybridCacheSnapshot {
+        PrefixCacheTestFixtures.makeUniformSnapshot(offset: offset, type: type)
+    }
+
     private func makeManager(budgetMB: Int = 100) -> PrefixCacheManager {
         PrefixCacheManager(memoryBudgetBytes: budgetMB * 1024 * 1024)
     }
@@ -119,33 +126,37 @@ struct PrefixCacheManagerTests {
         #expect(r2.restoreCache()![0].state[0].dim(2) == 50)
     }
 
-    // MARK: - 7. evictionRemovesLeafBeforeSystem
-
-    @Test func evictionRemovesLeafBeforeSystem() {
-        // Store system first, then leaf. Budget fits only one.
-        // Use same-size snapshots so we can set budget = 1 snapshot's worth.
-        let sysTokens = Array(1...10)
-        let sysSnap = makeSnapshot(offset: 10, type: .system)
-        let snapBytes = sysSnap.memoryBytes
-
-        // Budget fits exactly one snapshot
+    /// With the default `alpha = 0`, utility scoring collapses to pure
+    /// recency over the eligible set — the least-recently-accessed snapshot
+    /// is evicted regardless of checkpoint type.
+    @Test func evictsLowestUtilityWithinPartition() {
+        let snapBytes = makeUniformSnapshot(offset: 10).memoryBytes
         let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes)
 
-        mgr.storeSnapshots(promptTokens: sysTokens, capturedSnapshots: [sysSnap], partitionKey: defaultKey)
+        // Older system snapshot on its own path.
+        let sysTokens = Array(1...10)
+        mgr.storeSnapshots(
+            promptTokens: sysTokens,
+            capturedSnapshots: [makeUniformSnapshot(offset: 10, type: .system)],
+            partitionKey: defaultKey
+        )
         #expect(mgr.stats.snapshotCount == 1)
 
-        // Store leaf — pushes over budget. Eviction should remove leaf (lower priority), keep system.
-        let leafTokens = Array(1...20)
-        let leafSnap = makeSnapshot(offset: 20, type: .leaf)
-        mgr.storeLeaf(storedTokens: leafTokens, leafSnapshot: leafSnap, partitionKey: defaultKey)
+        // Newer leaf on an independent path. Same MLXArray shape → same
+        // `memoryBytes` → exactly one eviction is needed to fit within
+        // `snapBytes`.
+        let leafTokens = Array(20...29)
+        mgr.storeLeaf(
+            storedTokens: leafTokens,
+            leafSnapshot: makeUniformSnapshot(offset: leafTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
 
-        // System survives
-        let sysResult = mgr.lookup(tokens: sysTokens, partitionKey: defaultKey)
-        #expect(sysResult.snapshotTokenOffset == 10)
-
-        // Leaf was evicted (may still hit system at 10 as prefix)
+        #expect(mgr.stats.snapshotCount == 1)
         let leafResult = mgr.lookup(tokens: leafTokens, partitionKey: defaultKey)
-        #expect(leafResult.snapshotTokenOffset != 20)
+        #expect(leafResult.snapshotTokenOffset == leafTokens.count)
+        let sysResult = mgr.lookup(tokens: sysTokens, partitionKey: defaultKey)
+        #expect(sysResult.snapshotTokenOffset == 0)
     }
 
     // MARK: - 8. memoryBudgetEnforced
@@ -407,46 +418,40 @@ struct PrefixCacheManagerTests {
         #expect(resultB.snapshotTokenOffset == 10, "snapshotB (newer) should survive")
     }
 
-    // MARK: - Branch node eviction (multi-child node with snapshot)
-
-    @Test func evictionCanEvictBranchNodeSnapshots() {
-        // The ONLY snapshot is on a multi-child node (childCount == 2).
-        // Under the old eligibleEvictionNodes() (childCount <= 1), this node would
-        // not be a candidate and eviction would stall with totalSnapshotBytes > budget.
-        // With allSnapshotNodes(), the branch snapshot is evictable.
+    /// Multi-child branch snapshots are protected from utility scoring
+    /// (Marconi rule: candidates must have `childCount <= 1`). The hard
+    /// budget invariant is preserved by a fallback that drops the oldest
+    /// snapshot regardless of `childCount` when the eligible set is empty.
+    @Test func branchNodeFallbackHonorsHardBudget() {
         let snapBytes = makeSnapshot(offset: 10, type: .system).memoryBytes
-
-        // Large budget during setup
         let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 100)
 
+        // root → [1..10] (system snap, childCount==2 after both inserts)
+        //            → [11..15]
+        //            → [21..25] (leaf)
         let pathA = Array(1...15)
         let pathB = Array(1...10) + Array(21...25)
+        mgr.storeSnapshots(
+            promptTokens: pathA,
+            capturedSnapshots: [makeSnapshot(offset: 10, type: .system)],
+            partitionKey: defaultKey
+        )
+        mgr.storeLeaf(
+            storedTokens: pathB,
+            leafSnapshot: makeSnapshot(offset: pathB.count, type: .leaf),
+            partitionKey: defaultKey
+        )
 
-        // Insert BOTH paths first to create the branch structure
-        // root → [1..10] → {[11..15], [21..25]}   (offset-10 node has 2 children)
-        mgr.storeSnapshots(promptTokens: pathA,
-                           capturedSnapshots: [makeSnapshot(offset: 10, type: .system)],
-                           partitionKey: defaultKey)
-        // Insert pathB by storing a snapshot on its leaf, then evicting just the leaf snapshot.
-        // This leaves the pathB child node in place (making offset-10 multi-child)
-        // but removes the leaf snapshot so the ONLY remaining snapshot is the branch node.
-        mgr.storeLeaf(storedTokens: pathB,
-                       leafSnapshot: makeSnapshot(offset: pathB.count, type: .leaf),
-                       partitionKey: defaultKey)
-
-        // Evict the leaf snapshot manually by looking it up and tightening
-        // Actually simpler: just set budget to exactly one snapshot — leaf gets evicted by type priority
+        // Tighten to one snapshot — the eligible leaf is evicted by utility
+        // scoring, leaving only the branch-node system snapshot.
         mgr.memoryBudgetBytes = snapBytes
         mgr.evictToFitBudget()
+        #expect(mgr.stats.snapshotCount == 1)
 
-        // After type-based eviction: leaf gone, only the branch-node system snapshot remains.
-        // Now tighten budget to zero — must evict the branch-node snapshot.
-        // Under old eligibleEvictionNodes(), this would stall (childCount == 2, not eligible).
-        #expect(mgr.stats.snapshotCount == 1) // only branch snapshot left
+        // Tighten to zero. The remaining snapshot is on a multi-child node
+        // (not in the eligible set), so the fallback drops it.
         mgr.memoryBudgetBytes = 0
         mgr.evictToFitBudget()
-
-        // Budget enforced — branch-node snapshot was evicted
         #expect(mgr.totalSnapshotBytes == 0)
         #expect(mgr.stats.snapshotCount == 0)
     }

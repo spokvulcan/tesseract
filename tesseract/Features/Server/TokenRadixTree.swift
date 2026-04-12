@@ -36,8 +36,17 @@ final class RadixTreeNode {
 final class TokenRadixTree {
     private let root: RadixTreeNode
     private(set) var nodeCount: Int = 1
-    private(set) var snapshotCount: Int = 0
     private(set) var totalSnapshotBytes: Int = 0
+    /// Per-checkpoint-type snapshot counts. Maintained incrementally on
+    /// every `storeSnapshot` / `evictSnapshot` / `evictNode` so callers
+    /// don't have to walk the tree to bucket snapshots by type.
+    private(set) var snapshotCountByType: [HybridCacheSnapshot.CheckpointType: Int] = [
+        .system: 0, .leaf: 0, .branchPoint: 0,
+    ]
+
+    var snapshotCount: Int {
+        snapshotCountByType.values.reduce(0, +)
+    }
 
     init() {
         self.root = RadixTreeNode()
@@ -168,11 +177,11 @@ final class TokenRadixTree {
     func storeSnapshot(_ snapshot: HybridCacheSnapshot, on node: RadixTreeNode) {
         if let old = node.snapshot {
             totalSnapshotBytes -= old.memoryBytes
-        } else {
-            snapshotCount += 1
+            snapshotCountByType[old.checkpointType, default: 0] -= 1
         }
         node.snapshot = snapshot
         totalSnapshotBytes += snapshot.memoryBytes
+        snapshotCountByType[snapshot.checkpointType, default: 0] += 1
         node.lastAccessTime = .now
     }
 
@@ -202,7 +211,7 @@ final class TokenRadixTree {
     func evictSnapshot(node: RadixTreeNode) {
         guard let snap = node.snapshot else { return }
         totalSnapshotBytes -= snap.memoryBytes
-        snapshotCount -= 1
+        snapshotCountByType[snap.checkpointType, default: 0] -= 1
         node.snapshot = nil
     }
 
@@ -222,7 +231,7 @@ final class TokenRadixTree {
 
             if let snap = target.snapshot {
                 totalSnapshotBytes -= snap.memoryBytes
-                snapshotCount -= 1
+                snapshotCountByType[snap.checkpointType, default: 0] -= 1
                 target.snapshot = nil
             }
             target.parent = nil
@@ -236,9 +245,9 @@ final class TokenRadixTree {
         }
     }
 
-    /// Snapshot-bearing nodes eligible for Phase 2 Marconi utility scoring.
-    /// Candidate rule: node has a snapshot AND childCount ≤ 1.
-    /// Multi-child nodes are protected (shared prefix) under Marconi policy.
+    /// Snapshot-bearing nodes eligible for Marconi utility scoring:
+    /// node has a snapshot AND `childCount <= 1`. Multi-child nodes are
+    /// protected (they hold shared cache state).
     func eligibleEvictionNodes() -> [RadixTreeNode] {
         var result: [RadixTreeNode] = []
         collectEligible(node: root, into: &result)
@@ -246,7 +255,8 @@ final class TokenRadixTree {
     }
 
     /// All snapshot-bearing nodes, including multi-child branch nodes.
-    /// Used by Phase 1 type-based LRU where any snapshot can be evicted.
+    /// Used by the eviction fallback when `eligibleEvictionNodes()` is
+    /// empty but the hard budget still requires dropping something.
     func allSnapshotNodes() -> [RadixTreeNode] {
         var result: [RadixTreeNode] = []
         collectAllSnapshots(node: root, into: &result)

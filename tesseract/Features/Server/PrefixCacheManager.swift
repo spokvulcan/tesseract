@@ -5,10 +5,19 @@ import MLXLMCommon
 ///
 /// Tool/template digests are intentionally NOT part of the partition key:
 /// different tools/context → different tokens → different radix paths → naturally isolated.
-struct CachePartitionKey: Hashable, Sendable {
+///
+/// `Comparable` so partition iteration can produce a deterministic order
+/// (modelID → kvBits → kvGroupSize) for stable tie-break behavior in
+/// eviction.
+struct CachePartitionKey: Hashable, Sendable, Comparable {
     let modelID: String
     let kvBits: Int?
     let kvGroupSize: Int
+
+    static func < (lhs: CachePartitionKey, rhs: CachePartitionKey) -> Bool {
+        (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize)
+            < (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize)
+    }
 }
 
 @MainActor
@@ -191,12 +200,19 @@ final class PrefixCacheManager {
 
     // MARK: - Eviction
 
-    /// Evict lowest-priority snapshots across all partitions until under budget.
-    /// Phase 1: type-based LRU — leaf first, then branchPoint, then system.
-    /// Within same type, least-recently-accessed first.
+    /// Drop snapshots until `totalSnapshotBytes <= memoryBudgetBytes`. Uses
+    /// Marconi utility scoring (`EvictionPolicy`) for eligible nodes and
+    /// falls back to oldest-first when only multi-child branch snapshots
+    /// remain.
     func evictToFitBudget() {
+        // Pin a single clock reading and a single sorted tree order so all
+        // iterations in one drain share the same recency anchor and
+        // tie-break ordering.
+        let now: ContinuousClock.Instant = .now
+        let orderedTrees = trees.sorted { $0.key < $1.key }.map(\.value)
         while totalSnapshotBytes > memoryBudgetBytes {
-            guard let (tree, node) = findEvictionCandidate() else { break }
+            guard let (tree, node) = findEvictionCandidate(now: now, orderedTrees: orderedTrees)
+            else { break }
 
             tree.evictSnapshot(node: node)
 
@@ -210,25 +226,33 @@ final class PrefixCacheManager {
 
     // MARK: - Stats
 
-    struct CacheStats {
+    struct CacheStats: Sendable {
         let partitionCount: Int
         let totalNodeCount: Int
         let totalSnapshotBytes: Int
-        let snapshotCount: Int
+        /// Per-checkpoint-type snapshot counts. Aggregates the incremental
+        /// counters from each partition's `TokenRadixTree`.
+        let snapshotsByType: [HybridCacheSnapshot.CheckpointType: Int]
+
+        nonisolated var snapshotCount: Int { snapshotsByType.values.reduce(0, +) }
     }
 
     var stats: CacheStats {
         var nodes = 0
-        var snapshots = 0
+        var byType: [HybridCacheSnapshot.CheckpointType: Int] = [
+            .system: 0, .leaf: 0, .branchPoint: 0,
+        ]
         for tree in trees.values {
             nodes += tree.nodeCount
-            snapshots += tree.snapshotCount
+            for (type, count) in tree.snapshotCountByType {
+                byType[type, default: 0] += count
+            }
         }
         return CacheStats(
             partitionCount: trees.count,
             totalNodeCount: nodes,
             totalSnapshotBytes: totalSnapshotBytes,
-            snapshotCount: snapshots
+            snapshotsByType: byType
         )
     }
 
@@ -245,37 +269,35 @@ final class PrefixCacheManager {
         return tree
     }
 
-    /// Phase 1: evict .leaf first, then .branchPoint, then .system last.
-    /// Within same type: oldest lastAccessTime first.
-    private func findEvictionCandidate() -> (tree: TokenRadixTree, node: RadixTreeNode)? {
-        var best: (tree: TokenRadixTree, node: RadixTreeNode)?
-        var bestPriority = Int.max
-        var bestTime: ContinuousClock.Instant?
-
-        for tree in trees.values {
-            for node in tree.allSnapshotNodes() {
-                guard let snap = node.snapshot else { continue }
-                let priority = Self.evictionPriority(snap.checkpointType)
-
-                if priority < bestPriority
-                    || (priority == bestPriority && bestTime.map({ node.lastAccessTime < $0 }) == true)
-                {
-                    best = (tree, node)
-                    bestPriority = priority
-                    bestTime = node.lastAccessTime
-                }
+    /// Pick one snapshot to evict from the supplied (already-sorted) trees.
+    ///
+    /// Primary path scores Marconi-eligible nodes (snapshot + `childCount
+    /// <= 1`) and returns the lowest-utility one. Fallback path returns the
+    /// oldest snapshot across all nodes (including multi-child branches)
+    /// so the hard budget invariant holds in degenerate cases like a
+    /// zero-budget drain.
+    private func findEvictionCandidate(
+        now: ContinuousClock.Instant,
+        orderedTrees: [TokenRadixTree]
+    ) -> (tree: TokenRadixTree, node: RadixTreeNode)? {
+        var nodeToTree: [ObjectIdentifier: TokenRadixTree] = [:]
+        var candidates: [RadixTreeNode] = []
+        for tree in orderedTrees {
+            for node in tree.eligibleEvictionNodes() {
+                nodeToTree[ObjectIdentifier(node)] = tree
+                candidates.append(node)
             }
         }
 
-        return best
-    }
-
-    /// Lower value = evict first.
-    private static func evictionPriority(_ type: HybridCacheSnapshot.CheckpointType) -> Int {
-        switch type {
-        case .leaf: 0
-        case .branchPoint: 1
-        case .system: 2
+        if let victim = EvictionPolicy.selectVictim(candidates: candidates, now: now),
+           let tree = nodeToTree[ObjectIdentifier(victim.node)]
+        {
+            return (tree: tree, node: victim.node)
         }
+
+        return orderedTrees
+            .lazy
+            .flatMap { tree in tree.allSnapshotNodes().lazy.map { (tree: tree, node: $0) } }
+            .min(by: { $0.node.lastAccessTime < $1.node.lastAccessTime })
     }
 }

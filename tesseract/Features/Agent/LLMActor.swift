@@ -497,6 +497,24 @@ actor LLMActor {
         return cache
     }
 
+    /// Snapshot of the live prefix-cache state, or `nil` if the cache hasn't
+    /// been instantiated. Used by the loaded-model E2E runner to verify
+    /// branch-point capture and survival.
+    func prefixCacheStats() async -> PrefixCacheManager.CacheStats? {
+        guard let cache = _prefixCache else { return nil }
+        return await cache.stats
+    }
+
+    /// Override the prefix-cache memory budget at runtime. Used by the
+    /// loaded-model E2E runner to deliberately trigger eviction pressure.
+    func setPrefixCacheBudgetBytes(_ bytes: Int) async {
+        let cache = await ensurePrefixCache()
+        await MainActor.run {
+            cache.memoryBudgetBytes = bytes
+            cache.evictToFitBudget()
+        }
+    }
+
     /// Extract a flat `[Int]` token sequence from an MLXArray that may be 1D `[seq]`
     /// (LLM-only) or 2D `[batch, seq]` (VLM). Uses the first batch element for 2D.
     private static func extractTokenSequence(_ tokens: MLXArray) -> [Int] {
@@ -592,6 +610,13 @@ actor LLMActor {
 
         let tokenizer = try await AgentTokenizer(container: container)
         let startsThinking = Self.detectPromptStartsThinking(directory: directory)
+        let profile = Self.detectModelFlopProfile(directory: directory) ?? .qwen35_4B_PARO
+        await MainActor.run { EvictionPolicy.modelProfile = profile }
+        Log.agent.info(
+            "EvictionPolicy.modelProfile — D=\(profile.hiddenSize) "
+            + "attn=\(profile.attentionLayers) ssm=\(profile.ssmLayers) "
+            + "mlp=\(profile.mlpLayers) N=\(profile.ssmStateDim)"
+        )
         modelContainer = container
         agentTokenizer = tokenizer
         promptStartsThinking = startsThinking
@@ -851,23 +876,59 @@ actor LLMActor {
         return template[genPromptRange.upperBound...].contains("<think>")
     }
 
-    /// Reads `config.json` from the model directory to detect the model type
-    /// and return the appropriate ``ToolCallFormat``.
-    ///
-    /// Qwen3.5 uses XML function syntax (`<function=name>...</function>`) inside
-    /// `<tool_call>` tags, which requires `.xmlFunction` format.
-    private static func detectToolCallFormat(directory: URL) -> ToolCallFormat? {
+    /// Parse `config.json` from the model directory into a top-level dict.
+    /// Returns `nil` if the file is missing or unparseable.
+    private static func loadConfigJSON(directory: URL) -> [String: Any]? {
         let configURL = directory.appendingPathComponent("config.json")
         guard let data = try? Data(contentsOf: configURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json
+    }
+
+    /// Detects the chat-template tool-call format from the model's
+    /// `config.json`. Qwen3.5 uses XML function syntax
+    /// (`<function=name>...</function>`) inside `<tool_call>` tags, which
+    /// requires `.xmlFunction`.
+    private static func detectToolCallFormat(directory: URL) -> ToolCallFormat? {
+        guard let json = loadConfigJSON(directory: directory),
               let modelType = json["model_type"] as? String
         else { return nil }
 
-        // Qwen3.5 chat template instructs XML function format for tool calls
         if modelType.hasPrefix("qwen3_5") {
             return .xmlFunction
         }
-
         return ToolCallFormat.infer(from: modelType)
+    }
+
+    /// Build a `ModelFlopProfile` for a Qwen3.5 hybrid model by reading its
+    /// `config.json`. Both LLM and VLM Qwen3.5 variants nest architecture
+    /// fields under `text_config` (the top-level `model_type` is `qwen3_5`,
+    /// the nested one is `qwen3_5_text`). Returns `nil` for non-Qwen3.5
+    /// models, missing fields, or malformed configs — caller should fall
+    /// back to `.qwen35_4B_PARO`.
+    static func detectModelFlopProfile(directory: URL) -> ModelFlopProfile? {
+        guard let root = loadConfigJSON(directory: directory),
+              let topModelType = root["model_type"] as? String,
+              topModelType.hasPrefix("qwen3_5")
+        else { return nil }
+
+        // VLM nests architecture fields under `text_config`; LLM-only puts
+        // them at the top level.
+        let textConfig = (root["text_config"] as? [String: Any]) ?? root
+        guard let hiddenLayers = textConfig["num_hidden_layers"] as? Int,
+              let hiddenSize = textConfig["hidden_size"] as? Int,
+              let linearNumValueHeads = textConfig["linear_num_value_heads"] as? Int,
+              let linearKeyHeadDim = textConfig["linear_key_head_dim"] as? Int,
+              let fullAttentionInterval = textConfig["full_attention_interval"] as? Int
+        else { return nil }
+
+        return .qwen35(
+            hiddenLayers: hiddenLayers,
+            hiddenSize: hiddenSize,
+            linearNumValueHeads: linearNumValueHeads,
+            linearKeyHeadDim: linearKeyHeadDim,
+            fullAttentionInterval: fullAttentionInterval
+        )
     }
 }

@@ -248,6 +248,20 @@ final class AgentEngine {
         await llmActor.memoryStats()
     }
 
+    /// Snapshot of the live prefix-cache state, or `nil` if the cache has
+    /// not yet been instantiated. Observer hook intended for the loaded-
+    /// model E2E runner; production code should not depend on it.
+    func prefixCacheStats() async -> PrefixCacheManager.CacheStats? {
+        await llmActor.prefixCacheStats()
+    }
+
+    /// Override the prefix-cache memory budget, triggering an immediate
+    /// eviction pass. Observer hook intended for the loaded-model E2E
+    /// runner; production code should not call this.
+    func setPrefixCacheBudgetBytes(_ bytes: Int) async {
+        await llmActor.setPrefixCacheBudgetBytes(bytes)
+    }
+
     /// Releases the model from memory.
     func unloadModel() {
         cancelGeneration()

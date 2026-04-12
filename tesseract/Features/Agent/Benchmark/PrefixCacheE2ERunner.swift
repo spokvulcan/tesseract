@@ -201,6 +201,21 @@ final class PrefixCacheE2ERunner {
             detail: "cachedTokens=\(requestB3.cachedTokens) expected > 100 (covers full system+tools prefix)"
         ))
 
+        // `requestB1.cachedTokens` is the canonical "bare stable_prefix" hit
+        // (after Request A's cold capture, B1 hits stable_prefix only because
+        // it diverges from A's user content). B3 hits more (stable_prefix +
+        // last-message-boundary from B2's stored snapshots), so it would
+        // overstate the baseline.
+        try await runBranchPointScenario(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            toolSpecs: toolSpecs,
+            params: params,
+            stablePrefixCachedTokens: requestB1.cachedTokens,
+            checks: &checks
+        )
+
         // Final report
         log("\n── Summary ──")
         var allPassed = true
@@ -245,25 +260,17 @@ final class PrefixCacheE2ERunner {
         toolSpecs: [ToolSpec],
         parameters: AgentGenerateParameters
     ) async throws -> RequestResult {
-        // Build the HTTPPrefixCacheConversation the same way CompletionHandler
-        // would: system prompt + a single user message, with the canonical
-        // tool-definitions digest. `MessageConverter.convertToolDefinitions`
-        // isn't directly available here because we don't have OpenAI types,
-        // so we build the conversation manually.
         let prefixCacheConversation = HTTPPrefixCacheConversation(
             systemPrompt: systemPrompt,
-            messages: [
-                HTTPPrefixCacheMessage(role: .user, content: userMessage)
-            ]
+            messages: [HTTPPrefixCacheMessage(role: .user, content: userMessage)]
         )
-
-        let messages: [LLMMessage] = [.user(content: userMessage, images: [])]
+        let llmMessages: [LLMMessage] = [.user(content: userMessage, images: [])]
 
         let startInstant = ContinuousClock.now
         let start = try await engine.generateServerTextCompletion(
             modelID: modelID,
             systemPrompt: systemPrompt,
-            messages: messages,
+            messages: llmMessages,
             toolSpecs: toolSpecs,
             prefixCacheConversation: prefixCacheConversation,
             parameters: parameters
@@ -301,11 +308,175 @@ final class PrefixCacheE2ERunner {
     }
 
     private static func elapsedSeconds(from start: ContinuousClock.Instant) -> Double {
-        let now = ContinuousClock.now
-        let duration = start.duration(to: now)
-        let components = duration.components
-        return Double(components.seconds) + Double(components.attoseconds) / 1_000_000_000_000_000_000
+        start.duration(to: .now).seconds
     }
+
+    // MARK: - Branch-point scenario
+
+    /// Verifies branch-point capture, re-hit, and utility-scored survival
+    /// against the loaded model. The three steps log themselves below.
+    ///
+    /// Test design: C and D share a deliberately long user-message prefix
+    /// (~80 tokens) before diverging at the very last word. Without that
+    /// long prefix, the captured `.branchPoint` would sit only a few tokens
+    /// past the stable prefix and its parent-relative deltaL (and therefore
+    /// `F/B`) would be smaller than the noise leaves' deltaL, causing the
+    /// utility scorer to evict it instead of the noise. With the long
+    /// prefix, the branch-point sits deeper than any noise leaf can reach
+    /// and survives eviction pressure.
+    private func runBranchPointScenario(
+        engine: AgentEngine,
+        modelID: String,
+        systemPrompt: String,
+        toolSpecs: [ToolSpec],
+        params: AgentGenerateParameters,
+        stablePrefixCachedTokens: Int,
+        checks: inout [CheckResult]
+    ) async throws {
+        let sharedPrefix = Self.branchPointSharedPrefix
+
+        // Step 7 setup: prime the tree with a long stored path under the
+        // shared prefix, so Step 7's capture request can diverge mid-edge
+        // of it.
+        log("\n── Step 7: Branch-point capture ──")
+        _ = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            userMessage: sharedPrefix + "alpha.dat",
+            toolSpecs: toolSpecs,
+            parameters: params
+        )
+        let preCaptureBranchCount = await branchPointCount(engine: engine)
+        log("  setup done — pre-capture branchPoint count = \(preCaptureBranchCount)")
+
+        let requestC = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            userMessage: sharedPrefix + "beta.dat",
+            toolSpecs: toolSpecs,
+            parameters: params
+        )
+        let postCaptureBranchCount = await branchPointCount(engine: engine)
+        log("  C cachedTokens=\(requestC.cachedTokens) "
+            + "branchPoint count = \(postCaptureBranchCount)")
+        checks.append(CheckResult(
+            name: "requestC_captures_branch_point",
+            passed: postCaptureBranchCount > preCaptureBranchCount,
+            detail: "branchPoint count: \(preCaptureBranchCount) → \(postCaptureBranchCount)"
+        ))
+
+        // Step 8: re-hit
+        log("\n── Step 8: Branch-point re-hit ──")
+        let requestD = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            userMessage: sharedPrefix + "gamma.dat",
+            toolSpecs: toolSpecs,
+            parameters: params
+        )
+        log("  D cachedTokens=\(requestD.cachedTokens) "
+            + "(stable-prefix-only baseline = \(stablePrefixCachedTokens))")
+        checks.append(CheckResult(
+            name: "requestD_hits_branch_point",
+            passed: requestD.cachedTokens > stablePrefixCachedTokens,
+            detail: "D cachedTokens=\(requestD.cachedTokens) vs stable-prefix=\(stablePrefixCachedTokens) "
+                + "(deeper hit means branch-point reuse)"
+        ))
+
+        // Step 9: survival under utility-scored eviction pressure.
+        // alpha=2 puts F/B above pure recency in the utility sum so the
+        // branch-point's larger deltaL outweighs the noise leaves' newer
+        // access times.
+        log("\n── Step 9: Branch-point survival under pressure ──")
+        let originalAlpha = EvictionPolicy.alpha
+        EvictionPolicy.alpha = 2.0
+        defer { EvictionPolicy.alpha = originalAlpha }
+
+        guard let preStats = await engine.prefixCacheStats(),
+              preStats.snapshotCount > 0
+        else {
+            log("  skipping — prefix cache empty")
+            checks.append(CheckResult(
+                name: "branch_point_survives_under_pressure",
+                passed: false,
+                detail: "prefix cache empty before pressure step"
+            ))
+            return
+        }
+
+        // Budget = current usage minus one snapshot. Each subsequent noise
+        // request overflows by ~one snapshot, so eviction drops one
+        // eligible candidate per round. The budget intentionally stays
+        // above the multi-child / branch-point combined size: utility
+        // scoring should keep the branch-point alive without ever
+        // depleting the eligible set far enough to fall through to the
+        // fallback path (which is plain LRU and would drop the
+        // branch-point regardless of F/B).
+        let avgBytes = preStats.totalSnapshotBytes / preStats.snapshotCount
+        let tightBudget = max(preStats.totalSnapshotBytes - avgBytes, avgBytes)
+        await engine.setPrefixCacheBudgetBytes(tightBudget)
+        log("  tight budget = \(tightBudget) bytes "
+            + "(pre-pressure total = \(preStats.totalSnapshotBytes), "
+            + "avg snapshot size = \(avgBytes), "
+            + "starting branchPoint count = \(preStats.snapshotsByType[.branchPoint] ?? 0))")
+
+        for (i, prompt) in Self.branchPointNoisePrompts.enumerated() {
+            _ = try await runRequest(
+                engine: engine,
+                modelID: modelID,
+                systemPrompt: systemPrompt,
+                userMessage: "\(prompt) #\(i)",
+                toolSpecs: toolSpecs,
+                parameters: params
+            )
+        }
+
+        let postStats = await engine.prefixCacheStats()
+        let postBranchCount = postStats?.snapshotsByType[.branchPoint] ?? 0
+        let postTotalBytes = postStats?.totalSnapshotBytes ?? 0
+        log("  post-pressure branchPoint count = \(postBranchCount), "
+            + "totalBytes = \(postTotalBytes)")
+        checks.append(CheckResult(
+            name: "branch_point_survives_under_pressure",
+            passed: postBranchCount >= 1,
+            detail: "branchPoint count after \(Self.branchPointNoisePrompts.count) "
+                + "noise requests + tight budget: \(postBranchCount) "
+                + "(≥1 means utility scoring preserved it)"
+        ))
+    }
+
+    private func branchPointCount(engine: AgentEngine) async -> Int {
+        let stats = await engine.prefixCacheStats()
+        return stats?.snapshotsByType[.branchPoint] ?? 0
+    }
+
+    /// Long shared user-message prefix (~80 tokens) for the branch-point
+    /// scenario. C/D append a different terminator so the divergence
+    /// happens deep in the user message — putting the captured
+    /// `.branchPoint` snapshot's parent-relative deltaL well above any
+    /// noise leaf's deltaL.
+    private static let branchPointSharedPrefix: String = """
+        Please carefully analyze the contents of this very specific file path \
+        that I am about to give you, and tell me what kind of file it is, what \
+        it might contain, what tools you would use to read it, and any caveats \
+        I should know about. Then report back with your findings in a \
+        structured format including the file type, the suspected purpose, and \
+        any related files you would expect to find nearby. The file is at \
+        /tmp/data/configs/sample-
+        """
+
+    /// Short, unrelated noise prompts for the survival check. Kept short
+    /// so noise leaves stay shallower than the branch-point's offset.
+    private static let branchPointNoisePrompts: [String] = [
+        "Add 1 + 1",
+        "Spell cat",
+        "Pick a color",
+        "Say hi",
+        "Name an animal",
+    ]
 
     // MARK: - Fixtures
 
