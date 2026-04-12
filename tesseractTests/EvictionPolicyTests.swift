@@ -19,6 +19,7 @@ struct EvictionPolicyTests {
     private let defaultKey = CachePartitionKey(
         modelID: "test-model", kvBits: nil, kvGroupSize: 64
     )
+    private let gib = 1024 * 1024 * 1024
 
     private func makeManager(budgetMB: Int = 100) -> PrefixCacheManager {
         PrefixCacheManager(memoryBudgetBytes: budgetMB * 1024 * 1024)
@@ -367,6 +368,77 @@ struct EvictionPolicyTests {
             ObjectIdentifier(s2),
             ObjectIdentifier(s3),
         ])
+    }
+
+    // MARK: - Prefix cache budget sizing
+
+    @Test func budgetScalesWithRAM() {
+        let modelBytes = Int64(10 * gib)
+
+        let budget32 = LLMActor.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: UInt64(32 * gib),
+            modelMemoryBytes: modelBytes
+        )
+        let budget48 = LLMActor.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: UInt64(48 * gib),
+            modelMemoryBytes: modelBytes
+        )
+        let budget64 = LLMActor.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: UInt64(64 * gib),
+            modelMemoryBytes: modelBytes
+        )
+
+        #expect(budget32 == 9 * gib)
+        #expect(budget48 == 17 * gib)
+        #expect(budget64 == 25 * gib)
+        #expect(budget32 < budget48)
+        #expect(budget48 < budget64)
+    }
+
+    @Test func budgetAccountsForModel() {
+        let totalMemoryBytes = UInt64(48 * gib)
+
+        let budget4 = LLMActor.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: totalMemoryBytes,
+            modelMemoryBytes: Int64(4 * gib)
+        )
+        let budget10 = LLMActor.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: totalMemoryBytes,
+            modelMemoryBytes: Int64(10 * gib)
+        )
+        let budget20 = LLMActor.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: totalMemoryBytes,
+            modelMemoryBytes: Int64(20 * gib)
+        )
+
+        #expect(budget4 == 20 * gib)
+        #expect(budget10 == 17 * gib)
+        #expect(budget20 == 12 * gib)
+        #expect(budget4 > budget10)
+        #expect(budget10 > budget20)
+    }
+
+    @Test func budgetUsesRawFormulaWithoutHardCap() {
+        let budget = LLMActor.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: UInt64(128 * gib),
+            modelMemoryBytes: Int64(10 * gib)
+        )
+
+        #expect(budget == 57 * gib)
+    }
+
+    @Test func budgetClampsToZeroWhenHeadroomExhausted() {
+        let exactFit = LLMActor.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: UInt64(16 * gib),
+            modelMemoryBytes: Int64(12 * gib)
+        )
+        let overcommitted = LLMActor.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: UInt64(16 * gib),
+            modelMemoryBytes: Int64(13 * gib)
+        )
+
+        #expect(exactFit == 0)
+        #expect(overcommitted == 0)
     }
 
     // MARK: - Profile detection

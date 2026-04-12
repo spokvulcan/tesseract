@@ -3,6 +3,7 @@ import HuggingFace
 import MLX
 import MLXHuggingFace
 import MLXLMCommon
+import MLXNN
 import Tokenizers
 import os
 
@@ -52,32 +53,29 @@ actor LLMActor {
     /// - Activations / scratch:            ~1.0 GB
     /// - Subtotal (single in-flight turn): ~5.5 GB
     ///
-    /// Plus the HTTP prefix cache, which retains a full KV state per stored entry.
-    /// For Qwen3.5 hybrid (8 attention layers per 32, ~16 K context):
-    ///   8 attn layers × 16384 tokens × 8 KV heads × 128 dim × 2 (K+V) × 2 B (fp16) ≈ 0.5 GB / entry
-    /// At 32 K context this roughly doubles to ~1 GB / entry.
+    /// The HTTP prefix cache is auto-sized from the remaining unified memory
+    /// after subtracting model weights and a fixed 4 GiB safety headroom:
+    /// `max(0, (physicalMemory - modelWeightBytes - 4 GiB) / 2)`.
     ///
-    /// With `httpPrefixCacheCapacity = 3`: ~3 GB cache budget → ~8.5 GB total target.
-    /// With `httpPrefixCacheCapacity = 8`: ~8 GB cache budget → ~13.5 GB total — was the
-    /// previous default and is what put the process at >20 GB once OpenCode subagents
-    /// kept several distinct cache keys live simultaneously.
-    ///
-    /// Trade-off: smaller capacity → fewer parallel conversation chains kept warm.
-    /// 3 is enough for "main agent + subagent + title gen" — the three keys we
-    /// observe in OpenCode workloads. If you need more, raise it knowing each
-    /// extra slot costs ~0.5–1 GB.
+    /// Example: on a 48 GiB machine with a 10 GiB model, the default cache
+    /// budget becomes 17 GiB. Before a model is sized (or after unload), the
+    /// actor falls back to a conservative 3 GiB budget so pre-load paths and
+    /// tests retain deterministic behavior.
     private enum Defaults {
         static let cacheLimitMB = 2048
-        /// Memory budget for the prefix cache. Each snapshot costs ~200–600 MiB
-        /// depending on context length. 3 GiB fits ~5–15 snapshots for typical
-        /// Qwen3.5 workloads (system + leaf per concurrent conversation).
-        static let prefixCacheMemoryBudgetBytes = 3 * 1024 * 1024 * 1024 // 3 GiB
+        static let prefixCacheHeadroomBytes = 4 * 1024 * 1024 * 1024 // 4 GiB
+        /// Fallback budget used before load-time sizing runs. Each snapshot
+        /// costs ~200–600 MiB depending on context length, so 3 GiB fits
+        /// ~5–15 snapshots for typical Qwen3.5 workloads.
+        static let fallbackPrefixCacheMemoryBudgetBytes = 3 * 1024 * 1024 * 1024 // 3 GiB
     }
 
     private var modelContainer: ModelContainer?
     private(set) var agentTokenizer: AgentTokenizer?
     private var _prefixCache: PrefixCacheManager?
     private var promptStartsThinking = false
+    private var defaultPrefixCacheMemoryBudgetBytes =
+        Defaults.fallbackPrefixCacheMemoryBudgetBytes
 
     var isLoaded: Bool { modelContainer != nil }
 
@@ -510,6 +508,7 @@ actor LLMActor {
         agentTokenizer = nil
         promptStartsThinking = false
         _prefixCache = nil
+        defaultPrefixCacheMemoryBudgetBytes = Defaults.fallbackPrefixCacheMemoryBudgetBytes
     }
 
     /// Frees unreferenced MLX buffers between tool rounds.
@@ -534,7 +533,7 @@ actor LLMActor {
         if let existing = _prefixCache { return existing }
         await MainActor.run { EvictionPolicy.alpha = 0.0 }
         let cache = await PrefixCacheManager(
-            memoryBudgetBytes: Defaults.prefixCacheMemoryBudgetBytes,
+            memoryBudgetBytes: defaultPrefixCacheMemoryBudgetBytes,
             alphaTuner: AlphaTuner()
         )
         _prefixCache = cache
@@ -655,17 +654,53 @@ actor LLMActor {
         let tokenizer = try await AgentTokenizer(container: container)
         let startsThinking = Self.detectPromptStartsThinking(directory: directory)
         let profile = Self.detectModelFlopProfile(directory: directory) ?? .qwen35_4B_PARO
+        let modelWeightBytes = await container.perform { context in
+            context.model.parameters().flattened().reduce(into: Int64.zero) { partial, item in
+                let nbytes = Int64(clamping: item.1.nbytes)
+                if partial > Int64.max - nbytes {
+                    partial = Int64.max
+                } else {
+                    partial += nbytes
+                }
+            }
+        }
+        let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
+        let prefixCacheBudgetBytes = Self.autoSizedPrefixCacheMemoryBudgetBytes(
+            totalMemoryBytes: totalMemoryBytes,
+            modelMemoryBytes: modelWeightBytes
+        )
         await MainActor.run { EvictionPolicy.modelProfile = profile }
         Log.agent.info(
             "EvictionPolicy.modelProfile — D=\(profile.hiddenSize) "
             + "attn=\(profile.attentionLayers) ssm=\(profile.ssmLayers) "
             + "mlp=\(profile.mlpLayers) N=\(profile.ssmStateDim)"
         )
+        Log.agent.info(
+            "Prefix cache budget auto-sized — "
+            + "totalRAMBytes=\(totalMemoryBytes) "
+            + "modelWeightBytes=\(modelWeightBytes) "
+            + "headroomBytes=\(Defaults.prefixCacheHeadroomBytes) "
+            + "budgetBytes=\(prefixCacheBudgetBytes)"
+        )
         modelContainer = container
         agentTokenizer = tokenizer
         promptStartsThinking = startsThinking
+        defaultPrefixCacheMemoryBudgetBytes = prefixCacheBudgetBytes
         _prefixCache = nil
         return (tokenizer, startsThinking)
+    }
+
+    static func autoSizedPrefixCacheMemoryBudgetBytes(
+        totalMemoryBytes: UInt64,
+        modelMemoryBytes: Int64
+    ) -> Int {
+        let total = Int64(clamping: totalMemoryBytes)
+        let model = max(Int64.zero, modelMemoryBytes)
+        let headroom = Int64(clamping: Defaults.prefixCacheHeadroomBytes)
+        let reserved = model > Int64.max - headroom ? Int64.max : model + headroom
+        let available = total - reserved
+        guard available > 0 else { return 0 }
+        return Int(clamping: available / 2)
     }
 
     /// Build the lower-level MLX generation pipeline using the radix-tree prefix cache.
