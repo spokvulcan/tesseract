@@ -359,6 +359,51 @@ struct PrefixCacheIntegrationTests {
         #expect(relativeOffset == 1000)
     }
 
+    // MARK: - 12b. newSnapshotFromTwoPassReusable
+
+    /// A hit at K with a longer tree match to M synthesizes an alignment
+    /// checkpoint at M, and the next request reuses that deeper snapshot.
+    @Test func newSnapshotFromTwoPassReusable() {
+        let mgr = makeManager()
+        let seedPath = Array(1...600)
+
+        mgr.storeSnapshots(
+            promptTokens: seedPath,
+            capturedSnapshots: [makeKVSnapshot(offset: 200, type: .system)],
+            partitionKey: defaultKey
+        )
+
+        let firstRequest = seedPath + [999]
+        let firstLookup = mgr.lookup(tokens: firstRequest, partitionKey: defaultKey)
+        #expect(firstLookup.snapshotTokenOffset == 200)
+        #expect(firstLookup.sharedPrefixLength == 600)
+
+        let planned = mgr.planCheckpoints(
+            tokens: firstRequest,
+            stablePrefixOffset: nil,
+            partitionKey: defaultKey
+        )
+        #expect(!planned.contains(where: { $0.offset == 600 }))
+
+        let alignmentOffset = mgr.alignmentCheckpointOffset(
+            lookupResult: firstLookup,
+            totalTokenCount: firstRequest.count,
+            plannedCheckpoints: planned
+        )
+        #expect(alignmentOffset == 600)
+
+        mgr.storeSnapshots(
+            promptTokens: firstRequest,
+            capturedSnapshots: [makeKVSnapshot(offset: 600, type: .branchPoint)],
+            partitionKey: defaultKey
+        )
+
+        let nextRequest = seedPath + [1000, 1001]
+        let nextLookup = mgr.lookup(tokens: nextRequest, partitionKey: defaultKey)
+        #expect(nextLookup.snapshotTokenOffset == 600)
+        #expect(nextLookup.snapshot?.checkpointType == .branchPoint)
+    }
+
     // MARK: - 13. leafStoredUnderPostResponsePath
 
     /// After generation, leaf snapshot stored under re-tokenized (prompt + response) path.

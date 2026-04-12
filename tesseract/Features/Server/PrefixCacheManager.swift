@@ -51,6 +51,9 @@ final class PrefixCacheManager {
         let snapshot: HybridCacheSnapshot?
         let partitionKey: CachePartitionKey?
         let snapshotTokenOffset: Int
+        /// Actual token-level match depth in the radix tree, which may be
+        /// deeper than `snapshotTokenOffset` when the tree matches beyond the
+        /// best stored snapshot.
         let sharedPrefixLength: Int
         let reason: LookupReason
 
@@ -101,17 +104,78 @@ final class PrefixCacheManager {
             )
         }
 
+        let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
+
         return LookupResult(
             snapshot: snapshot,
             partitionKey: partitionKey,
             snapshotTokenOffset: snapshot.tokenOffset,
-            sharedPrefixLength: sharedLen,
+            sharedPrefixLength: treeMatchDepth,
             reason: .hit(
                 snapshotOffset: snapshot.tokenOffset,
                 totalTokens: tokens.count,
                 type: snapshot.checkpointType
             )
         )
+    }
+
+    /// When a lookup restores at `K` but the tree already matches farther to
+    /// `M`, synthesize a checkpoint at `M` so the next request can skip the
+    /// already-shared gap. This is layered on top of the existing Phase 2
+    /// planner and does not change its speculative branch-point rules.
+    func alignmentCheckpointOffset(
+        lookupResult: LookupResult,
+        totalTokenCount: Int,
+        plannedCheckpoints: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
+    ) -> Int? {
+        guard lookupResult.snapshot != nil else { return nil }
+
+        let snapshotOffset = lookupResult.snapshotTokenOffset
+        let sharedPrefixLength = lookupResult.sharedPrefixLength
+        let alignmentThreshold = 256
+
+        guard snapshotOffset > 0,
+              sharedPrefixLength > snapshotOffset,
+              sharedPrefixLength < totalTokenCount,
+              sharedPrefixLength - snapshotOffset > alignmentThreshold
+        else { return nil }
+
+        guard !plannedCheckpoints.contains(where: { $0.offset == sharedPrefixLength }) else {
+            return nil
+        }
+
+        guard case .hit(let offset, _, _) = lookupResult.reason,
+              offset == snapshotOffset
+        else {
+            return nil
+        }
+
+        return sharedPrefixLength
+    }
+
+    /// Runs the production lookup + checkpoint planner flow, including the
+    /// Phase 3.1 alignment checkpoint merge used by `LLMActor`.
+    func lookupAndPlanCheckpoints(
+        tokens: [Int],
+        stablePrefixOffset: Int?,
+        lastMessageBoundaryOffset: Int? = nil,
+        partitionKey: CachePartitionKey
+    ) -> (lookup: LookupResult, plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]) {
+        let lookup = lookup(tokens: tokens, partitionKey: partitionKey)
+        let basePlan = planCheckpoints(
+            tokens: tokens,
+            stablePrefixOffset: stablePrefixOffset,
+            lastMessageBoundaryOffset: lastMessageBoundaryOffset,
+            partitionKey: partitionKey
+        )
+        guard let alignmentOffset = alignmentCheckpointOffset(
+            lookupResult: lookup,
+            totalTokenCount: tokens.count,
+            plannedCheckpoints: basePlan
+        ) else {
+            return (lookup, basePlan)
+        }
+        return (lookup, basePlan + [(offset: alignmentOffset, type: .branchPoint)])
     }
 
     // MARK: - Checkpoint Planning

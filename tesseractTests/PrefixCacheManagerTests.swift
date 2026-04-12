@@ -695,4 +695,112 @@ struct PrefixCacheManagerTests {
         #expect(plan[0].offset == 10)
         #expect(plan[0].type == .system)
     }
+
+    // MARK: - Phase 3.1 alignment checkpoints
+
+    @Test func alignedSnapshotSinglePass() {
+        let mgr = makeManager()
+
+        let exactPath = Array(1...200)
+        mgr.storeSnapshots(
+            promptTokens: exactPath,
+            capturedSnapshots: [makeSnapshot(offset: 200, type: .system)],
+            partitionKey: defaultKey
+        )
+
+        let exactLookup = mgr.lookup(tokens: exactPath + [999], partitionKey: defaultKey)
+        #expect(exactLookup.snapshotTokenOffset == 200)
+        #expect(exactLookup.sharedPrefixLength == 200)
+        #expect(
+            mgr.alignmentCheckpointOffset(
+                lookupResult: exactLookup,
+                totalTokenCount: exactPath.count + 1,
+                plannedCheckpoints: []
+            ) == nil
+        )
+
+        let longPath = Array(1...500)
+        mgr.storeSnapshots(
+            promptTokens: longPath,
+            capturedSnapshots: [makeSnapshot(offset: 200, type: .system)],
+            partitionKey: defaultKey
+        )
+
+        let plannedLookup = mgr.lookup(tokens: longPath + [1000], partitionKey: defaultKey)
+        #expect(plannedLookup.snapshotTokenOffset == 200)
+        #expect(plannedLookup.sharedPrefixLength == 500)
+        #expect(
+            mgr.alignmentCheckpointOffset(
+                lookupResult: plannedLookup,
+                totalTokenCount: longPath.count + 1,
+                plannedCheckpoints: [(offset: 500, type: .system)]
+            ) == nil
+        )
+    }
+
+    @Test func largeGapTriggersTwoPass() {
+        let mgr = makeManager()
+        let matchedPath = Array(1...500)
+        mgr.storeSnapshots(
+            promptTokens: matchedPath,
+            capturedSnapshots: [makeSnapshot(offset: 100, type: .system)],
+            partitionKey: defaultKey
+        )
+
+        let lookup = mgr.lookup(tokens: matchedPath + [999], partitionKey: defaultKey)
+        #expect(lookup.snapshotTokenOffset == 100)
+        #expect(lookup.sharedPrefixLength == 500)
+
+        let alignmentOffset = mgr.alignmentCheckpointOffset(
+            lookupResult: lookup,
+            totalTokenCount: matchedPath.count + 1,
+            plannedCheckpoints: []
+        )
+        #expect(alignmentOffset == 500)
+    }
+
+    @Test func smallGapSinglePass() {
+        let mgr = makeManager()
+        let matchedPath = Array(1...450)
+        mgr.storeSnapshots(
+            promptTokens: matchedPath,
+            capturedSnapshots: [makeSnapshot(offset: 300, type: .system)],
+            partitionKey: defaultKey
+        )
+
+        let lookup = mgr.lookup(tokens: matchedPath + [999], partitionKey: defaultKey)
+        #expect(lookup.snapshotTokenOffset == 300)
+        #expect(lookup.sharedPrefixLength == 450)
+
+        let alignmentOffset = mgr.alignmentCheckpointOffset(
+            lookupResult: lookup,
+            totalTokenCount: matchedPath.count + 1,
+            plannedCheckpoints: []
+        )
+        #expect(alignmentOffset == nil)
+    }
+
+    @Test func lookupAndPlanCheckpointsIncludesAlignmentCheckpoint() {
+        let mgr = makeManager()
+        let matchedPath = Array(1...500)
+        mgr.storeSnapshots(
+            promptTokens: matchedPath,
+            capturedSnapshots: [makeSnapshot(offset: 100, type: .system)],
+            partitionKey: defaultKey
+        )
+
+        let request = matchedPath + [999]
+        let result = mgr.lookupAndPlanCheckpoints(
+            tokens: request,
+            stablePrefixOffset: nil,
+            partitionKey: defaultKey
+        )
+
+        #expect(result.lookup.snapshotTokenOffset == 100)
+        #expect(result.lookup.sharedPrefixLength == 500)
+        #expect(result.plan.contains { $0.offset == 500 && $0.type == .branchPoint })
+
+        let suffixPlan = result.plan.filter { $0.offset > result.lookup.snapshotTokenOffset }
+        #expect(suffixPlan.contains { $0.offset == 500 && $0.type == .branchPoint })
+    }
 }

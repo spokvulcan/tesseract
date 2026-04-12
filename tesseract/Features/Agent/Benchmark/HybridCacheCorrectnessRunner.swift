@@ -154,6 +154,11 @@ final class HybridCacheCorrectnessRunner {
                 context: context, tokens: shortPrompt, fullLogits: shortFullLogits
             )
         }
+        runTest("twoPassLogitsMatchFullPrefill") {
+            try test11_twoPassAlignmentPrefill(
+                context: context, tokens: shortPrompt, fullLogits: shortFullLogits
+            )
+        }
 
         return TestRunResult(logs: logs, checks: checks)
     }
@@ -434,6 +439,54 @@ final class HybridCacheCorrectnessRunner {
         )
         let diff = maxAbsDiff(fullLogits, restoredLogits)
         return (diff <= bitwiseTolerance, "maxAbsDiff=\(diff)", [])
+    }
+
+    /// Simulates the Phase 3.1 alignment path: restore at `K`, capture an
+    /// intermediate checkpoint at `M > K` during the suffix prefill, then
+    /// continue to the final logits. The result must match cold prefill
+    /// bitwise, and the mid-suffix checkpoint must actually be emitted.
+    private nonisolated static func test11_twoPassAlignmentPrefill(
+        context: ModelContext,
+        tokens: [Int],
+        fullLogits: MLXArray
+    ) throws -> (passed: Bool, detail: String, lines: [String]) {
+        let n = tokens.count
+        let k = n / 4
+        let m = n / 2
+
+        let setupCache = context.model.newCache(parameters: nil)
+        try prefill(
+            context: context,
+            tokens: Array(tokens.prefix(k)),
+            checkpoints: [:],
+            cache: setupCache
+        )
+        guard let snap = HybridCacheSnapshot.capture(
+            cache: setupCache, offset: k, type: .system
+        ) else {
+            return (false, "capture nil at K=\(k)", [])
+        }
+
+        let restoredCache = snap.restore()
+        let suffix = Array(tokens[k..<(tokens.count - 1)])
+        let snapshots = try prefill(
+            context: context,
+            tokens: suffix,
+            checkpoints: [m: .branchPoint],
+            checkpointBaseOffset: k,
+            cache: restoredCache
+        )
+        let restoredLogits = lastTokenLogits(
+            context: context, tokens: tokens, cache: restoredCache
+        )
+        let diff = maxAbsDiff(fullLogits, restoredLogits)
+        let capturedOffsets = snapshots.map(\.tokenOffset)
+        let capturedM = capturedOffsets.contains(m)
+        return (
+            capturedM && diff <= bitwiseTolerance,
+            "K=\(k) M=\(m) maxAbsDiff=\(diff) capturedOffsets=\(capturedOffsets)",
+            []
+        )
     }
 
     /// Diagnostic: simulates the trim-and-restore path that **production no

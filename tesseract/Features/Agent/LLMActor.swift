@@ -762,14 +762,12 @@ actor LLMActor {
 
             // 5–6. Radix tree lookup + checkpoint planning (single MainActor hop).
             let (lookupResult, initialCheckpointPlan) = await MainActor.run {
-                let lookup = prefixCache.lookup(tokens: fullTokens, partitionKey: partitionKey)
-                let plan = prefixCache.planCheckpoints(
+                prefixCache.lookupAndPlanCheckpoints(
                     tokens: fullTokens,
                     stablePrefixOffset: stablePrefixOffset,
                     lastMessageBoundaryOffset: lastMessageBoundaryOffset,
                     partitionKey: partitionKey
                 )
-                return (lookup, plan)
             }
             var checkpointPlan = initialCheckpointPlan
 
