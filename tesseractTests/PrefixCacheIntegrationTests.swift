@@ -261,17 +261,17 @@ struct PrefixCacheIntegrationTests {
     /// This test validates the contract: checkpoint offsets flow through GenerateParameters,
     /// and capturedSnapshots is populated after init — no separate prepare() call needed.
     @Test func noDoublePrefill() {
-        // Verify the GenerateParameters contract: checkpointAtOffsets and checkpointBaseOffset
+        // Verify the GenerateParameters contract: checkpoints and checkpointBaseOffset
         // are passed through, and default to empty/zero (no double-prefill path).
         var params = GenerateParameters()
-        #expect(params.checkpointAtOffsets.isEmpty)
+        #expect(params.checkpoints.isEmpty)
         #expect(params.checkpointBaseOffset == 0)
 
-        // Setting checkpoint offsets doesn't trigger any separate prepare call —
-        // they're read by TokenIterator.init during its single prepare() invocation.
-        params.checkpointAtOffsets = [100, 200]
+        // Setting checkpoints doesn't trigger any separate prepare call — they're
+        // read by TokenIterator.init during its single prepare() invocation.
+        params.checkpoints = [100: .system, 200: .system]
         params.checkpointBaseOffset = 50
-        #expect(params.checkpointAtOffsets.count == 2)
+        #expect(params.checkpoints.count == 2)
         #expect(params.checkpointBaseOffset == 50)
     }
 

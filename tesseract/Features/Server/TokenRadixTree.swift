@@ -253,6 +253,42 @@ final class TokenRadixTree {
         return result
     }
 
+    // MARK: - Speculative branch-point detection
+
+    /// Dry-run insertion: returns the absolute token offset at which
+    /// `insertPath(tokens:)` would call `splitEdge`, or `nil` if insertion
+    /// would not split any compressed edge (empty tokens, empty tree,
+    /// node-boundary divergence, or exact match).
+    ///
+    /// Note: a strict prefix of an existing edge also splits the edge — the
+    /// helper reports the offset honestly, and the planner suppresses that
+    /// degenerate case via `splitOffset < tokens.count`.
+    func findIntermediateSplitOffsetForInsertion(tokens: [Int]) -> Int? {
+        guard !tokens.isEmpty else { return nil }
+
+        var current = root
+        var pos = 0
+
+        while pos < tokens.count {
+            guard let child = current.children[tokens[pos]] else { return nil }
+
+            let edge = child.edgeTokens
+            var edgePos = 0
+            while edgePos < edge.count && pos < tokens.count && edge[edgePos] == tokens[pos] {
+                edgePos += 1
+                pos += 1
+            }
+
+            if edgePos < edge.count {
+                return current.tokenOffset + edgePos
+            }
+
+            current = child
+        }
+
+        return nil
+    }
+
     /// Collapse a snapshot-less node with exactly one child.
     /// Concatenates the node's edgeTokens into the child edge and re-links parent→child.
     /// Preserves radix compression after snapshot eviction.

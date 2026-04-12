@@ -527,4 +527,167 @@ struct PrefixCacheManagerTests {
         #expect(plan.count == 1)
         #expect(plan[0].offset == 100)
     }
+
+    // MARK: - Speculative branch-point candidates
+
+    @Test func divergenceInsideCompressedEdgeCreatesCandidate() {
+        let mgr = makeManager()
+        let stored = [1, 2, 3, 4]
+        mgr.storeLeaf(
+            storedTokens: stored,
+            leafSnapshot: makeSnapshot(offset: stored.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        let plan = mgr.planCheckpoints(
+            tokens: [1, 2, 5, 6],
+            stablePrefixOffset: nil,
+            partitionKey: defaultKey
+        )
+
+        #expect(plan.count == 1)
+        #expect(plan[0].offset == 2)
+        #expect(plan[0].type == .branchPoint)
+    }
+
+    @Test func exactPathExtensionDoesNotCreateBranchPoint() {
+        // Pure extension is already covered by the leaf checkpoint, so no
+        // speculative branch point is needed.
+        let mgr = makeManager()
+        mgr.storeLeaf(
+            storedTokens: [1, 2, 3],
+            leafSnapshot: makeSnapshot(offset: 3, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        let plan = mgr.planCheckpoints(
+            tokens: [1, 2, 3, 4, 5],
+            stablePrefixOffset: nil,
+            partitionKey: defaultKey
+        )
+
+        #expect(!plan.contains(where: { $0.type == .branchPoint }))
+    }
+
+    @Test func nodeBoundaryDivergenceDoesNotCreateIntermediateCheckpoint() {
+        let mgr = makeManager()
+        // Storing both [1,2] and [1,2,3,4] materializes node [1,2] as a real
+        // boundary, so a [1,2,9] walk diverges at the boundary not mid-edge.
+        mgr.storeLeaf(
+            storedTokens: [1, 2],
+            leafSnapshot: makeSnapshot(offset: 2, type: .leaf),
+            partitionKey: defaultKey
+        )
+        mgr.storeLeaf(
+            storedTokens: [1, 2, 3, 4],
+            leafSnapshot: makeSnapshot(offset: 4, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        let plan = mgr.planCheckpoints(
+            tokens: [1, 2, 9, 10],
+            stablePrefixOffset: nil,
+            partitionKey: defaultKey
+        )
+
+        #expect(!plan.contains(where: { $0.type == .branchPoint }))
+    }
+
+    @Test func coldTreeNoSpeculativeCandidates() {
+        let mgr = makeManager()
+        let plan = mgr.planCheckpoints(
+            tokens: Array(1...10),
+            stablePrefixOffset: nil,
+            partitionKey: defaultKey
+        )
+        #expect(plan.isEmpty)
+    }
+
+    @Test func existingSnapshotNotReCandidate() {
+        // After a real prior capture the intermediate node is materialized
+        // and carries a snapshot — re-running the planner on the same
+        // divergent tokens must not re-add the branch point.
+        let mgr = makeManager()
+        mgr.storeSnapshots(
+            promptTokens: [1, 2, 3, 4],
+            capturedSnapshots: [makeSnapshot(offset: 2, type: .system)],
+            partitionKey: defaultKey
+        )
+
+        let plan = mgr.planCheckpoints(
+            tokens: [1, 2, 5, 6],
+            stablePrefixOffset: nil,
+            partitionKey: defaultKey
+        )
+
+        #expect(!plan.contains(where: { $0.type == .branchPoint }))
+    }
+
+    @Test func atMostOneBranchPointPerSequence() {
+        // The walk stops at the first mid-edge divergence by construction —
+        // even with multiple plausible split sites along the path, only one
+        // candidate is emitted.
+        let mgr = makeManager()
+        mgr.storeLeaf(
+            storedTokens: [1, 2, 3, 4, 5],
+            leafSnapshot: makeSnapshot(offset: 5, type: .leaf),
+            partitionKey: defaultKey
+        )
+        mgr.storeLeaf(
+            storedTokens: [1, 2, 8, 9, 10],
+            leafSnapshot: makeSnapshot(offset: 5, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        // Tree: root -> [1,2] -> {[3,4,5], [8,9,10]}. [1,2,3,7,11] descends
+        // through [1,2] then diverges mid-edge of [3,4,5] at offset 3.
+        let plan = mgr.planCheckpoints(
+            tokens: [1, 2, 3, 7, 11],
+            stablePrefixOffset: nil,
+            partitionKey: defaultKey
+        )
+
+        let branchPoints = plan.filter { $0.type == .branchPoint }
+        #expect(branchPoints.count == 1)
+        #expect(branchPoints.first?.offset == 3)
+    }
+
+    @Test func branchPointCoexistsWithSystemCheckpoint() {
+        let mgr = makeManager()
+        mgr.storeLeaf(
+            storedTokens: Array(1...50),
+            leafSnapshot: makeSnapshot(offset: 50, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        let request = Array(1...30) + [999, 1000]
+        let plan = mgr.planCheckpoints(
+            tokens: request,
+            stablePrefixOffset: 10,
+            partitionKey: defaultKey
+        )
+
+        #expect(plan.contains { $0.offset == 10 && $0.type == .system })
+        #expect(plan.contains { $0.offset == 30 && $0.type == .branchPoint })
+    }
+
+    @Test func branchPointSkippedIfSameOffsetAsSystem() {
+        let mgr = makeManager()
+        mgr.storeLeaf(
+            storedTokens: Array(1...50),
+            leafSnapshot: makeSnapshot(offset: 50, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        let request = Array(1...10) + [999, 1000]
+        let plan = mgr.planCheckpoints(
+            tokens: request,
+            stablePrefixOffset: 10,
+            partitionKey: defaultKey
+        )
+
+        #expect(plan.count == 1)
+        #expect(plan[0].offset == 10)
+        #expect(plan[0].type == .system)
+    }
 }

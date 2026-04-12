@@ -434,4 +434,50 @@ struct TokenRadixTreeTests {
         let node = tree.findBestSnapshot(tokens: Array(1...50))!.node
         #expect(node.lastAccessTime >= timeBefore)
     }
+
+    // MARK: - Speculative branch-point detection
+
+    @Test func findSplitInsideCompressedEdge() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3, 4])
+        #expect(tree.findIntermediateSplitOffsetForInsertion(tokens: [1, 2, 5, 6]) == 2)
+    }
+
+    @Test func findSplitNodeBoundaryDivergenceReturnsNil() {
+        let tree = TokenRadixTree()
+        // Materialize an intermediate node at offset 2 by inserting both
+        // [1,2,3,4] and [1,2] — the second insert splits the edge.
+        tree.insertPath(tokens: [1, 2, 3, 4])
+        tree.insertPath(tokens: [1, 2])
+        #expect(tree.findIntermediateSplitOffsetForInsertion(tokens: [1, 2, 9]) == nil)
+    }
+
+    @Test func findSplitExactExtensionReturnsNil() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3])
+        #expect(tree.findIntermediateSplitOffsetForInsertion(tokens: [1, 2, 3, 4, 5]) == nil)
+    }
+
+    @Test func findSplitEmptyTreeReturnsNil() {
+        let tree = TokenRadixTree()
+        #expect(tree.findIntermediateSplitOffsetForInsertion(tokens: [1, 2, 3]) == nil)
+    }
+
+    @Test func findSplitEmptyTokensReturnsNil() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3])
+        #expect(tree.findIntermediateSplitOffsetForInsertion(tokens: []) == nil)
+    }
+
+    @Test func findSplitExactMatchReturnsNil() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3])
+        #expect(tree.findIntermediateSplitOffsetForInsertion(tokens: [1, 2, 3]) == nil)
+    }
+
+    @Test func findSplitShorterPrefixReturnsSplitOffset() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3, 4, 5])
+        #expect(tree.findIntermediateSplitOffsetForInsertion(tokens: [1, 2, 3]) == 3)
+    }
 }

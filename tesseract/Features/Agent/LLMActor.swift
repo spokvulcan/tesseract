@@ -713,8 +713,12 @@ actor LLMActor {
             }
 
             // 8. Set checkpoint offsets on parameters — flows into TokenIterator → prepare().
+            // Planner guarantees offset uniqueness, so uniqueKeysWithValues traps loudly
+            // on a planner-side invariant break instead of silently dropping a candidate.
             var genParams = parameters
-            genParams.checkpointAtOffsets = Set(checkpointPlan.map(\.offset))
+            genParams.checkpoints = Dictionary(
+                uniqueKeysWithValues: checkpointPlan.map { ($0.offset, $0.type) }
+            )
             genParams.checkpointBaseOffset = checkpointBaseOffset
 
             // 9. Create TokenIterator — this calls model.prepare() internally with checkpoints.

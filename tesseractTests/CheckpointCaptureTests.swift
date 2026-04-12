@@ -32,7 +32,8 @@ struct CheckpointCaptureTests {
         }
     }
 
-    /// Runs chunkedPrefill and records chunk sizes.
+    /// Runs chunkedPrefill and records chunk sizes. Lifts the test-friendly
+    /// `Set<Int>` argument to a `[offset: .system]` map for the underlying API.
     @discardableResult
     private func runPrefill(
         totalTokens: Int,
@@ -43,11 +44,14 @@ struct CheckpointCaptureTests {
         cache: [any KVCache]? = nil
     ) throws -> (chunks: [Int], consumed: Int, snapshots: [HybridCacheSnapshot]) {
         let cache = cache ?? makeCache()
+        let checkpoints = Dictionary(
+            uniqueKeysWithValues: checkpointAtOffsets.map { ($0, HybridCacheSnapshot.CheckpointType.system) }
+        )
         var chunks: [Int] = []
         let (consumed, snapshots) = try HybridCacheSnapshot.chunkedPrefill(
             totalTokens: totalTokens,
             prefillStepSize: prefillStepSize,
-            checkpointAtOffsets: checkpointAtOffsets,
+            checkpoints: checkpoints,
             checkpointBaseOffset: checkpointBaseOffset,
             initialOffset: initialOffset,
             cache: cache
@@ -256,10 +260,10 @@ struct CheckpointCaptureTests {
         // Verify the parameter plumbing: GenerateParameters carries checkpoint fields
         // through to TokenIterator's stored properties (Evaluate.swift:593-594, 628-629).
         let params = GenerateParameters(
-            checkpointAtOffsets: [100, 200],
+            checkpoints: [100: .system, 200: .system],
             checkpointBaseOffset: 50
         )
-        #expect(params.checkpointAtOffsets == [100, 200])
+        #expect(Set(params.checkpoints.keys) == [100, 200])
         #expect(params.checkpointBaseOffset == 50)
     }
 
@@ -268,9 +272,9 @@ struct CheckpointCaptureTests {
     @Test func tokenIteratorWithNoCheckpointsHasEmptySnapshots() {
         // Default GenerateParameters: no checkpoints requested.
         let params = GenerateParameters()
-        #expect(params.checkpointAtOffsets.isEmpty)
+        #expect(params.checkpoints.isEmpty)
         #expect(params.checkpointBaseOffset == 0)
-        // With empty offsets, LLMModel.prepareWithCheckpoints() (LLMModel.swift:47-49)
+        // With empty checkpoints, LLMModel.prepareWithCheckpoints()
         // short-circuits to prepare() and returns (result, []).
         // TokenIterator.capturedSnapshots stays [].
     }
@@ -352,7 +356,9 @@ struct CheckpointCaptureTests {
     }
 
     @Test func snapshotHasCorrectCheckpointType() throws {
-        // All snapshots from chunkedPrefill get .system type.
+        // `runPrefill` lifts its `Set<Int>` argument to `[offset: .system]`,
+        // so the captured snapshot is tagged `.system` here. Per-offset type
+        // tagging is exercised by `checkpointMapTagsEachSnapshotWithItsType`.
         let result = try runPrefill(
             totalTokens: 1000,
             prefillStepSize: 256,
@@ -381,7 +387,7 @@ struct CheckpointCaptureTests {
         let (_, snapshots) = try HybridCacheSnapshot.chunkedPrefill(
             totalTokens: 200,
             prefillStepSize: 256,
-            checkpointAtOffsets: [100],
+            checkpoints: [100: .system],
             checkpointBaseOffset: 0,
             initialOffset: 100,
             cache: cache
@@ -407,5 +413,22 @@ struct CheckpointCaptureTests {
             #expect(chunkSum == result.consumed, "total=\(total): chunk sum \(chunkSum) ≠ consumed \(result.consumed)")
             #expect(result.consumed <= total, "total=\(total): consumed \(result.consumed) > total")
         }
+    }
+
+    // MARK: - Per-checkpoint type tagging
+
+    @Test func checkpointMapTagsEachSnapshotWithItsType() throws {
+        let cache = makeCache()
+        let (_, snapshots) = try HybridCacheSnapshot.chunkedPrefill(
+            totalTokens: 800,
+            prefillStepSize: 256,
+            checkpoints: [200: .system, 500: .branchPoint],
+            checkpointBaseOffset: 0,
+            cache: cache
+        ) { _ in }
+
+        let byOffset = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.tokenOffset, $0.checkpointType) })
+        #expect(byOffset[200] == .system)
+        #expect(byOffset[500] == .branchPoint)
     }
 }

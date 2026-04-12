@@ -1396,14 +1396,26 @@ Extend `planCheckpoints()` to perform **Marconi speculative insertion**:
 1. Walk the tree with the new token sequence as if inserting it.
 2. If insertion would **split an existing edge** (the shared prefix continues inside a compressed edge, then diverges), mark the split offset as a `.branchPoint` checkpoint candidate.
 3. If the new sequence only **extends an existing path at a node boundary**, do **not** create a `.branchPoint` checkpoint. The leaf checkpoint already covers this case.
-4. Admit **at most one** `.branchPoint` candidate per request. Combined with the leaf checkpoint, this preserves Marconi's "max 2 checkpoints per sequence" rule.
+4. Admit **at most one** `.branchPoint` candidate per request — independent of the Phase 1 stable-prefix and last-message-boundary checkpoints, which are kept as-is.
+
+**Checkpoint budget — deliberate divergence from the paper.** Marconi's strict reading is "max 2 checkpoints per sequence" (one mid-prefill + one leaf). Tesseract's Phase 1 already ships **two** mid-prefill checkpoints (`stablePrefixOffset` for system+tools reuse, `lastMessageBoundaryOffset` for cross-turn reuse on Qwen3.5's template) plus the leaf, so the actual Phase 1 budget is **3 captures per request**. Task 2.1 adds at most one further `.branchPoint` candidate when a true mid-edge divergence occurs, raising the worst-case Phase 2 budget to **4 captures per request**:
+
+| Phase | Mid-prefill | Leaf | Total worst-case | Triggered by |
+|---|---|---|---|---|
+| Marconi paper | 1 | 1 | 2 | always |
+| Tesseract Phase 1 | 2 | 1 | 3 | non-empty system + multi-message body |
+| Tesseract Phase 2 (Task 2.1) | up to 3 | 1 | 4 | + mid-edge divergence on the body |
+
+The extra captures are conditional and rare in practice — branch points only fire on true mid-edge divergence (not node-boundary extensions, not cold cache, not exact-path reuse). Each capture adds one chunk split in `chunkedPrefill` (negligible) and one snapshot allocation (`evictToFitBudget` enforces the global memory budget immediately after store, so steady-state usage stays bounded). The trade is two extra cross-conversation hit paths in exchange for the enlarged budget — the design considers it worth it for Tesseract's primary subagent + Qwen3.5 workload.
 
 ```swift
 // In planCheckpoints() — Phase 2 addition:
-if let splitOffset = tree.findIntermediateSplitOffsetForInsertion(tokens: tokens) {
-    if !tree.hasSnapshotAt(offset: splitOffset) {
-        plan.append((offset: splitOffset, type: .branchPoint))
-    }
+if let splitOffset = tree.findIntermediateSplitOffsetForInsertion(tokens: tokens),
+   splitOffset > 0,
+   splitOffset < tokens.count,
+   !plan.contains(where: { $0.offset == splitOffset })
+{
+    plan.append((offset: splitOffset, type: .branchPoint))
 }
 ```
 
@@ -1415,8 +1427,10 @@ if let splitOffset = tree.findIntermediateSplitOffsetForInsertion(tokens: tokens
 | 2 | `exactPathExtensionDoesNotCreateBranchPoint` | [1,2,3] stored, [1,2,3,4,5] → no speculative checkpoint |
 | 3 | `nodeBoundaryDivergenceDoesNotCreateIntermediateCheckpoint` | Existing node [1,2], new child [1,2,9] → leaf only, no `.branchPoint` |
 | 4 | `coldTreeNoSpeculativeCandidates` | Empty tree → no branch-point candidates |
-| 5 | `existingSnapshotNotReCandidate` | Split offset already has snapshot → not re-planned |
+| 5 | `existingSnapshotNotReCandidate` | Re-running planner after a real prior capture (intermediate node materialized) → not re-planned |
 | 6 | `atMostOneBranchPointPerSequence` | Complex tree, single insertion → at most one speculative candidate |
+| 7 | `branchPointCoexistsWithSystemCheckpoint` | Stable-prefix + branch-point at distinct offsets → both planned |
+| 8 | `branchPointSkippedIfSameOffsetAsSystem` | Branch-point offset coincides with stable-prefix offset → no duplicate |
 
 ### Task 2.2: Logit-equivalence verification harness
 
@@ -1526,6 +1540,23 @@ This replaces the Phase 1 type-priority heuristic. Checkpoint type still exists 
 | 8 | `memoryBudgetRespected` | Repeated lowest-utility eviction brings usage under budget |
 | 9 | `tallMainAgentSurvivesSubagentChurn` | **Regression test for Phase 1 limitation #6.** Simulate a main-agent checkpoint at offset 76K coexisting with many subagent checkpoints at offset 20–30K. Subagent checkpoints are accessed frequently (recent), main-agent checkpoint is accessed rarely (stale). Under utility scoring with `alpha > 0`, the main-agent checkpoint must survive eviction because its F/B ratio dominates. Under Phase 1 LRU, it would be evicted; Phase 2 must not regress to that behavior. |
 | 10 | `parallelSubagentsCoexistWithMainAgent` | **Acceptance criterion for Phase 2.** Simulate 1 main agent (80K checkpoint) + 3 subagents (25K checkpoints each) all under a shared budget just tight enough to require eviction. All 4 tall-prefix checkpoints must remain in the cache (shorter leaf-like entries are evicted first). Validates that `norm(F/B)` weighting is sufficient to preserve tall context prefixes across sessions. |
+
+**Loaded-model E2E coverage (extends `PrefixCacheE2ERunner`):**
+
+Task 2.1's planner-only landing left a coverage gap: the existing `prefix-cache-e2e` runner only exercises Request A → Request B with same system + different user, which diverges at the *node boundary* of the system snapshot, not mid-edge. The branch-point capture path is exercised by unit and integration tests but never by a real loaded model.
+
+Task 2.3 closes that gap because utility-scored eviction must distinguish branch-point snapshots from system snapshots in production conditions. Add a 3-request scenario to `PrefixCacheE2ERunner` that:
+
+1. **Request A** — system + user₁ → fully cold; captures stable-prefix + last-message-boundary + leaf
+2. **Request B** — same system + user₁ + assistant₁ + user₂ → diverges *mid-edge* of A's leaf path; planner emits a `.branchPoint` candidate at the divergence offset; the captured snapshot must land tagged `.branchPoint` (verifiable via `tmp/tesseract-debug/http-completions/` request mirror or via `PrefixCacheManager.stats`)
+3. **Request C** — same system + user₁ + assistant₁ + user₃ → re-hits the branch point captured by Request B; reported `cachedTokens` should match the branch-point offset, *not* the stable-prefix offset
+
+Assertions to add alongside the existing 7 checks:
+- `requestB_captures_branch_point` — at least one `.branchPoint`-tagged snapshot exists in the cache after Request B
+- `requestC_hits_branch_point` — Request C's `cachedTokens` equals the offset of the `.branchPoint` snapshot, not the stable-prefix offset
+- `branch_point_survives_under_pressure` — repeat Request C N times; under utility scoring with `alpha > 0`, the branch-point snapshot must outlive shorter siblings even if they're more recent (folds the `tallMainAgentSurvivesSubagentChurn` and `parallelSubagentsCoexistWithMainAgent` invariants into the loaded-model harness)
+
+This bundles the Task 2.1 deferred E2E coverage with Task 2.3's natural verification needs — one harness, one runtime envelope (~6 seconds plus the extra requests), instead of two one-shot runners.
 
 ### Task 2.4: Adaptive `alpha` tuning (paper/repo-aligned)
 

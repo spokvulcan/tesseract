@@ -141,6 +141,15 @@ final class PrefixCacheManager {
             plan.append((offset: offset, type: .system))
         }
 
+        if let tree,
+           let splitOffset = tree.findIntermediateSplitOffsetForInsertion(tokens: tokens),
+           splitOffset > 0,
+           splitOffset < tokens.count,
+           !plan.contains(where: { $0.offset == splitOffset })
+        {
+            plan.append((offset: splitOffset, type: .branchPoint))
+        }
+
         return plan
     }
 
