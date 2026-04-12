@@ -36,6 +36,7 @@ final class RadixTreeNode {
 final class TokenRadixTree {
     private let root: RadixTreeNode
     private(set) var nodeCount: Int = 1
+    private(set) var snapshotCount: Int = 0
     private(set) var totalSnapshotBytes: Int = 0
 
     init() {
@@ -48,7 +49,7 @@ final class TokenRadixTree {
     ///
     /// Walks the tree matching tokens. Tracks the deepest snapshot-bearing node.
     /// On lookup hit, updates `lastAccessTime` on the returned node only (not ancestors).
-    func findBestSnapshot(tokens: [Int]) -> (node: RadixTreeNode, sharedPrefixLength: Int)? {
+    func findBestSnapshot(tokens: [Int], updateAccess: Bool = true) -> (node: RadixTreeNode, sharedPrefixLength: Int)? {
         var current = root
         var pos = 0
         var bestNode: RadixTreeNode?
@@ -83,7 +84,7 @@ final class TokenRadixTree {
         }
 
         guard let node = bestNode else { return nil }
-        node.lastAccessTime = .now
+        if updateAccess { node.lastAccessTime = .now }
         return (node: node, sharedPrefixLength: bestPrefixLength)
     }
 
@@ -144,6 +145,8 @@ final class TokenRadixTree {
     func storeSnapshot(_ snapshot: HybridCacheSnapshot, on node: RadixTreeNode) {
         if let old = node.snapshot {
             totalSnapshotBytes -= old.memoryBytes
+        } else {
+            snapshotCount += 1
         }
         node.snapshot = snapshot
         totalSnapshotBytes += snapshot.memoryBytes
@@ -176,6 +179,7 @@ final class TokenRadixTree {
     func evictSnapshot(node: RadixTreeNode) {
         guard let snap = node.snapshot else { return }
         totalSnapshotBytes -= snap.memoryBytes
+        snapshotCount -= 1
         node.snapshot = nil
     }
 
@@ -195,6 +199,7 @@ final class TokenRadixTree {
 
             if let snap = target.snapshot {
                 totalSnapshotBytes -= snap.memoryBytes
+                snapshotCount -= 1
                 target.snapshot = nil
             }
             target.parent = nil
@@ -208,12 +213,20 @@ final class TokenRadixTree {
         }
     }
 
-    /// Snapshot-bearing nodes eligible for eviction scoring.
+    /// Snapshot-bearing nodes eligible for Phase 2 Marconi utility scoring.
     /// Candidate rule: node has a snapshot AND childCount ≤ 1.
-    /// Multi-child nodes are protected (shared prefix).
+    /// Multi-child nodes are protected (shared prefix) under Marconi policy.
     func eligibleEvictionNodes() -> [RadixTreeNode] {
         var result: [RadixTreeNode] = []
         collectEligible(node: root, into: &result)
+        return result
+    }
+
+    /// All snapshot-bearing nodes, including multi-child branch nodes.
+    /// Used by Phase 1 type-based LRU where any snapshot can be evicted.
+    func allSnapshotNodes() -> [RadixTreeNode] {
+        var result: [RadixTreeNode] = []
+        collectAllSnapshots(node: root, into: &result)
         return result
     }
 
@@ -261,6 +274,15 @@ final class TokenRadixTree {
 
         parent.children[originalEdge[0]] = intermediate
         nodeCount += 1
+    }
+
+    private func collectAllSnapshots(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
+        if node.snapshot != nil {
+            result.append(node)
+        }
+        for child in node.children.values {
+            collectAllSnapshots(node: child, into: &result)
+        }
     }
 
     private func collectEligible(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
