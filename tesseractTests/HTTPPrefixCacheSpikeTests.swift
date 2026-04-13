@@ -366,13 +366,26 @@ struct HTTPPrefixCacheSpikeTests {
 }
 
 // MARK: - Session replay store (still used in production)
+//
+// The store now partitions by (sessionAffinity, modelID, visionMode) so that
+// recovered reasoning content cannot bleed across two different physical LLM
+// slots that share the same client session. The existing tests use a fixed
+// modelID + visionMode; the partitioning is exercised explicitly by the
+// `sessionReplayIsolatesReasoningBy*` tests below.
 
 struct HTTPPrefixCacheSessionReplayTests {
+
+    // Constants used across all tests in this struct. Picking an arbitrary
+    // non-empty model id — what matters is that record() and repair() agree.
+    private static let modelA = "qwen3.5-4b-paro"
+    private static let modelB = "qwen3.5-9b-paro"
 
     @Test func sessionReplayRecoversMissingReasoningWhenSignatureMatches() async {
         let store = HTTPPrefixCacheSessionReplayStore()
         await store.record(
             sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false,
             assistantMessage: .assistant(
                 content: "Calling tool",
                 reasoning: "Need to inspect the file first.",
@@ -394,7 +407,9 @@ struct HTTPPrefixCacheSessionReplayTests {
                     ]
                 ),
             ],
-            sessionAffinity: "session-1"
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false
         )
 
         #expect(repair.clientCount == 0)
@@ -407,6 +422,8 @@ struct HTTPPrefixCacheSessionReplayTests {
         let store = HTTPPrefixCacheSessionReplayStore()
         await store.record(
             sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false,
             assistantMessage: .assistant(content: "Answer", reasoning: "Stored reasoning")
         )
 
@@ -418,7 +435,9 @@ struct HTTPPrefixCacheSessionReplayTests {
                     reasoning_content: "Client reasoning"
                 ),
             ],
-            sessionAffinity: "session-1"
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false
         )
 
         #expect(repair.clientCount == 1)
@@ -431,6 +450,8 @@ struct HTTPPrefixCacheSessionReplayTests {
         let store = HTTPPrefixCacheSessionReplayStore()
         await store.record(
             sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false,
             assistantMessage: .assistant(content: "Answer", reasoning: "Stored reasoning")
         )
 
@@ -438,7 +459,9 @@ struct HTTPPrefixCacheSessionReplayTests {
             messages: [
                 .init(role: .assistant, content: .text("Answer")),
             ],
-            sessionAffinity: nil
+            sessionAffinity: nil,
+            modelID: Self.modelA,
+            visionMode: false
         )
 
         #expect(repair.clientCount == 0)
@@ -451,6 +474,8 @@ struct HTTPPrefixCacheSessionReplayTests {
         let store = HTTPPrefixCacheSessionReplayStore()
         await store.record(
             sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false,
             assistantMessage: .assistant(
                 content: "Calling tool",
                 reasoning: "Stored reasoning",
@@ -472,10 +497,117 @@ struct HTTPPrefixCacheSessionReplayTests {
                     ]
                 ),
             ],
-            sessionAffinity: "session-1"
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false
         )
 
         #expect(repair.clientCount == 0)
+        #expect(repair.sessionRecoveredCount == 0)
+        #expect(repair.missingCount == 1)
+        #expect(repair.messages[0].reasoning_content == nil)
+    }
+
+    // MARK: Partitioning by modelID / visionMode
+    //
+    // These tests are the teeth of the partitioning fix. If they regress it
+    // means recovered reasoning content is leaking between two different
+    // physical LLM containers that share a client session — a correctness
+    // hazard for benchmark clients like BenchLocal that may alternate models.
+
+    @Test func sessionReplayIsolatesReasoningByModelID() async {
+        let store = HTTPPrefixCacheSessionReplayStore()
+
+        // Same session affinity + same content + same vision mode, but two
+        // different model IDs. Each record() goes to its own partition; each
+        // repair() should recover the reasoning from the matching partition.
+        await store.record(
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false,
+            assistantMessage: .assistant(content: "X", reasoning: "secret-A")
+        )
+        await store.record(
+            sessionAffinity: "session-1",
+            modelID: Self.modelB,
+            visionMode: false,
+            assistantMessage: .assistant(content: "X", reasoning: "secret-B")
+        )
+
+        let repairA = await store.repair(
+            messages: [.init(role: .assistant, content: .text("X"))],
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false
+        )
+        #expect(repairA.sessionRecoveredCount == 1)
+        #expect(repairA.messages[0].reasoning_content == "secret-A")
+
+        let repairB = await store.repair(
+            messages: [.init(role: .assistant, content: .text("X"))],
+            sessionAffinity: "session-1",
+            modelID: Self.modelB,
+            visionMode: false
+        )
+        #expect(repairB.sessionRecoveredCount == 1)
+        #expect(repairB.messages[0].reasoning_content == "secret-B")
+    }
+
+    @Test func sessionReplayIsolatesReasoningByVisionMode() async {
+        let store = HTTPPrefixCacheSessionReplayStore()
+
+        // Same session + same model + same content, but visionMode toggled.
+        // `LoadedLLMState` treats these as different physical containers —
+        // the replay store must match.
+        await store.record(
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false,
+            assistantMessage: .assistant(content: "X", reasoning: "vlm-off")
+        )
+        await store.record(
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: true,
+            assistantMessage: .assistant(content: "X", reasoning: "vlm-on")
+        )
+
+        let repairOff = await store.repair(
+            messages: [.init(role: .assistant, content: .text("X"))],
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false
+        )
+        #expect(repairOff.messages[0].reasoning_content == "vlm-off")
+
+        let repairOn = await store.repair(
+            messages: [.init(role: .assistant, content: .text("X"))],
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: true
+        )
+        #expect(repairOn.messages[0].reasoning_content == "vlm-on")
+    }
+
+    @Test func sessionReplayMissesAcrossModelIDs() async {
+        let store = HTTPPrefixCacheSessionReplayStore()
+
+        // Record to model A, repair for model B — nothing should be
+        // recovered (missingCount reflects the failed lookup).
+        await store.record(
+            sessionAffinity: "session-1",
+            modelID: Self.modelA,
+            visionMode: false,
+            assistantMessage: .assistant(content: "X", reasoning: "secret-A")
+        )
+
+        let repair = await store.repair(
+            messages: [.init(role: .assistant, content: .text("X"))],
+            sessionAffinity: "session-1",
+            modelID: Self.modelB,
+            visionMode: false
+        )
+
         #expect(repair.sessionRecoveredCount == 0)
         #expect(repair.missingCount == 1)
         #expect(repair.messages[0].reasoning_content == nil)

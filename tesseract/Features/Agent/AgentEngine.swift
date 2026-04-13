@@ -15,12 +15,18 @@ extension UserInput: @retroactive @unchecked Sendable {}
 /// Errors thrown by ``AgentEngine`` during generation.
 enum AgentEngineError: LocalizedError {
     case modelNotLoaded
+    /// Raised when loading a specific model ID fails because its weights are
+    /// not present on disk. Carries the offending ID so HTTP handlers can
+    /// surface it in a 404 `model_not_found` response.
+    case modelNotDownloaded(modelID: String)
     case generationFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .modelNotLoaded:
             "No model is loaded"
+        case .modelNotDownloaded(let id):
+            "Model '\(id)' is not downloaded"
         case .generationFailed(let description):
             "Generation failed: \(description)"
         }

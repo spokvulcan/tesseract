@@ -104,6 +104,208 @@ struct CompletionHandlerTests {
     }
 }
 
+// MARK: - ModelSelection resolver (per-request model switching)
+//
+// These tests exercise the pure `CompletionHandler.resolveModelSelection`
+// function, which decides how `request.model` routes. They verify the
+// contract documented in docs/HTTP_SERVER_SPEC.md §4.2 Model Routing:
+// - missing / empty / whitespace-only → .useSettings
+// - exact id + downloaded → .override
+// - exact id + not downloaded → .notDownloaded
+// - anything else → .unknown (no displayName fallback, no trimming)
+
+struct ModelSelectionTests {
+
+    private static let qwen4 = "qwen3.5-4b-paro"
+    private static let qwen9 = "qwen3.5-9b-paro"
+    private static let agentIDs = [qwen4, qwen9, "qwen3.5-4b"]
+
+    private static let downloadedStatuses: [String: ModelStatus] = [
+        qwen4: .downloaded(sizeOnDisk: 1),
+        qwen9: .downloaded(sizeOnDisk: 1),
+        "qwen3.5-4b": .downloaded(sizeOnDisk: 1),
+    ]
+
+    @Test func resolvesNilToUseSettings() {
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: nil,
+                agentIDs: Self.agentIDs,
+                statuses: Self.downloadedStatuses
+            ) == .useSettings
+        )
+    }
+
+    @Test func resolvesEmptyStringToUseSettings() {
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: "",
+                agentIDs: Self.agentIDs,
+                statuses: Self.downloadedStatuses
+            ) == .useSettings
+        )
+    }
+
+    @Test func resolvesWhitespaceOnlyToUseSettings() {
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: "   ",
+                agentIDs: Self.agentIDs,
+                statuses: Self.downloadedStatuses
+            ) == .useSettings
+        )
+    }
+
+    @Test func resolvesKnownAndDownloadedToOverride() {
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: Self.qwen9,
+                agentIDs: Self.agentIDs,
+                statuses: Self.downloadedStatuses
+            ) == .override(Self.qwen9)
+        )
+    }
+
+    @Test func resolvesUnknownIDToUnknown() {
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: "gpt-4",
+                agentIDs: Self.agentIDs,
+                statuses: Self.downloadedStatuses
+            ) == .unknown("gpt-4")
+        )
+    }
+
+    @Test func resolvesKnownButNotDownloadedToNotDownloaded() {
+        let statuses: [String: ModelStatus] = [
+            Self.qwen4: .downloaded(sizeOnDisk: 1),
+            Self.qwen9: .notDownloaded,
+            "qwen3.5-4b": .downloaded(sizeOnDisk: 1),
+        ]
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: Self.qwen9,
+                agentIDs: Self.agentIDs,
+                statuses: statuses
+            ) == .notDownloaded(Self.qwen9)
+        )
+    }
+
+    @Test func resolvesKnownButDownloadingToNotDownloaded() {
+        let statuses: [String: ModelStatus] = [
+            Self.qwen9: .downloading(progress: 0.5),
+        ]
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: Self.qwen9,
+                agentIDs: Self.agentIDs,
+                statuses: statuses
+            ) == .notDownloaded(Self.qwen9)
+        )
+    }
+
+    @Test func resolvesKnownButErroredToNotDownloaded() {
+        let statuses: [String: ModelStatus] = [
+            Self.qwen9: .error("network failure"),
+        ]
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: Self.qwen9,
+                agentIDs: Self.agentIDs,
+                statuses: statuses
+            ) == .notDownloaded(Self.qwen9)
+        )
+    }
+
+    @Test func resolvesKnownButMissingFromStatusesToNotDownloaded() {
+        // Agent IDs contain qwen9 but statuses dict is empty (not yet
+        // refreshed, for instance). Should fail closed → .notDownloaded.
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: Self.qwen9,
+                agentIDs: Self.agentIDs,
+                statuses: [:]
+            ) == .notDownloaded(Self.qwen9)
+        )
+    }
+
+    @Test func resolverRejectsDisplayName() {
+        // Display names ("Qwen3.5-9B PARO") must NOT match the canonical id
+        // ("qwen3.5-9b-paro"). Exact match only per decision #3.
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: "Qwen3.5-9B PARO",
+                agentIDs: Self.agentIDs,
+                statuses: Self.downloadedStatuses
+            ) == .unknown("Qwen3.5-9B PARO")
+        )
+    }
+
+    @Test func resolverRejectsTrailingWhitespace() {
+        // A trailing space is NOT trimmed for the comparison — trimming is
+        // only used for the is-empty check. Catching a silent client config
+        // mistake is the whole point.
+        #expect(
+            CompletionHandler.resolveModelSelection(
+                requestModel: "\(Self.qwen9) ",
+                agentIDs: Self.agentIDs,
+                statuses: Self.downloadedStatuses
+            ) == .unknown("\(Self.qwen9) ")
+        )
+    }
+}
+
+// MARK: - echoModelID (per-request model switching)
+//
+// Covers the bug where `{"model":"   "}` round-tripped through the
+// non-streaming and streaming echo sites — the raw whitespace string would
+// appear in the response body. The helper substitutes the physical model ID
+// when the client sent nothing useful.
+
+struct EchoModelIDTests {
+
+    @Test func echoReturnsPhysicalForNilRequest() {
+        #expect(
+            CompletionHandler.echoModelID(
+                requestModel: nil,
+                physical: "qwen3.5-4b-paro"
+            ) == "qwen3.5-4b-paro"
+        )
+    }
+
+    @Test func echoReturnsPhysicalForEmptyRequest() {
+        #expect(
+            CompletionHandler.echoModelID(
+                requestModel: "",
+                physical: "qwen3.5-4b-paro"
+            ) == "qwen3.5-4b-paro"
+        )
+    }
+
+    @Test func echoReturnsPhysicalForWhitespaceRequest() {
+        #expect(
+            CompletionHandler.echoModelID(
+                requestModel: "   ",
+                physical: "qwen3.5-4b-paro"
+            ) == "qwen3.5-4b-paro"
+        )
+    }
+
+    @Test func echoReturnsRequestVerbatimWhenNonEmpty() {
+        // Echo preserves exactly what the client sent, regardless of
+        // whether it matched the resolver. `"Qwen3.5-9B PARO"` would fail
+        // the resolver (display name, not canonical id) — but if it reached
+        // the echo helper, it would be echoed verbatim. That's OpenAI's
+        // contract: echo what the client sent.
+        #expect(
+            CompletionHandler.echoModelID(
+                requestModel: "Qwen3.5-9B PARO",
+                physical: "qwen3.5-9b-paro"
+            ) == "Qwen3.5-9B PARO"
+        )
+    }
+}
+
 // MARK: - HTTPServer Integration Tests
 
 @MainActor
@@ -337,6 +539,101 @@ struct HTTPServerIntegrationTests {
         try await Task.sleep(nanoseconds: 500_000_000)
         #expect(generationCancelled.isSet)
         #expect(handlerExited.isSet)
+    }
+
+    // MARK: - OpenAI Error Shape (model_not_found)
+
+    @Test func modelNotFoundUnknownReturnsOpenAIShape() async throws {
+        let server = HTTPServer(port: 0)
+        server.route(.POST, "/v1/chat/completions") { _, writer in
+            try await writer.send(.modelNotFound(modelID: "gpt-4", reason: .unknownID))
+        }
+        let port = try await startOnRandomPort(server)
+        defer { server.stop() }
+
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data(#"{"model":"gpt-4","messages":[]}"#.utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 404)
+
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let error = json["error"] as? [String: Any]
+        #expect(error != nil)
+        #expect(error?["type"] as? String == "invalid_request_error")
+        // Strict shape: `code` is a string, not an integer.
+        #expect(error?["code"] as? String == "model_not_found")
+        #expect(error?["param"] as? String == "model")
+        let message = error?["message"] as? String ?? ""
+        #expect(message.contains("gpt-4"))
+        #expect(message.contains("does not exist"))
+    }
+
+    @Test func modelNotFoundNotDownloadedReturnsOpenAIShape() async throws {
+        let server = HTTPServer(port: 0)
+        server.route(.POST, "/v1/chat/completions") { _, writer in
+            try await writer.send(
+                .modelNotFound(modelID: "qwen3.5-9b-paro", reason: .notDownloaded)
+            )
+        }
+        let port = try await startOnRandomPort(server)
+        defer { server.stop() }
+
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data(#"{"model":"qwen3.5-9b-paro","messages":[]}"#.utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 404)
+
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let error = json["error"] as? [String: Any]
+        #expect(error?["type"] as? String == "invalid_request_error")
+        #expect(error?["code"] as? String == "model_not_found")
+        #expect(error?["param"] as? String == "model")
+        let message = error?["message"] as? String ?? ""
+        #expect(message.contains("qwen3.5-9b-paro"))
+        #expect(message.contains("not downloaded"))
+        #expect(message.contains("Settings"))
+    }
+
+    @Test func openAIErrorStrictPreservesNullParam() async throws {
+        // Sanity check: when `param` is nil, the JSON body should still
+        // include the key (as `null`) rather than omitting it entirely —
+        // OpenAI SDK clients expect the key to be present.
+        let server = HTTPServer(port: 0)
+        server.route(.GET, "/custom-error") { _, writer in
+            try await writer.send(
+                .openAIError(
+                    status: 400,
+                    type: "invalid_request_error",
+                    code: "generic_failure",
+                    message: "something went wrong",
+                    param: nil
+                )
+            )
+        }
+        let port = try await startOnRandomPort(server)
+        defer { server.stop() }
+
+        let (data, response) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/custom-error")!
+        )
+        let http = response as! HTTPURLResponse
+        #expect(http.statusCode == 400)
+
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let error = json["error"] as! [String: Any]
+        #expect(error["type"] as? String == "invalid_request_error")
+        #expect(error["code"] as? String == "generic_failure")
+        // `param` key must exist and be NSNull.
+        #expect(error.keys.contains("param"))
+        #expect(error["param"] is NSNull)
     }
 
     @Test func midStreamDisconnectBreaksGenerationLoop() async throws {

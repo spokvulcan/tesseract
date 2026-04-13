@@ -17,12 +17,13 @@ Tesseract Agent local HTTP server — serves the on-device LLM via an OpenAI-com
 ## 2. Non-Goals (for initial release)
 
 - Authentication / API keys (local-only, `127.0.0.1`)
-- Model switching via API (serves whatever is loaded)
 - `/v1/completions` (text completions) — chat only
 - `/v1/embeddings`
 - Remote/non-localhost access
 - True batched inference with `[B, H, L, D]` KV caches (phase 2)
 - Anthropic `/v1/messages` format (phase 2)
+- Per-request vision mode override (vision requires `Settings → Vision Mode` on;
+  HTTP requests cannot enable it)
 
 ---
 
@@ -101,12 +102,22 @@ Tesseract Agent local HTTP server — serves the on-device LLM via an OpenAI-com
 
 #### `GET /v1/models`
 
-Returns the currently loaded model. Required by OpenCode for local provider discovery.
+Returns every agent-category model in Tesseract's catalog that is currently
+downloaded. Required by OpenCode and similar clients for local provider
+discovery; also drives BenchLocal's model browsing UI.
 
 ```json
 {
   "object": "list",
   "data": [
+    {
+      "id": "qwen3.5-4b-paro",
+      "object": "model",
+      "type": "llm",
+      "owned_by": "tesseract",
+      "max_context_length": 131072,
+      "state": "available"
+    },
     {
       "id": "qwen3.5-9b-paro",
       "object": "model",
@@ -115,18 +126,40 @@ Returns the currently loaded model. Required by OpenCode for local provider disc
       "max_context_length": 131072,
       "loaded_context_length": 131072,
       "state": "loaded"
+    },
+    {
+      "id": "qwen3.5-4b",
+      "object": "model",
+      "type": "llm",
+      "owned_by": "tesseract",
+      "max_context_length": 131072,
+      "state": "available"
     }
   ]
 }
 ```
 
 Fields:
-- `id` — model directory name or configuration name from Tesseract
-- `max_context_length` — model's maximum context window
-- `loaded_context_length` — effective context window (may differ if user configured a limit)
-- `state: "loaded"` — signals to OpenCode that this is the active model
+- `id` — canonical `ModelDefinition.id` from Tesseract's catalog. This is the
+  string clients must put in `request.model` when they want per-request
+  model routing (see §4.2 Model Routing below).
+- `max_context_length` — the model's maximum context window.
+- `loaded_context_length` — present only when `state == "loaded"`; the
+  effective context window for the currently-resident container.
+- `state` — one of:
+  - `"loaded"` — currently resident in memory and serving requests.
+  - `"available"` — downloaded but not currently resident. An HTTP request
+    specifying this id will trigger a load.
 
-If no model is loaded, return an empty `data` array.
+Undownloaded catalog entries are **not** advertised; clients cannot route to
+them. If no agent models are downloaded at all, the `data` array is empty.
+
+**Note on `state` flapping.** Because the server honors per-request model
+overrides (see §4.2 Model Routing), the `"loaded"` marker shifts between
+entries whenever a client alternates models. A client reading `/v1/models`
+between two HTTP requests targeting different models will see the state
+flipping. The value reflects the current physical slot at read time, not a
+logical "default" model.
 
 #### `POST /v1/chat/completions`
 
@@ -191,7 +224,7 @@ Primary inference endpoint. Both streaming and non-streaming.
 
 | Parameter | Behavior |
 |---|---|
-| `model` | Ignored (serves loaded model), but validated for response echo |
+| `model` | Routed per-request. See **Model Routing** below. |
 | `messages` | Required. Supports `system`, `user`, `assistant`, `tool` roles |
 | `tools` | Optional. Converted to Qwen3.5 XML tool format in chat template |
 | `stream` | Default `false`. When `true`, SSE response |
@@ -278,6 +311,52 @@ Keepalive during prefill (SSE comment, ignored by clients):
 - `"stop"` — natural stop or stop sequence hit
 - `"length"` — hit `max_tokens` / `max_completion_tokens`
 - `"tool_calls"` — model produced tool calls
+
+**Model Routing.**
+
+The `model` field on the request body is honored when it exactly matches a
+downloaded agent `ModelDefinition.id` (e.g. `qwen3.5-4b-paro`,
+`qwen3.5-9b-paro`, `qwen3.5-4b`). Matching is **strict**: no displayName or
+HuggingFace repo fallback, no case folding, no whitespace normalization.
+Clients should copy the id verbatim from `GET /v1/models`.
+
+| `request.model` value | Behavior |
+|---|---|
+| Missing / empty / whitespace-only | Falls back to whatever `Settings → selectedAgentModelID` currently points at (chat UI's default). |
+| Exact id of a **downloaded** agent model | Server loads that model for the request (unloading any other LLM first, if needed) and serves the request from it. |
+| Exact id of a **known but undownloaded** catalog entry | HTTP `404 model_not_found`. |
+| Anything else (unknown id, display name, repo path, …) | HTTP `404 model_not_found`. |
+
+Example 404 response body (OpenAI-compatible shape):
+
+```json
+{
+  "error": {
+    "message": "The model `gpt-4` does not exist or you do not have access to it.",
+    "type": "invalid_request_error",
+    "param": "model",
+    "code": "model_not_found"
+  }
+}
+```
+
+**Isolated override.** Routing a request to a different model does **not**
+update `selectedAgentModelID`. The chat UI and background scheduled agents
+continue reading their model from Settings. If chat UI or a scheduled task
+runs between HTTP requests that target a different model, it will reload
+the Settings model via its own lease — wasting the HTTP load. Serialize
+benchmark runs per model, or configure your client to always target the
+same id as Settings, to avoid this thrash.
+
+**Prefix cache and flapping.** Model switching unloads the previous LLM
+container, which destroys the in-memory prefix cache. An `A → B → A` loop
+rebuilds prefix state from scratch each time — expect cold prefill costs
+on every switch.
+
+**Vision mode.** Vision-capable models require `Settings → Vision Mode = on`.
+HTTP requests cannot toggle vision mode per-request; image content parts
+(`type: "image_url"`) in an HTTP request that target a non-VLM container
+will be dropped or error out.
 
 ### 4.3 Tool Calling
 

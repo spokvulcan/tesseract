@@ -20,12 +20,31 @@ actor HTTPPrefixCacheSessionReplayStore {
         var turnOrder: [HTTPPrefixCacheAssistantSignature] = []
     }
 
+    /// Partition key for reasoning recovery.
+    ///
+    /// Combines `sessionAffinity` (client-provided) with `modelID` + `visionMode`
+    /// — the pair that identifies the physical LLM slot in
+    /// `InferenceArbiter.LoadedLLMState`. This prevents recovered reasoning
+    /// content from bleeding across two different physical containers sharing
+    /// the same client session, which can happen if a client alternates
+    /// models on the HTTP path or if the user toggles Vision Mode between
+    /// requests on the same session.
+    private struct ReplayKey: Hashable, Sendable {
+        let sessionAffinity: String
+        let modelID: String
+        let visionMode: Bool
+    }
+
     private let maxSessions: Int
     private let maxTurnsPerSession: Int
-    private var sessions: [String: SessionEntry] = [:]
-    private var sessionOrder: [String] = []
+    private var sessions: [ReplayKey: SessionEntry] = [:]
+    private var sessionOrder: [ReplayKey] = []
 
-    init(maxSessions: Int = 32, maxTurnsPerSession: Int = 256) {
+    // Default `maxSessions` is sized to absorb the partition multiplier from
+    // `(sessionAffinity, modelID, visionMode)`. With ~3 agent models × 2
+    // vision modes, the effective per-affinity slot count is 64 / 6 ≈ 10
+    // unique sessions. Memory delta is bounded by `maxTurnsPerSession`.
+    init(maxSessions: Int = 64, maxTurnsPerSession: Int = 256) {
         self.maxSessions = max(1, maxSessions)
         self.maxTurnsPerSession = max(1, maxTurnsPerSession)
     }
@@ -37,10 +56,16 @@ actor HTTPPrefixCacheSessionReplayStore {
 
     func repair(
         messages: [OpenAI.ChatMessage],
-        sessionAffinity: String?
+        sessionAffinity: String?,
+        modelID: String,
+        visionMode: Bool
     ) -> HTTPAssistantReasoningRepair {
-        let sessionAffinity = normalizedSessionAffinity(sessionAffinity)
-        let storedTurns = sessionAffinity.flatMap { sessions[$0]?.turnsBySignature } ?? [:]
+        let key = replayKey(
+            sessionAffinity: sessionAffinity,
+            modelID: modelID,
+            visionMode: visionMode
+        )
+        let storedTurns = key.flatMap { sessions[$0]?.turnsBySignature } ?? [:]
 
         var repairedMessages: [OpenAI.ChatMessage] = []
         repairedMessages.reserveCapacity(messages.count)
@@ -84,16 +109,22 @@ actor HTTPPrefixCacheSessionReplayStore {
 
     func record(
         sessionAffinity: String?,
+        modelID: String,
+        visionMode: Bool,
         assistantMessage: HTTPPrefixCacheMessage
     ) {
         guard assistantMessage.role == .assistant,
               let signature = assistantMessage.assistantSignature,
-              let sessionAffinity = normalizedSessionAffinity(sessionAffinity) else {
+              let key = replayKey(
+                sessionAffinity: sessionAffinity,
+                modelID: modelID,
+                visionMode: visionMode
+              ) else {
             return
         }
 
-        var session = sessions[sessionAffinity] ?? SessionEntry()
-        touchSession(sessionAffinity)
+        var session = sessions[key] ?? SessionEntry()
+        touchSession(key)
 
         session.turnsBySignature[signature] = assistantMessage
         session.turnOrder.removeAll { $0 == signature }
@@ -108,7 +139,7 @@ actor HTTPPrefixCacheSessionReplayStore {
             }
         }
 
-        sessions[sessionAffinity] = session
+        sessions[key] = session
     }
 
     private func assistantSignature(
@@ -130,15 +161,25 @@ actor HTTPPrefixCacheSessionReplayStore {
         )
     }
 
-    private func normalizedSessionAffinity(_ sessionAffinity: String?) -> String? {
+    private func replayKey(
+        sessionAffinity: String?,
+        modelID: String,
+        visionMode: Bool
+    ) -> ReplayKey? {
         guard let sessionAffinity else { return nil }
-        let trimmed = sessionAffinity.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        let trimmedAffinity = sessionAffinity.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedModel = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAffinity.isEmpty, !trimmedModel.isEmpty else { return nil }
+        return ReplayKey(
+            sessionAffinity: trimmedAffinity,
+            modelID: trimmedModel,
+            visionMode: visionMode
+        )
     }
 
-    private func touchSession(_ sessionAffinity: String) {
-        sessionOrder.removeAll { $0 == sessionAffinity }
-        sessionOrder.append(sessionAffinity)
+    private func touchSession(_ key: ReplayKey) {
+        sessionOrder.removeAll { $0 == key }
+        sessionOrder.append(key)
 
         if sessionOrder.count > maxSessions {
             let overflow = sessionOrder.count - maxSessions

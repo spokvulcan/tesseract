@@ -16,16 +16,95 @@ struct CompletionHandler: Sendable {
 
     private let arbiter: InferenceArbiter
     private let engine: AgentEngine
+    private let downloads: ModelDownloadManager
 
-    init(arbiter: InferenceArbiter, engine: AgentEngine) {
+    init(
+        arbiter: InferenceArbiter,
+        engine: AgentEngine,
+        downloads: ModelDownloadManager
+    ) {
         self.arbiter = arbiter
         self.engine = engine
+        self.downloads = downloads
     }
 
     private struct StartedGeneration {
         let modelID: String
+        /// Physical vision-mode flag of the loaded container at generation
+        /// start. Used alongside `modelID` to partition the session replay
+        /// store so that recovered reasoning content cannot cross two
+        /// different physical LLM slots with the same client session.
+        let visionMode: Bool
         let stream: AsyncThrowingStream<AgentGeneration, Error>
         let cachedTokenCount: Int
+    }
+
+    /// Routing decision for the request's `model` field.
+    ///
+    /// Consumed by `handle()` to short-circuit unknown/undownloaded requests
+    /// with a 404 before queueing for the inference lease.
+    ///
+    /// Marked `nonisolated` so tests (and any other call site) can construct
+    /// and compare values from outside the MainActor; Swift 6.2 would
+    /// otherwise infer MainActor isolation from the enclosing type.
+    nonisolated enum ModelSelection: Sendable, Equatable {
+        /// Request.model is missing / empty / whitespace-only. Fall back to
+        /// whatever Settings has selected (existing behavior).
+        case useSettings
+        /// Exact-match agent ID, downloaded and routable. Passed into the
+        /// lease API as `llmModelIDOverride`.
+        case override(String)
+        /// Not in `ModelDefinition.all` filtered to `.agent`. Returns 404
+        /// `model_not_found` with an "unknown" message.
+        case unknown(String)
+        /// In the catalog but `ModelDownloadManager.statuses[id]` reports
+        /// anything other than `.downloaded`. Returns 404 with a
+        /// "not downloaded — Settings → Models" message.
+        case notDownloaded(String)
+    }
+
+    /// Resolve the request's `model` string into a routing decision.
+    ///
+    /// Exact match only on `ModelDefinition.id`. No displayName fallback, no
+    /// repoID fallback, no case folding. Trimming is used **only** to detect
+    /// whitespace-only strings (which normalize to `.useSettings` alongside
+    /// nil and empty); non-empty values are compared verbatim so that subtle
+    /// client config bugs like a trailing space surface as `.unknown` instead
+    /// of silently matching.
+    ///
+    /// `nonisolated` because this is a pure function over value-type inputs —
+    /// callable from tests without a MainActor hop. The caller (`handle()`)
+    /// is responsible for reading `ModelDownloadManager.statuses` on the
+    /// MainActor and passing the snapshot in.
+    nonisolated static func resolveModelSelection(
+        requestModel: String?,
+        agentIDs: [String],
+        statuses: [String: ModelStatus]
+    ) -> ModelSelection {
+        let raw = requestModel ?? ""
+        let trimmedForEmptinessCheck = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedForEmptinessCheck.isEmpty { return .useSettings }
+        guard agentIDs.contains(raw) else { return .unknown(raw) }
+        guard case .downloaded = statuses[raw] else { return .notDownloaded(raw) }
+        return .override(raw)
+    }
+
+    /// Decide what to put in the response's `model` field.
+    ///
+    /// OpenAI echoes back whatever the client sent, but we substitute the
+    /// physical model ID when the client sent nothing / whitespace / empty —
+    /// otherwise a request with `"model":"   "` round-trips as
+    /// `"model":"   "` in the response body, which is a nonsense echo.
+    ///
+    /// `nonisolated` for the same reason as `resolveModelSelection` — pure
+    /// function, no actor state touched.
+    nonisolated static func echoModelID(
+        requestModel: String?,
+        physical: String
+    ) -> String {
+        guard let raw = requestModel else { return physical }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? physical : raw
     }
 
     /// Entry point called by the HTTP server route.
@@ -48,6 +127,36 @@ struct CompletionHandler: Sendable {
             return
         }
 
+        // Pre-lease validation of `request.model`. If the client asked for a
+        // model we can't serve, return 404 `model_not_found` immediately
+        // without touching the arbiter queue. Downloaded + in-catalog models
+        // produce an `llmModelIDOverride` that flows into the lease API so
+        // `ensureLoaded` targets it instead of `settingsManager.selectedAgentModelID`.
+        let selection: ModelSelection = await MainActor.run {
+            let agentIDs = ModelDefinition.all
+                .filter { $0.category == .agent }
+                .map(\.id)
+            return Self.resolveModelSelection(
+                requestModel: completionRequest.model,
+                agentIDs: agentIDs,
+                statuses: downloads.statuses
+            )
+        }
+
+        let llmModelIDOverride: String?
+        switch selection {
+        case .useSettings:
+            llmModelIDOverride = nil
+        case .override(let id):
+            llmModelIDOverride = id
+        case .unknown(let id):
+            try await writer.send(.modelNotFound(modelID: id, reason: .unknownID))
+            return
+        case .notDownloaded(let id):
+            try await writer.send(.modelNotFound(modelID: id, reason: .notDownloaded))
+            return
+        }
+
         let sessionAffinity = request.header("x-session-affinity")
 
         // File-based request logging — writes the raw request body to
@@ -62,7 +171,10 @@ struct CompletionHandler: Sendable {
 
         do {
             try await withAcquisitionTimeout { signal in
-                try await arbiter.withExclusiveGPU(.llm) {
+                try await arbiter.withExclusiveGPU(
+                    .llm,
+                    llmModelIDOverride: llmModelIDOverride
+                ) {
                     signal.set()
                     await self.runCompletion(
                         completionRequest,
@@ -81,6 +193,13 @@ struct CompletionHandler: Sendable {
                 headers: base.headers + [("Retry-After", "5")],
                 body: base.body
             ))
+        } catch AgentEngineError.modelNotDownloaded(let id) {
+            // Post-lease race: validated pre-lease, then the model was
+            // deleted from Settings → Models while we were queued. Surface
+            // the same 404 `model_not_found` shape as the pre-lease path so
+            // clients see one consistent error contract regardless of
+            // whether the check failed before or after queueing.
+            try await writer.send(.modelNotFound(modelID: id, reason: .notDownloaded))
         } catch let error as AgentEngineError {
             try await writer.send(.serviceUnavailable(error.localizedDescription))
         } catch {
@@ -116,9 +235,26 @@ struct CompletionHandler: Sendable {
         _ request: OpenAI.ChatCompletionRequest,
         sessionAffinity: String?
     ) async -> Result<StartedGeneration, Error> {
+        // Read the full physical LLM slot identity (modelID + visionMode) in
+        // a single MainActor hop. `loadedLLMState` is the authoritative
+        // source after `ensureLoaded` has run inside the lease body —
+        // whatever was actually loaded for this request, whether driven by
+        // settings or the HTTP override. Using both dimensions to partition
+        // the session replay store prevents recovered reasoning from
+        // bleeding across two different physical containers that share the
+        // same client session affinity.
+        let (modelID, visionMode): (String, Bool) = await MainActor.run {
+            if let state = arbiter.loadedLLMState {
+                return (state.modelID, state.visionMode)
+            }
+            return ("", false)
+        }
+
         let repairedRequest = await Self.sessionReplayStore.repair(
             messages: request.messages,
-            sessionAffinity: sessionAffinity
+            sessionAffinity: sessionAffinity,
+            modelID: modelID,
+            visionMode: visionMode
         )
         let (systemPrompt, messages) = MessageConverter.convertMessages(repairedRequest.messages)
         let toolSpecs = MessageConverter.convertToolDefinitions(request.tools)
@@ -127,9 +263,6 @@ struct CompletionHandler: Sendable {
             tools: request.tools
         )
         let prefixCacheConversation = prefixCacheEligibility.conversation
-        let modelID = await MainActor.run {
-            arbiter.loadedLLMModelID ?? ""
-        }
         var params = AgentGenerateParameters.forModel(modelID)
         if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
         if let temp = request.temperature { params.temperature = Float(temp) }
@@ -142,7 +275,8 @@ struct CompletionHandler: Sendable {
             + "missing=\(repairedRequest.missingCount)"
         )
         Log.server.info(
-            "HTTP completion start — model=\(request.model ?? modelID) stream=\(request.stream == true) "
+            "HTTP completion start — model=\(Self.echoModelID(requestModel: request.model, physical: modelID)) "
+            + "stream=\(request.stream == true) "
             + "messages=\(repairedRequest.messages.count) normalizedMessages=\(messages.count) "
             + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCache=\(prefixCacheEligibility) "
             + "maxTokens=\(params.maxTokens)"
@@ -159,6 +293,7 @@ struct CompletionHandler: Sendable {
             )
             return .success(.init(
                 modelID: modelID,
+                visionMode: visionMode,
                 stream: start.stream,
                 cachedTokenCount: start.cachedTokenCount
             ))
@@ -220,6 +355,8 @@ struct CompletionHandler: Sendable {
 
         await Self.sessionReplayStore.record(
             sessionAffinity: sessionAffinity,
+            modelID: start.modelID,
+            visionMode: start.visionMode,
             assistantMessage: makeReplayAssistantMessage(
                 textContent: textContent,
                 thinkingContent: thinkingContent,
@@ -241,7 +378,7 @@ struct CompletionHandler: Sendable {
 
         let response = OpenAI.ChatCompletionResponse(
             id: "chatcmpl-\(UUID().uuidString)",
-            model: request.model ?? start.modelID,
+            model: Self.echoModelID(requestModel: request.model, physical: start.modelID),
             created: Int(Date().timeIntervalSince1970),
             system_fingerprint: "tesseract-1.0-mlx",
             choices: [
@@ -302,7 +439,7 @@ struct CompletionHandler: Sendable {
 
         let completionID = "chatcmpl-\(UUID().uuidString)"
         let created = Int(Date().timeIntervalSince1970)
-        let model = request.model ?? start.modelID
+        let model = Self.echoModelID(requestModel: request.model, physical: start.modelID)
         let includeUsage = request.stream_options?.include_usage == true
 
         // Emit initial chunk with role
@@ -359,6 +496,8 @@ struct CompletionHandler: Sendable {
 
         await Self.sessionReplayStore.record(
             sessionAffinity: sessionAffinity,
+            modelID: start.modelID,
+            visionMode: start.visionMode,
             assistantMessage: makeReplayAssistantMessage(
                 textContent: streamResult.textContent,
                 thinkingContent: streamResult.thinkingContent,

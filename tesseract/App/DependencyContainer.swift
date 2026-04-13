@@ -382,29 +382,45 @@ final class DependencyContainer: ObservableObject {
 
         let engine = agentEngine
         let arbiter = inferenceArbiter
+        let downloads = modelDownloadManager
         httpServer.route(.GET, "/v1/models") { _, writer in
             // Encodable conformance requires MainActor context (Swift 6.2 isolation inference)
             let data: Data = await MainActor.run {
-                let models: [OpenAI.ModelObject]
-                if engine.isModelLoaded, let modelID = arbiter.loadedLLMModelID {
-                    models = [OpenAI.ModelObject(
-                        id: modelID,
-                        type: "llm",
-                        owned_by: "tesseract",
-                        max_context_length: 131_072,
-                        loaded_context_length: 131_072,
-                        state: "loaded"
-                    )]
-                } else {
-                    models = []
-                }
+                // List all agent-category models that are downloaded. The
+                // currently-loaded one is reported with `state: "loaded"`;
+                // the rest are `"available"`. Undownloaded models are omitted
+                // because `CompletionHandler` ignores `request.model` for
+                // routing (see docs/HTTP_SERVER_SPEC.md §4.2) — it always
+                // serves whatever `selectedAgentModelID` resolves to — so
+                // advertising an undownloaded id would be misleading.
+                let loadedID: String? = engine.isModelLoaded ? arbiter.loadedLLMModelID : nil
+                let models: [OpenAI.ModelObject] = ModelDefinition.all
+                    .filter { $0.category == .agent }
+                    .compactMap { definition -> OpenAI.ModelObject? in
+                        guard case .downloaded = downloads.statuses[definition.id] else {
+                            return nil
+                        }
+                        let isLoaded = definition.id == loadedID
+                        return OpenAI.ModelObject(
+                            id: definition.id,
+                            type: "llm",
+                            owned_by: "tesseract",
+                            max_context_length: 131_072,
+                            loaded_context_length: isLoaded ? 131_072 : nil,
+                            state: isLoaded ? "loaded" : "available"
+                        )
+                    }
                 return (try? JSONEncoder().encode(OpenAI.ModelListResponse(data: models)))
                     ?? Data("{}".utf8)
             }
             try await writer.send(.jsonBody(data))
         }
 
-        let completionHandler = CompletionHandler(arbiter: inferenceArbiter, engine: agentEngine)
+        let completionHandler = CompletionHandler(
+            arbiter: inferenceArbiter,
+            engine: agentEngine,
+            downloads: modelDownloadManager
+        )
         httpServer.route(.POST, "/v1/chat/completions") { request, writer in
             try await completionHandler.handle(request: request, writer: writer)
         }

@@ -90,6 +90,65 @@ struct HTTPResponse: Sendable {
         )
     }
 
+    // MARK: OpenAI-strict error envelope
+    //
+    // The legacy `error(status:message:)` factory above encodes `code` as an
+    // integer HTTP status — a pre-existing wire format bug; OpenAI's real
+    // API uses a string `code` (e.g. `"model_not_found"`) and an optional
+    // `param`. Fixing the legacy shape in place would change every existing
+    // 4xx/5xx body and break the regression test at CompletionHandlerTests
+    // that asserts `error.code as? Int == 404`. Instead we keep the legacy
+    // factory untouched and provide this strict-shape factory for new code
+    // paths that need OpenAI compatibility (currently: `model_not_found`).
+
+    /// Build an OpenAI-compatible error response with a string `code` and
+    /// optional `param`. Prefer this factory for new error responses.
+    static func openAIError(
+        status: Int,
+        type: String,
+        code: String,
+        message: String,
+        param: String? = nil
+    ) -> HTTPResponse {
+        let body = OpenAIErrorStrict(
+            error: .init(message: message, type: type, param: param, code: code)
+        )
+        return json(body, status: status)
+    }
+
+    /// Reason for a `model_not_found` response, controlling the human-readable
+    /// message while keeping the same HTTP status + code string.
+    enum ModelNotFoundReason: Sendable {
+        case unknownID
+        case notDownloaded
+
+        fileprivate func message(for id: String) -> String {
+            switch self {
+            case .unknownID:
+                return "The model `\(id)` does not exist or you do not have access to it."
+            case .notDownloaded:
+                return "The model `\(id)` is not downloaded. "
+                    + "Download it from Settings → Models before use."
+            }
+        }
+    }
+
+    /// HTTP 404 `model_not_found`, matching OpenAI's response shape. Used when
+    /// the client's `model` field refers to something the server cannot route
+    /// to — either absent from the catalog or present but not on disk.
+    static func modelNotFound(
+        modelID: String,
+        reason: ModelNotFoundReason
+    ) -> HTTPResponse {
+        openAIError(
+            status: 404,
+            type: "invalid_request_error",
+            code: "model_not_found",
+            message: reason.message(for: modelID),
+            param: "model"
+        )
+    }
+
     fileprivate static func statusText(for code: Int) -> String {
         switch code {
         case 200: "OK"
@@ -113,13 +172,59 @@ struct HTTPResponse: Sendable {
     }
 }
 
-/// OpenAI-compatible error envelope.
+/// OpenAI-compatible error envelope (legacy, `code: Int`).
+///
+/// The numeric `code` is a pre-existing wire bug — OpenAI's real API uses a
+/// string code. Leaving this type in place to preserve backwards compatibility
+/// for existing 4xx/5xx callers. New paths should prefer ``OpenAIErrorStrict``
+/// via ``HTTPResponse/openAIError(status:type:code:message:param:)``.
 private struct OpenAIError: Encodable {
     let error: Detail
     struct Detail: Encodable {
         let message: String
         let type: String
         let code: Int
+    }
+}
+
+/// Strict OpenAI-compatible error envelope: string `code`, optional `param`.
+/// Matches what `platform.openai.com/v1/chat/completions` returns for
+/// `model_not_found` and similar validation failures.
+///
+/// Note the explicit `encode(to:)`: by default `JSONEncoder` omits keys for
+/// nil optionals, but OpenAI's real API always writes `"param":null` and
+/// `"code":null` when those values don't apply. Some SDK clients depend on
+/// the keys being present; match the wire format exactly.
+private struct OpenAIErrorStrict: Encodable {
+    let error: Detail
+
+    struct Detail: Encodable {
+        let message: String
+        let type: String
+        let param: String?
+        let code: String?
+
+        enum CodingKeys: String, CodingKey {
+            case message, type, param, code
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(message, forKey: .message)
+            try container.encode(type, forKey: .type)
+            // Explicit nil-writing: keeps the keys in the output body even
+            // when the values aren't applicable, matching OpenAI exactly.
+            if let param {
+                try container.encode(param, forKey: .param)
+            } else {
+                try container.encodeNil(forKey: .param)
+            }
+            if let code {
+                try container.encode(code, forKey: .code)
+            } else {
+                try container.encodeNil(forKey: .code)
+            }
+        }
     }
 }
 

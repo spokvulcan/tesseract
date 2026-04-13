@@ -114,6 +114,7 @@ final class InferenceArbiter {
     ///     the body and the lease is released via `defer`.
     func withExclusiveGPU<T: Sendable>(
         _ slot: ModelSlot,
+        llmModelIDOverride: String? = nil,
         body: () async throws -> T
     ) async throws -> T {
         // Block if lease is held OR waiters exist (prevents queue bypass).
@@ -170,7 +171,7 @@ final class InferenceArbiter {
         }
 
         // Ensure requested model is loaded (co-resident or exclusive)
-        try await ensureLoaded(slot)
+        try await ensureLoaded(slot, llmModelIDOverride: llmModelIDOverride)
 
         return try await body()
     }
@@ -183,6 +184,7 @@ final class InferenceArbiter {
     /// tasks from wedging between consecutive user turns.
     func withDeferredGPU<T: Sendable>(
         _ slot: ModelSlot,
+        llmModelIDOverride: String? = nil,
         body: () async throws -> T
     ) async throws -> T {
         // Loop: wait for idle, then re-check. If a foreground request arrived
@@ -194,7 +196,11 @@ final class InferenceArbiter {
         // GPU is idle with no foreground waiters — acquire immediately.
         // On MainActor, no work can interleave between the loop exit and
         // withExclusiveGPU's synchronous isLeased/waiters check.
-        return try await withExclusiveGPU(slot, body: body)
+        return try await withExclusiveGPU(
+            slot,
+            llmModelIDOverride: llmModelIDOverride,
+            body: body
+        )
     }
 
     // MARK: - Idle Signaling
@@ -238,12 +244,21 @@ final class InferenceArbiter {
     // MARK: - Model Management
 
     /// Load a model slot. Co-resident slots coexist; ImageGen is exclusive.
-    /// For `.llm`: also checks if the loaded model ID and vision mode match the current settings.
-    private func ensureLoaded(_ slot: ModelSlot) async throws {
+    /// For `.llm`: checks if the loaded model ID and vision mode match the
+    /// target. The target model ID is `llmModelIDOverride` when the caller
+    /// passed one (HTTP requests honoring `request.model`), otherwise the
+    /// user's `settingsManager.selectedAgentModelID` (chat UI, background
+    /// agents). Vision mode is always sourced from settings — HTTP requests
+    /// cannot override it (see docs/HTTP_SERVER_SPEC.md §4.2 Model routing).
+    private func ensureLoaded(
+        _ slot: ModelSlot,
+        llmModelIDOverride: String? = nil
+    ) async throws {
         switch slot {
         case .llm:
+            let targetModelID = llmModelIDOverride ?? settingsManager.selectedAgentModelID
             let desired = LoadedLLMState(
-                modelID: settingsManager.selectedAgentModelID,
+                modelID: targetModelID,
                 visionMode: settingsManager.visionModeEnabled
             )
             if loadedSlots.contains(.llm) && loadedLLMState == desired {
@@ -285,7 +300,11 @@ final class InferenceArbiter {
                   let path = modelDownloadManager.modelPath(for: modelID)
             else {
                 Log.general.error("InferenceArbiter: LLM model '\(modelID)' not downloaded")
-                throw AgentEngineError.modelNotLoaded
+                // Specific error case so HTTP callers can surface 404
+                // `model_not_found` instead of a generic 503. Closes the
+                // race where a model validated pre-lease is deleted from
+                // Settings → Models while a request is queued.
+                throw AgentEngineError.modelNotDownloaded(modelID: modelID)
             }
             Log.general.info("InferenceArbiter: loading LLM model '\(modelID)' visionMode=\(visionMode)")
             try await agentEngine.loadModel(from: path, visionMode: visionMode)
