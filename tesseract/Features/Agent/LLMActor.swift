@@ -102,7 +102,27 @@ actor LLMActor {
     private var defaultPrefixCacheMemoryBudgetBytes =
         Defaults.fallbackPrefixCacheMemoryBudgetBytes
 
+    /// Stable SHA-256 of the loaded model's weight files. Folded into every
+    /// `CachePartitionKey` so a weight swap under the same `modelID`
+    /// cannot surface stale persisted snapshots. `nil` before load and
+    /// after `unloadModel()`.
+    private var modelFingerprint: String?
+
+    /// Snapshot of the SSD prefix-cache config captured at load time.
+    /// Actor-isolated and synchronously readable from inside
+    /// `container.perform`, which cannot await MainActor.
+    private var ssdConfig: SSDPrefixCacheConfig?
+
     var isLoaded: Bool { modelContainer != nil }
+
+    /// Internal read-only accessor for the load-time SSD config snapshot.
+    /// Production reads happen via the synchronous capture in
+    /// `makeHTTPPrefixCacheGeneration`; this accessor exists so tests
+    /// can assert the load/unload lifecycle across the actor boundary.
+    var currentSSDConfigForTesting: SSDPrefixCacheConfig? { ssdConfig }
+
+    /// Internal read-only accessor for the load-time model fingerprint.
+    var currentModelFingerprintForTesting: String? { modelFingerprint }
 
     /// Loads model weights, verifies with a 1-token generation, and resolves the tokenizer.
     ///
@@ -115,17 +135,42 @@ actor LLMActor {
     ///     image attachments but has ~3.4× slower prefill on long text prompts). When
     ///     `false`, loads the LLM variant with fast chunked prefill. Ignored for
     ///     non-ParoQuant models.
+    ///   - ssdConfig: Snapshot of the SSD prefix-cache config, normally
+    ///     produced by `SettingsManager.makeSSDPrefixCacheConfig()`. `nil`
+    ///     disables SSD for the lifetime of this load.
     /// - Returns: The resolved ``AgentTokenizer`` and whether the template starts inside a think block.
     @discardableResult
     func loadModel(
         from directory: URL,
-        visionMode: Bool
+        visionMode: Bool,
+        ssdConfig: SSDPrefixCacheConfig? = nil
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let format = Self.detectToolCallFormat(directory: directory)
         Log.agent.info(
             "Loading model — visionMode=\(visionMode) "
             + "format=\(format.map { "\($0)" } ?? "json (default)")"
         )
+
+        if let ssdConfig {
+            Log.agent.info(
+                "prefix-cache ssd enabled=\(ssdConfig.enabled) "
+                + "budget=\(ssdConfig.budgetBytes) "
+                + "root=\(ssdConfig.rootURL.path) "
+                + "maxPendingBytes=\(ssdConfig.maxPendingBytes)"
+            )
+        } else {
+            Log.agent.info("prefix-cache ssd enabled=false")
+        }
+
+        // Install SSD plumbing + weight fingerprint before attempting the
+        // container load. A failed load leaves these fields populated
+        // (harmless because nothing reads them without a loaded
+        // container) and `unloadModel` is still responsible for
+        // clearing them. Installing up-front keeps the full plumbing
+        // chain — `resolveSSDConfig` → here — exercisable via a
+        // real-path unit test even when no MLX container can be loaded.
+        let fingerprint = try ModelFingerprint.computeFingerprint(modelDir: directory)
+        installLoadTimeSSDState(fingerprint: fingerprint, ssdConfig: ssdConfig)
 
         if isParoQuantModel(directory: directory) {
             Log.agent.info("Detected ParoQuant model — using \(visionMode ? "VLM" : "LLM") path")
@@ -641,6 +686,8 @@ actor LLMActor {
         modelWeightBytes = 0
         _prefixCache = nil
         defaultPrefixCacheMemoryBudgetBytes = Defaults.fallbackPrefixCacheMemoryBudgetBytes
+        modelFingerprint = nil
+        ssdConfig = nil
     }
 
     /// Frees unreferenced MLX buffers between tool rounds.
@@ -771,7 +818,8 @@ actor LLMActor {
 
     /// Verifies the model with a 1-token generation, stores it, and returns the tokenizer.
     private func verifyAndStore(
-        container: ModelContainer, directory: URL
+        container: ModelContainer,
+        directory: URL
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         // Wrap in withError so C++ MLX errors (e.g. matmul shape mismatches) throw
         // instead of calling fatalError via the default error handler.
@@ -823,6 +871,20 @@ actor LLMActor {
         return (tokenizer, startsThinking)
     }
 
+    /// Single install site for per-load SSD plumbing state. Called from
+    /// `loadModel` before the container load is attempted so the state
+    /// is visible even on failed loads; this lets the unit suite exercise
+    /// the full `AgentEngine.loadModel` → `resolveSSDConfig` → here
+    /// chain via a fake directory that trips the container load. The
+    /// unload path clears both fields.
+    private func installLoadTimeSSDState(
+        fingerprint: String,
+        ssdConfig: SSDPrefixCacheConfig?
+    ) {
+        self.modelFingerprint = fingerprint
+        self.ssdConfig = ssdConfig
+    }
+
     static func autoSizedPrefixCacheMemoryBudgetBytes(
         totalMemoryBytes: UInt64,
         modelMemoryBytes: Int64
@@ -863,8 +925,9 @@ actor LLMActor {
         // canonicalization is kept as defense-in-depth and costs almost nothing.
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
 
-        // Capture promptStartsThinking for the non-MainActor closure below.
+        // Capture actor state for the non-MainActor closure below.
         let promptStartsThinking = self.promptStartsThinking
+        let modelFingerprint = self.modelFingerprint
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
             modelID: modelID,
@@ -901,7 +964,8 @@ actor LLMActor {
                 modelID: modelID,
                 kvBits: parameters.kvBits,
                 kvGroupSize: parameters.kvGroupSize,
-                sessionAffinity: sessionAffinity
+                sessionAffinity: sessionAffinity,
+                modelFingerprint: modelFingerprint
             )
 
             // 4a. Detect stable prefix boundary (system + tools) via two-probe technique.

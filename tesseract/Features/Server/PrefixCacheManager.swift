@@ -35,22 +35,29 @@ struct CachePartitionKey: Hashable, Sendable, Comparable {
     /// client does not send the header — all such requests share a
     /// single default partition, matching pre-session-scoping behavior.
     let sessionAffinity: String?
+    /// Stable hex SHA-256 of the loaded model's weight files
+    /// (`ModelFingerprint.computeFingerprint`). Folded in so a weight swap
+    /// under the same `modelID` cannot surface stale persisted snapshots.
+    /// `nil` for RAM-only test fixtures.
+    let modelFingerprint: String?
 
     nonisolated init(
         modelID: String,
         kvBits: Int?,
         kvGroupSize: Int,
-        sessionAffinity: String? = nil
+        sessionAffinity: String? = nil,
+        modelFingerprint: String? = nil
     ) {
         self.modelID = modelID
         self.kvBits = kvBits
         self.kvGroupSize = kvGroupSize
         self.sessionAffinity = sessionAffinity
+        self.modelFingerprint = modelFingerprint
     }
 
     static func < (lhs: CachePartitionKey, rhs: CachePartitionKey) -> Bool {
-        (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize, lhs.sessionAffinity ?? "")
-            < (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize, rhs.sessionAffinity ?? "")
+        (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize, lhs.sessionAffinity ?? "", lhs.modelFingerprint ?? "")
+            < (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize, rhs.sessionAffinity ?? "", rhs.modelFingerprint ?? "")
     }
 }
 

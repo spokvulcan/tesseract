@@ -31,8 +31,11 @@ final class DependencyContainer: ObservableObject {
     // Model Downloads
     lazy var modelDownloadManager = ModelDownloadManager()
 
-    // Agent (LLM)
-    lazy var agentEngine = AgentEngine()
+    // Agent (LLM). Plumb `settingsManager` so the SSD prefix-cache config
+    // is snapshotted from live user settings at each model load. Benchmark
+    // and test call sites use `AgentEngine()` to stay SSD-disabled for
+    // reproducibility.
+    lazy var agentEngine = AgentEngine(settingsManager: settingsManager)
 
     // New architecture (Epics 0-5)
     lazy var agentSandbox: PathSandbox = {

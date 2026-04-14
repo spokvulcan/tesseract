@@ -49,6 +49,9 @@ final class SettingsManager {
         static let visionModeEnabled = "visionModeEnabled"
         static let isServerEnabled = "isServerEnabled"
         static let serverPort = "serverPort"
+        static let prefixCacheSSDEnabled = "prefixCacheSSDEnabled"
+        static let prefixCacheSSDBudgetBytes = "prefixCacheSSDBudgetBytes"
+        static let prefixCacheSSDDirectoryOverride = "prefixCacheSSDDirectoryOverride"
     }
 
     // MARK: - General Settings
@@ -293,6 +296,34 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(serverPort, forKey: Key.serverPort) }
     }
 
+    // MARK: - SSD Prefix Cache
+
+    // Changes to these settings take effect on the next model unload/reload.
+    // `LLMActor` snapshots the effective config at load time — the hot path
+    // inside `container.perform` cannot await MainActor mid-inference.
+
+    var prefixCacheSSDEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(prefixCacheSSDEnabled, forKey: Key.prefixCacheSSDEnabled) }
+    }
+
+    /// Hard top-level byte budget for the SSD tier. Default 20 GiB.
+    var prefixCacheSSDBudgetBytes: Int = 20 * 1024 * 1024 * 1024 {
+        didSet { UserDefaults.standard.set(prefixCacheSSDBudgetBytes, forKey: Key.prefixCacheSSDBudgetBytes) }
+    }
+
+    /// Optional override for the SSD root directory. When `nil`, the config
+    /// falls back to the sandbox Caches directory. Accepts either a file
+    /// URL string or a plain filesystem path.
+    var prefixCacheSSDDirectoryOverride: String? = nil {
+        didSet {
+            if let override = prefixCacheSSDDirectoryOverride {
+                UserDefaults.standard.set(override, forKey: Key.prefixCacheSSDDirectoryOverride)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Key.prefixCacheSSDDirectoryOverride)
+            }
+        }
+    }
+
     // MARK: - Onboarding
 
     var hasCompletedOnboarding = false {
@@ -341,6 +372,9 @@ final class SettingsManager {
             Key.visionModeEnabled: false,
             Key.isServerEnabled: false,
             Key.serverPort: 8321,
+            Key.prefixCacheSSDEnabled: true,
+            Key.prefixCacheSSDBudgetBytes: 20 * 1024 * 1024 * 1024,
+            // prefixCacheSSDDirectoryOverride: unset key → sandbox Caches fallback.
         ])
 
         // Load persisted values (didSet does NOT fire during init).
@@ -379,9 +413,40 @@ final class SettingsManager {
         visionModeEnabled = ud.bool(forKey: Key.visionModeEnabled)
         isServerEnabled = ud.bool(forKey: Key.isServerEnabled)
         serverPort = ud.integer(forKey: Key.serverPort)
+        prefixCacheSSDEnabled = ud.bool(forKey: Key.prefixCacheSSDEnabled)
+        prefixCacheSSDBudgetBytes = ud.integer(forKey: Key.prefixCacheSSDBudgetBytes)
+        prefixCacheSSDDirectoryOverride = ud.string(forKey: Key.prefixCacheSSDDirectoryOverride)
     }
 
     // MARK: - Methods
+
+    /// Capture an immutable `SSDPrefixCacheConfig` from the current settings,
+    /// or `nil` if the SSD tier is disabled. Called on MainActor at model
+    /// load time; the result is held by `LLMActor` for the lifetime of the
+    /// load. Settings mutated after this call take effect on the next
+    /// unload/reload cycle — the hot prefix-cache path cannot await
+    /// MainActor for mid-run config reads.
+    func makeSSDPrefixCacheConfig() -> SSDPrefixCacheConfig? {
+        guard prefixCacheSSDEnabled else { return nil }
+        return .withAutoPendingCap(
+            rootURL: resolvedSSDPrefixCacheRootURL(),
+            budgetBytes: prefixCacheSSDBudgetBytes
+        )
+    }
+
+    private func resolvedSSDPrefixCacheRootURL() -> URL {
+        if let override = prefixCacheSSDDirectoryOverride, !override.isEmpty {
+            // Accept either a file URL string or a plain path.
+            if let url = URL(string: override), url.isFileURL {
+                return url
+            }
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default
+            .urls(for: .cachesDirectory, in: .userDomainMask)
+            .first!
+            .appendingPathComponent("prefix-cache", isDirectory: true)
+    }
 
     func resetToDefaults() {
         launchAtLogin = false
@@ -418,6 +483,9 @@ final class SettingsManager {
         visionModeEnabled = false
         isServerEnabled = false
         serverPort = 8321
+        prefixCacheSSDEnabled = true
+        prefixCacheSSDBudgetBytes = 20 * 1024 * 1024 * 1024
+        prefixCacheSSDDirectoryOverride = nil
     }
 
     // MARK: - Private

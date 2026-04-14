@@ -51,8 +51,58 @@ final class AgentEngine {
     /// Whether the loaded model's template starts generation inside a `<think>` block.
     private(set) var promptStartsThinking = false
 
-    private let llmActor = LLMActor()
+    /// Internal (not private) so unit tests can reach across the actor
+    /// boundary to assert load/unload state transitions; production code
+    /// never references this directly.
+    let llmActor = LLMActor()
     private var generationTask: Task<Void, Never>?
+
+    /// Tracks the most recent `unloadModel` call's detached actor
+    /// unload. Tests drain this via `awaitPendingUnloadForTesting()` so
+    /// assertions about the cleared state are race-free; production code
+    /// does not read it.
+    private var unloadTask: Task<Void, Never>?
+
+    /// How the engine sources its `SSDPrefixCacheConfig` at model load.
+    /// `.explicit` wins over `.settings` when both are provided to `init`.
+    private enum SSDConfigSource {
+        case none
+        case settings(SettingsManager)
+        case explicit(SSDPrefixCacheConfig)
+    }
+
+    private let ssdConfigSource: SSDConfigSource
+
+    /// `ssdConfig` takes precedence over `settingsManager`. If both are nil,
+    /// the SSD tier is disabled for the lifetime of this engine — the
+    /// default shape used by benchmarks and unit tests.
+    init(
+        settingsManager: SettingsManager? = nil,
+        ssdConfig: SSDPrefixCacheConfig? = nil
+    ) {
+        if let ssdConfig {
+            self.ssdConfigSource = .explicit(ssdConfig)
+        } else if let settingsManager {
+            self.ssdConfigSource = .settings(settingsManager)
+        } else {
+            self.ssdConfigSource = .none
+        }
+    }
+
+    /// Resolve the effective SSD config at the moment of the call. Reaches
+    /// back into `SettingsManager` via `makeSSDPrefixCacheConfig()` when
+    /// the source is `.settings`, so two consecutive loads with a setting
+    /// mutated between them produce two different snapshots.
+    ///
+    /// Internal so unit tests can exercise the precedence rule and the
+    /// live-reflection property without a real model load.
+    func resolveSSDConfig() -> SSDPrefixCacheConfig? {
+        switch ssdConfigSource {
+        case .none: return nil
+        case .settings(let manager): return manager.makeSSDPrefixCacheConfig()
+        case .explicit(let config): return config
+        }
+    }
 
     /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
     ///
@@ -70,7 +120,9 @@ final class AgentEngine {
 
         do {
             let (tokenizer, startsThinking) = try await llmActor.loadModel(
-                from: directory, visionMode: visionMode
+                from: directory,
+                visionMode: visionMode,
+                ssdConfig: resolveSSDConfig()
             )
 
             let st = tokenizer.specialTokens
@@ -279,8 +331,16 @@ final class AgentEngine {
         promptStartsThinking = false
         isModelLoaded = false
         loadingStatus = ""
-        Task { await llmActor.unloadModel() }
+        unloadTask = Task { [llmActor] in await llmActor.unloadModel() }
         Log.agent.info("Model unloaded")
+    }
+
+    /// Wait for the most recent `unloadModel` call's detached actor
+    /// unload to complete. Internal so tests can make assertions about
+    /// the cleared state race-free; production code is happy with
+    /// fire-and-forget semantics.
+    func awaitPendingUnloadForTesting() async {
+        await unloadTask?.value
     }
 
     // MARK: - Private
