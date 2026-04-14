@@ -39,6 +39,17 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let capturedSnapshots: [HybridCacheSnapshot]
     /// Partition key used for cache routing.
     let partitionKey: CachePartitionKey
+    /// Offset where the final history message ends, right before the
+    /// assistant generation prompt. `nil` when the generation prompt
+    /// string couldn't be resolved (non-Qwen3.5 templates). Used by the
+    /// stripped-leaf capture path to restore a fresh cache at a
+    /// known-stable boundary and re-prefill the stripped assistant turn.
+    let lastMessageBoundaryOffset: Int?
+    /// Chunked prefill step size from the request's `GenerateParameters`,
+    /// plumbed out so the post-generation stripped-leaf path can use the
+    /// same chunk size when re-prefilling the stripped assistant residual
+    /// on top of the restored last-message-boundary snapshot.
+    let prefillStepSize: Int
 }
 
 /// Actor-isolated wrapper that owns the LLM model and runs inference off the MainActor.
@@ -58,16 +69,25 @@ actor LLMActor {
     /// - Subtotal (single in-flight turn): ~5.5 GB
     ///
     /// The HTTP prefix cache is auto-sized from the remaining unified memory
-    /// after subtracting model weights and a fixed 4 GiB safety headroom:
-    /// `max(0, (physicalMemory - modelWeightBytes - 4 GiB) / 2)`.
+    /// after subtracting model weights and a fixed 20 GiB safety headroom:
+    /// `max(0, (physicalMemory - modelWeightBytes - 20 GiB) / 2)`.
     ///
-    /// Example: on a 48 GiB machine with a 10 GiB model, the default cache
-    /// budget becomes 17 GiB. Before a model is sized (or after unload), the
-    /// actor falls back to a conservative 3 GiB budget so pre-load paths and
-    /// tests retain deterministic behavior.
+    /// The 20 GiB headroom accounts for: peak active MLX working set during
+    /// a large-chunk prefill (~12–14 GiB above the cache budget on Qwen3.5
+    /// 9B), macOS kernel + WindowServer + other apps (~6–8 GiB), and
+    /// enough slack to avoid memory compression / swap on a typical dev
+    /// machine running Xcode + browser alongside Tesseract. An earlier
+    /// 4 GiB headroom produced a 19 GiB cache budget on a 48 GiB Mac,
+    /// which pushed peak MLX usage to 36 GiB and triggered 14 GiB of swap.
+    ///
+    /// Example: on a 48 GiB machine with a 4.8 GiB model, the default cache
+    /// budget becomes ~11.6 GiB. Before a model is sized (or after unload),
+    /// the actor falls back to a conservative 3 GiB budget so pre-load paths
+    /// and tests retain deterministic behavior. Machines too small to fit
+    /// model + headroom clamp to 0 and rely on the fallback.
     private enum Defaults {
         static let cacheLimitMB = 2048
-        static let prefixCacheHeadroomBytes = 4 * 1024 * 1024 * 1024 // 4 GiB
+        static let prefixCacheHeadroomBytes = 20 * 1024 * 1024 * 1024 // 20 GiB
         /// Fallback budget used before load-time sizing runs. Each snapshot
         /// costs ~200–600 MiB depending on context length, so 3 GiB fits
         /// ~5–15 snapshots for typical Qwen3.5 workloads.
@@ -155,6 +175,7 @@ actor LLMActor {
         modelID: String,
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
+        sessionAffinity: String?,
         parameters: AgentGenerateParameters
     ) async throws -> HTTPServerGenerationStart? {
         guard let container = modelContainer else {
@@ -183,6 +204,7 @@ actor LLMActor {
             conversation: conversation,
             requestID: requestID,
             modelID: modelID,
+            sessionAffinity: sessionAffinity,
             parameters: Self.makeGenerateParameters(from: parameters),
             toolSpecs: canonicalTools,
             prefixCache: prefixCache
@@ -328,7 +350,30 @@ actor LLMActor {
                 // the request-end recordRequest call below — the alpha
                 // tuner needs to see every request, not just the ones
                 // whose leaf store completed.
+                //
+                // Two leaves are captured per turn:
+                //
+                //  - **Unstripped leaf** (this block): represents the
+                //    full conversation state with the just-generated
+                //    assistant. Reachable for tool-loop continuations
+                //    where the assistant remains the latest message in
+                //    the next request.
+                //
+                //  - **Stripped leaf** (`captureStrippedLeaf` below):
+                //    represents the conversation as Turn N+1 will see
+                //    it after a new user message arrives — Qwen3.5's
+                //    template strips the assistant's `<think>...</think>`
+                //    block when it is no longer the latest assistant.
+                //    Reachable for cross-new-user-turn lookups.
+                //
+                // Both leaves coexist in the radix tree on different
+                // paths and serve different lookup shapes. Eviction
+                // treats them uniformly under the LRU-with-FLOPs policy.
                 var leafStoreForTuner: AlphaTuner.LeafStore? = nil
+                // Hoisted out of `leafBlock` so the stripped-leaf capture
+                // path below can reuse them.
+                var storedConversationCaptured: HTTPPrefixCacheConversation? = nil
+                var storedTokensCaptured: [Int]? = nil
                 leafBlock: do {
                     guard !Task.isCancelled,
                           let finalCache = await mlxStart.finalCacheHandle.takeFinalCache()
@@ -359,6 +404,7 @@ actor LLMActor {
                         reasoning: thinkingContent,
                         toolCalls: toolCalls
                     ))
+                    storedConversationCaptured = storedConversation
 
                     // 3. Re-tokenize stored conversation → flat token sequence.
                     guard let storedTokens = await Self.measureStoredTokenSequence(
@@ -373,6 +419,7 @@ actor LLMActor {
                         )
                         break leafBlock
                     }
+                    storedTokensCaptured = storedTokens
 
                     // 4. Offset-alignment guard: if normalization shortened the
                     //    stored conversation (whitespace-only assistant content → ""),
@@ -433,25 +480,78 @@ actor LLMActor {
 
                     // Coalesce storeLeaf + stats read in one MainActor
                     // hop — saves one cross-actor switch on the success
-                    // path (the request hot path).
-                    let diagnostics = await MainActor.run {
-                        prefixCache.storeLeaf(
+                    // path (the request hot path). Includes the post-store
+                    // budget/total snapshot so the admission diagnostic can
+                    // be logged from this actor without another hop.
+                    let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
+                        await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
+                            let d = prefixCache.storeLeaf(
+                                storedTokens: storedTokens,
+                                leafSnapshot: leafSnapshot,
+                                partitionKey: mlxStart.partitionKey,
+                                requestID: requestID
+                            )
+                            return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
+                        }
+                    logEvictions(diagnostics.evictions)
+                    let unstrippedAdmissionEvicted = diagnostics.evictions.contains { event in
+                        event.offset == leafSnapshot.tokenOffset
+                            && event.checkpointType == .leaf
+                    }
+                    if unstrippedAdmissionEvicted {
+                        diagnosticsContext.logSkip(
+                            stage: "leafAdmission",
+                            reason: "capturedThenEvicted",
+                            level: .warning,
+                            extraFields: [
+                                ("offset", "\(leafSnapshot.tokenOffset)"),
+                                ("bytes", "\(leafSnapshot.memoryBytes)"),
+                                ("budgetBytes", "\(postStoreBudgetBytes)"),
+                                ("snapshotBytesAfter", "\(postStoreSnapshotBytes)"),
+                            ]
+                        )
+                    } else {
+                        leafStoreForTuner = AlphaTuner.LeafStore(
                             storedTokens: storedTokens,
-                            leafSnapshot: leafSnapshot,
-                            partitionKey: mlxStart.partitionKey,
-                            requestID: requestID
+                            bytes: leafSnapshot.memoryBytes
                         )
                     }
-                    logEvictions(diagnostics.evictions)
-                    leafStoreForTuner = AlphaTuner.LeafStore(
-                        storedTokens: storedTokens,
-                        bytes: leafSnapshot.memoryBytes
-                    )
 
                     // Release the MLX free buffer pool back to the OS so it
                     // doesn't accumulate transient prefill intermediates
                     // across requests.
                     Memory.clearCache()
+                }
+
+                // Stripped-leaf capture: stores a second `.leaf` snapshot
+                // keyed by the token sequence that Turn N+1 WILL see when
+                // it re-renders the conversation (with `a_N`'s `<think>`
+                // block stripped by the Qwen3.5 template's
+                // `last_query_index` logic). The unstripped leaf above is
+                // unreachable across new-user turns; the stripped leaf is
+                // reachable and saves a full cold prefill on every
+                // subsequent cross-new-user-turn lookup. Purely additive —
+                // any failure is caught and logged without affecting the
+                // rest of the request lifecycle.
+                if !Task.isCancelled,
+                   let storedConversation = storedConversationCaptured,
+                   let storedTokens = storedTokensCaptured
+                {
+                    await Self.captureStrippedLeaf(
+                        container: container,
+                        storedConversation: storedConversation,
+                        storedTokens: storedTokens,
+                        toolSpecs: canonicalTools,
+                        capturedSnapshots: mlxStart.capturedSnapshots,
+                        lastMessageBoundaryOffset: mlxStart.lastMessageBoundaryOffset,
+                        partitionKey: mlxStart.partitionKey,
+                        prefillStepSize: mlxStart.prefillStepSize,
+                        requestID: requestID,
+                        prefixCache: prefixCache,
+                        diagnosticsContext: diagnosticsContext,
+                        promptStartsThinking: startsInsideThinkBlock,
+                        thinkingContent: thinkingContent
+                    )
                 }
 
                 // Record the request lifecycle for the alpha tuner. Fires
@@ -752,6 +852,7 @@ actor LLMActor {
         conversation: HTTPPrefixCacheConversation,
         requestID: UUID,
         modelID: String,
+        sessionAffinity: String?,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         prefixCache: PrefixCacheManager
@@ -792,10 +893,15 @@ actor LLMActor {
             let fullTokens = Self.extractTokenSequence(fullInput.text.tokens)
 
             // 3. Build partition key for radix-tree routing.
+            //    sessionAffinity isolates main agent from subagents — without
+            //    it, a long-running subagent's churn evicts the idle main
+            //    agent's snapshots under shared budget pressure. See
+            //    `CachePartitionKey` for the full rationale.
             let partitionKey = CachePartitionKey(
                 modelID: modelID,
                 kvBits: parameters.kvBits,
-                kvGroupSize: parameters.kvGroupSize
+                kvGroupSize: parameters.kvGroupSize,
+                sessionAffinity: sessionAffinity
             )
 
             // 4a. Detect stable prefix boundary (system + tools) via two-probe technique.
@@ -955,7 +1061,9 @@ actor LLMActor {
                 skippedPrefillTokens: skippedTokens,
                 fullTokens: fullTokens,
                 capturedSnapshots: capturedSnapshots,
-                partitionKey: partitionKey
+                partitionKey: partitionKey,
+                lastMessageBoundaryOffset: lastMessageBoundaryOffset,
+                prefillStepSize: parameters.prefillStepSize
             )
         }
     }
@@ -998,6 +1106,319 @@ actor LLMActor {
                 "Stored token sequence measurement failed — error=\(error.localizedDescription)"
             )
             return nil
+        }
+    }
+
+    /// Return the stripped stored-token sequence `[sys, ..., u_N, a_N_stripped]`
+    /// — the token path Turn N+1 will see when it re-renders the conversation
+    /// with a new user message, triggering the Qwen3.5 template's `last_query_index`
+    /// logic to strip `a_N`'s `<think>...</think>` block.
+    ///
+    /// Algorithm: tokenize two probe conversations that share the same
+    /// `[sys, ..., u_N, a_N]` prefix and differ only in an appended dummy
+    /// user message. Both tokenizations run the assistant through the template
+    /// as non-latest, so its think block is stripped. The two token sequences
+    /// share a common prefix up to the first token of the dummy user's
+    /// CONTENT (the `<|im_start|>user\n` opener is identical). Subtract the
+    /// opener length from the divergence index to land on the end of
+    /// `a_N_stripped`.
+    ///
+    /// Returns `nil` on any unexpected condition (probes identical, opener
+    /// mismatch, etc.) so the caller can skip the stripped-leaf store cleanly.
+    private static func computeStrippedStoredTokens(
+        context: ModelContext,
+        storedConversation: HTTPPrefixCacheConversation,
+        toolSpecs: [ToolSpec]?
+    ) async throws -> [Int]? {
+        let baseHistory = storedConversation.historyMessages
+
+        // Build probe histories with differing dummy user content. Content
+        // is chosen to start with different tokens immediately (single
+        // alphabetic character + marker), so the divergence point lands
+        // right at the first content token of the dummy user.
+        let probeAInput = UserInput(
+            chat: baseHistory + [.user("Aqkz_strip_probe")],
+            tools: toolSpecs
+        )
+        let probeBInput = UserInput(
+            chat: baseHistory + [.user("Zqkz_strip_probe")],
+            tools: toolSpecs
+        )
+        let probeA = try await context.processor.prepare(input: probeAInput)
+        let probeB = try await context.processor.prepare(input: probeBInput)
+        let tokensA = Self.extractTokenSequence(probeA.text.tokens)
+        let tokensB = Self.extractTokenSequence(probeB.text.tokens)
+
+        // First divergence between the two probes.
+        var divergence = 0
+        let shorter = min(tokensA.count, tokensB.count)
+        while divergence < shorter && tokensA[divergence] == tokensB[divergence] {
+            divergence += 1
+        }
+        // If the two probes match entirely, something unexpected happened
+        // (template ignored user content?) — bail out so we don't produce
+        // bogus stripped tokens.
+        guard divergence > 0, divergence < tokensA.count else { return nil }
+
+        // Subtract the `<|im_start|>user\n` opener (fixed, template-emitted)
+        // to get the offset at the end of `a_N_stripped`.
+        let userOpenerTokens = context.tokenizer.encode(
+            text: "<|im_start|>user\n", addSpecialTokens: false
+        )
+        guard userOpenerTokens.count > 0,
+              divergence >= userOpenerTokens.count
+        else { return nil }
+
+        // Defense in depth: verify the opener actually precedes the
+        // divergence. If the template injected something else between
+        // `a_N_stripped` and the dummy user (chat history wrappers,
+        // additional role markers), bail out rather than producing
+        // misaligned stripped tokens.
+        let openerSlice = Array(tokensA[(divergence - userOpenerTokens.count)..<divergence])
+        guard openerSlice.elementsEqual(userOpenerTokens) else { return nil }
+
+        let strippedLen = divergence - userOpenerTokens.count
+        guard strippedLen > 0, strippedLen <= tokensA.count else { return nil }
+        return Array(tokensA[0..<strippedLen])
+    }
+
+    /// Capture a second, "stripped" leaf snapshot for the current turn's
+    /// conversation. Addresses the Qwen3.5 think-stripping cross-new-user-turn
+    /// divergence: the template strips `<think>...</think>` from assistant
+    /// messages that are not the latest assistant, so Turn N's unstripped
+    /// leaf is unreachable from Turn N+1's lookup once a new user message
+    /// arrives. The stripped leaf stores a snapshot keyed by the token
+    /// sequence Turn N+1 WILL actually see, allowing a deep cache hit
+    /// instead of a full cold prefill.
+    ///
+    /// Correctness: the stripped leaf's cache state is the result of
+    /// restoring the `lastMessageBoundary` snapshot (captured mid-prefill
+    /// during this turn, byte-exact representation of the cache at
+    /// end-of-last-user) and running a real residual prefill over
+    /// `[assistant_opener + response_content + <|im_end|>]`. No state
+    /// trimming, no Mamba divergence — bit-exact continuation of the
+    /// same forward pass.
+    ///
+    /// Additive: runs AFTER the primary (unstripped) leaf store, and any
+    /// failure is caught and logged without affecting the rest of the
+    /// request lifecycle. The unstripped leaf is still the authoritative
+    /// reuse target for tool-loop continuation (where the assistant is
+    /// still the latest message in the next request's history).
+    ///
+    /// Skip conditions (logged via `logSkip` unless explicitly silent):
+    /// - `!promptStartsThinking`: non-thinking model, nothing to strip.
+    ///   Silent — the unstripped leaf path covers this case correctly.
+    /// - `thinkingContent < 50 chars`: prefill cost > expected savings.
+    ///   Silent.
+    /// - `lastMessageBoundaryOffset == nil`: can't identify boundary
+    ///   snapshot to restore from. Logged.
+    /// - No `.lastMessageBoundary` snapshot at the boundary offset in
+    ///   `capturedSnapshots`: prior turn already stored the boundary
+    ///   (planner deduped it), so its stripped leaf still exists. Silent.
+    /// - Two-probe tokenization failed or probes identical: tokenizer
+    ///   edge case. Logged.
+    /// - `strippedLen <= boundaryOffset`: no residual to prefill. Logged.
+    /// - `strippedLen >= storedTokens.count`: template didn't actually
+    ///   strip anything (possibly non-Qwen3.5 template). Logged.
+    /// - Residual prefill throws. Logged.
+    /// - Snapshot capture returns nil (unsupported cache types). Logged.
+    /// - The freshly stored leaf was immediately evicted by its own
+    ///   `evictToFitBudget` cycle (the "capturedThenEvicted" pathology).
+    ///   Logged as a warning so the issue is visible in production logs.
+    private static func captureStrippedLeaf(
+        container: ModelContainer,
+        storedConversation: HTTPPrefixCacheConversation,
+        storedTokens: [Int],
+        toolSpecs: [ToolSpec]?,
+        capturedSnapshots: [HybridCacheSnapshot],
+        lastMessageBoundaryOffset: Int?,
+        partitionKey: CachePartitionKey,
+        prefillStepSize: Int,
+        requestID: UUID,
+        prefixCache: PrefixCacheManager,
+        diagnosticsContext: PrefixCacheDiagnostics.Context,
+        promptStartsThinking: Bool,
+        thinkingContent: String
+    ) async {
+        // Guard 1: non-thinking model → nothing to strip.
+        guard promptStartsThinking else {
+            return  // silent; not an anomaly
+        }
+
+        // Guard 2: trivial think content → prefill cost would exceed savings.
+        let trimmedThink = thinkingContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedThink.count >= 50 else {
+            return  // silent; not worth the prefill
+        }
+
+        // Guard 3: no boundary offset → can't identify where to restore from.
+        guard let boundaryOffset = lastMessageBoundaryOffset else {
+            diagnosticsContext.logSkip(
+                stage: "strippedLeafStore",
+                reason: "no-boundary-offset"
+            )
+            return
+        }
+
+        // Guard 4: boundary snapshot must be in capturedSnapshots.
+        // When the planner skipped the boundary checkpoint because a
+        // prior turn already stored one at the same offset (deduped),
+        // capturedSnapshots won't contain it — in that case the prior
+        // turn's stripped leaf already exists and we silently skip.
+        guard let boundarySnapshot = capturedSnapshots.first(
+            where: { $0.tokenOffset == boundaryOffset }
+        ) else {
+            return  // silent; prior turn handled it
+        }
+
+        do {
+            try await container.perform { context in
+                // Tokenize the stripped stored sequence via two-probe.
+                guard let storedTokensStripped = try await Self.computeStrippedStoredTokens(
+                    context: context,
+                    storedConversation: storedConversation,
+                    toolSpecs: toolSpecs
+                ) else {
+                    diagnosticsContext.logSkip(
+                        stage: "strippedLeafStore",
+                        reason: "probe-divergence-failed"
+                    )
+                    return
+                }
+
+                // Guard 5: no residual to prefill.
+                guard storedTokensStripped.count > boundaryOffset else {
+                    diagnosticsContext.logSkip(
+                        stage: "strippedLeafStore",
+                        reason: "no-residual",
+                        extraFields: [
+                            ("strippedLen", "\(storedTokensStripped.count)"),
+                            ("boundaryOffset", "\(boundaryOffset)"),
+                        ]
+                    )
+                    return
+                }
+
+                // Guard 6: template didn't actually strip anything (non-Qwen3.5?).
+                // If `strippedLen == storedTokens.count`, the probe produced
+                // the same length as the unstripped path — no think block was
+                // removed. Skip to avoid storing a duplicate leaf.
+                guard storedTokensStripped.count < storedTokens.count else {
+                    diagnosticsContext.logSkip(
+                        stage: "strippedLeafStore",
+                        reason: "no-stripping-applied",
+                        level: .warning,
+                        extraFields: [
+                            ("strippedLen", "\(storedTokensStripped.count)"),
+                            ("storedLen", "\(storedTokens.count)"),
+                        ]
+                    )
+                    return
+                }
+
+                // Restore the boundary snapshot into a fresh [KVCache].
+                let restoredCache = boundarySnapshot.restore(
+                    kvBitsHint: partitionKey.kvBits,
+                    kvGroupSizeHint: partitionKey.kvGroupSize
+                )
+
+                // Compute the residual tokens: `[assistant_opener + response + <|im_end|>]`.
+                let residual = Array(storedTokensStripped[boundaryOffset...])
+
+                // Prefill the residual on top of the restored cache.
+                // Mirrors `HybridCacheCorrectnessRunner.prefill` — the
+                // production prefill loop, with leftover drain.
+                let prefillStart = Date.timeIntervalSinceReferenceDate
+                let inputArr = MLXArray(residual.map { Int32($0) })
+                let lmInput = LMInput(text: .init(tokens: inputArr, mask: nil))
+                let (prepareResult, _) = try context.model.prepareWithCheckpoints(
+                    lmInput,
+                    cache: restoredCache,
+                    windowSize: prefillStepSize,
+                    checkpoints: [:],
+                    checkpointBaseOffset: boundaryOffset
+                )
+                if case .tokens(let leftover) = prepareResult, leftover.tokens.size > 0 {
+                    let batched = LMInput.Text(
+                        tokens: leftover.tokens.expandedDimensions(axis: 0),
+                        mask: leftover.mask
+                    )
+                    _ = context.model(batched, cache: restoredCache, state: nil)
+                    eval(restoredCache)
+                }
+                let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStart
+
+                // Capture the stripped leaf from the freshly prefilled cache.
+                guard let strippedLeaf = HybridCacheSnapshot.capture(
+                    cache: restoredCache,
+                    offset: storedTokensStripped.count,
+                    type: .leaf
+                ) else {
+                    diagnosticsContext.logSkip(
+                        stage: "strippedLeafCapture",
+                        reason: "unsupported-cache-type"
+                    )
+                    return
+                }
+
+                diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
+                    offset: strippedLeaf.tokenOffset,
+                    checkpointType: strippedLeaf.checkpointType,
+                    bytes: strippedLeaf.memoryBytes,
+                    duringPrefill: false,
+                    source: "strippedLeaf"
+                ))
+                Log.agent.info(
+                    "Stripped leaf captured — offset=\(strippedLeaf.tokenOffset) "
+                    + "residualTokens=\(residual.count) "
+                    + "prefillMs=\(String(format: "%.3f", prefillMs * 1000)) "
+                    + "unstrippedLen=\(storedTokens.count) "
+                    + "strippedLen=\(storedTokensStripped.count)"
+                )
+
+                // Store the stripped leaf on MainActor and detect immediate
+                // eviction (the "capturedThenEvicted" pathology). Read the
+                // post-store budget + total in the same hop.
+                let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
+                    await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
+                        let d = prefixCache.storeLeaf(
+                            storedTokens: storedTokensStripped,
+                            leafSnapshot: strippedLeaf,
+                            partitionKey: partitionKey,
+                            requestID: requestID
+                        )
+                        return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
+                    }
+                for event in diagnostics.evictions {
+                    diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
+                }
+                let admissionEvicted = diagnostics.evictions.contains { event in
+                    event.offset == strippedLeaf.tokenOffset
+                        && event.checkpointType == .leaf
+                }
+                if admissionEvicted {
+                    diagnosticsContext.logSkip(
+                        stage: "strippedLeafAdmission",
+                        reason: "capturedThenEvicted",
+                        level: .warning,
+                        extraFields: [
+                            ("offset", "\(strippedLeaf.tokenOffset)"),
+                            ("bytes", "\(strippedLeaf.memoryBytes)"),
+                            ("budgetBytes", "\(postStoreBudgetBytes)"),
+                            ("snapshotBytesAfter", "\(postStoreSnapshotBytes)"),
+                        ]
+                    )
+                }
+
+                Memory.clearCache()
+            }
+        } catch {
+            diagnosticsContext.logSkip(
+                stage: "strippedLeafStore",
+                reason: "prefill-threw",
+                level: .warning,
+                extraFields: [("error", error.localizedDescription)]
+            )
         }
     }
 

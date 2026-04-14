@@ -233,18 +233,21 @@ struct EvictionPolicyTests {
 
     /// When eviction empties a snapshot from a node that still has exactly
     /// one child, `evictToFitBudget` collapses the snapshot-less node into
-    /// its child to preserve compressed-radix structure.
+    /// its child to preserve compressed-radix structure. Both nodes use
+    /// `.branchPoint` so the type-protection guard on `.system` doesn't
+    /// interfere — the test is about the collapse mechanism, not type
+    /// priority.
     @Test func singleChildEvictionCollapsesNode() {
         defer { resetPolicyDefaults() }
 
         let snapBytes = makeUniformSnapshot(offset: 10).memoryBytes
         let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 100)
 
-        // root → node1 (system, offset 10) → node2 (leaf, offset 20)
-        // Storage order: system first → older. Leaf second → newer.
+        // root → node1 (branchPoint, offset 10) → node2 (leaf, offset 20)
+        // Storage order: branchPoint first → older. Leaf second → newer.
         mgr.storeSnapshots(
             promptTokens: Array(1...10),
-            capturedSnapshots: [makeUniformSnapshot(offset: 10, type: .system)],
+            capturedSnapshots: [makeUniformSnapshot(offset: 10, type: .branchPoint)],
             partitionKey: defaultKey
         )
         let leafTokens = Array(1...20)
@@ -388,9 +391,10 @@ struct EvictionPolicyTests {
             modelMemoryBytes: modelBytes
         )
 
-        #expect(budget32 == 9 * gib)
-        #expect(budget48 == 17 * gib)
-        #expect(budget64 == 25 * gib)
+        // (total - 10 GiB model - 20 GiB headroom) / 2
+        #expect(budget32 == 1 * gib)
+        #expect(budget48 == 9 * gib)
+        #expect(budget64 == 17 * gib)
         #expect(budget32 < budget48)
         #expect(budget48 < budget64)
     }
@@ -411,9 +415,10 @@ struct EvictionPolicyTests {
             modelMemoryBytes: Int64(20 * gib)
         )
 
-        #expect(budget4 == 20 * gib)
-        #expect(budget10 == 17 * gib)
-        #expect(budget20 == 12 * gib)
+        // (48 GiB - model - 20 GiB headroom) / 2
+        #expect(budget4 == 12 * gib)
+        #expect(budget10 == 9 * gib)
+        #expect(budget20 == 4 * gib)
         #expect(budget4 > budget10)
         #expect(budget10 > budget20)
     }
@@ -424,7 +429,8 @@ struct EvictionPolicyTests {
             modelMemoryBytes: Int64(10 * gib)
         )
 
-        #expect(budget == 57 * gib)
+        // (128 GiB - 10 GiB model - 20 GiB headroom) / 2
+        #expect(budget == 49 * gib)
     }
 
     @Test func budgetClampsToZeroWhenHeadroomExhausted() {

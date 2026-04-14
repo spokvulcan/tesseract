@@ -11,15 +11,22 @@ struct TokenRadixTreeTests {
 
     // MARK: - Helpers
 
-    private func makeSnapshot(offset: Int) -> HybridCacheSnapshot {
+    private func makeSnapshot(
+        offset: Int,
+        type: HybridCacheSnapshot.CheckpointType = .system
+    ) -> HybridCacheSnapshot {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, max(offset, 1), 64]), MLXArray.zeros([1, 1, max(offset, 1), 64])]
-        return HybridCacheSnapshot.capture(cache: [kv], offset: offset, type: .system)!
+        return HybridCacheSnapshot.capture(cache: [kv], offset: offset, type: type)!
     }
 
-    private func insertAndStore(_ tree: TokenRadixTree, tokens: [Int]) {
+    private func insertAndStore(
+        _ tree: TokenRadixTree,
+        tokens: [Int],
+        type: HybridCacheSnapshot.CheckpointType = .system
+    ) {
         let node = tree.insertPath(tokens: tokens)
-        tree.storeSnapshot(makeSnapshot(offset: node.tokenOffset), on: node)
+        tree.storeSnapshot(makeSnapshot(offset: node.tokenOffset, type: type), on: node)
     }
 
     // MARK: - 1. emptyTreeReturnsNil
@@ -222,13 +229,16 @@ struct TokenRadixTreeTests {
     @Test func eligibleEvictionNodesExcludeMultiChildNodes() {
         let tree = TokenRadixTree()
 
-        // Distinct lengths to avoid offset ambiguity
+        // Distinct lengths to avoid offset ambiguity. Use `.leaf` for the
+        // leaf snapshots so they're not also excluded by the `.system`
+        // type-protection guard — this test is about multi-child
+        // protection, exercised in isolation.
         tree.insertPath(tokens: [1, 2, 3, 4, 5])
         tree.insertPath(tokens: [1, 2, 6, 7])
         let midNode = tree.insertPath(tokens: [1, 2])
         tree.storeSnapshot(makeSnapshot(offset: 2), on: midNode) // multi-child
-        insertAndStore(tree, tokens: [1, 2, 3, 4, 5]) // leaf, offset=5
-        insertAndStore(tree, tokens: [1, 2, 6, 7])     // leaf, offset=4
+        insertAndStore(tree, tokens: [1, 2, 3, 4, 5], type: .leaf) // leaf, offset=5
+        insertAndStore(tree, tokens: [1, 2, 6, 7], type: .leaf)    // leaf, offset=4
 
         let eligible = tree.eligibleEvictionNodes()
         let offsets = Set(eligible.map(\.tokenOffset))
@@ -236,6 +246,51 @@ struct TokenRadixTreeTests {
         #expect(offsets.contains(5))
         #expect(offsets.contains(4))
         #expect(!offsets.contains(2)) // multi-child node protected
+    }
+
+    // MARK: - 14b. eligibleEvictionNodesExcludeSystemSnapshots
+
+    /// Regression test for the new-user-turn cold-prefill pathology.
+    /// `.system` snapshots (stable prefix + last-message boundary) are
+    /// excluded from the utility-eviction candidate set even when their
+    /// node has `childCount <= 1`. The hard budget invariant is preserved
+    /// by `PrefixCacheManager.findEvictionCandidate`'s fallback path
+    /// (covered separately by `branchNodeFallbackHonorsHardBudget`).
+    @Test func eligibleEvictionNodesExcludeSystemSnapshots() {
+        let tree = TokenRadixTree()
+
+        // Linear chain: root → [1..10] (system) → [11..15] (leaf)
+        // Both nodes have childCount <= 1; only the .leaf is eligible.
+        let sysNode = tree.insertPath(tokens: Array(1...10))
+        tree.storeSnapshot(makeSnapshot(offset: 10, type: .system), on: sysNode)
+        let leafNode = tree.insertPath(tokens: Array(1...15))
+        tree.storeSnapshot(makeSnapshot(offset: 15, type: .leaf), on: leafNode)
+
+        let eligible = tree.eligibleEvictionNodes()
+        let offsets = Set(eligible.map(\.tokenOffset))
+
+        #expect(offsets.contains(15))   // leaf is eligible
+        #expect(!offsets.contains(10))  // system is protected
+    }
+
+    // MARK: - 14c. eligibleEvictionNodesAllowsBranchPointAndLeaf
+
+    /// `.branchPoint` snapshots are still eligible — only `.system` is
+    /// type-protected. Phase 2 branch points represent speculative
+    /// captures and have no special protection rule.
+    @Test func eligibleEvictionNodesAllowsBranchPointAndLeaf() {
+        let tree = TokenRadixTree()
+
+        let branchNode = tree.insertPath(tokens: Array(1...8))
+        tree.storeSnapshot(makeSnapshot(offset: 8, type: .branchPoint), on: branchNode)
+        let leafNode = tree.insertPath(tokens: Array(1...12))
+        tree.storeSnapshot(makeSnapshot(offset: 12, type: .leaf), on: leafNode)
+
+        let eligible = tree.eligibleEvictionNodes()
+        let offsets = Set(eligible.map(\.tokenOffset))
+
+        #expect(offsets.contains(8))
+        #expect(offsets.contains(12))
     }
 
     // MARK: - 15. collapseSingleChildNodeMergesEdges

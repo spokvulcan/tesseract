@@ -289,6 +289,7 @@ struct CompletionHandler: Sendable {
                 messages: messages,
                 toolSpecs: toolSpecs,
                 prefixCacheConversation: prefixCacheConversation,
+                sessionAffinity: sessionAffinity,
                 parameters: params
             )
             return .success(.init(

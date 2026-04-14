@@ -1,22 +1,56 @@
 import Foundation
 import MLXLMCommon
 
-/// Partition key for isolating radix trees by runtime configuration.
+/// Partition key for isolating radix trees by runtime configuration and
+/// client session.
 ///
 /// Tool/template digests are intentionally NOT part of the partition key:
-/// different tools/context → different tokens → different radix paths → naturally isolated.
+/// different tools/context → different tokens → different radix paths →
+/// naturally isolated within one partition.
+///
+/// `sessionAffinity` separates different client sessions — for OpenCode,
+/// the main agent and each subagent carry distinct `x-session-affinity`
+/// header values. Without session scoping, a long-running subagent's
+/// churn evicts the idle main agent's snapshots (because main agent's
+/// `lastAccessTime` goes stale while the subagent runs), and when the
+/// main agent resumes it pays a full cold prefill — 5+ minutes at 9B on
+/// 80K tokens. With session scoping, each session gets its own radix
+/// tree, and eviction prefers to drop snapshots from the
+/// currently-writing partition before touching others (see
+/// `findEvictionCandidate`). The global memory budget is still hard —
+/// when a writing session's own eligible set is exhausted, eviction
+/// spills over to other partitions — but in practice the writing
+/// session's own tree has enough freeable snapshots so idle sessions are
+/// left alone.
 ///
 /// `Comparable` so partition iteration can produce a deterministic order
-/// (modelID → kvBits → kvGroupSize) for stable tie-break behavior in
-/// eviction.
+/// (modelID → kvBits → kvGroupSize → sessionAffinity) for stable
+/// tie-break behavior in eviction.
 struct CachePartitionKey: Hashable, Sendable, Comparable {
     let modelID: String
     let kvBits: Int?
     let kvGroupSize: Int
+    /// Client-provided session identifier (the `x-session-affinity` HTTP
+    /// header, originally the OpenCode session UUID). `nil` when the
+    /// client does not send the header — all such requests share a
+    /// single default partition, matching pre-session-scoping behavior.
+    let sessionAffinity: String?
+
+    nonisolated init(
+        modelID: String,
+        kvBits: Int?,
+        kvGroupSize: Int,
+        sessionAffinity: String? = nil
+    ) {
+        self.modelID = modelID
+        self.kvBits = kvBits
+        self.kvGroupSize = kvGroupSize
+        self.sessionAffinity = sessionAffinity
+    }
 
     static func < (lhs: CachePartitionKey, rhs: CachePartitionKey) -> Bool {
-        (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize)
-            < (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize)
+        (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize, lhs.sessionAffinity ?? "")
+            < (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize, rhs.sessionAffinity ?? "")
     }
 }
 
@@ -225,12 +259,20 @@ final class PrefixCacheManager {
     /// Captures up to two mid-prefill snapshots:
     /// - `stablePrefixOffset`: where `system + tools` end (shared across
     ///   conversations, any request with the same system/tools can hit).
+    ///   Stored as `.system` — type-protected from utility eviction
+    ///   because it's the cross-conversation hot prefix that an entire
+    ///   tree is built on.
     /// - `lastMessageBoundaryOffset`: where the last message ends, right
     ///   before the assistant-generation prompt. Templates (e.g. Qwen3.5)
     ///   re-render old assistants differently once they're no longer the
     ///   latest turn, so a leaf stored at the full-prompt offset doesn't
     ///   match future requests. A checkpoint at the last-message boundary
     ///   is stable across turns and enables cross-turn prefix reuse.
+    ///   Stored as `.lastMessageBoundary` — **NOT** type-protected. Long
+    ///   conversations accumulate one boundary per turn, and protecting
+    ///   them all would fill the budget with stale boundaries from old
+    ///   turns and starve new leaves of admission room. LRU eviction
+    ///   keeps the freshest boundary alive while letting old ones go.
     ///
     /// Leaf checkpoint is NOT planned — captured post-generation via storeLeaf().
     /// Existing snapshots at the same offset are skipped.
@@ -265,9 +307,9 @@ final class PrefixCacheManager {
            offset > 0,
            offset < tokens.count,
            offset != stablePrefixOffset,  // avoid duplicate with stable prefix
-           !alreadyStored(offset: offset, type: .system)
+           !alreadyStored(offset: offset, type: .lastMessageBoundary)
         {
-            plan.append((offset: offset, type: .system))
+            plan.append((offset: offset, type: .lastMessageBoundary))
         }
 
         if let tree,
@@ -303,7 +345,10 @@ final class PrefixCacheManager {
             tree.storeSnapshot(snapshot, forTokens: promptTokens, atOffset: snapshot.tokenOffset)
         }
 
-        let evictions = evictToFitBudget(requestID: requestID)
+        let evictions = evictToFitBudget(
+            requestID: requestID,
+            preferredPartitionKey: partitionKey
+        )
         return StoreDiagnostics(evictions: evictions, stats: stats)
     }
 
@@ -324,7 +369,10 @@ final class PrefixCacheManager {
         let node = tree.insertPath(tokens: storedTokens)
         tree.storeSnapshot(leafSnapshot, on: node)
 
-        let evictions = evictToFitBudget(requestID: requestID)
+        let evictions = evictToFitBudget(
+            requestID: requestID,
+            preferredPartitionKey: partitionKey
+        )
         return StoreDiagnostics(evictions: evictions, stats: stats)
     }
 
@@ -420,16 +468,31 @@ final class PrefixCacheManager {
     /// Marconi utility scoring (`EvictionPolicy`) for eligible nodes and
     /// falls back to oldest-first when only multi-child branch snapshots
     /// remain.
+    ///
+    /// `preferredPartitionKey` — the partition currently writing (i.e.,
+    /// the request that triggered this drain). Eviction prefers to drop
+    /// snapshots from this partition first, exhausting its eligible set
+    /// before touching other partitions. This prevents a long-running
+    /// subagent's churn from evicting an idle main agent's tall
+    /// snapshots. When `nil`, behaves globally (Marconi default).
     @discardableResult
-    func evictToFitBudget(requestID: UUID? = nil) -> [EvictionEvent] {
+    func evictToFitBudget(
+        requestID: UUID? = nil,
+        preferredPartitionKey: CachePartitionKey? = nil
+    ) -> [EvictionEvent] {
         // Pin a single clock reading and a single sorted tree order so all
         // iterations in one drain share the same recency anchor and
         // tie-break ordering.
         let now: ContinuousClock.Instant = .now
         let orderedTrees = trees.sorted { $0.key < $1.key }.map(\.value)
+        let preferredTree = preferredPartitionKey.flatMap { trees[$0] }
         var events: [EvictionEvent] = []
         while totalSnapshotBytes > memoryBudgetBytes {
-            guard let candidate = findEvictionCandidate(now: now, orderedTrees: orderedTrees),
+            guard let candidate = findEvictionCandidate(
+                now: now,
+                orderedTrees: orderedTrees,
+                preferredTree: preferredTree
+            ),
                   let snapshot = candidate.node.snapshot
             else { break }
 
@@ -503,24 +566,54 @@ final class PrefixCacheManager {
 
     /// Pick one snapshot to evict from the supplied (already-sorted) trees.
     ///
-    /// Primary path scores Marconi-eligible nodes (snapshot + `childCount
-    /// <= 1`) and returns the lowest-utility one. Fallback path returns the
-    /// oldest snapshot across all nodes (including multi-child branches)
-    /// so the hard budget invariant holds in degenerate cases like a
-    /// zero-budget drain.
+    /// Strategy (in order):
+    /// 1. **Preferred utility**: if a `preferredTree` is supplied, score
+    ///    its Marconi-eligible nodes (snapshot + `childCount <= 1` +
+    ///    non-`.system`) and return the lowest-utility one. This is the
+    ///    writing-partition-first rule — session scoping's key
+    ///    protection for idle partitions.
+    /// 2. **Global utility**: if the preferred tree has no eligible
+    ///    candidates (or none was supplied), score eligible nodes across
+    ///    all partitions and return the lowest-utility one. Preserves
+    ///    Marconi's "global utility" semantics for single-partition
+    ///    configurations and for the spill-over case when the writing
+    ///    partition is already drained.
+    /// 3. **Preferred fallback**: if both utility paths are empty but
+    ///    the preferred tree still has any snapshots (all ineligible —
+    ///    e.g., `.system`-only), drop the oldest one from the preferred
+    ///    tree.
+    /// 4. **Global fallback**: drop the oldest snapshot from any tree,
+    ///    including multi-child branches, so the hard budget invariant
+    ///    holds in degenerate cases like a zero-budget drain.
     private func findEvictionCandidate(
         now: ContinuousClock.Instant,
-        orderedTrees: [TokenRadixTree]
+        orderedTrees: [TokenRadixTree],
+        preferredTree: TokenRadixTree? = nil
     ) -> EvictionCandidate? {
+        // 1. Preferred utility — writing-partition-first.
+        if let preferredTree {
+            let preferredCandidates = preferredTree.eligibleEvictionNodes()
+            if let victim = EvictionPolicy.selectVictim(
+                candidates: preferredCandidates, now: now
+            ) {
+                return EvictionCandidate(
+                    tree: preferredTree,
+                    node: victim.node,
+                    strategy: .utility,
+                    score: victim.score
+                )
+            }
+        }
+
+        // 2. Global utility — spill to other partitions.
         var nodeToTree: [ObjectIdentifier: TokenRadixTree] = [:]
         var candidates: [RadixTreeNode] = []
-        for tree in orderedTrees {
+        for tree in orderedTrees where tree !== preferredTree {
             for node in tree.eligibleEvictionNodes() {
                 nodeToTree[ObjectIdentifier(node)] = tree
                 candidates.append(node)
             }
         }
-
         if let victim = EvictionPolicy.selectVictim(candidates: candidates, now: now),
            let tree = nodeToTree[ObjectIdentifier(victim.node)]
         {
@@ -532,6 +625,21 @@ final class PrefixCacheManager {
             )
         }
 
+        // 3. Preferred fallback — oldest snapshot in the writing partition.
+        if let preferredTree,
+           let oldest = preferredTree.allSnapshotNodes().min(
+               by: { $0.lastAccessTime < $1.lastAccessTime }
+           )
+        {
+            return EvictionCandidate(
+                tree: preferredTree,
+                node: oldest,
+                strategy: .fallback,
+                score: nil
+            )
+        }
+
+        // 4. Global fallback — oldest snapshot anywhere.
         return orderedTrees
             .lazy
             .flatMap { tree in tree.allSnapshotNodes().lazy.map { (tree: tree, node: $0) } }

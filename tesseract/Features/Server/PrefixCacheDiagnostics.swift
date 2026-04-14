@@ -299,6 +299,8 @@ nonisolated enum PrefixCacheDiagnostics {
         switch value {
         case .system:
             return "system"
+        case .lastMessageBoundary:
+            return "lastMessageBoundary"
         case .leaf:
             return "leaf"
         case .branchPoint:

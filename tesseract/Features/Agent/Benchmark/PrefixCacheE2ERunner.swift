@@ -273,6 +273,7 @@ final class PrefixCacheE2ERunner {
             messages: llmMessages,
             toolSpecs: toolSpecs,
             prefixCacheConversation: prefixCacheConversation,
+            sessionAffinity: nil,
             parameters: parameters
         )
 

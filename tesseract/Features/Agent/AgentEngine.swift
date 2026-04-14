@@ -156,6 +156,7 @@ final class AgentEngine {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         prefixCacheConversation: HTTPPrefixCacheConversation?,
+        sessionAffinity: String?,
         parameters: AgentGenerateParameters = .default
     ) async throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
@@ -167,10 +168,13 @@ final class AgentEngine {
                 modelID: modelID,
                 conversation: prefixCacheConversation,
                 toolSpecs: toolSpecs,
+                sessionAffinity: sessionAffinity,
                 parameters: parameters
            ) {
             Log.agent.info(
-                "HTTP completion using prefix-cache path — model=\(modelID) cachedTokens=\(start.cachedTokenCount)"
+                "HTTP completion using prefix-cache path — model=\(modelID) "
+                + "cachedTokens=\(start.cachedTokenCount) "
+                + "session=\(sessionAffinity ?? "nil")"
             )
             return startManagedHTTPGeneration(start)
         }

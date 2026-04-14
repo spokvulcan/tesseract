@@ -1670,6 +1670,99 @@ Structured logging via `Log.agent`:
 
 ---
 
+## Phase 4 — Draft Ideas (exploratory, not development-ready)
+
+**Status:** Brainstorm. None of these are scoped, blocker-reviewed, or sequenced. They are candidates for enhancement *after* Phases 0–3 ship and we have a production trace to optimize against. Each idea lists an estimated win, the open questions that would need answers before scoping, and the code areas most likely to change. **Do not implement from this section directly.**
+
+The ordering reflects rough return-on-effort for Tesseract's single-user Apple Silicon workload — SSD persistence is the first candidate because it directly attacks the biggest remaining failure mode (cold restart throws away every snapshot, including the `stablePrefix` + tool-definition snapshot that is the most expensive to rebuild and the most universally shared across conversations).
+
+### Idea 4.1 — SSD persistence tier (primary candidate)
+
+**Motivation.** Phase 1's cache lives entirely in RAM. Every app restart, model swap, or OOM-triggered unload drops the full radix tree — including the stable-prefix snapshot, which is the single most valuable entry because it is reused by every conversation against the same system prompt + tools. On the first post-restart request the user pays a full cold prefill for system + tools (~4K tokens on the current agent prompt) even though nothing about that prefix has changed. oMLX addresses this with a write-through safetensors tier on SSD (`BoundarySnapshotSSDStore`, `PagedSSDCacheManager`) and retains cache hits across process restarts.
+
+The same shape fits Marconi: snapshots are already immutable `(className, state, metaState)` triples that mirror `savePromptCache()` / `loadPromptCache()` (Task 1.1), so serialization is a problem we have already solved at the type level. What we do not have is a storage layer, an async writer, a partition-keyed layout, or a warm-start path.
+
+**Target win.**
+- Post-restart stable-prefix hit: cold → ~50–150 ms SSD read + snapshot reconstruct on Apple Silicon NVMe for a ~200 MiB snapshot, versus ~1–3 s cold prefill today. Net win ~1–3 s on the first request after every launch.
+- Capacity relief: RAM budget can stay conservative (~8 GiB) while the SSD tier absorbs overflow, extending effective working-set size into the 50+ GiB range without touching the unified-memory envelope.
+- Preserves leaf snapshots across short app restarts during active development iteration (common in Tesseract's own dev loop).
+
+**Proposed shape.**
+- New protocol `SnapshotStore` with two conformers:
+  - `InMemorySnapshotStore` — the current behavior. Holds `HybridCacheSnapshot` in RAM under the existing memory budget.
+  - `SSDSnapshotStore` — serializes snapshots to `~/Library/Caches/Tesseract Agent/prefix-cache/{modelID}/{kvBits}-{kvGroupSize}/{snapshotID}.safetensors` via a background writer actor off the MainActor.
+- `PrefixCacheManager` owns a `TieredSnapshotStore` that composes both. RAM is the hot tier; admission writes through to SSD asynchronously; RAM evictions demote to SSD rather than delete (until SSD is also full).
+- Serialization uses the existing `savePromptCache()` equivalent — `HybridCacheSnapshot` already stores the exact triple that `loadPromptCache()` expects, so we reuse that path instead of rolling a new format. Wrap with a small header that records `modelID`, `kvBits`, `kvGroupSize`, `tokenOffset`, `checkpointType`, `createdAt`, and the path from the radix tree root (as a `[Int]` of edge ids) so the tree can be rebuilt on warm start.
+- Background writer is a serial `DispatchQueue` (or Swift `Task` on a cooperative actor) fed by an unbounded bounded queue with coalescing — if the same snapshot is re-admitted before its write lands, drop the older write. Crucially, **the writer must never block the inference path**; if the SSD is slow, write queue can grow and the oldest queued writes are dropped on back-pressure.
+- Partition keying follows `CachePartitionKey` exactly — different `(modelID, kvBits, kvGroupSize)` means different directories; cross-config contamination is impossible at the filesystem level.
+- SSD budget defaults to a conservative 20 GiB with a user-configurable override in `SettingsManager`. Eviction on SSD is type-aware LRU in Phase 1-style, or utility-scored if Phase 2 is already live (the Marconi score works for any tier as long as access timestamps are recorded).
+
+**Cost-aware utility score.** If SSD is live, the Phase 2 utility formula changes shape: a SSD hit costs ~50–150 ms; a RAM hit costs ~1 ms; a cold prefill costs ~1–3 s. For tier-selection and eviction we want `utility(node) = expected_latency_saved / storage_cost`, not just `flops_saved / bytes`. The concrete extension is: when scoring whether to **demote RAM → SSD** vs **delete outright**, compare `(coldCost - ssdCost)` against `(coldCost - ramCost) * ramEvictionRate` and demote when SSD still nets a win. This falls out of the existing `EvictionPolicy` with one extra coefficient — no new scoring machinery.
+
+**Warm start.** On `PrefixCacheManager.init()`, walk the SSD directory for the current partition key and:
+1. Read only the headers (not the tensor bodies) — cheap directory scan, sub-100 ms for typical cache sizes.
+2. Rebuild the radix tree structure (edges + node metadata + snapshot pointers) from the header paths. Snapshot bodies remain on disk until the first lookup materializes them.
+3. Lazily hydrate a snapshot on first hit: `SSDSnapshotStore.load(id)` reads the safetensors, reconstructs `HybridCacheSnapshot` via the existing `loadPromptCache`-style path, and promotes it into RAM under the normal admission flow.
+
+This gives the first post-restart request a real hit with zero user-visible warm-up cost beyond the initial load on the first hit.
+
+**Open questions (must be answered before scoping).**
+1. **Serialization correctness under model updates.** If the user updates the Qwen3.5 weights (same `modelID` string but a different snapshot of the model on disk), the SSD tier will silently serve stale snapshots. Need a model fingerprint — hash of `config.json` + weights file mtimes, or a short rolling hash of the first layer's weight bytes — folded into the partition key or the snapshot header. Invalidation on mismatch.
+2. **MLXArray → bytes path without eval thrash.** `savePromptCache()` already solves this upstream in `mlx-swift-lm`, but verify that writing ~200 MiB through safetensors does not cause a Metal sync that stalls the inference path. If it does, the background writer needs a snapshot-copy-to-CPU-memory step at capture time so the writer thread never touches live Metal resources.
+3. **SSD wear and write amplification.** A heavy Phase 2 workload with many branch-point captures could generate hundreds of MiB of SSD writes per minute. Apple Silicon SSDs are rated for several petabytes of writes, but still — add a write-rate cap (`bytesPerMinute`) and a coalescing window to avoid admitting every tentative branch point to disk. Rule of thumb: only promote to SSD after a snapshot has survived one RAM eviction pass, so ephemeral branch points never touch disk.
+4. **Leaf-store-guard interaction.** The current production guard (Task 2.2) skips leaf store on any `trimAmount > 0` for correctness under sampled decoding. SSD persistence does not change that guard — leaf-with-trim still doesn't get stored — but it does mean normalized leaf cache hits cannot be recovered across restart. That's fine (same as today), just make sure the SSD tier doesn't accidentally resurrect the old tag-free snapshots.
+5. **Concurrent process access.** If the user runs the CLI benchmark harness while the app is live, two processes may contend on the same SSD directory. Simplest answer: per-process subdirectory keyed by `ProcessInfo.processInfo.processIdentifier`, accepting some duplication. Shared access with file-level locking is over-engineered for Tesseract's single-user scope.
+
+**Files most likely to change.**
+- `tesseract/Features/Server/PrefixCacheManager.swift` — introduce `SnapshotStore` protocol, wire the tiered composition, add warm-start on init.
+- `tesseract/Features/Server/HybridCacheSnapshot.swift` — add a `serialize()` / `deserialize(from:)` pair plus the header schema.
+- New: `tesseract/Features/Server/SSDSnapshotStore.swift` — writer actor, directory layout, header read/write, lazy hydration.
+- New: `tesseract/Features/Server/TieredSnapshotStore.swift` — hot/cold composition, demote-on-evict logic, back-pressure handling.
+- `tesseract/Features/Server/EvictionPolicy.swift` — extend the Phase 2 utility score with the `coldCost - ssdCost` demote-vs-delete decision (one extra coefficient, no structural change).
+- `tesseract/Features/Agent/Benchmark/PrefixCacheE2ERunner.swift` — add a restart-simulating scenario that tears down the manager, reinstantiates, and asserts a warm hit on the first subsequent request.
+- `tesseract/Features/Settings/SettingsManager.swift` — `prefixCacheSSDBudgetBytes`, `prefixCacheSSDEnabled`, and the directory path as a settings surface.
+
+**Rough test topology (when scoped for real).**
+- Unit tests for `SSDSnapshotStore` round-trip (capture → serialize → deserialize → restore → bitwise equality), model-fingerprint invalidation, back-pressure dropping, warm-start tree rebuild from headers only.
+- Integration tests for `TieredSnapshotStore` — admission writes through, RAM eviction demotes to SSD, SSD eviction deletes, write-rate cap enforcement.
+- Loaded-model harness extension — kill-and-restart scenario proving first post-restart stable-prefix hit is within a constant of SSD read time (not cold-prefill time).
+
+### Idea 4.2 — Snapshot quantization for RAM efficiency
+
+The snapshot size table in Implementation Note 2 shows a 16K unquantized snapshot at ~586 MiB. Most of that is attention KV; SSM state is fixed at ~74 MiB regardless of sequence length. Runtime already uses `QuantizedKVCache` with `kvBits = 8`, but the snapshots we capture inherit whatever type the live cache is using at the checkpoint offset — early mid-prefill checkpoints may still be `KVCacheSimple` unquantized.
+
+**Idea:** optionally re-quantize attention state to `int8` (or even `int4`) at capture time, independently of the live cache. Halves or quarters the RAM footprint of the largest snapshots. Leaves SSM state untouched.
+
+**Concern:** this is a correctness trade. Re-quantization is lossy; Task 2.2's bitwise-logit-equality gate would need to be relaxed to a bounded-drift gate for quantized-at-capture snapshots. Not worth pursuing until we have a real RAM-pressure trace showing that the budget is binding.
+
+### Idea 4.3 — Warm-start pre-hydration of the top-K stable prefixes
+
+Pairs with 4.1. Even with the SSD tier, the first lookup pays a ~100 ms disk read. On launch, pre-hydrate the top-K most-recently-accessed `.system` snapshots into RAM speculatively, before the first request arrives. K ≈ 1–3 on typical workloads because stable-prefix snapshots are rare and tall.
+
+**Implementation:** after warm-start header scan, kick off a background `Task` that loads the K highest-ranked `.system` snapshots by last-access time. Gate behind a user preference; costs ~200–600 MiB of RAM at launch that might not be needed.
+
+### Idea 4.4 — VLM image feature cache
+
+oMLX ships `vision_feature_cache.py` — a content-addressed cache of encoded image embeddings keyed by image hash. Orthogonal to the text prefix cache but high-value for any VLM workload (Qwen3.5 VLM is the current target): image encoding is a fixed-cost prefill step that dominates first-token latency when the same image is referenced across turns.
+
+**Shape.** Hash-by-content (`SHA-256` of raw image bytes) → cached `inputEmbeddings` tensor. Lives outside the text radix tree because its key space is different. Invalidated when the vision encoder weights change (same fingerprint story as 4.1).
+
+**Defer until:** there is a real VLM agent workload. The current `/v1/chat/completions` path is LLM-only for the agent; VLM is wired but untested per `CLAUDE.md`.
+
+### Idea 4.5 — Predictive prefetch of likely tool-loop continuations
+
+During the gap between a tool call returning and the next user turn, the agent's next prompt shape is *mostly* known: the existing conversation + the tool result. If we speculatively tokenize and prefill that continuation in the background (behind the arbiter, canceled on user input), the next user turn lands on a warm cache with zero wait.
+
+**Concern.** This breaks the `InferenceArbiter` single-in-flight invariant and competes with the actual tool execution for Metal bandwidth. Only worth doing if benchmarks show the tool-result → next-turn gap is a dominant UX issue, and only with a clean cancellation path so the prefetch can't starve the real request.
+
+### Idea 4.6 — Cross-model stable-prefix sharing for fine-tunes
+
+If two models share identical embeddings and identical first N transformer layers (common for LoRA fine-tunes), the first N layers' snapshot state is identical. In theory the stable-prefix snapshot could be shared across partitions.
+
+**Concern.** Tesseract ships one model. This is speculative architecture for a user pattern we do not have. Park it unless multi-model serving becomes a real requirement.
+
+---
+
 ## Phase Dependency Graph
 
 ```
@@ -1683,9 +1776,12 @@ Phase 2 (Marconi: speculative branch-point + utility-scored eviction + alpha tun
     │
     ▼
 Phase 3 (two-pass prefill + production hardening)
+    │
+    ▼
+Phase 4 (draft — SSD tier, warm start, snapshot quantization, VLM feature cache — not scoped)
 ```
 
-All phases are sequential. Phase 1 includes the modified `prepare()` loop (previously deferred to Phase 2) because Mamba state capture during prefill is a prerequisite for any hybrid checkpoint.
+All phases 0–3 are sequential. Phase 1 includes the modified `prepare()` loop (previously deferred to Phase 2) because Mamba state capture during prefill is a prerequisite for any hybrid checkpoint. **Phase 4 is a draft idea list, not a sequenced plan** — each idea is independently scopable after 0–3 ship and a production trace is available.
 
 ---
 
@@ -1695,6 +1791,7 @@ All phases are sequential. Phase 1 includes the modified `prepare()` loop (previ
 - Phase 1: 72 new unit tests across snapshot/prepare/detector/radix/manager, 18 integration tests for the end-to-end cache path, migration of the existing normalization-focused `HTTPPrefixCacheSpikeTests`, 1 model-backed E2E scenario.
 - Phase 2: 28 new unit tests across speculative admission, correctness gating, Marconi utility scoring, and adaptive `alpha` tuning, plus 1 manual benchmark validation pass.
 - Phase 3: 8 unit tests for two-pass prefill and prefill-step heuristics, 11 model-backed benchmark scenarios, and 1 manual validation pass.
+- Phase 4: **draft only — no test scope yet.** Each idea carries a rough test topology but is not sequenced. Test counts will be assigned at scoping time, after a production trace justifies the specific enhancement.
 
 ---
 

@@ -246,8 +246,22 @@ final class TokenRadixTree {
     }
 
     /// Snapshot-bearing nodes eligible for Marconi utility scoring:
-    /// node has a snapshot AND `childCount <= 1`. Multi-child nodes are
-    /// protected (they hold shared cache state).
+    /// node has a snapshot AND `childCount <= 1` AND `checkpointType !=
+    /// .system`. Multi-child nodes are protected because they hold shared
+    /// cache state. **Only** `.system` (stable prefix) snapshots are
+    /// type-protected — they sit linearly on the path from root in
+    /// single-conversation usage and represent the cross-conversation hot
+    /// prefix that the entire tree is built on. `.lastMessageBoundary`
+    /// snapshots are explicitly NOT protected because long conversations
+    /// accumulate one boundary per turn; protecting all of them would fill
+    /// the budget with stale boundaries from old turns and cause the
+    /// freshly-stored leaf for the current turn to be the only eligible
+    /// eviction candidate, killing it on admission. LRU eviction over the
+    /// boundary set keeps the freshest boundary alive (recency wins) while
+    /// reaping old ones, which is the behaviour we want.
+    /// The hard budget invariant is preserved by `findEvictionCandidate`'s
+    /// fallback path, which drops the oldest snapshot from
+    /// `allSnapshotNodes()` when the eligible set is empty.
     func eligibleEvictionNodes() -> [RadixTreeNode] {
         var result: [RadixTreeNode] = []
         collectEligible(node: root, into: &result)
@@ -369,7 +383,10 @@ final class TokenRadixTree {
     }
 
     private func collectEligible(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
-        if node.snapshot != nil && node.childCount <= 1 {
+        if let snapshot = node.snapshot,
+           node.childCount <= 1,
+           snapshot.checkpointType != .system
+        {
             result.append(node)
         }
         for child in node.children.values {

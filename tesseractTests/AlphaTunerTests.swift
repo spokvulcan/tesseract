@@ -96,31 +96,48 @@ struct AlphaTunerTests {
         #expect(EvictionPolicy.alpha == 0.0)
     }
 
-    // MARK: - 2. bootstrapWindowUsesFiveTimesFirstEvictionCount
+    // MARK: - 2. bootstrapWindowUsesMultiplierTimesFirstEvictionCount
 
     /// On the first eviction, the bootstrap target is
-    /// `requestsBeforeFirstEviction * 5`. The phase transitions to
-    /// `.bootstrapping` and subsequent records accumulate in the
-    /// window until it fills.
-    @Test func bootstrapWindowUsesFiveTimesFirstEvictionCount() {
+    /// `requestsBeforeFirstEviction * bootstrapMultiplier`, clamped to
+    /// `[minimumBootstrapWindow, maximumBootstrapWindow]`. The phase
+    /// transitions to `.bootstrapping` and subsequent records accumulate
+    /// in the window until it fills. Pre-eviction count is chosen large
+    /// enough that `multiplier * count` is the dominant term (above the
+    /// floor and below the cap).
+    @Test func bootstrapWindowUsesMultiplierTimesFirstEvictionCount() {
         defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
 
-        for i in 0..<7 {
+        // Pick a count where `multiplier * count` lands strictly
+        // between the floor and the cap so neither clamp interferes.
+        let preEvictionCount = max(
+            AlphaTuner.minimumBootstrapWindow + 5,
+            AlphaTuner.minimumBootstrapWindow / AlphaTuner.bootstrapMultiplier + 5
+        )
+        for i in 0..<preEvictionCount {
             tuner.recordRequest(makeLeafOnlyRecord(
                 promptTokens: [i, 100],
                 storedTokens: [i, 100, 200]
             ))
         }
-        #expect(tuner.requestsBeforeFirstEviction == 7)
+        #expect(tuner.requestsBeforeFirstEviction == preEvictionCount)
+
+        let expected = min(
+            max(
+                preEvictionCount * AlphaTuner.bootstrapMultiplier,
+                AlphaTuner.minimumBootstrapWindow
+            ),
+            AlphaTuner.maximumBootstrapWindow
+        )
 
         tuner.notifyFirstEviction(startingInventory: [])
         #expect(tuner.phase == .bootstrapping)
-        #expect(tuner.bootstrapTarget == 7 * AlphaTuner.bootstrapMultiplier)
+        #expect(tuner.bootstrapTarget == expected)
 
         // A second notify is a no-op.
         tuner.notifyFirstEviction(startingInventory: [])
-        #expect(tuner.bootstrapTarget == 7 * AlphaTuner.bootstrapMultiplier)
+        #expect(tuner.bootstrapTarget == expected)
     }
 
     /// When the first eviction fires before any request has been
@@ -133,6 +150,29 @@ struct AlphaTunerTests {
         tuner.notifyFirstEviction(startingInventory: [])
         #expect(tuner.phase == .bootstrapping)
         #expect(tuner.bootstrapTarget == AlphaTuner.minimumBootstrapWindow)
+    }
+
+    /// A workload with a very loose budget could push
+    /// `requestsBeforeFirstEviction * bootstrapMultiplier` past the
+    /// `maximumBootstrapWindow` cap. The cap must clamp it back so the
+    /// tuner can finish in a single typical session even when first
+    /// eviction takes hundreds of requests.
+    @Test func bootstrapTargetHonorsMaximumWindow() {
+        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
+        let tuner = AlphaTuner()
+
+        // Pick a pre-eviction count guaranteed to overshoot the cap.
+        let preEvictionCount = AlphaTuner.maximumBootstrapWindow * 2
+            + AlphaTuner.minimumBootstrapWindow
+        for i in 0..<preEvictionCount {
+            tuner.recordRequest(makeLeafOnlyRecord(
+                promptTokens: [i, 100],
+                storedTokens: [i, 100, 200]
+            ))
+        }
+
+        tuner.notifyFirstEviction(startingInventory: [])
+        #expect(tuner.bootstrapTarget == AlphaTuner.maximumBootstrapWindow)
     }
 
     // MARK: - 3. gridSearchTransitionsToTunedWithCandidateAlpha
@@ -357,11 +397,17 @@ struct AlphaTunerTests {
     /// manager must defer bootstrap start until request end so the
     /// seeded inventory includes the same request's later leaf store.
     /// The boundary request itself is excluded from the replay window.
+    ///
+    /// Both mid-prefill snapshots are `.branchPoint` (not `.system`)
+    /// because `.system` is type-protected from utility eviction by
+    /// `TokenRadixTree.collectEligible`. The test's intent is the
+    /// boundary-capture timing, not the type-priority rule, so we use
+    /// types that participate in normal recency-based eviction.
     @Test func managerDefersBootstrapBoundaryUntilFullRequestCompletes() {
         defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
         let boundaryRequestID = UUID()
-        let snapshotA = PrefixCacheTestFixtures.makeUniformSnapshot(offset: 10, type: .system)
+        let snapshotA = PrefixCacheTestFixtures.makeUniformSnapshot(offset: 10, type: .branchPoint)
         let snapshotB = PrefixCacheTestFixtures.makeUniformSnapshot(offset: 20, type: .branchPoint)
         let mgr = PrefixCacheManager(
             memoryBudgetBytes: snapshotA.memoryBytes,

@@ -57,17 +57,45 @@ final class AlphaTuner {
     }
 
     /// Number of requests to record post-first-eviction =
-    /// `requestsBeforeFirstEviction * bootstrapMultiplier`. The Marconi
-    /// paper specifies `5–15`; the reference repo uses `5`.
-    static let bootstrapMultiplier = 5
+    /// `requestsBeforeFirstEviction * bootstrapMultiplier`, then clamped
+    /// to `[minimumBootstrapWindow, maximumBootstrapWindow]`.
+    ///
+    /// The Marconi paper specifies `5–15`; the reference repo uses `5`.
+    /// Tesseract is a single-user local agent where one process rarely
+    /// sees hundreds of requests, so a 5× window is unreachable in
+    /// practice — most sessions exit before the tuner ever transitions
+    /// out of `.bootstrapping`. We use `1×` instead, with the floor
+    /// `minimumBootstrapWindow = 10` providing a safety net of distinct
+    /// hit/miss outcomes.
+    ///
+    /// `1×` is safe because `TokenRadixTree.collectEligible` protects
+    /// `.system` snapshots from utility scoring, so the worst-case
+    /// during bootstrap (alpha = 0) is no longer "lose the stable prefix
+    /// and stall for minutes" — it's "evict `.leaf`/`.branchPoint`
+    /// slightly less optimally than tuned alpha would." Minimizing time
+    /// to tuned alpha matters more than tuned-alpha precision: alpha=0.5
+    /// vs alpha=0.7 is a small gap, but alpha=0 (untuned) vs
+    /// alpha=anything-positive is a large gap.
+    static let bootstrapMultiplier = 1
 
     /// `[0.0, 0.1, ..., 2.0]` — 21 values. Integer-multiply form is
     /// immune to float-accumulation drift.
     static let alphaCandidates: [Double] = (0...20).map { Double($0) * 0.1 }
 
     /// Without this floor, a workload that triggers eviction on the very
-    /// first request would tune against an empty window.
-    static let minimumBootstrapWindow = 5
+    /// first request would tune against an empty window. Raised to 10 so
+    /// the grid search has at least a handful of distinct hit/miss
+    /// outcomes to score against, even when the first eviction fires
+    /// almost immediately on a tight budget.
+    static let minimumBootstrapWindow = 10
+
+    /// Cap on the bootstrap window. Without this, a workload that takes
+    /// 200+ requests before its first eviction (very loose budget) would
+    /// require 600+ post-bootstrap requests to tune — far longer than a
+    /// typical Tesseract session. Capping at 60 keeps the window
+    /// reachable in one sitting while preserving enough signal for the
+    /// grid search to discriminate between alpha candidates.
+    static let maximumBootstrapWindow = 60
 
     private(set) var phase: Phase = .waitingForFirstEviction
     private(set) var requestsBeforeFirstEviction: Int = 0
@@ -104,9 +132,12 @@ final class AlphaTuner {
     /// the next request arrives.
     func notifyFirstEviction(startingInventory: [InventoryEntry]) {
         guard case .waitingForFirstEviction = phase else { return }
-        bootstrapTarget = max(
-            requestsBeforeFirstEviction * Self.bootstrapMultiplier,
-            Self.minimumBootstrapWindow
+        bootstrapTarget = min(
+            max(
+                requestsBeforeFirstEviction * Self.bootstrapMultiplier,
+                Self.minimumBootstrapWindow
+            ),
+            Self.maximumBootstrapWindow
         )
         self.startingInventory = startingInventory
         self.inventoryCaptureTime = .now
