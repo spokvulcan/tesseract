@@ -124,7 +124,7 @@ nonisolated enum PrefixCacheDiagnostics {
         var fields: [(String, String)] {
             [
                 ("offset", "\(offset)"),
-                ("checkpointType", PrefixCacheDiagnostics.checkpointType(checkpointType)),
+                ("checkpointType", checkpointType.wireString),
                 ("bytes", "\(bytes)"),
                 ("duringPrefill", "\(duringPrefill)"),
                 ("source", source),
@@ -161,7 +161,7 @@ nonisolated enum PrefixCacheDiagnostics {
             var fields: [(String, String)] = [
                 ("strategy", strategy.rawValue),
                 ("offset", "\(offset)"),
-                ("checkpointType", PrefixCacheDiagnostics.checkpointType(checkpointType)),
+                ("checkpointType", checkpointType.wireString),
                 ("freedBytes", "\(freedBytes)"),
                 ("budgetBytes", "\(budgetBytes)"),
                 ("snapshotBytesAfter", "\(snapshotBytesAfter)"),
@@ -292,27 +292,14 @@ nonisolated enum PrefixCacheDiagnostics {
     }
 
     private static func optionalCheckpointType(_ value: HybridCacheSnapshot.CheckpointType?) -> String {
-        value.map(checkpointType) ?? "nil"
-    }
-
-    private static func checkpointType(_ value: HybridCacheSnapshot.CheckpointType) -> String {
-        switch value {
-        case .system:
-            return "system"
-        case .lastMessageBoundary:
-            return "lastMessageBoundary"
-        case .leaf:
-            return "leaf"
-        case .branchPoint:
-            return "branchPoint"
-        }
+        value?.wireString ?? "nil"
     }
 
     private static func checkpointList(
         _ value: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
     ) -> String {
         guard !value.isEmpty else { return "[]" }
-        let parts = value.map { "\($0.offset):\(checkpointType($0.type))" }
+        let parts = value.map { "\($0.offset):\($0.type.wireString)" }
         return "[\(parts.joined(separator: ","))]"
     }
 
