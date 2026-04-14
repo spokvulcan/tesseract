@@ -37,6 +37,21 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let fullTokens: [Int]
     /// Snapshots captured during prefill at checkpoint offsets (e.g. stable-prefix boundary).
     let capturedSnapshots: [HybridCacheSnapshot]
+    /// Pre-extracted `SnapshotPayload` values for each entry in
+    /// ``capturedSnapshots``, produced inside the
+    /// ``ModelContainer/perform(_:)`` block that captured the snapshots
+    /// so that `MLXArray.asData()` runs on the Metal-affine inference
+    /// thread. Positionally aligned with ``capturedSnapshots``. Empty
+    /// when ``ssdEnabled`` is false; callers must tolerate the
+    /// zero-length case without crashing.
+    let capturedPayloads: [SnapshotPayload]
+    /// SSD persistence tier gate, sampled once on `LLMActor`'s own
+    /// isolation at `makeHTTPPrefixCacheGeneration` entry. Downstream
+    /// post-generation sites (unstripped leaf + stripped leaf) read
+    /// this through the captured `mlxStart` instead of re-sampling
+    /// `self.ssdConfig`, which they cannot do without crossing the
+    /// Metal-affine scope boundary.
+    let ssdEnabled: Bool
     /// Partition key used for cache routing.
     let partitionKey: CachePartitionKey
     /// Offset where the final history message ends, right before the
@@ -383,6 +398,7 @@ actor LLMActor {
                         prefixCache.storeSnapshots(
                             promptTokens: mlxStart.fullTokens,
                             capturedSnapshots: mlxStart.capturedSnapshots,
+                            snapshotPayloads: mlxStart.capturedPayloads,
                             partitionKey: mlxStart.partitionKey,
                             requestID: requestID
                         )
@@ -500,14 +516,33 @@ actor LLMActor {
                         break leafBlock
                     }
 
-                    // 5. Capture leaf snapshot from the final cache. The guard
-                    //    above ensures the cache's offset matches `storedTokens.count`
-                    //    exactly — no per-layer trimming is needed.
-                    guard let leafSnapshot = HybridCacheSnapshot.capture(
-                        cache: finalCache,
-                        offset: storedTokens.count,
-                        type: .leaf
-                    ) else {
+                    // 5. Capture leaf snapshot AND extract its payload
+                    //    inside a Metal-affine `container.perform` so
+                    //    the per-array `asData()` calls run on the
+                    //    inference thread. `finalCache` is non-`Sendable`
+                    //    `[any KVCache]` — routed through the vendor's
+                    //    `nonSendable` perform overload. The offset
+                    //    guard above ensures no per-layer trimming is
+                    //    needed before capture.
+                    let ssdEnabled = mlxStart.ssdEnabled
+                    let (maybeLeaf, leafPayload): (HybridCacheSnapshot?, SnapshotPayload?) =
+                        try await container.perform(
+                            nonSendable: finalCache
+                        ) { _, cache in
+                            guard let snap = HybridCacheSnapshot.capture(
+                                cache: cache,
+                                offset: storedTokens.count,
+                                type: .leaf
+                            ) else {
+                                return (nil, nil)
+                            }
+                            let payload = Self.extractSnapshotPayloads(
+                                [snap],
+                                ssdEnabled: ssdEnabled
+                            ).first
+                            return (snap, payload)
+                        }
+                    guard let leafSnapshot = maybeLeaf else {
                         diagnosticsContext.logSkip(
                             stage: "leafCapture",
                             reason: "unsupported-cache-type",
@@ -533,6 +568,7 @@ actor LLMActor {
                             let d = prefixCache.storeLeaf(
                                 storedTokens: storedTokens,
                                 leafSnapshot: leafSnapshot,
+                                leafPayload: leafPayload,
                                 partitionKey: mlxStart.partitionKey,
                                 requestID: requestID
                             )
@@ -595,7 +631,8 @@ actor LLMActor {
                         prefixCache: prefixCache,
                         diagnosticsContext: diagnosticsContext,
                         promptStartsThinking: startsInsideThinkBlock,
-                        thinkingContent: thinkingContent
+                        thinkingContent: thinkingContent,
+                        ssdEnabled: mlxStart.ssdEnabled
                     )
                 }
 
@@ -744,6 +781,102 @@ actor LLMActor {
             return tokens.asArray(Int.self)
         } else {
             return tokens[0].asArray(Int.self)
+        }
+    }
+
+    /// Pre-extract `HybridCacheSnapshot` instances into pure `Sendable`
+    /// ``SnapshotPayload`` value types, calling `MLXArray.asData` on
+    /// every per-layer state array. Result is positionally aligned
+    /// with the input; empty when `ssdEnabled` is false.
+    ///
+    /// **Metal-affinity contract.** Must be called from inside
+    /// ``ModelContainer/perform(_:)`` on `LLMActor` — calling it
+    /// outside a live Metal-affine scope risks re-issuing command-queue
+    /// work on a non-inference thread. The method is `nonisolated
+    /// static` so callers can invoke it synchronously from inside a
+    /// `container.perform` closure without an `await`; the Metal
+    /// affinity is enforced by convention, not the type system. See
+    /// `docs/marconi-hybrid-prefix-cache-implementation-plan.md`
+    /// "Write path" for the three call sites and their per-site
+    /// scoping requirements.
+    nonisolated static func extractSnapshotPayloads(
+        _ snapshots: [HybridCacheSnapshot],
+        ssdEnabled: Bool
+    ) -> [SnapshotPayload] {
+        guard ssdEnabled, !snapshots.isEmpty else { return [] }
+
+        var result: [SnapshotPayload] = []
+        result.reserveCapacity(snapshots.count)
+
+        for snapshot in snapshots {
+            var layers: [SnapshotPayload.LayerPayload] = []
+            layers.reserveCapacity(snapshot.layers.count)
+
+            for layer in snapshot.layers {
+                var arrays: [SnapshotPayload.ArrayPayload] = []
+                arrays.reserveCapacity(layer.state.count)
+                for array in layer.state {
+                    let extracted = array.asData(access: .copy)
+                    arrays.append(SnapshotPayload.ArrayPayload(
+                        data: extracted.data,
+                        dtype: dtypeWireString(extracted.dType),
+                        shape: extracted.shape
+                    ))
+                }
+                layers.append(SnapshotPayload.LayerPayload(
+                    className: layer.className,
+                    state: arrays,
+                    metaState: layer.metaState,
+                    offset: layer.offset
+                ))
+            }
+
+            result.append(SnapshotPayload(
+                tokenOffset: snapshot.tokenOffset,
+                checkpointType: snapshot.checkpointType,
+                layers: layers
+            ))
+        }
+
+        return result
+    }
+
+    /// Stable wire-format name for an MLX `DType`. Load-bearing: the
+    /// result is written into the SSD snapshot header at
+    /// `SSDSnapshotStore.encodePlaceholderContainer(payload:descriptor:)`,
+    /// so the mapping is part of the on-disk contract. A vendor-side
+    /// rename of any `DType` case label would silently corrupt files
+    /// without this explicit table.
+    ///
+    /// `@unknown default` traps via `fatalError` rather than inventing
+    /// a placeholder string, because reaching it means the vendor
+    /// shipped a new case that this table hasn't audited — inventing
+    /// a wire name would persist an unreadable header under a claim of
+    /// success. The remediation is always "add the case", not "paper
+    /// over with a sentinel." Mirrors `DType.init(_ cmlxDtype:)` at
+    /// `Vendor/.../mlx-swift/Source/MLX/DType.swift:61`, which uses
+    /// the same loud-failure pattern for the C → Swift direction.
+    nonisolated static func dtypeWireString(_ dtype: DType) -> String {
+        switch dtype {
+        case .bool: return "bool"
+        case .uint8: return "uint8"
+        case .uint16: return "uint16"
+        case .uint32: return "uint32"
+        case .uint64: return "uint64"
+        case .int8: return "int8"
+        case .int16: return "int16"
+        case .int32: return "int32"
+        case .int64: return "int64"
+        case .float16: return "float16"
+        case .float32: return "float32"
+        case .bfloat16: return "bfloat16"
+        case .complex64: return "complex64"
+        case .float64: return "float64"
+        @unknown default:
+            fatalError(
+                "dtypeWireString missing case for MLX DType \(dtype) — "
+                + "extend the switch to preserve the SSD wire-format contract."
+            )
         }
     }
 
@@ -925,9 +1058,12 @@ actor LLMActor {
         // canonicalization is kept as defense-in-depth and costs almost nothing.
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
 
-        // Capture actor state for the non-MainActor closure below.
+        // Capture actor state for the non-MainActor closure below —
+        // the closure runs on `ModelContainer`'s isolation and cannot
+        // sync-read `LLMActor` properties.
         let promptStartsThinking = self.promptStartsThinking
         let modelFingerprint = self.modelFingerprint
+        let ssdEnabled = self.ssdConfig?.enabled == true
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
             modelID: modelID,
@@ -1083,8 +1219,15 @@ actor LLMActor {
                 )
             }
 
-            // 10. Read captured snapshots (populated by prepare() inside TokenIterator.init).
+            // 10. Read captured snapshots (populated by prepare() inside TokenIterator.init),
+            // then extract their payloads inside this `container.perform` so
+            // `MLXArray.asData()` runs on the Metal-affine thread before the
+            // later MainActor store hop.
             let capturedSnapshots = iterator.capturedSnapshots
+            let capturedPayloads = Self.extractSnapshotPayloads(
+                capturedSnapshots,
+                ssdEnabled: ssdEnabled
+            )
             diagnosticsContext.log(PrefixCacheDiagnostics.LookupEvent(
                 reason: lookupResult.reason,
                 promptTokens: fullTokenCount,
@@ -1125,6 +1268,8 @@ actor LLMActor {
                 skippedPrefillTokens: skippedTokens,
                 fullTokens: fullTokens,
                 capturedSnapshots: capturedSnapshots,
+                capturedPayloads: capturedPayloads,
+                ssdEnabled: ssdEnabled,
                 partitionKey: partitionKey,
                 lastMessageBoundaryOffset: lastMessageBoundaryOffset,
                 prefillStepSize: parameters.prefillStepSize
@@ -1302,7 +1447,8 @@ actor LLMActor {
         prefixCache: PrefixCacheManager,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         promptStartsThinking: Bool,
-        thinkingContent: String
+        thinkingContent: String,
+        ssdEnabled: Bool
     ) async {
         // Guard 1: non-thinking model → nothing to strip.
         guard promptStartsThinking else {
@@ -1425,6 +1571,14 @@ actor LLMActor {
                     return
                 }
 
+                // Extract the stripped leaf payload inside the enclosing
+                // `container.perform` so `asData()` runs on the Metal-affine
+                // thread that just prefilled the residual.
+                let strippedLeafPayload = Self.extractSnapshotPayloads(
+                    [strippedLeaf],
+                    ssdEnabled: ssdEnabled
+                ).first
+
                 diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
                     offset: strippedLeaf.tokenOffset,
                     checkpointType: strippedLeaf.checkpointType,
@@ -1448,6 +1602,7 @@ actor LLMActor {
                         let d = prefixCache.storeLeaf(
                             storedTokens: storedTokensStripped,
                             leafSnapshot: strippedLeaf,
+                            leafPayload: strippedLeafPayload,
                             partitionKey: partitionKey,
                             requestID: requestID
                         )

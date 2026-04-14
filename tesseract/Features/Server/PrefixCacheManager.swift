@@ -68,7 +68,9 @@ final class PrefixCacheManager {
         case request(UUID)
     }
 
-    private var trees: [CachePartitionKey: TokenRadixTree] = [:]
+    /// Per-partition tree collection. Tier-pluggable so an SSD-backed
+    /// implementation can layer on without touching the manager.
+    private let store: SnapshotStore
     /// Set by `evictToFitBudget` when the first-ever drain happens
     /// inside an in-flight request. Production passes a per-request ID
     /// so only the matching request-end `recordRequest` call can start
@@ -82,6 +84,7 @@ final class PrefixCacheManager {
     let alphaTuner: AlphaTuner?
 
     init(memoryBudgetBytes: Int, alphaTuner: AlphaTuner? = nil) {
+        self.store = InMemorySnapshotTier()
         self.memoryBudgetBytes = memoryBudgetBytes
         self.alphaTuner = alphaTuner
     }
@@ -164,7 +167,7 @@ final class PrefixCacheManager {
     }
 
     func lookup(tokens: [Int], partitionKey: CachePartitionKey) -> LookupResult {
-        guard let tree = trees[partitionKey] else {
+        guard let tree = store.tree(for: partitionKey) else {
             return LookupResult(
                 snapshot: nil, partitionKey: nil,
                 snapshotTokenOffset: 0, sharedPrefixLength: 0,
@@ -290,7 +293,7 @@ final class PrefixCacheManager {
         partitionKey: CachePartitionKey
     ) -> [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] {
         var plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] = []
-        let tree = trees[partitionKey]
+        let tree = store.tree(for: partitionKey)
 
         /// Returns true if a snapshot of the requested type already exists at
         /// exactly `offset`. A snapshot of a different type (e.g. a leaf stored
@@ -334,10 +337,19 @@ final class PrefixCacheManager {
     // MARK: - Store
 
     /// Store mid-prefill snapshots captured during prepareWithCheckpoints().
+    ///
+    /// `snapshotPayloads` carries the pre-extracted CPU-owned bytes for
+    /// each entry in `capturedSnapshots`, produced by
+    /// `LLMActor.extractSnapshotPayloads(_:ssdEnabled:)` inside the
+    /// same `container.perform` scope that captured the snapshots.
+    /// Currently accepted and held for the tiered-store wiring that
+    /// lands in a downstream task; passing an empty array is the
+    /// documented "SSD disabled" signal.
     @discardableResult
     func storeSnapshots(
         promptTokens: [Int],
         capturedSnapshots: [HybridCacheSnapshot],
+        snapshotPayloads: [SnapshotPayload] = [],
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
     ) -> StoreDiagnostics {
@@ -345,7 +357,7 @@ final class PrefixCacheManager {
             return StoreDiagnostics(evictions: [], stats: stats)
         }
 
-        let tree = getOrCreateTree(for: partitionKey)
+        let tree = store.getOrCreateTree(for: partitionKey)
         tree.insertPath(tokens: promptTokens)
 
         for snapshot in capturedSnapshots {
@@ -361,10 +373,17 @@ final class PrefixCacheManager {
 
     /// Store the leaf snapshot under post-response tokens.
     /// `storedTokens` = re-tokenized (prompt + generated response).
+    ///
+    /// `leafPayload` is the pre-extracted CPU-owned bytes matching
+    /// `leafSnapshot`, produced by
+    /// `LLMActor.extractSnapshotPayloads(_:ssdEnabled:)` inside a
+    /// `container.perform` scope. Currently accepted and held for the
+    /// tiered-store wiring that lands in a downstream task.
     @discardableResult
     func storeLeaf(
         storedTokens: [Int],
         leafSnapshot: HybridCacheSnapshot,
+        leafPayload: SnapshotPayload? = nil,
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
     ) -> StoreDiagnostics {
@@ -372,7 +391,7 @@ final class PrefixCacheManager {
             return StoreDiagnostics(evictions: [], stats: stats)
         }
 
-        let tree = getOrCreateTree(for: partitionKey)
+        let tree = store.getOrCreateTree(for: partitionKey)
         let node = tree.insertPath(tokens: storedTokens)
         tree.storeSnapshot(leafSnapshot, on: node)
 
@@ -393,7 +412,7 @@ final class PrefixCacheManager {
         partitionKey: CachePartitionKey,
         lastAccessTime: ContinuousClock.Instant
     ) {
-        let tree = getOrCreateTree(for: partitionKey)
+        let tree = store.getOrCreateTree(for: partitionKey)
         let node = tree.insertPath(tokens: path)
         tree.storeSnapshot(snapshot, on: node)
         node.lastAccessTime = lastAccessTime
@@ -453,7 +472,7 @@ final class PrefixCacheManager {
     /// bootstrap-window start.
     func collectSnapshotInventory() -> [AlphaTuner.InventoryEntry] {
         var result: [AlphaTuner.InventoryEntry] = []
-        for (key, tree) in trees {
+        for (key, tree) in store.orderedPartitions() {
             for node in tree.allSnapshotNodes() {
                 guard let snap = node.snapshot else { continue }
                 result.append(AlphaTuner.InventoryEntry(
@@ -491,8 +510,8 @@ final class PrefixCacheManager {
         // iterations in one drain share the same recency anchor and
         // tie-break ordering.
         let now: ContinuousClock.Instant = .now
-        let orderedTrees = trees.sorted { $0.key < $1.key }.map(\.value)
-        let preferredTree = preferredPartitionKey.flatMap { trees[$0] }
+        let orderedTrees = store.orderedPartitions().map(\.tree)
+        let preferredTree = preferredPartitionKey.flatMap { store.tree(for: $0) }
         var events: [EvictionEvent] = []
         while totalSnapshotBytes > memoryBudgetBytes {
             guard let candidate = findEvictionCandidate(
@@ -544,14 +563,14 @@ final class PrefixCacheManager {
         var byType: [HybridCacheSnapshot.CheckpointType: Int] = [
             .system: 0, .leaf: 0, .branchPoint: 0,
         ]
-        for tree in trees.values {
+        for (_, tree) in store.orderedPartitions() {
             nodes += tree.nodeCount
             for (type, count) in tree.snapshotCountByType {
                 byType[type, default: 0] += count
             }
         }
         return CacheStats(
-            partitionCount: trees.count,
+            partitionCount: store.partitionCount,
             totalNodeCount: nodes,
             totalSnapshotBytes: totalSnapshotBytes,
             snapshotsByType: byType
@@ -559,17 +578,10 @@ final class PrefixCacheManager {
     }
 
     var totalSnapshotBytes: Int {
-        trees.values.reduce(0) { $0 + $1.totalSnapshotBytes }
+        store.totalSnapshotBytes
     }
 
     // MARK: - Private
-
-    private func getOrCreateTree(for key: CachePartitionKey) -> TokenRadixTree {
-        if let tree = trees[key] { return tree }
-        let tree = TokenRadixTree()
-        trees[key] = tree
-        return tree
-    }
 
     /// Pick one snapshot to evict from the supplied (already-sorted) trees.
     ///
