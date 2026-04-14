@@ -359,42 +359,6 @@ nonisolated struct SnapshotPayload: Sendable {
     }
 }
 
-// MARK: - Checkpoint-type wire format
-
-extension HybridCacheSnapshot.CheckpointType {
-    /// Stable string representation used in both
-    /// `PersistedSnapshotDescriptor.checkpointType` and the
-    /// safetensors-header `checkpoint_type` field. Case names match
-    /// the enum verbatim so `.wireString` round-trips through
-    /// `init?(wireString:)` without a lookup table.
-    ///
-    /// Kept in this file (rather than extending the vendor type from
-    /// `PrefixCacheDiagnostics`) because the SSD persistence tier is
-    /// the canonical wire-format producer and consumer — other
-    /// subsystems are read-only and should reuse this helper.
-    nonisolated var wireString: String {
-        switch self {
-        case .system: return "system"
-        case .lastMessageBoundary: return "lastMessageBoundary"
-        case .leaf: return "leaf"
-        case .branchPoint: return "branchPoint"
-        }
-    }
-
-    /// Inverse of `wireString`. Returns `nil` for any unrecognized
-    /// input so the warm-start path can treat it as "drop this
-    /// descriptor" without crashing on unknown data.
-    nonisolated init?(wireString: String) {
-        switch wireString {
-        case "system": self = .system
-        case "lastMessageBoundary": self = .lastMessageBoundary
-        case "leaf": self = .leaf
-        case "branchPoint": self = .branchPoint
-        default: return nil
-        }
-    }
-}
-
 // MARK: - Partition digest (wire contract for on-disk directory layout)
 
 extension CachePartitionKey {
