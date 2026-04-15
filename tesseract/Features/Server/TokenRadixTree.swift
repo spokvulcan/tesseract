@@ -7,6 +7,13 @@ final class RadixTreeNode {
     var edgeTokens: [Int]
     var children: [Int: RadixTreeNode]
     var snapshot: HybridCacheSnapshot?
+    /// SSD persistence tier back-reference. Non-nil while an SSD
+    /// write is pending (`committed == false`) or has landed
+    /// (`committed == true`); `nil` for RAM-only nodes and after a
+    /// writer drop callback fires. Drives the five-state lifecycle
+    /// in `TieredSnapshotStore` — see the plan's
+    /// "Storage ref lifecycle" section.
+    var storageRef: SnapshotStorageRef?
     /// Cumulative token count from root to the end of this node's edge.
     var tokenOffset: Int
     var lastAccessTime: ContinuousClock.Instant
@@ -20,6 +27,7 @@ final class RadixTreeNode {
         self.edgeTokens = edgeTokens
         self.children = [:]
         self.snapshot = nil
+        self.storageRef = nil
         self.tokenOffset = tokenOffset
         self.lastAccessTime = .now
         self.parent = parent
