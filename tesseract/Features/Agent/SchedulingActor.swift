@@ -380,4 +380,21 @@ actor SchedulingActor {
 
     var queueDepth: Int { executionQueue.count }
     func consecutiveFailures(for taskId: UUID) -> Int { consecutiveFailureCount[taskId] ?? 0 }
+
+    /// Test helper that waits for queued scheduling work to finish without
+    /// changing production polling semantics.
+    func awaitIdleForTesting(timeout: Duration = .seconds(1)) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+
+        while true {
+            if executionQueue.isEmpty && !isDraining && currentlyRunningTask == nil {
+                return true
+            }
+            if clock.now >= deadline {
+                return false
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
 }

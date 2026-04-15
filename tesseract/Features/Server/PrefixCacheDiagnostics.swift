@@ -13,7 +13,9 @@ nonisolated enum PrefixCacheDiagnostics {
         }
 
         func log(_ payload: some Payload) {
-            Log.agent.info(render(payload))
+            let line = render(payload)
+            Log.agent.info(line)
+            PrefixCacheDiagnostics.forwardToSink(line)
         }
 
         func logSkip(
@@ -33,6 +35,7 @@ nonisolated enum PrefixCacheDiagnostics {
             case .error:
                 Log.agent.error(line)
             }
+            PrefixCacheDiagnostics.forwardToSink(line)
         }
     }
 
@@ -262,6 +265,250 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("mlxCacheLimitBytes", "\(mlxCacheLimitBytes)"),
                 ("partitionCount", "\(partitionCount)"),
             ]
+        }
+    }
+
+    // MARK: - SSD-tier events (Task 4.1.12)
+
+    /// Terminal admission outcome for a single SSD writer item. Each
+    /// `tryEnqueue` call eventually fires exactly one `ssdAdmit`
+    /// event — synchronously in the front-door reject paths, or
+    /// asynchronously from the writer loop after `processPendingItem`
+    /// reaches a commit/drop branch.
+    enum SSDAdmitOutcome: String, Sendable {
+        case accepted
+        case droppedByteBudget
+        case droppedTooLargeForBudget
+        case droppedExceedsBudget
+        case droppedSystemProtectionWins
+        case droppedDiskFull
+        case droppedWriterIOError
+        case droppedInvalidCheckpointType
+        case droppedUnregisteredPartition
+    }
+
+    /// Reason an SSD-resident state-5 hydration failed. Mirrors the
+    /// granular branches inside `SSDSnapshotStore.loadSync` so an
+    /// operator triaging a miss can tell file-missing apart from
+    /// fingerprint mismatch without parsing free-form messages.
+    enum SSDMissReason: String, Sendable {
+        case partitionNotInManifest
+        case fingerprintMismatch
+        case readFailed
+        case decodeFailed
+    }
+
+    struct SSDAdmitEvent: Payload {
+        let id: String
+        let bytes: Int
+        let outcome: SSDAdmitOutcome
+
+        let eventName = "ssdAdmit"
+
+        var fields: [(String, String)] {
+            [
+                ("id", id),
+                ("bytes", "\(bytes)"),
+                ("outcome", outcome.rawValue),
+            ]
+        }
+    }
+
+    struct SSDEvictAtAdmissionEvent: Payload {
+        let victimID: String
+        let incomingID: String
+
+        let eventName = "ssdEvictAtAdmission"
+
+        var fields: [(String, String)] {
+            [
+                ("victimID", victimID),
+                ("incomingID", incomingID),
+            ]
+        }
+    }
+
+    struct SSDHitEvent: Payload {
+        let id: String
+        let hydrateMs: TimeInterval
+
+        let eventName = "ssdHit"
+
+        var fields: [(String, String)] {
+            [
+                ("id", id),
+                ("hydrateMs", PrefixCacheDiagnostics.milliseconds(hydrateMs)),
+            ]
+        }
+    }
+
+    struct SSDMissEvent: Payload {
+        let id: String
+        let reason: SSDMissReason
+
+        let eventName = "ssdMiss"
+
+        var fields: [(String, String)] {
+            [
+                ("id", id),
+                ("reason", reason.rawValue),
+            ]
+        }
+    }
+
+    struct SSDBodyDropEvent: Payload {
+        let id: String
+
+        let eventName = "ssdBodyDrop"
+
+        var fields: [(String, String)] {
+            [("id", id)]
+        }
+    }
+
+    struct SSDRecordHitEvent: Payload {
+        let id: String
+
+        let eventName = "ssdRecordHit"
+
+        var fields: [(String, String)] {
+            [("id", id)]
+        }
+    }
+
+    struct StorageRefCommitEvent: Payload {
+        let id: String
+
+        let eventName = "storageRefCommit"
+
+        var fields: [(String, String)] {
+            [("id", id)]
+        }
+    }
+
+    struct StorageRefDropCallbackEvent: Payload {
+        let id: String
+        let reason: SSDDropReason
+
+        let eventName = "storageRefDropCallback"
+
+        var fields: [(String, String)] {
+            [
+                ("id", id),
+                ("reason", PrefixCacheDiagnostics.ssdDropReasonString(reason)),
+            ]
+        }
+    }
+
+    struct WarmStartCompleteEvent: Payload {
+        let partitionCount: Int
+        let snapshotCount: Int
+        let invalidatedPartitionCount: Int
+        let durationSeconds: TimeInterval
+
+        let eventName = "warmStartComplete"
+
+        var fields: [(String, String)] {
+            [
+                ("partitionCount", "\(partitionCount)"),
+                ("snapshotCount", "\(snapshotCount)"),
+                ("invalidatedPartitionCount", "\(invalidatedPartitionCount)"),
+                ("durationMs", PrefixCacheDiagnostics.milliseconds(durationSeconds)),
+            ]
+        }
+    }
+
+    struct FingerprintMismatchEvent: Payload {
+        let partition: String
+
+        let eventName = "fingerprintMismatch"
+
+        var fields: [(String, String)] {
+            [("partition", partition)]
+        }
+    }
+
+    /// Render a payload without per-request context fields. Used by
+    /// SSD-tier events that originate outside any request scope —
+    /// the SSD writer task, warm-start, the writer's commit/drop
+    /// callbacks. Format mirrors the contextful renderer minus the
+    /// `requestID` / `modelID` / `kvBits` / `kvGroupSize` prefix.
+    nonisolated static func renderSystem(_ payload: some Payload) -> String {
+        let fields: [(String, String)] = [("event", payload.eventName)] + payload.fields
+        return fields
+            .map { key, value in "\(key)=\(escape(value))" }
+            .joined(separator: " ")
+    }
+
+    /// Emit a system-scope event to `Log.agent.info` and forward the
+    /// rendered line to the test sink (if installed). Safe to call
+    /// from any thread / actor; both `Log.agent` and the sink hop
+    /// internally as needed.
+    nonisolated static func logSystem(_ payload: some Payload) {
+        let line = renderSystem(payload)
+        Log.agent.info(line)
+        forwardToSink(line)
+    }
+
+    /// Test-only event sink registry. Every emitted diagnostic line
+    /// (request-scoped via `Context.log` / `logSkip`, and system-scope
+    /// via `logSystem`) is forwarded to every installed sink. Tests
+    /// install a sink to assert event ordering deterministically
+    /// without scraping the unified-log pipeline. Production never
+    /// installs a sink — `forwardToSink` becomes a single uncontended
+    /// lock acquisition per event.
+    ///
+    /// The registry holds an array of `(UUID, handler)` pairs so
+    /// multiple parallel tests can each register their own sink
+    /// without overwriting one another's slot. Each test filters the
+    /// captured lines by its own snapshot IDs to ignore cross-test
+    /// leakage; serialization is not required.
+    nonisolated final class TestSinkHandle: @unchecked Sendable {
+        let id: UUID
+        init(id: UUID) { self.id = id }
+    }
+
+    nonisolated(unsafe) private static var _sinks: [(UUID, @Sendable (String) -> Void)] = []
+    private static let _sinkLock = NSLock()
+
+    @discardableResult
+    nonisolated static func addTestSink(
+        _ handler: @escaping @Sendable (String) -> Void
+    ) -> TestSinkHandle {
+        _sinkLock.lock()
+        defer { _sinkLock.unlock() }
+        let id = UUID()
+        _sinks.append((id, handler))
+        return TestSinkHandle(id: id)
+    }
+
+    nonisolated static func removeTestSink(_ handle: TestSinkHandle) {
+        _sinkLock.lock()
+        defer { _sinkLock.unlock() }
+        _sinks.removeAll { $0.0 == handle.id }
+    }
+
+    nonisolated static func forwardToSink(_ line: String) {
+        _sinkLock.lock()
+        let snapshot = _sinks
+        _sinkLock.unlock()
+        for (_, handler) in snapshot {
+            handler(line)
+        }
+    }
+
+    /// Wire-format string for an `SSDDropReason`. Pinned in tests so
+    /// future enum additions are forced through this switch and the
+    /// rendered diagnostics line stays stable.
+    nonisolated static func ssdDropReasonString(_ reason: SSDDropReason) -> String {
+        switch reason {
+        case .backpressureOldest: return "backpressureOldest"
+        case .evictedByLRU: return "evictedByLRU"
+        case .systemProtectionWins: return "systemProtectionWins"
+        case .exceedsBudget: return "exceedsBudget"
+        case .diskFull: return "diskFull"
+        case .writerIOError: return "writerIOError"
+        case .hydrationFailure: return "hydrationFailure"
         }
     }
 

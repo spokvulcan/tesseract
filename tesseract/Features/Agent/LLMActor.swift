@@ -324,6 +324,17 @@ actor LLMActor {
                 func logEvictions(_ evictions: [PrefixCacheManager.EvictionEvent]) {
                     for event in evictions {
                         diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
+                        // Body-drop with live storage ref → state 2→3
+                        // or state 4→5 transition. Surface a separate
+                        // `ssdBodyDrop` event so an operator scanning
+                        // the eviction log can correlate the RAM
+                        // freeing with the SSD-tier survival of the
+                        // same node.
+                        if let id = event.bodyDroppedStorageRefID {
+                            diagnosticsContext.log(
+                                PrefixCacheDiagnostics.SSDBodyDropEvent(id: id)
+                            )
+                        }
                     }
                 }
 
@@ -730,6 +741,17 @@ actor LLMActor {
     /// Frees unreferenced MLX buffers between tool rounds.
     func clearMemoryCache() {
         Memory.clearCache()
+    }
+
+    /// Block until any pending SSD-tier writes have drained and the
+    /// manifest is durably persisted. Callers must invoke this
+    /// before `unloadModel()` when they need the on-disk state to
+    /// survive the teardown (benchmark restart scenarios, manual
+    /// "flush before shutdown" flows). No-op when SSD is disabled
+    /// or the prefix cache was never instantiated.
+    func flushPrefixCache() async {
+        guard let cache = _prefixCache else { return }
+        await cache.flushSSDWrites()
     }
 
     /// Returns current MLX memory usage in MB.
@@ -1217,10 +1239,17 @@ actor LLMActor {
             if case .ssdHit(let ctx) = initialLookupResult.reason,
                let fingerprint = modelFingerprint
             {
-                if let hydrated = ctx.ssdStore.loadSync(
-                    storageRef: ctx.storageRef,
-                    expectedFingerprint: fingerprint
-                ) {
+                let (hydrated, hydrateSeconds) = measure {
+                    ctx.ssdStore.loadSync(
+                        storageRef: ctx.storageRef,
+                        expectedFingerprint: fingerprint
+                    )
+                }
+                if let hydrated {
+                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
+                        id: ctx.storageRef.snapshotID,
+                        hydrateMs: hydrateSeconds
+                    ))
                     await MainActor.run {
                         ctx.ssdStore.recordHit(id: ctx.storageRef.snapshotID)
                         prefixCache.promote(
@@ -1229,6 +1258,9 @@ actor LLMActor {
                             partitionKey: partitionKey
                         )
                     }
+                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(
+                        id: ctx.storageRef.snapshotID
+                    ))
                     lookupResult = PrefixCacheManager.LookupResult(
                         snapshot: hydrated,
                         partitionKey: partitionKey,
@@ -1242,8 +1274,10 @@ actor LLMActor {
                     )
                 } else {
                     // loadSync already dropped the descriptor + file +
-                    // fired onDrop. Clear the node's ref on MainActor
-                    // so subsequent lookups see the miss directly.
+                    // fired onDrop and emitted the granular ssdMiss
+                    // event from inside its failure branches. Clear
+                    // the node's ref on MainActor so subsequent
+                    // lookups see the miss directly.
                     await MainActor.run {
                         prefixCache.clearStorageRef(
                             node: ctx.node,
@@ -1260,6 +1294,13 @@ actor LLMActor {
                 }
             } else {
                 lookupResult = initialLookupResult
+                // State-4 RAM hit: lookup() bumped the SSD descriptor's
+                // lastAccessAt under the store's lock; surface the bump
+                // as an `ssdRecordHit` event so the LRU age progression
+                // is visible alongside the workload's hit log.
+                if let id = initialLookupResult.recordedHitSnapshotID {
+                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: id))
+                }
             }
             let lookupMs = Date.timeIntervalSinceReferenceDate - lookupStarted
             var checkpointPlan = initialCheckpointPlan
@@ -1714,6 +1755,11 @@ actor LLMActor {
                     }
                 for event in diagnostics.evictions {
                     diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
+                    if let id = event.bodyDroppedStorageRefID {
+                        diagnosticsContext.log(
+                            PrefixCacheDiagnostics.SSDBodyDropEvent(id: id)
+                        )
+                    }
                 }
                 let admissionEvicted = diagnostics.evictions.contains { event in
                     event.offset == strippedLeaf.tokenOffset

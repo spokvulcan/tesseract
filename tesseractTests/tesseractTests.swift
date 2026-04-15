@@ -2213,6 +2213,7 @@ struct SchedulingActorTests {
         store.save(task)
 
         await scheduler.checkAndRunDueTasks()
+        #expect(await scheduler.awaitIdleForTesting())
 
         let runs = store.loadRuns(for: task.id)
         #expect(runs.count == 1)
@@ -2228,6 +2229,7 @@ struct SchedulingActorTests {
         store.save(task)
 
         await scheduler.checkAndRunDueTasks()
+        #expect(await scheduler.awaitIdleForTesting())
 
         let runs = store.loadRuns(for: task.id)
         #expect(runs.isEmpty)
@@ -2243,6 +2245,7 @@ struct SchedulingActorTests {
         store.save(task)
 
         await scheduler.checkAndRunDueTasks()
+        #expect(await scheduler.awaitIdleForTesting())
 
         let runs = store.loadRuns(for: task.id)
         #expect(runs.isEmpty)
@@ -2260,6 +2263,7 @@ struct SchedulingActorTests {
         store.save(task)
 
         await scheduler.checkAndRunDueTasks()
+        #expect(await scheduler.awaitIdleForTesting())
 
         let runs = store.loadRuns(for: task.id)
         #expect(runs.isEmpty)
@@ -2275,6 +2279,7 @@ struct SchedulingActorTests {
 
         await scheduler.pause()
         await scheduler.checkAndRunDueTasks()
+        #expect(await scheduler.awaitIdleForTesting())
 
         let runs = store.loadRuns(for: task.id)
         #expect(runs.isEmpty)
@@ -2291,6 +2296,7 @@ struct SchedulingActorTests {
         store.save(task)
 
         await scheduler.detectMissedRuns(now: now)
+        #expect(await scheduler.awaitIdleForTesting())
 
         let runs = store.loadRuns(for: task.id)
         #expect(runs.count == 1)
@@ -2311,6 +2317,7 @@ struct SchedulingActorTests {
         store.save(task)
 
         await scheduler.detectMissedRuns(now: now)
+        #expect(await scheduler.awaitIdleForTesting())
 
         let runs = store.loadRuns(for: task.id)
         #expect(runs.count == 1)
@@ -2335,6 +2342,7 @@ struct SchedulingActorTests {
 
         // First detectMissedRuns — should catch up
         await scheduler.detectMissedRuns(now: now)
+        #expect(await scheduler.awaitIdleForTesting())
         var runs = store.loadRuns(for: task.id)
         #expect(runs.count == 1)
 
@@ -2346,6 +2354,7 @@ struct SchedulingActorTests {
 
         // Second detectMissedRuns — should NOT catch up again
         await scheduler.detectMissedRuns(now: now)
+        #expect(await scheduler.awaitIdleForTesting())
         runs = store.loadRuns(for: task.id)
         #expect(runs.count == 1) // Still only 1 run
     }
@@ -2366,6 +2375,7 @@ struct SchedulingActorTests {
                 store.save(current)
             }
             await scheduler.checkAndRunDueTasks()
+            #expect(await scheduler.awaitIdleForTesting())
         }
 
         let updated = store.loadTask(id: task.id)
@@ -2392,6 +2402,7 @@ struct SchedulingActorTests {
                 store.save(current)
             }
             await scheduler.checkAndRunDueTasks()
+            #expect(await scheduler.awaitIdleForTesting())
         }
 
         // Task should still be enabled (max consecutive errors was 3, not 5)
@@ -2419,6 +2430,7 @@ struct SchedulingActorTests {
         store.save(task)
 
         await scheduler.checkAndRunDueTasks()
+        #expect(await scheduler.awaitIdleForTesting())
 
         #expect(recorder.ids.isEmpty)
     }
@@ -2440,6 +2452,7 @@ struct SchedulingActorTests {
         store.save(taskB)
 
         await scheduler.checkAndRunDueTasks()
+        #expect(await scheduler.awaitIdleForTesting())
 
         #expect(recorder.ids.count == 2)
         #expect(recorder.ids[0] == taskA.id)

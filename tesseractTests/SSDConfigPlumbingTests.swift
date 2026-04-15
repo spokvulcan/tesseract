@@ -386,7 +386,7 @@ struct SSDConfigPlumbingTests {
         #expect(await engine.llmActor.currentModelFingerprintForTesting != nil)
 
         engine.unloadModel()
-        await engine.awaitPendingUnloadForTesting()
+        await engine.awaitPendingUnload()
 
         #expect(await engine.llmActor.currentSSDConfigForTesting == nil)
         #expect(await engine.llmActor.currentModelFingerprintForTesting == nil)

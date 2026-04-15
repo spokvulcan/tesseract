@@ -75,7 +75,8 @@ struct PrefixCacheDiagnosticsTests {
             snapshotBytesAfter: 1024,
             normalizedRecency: 0.25,
             normalizedFlopEfficiency: 0.75,
-            utility: 1.0
+            utility: 1.0,
+            bodyDroppedStorageRefID: nil
         ))
         let fallback = PrefixCacheDiagnostics.EvictionEvent(.init(
             strategy: .fallback,
@@ -86,7 +87,8 @@ struct PrefixCacheDiagnosticsTests {
             snapshotBytesAfter: 0,
             normalizedRecency: nil,
             normalizedFlopEfficiency: nil,
-            utility: nil
+            utility: nil,
+            bodyDroppedStorageRefID: nil
         ))
 
         let utilityLine = context.render(utility)
@@ -130,5 +132,171 @@ struct PrefixCacheDiagnosticsTests {
 
         #expect(context.render(event) ==
             "event=memory requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 snapshotCount=3 totalSnapshotBytes=8192 budgetBytes=16384 modelWeightBytes=123456 activeMlxBytes=111 peakMlxBytes=222 mlxCacheLimitBytes=333 partitionCount=2")
+    }
+
+    // MARK: - SSD-tier event renderers (Task 4.1.12)
+
+    @Test func ssdAdmitAcceptedRendersInSystemFormat() {
+        let event = PrefixCacheDiagnostics.SSDAdmitEvent(
+            id: "snap-1",
+            bytes: 4_096,
+            outcome: .accepted
+        )
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=ssdAdmit id=snap-1 bytes=4096 outcome=accepted")
+    }
+
+    @Test func ssdAdmitDroppedSystemProtectionWinsRendersOutcome() {
+        let event = PrefixCacheDiagnostics.SSDAdmitEvent(
+            id: "snap-2",
+            bytes: 8_192,
+            outcome: .droppedSystemProtectionWins
+        )
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=ssdAdmit id=snap-2 bytes=8192 outcome=droppedSystemProtectionWins")
+    }
+
+    @Test func ssdEvictAtAdmissionPairsVictimAndIncoming() {
+        let event = PrefixCacheDiagnostics.SSDEvictAtAdmissionEvent(
+            victimID: "old-1",
+            incomingID: "new-1"
+        )
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=ssdEvictAtAdmission victimID=old-1 incomingID=new-1")
+    }
+
+    @Test func ssdHitRendersHydrateMs() {
+        let event = PrefixCacheDiagnostics.SSDHitEvent(
+            id: "snap-3",
+            hydrateMs: 0.045
+        )
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=ssdHit id=snap-3 hydrateMs=45.000")
+    }
+
+    @Test func ssdMissCarriesGranularReason() {
+        let event = PrefixCacheDiagnostics.SSDMissEvent(
+            id: "snap-4",
+            reason: .fingerprintMismatch
+        )
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=ssdMiss id=snap-4 reason=fingerprintMismatch")
+    }
+
+    @Test func ssdBodyDropCarriesIDOnly() {
+        let event = PrefixCacheDiagnostics.SSDBodyDropEvent(id: "snap-5")
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=ssdBodyDrop id=snap-5")
+    }
+
+    @Test func ssdRecordHitCarriesIDOnly() {
+        let event = PrefixCacheDiagnostics.SSDRecordHitEvent(id: "snap-6")
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=ssdRecordHit id=snap-6")
+    }
+
+    @Test func storageRefCommitCarriesIDOnly() {
+        let event = PrefixCacheDiagnostics.StorageRefCommitEvent(id: "snap-7")
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=storageRefCommit id=snap-7")
+    }
+
+    @Test func storageRefDropCallbackCarriesReason() {
+        for reason: SSDDropReason in [
+            .backpressureOldest,
+            .evictedByLRU,
+            .systemProtectionWins,
+            .exceedsBudget,
+            .diskFull,
+            .writerIOError,
+            .hydrationFailure,
+        ] {
+            let event = PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+                id: "snap-8",
+                reason: reason
+            )
+            let line = PrefixCacheDiagnostics.renderSystem(event)
+            #expect(
+                line == "event=storageRefDropCallback id=snap-8 reason=\(PrefixCacheDiagnostics.ssdDropReasonString(reason))"
+            )
+        }
+    }
+
+    @Test func warmStartCompleteRendersStructuredFields() {
+        let event = PrefixCacheDiagnostics.WarmStartCompleteEvent(
+            partitionCount: 3,
+            snapshotCount: 17,
+            invalidatedPartitionCount: 1,
+            durationSeconds: 0.012
+        )
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=warmStartComplete partitionCount=3 snapshotCount=17 invalidatedPartitionCount=1 durationMs=12.000")
+    }
+
+    @Test func fingerprintMismatchCarriesPartitionDigest() {
+        let event = PrefixCacheDiagnostics.FingerprintMismatchEvent(partition: "abcd1234")
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=fingerprintMismatch partition=abcd1234")
+    }
+
+    @Test func testSinkCapturesContextfulAndSystemEvents() {
+        // Install a recording sink, emit one event from each path,
+        // then drain. The sink must see both lines; uninstalling
+        // clears it for subsequent tests. Tests run in parallel and
+        // share the registry, so we filter by a per-test unique ID
+        // (`diag-snap-9` / `diag-snap-10`) to ignore cross-test
+        // leakage from sibling tests.
+        let sink = RecordingSink()
+        let handle = PrefixCacheDiagnostics.addTestSink(sink.handler)
+        defer { PrefixCacheDiagnostics.removeTestSink(handle) }
+
+        context.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: "diag-snap-9"))
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.StorageRefCommitEvent(id: "diag-snap-10")
+        )
+
+        let mine = sink.drain().filter {
+            $0.contains("diag-snap-9") || $0.contains("diag-snap-10")
+        }
+        #expect(mine.count == 2)
+
+        let recordHit = mine.first { $0.contains("event=ssdRecordHit") }
+        #expect(recordHit != nil)
+        #expect(recordHit?.contains("requestID=00000000-0000-0000-0000-000000000001") == true)
+
+        let commit = mine.first { $0.contains("event=storageRefCommit") }
+        #expect(commit == "event=storageRefCommit id=diag-snap-10")
+    }
+
+    private final class RecordingSink: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lines: [String] = []
+
+        var handler: @Sendable (String) -> Void {
+            { [weak self] line in
+                guard let self else { return }
+                self.lock.lock()
+                self.lines.append(line)
+                self.lock.unlock()
+            }
+        }
+
+        func drain() -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            let copy = lines
+            lines.removeAll()
+            return copy
+        }
     }
 }

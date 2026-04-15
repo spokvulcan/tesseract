@@ -122,6 +122,38 @@ final class PrefixCacheManager {
         let normalizedRecency: Double?
         let normalizedFlopEfficiency: Double?
         let utility: Double?
+        /// Non-nil when the victim node was kept in the radix tree
+        /// because it carried a live `storageRef` (Task 4.1.8 body-drop
+        /// guard) — the RAM body was freed but the SSD-backed node
+        /// remains reachable for future lookups. Consumers
+        /// (`LLMActor.makeHTTPPrefixCacheGeneration`) emit a
+        /// `ssdBodyDrop(id:)` diagnostic event for each non-nil
+        /// entry. `nil` for plain RAM-only evictions.
+        let bodyDroppedStorageRefID: String?
+
+        nonisolated init(
+            strategy: Strategy,
+            offset: Int,
+            checkpointType: HybridCacheSnapshot.CheckpointType,
+            freedBytes: Int,
+            budgetBytes: Int,
+            snapshotBytesAfter: Int,
+            normalizedRecency: Double?,
+            normalizedFlopEfficiency: Double?,
+            utility: Double?,
+            bodyDroppedStorageRefID: String? = nil
+        ) {
+            self.strategy = strategy
+            self.offset = offset
+            self.checkpointType = checkpointType
+            self.freedBytes = freedBytes
+            self.budgetBytes = budgetBytes
+            self.snapshotBytesAfter = snapshotBytesAfter
+            self.normalizedRecency = normalizedRecency
+            self.normalizedFlopEfficiency = normalizedFlopEfficiency
+            self.utility = utility
+            self.bodyDroppedStorageRefID = bodyDroppedStorageRefID
+        }
     }
 
     struct StoreDiagnostics: Sendable {
@@ -147,6 +179,30 @@ final class PrefixCacheManager {
         /// best stored snapshot.
         let sharedPrefixLength: Int
         let reason: LookupReason
+        /// Snapshot ID whose `lastAccessAt` was just bumped by the
+        /// SSD LRU bookkeeping (`ssdStore.recordHit(id:)`). Non-nil
+        /// only when the hit landed on a committed storage ref —
+        /// state 4 (RAM body present + SSD ref committed). Consumers
+        /// emit a `ssdRecordHit(id:)` diagnostic event whenever this
+        /// is non-nil so the SSD LRU age progression is visible
+        /// under operator workload traces.
+        let recordedHitSnapshotID: String?
+
+        nonisolated init(
+            snapshot: HybridCacheSnapshot?,
+            partitionKey: CachePartitionKey?,
+            snapshotTokenOffset: Int,
+            sharedPrefixLength: Int,
+            reason: LookupReason,
+            recordedHitSnapshotID: String? = nil
+        ) {
+            self.snapshot = snapshot
+            self.partitionKey = partitionKey
+            self.snapshotTokenOffset = snapshotTokenOffset
+            self.sharedPrefixLength = sharedPrefixLength
+            self.reason = reason
+            self.recordedHitSnapshotID = recordedHitSnapshotID
+        }
 
         /// Restore the cached KV/Mamba state. Each call produces an independent deep copy.
         /// Nonisolated because it operates only on the snapshot's deep-copy data.
@@ -223,8 +279,10 @@ final class PrefixCacheManager {
             // bump the SSD descriptor's `lastAccessAt` so a hot RAM
             // hit does not look stale to the SSD LRU when the body
             // is eventually dropped to state 5.
+            var recordedHitID: String?
             if let ref = node.storageRef, ref.committed {
                 store.ssdStore?.recordHit(id: ref.snapshotID)
+                recordedHitID = ref.snapshotID
             }
             return LookupResult(
                 snapshot: snapshot,
@@ -235,7 +293,8 @@ final class PrefixCacheManager {
                     snapshotOffset: snapshot.tokenOffset,
                     totalTokens: tokens.count,
                     type: snapshot.checkpointType
-                )
+                ),
+                recordedHitSnapshotID: recordedHitID
             )
         }
 
@@ -423,6 +482,9 @@ final class PrefixCacheManager {
         tree.insertPath(tokens: promptTokens)
 
         let payloadsAligned = snapshotPayloads.count == capturedSnapshots.count
+        if payloadsAligned {
+            registerSSDPartitionIfNeeded(for: partitionKey)
+        }
         for (index, snapshot) in capturedSnapshots.enumerated() {
             let offset = snapshot.tokenOffset
             guard offset > 0, offset <= promptTokens.count else { continue }
@@ -481,6 +543,7 @@ final class PrefixCacheManager {
         tree.storeSnapshot(leafSnapshot, on: node)
 
         if let leafPayload {
+            registerSSDPartitionIfNeeded(for: partitionKey)
             let descriptor = makePersistedDescriptor(
                 partitionKey: partitionKey,
                 pathFromRoot: storedTokens,
@@ -600,6 +663,14 @@ final class PrefixCacheManager {
     /// loaded model's fingerprint inside `warmStartLoad`; mismatched
     /// partitions are skipped here and their on-disk directories
     /// are scheduled for async cleanup by the store.
+    /// Block until the SSD writer's pending queue drains and the
+    /// manifest is persisted to disk. Called by `LLMActor` /
+    /// benchmark restart scenarios before an unload so in-flight
+    /// writes survive the teardown. No-op when SSD is disabled.
+    func flushSSDWrites() async {
+        await store.ssdStore?.flushAsync()
+    }
+
     func warmStart(modelFingerprint: String) async throws {
         guard let ssdStore = store.ssdStore else { return }
 
@@ -644,13 +715,23 @@ final class PrefixCacheManager {
         let snapshotCount = outcome.validPartitions.reduce(0) {
             $0 + $1.descriptors.count
         }
-        let durationMs = (Date.timeIntervalSinceReferenceDate - started) * 1000
-        Log.agent.info(
-            "PrefixCacheManager.warmStart "
-            + "partitions=\(outcome.validPartitions.count) "
-            + "snapshots=\(snapshotCount) "
-            + "invalidated=\(outcome.invalidatedPartitionDigests.count) "
-            + "durationMs=\(String(format: "%.1f", durationMs))"
+        let durationSeconds = Date.timeIntervalSinceReferenceDate - started
+
+        // Emit a fingerprint mismatch event per invalidated partition
+        // BEFORE the warm-start summary so a `grep` walk of the log
+        // shows the failures contributing to the summary count.
+        for digest in outcome.invalidatedPartitionDigests {
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.FingerprintMismatchEvent(partition: digest)
+            )
+        }
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.WarmStartCompleteEvent(
+                partitionCount: outcome.validPartitions.count,
+                snapshotCount: snapshotCount,
+                invalidatedPartitionCount: outcome.invalidatedPartitionDigests.count,
+                durationSeconds: durationSeconds
+            )
         )
     }
 
@@ -678,6 +759,32 @@ final class PrefixCacheManager {
             ),
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
+    }
+
+    private func registerSSDPartitionIfNeeded(for partitionKey: CachePartitionKey) {
+        guard store.ssdStore != nil else { return }
+        guard let fingerprint = partitionKey.modelFingerprint else {
+            assertionFailure(
+                "SSD admission requires a model fingerprint on CachePartitionKey"
+            )
+            Log.agent.error(
+                "PrefixCacheManager SSD admission skipped: missing modelFingerprint "
+                + "modelID=\(partitionKey.modelID) kvBits=\(String(describing: partitionKey.kvBits)) "
+                + "kvGroupSize=\(partitionKey.kvGroupSize)"
+            )
+            return
+        }
+
+        let meta = PartitionMeta(
+            modelID: partitionKey.modelID,
+            modelFingerprint: fingerprint,
+            kvBits: partitionKey.kvBits,
+            kvGroupSize: partitionKey.kvGroupSize,
+            sessionAffinity: partitionKey.sessionAffinity,
+            createdAt: Date().timeIntervalSinceReferenceDate,
+            schemaVersion: SnapshotManifestSchema.currentVersion
+        )
+        store.registerPartition(meta, for: partitionKey)
     }
 
     // MARK: - Tuner integration
@@ -794,7 +901,8 @@ final class PrefixCacheManager {
                 snapshotBytesAfter: totalSnapshotBytes,
                 normalizedRecency: candidate.score?.normalizedRecency,
                 normalizedFlopEfficiency: candidate.score?.normalizedFlopEfficiency,
-                utility: candidate.score?.utility
+                utility: candidate.score?.utility,
+                bodyDroppedStorageRefID: candidate.node.storageRef?.snapshotID
             ))
 
             // A live `storageRef` means the SSD tier owns a pending or

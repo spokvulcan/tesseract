@@ -118,8 +118,7 @@ final class PrefixCacheE2ERunner {
         // immediately flip an argmax and diverge the output.
         log("\n── Step 4: Logit equivalence (cached vs cold generation) ──")
         log("  Unloading + reloading model to clear prefix cache…")
-        await engine.unloadModel()
-        try await engine.loadModel(from: modelDir, visionMode: false)
+        try await reloadEngine(engine, modelDir: modelDir)
 
         let requestB2 = try await runRequest(
             engine: engine,
@@ -137,35 +136,16 @@ final class PrefixCacheE2ERunner {
             detail: "cachedTokens=\(requestB2.cachedTokens) expected 0 after reload"
         ))
 
-        let cachedText = requestB1.generatedText
-        let coldText = requestB2.generatedText
-        let commonPrefix = Self.longestCommonPrefix(cachedText, coldText)
-        let matchLength = commonPrefix.count
-        let equivalence: Bool
-        let equivalenceDetail: String
-        if cachedText == coldText {
-            equivalence = true
-            equivalenceDetail = "fully identical (\(cachedText.count) chars)"
-        } else if matchLength >= 20 {
-            // Partial match: the first N tokens agreed, but the model
-            // eventually diverged. For greedy decoding this can happen if the
-            // max-tokens limit is hit at different points, or (rarely) due to
-            // tie-break indeterminacy. 20 chars of agreement is considered a
-            // passing proxy for logit equivalence.
-            equivalence = true
-            equivalenceDetail = "first \(matchLength) chars identical; "
-                + "cached=\"\(Self.escapeForLog(cachedText.prefix(60)))\" "
-                + "cold=\"\(Self.escapeForLog(coldText.prefix(60)))\""
-        } else {
-            equivalence = false
-            equivalenceDetail = "diverged after \(matchLength) chars; "
-                + "cached=\"\(Self.escapeForLog(cachedText.prefix(60)))\" "
-                + "cold=\"\(Self.escapeForLog(coldText.prefix(60)))\""
-        }
+        let equivalence = Self.checkGreedyOutputEquivalence(
+            requestB1.generatedText,
+            requestB2.generatedText,
+            labelA: "cached",
+            labelB: "cold"
+        )
         checks.append(CheckResult(
             name: "greedy_output_equivalence",
-            passed: equivalence,
-            detail: equivalenceDetail
+            passed: equivalence.passed,
+            detail: equivalence.detail
         ))
 
         // Step 5: Normalization round-trip — Request B with trailing
@@ -216,6 +196,16 @@ final class PrefixCacheE2ERunner {
             checks: &checks
         )
 
+        let restartResult = try await runSSDRestartScenario(
+            originalEngine: engine,
+            modelDir: modelDir,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            toolSpecs: toolSpecs,
+            params: params,
+            checks: &checks
+        )
+
         // Final report
         log("\n── Summary ──")
         var allPassed = true
@@ -231,6 +221,7 @@ final class PrefixCacheE2ERunner {
             requestB1: requestB1,
             requestB2: requestB2,
             requestB3: requestB3,
+            restartResult: restartResult,
             ttftRatio: ttftRatio,
             allPassed: allPassed
         )
@@ -245,6 +236,21 @@ final class PrefixCacheE2ERunner {
     }
 
     // MARK: - Private — request execution
+
+    /// Unload + await detached unload + reload the engine against
+    /// the same model directory. `AgentEngine.unloadModel()` is
+    /// sync-void and schedules an async actor unload via
+    /// `unloadTask`; callers that then immediately invoke
+    /// `loadModel` race the detached unload. The explicit
+    /// `awaitPendingUnload()` hop closes that window.
+    private func reloadEngine(
+        _ engine: AgentEngine,
+        modelDir: URL
+    ) async throws {
+        engine.unloadModel()
+        await engine.awaitPendingUnload()
+        try await engine.loadModel(from: modelDir, visionMode: false)
+    }
 
     private struct RequestResult {
         let cachedTokens: Int
@@ -454,6 +460,166 @@ final class PrefixCacheE2ERunner {
         return stats?.snapshotsByType[.branchPoint] ?? 0
     }
 
+    // MARK: - Step X: SSD restart scenario
+
+    private struct RestartScenarioResult {
+        let requestX1: RequestResult
+        let requestX2: RequestResult
+        let requestX3: RequestResult
+    }
+
+    /// Validate that a committed SSD snapshot survives an engine
+    /// unload/reload and serves subsequent requests as warm hits.
+    /// Lives on a separate `AgentEngine` so Steps 1–4's
+    /// `requestB2_cold_after_reload` assertion stays valid.
+    private func runSSDRestartScenario(
+        originalEngine: AgentEngine,
+        modelDir: URL,
+        modelID: String,
+        systemPrompt: String,
+        toolSpecs: [ToolSpec],
+        params: AgentGenerateParameters,
+        checks: inout [CheckResult]
+    ) async throws -> RestartScenarioResult {
+        log("\n── Step X: SSD restart scenario ──")
+        log("  Unloading original (RAM-only) engine to free the model slot…")
+        originalEngine.unloadModel()
+        await originalEngine.awaitPendingUnload()
+
+        // Per-PID scratch dir keeps concurrent e2e runs from colliding
+        // and guarantees a clean slate after a crashed run.
+        let ssdRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tesseract-e2e-ssd")
+            .appendingPathComponent(String(getpid()))
+        try? FileManager.default.removeItem(at: ssdRoot)
+        try FileManager.default.createDirectory(
+            at: ssdRoot,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: ssdRoot) }
+        log("  SSD scratch dir: \(ssdRoot.path)")
+
+        let ssdConfig = SSDPrefixCacheConfig(
+            enabled: true,
+            rootURL: ssdRoot,
+            budgetBytes: 4 * 1024 * 1024 * 1024,     // 4 GiB
+            maxPendingBytes: 1 * 1024 * 1024 * 1024  // 1 GiB front door
+        )
+        let ssdEngine = AgentEngine(ssdConfig: ssdConfig)
+
+        // Engine teardown must run on every exit path. `defer` cannot
+        // host async calls, so use do/catch with explicit teardown
+        // at both return sites. The scratch-dir `defer` above runs
+        // after this closes out (LIFO order), so the writer is
+        // stopped before any file removal touches its directory.
+        func tearDownSSDEngine() async {
+            ssdEngine.unloadModel()
+            await ssdEngine.awaitPendingUnload()
+        }
+
+        do {
+            log("  Loading model into SSD-enabled engine…")
+            try await ssdEngine.loadModel(from: modelDir, visionMode: false)
+
+            // X1 and X2 must send byte-identical requests for the
+            // equivalence check to mean anything.
+            let restartPrompt = "read file /tmp/foo.txt"
+
+            log("\n── Step X1: Request (cold, writes SSD snapshot) ──")
+            let requestX1 = try await runRequest(
+                engine: ssdEngine,
+                modelID: modelID,
+                systemPrompt: systemPrompt,
+                userMessage: restartPrompt,
+                toolSpecs: toolSpecs,
+                parameters: params
+            )
+            log("  cachedTokens=\(requestX1.cachedTokens) ttft=\(String(format: "%.3f", requestX1.ttftSeconds))s "
+                + "generatedChars=\(requestX1.generatedText.count)")
+            checks.append(CheckResult(
+                name: "requestX1_cold_on_ssd_engine",
+                passed: requestX1.cachedTokens == 0,
+                detail: "cachedTokens=\(requestX1.cachedTokens) expected 0"
+            ))
+
+            // `reloadEngine` drains the SSD writer + persists the
+            // manifest inside `unloadModel`'s detached task, then
+            // reloads against the same rootURL.
+            log("  Unloading + reloading SSD engine at \(ssdRoot.path)…")
+            try await reloadEngine(ssdEngine, modelDir: modelDir)
+
+            log("\n── Step X2: Request (after restart, SSD hit) ──")
+            let requestX2 = try await runRequest(
+                engine: ssdEngine,
+                modelID: modelID,
+                systemPrompt: systemPrompt,
+                userMessage: restartPrompt,
+                toolSpecs: toolSpecs,
+                parameters: params
+            )
+            log("  cachedTokens=\(requestX2.cachedTokens) ttft=\(String(format: "%.3f", requestX2.ttftSeconds))s "
+                + "generatedChars=\(requestX2.generatedText.count)")
+
+            checks.append(CheckResult(
+                name: "requestX2_hits_ssd_after_restart",
+                passed: requestX2.cachedTokens > 0,
+                detail: "cachedTokens=\(requestX2.cachedTokens) expected > 0 after warm start"
+            ))
+
+            let equivalence = Self.checkGreedyOutputEquivalence(
+                requestX1.generatedText,
+                requestX2.generatedText,
+                labelA: "x1",
+                labelB: "x2"
+            )
+            checks.append(CheckResult(
+                name: "requestX2_byte_identical_to_x1",
+                passed: equivalence.passed,
+                detail: equivalence.detail
+            ))
+
+            // 50% of cold or 200 ms floor — hydration is NVMe read +
+            // suffix prefill, not full cold prefill.
+            let ttftThreshold = max(requestX1.ttftSeconds * 0.5, 0.200)
+            checks.append(CheckResult(
+                name: "requestX2_ttft_under_threshold",
+                passed: requestX2.ttftSeconds < ttftThreshold,
+                detail: "ttftX2=\(String(format: "%.3f", requestX2.ttftSeconds))s "
+                    + "< threshold=\(String(format: "%.3f", ttftThreshold))s "
+                    + "(cold=\(String(format: "%.3f", requestX1.ttftSeconds))s)"
+            ))
+
+            log("\n── Step X3: Request (new user message, same system) ──")
+            let requestX3 = try await runRequest(
+                engine: ssdEngine,
+                modelID: modelID,
+                systemPrompt: systemPrompt,
+                userMessage: "list files in /tmp/data",
+                toolSpecs: toolSpecs,
+                parameters: params
+            )
+            log("  cachedTokens=\(requestX3.cachedTokens) ttft=\(String(format: "%.3f", requestX3.ttftSeconds))s")
+            checks.append(CheckResult(
+                name: "requestX3_stable_prefix_reused_across_users",
+                passed: requestX3.cachedTokens > 0,
+                detail: "cachedTokens=\(requestX3.cachedTokens) expected > 0 (new user, same system)"
+            ))
+
+            log("  Unloading SSD engine…")
+            await tearDownSSDEngine()
+
+            return RestartScenarioResult(
+                requestX1: requestX1,
+                requestX2: requestX2,
+                requestX3: requestX3
+            )
+        } catch {
+            log("  Step X failed; tearing down SSD engine…")
+            await tearDownSSDEngine()
+            throw error
+        }
+    }
+
     /// Long shared user-message prefix (~80 tokens) for the branch-point
     /// scenario. C/D append a different terminator so the divergence
     /// happens deep in the user message — putting the captured
@@ -553,6 +719,37 @@ final class PrefixCacheE2ERunner {
         return a.prefix(count)
     }
 
+    /// Proxy logit-equivalence check for greedy decoding: identical
+    /// output OR a ≥`threshold`-char identical prefix. Under greedy
+    /// sampling every byte-identical character proves the logit
+    /// argmax agreed at that step, so the threshold is a sufficient
+    /// correctness gate for the restored-cache paths in Step 4 and
+    /// Step X.
+    private static func checkGreedyOutputEquivalence(
+        _ a: String,
+        _ b: String,
+        labelA: String,
+        labelB: String,
+        threshold: Int = 20
+    ) -> (passed: Bool, detail: String) {
+        if a == b {
+            return (true, "fully identical (\(a.count) chars)")
+        }
+        let matchLength = longestCommonPrefix(a, b).count
+        let label = "\(labelA)=\"\(escapeForLog(a.prefix(60)))\" "
+            + "\(labelB)=\"\(escapeForLog(b.prefix(60)))\""
+        if matchLength >= threshold {
+            return (
+                true,
+                "first \(matchLength) chars identical; \(label)"
+            )
+        }
+        return (
+            false,
+            "diverged after \(matchLength) chars; \(label)"
+        )
+    }
+
     private static func escapeForLog(_ s: Substring) -> String {
         escapeForLog(String(s))
     }
@@ -581,6 +778,7 @@ final class PrefixCacheE2ERunner {
         requestB1: RequestResult,
         requestB2: RequestResult,
         requestB3: RequestResult,
+        restartResult: RestartScenarioResult,
         ttftRatio: Double,
         allPassed: Bool
     ) throws {
@@ -591,20 +789,32 @@ final class PrefixCacheE2ERunner {
             let checks: [CheckResult]
             let measurements: Measurements
         }
-        struct Measurements: Codable {
-            let requestA_ttft_seconds: Double
-            let requestA_cached_tokens: Int
-            let requestA_generated: String
-            let requestB1_ttft_seconds: Double
-            let requestB1_cached_tokens: Int
-            let requestB1_generated: String
-            let requestB2_ttft_seconds: Double
-            let requestB2_cached_tokens: Int
-            let requestB2_generated: String
-            let requestB3_ttft_seconds: Double
-            let requestB3_cached_tokens: Int
-            let ttft_ratio_b1_over_a: Double
+        struct RequestMeasurement: Codable {
+            let ttftSeconds: Double
+            let cachedTokens: Int
+            let generated: String
+
+            init(_ r: RequestResult, textPrefix: Int = 200) {
+                self.ttftSeconds = r.ttftSeconds
+                self.cachedTokens = r.cachedTokens
+                self.generated = String(r.generatedText.prefix(textPrefix))
+            }
         }
+        struct Measurements: Codable {
+            let requestA: RequestMeasurement
+            let requestB1: RequestMeasurement
+            let requestB2: RequestMeasurement
+            let requestB3: RequestMeasurement
+            let requestX1: RequestMeasurement
+            let requestX2: RequestMeasurement
+            let requestX3: RequestMeasurement
+            let ttftRatioB1OverA: Double
+            let ttftRatioX2OverX1: Double
+        }
+
+        let x2OverX1 = restartResult.requestX1.ttftSeconds > 0
+            ? restartResult.requestX2.ttftSeconds / restartResult.requestX1.ttftSeconds
+            : 1.0
 
         let report = Report(
             date: ISO8601DateFormatter().string(from: Date()),
@@ -612,18 +822,15 @@ final class PrefixCacheE2ERunner {
             passed: allPassed,
             checks: checks,
             measurements: Measurements(
-                requestA_ttft_seconds: requestA.ttftSeconds,
-                requestA_cached_tokens: requestA.cachedTokens,
-                requestA_generated: String(requestA.generatedText.prefix(200)),
-                requestB1_ttft_seconds: requestB1.ttftSeconds,
-                requestB1_cached_tokens: requestB1.cachedTokens,
-                requestB1_generated: String(requestB1.generatedText.prefix(200)),
-                requestB2_ttft_seconds: requestB2.ttftSeconds,
-                requestB2_cached_tokens: requestB2.cachedTokens,
-                requestB2_generated: String(requestB2.generatedText.prefix(200)),
-                requestB3_ttft_seconds: requestB3.ttftSeconds,
-                requestB3_cached_tokens: requestB3.cachedTokens,
-                ttft_ratio_b1_over_a: ttftRatio
+                requestA: RequestMeasurement(requestA),
+                requestB1: RequestMeasurement(requestB1),
+                requestB2: RequestMeasurement(requestB2),
+                requestB3: RequestMeasurement(requestB3),
+                requestX1: RequestMeasurement(restartResult.requestX1),
+                requestX2: RequestMeasurement(restartResult.requestX2),
+                requestX3: RequestMeasurement(restartResult.requestX3),
+                ttftRatioB1OverA: ttftRatio,
+                ttftRatioX2OverX1: x2OverX1
             )
         )
 

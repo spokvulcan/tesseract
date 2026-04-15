@@ -26,6 +26,42 @@ struct PrefixCacheManagerTests {
         PrefixCacheTestFixtures.makeUniformSnapshot(offset: offset, type: type)
     }
 
+    private func makeSSDKey(
+        fingerprint: String = String(repeating: "a", count: 64)
+    ) -> CachePartitionKey {
+        CachePartitionKey(
+            modelID: "test-model",
+            kvBits: nil,
+            kvGroupSize: 64,
+            sessionAffinity: nil,
+            modelFingerprint: fingerprint
+        )
+    }
+
+    private func makeSSDPayload(
+        bytes: Int,
+        checkpointType: HybridCacheSnapshot.CheckpointType = .system
+    ) -> SnapshotPayload {
+        SnapshotPayload(
+            tokenOffset: 4_096,
+            checkpointType: checkpointType,
+            layers: [
+                SnapshotPayload.LayerPayload(
+                    className: "KVCache",
+                    state: [
+                        SnapshotPayload.ArrayPayload(
+                            data: Data(repeating: 0xAB, count: bytes),
+                            dtype: "bfloat16",
+                            shape: [1, bytes]
+                        )
+                    ],
+                    metaState: ["meta"],
+                    offset: 4_096
+                )
+            ]
+        )
+    }
+
     private func makeManager(budgetMB: Int = 100) -> PrefixCacheManager {
         PrefixCacheManager(memoryBudgetBytes: budgetMB * 1024 * 1024)
     }
@@ -1543,5 +1579,56 @@ struct PrefixCacheManagerTests {
         // The recordHit bump should have moved lastAccessAt forward.
         let bumped = ssdStore.lastAccessAtForTesting(id: ref.snapshotID)
         #expect(bumped > originalAccess)
+    }
+
+    /// The production store path must register the SSD partition
+    /// before the first enqueue so a flush + warm start can recover
+    /// the snapshot into a fresh manager.
+    @Test func storeSnapshotsWithSSDPayloadsSurviveWarmStart() async throws {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let key = makeSSDKey()
+        let promptTokens = Array(1...10)
+        let snapshot = makeUniformSnapshot(offset: 5, type: .system)
+        let payload = makeSSDPayload(bytes: 256, checkpointType: .system)
+
+        mgr.storeSnapshots(
+            promptTokens: promptTokens,
+            capturedSnapshots: [snapshot],
+            snapshotPayloads: [payload],
+            partitionKey: key
+        )
+        await tieredStore.ssdStore!.flushAsync()
+
+        let manifestURL = root.appendingPathComponent("manifest.json")
+        #expect(FileManager.default.fileExists(atPath: manifestURL.path))
+        let manifest = try JSONDecoder().decode(
+            SnapshotManifest.self,
+            from: Data(contentsOf: manifestURL)
+        )
+        #expect(manifest.partitions[key.partitionDigest] != nil)
+        #expect(manifest.snapshots.count == 1)
+
+        let config = SSDPrefixCacheConfig(
+            enabled: true,
+            rootURL: root,
+            budgetBytes: 1_000_000,
+            maxPendingBytes: 10_000_000
+        )
+        let restoredStore = TieredSnapshotStore(ssdConfig: config)
+        let restoredMgr = PrefixCacheManager(
+            memoryBudgetBytes: 10_000_000,
+            tieredStore: restoredStore
+        )
+        try await restoredMgr.warmStart(modelFingerprint: key.modelFingerprint!)
+
+        let lookup = restoredMgr.lookup(tokens: promptTokens, partitionKey: key)
+        guard case .ssdHit(let ctx) = lookup.reason else {
+            Issue.record("Expected .ssdHit after warm start, got \(lookup.reason)")
+            return
+        }
+        #expect(ctx.storageRef.tokenOffset == snapshot.tokenOffset)
+        #expect(restoredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
     }
 }

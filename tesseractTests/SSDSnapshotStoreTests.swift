@@ -1052,4 +1052,378 @@ struct SSDSnapshotStoreTests {
         }
         #expect(dropped)
     }
+
+    // MARK: - flushAsync
+
+    /// `flushAsync` returns only after the writer has drained every
+    /// pending item AND persisted a manifest that reflects the new
+    /// state. A fresh store pointed at the same rootURL must then
+    /// read the committed descriptor via `warmStartLoad` without
+    /// relying on the debounced persist timer.
+    @Test
+    func flushAsyncDrainsWriterAndPersistsManifest() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        // Long debounce so a naive implementation (wait-for-commit-
+        // without-persist) would fail the warm-start assertion.
+        let store = makeStoreWithPartition(
+            config: config,
+            manifestDebounce: .seconds(60)
+        )
+
+        let payload = makePayload(bytes: 256)
+        let descriptor = makeDescriptor(bytes: 256)
+        guard case .accepted = store.tryEnqueue(
+            payload: payload, descriptor: descriptor
+        ) else {
+            #expect(Bool(false), "tryEnqueue rejected")
+            return
+        }
+
+        await store.flushAsync()
+
+        let manifestURL = root.appendingPathComponent("manifest.json")
+        #expect(FileManager.default.fileExists(atPath: manifestURL.path))
+        let data = try Data(contentsOf: manifestURL)
+        let manifest = try JSONDecoder().decode(SnapshotManifest.self, from: data)
+        #expect(manifest.snapshots[descriptor.snapshotID] != nil)
+        #expect(manifest.partitions["abcd1234"] != nil)
+
+        // Writer-side byte accounting also reflects the committed
+        // descriptor — pending queue is drained and the item is now
+        // resident.
+        #expect(store.currentSSDBytesForTesting() == descriptor.bytes)
+        #expect(store.pendingCountForTesting() == 0)
+    }
+
+    /// `flushAsync` on an empty store wakes the writer for a no-op
+    /// drain, resumes the waiter, and returns. The conservative
+    /// timeout protects against a heavily loaded CI box without
+    /// hiding a real hang.
+    @Test
+    func flushAsyncOnEmptyStoreReturnsWithoutBlocking() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let store = makeStoreWithPartition(config: config)
+
+        let start = ContinuousClock.now
+        await store.flushAsync()
+        let elapsed = ContinuousClock.now - start
+
+        #expect(elapsed < .seconds(5))
+    }
+
+    // MARK: - Diagnostic events (Task 4.1.12)
+
+    /// Test-only sink for `PrefixCacheDiagnostics` events. The
+    /// store's writer task is detached and emits events from off-main
+    /// threads, so the sink must be lock-protected. Tests poll on
+    /// `lines(matching:)` via `waitUntil` so the writer's commit /
+    /// drop callbacks have time to land before the assertion runs.
+    private final class DiagnosticsSink: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _lines: [String] = []
+
+        var lines: [String] {
+            lock.lock(); defer { lock.unlock() }
+            return _lines
+        }
+
+        func lines(matching keyword: String) -> [String] {
+            lock.lock(); defer { lock.unlock() }
+            return _lines.filter { $0.contains(keyword) }
+        }
+
+        var handler: @Sendable (String) -> Void {
+            { [weak self] line in
+                guard let self else { return }
+                self.lock.lock()
+                self._lines.append(line)
+                self.lock.unlock()
+            }
+        }
+    }
+
+    /// Install a sink for the duration of a single test. Returns the
+    /// sink so the test can inspect its captured lines, and a closure
+    /// the test must defer-call to remove the sink from the registry.
+    /// Multiple tests can share the registry concurrently — each
+    /// test's sink sees every emitted event, but tests filter by
+    /// per-test snapshot IDs (assigned via `makeDescriptor` UUIDs or
+    /// fixed-string IDs unique to the test) so cross-test leakage is
+    /// ignored. The defer-uninstall keeps the registry small even
+    /// under repeated test runs.
+    private func makeSink() -> (DiagnosticsSink, @Sendable () -> Void) {
+        let sink = DiagnosticsSink()
+        let handle = PrefixCacheDiagnostics.addTestSink(sink.handler)
+        return (sink, { PrefixCacheDiagnostics.removeTestSink(handle) })
+    }
+
+    @Test
+    func ssdAdmitAcceptedFiresAfterCommit() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let payload = makePayload(bytes: 1_024)
+        let descriptor = makeDescriptor(bytes: payload.totalBytes)
+        _ = store.tryEnqueue(payload: payload, descriptor: descriptor)
+
+        let landed = await waitUntil { tracker.committed.contains(descriptor.snapshotID) }
+        #expect(landed)
+
+        let admitLines = sink.lines(matching: "event=ssdAdmit")
+            .filter { $0.contains("id=\(descriptor.snapshotID)") }
+        #expect(admitLines.count == 1)
+        #expect(admitLines.first?.contains("outcome=accepted") == true)
+
+        let commitLines = sink.lines(matching: "event=storageRefCommit")
+            .filter { $0.contains("id=\(descriptor.snapshotID)") }
+        #expect(commitLines.count == 1)
+    }
+
+    @Test
+    func ssdAdmitFiresDroppedTooLargeForBudgetSynchronously() {
+        let (config, root) = makeConfig(maxPendingBytes: 1_024)
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+
+        let store = makeStoreWithPartition(config: config)
+
+        let payload = makePayload(bytes: 8_192)
+        let descriptor = makeDescriptor(bytes: payload.totalBytes)
+        let result = store.tryEnqueue(payload: payload, descriptor: descriptor)
+
+        #expect(result == .rejectedTooLargeForBudget)
+
+        let admitLines = sink.lines(matching: "event=ssdAdmit")
+            .filter { $0.contains("id=\(descriptor.snapshotID)") }
+        #expect(admitLines.count == 1)
+        #expect(admitLines.first?.contains("outcome=droppedTooLargeForBudget") == true)
+    }
+
+    @Test
+    func ssdAdmitFiresDroppedSystemProtectionWinsWhenEligibleSetEmpty() async throws {
+        // Tiny budget; seed it full with a `.system` descriptor so
+        // the non-`.system` eligible set is empty. A subsequent
+        // non-system enqueue must hit the `.systemProtectionWins`
+        // branch in `admitUnderBudget` and surface the matching
+        // `ssdAdmit` outcome.
+        let (config, root) = makeConfig(budgetBytes: 4_096)
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let systemSeed = makeDescriptor(
+            id: "system-seed",
+            checkpointType: "system",
+            bytes: 4_096,
+            lastAccessAt: 100
+        )
+        store.seedDescriptorForTesting(systemSeed)
+
+        let payload = makePayload(bytes: 2_048)
+        let leaf = makeDescriptor(checkpointType: "leaf", bytes: payload.totalBytes)
+        let result = store.tryEnqueue(payload: payload, descriptor: leaf)
+        guard case .accepted = result else {
+            Issue.record("expected front-door .accepted, got \(result)")
+            return
+        }
+
+        let dropped = await waitUntil {
+            tracker.dropped.contains { $0.id == leaf.snapshotID && $0.reason == .systemProtectionWins }
+        }
+        #expect(dropped)
+
+        let admitLines = sink.lines(matching: "event=ssdAdmit")
+            .filter { $0.contains("id=\(leaf.snapshotID)") }
+        #expect(admitLines.count == 1)
+        #expect(admitLines.first?.contains("outcome=droppedSystemProtectionWins") == true)
+
+        // Symmetric guard: the seeded `.system` resident must not
+        // have been evicted to make room. No `ssdEvictAtAdmission`
+        // event ever names it as the victim.
+        let evictLines = sink.lines(matching: "event=ssdEvictAtAdmission")
+        #expect(!evictLines.contains { $0.contains("victimID=system-seed") })
+
+        // And the matching storageRefDropCallback companion fired
+        // with the same reason — the writer's drop path always
+        // emits the lifecycle event before invoking onDrop.
+        let dropCallbackLines = sink.lines(matching: "event=storageRefDropCallback")
+            .filter { $0.contains("id=\(leaf.snapshotID)") }
+        #expect(dropCallbackLines.count == 1)
+        #expect(dropCallbackLines.first?.contains("reason=systemProtectionWins") == true)
+    }
+
+    @Test
+    func ssdEvictAtAdmissionFiresOncePerVictim() async throws {
+        // Tiny budget filled with two non-system residents, then
+        // enqueue a non-system payload large enough to displace
+        // both. The writer must fire one `ssdEvictAtAdmission`
+        // event per resident plus exactly one `ssdAdmit(accepted)`
+        // for the incoming.
+        let (config, root) = makeConfig(budgetBytes: 4_096)
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        store.seedDescriptorForTesting(makeDescriptor(
+            id: "old-leaf-1", checkpointType: "leaf", bytes: 2_048, lastAccessAt: 1
+        ))
+        store.seedDescriptorForTesting(makeDescriptor(
+            id: "old-leaf-2", checkpointType: "leaf", bytes: 2_048, lastAccessAt: 2
+        ))
+
+        let payload = makePayload(bytes: 4_096)
+        let incoming = makeDescriptor(checkpointType: "leaf", bytes: payload.totalBytes)
+        _ = store.tryEnqueue(payload: payload, descriptor: incoming)
+
+        let landed = await waitUntil { tracker.committed.contains(incoming.snapshotID) }
+        #expect(landed)
+
+        let evictLines = sink.lines(matching: "event=ssdEvictAtAdmission")
+            .filter { $0.contains("incomingID=\(incoming.snapshotID)") }
+        #expect(evictLines.count == 2)
+        #expect(evictLines.contains { $0.contains("victimID=old-leaf-1") })
+        #expect(evictLines.contains { $0.contains("victimID=old-leaf-2") })
+
+        // Each evicted resident also fired its lifecycle drop
+        // callback with `.evictedByLRU`.
+        let evictDropCallbacks = sink.lines(matching: "event=storageRefDropCallback")
+            .filter { $0.contains("reason=evictedByLRU") }
+        #expect(evictDropCallbacks.count >= 2)
+    }
+
+    @Test
+    func storageRefDropCallbackFiresOnBackpressureBumpedItems() async throws {
+        // Tight pending byte cap — first payload occupies it
+        // entirely, second payload bumps the first via
+        // drop-oldest-pending. The bumped item must surface as
+        // both `ssdAdmit(droppedByteBudget)` and
+        // `storageRefDropCallback(backpressureOldest)`.
+        let (config, root) = makeConfig(
+            budgetBytes: 8_192,
+            maxPendingBytes: 6_000
+        )
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+
+        let tracker = CallbackTracker()
+        // Use a long debounce so the writer cannot drain between
+        // the two enqueues; we want the second enqueue to find the
+        // first still in the queue and bump it.
+        let store = SSDSnapshotStore(
+            config: config,
+            manifestDebounce: .seconds(60),
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+        store.registerPartition(makePartitionMeta(), digest: "abcd1234")
+
+        // Block the writer on a long-running prelude so it cannot
+        // drain the first payload before the second arrives. We
+        // use a payload large enough to keep `pendingBytes` high.
+        let firstPayload = makePayload(bytes: 4_096)
+        let firstDescriptor = makeDescriptor(
+            id: "first", checkpointType: "leaf", bytes: firstPayload.totalBytes
+        )
+        let firstResult = store.tryEnqueue(payload: firstPayload, descriptor: firstDescriptor)
+        guard case .accepted = firstResult else {
+            Issue.record("expected first .accepted, got \(firstResult)")
+            return
+        }
+
+        // Second payload pushes pendingBytes over the cap and
+        // bumps the oldest.
+        let secondPayload = makePayload(bytes: 4_096)
+        let secondDescriptor = makeDescriptor(
+            id: "second", checkpointType: "leaf", bytes: secondPayload.totalBytes
+        )
+        let secondResult = store.tryEnqueue(payload: secondPayload, descriptor: secondDescriptor)
+        guard case .accepted = secondResult else {
+            Issue.record("expected second .accepted, got \(secondResult)")
+            return
+        }
+
+        // The bumped lifecycle event fires synchronously from the
+        // front door (the call site runs the callback after
+        // releasing the lock); no need to wait on the writer.
+        let bumpedAdmit = sink.lines(matching: "event=ssdAdmit")
+            .filter { $0.contains("id=first") && $0.contains("outcome=droppedByteBudget") }
+        #expect(bumpedAdmit.count == 1)
+
+        let bumpedCallback = sink.lines(matching: "event=storageRefDropCallback")
+            .filter { $0.contains("id=first") && $0.contains("reason=backpressureOldest") }
+        #expect(bumpedCallback.count == 1)
+    }
+
+    @Test
+    func ssdMissFiresOnFingerprintMismatchHydration() {
+        // Seed a manifest with a partition whose fingerprint does
+        // not match the caller's expected value; loadSync must
+        // fire `ssdMiss(reason=fingerprintMismatch)` from inside
+        // its terminal failure branch.
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+
+        let store = SSDSnapshotStore(config: config)
+        store.registerPartition(
+            makePartitionMeta(fingerprint: String(repeating: "a", count: 64)),
+            digest: "abcd1234"
+        )
+        let descriptor = makeDescriptor(
+            id: "snap-mismatch",
+            checkpointType: "leaf",
+            bytes: 2_048,
+            lastAccessAt: 1
+        )
+        store.seedDescriptorForTesting(descriptor)
+
+        let storageRef = SnapshotStorageRef(
+            snapshotID: descriptor.snapshotID,
+            partitionDigest: descriptor.partitionDigest,
+            tokenOffset: descriptor.tokenOffset,
+            checkpointType: .leaf,
+            bytesOnDisk: descriptor.bytes,
+            lastAccessTime: .now,
+            committed: true
+        )
+
+        let result = store.loadSync(
+            storageRef: storageRef,
+            expectedFingerprint: String(repeating: "b", count: 64)
+        )
+        #expect(result == nil)
+
+        let missLines = sink.lines(matching: "event=ssdMiss")
+            .filter { $0.contains("id=\(descriptor.snapshotID)") }
+        #expect(missLines.count == 1)
+        #expect(missLines.first?.contains("reason=fingerprintMismatch") == true)
+    }
 }

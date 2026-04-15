@@ -159,6 +159,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     private var currentSSDBytes: Int = 0
     private var manifestDirty: Bool = false
     private var manifestPersistTask: Task<Void, Never>?
+    /// Continuations waiting for the writer to finish its current
+    /// `drainPending` iteration. `flushAsync()` registers one per
+    /// call and the writer resumes them all after each drain cycle
+    /// so unload paths can observe pending writes as durable.
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
 
     // MARK: - Writer wakeup + task
 
@@ -227,6 +232,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 wireString: descriptor.checkpointType
             )
         else {
+            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
+                id: descriptor.snapshotID,
+                bytes: descriptor.bytes,
+                outcome: .droppedInvalidCheckpointType
+            ))
             return .rejectedInvalidCheckpointType
         }
 
@@ -235,10 +245,15 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         // A single payload larger than the cap cannot be queued at
         // all; no amount of back-pressure eviction can create room.
         if payloadBytes > maxPendingBytes {
+            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
+                id: descriptor.snapshotID,
+                bytes: payloadBytes,
+                outcome: .droppedTooLargeForBudget
+            ))
             return .rejectedTooLargeForBudget
         }
 
-        var droppedIDs: [String] = []
+        var droppedItems: [(id: String, bytes: Int)] = []
 
         lock.lock()
 
@@ -251,6 +266,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         // rather than persisting a dangling manifest entry.
         guard manifest.partitions[descriptor.partitionDigest] != nil else {
             lock.unlock()
+            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
+                id: descriptor.snapshotID,
+                bytes: payloadBytes,
+                outcome: .droppedUnregisteredPartition
+            ))
             return .rejectedUnregisteredPartition
         }
 
@@ -262,7 +282,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
               let oldest = pending.first {
             pending.removeFirst()
             pendingBytes -= oldest.payload.totalBytes
-            droppedIDs.append(oldest.descriptor.snapshotID)
+            droppedItems.append(
+                (id: oldest.descriptor.snapshotID, bytes: oldest.payload.totalBytes)
+            )
         }
 
         pending.append(PendingWrite(payload: payload, descriptor: descriptor))
@@ -270,8 +292,24 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
         lock.unlock()
 
-        for id in droppedIDs {
-            onDrop(id, .backpressureOldest)
+        for item in droppedItems {
+            // Both events fire per bumped item: the admission outcome
+            // (`droppedByteBudget` is the terminal verdict for that
+            // earlier `tryEnqueue` call), and the lifecycle callback
+            // (`storageRefDropCallback` so the radix node sees its
+            // pending ref cleared).
+            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
+                id: item.id,
+                bytes: item.bytes,
+                outcome: .droppedByteBudget
+            ))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+                    id: item.id,
+                    reason: .backpressureOldest
+                )
+            )
+            onDrop(item.id, .backpressureOldest)
         }
 
         wakeupContinuation.yield()
@@ -287,6 +325,44 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 committed: false
             )
         )
+    }
+
+    /// Block until the writer's pending queue is fully drained and
+    /// the in-memory manifest has been persisted to disk. Used by
+    /// `LLMActor.unloadModel` / benchmark restart scenarios to
+    /// guarantee that in-flight writes survive a `deinit`: without
+    /// this, any pending descriptors and any dirty manifest get
+    /// dropped when the store's detached writer task is cancelled.
+    ///
+    /// Idempotent; safe to call even if the queue is already empty
+    /// — the writer is woken once and runs a no-op `drainPending`
+    /// before the continuation resumes.
+    func flushAsync() async {
+        // Register before yielding so the writer can never skip our
+        // signal. New admissions landing between the wakeup and the
+        // resume pop off a second drain pass — covered by the loop.
+        repeat {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                registerDrainWaiter(cont)
+                wakeupContinuation.yield()
+            }
+        } while hasPendingWrites()
+
+        persistManifestIfDirty()
+    }
+
+    private func registerDrainWaiter(
+        _ cont: CheckedContinuation<Void, Never>
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        drainWaiters.append(cont)
+    }
+
+    private func hasPendingWrites() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !pending.isEmpty
     }
 
     /// Bump the descriptor's `lastAccessAt` so the writer's
@@ -320,6 +396,10 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     /// affinity changes between model loads.
     func registerPartition(_ meta: PartitionMeta, digest: String) {
         lock.lock()
+        if manifest.partitions[digest] == meta {
+            lock.unlock()
+            return
+        }
         manifest.partitions[digest] = meta
         manifestDirty = true
         scheduleManifestPersistLocked()
@@ -368,6 +448,20 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     private func writerLoop() async {
         for await _ in wakeupStream {
             await drainPending()
+            resumeDrainWaiters()
+        }
+        // Stream closed (deinit). Fail any straggling waiters by
+        // resuming them so `flushAsync` callers do not leak.
+        resumeDrainWaiters()
+    }
+
+    private func resumeDrainWaiters() {
+        lock.lock()
+        let waiters = drainWaiters
+        drainWaiters.removeAll(keepingCapacity: false)
+        lock.unlock()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
@@ -396,6 +490,20 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         //    mutate the in-memory manifest — file deletion and
         //    `onDrop` callbacks happen after release.
         let (admission, evicted) = admitUnderBudget(item.descriptor)
+        // Each evicted resident gets its own admission-cut event
+        // before the file delete + drop callback fire. The pair
+        // (`ssdEvictAtAdmission` + `storageRefDropCallback(...,
+        // .evictedByLRU)`) lets operators correlate write-time
+        // pressure with the lifecycle transitions on the radix
+        // tree.
+        for resident in evicted {
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDEvictAtAdmissionEvent(
+                    victimID: resident.snapshotID,
+                    incomingID: item.descriptor.snapshotID
+                )
+            )
+        }
         finalizeEvictions(evicted)
 
         switch admission {
@@ -403,7 +511,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             break
         case .drop(let reason):
             releasePendingBytes(item.payload.totalBytes)
-            onDrop(item.descriptor.snapshotID, reason)
+            emitWriterDrop(
+                id: item.descriptor.snapshotID,
+                bytes: item.payload.totalBytes,
+                reason: reason
+            )
             return
         }
 
@@ -415,6 +527,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             try writePayload(item.payload, descriptor: item.descriptor)
         } catch WriteError.diskFull {
             if let retryVictim = retryAfterDiskFull(item.descriptor) {
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.SSDEvictAtAdmissionEvent(
+                        victimID: retryVictim.snapshotID,
+                        incomingID: item.descriptor.snapshotID
+                    )
+                )
                 finalizeEvictions([retryVictim])
                 do {
                     try writePayload(item.payload, descriptor: item.descriptor)
@@ -424,7 +542,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                         + "\(String(describing: error))"
                     )
                     releasePendingBytes(item.payload.totalBytes)
-                    onDrop(item.descriptor.snapshotID, .diskFull)
+                    emitWriterDrop(
+                        id: item.descriptor.snapshotID,
+                        bytes: item.payload.totalBytes,
+                        reason: .diskFull
+                    )
                     return
                 }
             } else {
@@ -433,7 +555,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                     + "\(item.descriptor.snapshotID)"
                 )
                 releasePendingBytes(item.payload.totalBytes)
-                onDrop(item.descriptor.snapshotID, .diskFull)
+                emitWriterDrop(
+                    id: item.descriptor.snapshotID,
+                    bytes: item.payload.totalBytes,
+                    reason: .diskFull
+                )
                 return
             }
         } catch {
@@ -442,7 +568,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 + "\(String(describing: error))"
             )
             releasePendingBytes(item.payload.totalBytes)
-            onDrop(item.descriptor.snapshotID, .writerIOError)
+            emitWriterDrop(
+                id: item.descriptor.snapshotID,
+                bytes: item.payload.totalBytes,
+                reason: .writerIOError
+            )
             return
         }
 
@@ -450,7 +580,57 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         //    pending byte budget, and fire the commit callback.
         commitDescriptorToManifest(item.descriptor)
         releasePendingBytes(item.payload.totalBytes)
+        PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
+            id: item.descriptor.snapshotID,
+            bytes: item.descriptor.bytes,
+            outcome: .accepted
+        ))
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.StorageRefCommitEvent(id: item.descriptor.snapshotID)
+        )
         onCommit(item.descriptor.snapshotID)
+    }
+
+    /// Centralized writer-drop emission: terminal `ssdAdmit` outcome
+    /// for the failed item, then the `storageRefDropCallback`
+    /// lifecycle event, then the actual `onDrop` invocation.
+    /// `processPendingItem`'s drop branches all funnel through here
+    /// so the event ordering stays in lockstep with the callback
+    /// firing order — tests can assert "admit drop precedes
+    /// callback drop" without a per-branch check.
+    private func emitWriterDrop(
+        id: String,
+        bytes: Int,
+        reason: SSDDropReason
+    ) {
+        let outcome: PrefixCacheDiagnostics.SSDAdmitOutcome
+        switch reason {
+        case .systemProtectionWins: outcome = .droppedSystemProtectionWins
+        case .exceedsBudget: outcome = .droppedExceedsBudget
+        case .diskFull: outcome = .droppedDiskFull
+        case .writerIOError: outcome = .droppedWriterIOError
+        case .backpressureOldest, .evictedByLRU, .hydrationFailure:
+            // These reasons never originate from `processPendingItem`
+            // — front-door, eviction loop, and hydration paths fire
+            // their own events directly. Mapping them here would be
+            // a logic error; surface it loudly.
+            assertionFailure(
+                "emitWriterDrop called with non-writer reason \(reason)"
+            )
+            outcome = .droppedWriterIOError
+        }
+        PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
+            id: id,
+            bytes: bytes,
+            outcome: outcome
+        ))
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+                id: id,
+                reason: reason
+            )
+        )
+        onDrop(id, reason)
     }
 
     /// Delete the on-disk files and fire `onDrop(.evictedByLRU)`
@@ -460,6 +640,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     private func finalizeEvictions(_ evicted: [EvictedResident]) {
         for resident in evicted {
             deleteResidentFile(resident.fileURL)
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+                    id: resident.snapshotID,
+                    reason: .evictedByLRU
+                )
+            )
             onDrop(resident.snapshotID, .evictedByLRU)
         }
     }
@@ -1243,12 +1429,14 @@ extension SSDSnapshotStore {
         guard let partitionFingerprint else {
             return failLoad(
                 storageRef,
+                reason: .partitionNotInManifest,
                 "partition not in manifest digest=\(storageRef.partitionDigest)"
             )
         }
         guard partitionFingerprint == expectedFingerprint else {
             return failLoad(
                 storageRef,
+                reason: .fingerprintMismatch,
                 "fingerprint mismatch partition=\(partitionFingerprint.prefix(8)) "
                 + "expected=\(expectedFingerprint.prefix(8))"
             )
@@ -1263,7 +1451,11 @@ extension SSDSnapshotStore {
         do {
             fileData = try Data(contentsOf: url, options: .mappedIfSafe)
         } catch {
-            return failLoad(storageRef, "read failed error=\(error)")
+            return failLoad(
+                storageRef,
+                reason: .readFailed,
+                "read failed error=\(error)"
+            )
         }
 
         // Decode the placeholder container, reconstructing MLXArrays
@@ -1276,22 +1468,33 @@ extension SSDSnapshotStore {
                 checkpointType: storageRef.checkpointType
             )
         } catch {
-            return failLoad(storageRef, "decode failed error=\(error)")
+            return failLoad(
+                storageRef,
+                reason: .decodeFailed,
+                "decode failed error=\(error)"
+            )
         }
     }
 
     /// Shared terminal branch for every `loadSync` failure path.
-    /// Logs the `message`, drops the descriptor + on-disk file +
-    /// fires `onDrop(.hydrationFailure)`, and returns `nil` so the
-    /// caller can `return` the result directly.
+    /// Logs the `message`, emits an `ssdMiss(id:reason:)` diagnostic
+    /// event so operators can correlate the hydration miss with the
+    /// node id that just got cleared, drops the descriptor + on-disk
+    /// file + fires `onDrop(.hydrationFailure)`, and returns `nil`
+    /// so the caller can `return` the result directly.
     private nonisolated func failLoad(
         _ ref: SnapshotStorageRef,
+        reason: PrefixCacheDiagnostics.SSDMissReason,
         _ message: @autoclosure () -> String
     ) -> HybridCacheSnapshot? {
         Log.agent.error(
             "SSDSnapshotStore.loadSync: \(message()) "
             + "id=\(ref.snapshotID.prefix(8))"
         )
+        PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDMissEvent(
+            id: ref.snapshotID,
+            reason: reason
+        ))
         dropHydrationFailure(id: ref.snapshotID)
         return nil
     }
@@ -1317,6 +1520,12 @@ extension SSDSnapshotStore {
         if let evicted {
             try? FileManager.default.removeItem(at: evicted.fileURL)
         }
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+                id: id,
+                reason: .hydrationFailure
+            )
+        )
         onDrop(id, .hydrationFailure)
     }
 

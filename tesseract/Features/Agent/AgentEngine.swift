@@ -58,9 +58,10 @@ final class AgentEngine {
     private var generationTask: Task<Void, Never>?
 
     /// Tracks the most recent `unloadModel` call's detached actor
-    /// unload. Tests drain this via `awaitPendingUnloadForTesting()` so
-    /// assertions about the cleared state are race-free; production code
-    /// does not read it.
+    /// unload. Callers drain this via `awaitPendingUnload()` when
+    /// they need race-free observation of the cleared state
+    /// (unit tests, benchmark restart scenarios); production code
+    /// is happy with fire-and-forget semantics.
     private var unloadTask: Task<Void, Never>?
 
     /// How the engine sources its `SSDPrefixCacheConfig` at model load.
@@ -324,22 +325,40 @@ final class AgentEngine {
         await llmActor.setPrefixCacheBudgetBytes(bytes)
     }
 
-    /// Releases the model from memory.
+    /// Block until any pending SSD-tier writes drain and the
+    /// manifest is persisted. Exposed as a standalone primitive for
+    /// callers that want to observe durability without tearing down
+    /// the engine; `unloadModel()` already runs this first on the
+    /// detached unload task.
+    func flushPrefixCache() async {
+        await llmActor.flushPrefixCache()
+    }
+
+    /// Releases the model from memory. The detached unload task
+    /// drains the SSD writer + persists the manifest BEFORE
+    /// clearing actor state so production unload/restart flows
+    /// (normal model switching, app shutdown, `InferenceArbiter.unload`)
+    /// preserve any in-flight prefix-cache snapshots. Callers that
+    /// need to observe the drain synchronously await
+    /// `awaitPendingUnload()`.
     func unloadModel() {
         cancelGeneration()
         agentTokenizer = nil
         promptStartsThinking = false
         isModelLoaded = false
         loadingStatus = ""
-        unloadTask = Task { [llmActor] in await llmActor.unloadModel() }
+        unloadTask = Task { [llmActor] in
+            await llmActor.flushPrefixCache()
+            await llmActor.unloadModel()
+        }
         Log.agent.info("Model unloaded")
     }
 
     /// Wait for the most recent `unloadModel` call's detached actor
-    /// unload to complete. Internal so tests can make assertions about
-    /// the cleared state race-free; production code is happy with
-    /// fire-and-forget semantics.
-    func awaitPendingUnloadForTesting() async {
+    /// unload to complete. Used by unit tests and benchmark restart
+    /// scenarios that need to observe the cleared state race-free;
+    /// production hot paths use fire-and-forget `unloadModel()`.
+    func awaitPendingUnload() async {
         await unloadTask?.value
     }
 

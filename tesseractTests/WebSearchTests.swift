@@ -225,9 +225,11 @@ struct WebToolsExtensionTests {
     @Test func extensionRegistersWebSearchTool() {
         let ext = WebToolsExtension()
         #expect(ext.path == "web-tools")
-        #expect(ext.tools.count == 1)
+        #expect(ext.tools.count == 2)
         #expect(ext.tools["web_search"] != nil)
         #expect(ext.tools["web_search"]?.name == "web_search")
+        #expect(ext.tools["web_fetch"] != nil)
+        #expect(ext.tools["web_fetch"]?.name == "web_fetch")
     }
 
     @Test func extensionConformsToAgentExtension() {
