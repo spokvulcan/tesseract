@@ -181,6 +181,16 @@ final class PrefixCacheE2ERunner {
             detail: "cachedTokens=\(requestB3.cachedTokens) expected > 100 (covers full system+tools prefix)"
         ))
 
+        let toolLoopResult = try await runToolLoopScenario(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            toolSpecs: toolSpecs,
+            params: params,
+            stablePrefixBaseline: requestB1.cachedTokens,
+            checks: &checks
+        )
+
         // `requestB1.cachedTokens` is the canonical "bare stable_prefix" hit
         // (after Request A's cold capture, B1 hits stable_prefix only because
         // it diverges from A's user content). B3 hits more (stable_prefix +
@@ -203,6 +213,7 @@ final class PrefixCacheE2ERunner {
             systemPrompt: systemPrompt,
             toolSpecs: toolSpecs,
             params: params,
+            stablePrefixBaseline: requestB1.cachedTokens,
             checks: &checks
         )
 
@@ -221,6 +232,7 @@ final class PrefixCacheE2ERunner {
             requestB1: requestB1,
             requestB2: requestB2,
             requestB3: requestB3,
+            toolLoopResult: toolLoopResult,
             restartResult: restartResult,
             ttftRatio: ttftRatio,
             allPassed: allPassed
@@ -256,6 +268,118 @@ final class PrefixCacheE2ERunner {
         let cachedTokens: Int
         let ttftSeconds: Double
         let generatedText: String
+        let assistantText: String
+        let assistantReasoning: String?
+        let toolCalls: [ToolCallInfo]
+    }
+
+    private enum BenchmarkMessage {
+        case user(String)
+        case assistant(content: String, reasoning: String?, toolCalls: [ToolCallInfo] = [])
+        case toolResult(toolCallId: String, content: String)
+
+        var prefixCacheMessage: HTTPPrefixCacheMessage {
+            switch self {
+            case .user(let content):
+                HTTPPrefixCacheMessage(role: .user, content: content)
+            case .assistant(let content, let reasoning, let toolCalls):
+                .assistant(
+                    content: content,
+                    reasoning: reasoning,
+                    toolCalls: toolCalls.map {
+                        HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
+                    }
+                )
+            case .toolResult(_, let content):
+                HTTPPrefixCacheMessage(role: .tool, content: content)
+            }
+        }
+
+        var llmMessage: LLMMessage {
+            switch self {
+            case .user(let content):
+                .user(content: content, images: [])
+            case .assistant(let content, let reasoning, let toolCalls):
+                .assistant(
+                    content: content,
+                    reasoning: reasoning,
+                    toolCalls: toolCalls.isEmpty ? nil : toolCalls
+                )
+            case .toolResult(let toolCallId, let content):
+                .toolResult(toolCallId: toolCallId, content: content)
+            }
+        }
+    }
+
+    private func runRequest(
+        engine: AgentEngine,
+        modelID: String,
+        systemPrompt: String,
+        messages: [BenchmarkMessage],
+        toolSpecs: [ToolSpec],
+        parameters: AgentGenerateParameters
+    ) async throws -> RequestResult {
+        let prefixCacheConversation = HTTPPrefixCacheConversation(
+            systemPrompt: systemPrompt,
+            messages: messages.map(\.prefixCacheMessage)
+        )
+        let llmMessages = messages.map(\.llmMessage)
+
+        let startInstant = ContinuousClock.now
+        let start = try await engine.generateServerTextCompletion(
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: llmMessages,
+            toolSpecs: toolSpecs,
+            prefixCacheConversation: prefixCacheConversation,
+            parameters: parameters
+        )
+
+        var ttftSeconds: Double = 0
+        var generatedText = ""
+        var assistantText = ""
+        var assistantReasoning = ""
+        var toolCalls: [ToolCallInfo] = []
+        var firstTokenSeen = false
+
+        for try await event in start.stream {
+            if !firstTokenSeen {
+                ttftSeconds = Self.elapsedSeconds(from: startInstant)
+                firstTokenSeen = true
+            }
+            switch event {
+            case .text(let chunk):
+                assistantText += chunk
+                generatedText += chunk
+            case .thinking(let chunk):
+                assistantReasoning += chunk
+                generatedText += chunk
+            case .toolCall(let call):
+                toolCalls.append(ToolCallInfo(
+                    id: "bench-call-\(toolCalls.count)",
+                    name: call.function.name,
+                    argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(call.function.arguments)
+                ))
+            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .info:
+                break
+            }
+        }
+
+        if !firstTokenSeen {
+            // Stream completed without emitting any chunks.
+            ttftSeconds = Self.elapsedSeconds(from: startInstant)
+        }
+
+        let trimmedReasoning = assistantReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return RequestResult(
+            cachedTokens: start.cachedTokenCount,
+            ttftSeconds: ttftSeconds,
+            generatedText: generatedText,
+            assistantText: assistantText,
+            assistantReasoning: trimmedReasoning.isEmpty ? nil : trimmedReasoning,
+            toolCalls: toolCalls
+        )
     }
 
     private func runRequest(
@@ -266,51 +390,13 @@ final class PrefixCacheE2ERunner {
         toolSpecs: [ToolSpec],
         parameters: AgentGenerateParameters
     ) async throws -> RequestResult {
-        let prefixCacheConversation = HTTPPrefixCacheConversation(
-            systemPrompt: systemPrompt,
-            messages: [HTTPPrefixCacheMessage(role: .user, content: userMessage)]
-        )
-        let llmMessages: [LLMMessage] = [.user(content: userMessage, images: [])]
-
-        let startInstant = ContinuousClock.now
-        let start = try await engine.generateServerTextCompletion(
+        try await runRequest(
+            engine: engine,
             modelID: modelID,
             systemPrompt: systemPrompt,
-            messages: llmMessages,
+            messages: [.user(userMessage)],
             toolSpecs: toolSpecs,
-            prefixCacheConversation: prefixCacheConversation,
-            sessionAffinity: nil,
             parameters: parameters
-        )
-
-        var ttftSeconds: Double = 0
-        var generatedText = ""
-        var firstTokenSeen = false
-
-        for try await event in start.stream {
-            if !firstTokenSeen {
-                ttftSeconds = Self.elapsedSeconds(from: startInstant)
-                firstTokenSeen = true
-            }
-            switch event {
-            case .text(let chunk):
-                generatedText += chunk
-            case .thinking(let chunk):
-                generatedText += chunk
-            case .thinkStart, .thinkEnd, .thinkReclassify, .toolCall, .malformedToolCall, .info:
-                break
-            }
-        }
-
-        if !firstTokenSeen {
-            // Stream completed without emitting any chunks.
-            ttftSeconds = Self.elapsedSeconds(from: startInstant)
-        }
-
-        return RequestResult(
-            cachedTokens: start.cachedTokenCount,
-            ttftSeconds: ttftSeconds,
-            generatedText: generatedText
         )
     }
 
@@ -319,6 +405,157 @@ final class PrefixCacheE2ERunner {
     }
 
     // MARK: - Branch-point scenario
+
+    private struct ToolLoopScenarioResult {
+        let requestY1: RequestResult
+        let requestY2: RequestResult
+        let requestY3: RequestResult
+    }
+
+    /// Verifies the direct-leaf path for a `tool_calls` turn and the
+    /// canonical user-leaf path after the loop resolves.
+    private func runToolLoopScenario(
+        engine: AgentEngine,
+        modelID: String,
+        systemPrompt: String,
+        toolSpecs: [ToolSpec],
+        params: AgentGenerateParameters,
+        stablePrefixBaseline: Int,
+        checks: inout [CheckResult]
+    ) async throws -> ToolLoopScenarioResult {
+        var toolLoopParams = params
+        toolLoopParams.maxTokens = max(params.maxTokens, 160)
+        let toolLoopPrompt = """
+            Call exactly one tool now: use the `read` tool with the absolute \
+            path `/tmp/tool-loop-target.txt`. Do not answer in prose before \
+            the tool call. Emit only the tool call.
+            """
+
+        log("\n── Step Y1: Tool-call turn ──")
+        let requestY1 = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            userMessage: toolLoopPrompt,
+            toolSpecs: toolSpecs,
+            parameters: toolLoopParams
+        )
+        log("  cachedTokens=\(requestY1.cachedTokens) ttft=\(String(format: "%.3f", requestY1.ttftSeconds))s "
+            + "toolCalls=\(requestY1.toolCalls.count) generatedChars=\(requestY1.generatedText.count)")
+        checks.append(CheckResult(
+            name: "requestY1_emits_tool_calls",
+            passed: !requestY1.toolCalls.isEmpty,
+            detail: "toolCalls=\(requestY1.toolCalls.count) expected > 0"
+        ))
+
+        let toolResults = requestY1.toolCalls.enumerated().map { index, call in
+            BenchmarkMessage.toolResult(
+                toolCallId: call.id,
+                content: Self.syntheticToolResultContent(for: call, index: index)
+            )
+        }
+        let storedToolCallConversation = HTTPPrefixCacheConversation(
+            systemPrompt: systemPrompt,
+            messages: [
+                .init(role: .user, content: toolLoopPrompt),
+                .assistant(
+                    content: requestY1.assistantText,
+                    reasoning: requestY1.assistantReasoning,
+                    toolCalls: requestY1.toolCalls.map {
+                        HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
+                    }
+                ),
+            ]
+        )
+        let continuationMessages: [BenchmarkMessage] =
+            [
+                .user(toolLoopPrompt),
+                .assistant(
+                    content: requestY1.assistantText,
+                    reasoning: requestY1.assistantReasoning,
+                    toolCalls: requestY1.toolCalls
+                ),
+            ] + toolResults
+        let continuationConversation = HTTPPrefixCacheConversation(
+            systemPrompt: systemPrompt,
+            messages: continuationMessages.map(\.prefixCacheMessage)
+        )
+        _ = storedToolCallConversation.isPrefix(of: continuationConversation)
+
+        log("\n── Step Y2: Tool-result continuation (direct leaf expected) ──")
+        let requestY2 = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: continuationMessages,
+            toolSpecs: toolSpecs,
+            parameters: toolLoopParams
+        )
+        log("  cachedTokens=\(requestY2.cachedTokens) ttft=\(String(format: "%.3f", requestY2.ttftSeconds))s "
+            + "toolCalls=\(requestY2.toolCalls.count) generatedChars=\(requestY2.generatedText.count)")
+        checks.append(CheckResult(
+            name: "requestY2_hits_direct_tool_leaf",
+            passed: requestY2.cachedTokens > stablePrefixBaseline,
+            detail: "cachedTokens=\(requestY2.cachedTokens) expected > stable-prefix baseline="
+                + "\(stablePrefixBaseline)"
+        ))
+        checks.append(CheckResult(
+            name: "requestY2_finishes_tool_loop",
+            passed: requestY2.toolCalls.isEmpty && !requestY2.assistantText.isEmpty,
+            detail: "toolCalls=\(requestY2.toolCalls.count) assistantChars=\(requestY2.assistantText.count) "
+                + "expected 0 tool calls and non-empty assistant text"
+        ))
+
+        let resolvedMessages = continuationMessages + [
+            .assistant(
+                content: requestY2.assistantText,
+                reasoning: requestY2.assistantReasoning,
+                toolCalls: requestY2.toolCalls
+            ),
+            .user("summarize that in one sentence"),
+        ]
+        let storedResolvedConversation = HTTPPrefixCacheConversation(
+            systemPrompt: systemPrompt,
+            messages: continuationMessages.map(\.prefixCacheMessage) + [
+                .assistant(
+                    content: requestY2.assistantText,
+                    reasoning: requestY2.assistantReasoning,
+                    toolCalls: requestY2.toolCalls.map {
+                        HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
+                    }
+                ),
+            ]
+        )
+        let nextUserConversation = HTTPPrefixCacheConversation(
+            systemPrompt: systemPrompt,
+            messages: resolvedMessages.map(\.prefixCacheMessage)
+        )
+        _ = storedResolvedConversation.isPrefix(of: nextUserConversation)
+
+        log("\n── Step Y3: Next user turn (canonical user leaf expected) ──")
+        let requestY3 = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: resolvedMessages,
+            toolSpecs: toolSpecs,
+            parameters: toolLoopParams
+        )
+        log("  cachedTokens=\(requestY3.cachedTokens) ttft=\(String(format: "%.3f", requestY3.ttftSeconds))s "
+            + "generatedChars=\(requestY3.generatedText.count)")
+        checks.append(CheckResult(
+            name: "requestY3_hits_canonical_user_leaf",
+            passed: requestY3.cachedTokens > stablePrefixBaseline,
+            detail: "cachedTokens=\(requestY3.cachedTokens) expected > stable-prefix baseline="
+                + "\(stablePrefixBaseline)"
+        ))
+
+        return ToolLoopScenarioResult(
+            requestY1: requestY1,
+            requestY2: requestY2,
+            requestY3: requestY3
+        )
+    }
 
     /// Verifies branch-point capture, re-hit, and utility-scored survival
     /// against the loaded model. The three steps log themselves below.
@@ -479,6 +716,7 @@ final class PrefixCacheE2ERunner {
         systemPrompt: String,
         toolSpecs: [ToolSpec],
         params: AgentGenerateParameters,
+        stablePrefixBaseline: Int,
         checks: inout [CheckResult]
     ) async throws -> RestartScenarioResult {
         log("\n── Step X: SSD restart scenario ──")
@@ -521,9 +759,13 @@ final class PrefixCacheE2ERunner {
             log("  Loading model into SSD-enabled engine…")
             try await ssdEngine.loadModel(from: modelDir, visionMode: false)
 
-            // X1 and X2 must send byte-identical requests for the
-            // equivalence check to mean anything.
+            // X1 seeds SSD with the `.system` snapshot and a canonical
+            // `.leaf` for the generated assistant turn. After restart,
+            // X2 is a true continuation request so the first hit on the
+            // new engine exercises the warm-started leaf path, not the
+            // deleted historical boundary checkpoint.
             let restartPrompt = "read file /tmp/foo.txt"
+            let continuationPrompt = "now list files in /tmp/data"
 
             log("\n── Step X1: Request (cold, writes SSD snapshot) ──")
             let requestX1 = try await runRequest(
@@ -542,18 +784,27 @@ final class PrefixCacheE2ERunner {
                 detail: "cachedTokens=\(requestX1.cachedTokens) expected 0"
             ))
 
+            let continuationMessages: [BenchmarkMessage] = [
+                .user(restartPrompt),
+                .assistant(
+                    content: requestX1.assistantText,
+                    reasoning: requestX1.assistantReasoning
+                ),
+                .user(continuationPrompt),
+            ]
+
             // `reloadEngine` drains the SSD writer + persists the
             // manifest inside `unloadModel`'s detached task, then
             // reloads against the same rootURL.
             log("  Unloading + reloading SSD engine at \(ssdRoot.path)…")
             try await reloadEngine(ssdEngine, modelDir: modelDir)
 
-            log("\n── Step X2: Request (after restart, SSD hit) ──")
+            log("\n── Step X2: Continuation request (after restart, SSD leaf hit) ──")
             let requestX2 = try await runRequest(
                 engine: ssdEngine,
                 modelID: modelID,
                 systemPrompt: systemPrompt,
-                userMessage: restartPrompt,
+                messages: continuationMessages,
                 toolSpecs: toolSpecs,
                 parameters: params
             )
@@ -561,35 +812,19 @@ final class PrefixCacheE2ERunner {
                 + "generatedChars=\(requestX2.generatedText.count)")
 
             checks.append(CheckResult(
-                name: "requestX2_hits_ssd_after_restart",
-                passed: requestX2.cachedTokens > 0,
-                detail: "cachedTokens=\(requestX2.cachedTokens) expected > 0 after warm start"
+                name: "requestX2_hits_leaf_after_restart",
+                passed: requestX2.cachedTokens > stablePrefixBaseline,
+                detail: "cachedTokens=\(requestX2.cachedTokens) expected > stable-prefix baseline="
+                    + "\(stablePrefixBaseline) after warm-started leaf restore"
             ))
 
-            let equivalence = Self.checkGreedyOutputEquivalence(
-                requestX1.generatedText,
-                requestX2.generatedText,
-                labelA: "x1",
-                labelB: "x2"
-            )
             checks.append(CheckResult(
-                name: "requestX2_byte_identical_to_x1",
-                passed: equivalence.passed,
-                detail: equivalence.detail
+                name: "requestX2_generated_nonempty_after_leaf_hit",
+                passed: !requestX2.generatedText.isEmpty,
+                detail: "generatedChars=\(requestX2.generatedText.count) expected > 0"
             ))
 
-            // 50% of cold or 200 ms floor — hydration is NVMe read +
-            // suffix prefill, not full cold prefill.
-            let ttftThreshold = max(requestX1.ttftSeconds * 0.5, 0.200)
-            checks.append(CheckResult(
-                name: "requestX2_ttft_under_threshold",
-                passed: requestX2.ttftSeconds < ttftThreshold,
-                detail: "ttftX2=\(String(format: "%.3f", requestX2.ttftSeconds))s "
-                    + "< threshold=\(String(format: "%.3f", ttftThreshold))s "
-                    + "(cold=\(String(format: "%.3f", requestX1.ttftSeconds))s)"
-            ))
-
-            log("\n── Step X3: Request (new user message, same system) ──")
+            log("\n── Step X3: Request (fresh user message, same system) ──")
             let requestX3 = try await runRequest(
                 engine: ssdEngine,
                 modelID: modelID,
@@ -644,6 +879,33 @@ final class PrefixCacheE2ERunner {
         "Say hi",
         "Name an animal",
     ]
+
+    private static func syntheticToolResultContent(
+        for call: ToolCallInfo,
+        index: Int
+    ) -> String {
+        switch call.name {
+        case "read":
+            return """
+                /tmp/tool-loop-target.txt
+                alpha
+                beta
+                gamma
+                """
+        case "ls":
+            return """
+                /tmp/tool-loop-target.txt
+                /tmp/tool-loop-notes.md
+                """
+        default:
+            return """
+                tool=\(call.name)
+                index=\(index)
+                status=ok
+                payload=mock result for \(call.name) with args \(call.argumentsJSON)
+                """
+        }
+    }
 
     // MARK: - Fixtures
 
@@ -778,6 +1040,7 @@ final class PrefixCacheE2ERunner {
         requestB1: RequestResult,
         requestB2: RequestResult,
         requestB3: RequestResult,
+        toolLoopResult: ToolLoopScenarioResult,
         restartResult: RestartScenarioResult,
         ttftRatio: Double,
         allPassed: Bool
@@ -805,16 +1068,14 @@ final class PrefixCacheE2ERunner {
             let requestB1: RequestMeasurement
             let requestB2: RequestMeasurement
             let requestB3: RequestMeasurement
+            let requestY1: RequestMeasurement
+            let requestY2: RequestMeasurement
+            let requestY3: RequestMeasurement
             let requestX1: RequestMeasurement
             let requestX2: RequestMeasurement
             let requestX3: RequestMeasurement
             let ttftRatioB1OverA: Double
-            let ttftRatioX2OverX1: Double
         }
-
-        let x2OverX1 = restartResult.requestX1.ttftSeconds > 0
-            ? restartResult.requestX2.ttftSeconds / restartResult.requestX1.ttftSeconds
-            : 1.0
 
         let report = Report(
             date: ISO8601DateFormatter().string(from: Date()),
@@ -826,11 +1087,13 @@ final class PrefixCacheE2ERunner {
                 requestB1: RequestMeasurement(requestB1),
                 requestB2: RequestMeasurement(requestB2),
                 requestB3: RequestMeasurement(requestB3),
+                requestY1: RequestMeasurement(toolLoopResult.requestY1),
+                requestY2: RequestMeasurement(toolLoopResult.requestY2),
+                requestY3: RequestMeasurement(toolLoopResult.requestY3),
                 requestX1: RequestMeasurement(restartResult.requestX1),
                 requestX2: RequestMeasurement(restartResult.requestX2),
                 requestX3: RequestMeasurement(restartResult.requestX3),
-                ttftRatioB1OverA: ttftRatio,
-                ttftRatioX2OverX1: x2OverX1
+                ttftRatioB1OverA: ttftRatio
             )
         )
 

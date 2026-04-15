@@ -139,6 +139,20 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    struct LeafModeEvent: Payload {
+        let mode: String
+        let continuation: String
+
+        let eventName = "leafMode"
+
+        var fields: [(String, String)] {
+            [
+                ("mode", mode),
+                ("continuation", continuation),
+            ]
+        }
+    }
+
     struct EvictionEvent: Payload {
         let strategy: PrefixCacheManager.EvictionEvent.Strategy
         let offset: Int
@@ -363,6 +377,20 @@ nonisolated enum PrefixCacheDiagnostics {
 
         var fields: [(String, String)] {
             [("id", id)]
+        }
+    }
+
+    struct LeafSupersessionEvent: Payload {
+        let offset: Int
+        let storageRefID: String?
+
+        let eventName = "leafSupersession"
+
+        var fields: [(String, String)] {
+            [
+                ("offset", "\(offset)"),
+                ("storageRefID", storageRefID ?? "nil"),
+            ]
         }
     }
 

@@ -159,6 +159,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     private var currentSSDBytes: Int = 0
     private var manifestDirty: Bool = false
     private var manifestPersistTask: Task<Void, Never>?
+    /// Snapshot IDs explicitly removed by the MainActor store while a write
+    /// may already be in flight. `processPendingItem` checks this set before
+    /// writing and before commit so superseded leaves never land in the
+    /// manifest after their radix node has been cleaned up.
+    private var deletedInFlightSnapshotIDs: Set<String> = []
     /// Continuations waiting for the writer to finish its current
     /// `drainPending` iteration. `flushAsync()` registers one per
     /// call and the writer resumes them all after each drain cycle
@@ -175,6 +180,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
     private let onCommit: @Sendable (String) -> Void
     private let onDrop: @Sendable (String, SSDDropReason) -> Void
+    private let writerDrainPreludeForTesting: (@Sendable () async -> Void)?
 
     // MARK: - Public API
 
@@ -182,7 +188,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         config: SSDPrefixCacheConfig,
         manifestDebounce: Duration = .milliseconds(500),
         onCommit: @escaping @Sendable (String) -> Void = { _ in },
-        onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in }
+        onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in },
+        writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
     ) {
         self.rootURL = config.rootURL
         self.budgetBytes = config.budgetBytes
@@ -190,6 +197,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         self.manifestDebounce = manifestDebounce
         self.onCommit = onCommit
         self.onDrop = onDrop
+        self.writerDrainPreludeForTesting = writerDrainPreludeForTesting
 
         let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         self.wakeupStream = stream
@@ -413,6 +421,40 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         writePartitionMetaFile(meta, digest: digest)
     }
 
+    /// Remove a snapshot from the SSD tier immediately. Handles all three
+    /// states:
+    /// - pending queue entry not yet popped
+    /// - committed resident in the manifest
+    /// - in-flight writer item already popped from the queue
+    ///
+    /// The in-flight case is tracked via `deletedInFlightSnapshotIDs`; the
+    /// writer checks that tombstone before writing and again before commit.
+    func deleteSnapshot(snapshotID: String) {
+        var fileURLToDelete: URL?
+
+        lock.lock()
+
+        if let pendingIndex = pending.firstIndex(where: { $0.descriptor.snapshotID == snapshotID }) {
+            let removed = pending.remove(at: pendingIndex)
+            pendingBytes -= removed.payload.totalBytes
+            if pendingBytes < 0 { pendingBytes = 0 }
+            lock.unlock()
+            return
+        }
+
+        if let resident = removeResidentUnderLock(snapshotID: snapshotID) {
+            fileURLToDelete = resident.fileURL
+            lock.unlock()
+            if let fileURLToDelete {
+                try? FileManager.default.removeItem(at: fileURLToDelete)
+            }
+            return
+        }
+
+        deletedInFlightSnapshotIDs.insert(snapshotID)
+        lock.unlock()
+    }
+
     /// Serialize a `PartitionMeta` to `partitions/{digest}/_meta.json`.
     /// Best-effort: failures log at error level but do not abort the
     /// caller. The only caller that depends on the file is the
@@ -447,6 +489,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
     private func writerLoop() async {
         for await _ in wakeupStream {
+            await writerDrainPreludeForTesting?()
             await drainPending()
             resumeDrainWaiters()
         }
@@ -484,6 +527,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     }
 
     private func processPendingItem(_ item: PendingWrite) async {
+        if shouldSkipDeletedWrite(snapshotID: item.descriptor.snapshotID) {
+            releasePendingBytes(item.payload.totalBytes)
+            return
+        }
+
         // 1. Admission LRU cut. Returns the admit/drop decision
         //    and a list of committed residents that were evicted
         //    to make room. The lock is held only long enough to
@@ -576,9 +624,19 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             return
         }
 
+        if shouldSkipDeletedWrite(snapshotID: item.descriptor.snapshotID) {
+            try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
+            releasePendingBytes(item.payload.totalBytes)
+            return
+        }
+
         // 3. Write succeeded: register the descriptor, release the
         //    pending byte budget, and fire the commit callback.
-        commitDescriptorToManifest(item.descriptor)
+        guard commitDescriptorToManifest(item.descriptor) else {
+            try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
+            releasePendingBytes(item.payload.totalBytes)
+            return
+        }
         releasePendingBytes(item.payload.totalBytes)
         PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
             id: item.descriptor.snapshotID,
@@ -589,6 +647,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             PrefixCacheDiagnostics.StorageRefCommitEvent(id: item.descriptor.snapshotID)
         )
         onCommit(item.descriptor.snapshotID)
+    }
+
+    private func shouldSkipDeletedWrite(snapshotID: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return deletedInFlightSnapshotIDs.remove(snapshotID) != nil
     }
 
     /// Centralized writer-drop emission: terminal `ssdAdmit` outcome
@@ -747,7 +811,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             // bigger than `budgetBytes`), not filesystem fullness.
             return (.drop(.exceedsBudget), evicted)
 
-        case .lastMessageBoundary, .leaf, .branchPoint:
+        case .leaf, .branchPoint:
             // Non-system incoming, non-system eligible set empty.
             // System protection kicks in: drop the incoming rather
             // than destroying any `.system` resident.
@@ -954,9 +1018,13 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
     // MARK: - Manifest mutation
 
-    private func commitDescriptorToManifest(_ descriptor: PersistedSnapshotDescriptor) {
+    private func commitDescriptorToManifest(_ descriptor: PersistedSnapshotDescriptor) -> Bool {
         lock.lock()
         defer { lock.unlock() }
+
+        if deletedInFlightSnapshotIDs.remove(descriptor.snapshotID) != nil {
+            return false
+        }
 
         // Newly committed entries get a `lastAccessAt` of "now"; the
         // front door builds the descriptor once at extraction time,
@@ -969,6 +1037,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         currentSSDBytes += descriptor.bytes
         manifestDirty = true
         scheduleManifestPersistLocked()
+        return true
     }
 
     /// Release `bytes` from the front door's pending byte counter.
@@ -1150,6 +1219,19 @@ extension SSDSnapshotStore {
                 + "loaded=\(loaded.schemaVersion) "
                 + "current=\(SnapshotManifestSchema.currentVersion); starting fresh"
             )
+            let backupURL = rootURL.appendingPathComponent(
+                "manifest.v\(loaded.schemaVersion).bak"
+            )
+            try? FileManager.default.removeItem(at: backupURL)
+            if FileManager.default.fileExists(atPath: manifestURL.path) {
+                try? FileManager.default.moveItem(at: manifestURL, to: backupURL)
+            }
+            let partitionsDir = rootURL.appendingPathComponent("partitions")
+            if FileManager.default.fileExists(atPath: partitionsDir.path) {
+                Task.detached {
+                    try? FileManager.default.removeItem(at: partitionsDir)
+                }
+            }
             return .empty
         }
 

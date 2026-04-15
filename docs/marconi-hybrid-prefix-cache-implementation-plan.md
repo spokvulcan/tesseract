@@ -5,6 +5,26 @@
 **Prerequisite reading:** `docs/mlx-swift-lm-prefill-memory-research.md` (§4.7, §7.5–7.6)
 **References:** [Marconi paper](https://assets.amazon.science/96/d4/ee6df8f84a34b49a71f9c39212f2/marconi-prefix-caching-for-the-era-of-hybrid-llms.pdf), [Marconi reference repo](https://github.com/ruipeterpan/marconi), [SGLang MambaRadixCache](https://pytorch.org/blog/hybrid-models-meet-sglang-more-than-full-attention/), [mlx-lm #1072](https://github.com/ml-explore/mlx-lm/pull/1072)
 
+**2026-04-15 architecture update.** The shipped design is simpler than some of
+the historical Phase 1/4.1 notes below:
+- Stored checkpoint types are only `.system`, `.leaf`, and `.branchPoint`.
+- `lastMessageBoundary` is no longer a stored checkpoint type. Boundary
+  detection remains only as a request-local transient helper used to synthesize
+  continuation-shaped `.leaf` snapshots on Qwen3.5-style templates.
+- Tool-call turns store one direct tool-continuation `.leaf`, derived from the
+  shared token prefix between the isolated assistant turn and a synthetic
+  tool-result continuation.
+- Non-tool turns store one canonical user-continuation `.leaf`, derived from
+  the shared token prefix between the isolated assistant turn and a synthetic
+  next-user continuation.
+- Canonical user-leaf synthesis restores from the last real user boundary when
+  that transient snapshot is available; otherwise it falls back to the deepest
+  existing cache snapshot below the canonical prefix.
+- Only the newest `.leaf` on a structural branch survives; storing a descendant
+  leaf supersedes older ancestor leaves immediately in RAM and SSD.
+- SSD manifest schema version is `3`; older manifests are hard-invalidated on
+  warm start.
+
 ---
 
 ## Review Blockers Addressed
@@ -1175,12 +1195,12 @@ offset. Turn N+1 re-renders the same history with `assistant1 = Y` (think
 block stripped, because it is no longer the most recent assistant). Token
 paths diverge at the assistant position, so the stored leaf is unreachable.
 
-**Fix:** capture a **second** mid-prefill checkpoint at the _last-message
-boundary_ — the offset where the final history message ends, right before
-the `<|im_start|>assistant\n<think>\n` generation prompt. Unlike the leaf,
-this offset sits **before** any re-renderable assistant content, so it is
-stable across turns: turn N+1's first `lastMessageBoundaryOffset` tokens
-match turn N's stored tokens byte-for-byte.
+**Current fix:** capture the _last-message boundary_ only as a **transient
+request-local helper** — the offset where the final history message ends,
+right before the `<|im_start|>assistant\n<think>\n` generation prompt. That
+transient snapshot is restored immediately to synthesize the canonical
+stripped `.leaf` for thinking/Qwen-style templates. It is **not** stored in
+RAM or SSD as a separate checkpoint type.
 
 **Implementation details:**
 
@@ -1189,14 +1209,13 @@ match turn N's stored tokens byte-for-byte.
    `<|im_start|>assistant\n` otherwise) and subtracting its length from
    `fullTokens.count`. This avoids needing an `addGenerationPrompt=false`
    path, which the `MLXLMCommon.Tokenizer` protocol doesn't expose.
-2. `PrefixCacheManager.planCheckpoints` gained a
-   `lastMessageBoundaryOffset: Int?` parameter. Both `stablePrefixOffset`
-   and `lastMessageBoundaryOffset` are planned as `.system`-type
-   checkpoints when not already stored, with automatic dedup if the two
-   offsets coincide.
-3. The existing `alreadyStored` logic was tightened to match the
-   **requested** checkpoint type, not just any snapshot at the offset, so a
-   pre-existing `.leaf` doesn't suppress a needed `.system` checkpoint.
+2. `PrefixCacheManager.planCheckpoints` remains responsible only for stored
+   mid-prefill checkpoints (`stablePrefixOffset` and optional
+   `.branchPoint`). The boundary offset is no longer part of the stored
+   checkpoint planner.
+3. The canonical leaf path uses the transient boundary snapshot to re-prefill
+   only the assistant residual and stores a single stripped `.leaf` under the
+   token path turn N+1 will actually render.
 
 #### Ancillary robustness additions
 
@@ -1422,15 +1441,22 @@ Extend `planCheckpoints()` to perform **Marconi speculative insertion**:
 1. Walk the tree with the new token sequence as if inserting it.
 2. If insertion would **split an existing edge** (the shared prefix continues inside a compressed edge, then diverges), mark the split offset as a `.branchPoint` checkpoint candidate.
 3. If the new sequence only **extends an existing path at a node boundary**, do **not** create a `.branchPoint` checkpoint. The leaf checkpoint already covers this case.
-4. Admit **at most one** `.branchPoint` candidate per request — independent of the Phase 1 stable-prefix and last-message-boundary checkpoints, which are kept as-is.
+4. Admit **at most one** `.branchPoint` candidate per request — independent of
+   the Phase 1 stable-prefix checkpoint. The boundary helper is transient-only
+   and does not count as a stored checkpoint.
 
-**Checkpoint budget — deliberate divergence from the paper.** Marconi's strict reading is "max 2 checkpoints per sequence" (one mid-prefill + one leaf). Tesseract's Phase 1 already ships **two** mid-prefill checkpoints (`stablePrefixOffset` for system+tools reuse, `lastMessageBoundaryOffset` for cross-turn reuse on Qwen3.5's template) plus the leaf, so the actual Phase 1 budget is **3 captures per request**. Task 2.1 adds at most one further `.branchPoint` candidate when a true mid-edge divergence occurs, raising the worst-case Phase 2 budget to **4 captures per request**:
+**Checkpoint budget — current form.** Marconi's strict reading is "max 2
+checkpoints per sequence" (one mid-prefill + one leaf). Tesseract's current
+design stays close to that: one stored mid-prefill checkpoint
+(`stablePrefixOffset`) plus one stored leaf, with an optional extra
+`.branchPoint` candidate when a true mid-edge divergence occurs. The boundary
+helper is transient-only and never persisted:
 
 | Phase                        | Mid-prefill | Leaf | Total worst-case | Triggered by                          |
 | ---------------------------- | ----------- | ---- | ---------------- | ------------------------------------- |
 | Marconi paper                | 1           | 1    | 2                | always                                |
-| Tesseract Phase 1            | 2           | 1    | 3                | non-empty system + multi-message body |
-| Tesseract Phase 2 (Task 2.1) | up to 3     | 1    | 4                | + mid-edge divergence on the body     |
+| Tesseract current Phase 1    | 1 stored + 1 transient helper | 1 | 2 stored / 3 captured | non-empty system + thinking/Qwen body |
+| Tesseract Phase 2 (Task 2.1) | up to 2 stored + 1 transient helper | 1 | 3 stored / 4 captured | + mid-edge divergence on the body     |
 
 The extra captures are conditional and rare in practice — branch points only fire on true mid-edge divergence (not node-boundary extensions, not cold cache, not exact-path reuse). Each capture adds one chunk split in `chunkedPrefill` (negligible) and one snapshot allocation (`evictToFitBudget` enforces the global memory budget immediately after store, so steady-state usage stays bounded). The trade is two extra cross-conversation hit paths in exchange for the enlarged budget — the design considers it worth it for Tesseract's primary subagent + Qwen3.5 workload.
 
@@ -1774,7 +1800,10 @@ Tesseract's current eviction policy (Phase 2) is a faithful implementation of _M
 
 **Where the paper is silent and we make a deliberate engineering choice:**
 
-- _Caps on specific entry types._ Marconi has no quota system. Phase 4.1 **rejects** a per-type cap (e.g., the earlier draft's "N=4 most-recent `.lastMessageBoundary` on SSD") because (a) it violates Marconi's "one formula, one knob" convention, (b) the recency term already penalizes stale boundaries, and (c) the top-level `prefixCacheSSDBudgetBytes` (20 GiB default) is a single cap that bounds total growth without discriminating by type. If production traces ever show the recency term is insufficient for bounding `.lastMessageBoundary` growth, Phase 4.1.b can add a per-type admission filter — which Marconi's authors would call an admission gate, matching the paper's admission-first philosophy.
+- _Caps on specific entry types._ Marconi has no quota system. Phase 4.1
+  keeps a single SSD budget knob (`prefixCacheSSDBudgetBytes`) and does not
+  add per-type quotas. The older draft's `.lastMessageBoundary`-specific cap is
+  obsolete because that checkpoint type is no longer persisted.
 - _Cost-aware utility._ Marconi treats hits as free. A true tier-aware formula would weight `F/B` by `1 / readLatency(tier)` so a RAM hit (~1 ms) counts differently from an SSD hit (~40 ms). Phase 4.1 does **not** do this — we use recency-only on SSD because (a) we don't have measured tier-hit latencies yet, (b) the descriptor schema does not carry the FLOP inputs, so any tier-aware formula on SSD would require the same schema extension as full Marconi, and (c) the RAM tier's formula is unchanged so there is nothing asymmetric on the RAM side either. Phase 4.1.b is the natural home for both upgrades (schema extension + cost-aware weighting) and they should be scoped together.
 
 **What this means for reviewers.** Three specific claims to anchor against:
@@ -1906,7 +1935,7 @@ struct PersistedSnapshotDescriptor: Codable, Sendable {
     let partitionDigest: String          // 8-hex from CachePartitionKey
     let pathFromRoot: [Int]              // radix tree path, enables tree rebuild
     let tokenOffset: Int
-    let checkpointType: String           // "system" | "lastMessageBoundary" | "leaf" | "branchPoint"
+    let checkpointType: String           // "system" | "leaf" | "branchPoint"
     let bytes: Int                       // on-disk file size
     let createdAt: Double                // Date since reference
     var lastAccessAt: Double             // Date since reference — bumped to .now by SSDSnapshotStore.recordHit(id:) on every hit (RAM state-4 lookup OR SSD state-5 hydration); sole eviction input under alpha=0
@@ -1920,9 +1949,8 @@ struct PartitionMeta: Codable, Sendable {
     let modelFingerprint: String         // hex SHA-256 over config.json bytes + tokenizer.json bytes + sorted [(filename, size, mtime)] for every *.safetensors in the model dir (see decision 5)
     let kvBits: Int?                     // nil for unquantized
     let kvGroupSize: Int
-    let sessionAffinity: String?
     let createdAt: Double
-    let schemaVersion: Int               // current = 1
+    let schemaVersion: Int               // current = 2
 }
 
 // The full manifest, persisted to manifest.json, rebuilt from scratch if corrupt.
@@ -2103,7 +2131,7 @@ There is **no selective-write-through gate** in Phase 4.1. Every persist-eligibl
      2. Evict oldest non-`.system` residents one at a time, updating `currentSSDBytes` after each, until the new entry fits.
      3. If non-`.system` residents are exhausted and the new entry still doesn't fit, branch on the incoming's type:
         - **Incoming is `.system`**: fall through to evicting oldest `.system` residents. This is a lateral move — a fresh system prompt is replacing an older one, and protection is preserved across the set. Continue until fit.
-        - **Incoming is NOT `.system` (`.leaf` / `.lastMessageBoundary` / `.branchPoint`)**: **drop the incoming write**. Do NOT evict `.system` residents. The incoming is less valuable than the `.system` entries we'd have to destroy to make room, and the correct Marconi-faithful answer is to protect the high-value resident set. Fire `PrefixCacheDiagnostics.ssdAdmit(id:, outcome: .droppedSystemProtectionWins)` and return. The in-flight `storageRef` on the node is cleared via the normal `markStorageRefDropped` callback.
+        - **Incoming is NOT `.system` (`.leaf` / `.branchPoint`)**: **drop the incoming write**. Do NOT evict `.system` residents. The incoming is less valuable than the `.system` entries we'd have to destroy to make room, and the correct Marconi-faithful answer is to protect the high-value resident set. Fire `PrefixCacheDiagnostics.ssdAdmit(id:, outcome: .droppedSystemProtectionWins)` and return. The in-flight `storageRef` on the node is cleared via the normal `markStorageRefDropped` callback.
    - This rule preserves the stated protection goal: `.system` entries on SSD are never destroyed to make room for lower-value entries. The earlier draft's "fallback to oldest including `.system`" phrasing was a regression — it allowed non-system incomings to evict `.system` residents in the degenerate case, which broke type protection. (P1 flagged on 2026-04-14 fixed in this revision.)
    - This is **not** full Phase 2 Marconi — it is Marconi at α=0, which reduces to LRU within the eligible set. The rationale is in decision 21, decision 27, and the "Marconi extension" design note above: the writer actor cannot inspect live radix-tree state (parent offsets, childCount) from its own isolation domain, and running full Marconi on SSD would require either a descriptor schema extension or a cross-actor hop per scoring call. **At startup before the alpha tuner runs**, the RAM tier is also at α=0 (`LLMActor.swift:666` resets `EvictionPolicy.alpha = 0.0`), so the two tiers' policies are behaviorally equivalent. **After the alpha tuner writes `bestAlpha` at `AlphaTuner.swift:193`**, the RAM tier moves to the full formula while the SSD tier stays at LRU — the policies diverge subtly, and Phase 4.1 accepts the divergence (decision 27). Phase 4.1 ships the simpler form and leaves the schema extension as a Phase 4.1.b concern, gated on both the alpha tuner raising α above 0 AND production traces showing that the divergence costs real hit rate.
    - **Incoming usually wins but NOT always.** At α=0, recency is the sole eviction-scoring input and the incoming's `lastAccessAt = .now` beats every existing resident. So in the common case (SSD has at least one non-`.system` resident) the writer evicts the oldest non-`.system` resident and admits the incoming. The **exception** is the degenerate case documented in step 5 above and in Eviction + demotion bullet 4: if the non-`.system` eligible set is exhausted and the incoming is itself non-`.system`, the incoming is **dropped**. This preserves `.system` type protection, which is why the rule is asymmetric. A `.system` incoming in the same degenerate state still wins (lateral eviction of the oldest `.system` resident). This is the only case where "incoming loses" — not because of scoring, but because type protection for `.system` is a hard rule on SSD.
@@ -2325,7 +2353,7 @@ Because SSD writes happen at capture time (not at eviction time), RAM eviction i
   - SHA-256 over: `config.json` bytes + `tokenizer.json` bytes + sorted list of `(filename, size, mtime)` for every `*.safetensors` in the model directory.
   - Deliberately does **not** hash the weight bytes themselves (too expensive at load time — ~5–10 seconds for a 4B model). The `(size, mtime)` tuple is cryptographically weak but matches APFS behavior: replacing a weight file always changes mtime, and any real retraining pipeline produces different sizes or different mtimes.
   - Stored on `LLMActor` alongside the `ModelContainer`; passed into every `CachePartitionKey` constructed on that actor.
-- The fingerprint is written into the safetensors header for every snapshot AND into the partition meta file AND into the partition digest (`partitionDigest = fnv8(modelID || kvBits || kvGroupSize || sessionAffinity || modelFingerprint)`). A mismatch at any level invalidates without any chance of cross-contamination.
+- The fingerprint is written into the safetensors header for every snapshot AND into the partition meta file AND into the partition digest (`partitionDigest = fnv8(modelID || kvBits || kvGroupSize || modelFingerprint)`). A mismatch at any level invalidates without any chance of cross-contamination.
 
 **Concurrency (load-bearing — read carefully).**
 
@@ -2550,7 +2578,7 @@ Unit tests (`tesseractTests/`, Swift Testing framework):
 - `SnapshotManifestTests` — `Codable` round-trip, schema version mismatch handling, partition digest stability.
 - `SSDSnapshotStoreTests` — FIFO writer queue ordering, `tryEnqueue` returns synchronously in microseconds under lock acquisition, byte-budget back-pressure drops oldest-pending and fires `markStorageRefDropped` callback, `.rejectedTooLargeForBudget` on a single-payload-too-large admission attempt, `ENOSPC` handling, atomic `.tmp` → final rename under simulated crash, manifest debounce, **`recordHit(id:)` bumps descriptor.lastAccessAt synchronously under lock** (this is the P2 fix — without it, hot disk-resident entries would keep looking old to the LRU cut).
 - `SSDRecordHitIntegrationTests` — end-to-end test that the descriptor's `lastAccessAt` actually moves to the top of the LRU ordering after a lookup: fill SSD with a mix of types, hit one of the older non-`.system` entries, assert it is NOT the next eviction victim when a new entry is admitted. Also: a state-4 RAM hit (body present + committed ref) bumps the SSD descriptor, so that when the body is eventually dropped to state 5 the recency carries forward correctly.
-- `TieredSnapshotStoreTests` — composition + lifecycle only, **admission edge cases are deferred to `SSDAdmissionLRUTests`** which owns the asymmetric-fallback rule (decision 24). This suite covers: write-through at capture for every persist-eligible type (`.system`, `.leaf`, `.lastMessageBoundary`, `.branchPoint`); admission-time type-protected LRU cut evicts the oldest non-`.system` SSD resident when the budget would be exceeded in the common case; promote-on-SSD-hit installs body on node; demote-on-RAM-eviction is a body-drop that preserves the `storageRef` in whichever state it already holds; `.system` is type-protected on both tiers during normal operation; non-suspending admission confirmed via a synchronous holder test on MainActor (MainActor queue is held busy and `tryEnqueue` latency is measured — should be microseconds under lock). Does **not** assert that "incoming is always admitted" — that claim was wrong (decision 24 introduces the `.droppedSystemProtectionWins` outcome for non-`.system` incomings under degenerate pressure), and the correct assertion lives in `SSDAdmissionLRUTests`.
+- `TieredSnapshotStoreTests` — composition + lifecycle only, **admission edge cases are deferred to `SSDAdmissionLRUTests`** which owns the asymmetric-fallback rule (decision 24). This suite covers: write-through at capture for every persist-eligible type (`.system`, `.leaf`, `.branchPoint`); admission-time type-protected LRU cut evicts the oldest non-`.system` SSD resident when the budget would be exceeded in the common case; promote-on-SSD-hit installs body on node; demote-on-RAM-eviction is a body-drop that preserves the `storageRef` in whichever state it already holds; `.system` is type-protected on both tiers during normal operation; non-suspending admission confirmed via a synchronous holder test on MainActor (MainActor queue is held busy and `tryEnqueue` latency is measured — should be microseconds under lock). Does **not** assert that "incoming is always admitted" — that claim was wrong (decision 24 introduces the `.droppedSystemProtectionWins` outcome for non-`.system` incomings under degenerate pressure), and the correct assertion lives in `SSDAdmissionLRUTests`.
 - `WarmStartTests` — manifest rebuild after corruption, fingerprint mismatch invalidation, missing file recovery, partial tree rebuild with the existing `PrefixCacheIntegrationTests` fixtures.
 - `ModelFingerprintTests` — stability across reloads, sensitivity to weight swap (simulated by writing a dummy weight file with a new mtime).
 - `HybridCacheSnapshotSerializationTests` — bitwise round-trip capture → serialize → deserialize → compare every layer's state arrays byte-for-byte; schema version mismatch; expected-fingerprint mismatch.

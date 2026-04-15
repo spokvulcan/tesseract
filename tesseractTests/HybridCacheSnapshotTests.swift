@@ -313,7 +313,7 @@ struct HybridCacheSnapshotTests {
 
     @Test func serializeRoundTripAllCheckpointTypes() throws {
         let cases: [HybridCacheSnapshot.CheckpointType] = [
-            .system, .lastMessageBoundary, .leaf, .branchPoint,
+            .system, .leaf, .branchPoint,
         ]
         for ckptType in cases {
             let kv = KVCacheSimple()

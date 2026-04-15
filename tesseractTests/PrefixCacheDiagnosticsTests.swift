@@ -65,6 +65,16 @@ struct PrefixCacheDiagnosticsTests {
         #expect(context.render(leaf).contains("duringPrefill=false source=leaf"))
     }
 
+    @Test func leafModeRendersModeAndContinuation() {
+        let event = PrefixCacheDiagnostics.LeafModeEvent(
+            mode: HTTPLeafStoreMode.directToolLeaf.rawValue,
+            continuation: HTTPLeafContinuationKind.toolResult.rawValue
+        )
+
+        #expect(context.render(event) ==
+            "event=leafMode requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 mode=directToolLeaf continuation=toolResult")
+    }
+
     @Test func evictionRendersUtilityScoresOnlyWhenPresent() {
         let utility = PrefixCacheDiagnostics.EvictionEvent(.init(
             strategy: .utility,
@@ -193,6 +203,22 @@ struct PrefixCacheDiagnosticsTests {
 
         #expect(PrefixCacheDiagnostics.renderSystem(event) ==
             "event=ssdBodyDrop id=snap-5")
+    }
+
+    @Test func leafSupersessionCarriesOffsetAndOptionalStorageRefID() {
+        let withRef = PrefixCacheDiagnostics.LeafSupersessionEvent(
+            offset: 512,
+            storageRefID: "snap-old"
+        )
+        let withoutRef = PrefixCacheDiagnostics.LeafSupersessionEvent(
+            offset: 256,
+            storageRefID: nil
+        )
+
+        #expect(context.render(withRef) ==
+            "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=512 storageRefID=snap-old")
+        #expect(context.render(withoutRef) ==
+            "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=256 storageRefID=nil")
     }
 
     @Test func ssdRecordHitCarriesIDOnly() {

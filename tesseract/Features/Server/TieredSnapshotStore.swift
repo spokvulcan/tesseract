@@ -181,6 +181,14 @@ final class TieredSnapshotStore: SnapshotStore {
         return result
     }
 
+    /// Remove a snapshot's SSD backing immediately. Used by leaf
+    /// supersession when a newly stored descendant leaf makes an older
+    /// ancestor leaf obsolete. Safe for pending and committed refs.
+    func deleteSnapshot(snapshotID: String) {
+        pendingRefsByID.removeValue(forKey: snapshotID)
+        ssdStore?.deleteSnapshot(snapshotID: snapshotID)
+    }
+
     // MARK: - Writer callbacks (MainActor-isolated)
 
     /// Writer commit callback. Transitions:

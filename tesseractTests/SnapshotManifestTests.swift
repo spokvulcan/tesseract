@@ -49,7 +49,6 @@ struct SnapshotManifestTests {
             modelFingerprint: fingerprint,
             kvBits: 8,
             kvGroupSize: 64,
-            sessionAffinity: "session-abc",
             createdAt: 799_999.0,
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
@@ -68,11 +67,11 @@ struct SnapshotManifestTests {
     // MARK: - Schema version
 
     @Test
-    func schemaVersionIsOne() {
-        // The on-disk format starts at v1; bumping this value
+    func schemaVersionIsThree() {
+        // The on-disk format is currently v3; bumping this value
         // invalidates every existing manifest. Pinning here so an
         // accidental bump trips this test.
-        #expect(SnapshotManifestSchema.currentVersion == 1)
+        #expect(SnapshotManifestSchema.currentVersion == 3)
     }
 
     @Test
@@ -174,14 +173,13 @@ struct SnapshotManifestTests {
 
     @Test
     func partitionMetaHandlesNilOptionalFields() throws {
-        // `kvBits` and `sessionAffinity` are optionals; they must
-        // round-trip cleanly as `null` in JSON and come back as `nil`.
+        // `kvBits` is optional; it must round-trip cleanly as `null`
+        // in JSON and come back as `nil`.
         let original = PartitionMeta(
             modelID: "mlx-community/Qwen3-4B-4bit",
             modelFingerprint: String(repeating: "b", count: 64),
             kvBits: nil,
             kvGroupSize: 128,
-            sessionAffinity: nil,
             createdAt: 0,
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
@@ -192,7 +190,6 @@ struct SnapshotManifestTests {
 
         #expect(decoded == original)
         #expect(decoded.kvBits == nil)
-        #expect(decoded.sessionAffinity == nil)
     }
 
     // MARK: - SnapshotManifest round-trip
@@ -223,7 +220,6 @@ struct SnapshotManifestTests {
             modelFingerprint: String(repeating: "b", count: 64),
             kvBits: 4,
             kvGroupSize: 32,
-            sessionAffinity: nil,
             createdAt: 900_000,
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
@@ -242,7 +238,7 @@ struct SnapshotManifestTests {
         let descC = makeDescriptor(
             id: "cccccccc-0000-1111-2222-333344445555",
             partition: "22222222",
-            type: "lastMessageBoundary",
+            type: "branchPoint",
             bytes: 75_000_000
         )
 
@@ -428,7 +424,7 @@ struct SnapshotManifestTests {
         )
         let payload = SnapshotPayload(
             tokenOffset: 128,
-            checkpointType: .lastMessageBoundary,
+            checkpointType: .branchPoint,
             layers: [layer]
         )
         #expect(payload.layers[0].metaState == ["64", "4", "start-pos:0"])
@@ -442,7 +438,6 @@ struct SnapshotManifestTests {
     func checkpointTypeWireStringRoundTripsForEveryCase() {
         let cases: [HybridCacheSnapshot.CheckpointType] = [
             .system,
-            .lastMessageBoundary,
             .leaf,
             .branchPoint,
         ]
@@ -459,7 +454,6 @@ struct SnapshotManifestTests {
         // strings so a future rename does not silently break existing
         // manifests.
         #expect(HybridCacheSnapshot.CheckpointType.system.wireString == "system")
-        #expect(HybridCacheSnapshot.CheckpointType.lastMessageBoundary.wireString == "lastMessageBoundary")
         #expect(HybridCacheSnapshot.CheckpointType.leaf.wireString == "leaf")
         #expect(HybridCacheSnapshot.CheckpointType.branchPoint.wireString == "branchPoint")
     }
@@ -471,6 +465,7 @@ struct SnapshotManifestTests {
         #expect(HybridCacheSnapshot.CheckpointType(wireString: "") == nil)
         #expect(HybridCacheSnapshot.CheckpointType(wireString: "SYSTEM") == nil)
         #expect(HybridCacheSnapshot.CheckpointType(wireString: "bogus") == nil)
+        #expect(HybridCacheSnapshot.CheckpointType(wireString: "lastMessageBoundary") == nil)
         #expect(HybridCacheSnapshot.CheckpointType(wireString: "system ") == nil)
     }
 
@@ -497,7 +492,6 @@ struct SnapshotManifestTests {
             modelFingerprint: a.modelFingerprint,
             kvBits: a.kvBits,
             kvGroupSize: a.kvGroupSize + 1,
-            sessionAffinity: a.sessionAffinity,
             createdAt: a.createdAt,
             schemaVersion: a.schemaVersion
         )
@@ -515,7 +509,6 @@ struct SnapshotManifestTests {
             modelID: "m",
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: nil
         )
         let digest = key.partitionDigest
@@ -534,14 +527,12 @@ struct SnapshotManifestTests {
             modelID: "mlx-community/Qwen3-4B-4bit",
             kvBits: 8,
             kvGroupSize: 64,
-            sessionAffinity: "session-abc",
             modelFingerprint: "deadbeef"
         )
         let b = CachePartitionKey(
             modelID: "mlx-community/Qwen3-4B-4bit",
             kvBits: 8,
             kvGroupSize: 64,
-            sessionAffinity: "session-abc",
             modelFingerprint: "deadbeef"
         )
         #expect(a.partitionDigest == b.partitionDigest)
@@ -566,10 +557,9 @@ struct SnapshotManifestTests {
             modelID: "mlx-community/Qwen3-4B-4bit",
             kvBits: 8,
             kvGroupSize: 64,
-            sessionAffinity: "session-abc",
             modelFingerprint: "deadbeef"
         )
-        #expect(key.partitionDigest == "27855abe")
+        #expect(key.partitionDigest == "ecfce886")
     }
 
     @Test
@@ -579,28 +569,24 @@ struct SnapshotManifestTests {
         // partitions would collide on disk and cross-contaminate.
         let base = CachePartitionKey(
             modelID: "m", kvBits: 8, kvGroupSize: 64,
-            sessionAffinity: "s", modelFingerprint: "f"
+            modelFingerprint: "f"
         )
         let diffs: [(label: String, key: CachePartitionKey)] = [
             ("modelID", CachePartitionKey(
                 modelID: "m2", kvBits: 8, kvGroupSize: 64,
-                sessionAffinity: "s", modelFingerprint: "f"
+                modelFingerprint: "f"
             )),
             ("kvBits", CachePartitionKey(
                 modelID: "m", kvBits: 4, kvGroupSize: 64,
-                sessionAffinity: "s", modelFingerprint: "f"
+                modelFingerprint: "f"
             )),
             ("kvGroupSize", CachePartitionKey(
                 modelID: "m", kvBits: 8, kvGroupSize: 32,
-                sessionAffinity: "s", modelFingerprint: "f"
-            )),
-            ("sessionAffinity", CachePartitionKey(
-                modelID: "m", kvBits: 8, kvGroupSize: 64,
-                sessionAffinity: "s2", modelFingerprint: "f"
+                modelFingerprint: "f"
             )),
             ("modelFingerprint", CachePartitionKey(
                 modelID: "m", kvBits: 8, kvGroupSize: 64,
-                sessionAffinity: "s", modelFingerprint: "f2"
+                modelFingerprint: "f2"
             )),
         ]
         for diff in diffs {
@@ -621,14 +607,12 @@ struct SnapshotManifestTests {
             modelID: "m",
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: nil
         )
         let b = CachePartitionKey(
             modelID: "m",
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: nil
         )
         #expect(a.partitionDigest == b.partitionDigest)
@@ -639,19 +623,16 @@ struct SnapshotManifestTests {
             modelID: "m",
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: "abc"
         )
         #expect(a.partitionDigest != withFingerprint.partitionDigest)
     }
 
     @Test
-    func partitionDigestNilDistinguishedFromLiteralSentinelStrings() {
+    func partitionDigestFingerprintNilDistinguishedFromLiteralSentinelStrings() {
         // **Regression trap for a real correctness bug.** A bare
         // sentinel like `"none"` for nil would collide with an
-        // explicit field value of `"none"` — and an HTTP client can
-        // trigger exactly this by sending `x-session-affinity: none`
-        // or a modelFingerprint of `"none"`. The structural
+        // explicit modelFingerprint value of `"none"`. The structural
         // presence-tag encoding must keep every (nil, string) pair
         // distinct, including the obvious sentinel strings
         // (`"none"`, `"N"`, `""`) and the presence-tag prefix (`"S"`).
@@ -667,37 +648,12 @@ struct SnapshotManifestTests {
                 modelID: "m",
                 kvBits: 8,
                 kvGroupSize: 64,
-                sessionAffinity: nil,
-                modelFingerprint: "f"
-            )
-            let valueKey = CachePartitionKey(
-                modelID: "m",
-                kvBits: 8,
-                kvGroupSize: 64,
-                sessionAffinity: probe.value,
-                modelFingerprint: "f"
-            )
-            #expect(
-                nilKey.partitionDigest != valueKey.partitionDigest,
-                "nil sessionAffinity collides with literal \"\(probe.label)\""
-            )
-        }
-
-        // Same regression trap on `modelFingerprint` — distinct
-        // optional, same bug shape.
-        for probe in probes {
-            let nilKey = CachePartitionKey(
-                modelID: "m",
-                kvBits: 8,
-                kvGroupSize: 64,
-                sessionAffinity: "s",
                 modelFingerprint: nil
             )
             let valueKey = CachePartitionKey(
                 modelID: "m",
                 kvBits: 8,
                 kvGroupSize: 64,
-                sessionAffinity: "s",
                 modelFingerprint: probe.value
             )
             #expect(

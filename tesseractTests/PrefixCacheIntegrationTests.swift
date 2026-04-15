@@ -594,119 +594,81 @@ struct PrefixCacheIntegrationTests {
 
     // MARK: - Stripped leaf (Qwen3.5 think-stripping) cross-new-user-turn
 
-    /// Regression test for the Qwen3.5 `<think>` cross-new-user-turn
-    /// divergence. Simulates the production flow without a loaded model:
-    ///
-    /// - **Turn N** stores an **unstripped** leaf under `[sys..., u_N, a_N_with_think]`
-    ///   (this is the existing behavior; tokens include the `<think>…</think>`
-    ///   block because the assistant is the LAST message in the stored
-    ///   conversation, so the template keeps its think block).
-    /// - **Turn N** ALSO stores a **stripped** leaf under
-    ///   `[sys..., u_N, a_N_stripped]` (what Turn N+1 will see once the
-    ///   template strips the think block — this is what the new
-    ///   `captureStrippedLeaf` helper produces via a two-probe tokenization
-    ///   and a residual re-prefill).
-    /// - **Turn N+1** arrives with a new user message. The lookup token
-    ///   sequence starts with `[sys..., u_N, a_N_stripped]` and extends
-    ///   with the new user content. It must hit the STRIPPED leaf at
-    ///   `storedTokensStripped.count` — not the unstripped leaf (which is
-    ///   on a different radix path) and not fall back to the shallower
-    ///   stable-prefix snapshot.
-    ///
-    /// Also verifies that tool-loop continuation — where the assistant is
-    /// still the latest message in the next request's history — still
-    /// hits the UNSTRIPPED leaf at the full offset.
-    @Test func strippedLeafHitOnNewUserTurn() {
+    /// Tool-loop continuations should reuse the direct post-response leaf.
+    /// This models a request that appends tool results after an assistant
+    /// turn that finished with `tool_calls`.
+    @Test func directLeafHitOnToolContinuation() {
         let mgr = makeManager(budgetMB: 500)
 
-        // Stripped-history simulation. Tokens:
-        //   [1...85]  = [sys, tools, u_1, a_stripped...] (what Turn N+1 sees)
-        //   [86...95] = extra tokens in a_N_with_think (think block content)
-        //   96..100   = tail of a_N shared between stripped and unstripped
-        //
-        // To keep the synthetic test tractable, the "stripped" and
-        // "unstripped" paths share the [1...85] prefix (stable history
-        // through end of a_N_stripped content), then diverge:
-        //   - unstripped continues [86...100]
-        //   - stripped is just [1...85]
-        //
-        // In reality the divergence is mid-assistant; this approximation
-        // exercises the same radix tree behavior.
-        let strippedTokens = Array(1...85)
-        let unstrippedTokens = Array(1...100)
-
-        let strippedSnap = makeKVSnapshot(offset: strippedTokens.count, type: .leaf)
-        let unstrippedSnap = makeKVSnapshot(offset: unstrippedTokens.count, type: .leaf)
-
-        // Store the stripped leaf first (simulates the new additive path).
+        let toolCallTurnTokens = Array(1...95)
         mgr.storeLeaf(
-            storedTokens: strippedTokens,
-            leafSnapshot: strippedSnap,
+            storedTokens: toolCallTurnTokens,
+            leafSnapshot: makeKVSnapshot(offset: toolCallTurnTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
-        // Store the unstripped leaf (simulates the existing primary path).
-        mgr.storeLeaf(
-            storedTokens: unstrippedTokens,
-            leafSnapshot: unstrippedSnap,
-            partitionKey: defaultKey
-        )
-        #expect(mgr.stats.snapshotCount == 2, "Both leaves must coexist")
+        #expect(mgr.stats.snapshotCount == 1)
 
-        // Turn N+1: new user turn. Tokens match the stripped path
-        // `[1...85]` and then diverge with new user content.
-        let turnNPlus1Tokens = strippedTokens + Array(500...510)
-        let newUserResult = mgr.lookup(tokens: turnNPlus1Tokens, partitionKey: defaultKey)
-        #expect(newUserResult.snapshotTokenOffset == strippedTokens.count,
-                "Cross-new-user-turn lookup must hit the stripped leaf at offset 85")
-        if case .hit(_, _, let type) = newUserResult.reason {
+        let toolContinuationTokens = toolCallTurnTokens + Array(700...710)
+        let result = mgr.lookup(tokens: toolContinuationTokens, partitionKey: defaultKey)
+        #expect(result.snapshotTokenOffset == toolCallTurnTokens.count,
+                "Tool-result continuation must hit the direct leaf from the tool-call turn")
+        if case .hit(_, _, let type) = result.reason {
             #expect(type == .leaf)
         } else {
-            Issue.record("Expected .hit, got \(newUserResult.reason)")
+            Issue.record("Expected .hit, got \(result.reason)")
         }
-
-        // Tool-loop continuation: assistant is still the latest, so the
-        // template didn't strip its think block. Tokens match the
-        // unstripped path `[1...100]` and then extend with a tool_result.
-        let toolLoopTokens = unstrippedTokens + Array(700...710)
-        let toolLoopResult = mgr.lookup(tokens: toolLoopTokens, partitionKey: defaultKey)
-        #expect(toolLoopResult.snapshotTokenOffset == unstrippedTokens.count,
-                "Tool-loop continuation must still hit the unstripped leaf at offset 100")
     }
 
-    /// When the stripped tokens are a strict prefix of the unstripped
-    /// tokens (which they ARE in the real Qwen3.5 case: the `<think>` block
-    /// is interior content within the assistant turn, so re-rendering with
-    /// the assistant stripped produces a shorter version of the same
-    /// sequence up to the tail `<|im_end|>`), a lookup that matches the
-    /// unstripped path beyond the stripped offset must still pick the
-    /// DEEPEST snapshot — the unstripped leaf at the full offset, not
-    /// the stripped leaf at the shorter offset. This guards against a
-    /// future regression where the radix walk might prefer a shallower
-    /// hit when a deeper one is available on the same path.
-    @Test func unstrippedLeafPreferredWhenDeeperOnSamePath() {
+    /// Qwen-style templates should store only the canonical stripped leaf.
+    /// A new-user turn that re-renders the previous assistant as non-latest
+    /// must hit that shorter path directly.
+    @Test func canonicalLeafHitOnNewUserTurn() {
         let mgr = makeManager(budgetMB: 500)
-        // Stripped path is a strict prefix of unstripped. In the radix
-        // tree this creates a linear chain:
-        //   root → [1..80] (stripped leaf) → [81..100] (unstripped leaf)
-        let strippedTokens = Array(1...80)
-        let unstrippedTokens = Array(1...100)
 
+        let strippedTokens = Array(1...85)
         mgr.storeLeaf(
             storedTokens: strippedTokens,
             leafSnapshot: makeKVSnapshot(offset: strippedTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
+        #expect(mgr.stats.snapshotCount == 1)
+
+        let turnNPlus1Tokens = strippedTokens + Array(500...510)
+        let newUserResult = mgr.lookup(tokens: turnNPlus1Tokens, partitionKey: defaultKey)
+        #expect(newUserResult.snapshotTokenOffset == strippedTokens.count,
+                "Cross-new-user-turn lookup must hit the canonical stripped leaf at offset 85")
+        if case .hit(_, _, let type) = newUserResult.reason {
+            #expect(type == .leaf)
+        } else {
+            Issue.record("Expected .hit, got \(newUserResult.reason)")
+        }
+    }
+
+    /// Newer descendant leaves supersede shallower leaves on the same
+    /// branch, so the deepest canonical leaf is always the one that
+    /// survives lookup on later extensions.
+    @Test func newerCanonicalLeafReplacesShallowerLeafOnSamePath() {
+        let mgr = makeManager(budgetMB: 500)
+        let shallowTokens = Array(1...80)
+        let deeperTokens = Array(1...100)
+
         mgr.storeLeaf(
-            storedTokens: unstrippedTokens,
-            leafSnapshot: makeKVSnapshot(offset: unstrippedTokens.count, type: .leaf),
+            storedTokens: shallowTokens,
+            leafSnapshot: makeKVSnapshot(offset: shallowTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
+        let diagnostics = mgr.storeLeaf(
+            storedTokens: deeperTokens,
+            leafSnapshot: makeKVSnapshot(offset: deeperTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+        #expect(diagnostics.supersededLeaves.count == 1)
+        #expect(diagnostics.supersededLeaves[0].offset == shallowTokens.count)
+        #expect(mgr.stats.snapshotCount == 1)
 
-        // Lookup covering both: `[1...100] + extra` must return the
-        // DEEPER snapshot at 100, not the shallower one at 80.
-        let extendedTokens = unstrippedTokens + Array(800...810)
+        let extendedTokens = deeperTokens + Array(800...810)
         let result = mgr.lookup(tokens: extendedTokens, partitionKey: defaultKey)
-        #expect(result.snapshotTokenOffset == unstrippedTokens.count)
+        #expect(result.snapshotTokenOffset == deeperTokens.count)
     }
 }
 

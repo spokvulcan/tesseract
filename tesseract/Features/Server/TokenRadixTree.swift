@@ -298,14 +298,10 @@ final class TokenRadixTree {
     /// cache state. **Only** `.system` (stable prefix) snapshots are
     /// type-protected — they sit linearly on the path from root in
     /// single-conversation usage and represent the cross-conversation hot
-    /// prefix that the entire tree is built on. `.lastMessageBoundary`
-    /// snapshots are explicitly NOT protected because long conversations
-    /// accumulate one boundary per turn; protecting all of them would fill
-    /// the budget with stale boundaries from old turns and cause the
-    /// freshly-stored leaf for the current turn to be the only eligible
-    /// eviction candidate, killing it on admission. LRU eviction over the
-    /// boundary set keeps the freshest boundary alive (recency wins) while
-    /// reaping old ones, which is the behaviour we want.
+    /// prefix that the entire tree is built on. `.leaf` and
+    /// `.branchPoint` snapshots remain fully eligible so the utility
+    /// scorer can trade off deeper conversation reuse against shared
+    /// prefix protection.
     /// The hard budget invariant is preserved by `findEvictionCandidate`'s
     /// fallback path, which drops the oldest snapshot from
     /// `allSnapshotNodes()` when the eligible set is empty.

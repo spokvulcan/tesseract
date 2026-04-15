@@ -400,14 +400,12 @@ struct SSDConfigPlumbingTests {
             modelID: "model",
             kvBits: 8,
             kvGroupSize: 64,
-            sessionAffinity: "session",
             modelFingerprint: "aaaaaaaaaaaaaaaa"
         )
         let keyB = CachePartitionKey(
             modelID: "model",
             kvBits: 8,
             kvGroupSize: 64,
-            sessionAffinity: "session",
             modelFingerprint: "bbbbbbbbbbbbbbbb"
         )
         #expect(keyA != keyB)
@@ -417,7 +415,7 @@ struct SSDConfigPlumbingTests {
     @Test
     func partitionKeyWithoutFingerprintMatchesLegacyCallSites() {
         // Legacy call sites (existing unit tests) don't pass modelFingerprint.
-        // Both the 4-arg and 5-arg forms must produce equal keys when the
+        // Both the 3-arg and 4-arg forms must produce equal keys when the
         // fingerprint is nil, otherwise every existing test would start
         // mis-matching its own inputs.
         let legacy = CachePartitionKey(
@@ -429,7 +427,6 @@ struct SSDConfigPlumbingTests {
             modelID: "m",
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: nil
         )
         #expect(legacy == explicit)
@@ -439,14 +436,14 @@ struct SSDConfigPlumbingTests {
     func partitionKeyComparableIsStableWithFingerprint() {
         // Deterministic < ordering so partition iteration stays reproducible
         // for eviction tie-break scenarios. With fingerprint folded in, the
-        // tuple now has 5 elements — exercise a representative ordering.
+        // tuple now has 4 elements — exercise a representative ordering.
         let a = CachePartitionKey(
             modelID: "m", kvBits: 8, kvGroupSize: 64,
-            sessionAffinity: "s", modelFingerprint: "aaa"
+            modelFingerprint: "aaa"
         )
         let b = CachePartitionKey(
             modelID: "m", kvBits: 8, kvGroupSize: 64,
-            sessionAffinity: "s", modelFingerprint: "bbb"
+            modelFingerprint: "bbb"
         )
         #expect(a < b)
         #expect(!(b < a))

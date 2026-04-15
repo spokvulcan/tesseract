@@ -294,6 +294,76 @@ struct MessageConverterTests {
         #expect(history[1].content.contains("<parameter=path>\nmain.swift\n</parameter>"))
     }
 
+    @Test func prefixCacheConversationBuildsStructuredPromptMessages() throws {
+        let conversation = HTTPPrefixCacheConversation(
+            systemPrompt: "You are helpful.",
+            messages: [
+                .init(role: .user, content: "Inspect the file"),
+                .assistant(
+                    content: "I found the issue.",
+                    reasoning: "Need to inspect the relevant code first.",
+                    toolCalls: [
+                        HTTPPrefixCacheToolCall(
+                            name: "read",
+                            arguments: [
+                                "path": .string("/tmp/main.swift"),
+                                "line": .int(12),
+                            ]
+                        )
+                    ]
+                ),
+            ]
+        )
+
+        let promptMessages = conversation.promptMessages
+        #expect(promptMessages.count == 3)
+
+        let assistant = try #require(promptMessages.last)
+        #expect(assistant["role"] as? String == "assistant")
+        #expect(assistant["content"] as? String == "I found the issue.")
+        #expect(assistant["reasoning_content"] as? String == "Need to inspect the relevant code first.")
+
+        let toolCalls = try #require(assistant["tool_calls"] as? [[String: any Sendable]])
+        #expect(toolCalls.count == 1)
+        let function = try #require(toolCalls[0]["function"] as? [String: any Sendable])
+        #expect(function["name"] as? String == "read")
+        let arguments = try #require(function["arguments"] as? [String: any Sendable])
+        #expect(arguments["path"] as? String == "/tmp/main.swift")
+        #expect(arguments["line"] as? Int == 12)
+        #expect(!(assistant["content"] as? String ?? "").contains("<think>"))
+        #expect(!(assistant["content"] as? String ?? "").contains("<tool_call>"))
+    }
+
+    @Test func toolCallOnlyAssistantPromptMessagesKeepReasoningAndCallsStructured() throws {
+        let conversation = HTTPPrefixCacheConversation(
+            systemPrompt: "You are helpful.",
+            messages: [
+                .init(role: .user, content: "Read the file"),
+                .assistant(
+                    content: "\n\n",
+                    reasoning: "Need to inspect the file first.\n",
+                    toolCalls: [
+                        HTTPPrefixCacheToolCall(
+                            name: "read",
+                            arguments: ["path": .string("/tmp/foo.swift")]
+                        )
+                    ]
+                ),
+            ]
+        )
+
+        let assistant = try #require(conversation.promptMessages.last)
+        #expect(assistant["role"] as? String == "assistant")
+        #expect(assistant["content"] as? String == "")
+        #expect(assistant["reasoning_content"] as? String == "Need to inspect the file first.")
+
+        let toolCalls = try #require(assistant["tool_calls"] as? [[String: any Sendable]])
+        let function = try #require(toolCalls.first?["function"] as? [String: any Sendable])
+        let arguments = try #require(function["arguments"] as? [String: any Sendable])
+        #expect(function["name"] as? String == "read")
+        #expect(arguments["path"] as? String == "/tmp/foo.swift")
+    }
+
     @Test func textOnlyNormalizationRejectsImages() {
         let pngData = Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString()
         let messages: [OpenAI.ChatMessage] = [

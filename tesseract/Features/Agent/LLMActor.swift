@@ -54,17 +54,31 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let ssdEnabled: Bool
     /// Partition key used for cache routing.
     let partitionKey: CachePartitionKey
-    /// Offset where the final history message ends, right before the
-    /// assistant generation prompt. `nil` when the generation prompt
-    /// string couldn't be resolved (non-Qwen3.5 templates). Used by the
-    /// stripped-leaf capture path to restore a fresh cache at a
-    /// known-stable boundary and re-prefill the stripped assistant turn.
-    let lastMessageBoundaryOffset: Int?
+    /// Request-local helper snapshot captured at the end of the last history
+    /// message. Never stored or persisted; used to synthesize the direct
+    /// tool-continuation leaf for tool-call turns.
+    let transientLastMessageBoundarySnapshot: HybridCacheSnapshot?
+    /// Request-local helper snapshot captured at the end of the last real
+    /// user message. Never stored or persisted; used to synthesize the
+    /// canonical user-continuation leaf for templates that rewrite the
+    /// assistant/tool suffix after the last user.
+    let transientLastUserBoundarySnapshot: HybridCacheSnapshot?
     /// Chunked prefill step size from the request's `GenerateParameters`,
-    /// plumbed out so the post-generation stripped-leaf path can use the
-    /// same chunk size when re-prefilling the stripped assistant residual
+    /// plumbed out so the post-generation canonical-leaf path can use the
+    /// same chunk size when re-prefilling the canonical assistant residual
     /// on top of the restored last-message-boundary snapshot.
     let prefillStepSize: Int
+}
+
+nonisolated enum HTTPLeafContinuationKind: String, Sendable {
+    case toolResult
+    case userTurn
+}
+
+nonisolated enum HTTPLeafStoreMode: String, Sendable {
+    case directToolLeaf
+    case canonicalUserLeaf
+    case directLeaf
 }
 
 /// Actor-isolated wrapper that owns the LLM model and runs inference off the MainActor.
@@ -235,7 +249,6 @@ actor LLMActor {
         modelID: String,
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
-        sessionAffinity: String?,
         parameters: AgentGenerateParameters
     ) async throws -> HTTPServerGenerationStart? {
         guard let container = modelContainer else {
@@ -264,7 +277,6 @@ actor LLMActor {
             conversation: conversation,
             requestID: requestID,
             modelID: modelID,
-            sessionAffinity: sessionAffinity,
             parameters: Self.makeGenerateParameters(from: parameters),
             toolSpecs: canonicalTools,
             prefixCache: prefixCache
@@ -335,6 +347,17 @@ actor LLMActor {
                                 PrefixCacheDiagnostics.SSDBodyDropEvent(id: id)
                             )
                         }
+                    }
+                }
+
+                func logSupersededLeaves(
+                    _ supersededLeaves: [PrefixCacheManager.LeafSupersession]
+                ) {
+                    for supersession in supersededLeaves {
+                        diagnosticsContext.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
+                            offset: supersession.offset,
+                            storageRefID: supersession.bodyDroppedStorageRefID
+                        ))
                     }
                 }
 
@@ -423,30 +446,78 @@ actor LLMActor {
                 // tuner needs to see every request, not just the ones
                 // whose leaf store completed.
                 //
-                // Two leaves are captured per turn:
-                //
-                //  - **Unstripped leaf** (this block): represents the
-                //    full conversation state with the just-generated
-                //    assistant. Reachable for tool-loop continuations
-                //    where the assistant remains the latest message in
-                //    the next request.
-                //
-                //  - **Stripped leaf** (`captureStrippedLeaf` below):
-                //    represents the conversation as Turn N+1 will see
-                //    it after a new user message arrives — Qwen3.5's
-                //    template strips the assistant's `<think>...</think>`
-                //    block when it is no longer the latest assistant.
-                //    Reachable for cross-new-user-turn lookups.
-                //
-                // Both leaves coexist in the radix tree on different
-                // paths and serve different lookup shapes. Eviction
-                // treats them uniformly under the LRU-with-FLOPs policy.
+                // Canonical leaf policy:
+                // - thinking templates store one template-canonical leaf
+                //   synthesized from the transient boundary snapshot
+                // - non-thinking templates store the direct post-response
+                //   leaf captured from the final cache
                 var leafStoreForTuner: AlphaTuner.LeafStore? = nil
-                // Hoisted out of `leafBlock` so the stripped-leaf capture
-                // path below can reuse them.
-                var storedConversationCaptured: HTTPPrefixCacheConversation? = nil
-                var storedTokensCaptured: [Int]? = nil
                 leafBlock: do {
+                    // 1. Build stored conversation (prompt + generated assistant turn).
+                    let storedConversation = conversation.appendingAssistant(.assistant(
+                        content: textContent,
+                        reasoning: thinkingContent,
+                        toolCalls: toolCalls
+                    ))
+
+                    // 2. Re-tokenize stored conversation → flat token sequence.
+                    guard let storedTokens = await Self.measureStoredTokenSequence(
+                        container: container,
+                        conversation: storedConversation,
+                        toolSpecs: canonicalTools
+                    ) else {
+                        diagnosticsContext.logSkip(
+                            stage: "leafStore",
+                            reason: "tokenization-failed",
+                            level: .warning
+                        )
+                        break leafBlock
+                    }
+
+                    let leafStoreMode = Self.selectHTTPLeafStoreMode(
+                        promptStartsThinking: startsInsideThinkBlock,
+                        emittedToolCalls: !toolCalls.isEmpty
+                    )
+                    diagnosticsContext.log(PrefixCacheDiagnostics.LeafModeEvent(
+                        mode: leafStoreMode.rawValue,
+                        continuation: toolCalls.isEmpty
+                            ? HTTPLeafContinuationKind.userTurn.rawValue
+                            : HTTPLeafContinuationKind.toolResult.rawValue
+                    ))
+
+                    if leafStoreMode == .canonicalUserLeaf {
+                        leafStoreForTuner = await Self.captureCanonicalTemplateLeaf(
+                            container: container,
+                            storedConversation: storedConversation,
+                            storedTokens: storedTokens,
+                            toolSpecs: canonicalTools,
+                            transientBoundarySnapshot: mlxStart.transientLastUserBoundarySnapshot,
+                            partitionKey: mlxStart.partitionKey,
+                            prefillStepSize: mlxStart.prefillStepSize,
+                            requestID: requestID,
+                            prefixCache: prefixCache,
+                            diagnosticsContext: diagnosticsContext,
+                            ssdEnabled: mlxStart.ssdEnabled
+                        )
+                        break leafBlock
+                    }
+
+                    if leafStoreMode == .directToolLeaf {
+                        leafStoreForTuner = await Self.captureDirectToolLeaf(
+                            container: container,
+                            storedConversation: storedConversation,
+                            toolSpecs: canonicalTools,
+                            transientBoundarySnapshot: mlxStart.transientLastMessageBoundarySnapshot,
+                            partitionKey: mlxStart.partitionKey,
+                            prefillStepSize: mlxStart.prefillStepSize,
+                            requestID: requestID,
+                            prefixCache: prefixCache,
+                            diagnosticsContext: diagnosticsContext,
+                            ssdEnabled: mlxStart.ssdEnabled
+                        )
+                        break leafBlock
+                    }
+
                     guard !Task.isCancelled,
                           let finalCache = await mlxStart.finalCacheHandle.takeFinalCache()
                     else {
@@ -470,30 +541,7 @@ actor LLMActor {
                         break leafBlock
                     }
 
-                    // 1. Build stored conversation (prompt + generated assistant turn).
-                    let storedConversation = conversation.appendingAssistant(.assistant(
-                        content: textContent,
-                        reasoning: thinkingContent,
-                        toolCalls: toolCalls
-                    ))
-                    storedConversationCaptured = storedConversation
-
-                    // 3. Re-tokenize stored conversation → flat token sequence.
-                    guard let storedTokens = await Self.measureStoredTokenSequence(
-                        container: container,
-                        conversation: storedConversation,
-                        toolSpecs: canonicalTools
-                    ) else {
-                        diagnosticsContext.logSkip(
-                            stage: "leafStore",
-                            reason: "tokenization-failed",
-                            level: .warning
-                        )
-                        break leafBlock
-                    }
-                    storedTokensCaptured = storedTokens
-
-                    // 4. Offset-alignment guard: if normalization shortened the
+                    // 3. Offset-alignment guard: if normalization shortened the
                     //    stored conversation (whitespace-only assistant content → ""),
                     //    we can only trim attention K/V — Mamba's recurrent state
                     //    can't be unwound. Trimming the cache and capturing it as a
@@ -527,7 +575,7 @@ actor LLMActor {
                         break leafBlock
                     }
 
-                    // 5. Capture leaf snapshot AND extract its payload
+                    // 4. Capture leaf snapshot AND extract its payload
                     //    inside a Metal-affine `container.perform` so
                     //    the per-array `asData()` calls run on the
                     //    inference thread. `finalCache` is non-`Sendable`
@@ -586,11 +634,12 @@ actor LLMActor {
                             return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
                         }
                     logEvictions(diagnostics.evictions)
-                    let unstrippedAdmissionEvicted = diagnostics.evictions.contains { event in
+                    logSupersededLeaves(diagnostics.supersededLeaves)
+                    let directAdmissionEvicted = diagnostics.evictions.contains { event in
                         event.offset == leafSnapshot.tokenOffset
                             && event.checkpointType == .leaf
                     }
-                    if unstrippedAdmissionEvicted {
+                    if directAdmissionEvicted {
                         diagnosticsContext.logSkip(
                             stage: "leafAdmission",
                             reason: "capturedThenEvicted",
@@ -613,38 +662,6 @@ actor LLMActor {
                     // doesn't accumulate transient prefill intermediates
                     // across requests.
                     Memory.clearCache()
-                }
-
-                // Stripped-leaf capture: stores a second `.leaf` snapshot
-                // keyed by the token sequence that Turn N+1 WILL see when
-                // it re-renders the conversation (with `a_N`'s `<think>`
-                // block stripped by the Qwen3.5 template's
-                // `last_query_index` logic). The unstripped leaf above is
-                // unreachable across new-user turns; the stripped leaf is
-                // reachable and saves a full cold prefill on every
-                // subsequent cross-new-user-turn lookup. Purely additive —
-                // any failure is caught and logged without affecting the
-                // rest of the request lifecycle.
-                if !Task.isCancelled,
-                   let storedConversation = storedConversationCaptured,
-                   let storedTokens = storedTokensCaptured
-                {
-                    await Self.captureStrippedLeaf(
-                        container: container,
-                        storedConversation: storedConversation,
-                        storedTokens: storedTokens,
-                        toolSpecs: canonicalTools,
-                        capturedSnapshots: mlxStart.capturedSnapshots,
-                        lastMessageBoundaryOffset: mlxStart.lastMessageBoundaryOffset,
-                        partitionKey: mlxStart.partitionKey,
-                        prefillStepSize: mlxStart.prefillStepSize,
-                        requestID: requestID,
-                        prefixCache: prefixCache,
-                        diagnosticsContext: diagnosticsContext,
-                        promptStartsThinking: startsInsideThinkBlock,
-                        thinkingContent: thinkingContent,
-                        ssdEnabled: mlxStart.ssdEnabled
-                    )
                 }
 
                 // Record the request lifecycle for the alpha tuner. Fires
@@ -1118,7 +1135,6 @@ actor LLMActor {
         conversation: HTTPPrefixCacheConversation,
         requestID: UUID,
         modelID: String,
-        sessionAffinity: String?,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         prefixCache: PrefixCacheManager
@@ -1150,9 +1166,8 @@ actor LLMActor {
             }
 
             // 1. Tokenize the full conversation (BEFORE cache lookup).
-            let history = conversation.historyMessages
             let fullInput = try await context.processor.prepare(
-                input: UserInput(chat: history, tools: canonicalTools)
+                input: UserInput(messages: conversation.promptMessages, tools: canonicalTools)
             )
             // Sequence length is always the LAST dim. For LLM models tokens are
             // 1D [seq], for VLM models (ParoQuant Qwen35) they are 2D [batch, seq].
@@ -1162,16 +1177,14 @@ actor LLMActor {
             // 2. Extract flat token sequence for radix tree operations.
             let fullTokens = Self.extractTokenSequence(fullInput.text.tokens)
 
-            // 3. Build partition key for radix-tree routing.
-            //    sessionAffinity isolates main agent from subagents — without
-            //    it, a long-running subagent's churn evicts the idle main
-            //    agent's snapshots under shared budget pressure. See
-            //    `CachePartitionKey` for the full rationale.
+            // 3. Build the global Marconi partition key for this model
+            //    configuration. Cross-session sharing is intentional:
+            //    identical prompts under the same model config should
+            //    reuse the same radix tree.
             let partitionKey = CachePartitionKey(
                 modelID: modelID,
                 kvBits: parameters.kvBits,
                 kvGroupSize: parameters.kvGroupSize,
-                sessionAffinity: sessionAffinity,
                 modelFingerprint: modelFingerprint
             )
 
@@ -1217,6 +1230,22 @@ actor LLMActor {
             } else {
                 lastMessageBoundaryOffset = nil
             }
+            let lastUserBoundaryOffset: Int?
+            if let lastUserIndex = conversation.messages.lastIndex(where: { $0.role == .user }) {
+                let userPrefixConversation = HTTPPrefixCacheConversation(
+                    systemPrompt: conversation.systemPrompt,
+                    messages: Array(conversation.messages[...lastUserIndex]),
+                    toolDefinitionsDigest: conversation.toolDefinitionsDigest,
+                    templateContextDigest: conversation.templateContextDigest
+                )
+                lastUserBoundaryOffset = try context.tokenizer.applyChatTemplate(
+                    messages: userPrefixConversation.promptMessages,
+                    tools: canonicalTools,
+                    additionalContext: ["add_generation_prompt": false]
+                ).count
+            } else {
+                lastUserBoundaryOffset = nil
+            }
 
             // 5–6. Radix tree lookup + checkpoint planning (single MainActor hop).
             let lookupStarted = Date.timeIntervalSinceReferenceDate
@@ -1224,13 +1253,12 @@ actor LLMActor {
                 prefixCache.lookupAndPlanCheckpoints(
                     tokens: fullTokens,
                     stablePrefixOffset: stablePrefixOffset,
-                    lastMessageBoundaryOffset: lastMessageBoundaryOffset,
                     partitionKey: partitionKey
                 )
             }
             // Lazy SSD hydration: `.ssdHit` signals that the deepest
             // reachable node carries only a committed storage ref.
-            // Materialize the body from disk inside this
+            // Materialize the body from disk inside this existing
             // `container.perform` (Metal-affine), then hop to
             // MainActor to promote the node back to state 4. On
             // hydration failure, clear the ref and downgrade to a
@@ -1273,11 +1301,6 @@ actor LLMActor {
                         )
                     )
                 } else {
-                    // loadSync already dropped the descriptor + file +
-                    // fired onDrop and emitted the granular ssdMiss
-                    // event from inside its failure branches. Clear
-                    // the node's ref on MainActor so subsequent
-                    // lookups see the miss directly.
                     await MainActor.run {
                         prefixCache.clearStorageRef(
                             node: ctx.node,
@@ -1294,10 +1317,6 @@ actor LLMActor {
                 }
             } else {
                 lookupResult = initialLookupResult
-                // State-4 RAM hit: lookup() bumped the SSD descriptor's
-                // lastAccessAt under the store's lock; surface the bump
-                // as an `ssdRecordHit` event so the LRU age progression
-                // is visible alongside the workload's hit log.
                 if let id = initialLookupResult.recordedHitSnapshotID {
                     diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: id))
                 }
@@ -1351,6 +1370,14 @@ actor LLMActor {
             genParams.checkpoints = Dictionary(
                 uniqueKeysWithValues: checkpointPlan.map { ($0.offset, $0.type) }
             )
+            let transientOffsets = [lastMessageBoundaryOffset, lastUserBoundaryOffset]
+                .compactMap { $0 }
+                .filter { offset in
+                    offset > checkpointBaseOffset
+                        && offset < fullTokenCount
+                        && !checkpointPlan.contains(where: { $0.offset == offset })
+                }
+            genParams.transientCheckpointOffsets = Set(transientOffsets)
             genParams.checkpointBaseOffset = checkpointBaseOffset
 
             // 9. Create TokenIterator — this calls model.prepare() internally with checkpoints.
@@ -1369,6 +1396,14 @@ actor LLMActor {
             // `MLXArray.asData()` runs on the Metal-affine thread before the
             // later MainActor store hop.
             let capturedSnapshots = iterator.capturedSnapshots
+            let transientLastMessageBoundarySnapshot = lastMessageBoundaryOffset.flatMap { offset in
+                iterator.transientSnapshots[offset]
+                    ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
+            }
+            let transientLastUserBoundarySnapshot = lastUserBoundaryOffset.flatMap { offset in
+                iterator.transientSnapshots[offset]
+                    ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
+            }
             let capturedPayloads = Self.extractSnapshotPayloads(
                 capturedSnapshots,
                 ssdEnabled: ssdEnabled
@@ -1416,7 +1451,8 @@ actor LLMActor {
                 capturedPayloads: capturedPayloads,
                 ssdEnabled: ssdEnabled,
                 partitionKey: partitionKey,
-                lastMessageBoundaryOffset: lastMessageBoundaryOffset,
+                transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
+                transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
                 prefillStepSize: parameters.prefillStepSize
             )
         }
@@ -1440,9 +1476,24 @@ actor LLMActor {
         )
     }
 
+    nonisolated static func selectHTTPLeafStoreMode(
+        promptStartsThinking: Bool,
+        emittedToolCalls: Bool
+    ) -> HTTPLeafStoreMode {
+        if emittedToolCalls {
+            return .directToolLeaf
+        }
+        if promptStartsThinking {
+            return .canonicalUserLeaf
+        }
+        return .directLeaf
+    }
+
     /// Re-tokenize the stored conversation (prompt + generated response) and return
-    /// the flat token sequence. Used for storing the leaf snapshot under the correct
-    /// radix path. Returns `nil` on tokenization failure.
+    /// the flat token sequence. The HTTP prefix cache uses raw prompt messages here
+    /// so assistant `reasoning_content` and `tool_calls` survive template rendering.
+    /// Used for storing the leaf snapshot under the correct radix path.
+    /// Returns `nil` on tokenization failure.
     private static func measureStoredTokenSequence(
         container: ModelContainer,
         conversation: HTTPPrefixCacheConversation,
@@ -1450,10 +1501,11 @@ actor LLMActor {
     ) async -> [Int]? {
         do {
             return try await container.perform { context in
-                let prepared = try await context.processor.prepare(
-                    input: UserInput(chat: conversation.historyMessages, tools: toolSpecs)
+                try context.tokenizer.applyChatTemplate(
+                    messages: conversation.promptMessages,
+                    tools: toolSpecs,
+                    additionalContext: ["add_generation_prompt": false]
                 )
-                return Self.extractTokenSequence(prepared.text.tokens)
             }
         } catch {
             Log.agent.warning(
@@ -1463,226 +1515,108 @@ actor LLMActor {
         }
     }
 
-    /// Return the stripped stored-token sequence `[sys, ..., u_N, a_N_stripped]`
-    /// — the token path Turn N+1 will see when it re-renders the conversation
-    /// with a new user message, triggering the Qwen3.5 template's `last_query_index`
-    /// logic to strip `a_N`'s `<think>...</think>` block.
-    ///
-    /// Algorithm: tokenize two probe conversations that share the same
-    /// `[sys, ..., u_N, a_N]` prefix and differ only in an appended dummy
-    /// user message. Both tokenizations run the assistant through the template
-    /// as non-latest, so its think block is stripped. The two token sequences
-    /// share a common prefix up to the first token of the dummy user's
-    /// CONTENT (the `<|im_start|>user\n` opener is identical). Subtract the
-    /// opener length from the divergence index to land on the end of
-    /// `a_N_stripped`.
-    ///
-    /// Returns `nil` on any unexpected condition (probes identical, opener
-    /// mismatch, etc.) so the caller can skip the stripped-leaf store cleanly.
-    private static func computeStrippedStoredTokens(
+    /// Return the canonical stored-token sequence `[sys, ..., u_N, a_N_canonical]`
+    /// by comparing the isolated assistant-final render against the same
+    /// conversation with a dummy user turn appended. The shared token prefix is
+    /// exactly the reusable path a future user continuation can hydrate.
+    private static func computeCanonicalStoredTokens(
         context: ModelContext,
         storedConversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?
     ) async throws -> [Int]? {
-        let baseHistory = storedConversation.historyMessages
-
-        // Build probe histories with differing dummy user content. Content
-        // is chosen to start with different tokens immediately (single
-        // alphabetic character + marker), so the divergence point lands
-        // right at the first content token of the dummy user.
-        let probeAInput = UserInput(
-            chat: baseHistory + [.user("Aqkz_strip_probe")],
-            tools: toolSpecs
+        let baseMessages = storedConversation.promptMessages
+        let storedTokens = try context.tokenizer.applyChatTemplate(
+            messages: baseMessages,
+            tools: toolSpecs,
+            additionalContext: ["add_generation_prompt": false]
         )
-        let probeBInput = UserInput(
-            chat: baseHistory + [.user("Zqkz_strip_probe")],
-            tools: toolSpecs
+        let continuationTokens = try context.tokenizer.applyChatTemplate(
+            messages: baseMessages + [[
+                "role": Chat.Message.Role.user.rawValue,
+                "content": "Aqkz_strip_probe",
+            ]],
+            tools: toolSpecs,
+            additionalContext: ["add_generation_prompt": false]
         )
-        let probeA = try await context.processor.prepare(input: probeAInput)
-        let probeB = try await context.processor.prepare(input: probeBInput)
-        let tokensA = Self.extractTokenSequence(probeA.text.tokens)
-        let tokensB = Self.extractTokenSequence(probeB.text.tokens)
 
-        // First divergence between the two probes.
-        var divergence = 0
-        let shorter = min(tokensA.count, tokensB.count)
-        while divergence < shorter && tokensA[divergence] == tokensB[divergence] {
-            divergence += 1
+        let common = zip(storedTokens, continuationTokens).prefix { $0 == $1 }.count
+        guard common > 0, common <= storedTokens.count, common < continuationTokens.count else {
+            return nil
         }
-        // If the two probes match entirely, something unexpected happened
-        // (template ignored user content?) — bail out so we don't produce
-        // bogus stripped tokens.
-        guard divergence > 0, divergence < tokensA.count else { return nil }
-
-        // Subtract the `<|im_start|>user\n` opener (fixed, template-emitted)
-        // to get the offset at the end of `a_N_stripped`.
-        let userOpenerTokens = context.tokenizer.encode(
-            text: "<|im_start|>user\n", addSpecialTokens: false
-        )
-        guard userOpenerTokens.count > 0,
-              divergence >= userOpenerTokens.count
-        else { return nil }
-
-        // Defense in depth: verify the opener actually precedes the
-        // divergence. If the template injected something else between
-        // `a_N_stripped` and the dummy user (chat history wrappers,
-        // additional role markers), bail out rather than producing
-        // misaligned stripped tokens.
-        let openerSlice = Array(tokensA[(divergence - userOpenerTokens.count)..<divergence])
-        guard openerSlice.elementsEqual(userOpenerTokens) else { return nil }
-
-        let strippedLen = divergence - userOpenerTokens.count
-        guard strippedLen > 0, strippedLen <= tokensA.count else { return nil }
-        return Array(tokensA[0..<strippedLen])
+        return Array(continuationTokens[0..<common])
     }
 
-    /// Capture a second, "stripped" leaf snapshot for the current turn's
-    /// conversation. Addresses the Qwen3.5 think-stripping cross-new-user-turn
-    /// divergence: the template strips `<think>...</think>` from assistant
-    /// messages that are not the latest assistant, so Turn N's unstripped
-    /// leaf is unreachable from Turn N+1's lookup once a new user message
-    /// arrives. The stripped leaf stores a snapshot keyed by the token
-    /// sequence Turn N+1 WILL actually see, allowing a deep cache hit
-    /// instead of a full cold prefill.
-    ///
-    /// Correctness: the stripped leaf's cache state is the result of
-    /// restoring the `lastMessageBoundary` snapshot (captured mid-prefill
-    /// during this turn, byte-exact representation of the cache at
-    /// end-of-last-user) and running a real residual prefill over
-    /// `[assistant_opener + response_content + <|im_end|>]`. No state
-    /// trimming, no Mamba divergence — bit-exact continuation of the
-    /// same forward pass.
-    ///
-    /// Additive: runs AFTER the primary (unstripped) leaf store, and any
-    /// failure is caught and logged without affecting the rest of the
-    /// request lifecycle. The unstripped leaf is still the authoritative
-    /// reuse target for tool-loop continuation (where the assistant is
-    /// still the latest message in the next request's history).
-    ///
-    /// Skip conditions (logged via `logSkip` unless explicitly silent):
-    /// - `!promptStartsThinking`: non-thinking model, nothing to strip.
-    ///   Silent — the unstripped leaf path covers this case correctly.
-    /// - `thinkingContent < 50 chars`: prefill cost > expected savings.
-    ///   Silent.
-    /// - `lastMessageBoundaryOffset == nil`: can't identify boundary
-    ///   snapshot to restore from. Logged.
-    /// - No `.lastMessageBoundary` snapshot at the boundary offset in
-    ///   `capturedSnapshots`: prior turn already stored the boundary
-    ///   (planner deduped it), so its stripped leaf still exists. Silent.
-    /// - Two-probe tokenization failed or probes identical: tokenizer
-    ///   edge case. Logged.
-    /// - `strippedLen <= boundaryOffset`: no residual to prefill. Logged.
-    /// - `strippedLen >= storedTokens.count`: template didn't actually
-    ///   strip anything (possibly non-Qwen3.5 template). Logged.
-    /// - Residual prefill throws. Logged.
-    /// - Snapshot capture returns nil (unsupported cache types). Logged.
-    /// - The freshly stored leaf was immediately evicted by its own
-    ///   `evictToFitBudget` cycle (the "capturedThenEvicted" pathology).
-    ///   Logged as a warning so the issue is visible in production logs.
-    private static func captureStrippedLeaf(
-        container: ModelContainer,
+    /// Return the reusable token prefix for a tool-call assistant turn by
+    /// comparing its isolated render against the render that appends a single
+    /// synthetic tool result. The shared prefix between the two is the exact
+    /// token path the immediate tool-result continuation can hydrate.
+    private static func computeToolContinuationStoredTokens(
+        context: ModelContext,
         storedConversation: HTTPPrefixCacheConversation,
+        toolSpecs: [ToolSpec]?
+    ) async throws -> [Int]? {
+        let baseMessages = storedConversation.promptMessages
+        let storedTokens = try context.tokenizer.applyChatTemplate(
+            messages: baseMessages,
+            tools: toolSpecs,
+            additionalContext: ["add_generation_prompt": false]
+        )
+        let continuationTokens = try context.tokenizer.applyChatTemplate(
+            messages: baseMessages + [[
+                "role": Chat.Message.Role.tool.rawValue,
+                "content": "Aqkz_tool_probe",
+            ]],
+            tools: toolSpecs,
+            additionalContext: ["add_generation_prompt": false]
+        )
+
+        let common = zip(storedTokens, continuationTokens).prefix { $0 == $1 }.count
+        guard common > 0, common <= storedTokens.count, common < continuationTokens.count else {
+            return nil
+        }
+        return Array(continuationTokens[0..<common])
+    }
+
+    /// Restore the transient boundary snapshot, prefill the provided stored
+    /// token suffix, capture a `.leaf`, and store it under the given token
+    /// path. Shared by direct-tool and canonical-user leaf modes so both are
+    /// aligned to the structured template render, not the raw generated bytes.
+    private static func captureStructuredLeafFromBoundary(
+        container: ModelContainer,
         storedTokens: [Int],
-        toolSpecs: [ToolSpec]?,
-        capturedSnapshots: [HybridCacheSnapshot],
-        lastMessageBoundaryOffset: Int?,
+        boundarySnapshot: HybridCacheSnapshot,
         partitionKey: CachePartitionKey,
         prefillStepSize: Int,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
-        promptStartsThinking: Bool,
-        thinkingContent: String,
-        ssdEnabled: Bool
-    ) async {
-        // Guard 1: non-thinking model → nothing to strip.
-        guard promptStartsThinking else {
-            return  // silent; not an anomaly
-        }
-
-        // Guard 2: trivial think content → prefill cost would exceed savings.
-        let trimmedThink = thinkingContent.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedThink.count >= 50 else {
-            return  // silent; not worth the prefill
-        }
-
-        // Guard 3: no boundary offset → can't identify where to restore from.
-        guard let boundaryOffset = lastMessageBoundaryOffset else {
+        ssdEnabled: Bool,
+        storeStage: String,
+        captureStage: String,
+        admissionStage: String,
+        captureSource: String
+    ) async -> AlphaTuner.LeafStore? {
+        let boundaryOffset = boundarySnapshot.tokenOffset
+        guard storedTokens.count > boundaryOffset else {
             diagnosticsContext.logSkip(
-                stage: "strippedLeafStore",
-                reason: "no-boundary-offset"
+                stage: storeStage,
+                reason: "stored-at-or-before-boundary",
+                extraFields: [
+                    ("storedLen", "\(storedTokens.count)"),
+                    ("boundaryOffset", "\(boundaryOffset)"),
+                ]
             )
-            return
-        }
-
-        // Guard 4: boundary snapshot must be in capturedSnapshots.
-        // When the planner skipped the boundary checkpoint because a
-        // prior turn already stored one at the same offset (deduped),
-        // capturedSnapshots won't contain it — in that case the prior
-        // turn's stripped leaf already exists and we silently skip.
-        guard let boundarySnapshot = capturedSnapshots.first(
-            where: { $0.tokenOffset == boundaryOffset }
-        ) else {
-            return  // silent; prior turn handled it
+            return nil
         }
 
         do {
-            try await container.perform { context in
-                // Tokenize the stripped stored sequence via two-probe.
-                guard let storedTokensStripped = try await Self.computeStrippedStoredTokens(
-                    context: context,
-                    storedConversation: storedConversation,
-                    toolSpecs: toolSpecs
-                ) else {
-                    diagnosticsContext.logSkip(
-                        stage: "strippedLeafStore",
-                        reason: "probe-divergence-failed"
-                    )
-                    return
-                }
-
-                // Guard 5: no residual to prefill.
-                guard storedTokensStripped.count > boundaryOffset else {
-                    diagnosticsContext.logSkip(
-                        stage: "strippedLeafStore",
-                        reason: "no-residual",
-                        extraFields: [
-                            ("strippedLen", "\(storedTokensStripped.count)"),
-                            ("boundaryOffset", "\(boundaryOffset)"),
-                        ]
-                    )
-                    return
-                }
-
-                // Guard 6: template didn't actually strip anything (non-Qwen3.5?).
-                // If `strippedLen == storedTokens.count`, the probe produced
-                // the same length as the unstripped path — no think block was
-                // removed. Skip to avoid storing a duplicate leaf.
-                guard storedTokensStripped.count < storedTokens.count else {
-                    diagnosticsContext.logSkip(
-                        stage: "strippedLeafStore",
-                        reason: "no-stripping-applied",
-                        level: .warning,
-                        extraFields: [
-                            ("strippedLen", "\(storedTokensStripped.count)"),
-                            ("storedLen", "\(storedTokens.count)"),
-                        ]
-                    )
-                    return
-                }
-
-                // Restore the boundary snapshot into a fresh [KVCache].
+            return try await container.perform { context in
                 let restoredCache = boundarySnapshot.restore(
                     kvBitsHint: partitionKey.kvBits,
                     kvGroupSizeHint: partitionKey.kvGroupSize
                 )
 
-                // Compute the residual tokens: `[assistant_opener + response + <|im_end|>]`.
-                let residual = Array(storedTokensStripped[boundaryOffset...])
-
-                // Prefill the residual on top of the restored cache.
-                // Mirrors `HybridCacheCorrectnessRunner.prefill` — the
-                // production prefill loop, with leftover drain.
+                let residual = Array(storedTokens[boundaryOffset...])
                 let prefillStart = Date.timeIntervalSinceReferenceDate
                 let inputArr = MLXArray(residual.map { Int32($0) })
                 let lmInput = LMInput(text: .init(tokens: inputArr, mask: nil))
@@ -1703,51 +1637,43 @@ actor LLMActor {
                 }
                 let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStart
 
-                // Capture the stripped leaf from the freshly prefilled cache.
-                guard let strippedLeaf = HybridCacheSnapshot.capture(
+                guard let leaf = HybridCacheSnapshot.capture(
                     cache: restoredCache,
-                    offset: storedTokensStripped.count,
+                    offset: storedTokens.count,
                     type: .leaf
                 ) else {
                     diagnosticsContext.logSkip(
-                        stage: "strippedLeafCapture",
+                        stage: captureStage,
                         reason: "unsupported-cache-type"
                     )
-                    return
+                    return nil
                 }
 
-                // Extract the stripped leaf payload inside the enclosing
-                // `container.perform` so `asData()` runs on the Metal-affine
-                // thread that just prefilled the residual.
-                let strippedLeafPayload = Self.extractSnapshotPayloads(
-                    [strippedLeaf],
+                let leafPayload = Self.extractSnapshotPayloads(
+                    [leaf],
                     ssdEnabled: ssdEnabled
                 ).first
 
                 diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
-                    offset: strippedLeaf.tokenOffset,
-                    checkpointType: strippedLeaf.checkpointType,
-                    bytes: strippedLeaf.memoryBytes,
+                    offset: leaf.tokenOffset,
+                    checkpointType: leaf.checkpointType,
+                    bytes: leaf.memoryBytes,
                     duringPrefill: false,
-                    source: "strippedLeaf"
+                    source: captureSource
                 ))
                 Log.agent.info(
-                    "Stripped leaf captured — offset=\(strippedLeaf.tokenOffset) "
+                    "\(captureSource) captured — offset=\(leaf.tokenOffset) "
                     + "residualTokens=\(residual.count) "
                     + "prefillMs=\(String(format: "%.3f", prefillMs * 1000)) "
-                    + "unstrippedLen=\(storedTokens.count) "
-                    + "strippedLen=\(storedTokensStripped.count)"
+                    + "storedLen=\(storedTokens.count)"
                 )
 
-                // Store the stripped leaf on MainActor and detect immediate
-                // eviction (the "capturedThenEvicted" pathology). Read the
-                // post-store budget + total in the same hop.
                 let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
                     await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
                         let d = prefixCache.storeLeaf(
-                            storedTokens: storedTokensStripped,
-                            leafSnapshot: strippedLeaf,
-                            leafPayload: strippedLeafPayload,
+                            storedTokens: storedTokens,
+                            leafSnapshot: leaf,
+                            leafPayload: leafPayload,
                             partitionKey: partitionKey,
                             requestID: requestID
                         )
@@ -1761,33 +1687,307 @@ actor LLMActor {
                         )
                     }
                 }
+                for supersession in diagnostics.supersededLeaves {
+                    diagnosticsContext.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
+                        offset: supersession.offset,
+                        storageRefID: supersession.bodyDroppedStorageRefID
+                    ))
+                }
                 let admissionEvicted = diagnostics.evictions.contains { event in
-                    event.offset == strippedLeaf.tokenOffset
+                    event.offset == leaf.tokenOffset
                         && event.checkpointType == .leaf
                 }
                 if admissionEvicted {
                     diagnosticsContext.logSkip(
-                        stage: "strippedLeafAdmission",
+                        stage: admissionStage,
                         reason: "capturedThenEvicted",
                         level: .warning,
                         extraFields: [
-                            ("offset", "\(strippedLeaf.tokenOffset)"),
-                            ("bytes", "\(strippedLeaf.memoryBytes)"),
+                            ("offset", "\(leaf.tokenOffset)"),
+                            ("bytes", "\(leaf.memoryBytes)"),
                             ("budgetBytes", "\(postStoreBudgetBytes)"),
                             ("snapshotBytesAfter", "\(postStoreSnapshotBytes)"),
                         ]
                     )
+                    Memory.clearCache()
+                    return nil
                 }
 
                 Memory.clearCache()
+                return AlphaTuner.LeafStore(
+                    storedTokens: storedTokens,
+                    bytes: leaf.memoryBytes
+                )
             }
         } catch {
             diagnosticsContext.logSkip(
-                stage: "strippedLeafStore",
+                stage: storeStage,
                 reason: "prefill-threw",
                 level: .warning,
                 extraFields: [("error", error.localizedDescription)]
             )
+            return nil
+        }
+    }
+
+    /// Tool-call turns are reused by the immediate tool-result continuation, so
+    /// store the direct assistant turn exactly as the structured template renders
+    /// it from the request-local boundary snapshot.
+    private static func captureDirectToolLeaf(
+        container: ModelContainer,
+        storedConversation: HTTPPrefixCacheConversation,
+        toolSpecs: [ToolSpec]?,
+        transientBoundarySnapshot: HybridCacheSnapshot?,
+        partitionKey: CachePartitionKey,
+        prefillStepSize: Int,
+        requestID: UUID,
+        prefixCache: PrefixCacheManager,
+        diagnosticsContext: PrefixCacheDiagnostics.Context,
+        ssdEnabled: Bool
+    ) async -> AlphaTuner.LeafStore? {
+        guard let boundarySnapshot = transientBoundarySnapshot else {
+            diagnosticsContext.logSkip(
+                stage: "directToolLeafStore",
+                reason: "no-transient-boundary-snapshot"
+            )
+            return nil
+        }
+
+        do {
+            guard let toolContinuationStoredTokens = try await container.perform({ context in
+                try await Self.computeToolContinuationStoredTokens(
+                    context: context,
+                    storedConversation: storedConversation,
+                    toolSpecs: toolSpecs
+                )
+            }) else {
+                diagnosticsContext.logSkip(
+                    stage: "directToolLeafStore",
+                    reason: "probe-divergence-failed"
+                )
+                return nil
+            }
+
+            return await Self.captureStructuredLeafFromBoundary(
+                container: container,
+                storedTokens: toolContinuationStoredTokens,
+                boundarySnapshot: boundarySnapshot,
+                partitionKey: partitionKey,
+                prefillStepSize: prefillStepSize,
+                requestID: requestID,
+                prefixCache: prefixCache,
+                diagnosticsContext: diagnosticsContext,
+                ssdEnabled: ssdEnabled,
+                storeStage: "directToolLeafStore",
+                captureStage: "directToolLeafCapture",
+                admissionStage: "directToolLeafAdmission",
+                captureSource: "directToolLeaf"
+            )
+        } catch {
+            diagnosticsContext.logSkip(
+                stage: "directToolLeafStore",
+                reason: "prefill-threw",
+                level: .warning,
+                extraFields: [("error", error.localizedDescription)]
+            )
+            return nil
+        }
+    }
+
+    /// Hydrate a state-5 lookup result back into a live snapshot when the
+    /// boundary exists only on SSD. Callers use this for both the main request
+    /// lookup path and canonical leaf fallback so warm-started / body-dropped
+    /// boundaries stay reusable.
+    private static func hydrateSSDLookupIfNeeded(
+        container: ModelContainer,
+        lookupResult: PrefixCacheManager.LookupResult,
+        partitionKey: CachePartitionKey,
+        totalTokens: Int,
+        prefixCache: PrefixCacheManager,
+        diagnosticsContext: PrefixCacheDiagnostics.Context
+    ) async -> PrefixCacheManager.LookupResult {
+        guard case .ssdHit(let ctx) = lookupResult.reason,
+              let fingerprint = partitionKey.modelFingerprint
+        else {
+            return lookupResult
+        }
+
+        let (hydrated, hydrateSeconds) = await container.perform { _ in
+            let hydrateStarted = Date.timeIntervalSinceReferenceDate
+            let hydrated = ctx.ssdStore.loadSync(
+                storageRef: ctx.storageRef,
+                expectedFingerprint: fingerprint
+            )
+            return (hydrated, Date.timeIntervalSinceReferenceDate - hydrateStarted)
+        }
+
+        if let hydrated {
+            diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
+                id: ctx.storageRef.snapshotID,
+                hydrateMs: hydrateSeconds
+            ))
+            await MainActor.run {
+                ctx.ssdStore.recordHit(id: ctx.storageRef.snapshotID)
+                prefixCache.promote(
+                    node: ctx.node,
+                    snapshot: hydrated,
+                    partitionKey: partitionKey
+                )
+            }
+            diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(
+                id: ctx.storageRef.snapshotID
+            ))
+            return PrefixCacheManager.LookupResult(
+                snapshot: hydrated,
+                partitionKey: partitionKey,
+                snapshotTokenOffset: hydrated.tokenOffset,
+                sharedPrefixLength: lookupResult.sharedPrefixLength,
+                reason: .hit(
+                    snapshotOffset: hydrated.tokenOffset,
+                    totalTokens: totalTokens,
+                    type: hydrated.checkpointType
+                )
+            )
+        }
+
+        await MainActor.run {
+            prefixCache.clearStorageRef(
+                node: ctx.node,
+                partitionKey: partitionKey
+            )
+        }
+        return PrefixCacheManager.LookupResult(
+            snapshot: nil,
+            partitionKey: partitionKey,
+            snapshotTokenOffset: 0,
+            sharedPrefixLength: lookupResult.sharedPrefixLength,
+            reason: .missNoSnapshotInPrefix
+        )
+    }
+
+    /// Capture the canonical leaf for templates whose non-latest assistant turns
+    /// may differ from the just-generated latest assistant form.
+    ///
+    /// The helper restores the request-local transient boundary snapshot,
+    /// prefills only the canonical residual `[assistant_opener + response + <|im_end|>]`,
+    /// and stores the resulting `.leaf` under the token path that a future
+    /// non-latest-assistant render will actually see. The boundary snapshot
+    /// never leaves this request: it is neither stored in RAM nor persisted
+    /// to SSD.
+    ///
+    /// Returns the alpha-tuner `LeafStore` metadata only when the canonical
+    /// leaf survived admission. All failure paths are logged and return `nil`.
+    private static func captureCanonicalTemplateLeaf(
+        container: ModelContainer,
+        storedConversation: HTTPPrefixCacheConversation,
+        storedTokens: [Int],
+        toolSpecs: [ToolSpec]?,
+        transientBoundarySnapshot: HybridCacheSnapshot?,
+        partitionKey: CachePartitionKey,
+        prefillStepSize: Int,
+        requestID: UUID,
+        prefixCache: PrefixCacheManager,
+        diagnosticsContext: PrefixCacheDiagnostics.Context,
+        ssdEnabled: Bool
+    ) async -> AlphaTuner.LeafStore? {
+        do {
+            guard let canonicalStoredTokens = try await container.perform({ context in
+                try await Self.computeCanonicalStoredTokens(
+                    context: context,
+                    storedConversation: storedConversation,
+                    toolSpecs: toolSpecs
+                )
+            }) else {
+                diagnosticsContext.logSkip(
+                    stage: "canonicalLeafStore",
+                    reason: "probe-divergence-failed"
+                )
+                return nil
+            }
+
+            let boundarySnapshot: HybridCacheSnapshot?
+            if let transientBoundarySnapshot,
+               transientBoundarySnapshot.tokenOffset < canonicalStoredTokens.count {
+                boundarySnapshot = transientBoundarySnapshot
+            } else {
+                let initialFallbackLookup = await MainActor.run {
+                    prefixCache.lookup(tokens: canonicalStoredTokens, partitionKey: partitionKey)
+                }
+                let fallbackLookup = await Self.hydrateSSDLookupIfNeeded(
+                    container: container,
+                    lookupResult: initialFallbackLookup,
+                    partitionKey: partitionKey,
+                    totalTokens: canonicalStoredTokens.count,
+                    prefixCache: prefixCache,
+                    diagnosticsContext: diagnosticsContext
+                )
+                if let snapshot = fallbackLookup.snapshot,
+                   snapshot.tokenOffset > 0,
+                   snapshot.tokenOffset < canonicalStoredTokens.count {
+                    boundarySnapshot = snapshot
+                } else {
+                    boundarySnapshot = nil
+                }
+            }
+
+            guard let boundarySnapshot else {
+                diagnosticsContext.logSkip(
+                    stage: "canonicalLeafStore",
+                    reason: "no-canonical-restore-boundary",
+                    extraFields: [("canonicalLen", "\(canonicalStoredTokens.count)")]
+                )
+                return nil
+            }
+            let boundaryOffset = boundarySnapshot.tokenOffset
+
+            guard canonicalStoredTokens.count > boundaryOffset else {
+                diagnosticsContext.logSkip(
+                    stage: "canonicalLeafStore",
+                    reason: "canonical-at-or-before-boundary",
+                    extraFields: [
+                        ("canonicalLen", "\(canonicalStoredTokens.count)"),
+                        ("boundaryOffset", "\(boundaryOffset)"),
+                    ]
+                )
+                return nil
+            }
+
+            guard canonicalStoredTokens.count <= storedTokens.count else {
+                diagnosticsContext.logSkip(
+                    stage: "canonicalLeafStore",
+                    reason: "canonical-longer-than-stored",
+                    level: .warning,
+                    extraFields: [
+                        ("canonicalLen", "\(canonicalStoredTokens.count)"),
+                        ("storedLen", "\(storedTokens.count)"),
+                    ]
+                )
+                return nil
+            }
+
+            return await Self.captureStructuredLeafFromBoundary(
+                container: container,
+                storedTokens: canonicalStoredTokens,
+                boundarySnapshot: boundarySnapshot,
+                partitionKey: partitionKey,
+                prefillStepSize: prefillStepSize,
+                requestID: requestID,
+                prefixCache: prefixCache,
+                diagnosticsContext: diagnosticsContext,
+                ssdEnabled: ssdEnabled,
+                storeStage: "canonicalLeafStore",
+                captureStage: "canonicalLeafCapture",
+                admissionStage: "canonicalLeafAdmission",
+                captureSource: "canonicalLeaf"
+            )
+        } catch {
+            diagnosticsContext.logSkip(
+                stage: "canonicalLeafStore",
+                reason: "prefill-threw",
+                level: .warning,
+                extraFields: [("error", error.localizedDescription)]
+            )
+            return nil
         }
     }
 

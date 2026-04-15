@@ -1,40 +1,19 @@
 import Foundation
 import MLXLMCommon
 
-/// Partition key for isolating radix trees by runtime configuration and
-/// client session.
+/// Partition key for isolating radix trees by runtime configuration.
 ///
 /// Tool/template digests are intentionally NOT part of the partition key:
 /// different tools/context → different tokens → different radix paths →
 /// naturally isolated within one partition.
 ///
-/// `sessionAffinity` separates different client sessions — for OpenCode,
-/// the main agent and each subagent carry distinct `x-session-affinity`
-/// header values. Without session scoping, a long-running subagent's
-/// churn evicts the idle main agent's snapshots (because main agent's
-/// `lastAccessTime` goes stale while the subagent runs), and when the
-/// main agent resumes it pays a full cold prefill — 5+ minutes at 9B on
-/// 80K tokens. With session scoping, each session gets its own radix
-/// tree, and eviction prefers to drop snapshots from the
-/// currently-writing partition before touching others (see
-/// `findEvictionCandidate`). The global memory budget is still hard —
-/// when a writing session's own eligible set is exhausted, eviction
-/// spills over to other partitions — but in practice the writing
-/// session's own tree has enough freeable snapshots so idle sessions are
-/// left alone.
-///
 /// `Comparable` so partition iteration can produce a deterministic order
-/// (modelID → kvBits → kvGroupSize → sessionAffinity) for stable
+/// (modelID → kvBits → kvGroupSize → modelFingerprint) for stable
 /// tie-break behavior in eviction.
 struct CachePartitionKey: Hashable, Sendable, Comparable {
     let modelID: String
     let kvBits: Int?
     let kvGroupSize: Int
-    /// Client-provided session identifier (the `x-session-affinity` HTTP
-    /// header, originally the OpenCode session UUID). `nil` when the
-    /// client does not send the header — all such requests share a
-    /// single default partition, matching pre-session-scoping behavior.
-    let sessionAffinity: String?
     /// Stable hex SHA-256 of the loaded model's weight files
     /// (`ModelFingerprint.computeFingerprint`). Folded in so a weight swap
     /// under the same `modelID` cannot surface stale persisted snapshots.
@@ -45,19 +24,17 @@ struct CachePartitionKey: Hashable, Sendable, Comparable {
         modelID: String,
         kvBits: Int?,
         kvGroupSize: Int,
-        sessionAffinity: String? = nil,
         modelFingerprint: String? = nil
     ) {
         self.modelID = modelID
         self.kvBits = kvBits
         self.kvGroupSize = kvGroupSize
-        self.sessionAffinity = sessionAffinity
         self.modelFingerprint = modelFingerprint
     }
 
     static func < (lhs: CachePartitionKey, rhs: CachePartitionKey) -> Bool {
-        (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize, lhs.sessionAffinity ?? "", lhs.modelFingerprint ?? "")
-            < (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize, rhs.sessionAffinity ?? "", rhs.modelFingerprint ?? "")
+        (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize, lhs.modelFingerprint ?? "")
+            < (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize, rhs.modelFingerprint ?? "")
     }
 }
 
@@ -158,7 +135,13 @@ final class PrefixCacheManager {
 
     struct StoreDiagnostics: Sendable {
         let evictions: [EvictionEvent]
+        let supersededLeaves: [LeafSupersession]
         let stats: CacheStats
+    }
+
+    struct LeafSupersession: Sendable {
+        let offset: Int
+        let bodyDroppedStorageRefID: String?
     }
 
     private struct EvictionCandidate {
@@ -363,14 +346,12 @@ final class PrefixCacheManager {
     func lookupAndPlanCheckpoints(
         tokens: [Int],
         stablePrefixOffset: Int?,
-        lastMessageBoundaryOffset: Int? = nil,
         partitionKey: CachePartitionKey
     ) -> (lookup: LookupResult, plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]) {
         let lookup = lookup(tokens: tokens, partitionKey: partitionKey)
         let basePlan = planCheckpoints(
             tokens: tokens,
             stablePrefixOffset: stablePrefixOffset,
-            lastMessageBoundaryOffset: lastMessageBoundaryOffset,
             partitionKey: partitionKey
         )
         guard let alignmentOffset = alignmentCheckpointOffset(
@@ -387,30 +368,19 @@ final class PrefixCacheManager {
 
     /// Determine checkpoint offsets for the upcoming prefill.
     ///
-    /// Captures up to two mid-prefill snapshots:
+    /// Captures the stable-prefix snapshot plus an optional speculative
+    /// branch-point snapshot:
     /// - `stablePrefixOffset`: where `system + tools` end (shared across
     ///   conversations, any request with the same system/tools can hit).
     ///   Stored as `.system` — type-protected from utility eviction
     ///   because it's the cross-conversation hot prefix that an entire
     ///   tree is built on.
-    /// - `lastMessageBoundaryOffset`: where the last message ends, right
-    ///   before the assistant-generation prompt. Templates (e.g. Qwen3.5)
-    ///   re-render old assistants differently once they're no longer the
-    ///   latest turn, so a leaf stored at the full-prompt offset doesn't
-    ///   match future requests. A checkpoint at the last-message boundary
-    ///   is stable across turns and enables cross-turn prefix reuse.
-    ///   Stored as `.lastMessageBoundary` — **NOT** type-protected. Long
-    ///   conversations accumulate one boundary per turn, and protecting
-    ///   them all would fill the budget with stale boundaries from old
-    ///   turns and starve new leaves of admission room. LRU eviction
-    ///   keeps the freshest boundary alive while letting old ones go.
     ///
     /// Leaf checkpoint is NOT planned — captured post-generation via storeLeaf().
     /// Existing snapshots at the same offset are skipped.
     func planCheckpoints(
         tokens: [Int],
         stablePrefixOffset: Int?,
-        lastMessageBoundaryOffset: Int? = nil,
         partitionKey: CachePartitionKey
     ) -> [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] {
         var plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] = []
@@ -432,15 +402,6 @@ final class PrefixCacheManager {
            !alreadyStored(offset: offset, type: .system)
         {
             plan.append((offset: offset, type: .system))
-        }
-
-        if let offset = lastMessageBoundaryOffset,
-           offset > 0,
-           offset < tokens.count,
-           offset != stablePrefixOffset,  // avoid duplicate with stable prefix
-           !alreadyStored(offset: offset, type: .lastMessageBoundary)
-        {
-            plan.append((offset: offset, type: .lastMessageBoundary))
         }
 
         if let tree,
@@ -475,7 +436,7 @@ final class PrefixCacheManager {
         requestID: UUID? = nil
     ) -> StoreDiagnostics {
         guard !capturedSnapshots.isEmpty else {
-            return StoreDiagnostics(evictions: [], stats: stats)
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
         }
 
         let tree = store.getOrCreateTree(for: partitionKey)
@@ -513,7 +474,7 @@ final class PrefixCacheManager {
             requestID: requestID,
             preferredPartitionKey: partitionKey
         )
-        return StoreDiagnostics(evictions: evictions, stats: stats)
+        return StoreDiagnostics(evictions: evictions, supersededLeaves: [], stats: stats)
     }
 
     /// Store the leaf snapshot under post-response tokens.
@@ -535,12 +496,17 @@ final class PrefixCacheManager {
         requestID: UUID? = nil
     ) -> StoreDiagnostics {
         guard leafSnapshot.tokenOffset == storedTokens.count else {
-            return StoreDiagnostics(evictions: [], stats: stats)
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
         }
 
         let tree = store.getOrCreateTree(for: partitionKey)
         let node = tree.insertPath(tokens: storedTokens)
         tree.storeSnapshot(leafSnapshot, on: node)
+
+        let supersededLeaves = supersedeAncestorLeaves(
+            for: node,
+            in: tree
+        )
 
         if let leafPayload {
             registerSSDPartitionIfNeeded(for: partitionKey)
@@ -562,7 +528,50 @@ final class PrefixCacheManager {
             requestID: requestID,
             preferredPartitionKey: partitionKey
         )
-        return StoreDiagnostics(evictions: evictions, stats: stats)
+        return StoreDiagnostics(
+            evictions: evictions,
+            supersededLeaves: supersededLeaves,
+            stats: stats
+        )
+    }
+
+    private func supersedeAncestorLeaves(
+        for node: RadixTreeNode,
+        in tree: TokenRadixTree
+    ) -> [LeafSupersession] {
+        var current = node.parent
+        var superseded: [LeafSupersession] = []
+
+        while let ancestor = current {
+            let nextAncestor = ancestor.parent
+            let snapshot = ancestor.snapshot
+            let storageRef = ancestor.storageRef
+            let checkpointType = snapshot?.checkpointType ?? storageRef?.checkpointType
+            guard checkpointType == .leaf else {
+                current = nextAncestor
+                continue
+            }
+
+            let offset = snapshot?.tokenOffset ?? storageRef?.tokenOffset ?? 0
+            let storageRefID = storageRef?.snapshotID
+            if let ref = storageRef {
+                store.deleteSnapshot(snapshotID: ref.snapshotID)
+                ancestor.storageRef = nil
+            }
+
+            tree.evictSnapshot(node: ancestor)
+            if ancestor.childCount == 1 {
+                tree.collapseSingleChildNode(ancestor)
+            }
+
+            superseded.append(LeafSupersession(
+                offset: offset,
+                bodyDroppedStorageRefID: storageRefID
+            ))
+            current = nextAncestor
+        }
+
+        return superseded
     }
 
     /// Reseed a snapshot at `path` with an explicit `lastAccessTime`.
@@ -683,7 +692,6 @@ final class PrefixCacheManager {
                 modelID: partition.meta.modelID,
                 kvBits: partition.meta.kvBits,
                 kvGroupSize: partition.meta.kvGroupSize,
-                sessionAffinity: partition.meta.sessionAffinity,
                 modelFingerprint: partition.meta.modelFingerprint
             )
             // Register with the store so subsequent admissions do
@@ -780,7 +788,6 @@ final class PrefixCacheManager {
             modelFingerprint: fingerprint,
             kvBits: partitionKey.kvBits,
             kvGroupSize: partitionKey.kvGroupSize,
-            sessionAffinity: partitionKey.sessionAffinity,
             createdAt: Date().timeIntervalSinceReferenceDate,
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
@@ -867,9 +874,8 @@ final class PrefixCacheManager {
     /// `preferredPartitionKey` — the partition currently writing (i.e.,
     /// the request that triggered this drain). Eviction prefers to drop
     /// snapshots from this partition first, exhausting its eligible set
-    /// before touching other partitions. This prevents a long-running
-    /// subagent's churn from evicting an idle main agent's tall
-    /// snapshots. When `nil`, behaves globally (Marconi default).
+    /// before touching other partitions. When `nil`, behaves globally
+    /// (Marconi default).
     @discardableResult
     func evictToFitBudget(
         requestID: UUID? = nil,
@@ -967,8 +973,7 @@ final class PrefixCacheManager {
     /// 1. **Preferred utility**: if a `preferredTree` is supplied, score
     ///    its Marconi-eligible nodes (snapshot + `childCount <= 1` +
     ///    non-`.system`) and return the lowest-utility one. This is the
-    ///    writing-partition-first rule — session scoping's key
-    ///    protection for idle partitions.
+    ///    writing-partition-first rule.
     /// 2. **Global utility**: if the preferred tree has no eligible
     ///    candidates (or none was supplied), score eligible nodes across
     ///    all partitions and return the lowest-utility one. Preserves

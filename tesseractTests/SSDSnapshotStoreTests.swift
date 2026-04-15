@@ -93,7 +93,6 @@ struct SSDSnapshotStoreTests {
             modelFingerprint: fingerprint,
             kvBits: 8,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             createdAt: 100_000,
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
@@ -1144,6 +1143,39 @@ struct SSDSnapshotStoreTests {
         }
     }
 
+    /// Test-only gate for pausing the detached writer until a test
+    /// has finished building the pending-queue state it wants to
+    /// assert against.
+    private actor DrainGate {
+        private var isOpen = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            if isOpen {
+                return
+            }
+
+            await withCheckedContinuation { continuation in
+                if isOpen {
+                    continuation.resume()
+                    return
+                }
+                waiters.append(continuation)
+            }
+        }
+
+        func open() {
+            if isOpen {
+                return
+            }
+            isOpen = true
+            let currentWaiters = waiters
+            waiters.removeAll()
+
+            currentWaiters.forEach { $0.resume() }
+        }
+    }
+
     /// Install a sink for the duration of a single test. Returns the
     /// sink so the test can inspect its captured lines, and a closure
     /// the test must defer-call to remove the sink from the registry.
@@ -1333,20 +1365,19 @@ struct SSDSnapshotStoreTests {
         defer { uninstall() }
 
         let tracker = CallbackTracker()
-        // Use a long debounce so the writer cannot drain between
-        // the two enqueues; we want the second enqueue to find the
-        // first still in the queue and bump it.
+        let drainGate = DrainGate()
+        // Pause the detached writer so the second enqueue sees the
+        // first item still pending and deterministically triggers
+        // the drop-oldest path.
         let store = SSDSnapshotStore(
             config: config,
             manifestDebounce: .seconds(60),
             onCommit: tracker.onCommit,
-            onDrop: tracker.onDrop
+            onDrop: tracker.onDrop,
+            writerDrainPreludeForTesting: { await drainGate.wait() }
         )
+        defer { Task { await drainGate.open() } }
         store.registerPartition(makePartitionMeta(), digest: "abcd1234")
-
-        // Block the writer on a long-running prelude so it cannot
-        // drain the first payload before the second arrives. We
-        // use a payload large enough to keep `pendingBytes` high.
         let firstPayload = makePayload(bytes: 4_096)
         let firstDescriptor = makeDescriptor(
             id: "first", checkpointType: "leaf", bytes: firstPayload.totalBytes
@@ -1368,6 +1399,7 @@ struct SSDSnapshotStoreTests {
             Issue.record("expected second .accepted, got \(secondResult)")
             return
         }
+        await drainGate.open()
 
         // The bumped lifecycle event fires synchronously from the
         // front door (the call site runs the callback after

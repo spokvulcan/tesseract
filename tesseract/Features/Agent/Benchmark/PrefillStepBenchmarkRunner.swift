@@ -498,7 +498,6 @@ final class PrefillStepBenchmarkRunner {
             messages: llmMessages,
             toolSpecs: toolSpecs,
             prefixCacheConversation: prefixCacheConversation,
-            sessionAffinity: nil,
             parameters: parameters
         )
 

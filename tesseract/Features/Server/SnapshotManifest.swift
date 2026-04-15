@@ -43,7 +43,7 @@ nonisolated enum SnapshotManifestSchema {
     /// Incrementing this value invalidates every on-disk manifest
     /// and discards all previously persisted snapshots on the next
     /// warm start.
-    static let currentVersion: Int = 1
+    static let currentVersion: Int = 3
 }
 
 // MARK: - Persisted descriptor (Codable, manifest.json + safetensors header)
@@ -175,12 +175,6 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
     /// Quantization group size for the KV cache (e.g. 32, 64, 128).
     /// Mirrors `CachePartitionKey.kvGroupSize`.
     let kvGroupSize: Int
-
-    /// Client session identifier (from the `x-session-affinity` HTTP
-    /// header). `nil` when the client does not send the header. Used
-    /// to keep long-running OpenCode subagents from evicting the main
-    /// agent's snapshots.
-    let sessionAffinity: String?
 
     /// Seconds since Date's reference date. Not used for any eviction
     /// decision; recorded for diagnostics only.
@@ -394,32 +388,27 @@ extension CachePartitionKey {
     /// disagree — and `SnapshotManifestTests` pins a known
     /// input→output pair as a regression trap.
     ///
-    /// **Canonicalization.** Concatenates the five fields in fixed
-    /// order (`modelID`, `kvBits`, `kvGroupSize`, `sessionAffinity`,
-    /// `modelFingerprint`) separated by a single null byte (`\0`).
-    /// Nullable fields (`kvBits`, `sessionAffinity`,
-    /// `modelFingerprint`) use a presence tag: `"N"` for `nil`,
+    /// **Canonicalization.** Concatenates the four fields in fixed
+    /// order (`modelID`, `kvBits`, `kvGroupSize`, `modelFingerprint`)
+    /// separated by a single null byte (`\0`). Nullable fields
+    /// (`kvBits`, `modelFingerprint`) use a presence tag: `"N"` for `nil`,
     /// `"S"` followed by the value for `Some`. The tag is load-
     /// bearing — a bare sentinel string like `"none"` would
     /// collide with a real value of `"none"` and silently merge
-    /// two structurally distinct partitions on disk, which an
-    /// HTTP client can trigger by sending `x-session-affinity:
-    /// none`. The presence tag prevents the collision because
-    /// `nil` always encodes as `"N"` and a `Some` value always
-    /// encodes with a leading `"S"`, and no value starting with
-    /// `"S"` can ever equal the bare `"N"` sentinel.
+    /// two structurally distinct partitions on disk. The presence
+    /// tag prevents the collision because `nil` always encodes as
+    /// `"N"` and a `Some` value always encodes with a leading `"S"`,
+    /// and no value starting with `"S"` can ever equal the bare
+    /// `"N"` sentinel.
     ///
     /// The null-byte separator cannot appear inside any field:
     /// `modelID` is a HuggingFace ID, `kvBits`/`kvGroupSize` are
-    /// decimal integers, `sessionAffinity` is a header string
-    /// (HTTP headers disallow control bytes), and
-    /// `modelFingerprint` is hex SHA-256.
+    /// decimal integers, and `modelFingerprint` is hex SHA-256.
     nonisolated var partitionDigest: String {
         let kvBitsField = kvBits.map { "S\($0)" } ?? "N"
-        let sessionField = sessionAffinity.map { "S" + $0 } ?? "N"
         let fingerprintField = modelFingerprint.map { "S" + $0 } ?? "N"
         let canonical =
-            "\(modelID)\0\(kvBitsField)\0\(kvGroupSize)\0\(sessionField)\0\(fingerprintField)"
+            "\(modelID)\0\(kvBitsField)\0\(kvGroupSize)\0\(fingerprintField)"
 
         // FNV-1a 32-bit: offset_basis = 0x811c9dc5, prime = 0x01000193.
         var hash: UInt32 = 0x811c_9dc5

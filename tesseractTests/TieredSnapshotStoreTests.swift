@@ -53,7 +53,6 @@ struct TieredSnapshotStoreTests {
             modelFingerprint: String(repeating: "a", count: 64),
             kvBits: 8,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             createdAt: 100_000,
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
@@ -64,7 +63,6 @@ struct TieredSnapshotStoreTests {
             modelID: "mlx-community/Qwen3-4B-4bit",
             kvBits: 8,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: String(repeating: "a", count: 64)
         )
     }

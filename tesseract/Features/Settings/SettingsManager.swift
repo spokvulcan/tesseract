@@ -306,8 +306,8 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(prefixCacheSSDEnabled, forKey: Key.prefixCacheSSDEnabled) }
     }
 
-    /// Hard top-level byte budget for the SSD tier. Default 20 GiB.
-    var prefixCacheSSDBudgetBytes: Int = 20 * 1024 * 1024 * 1024 {
+    /// Hard top-level byte budget for the SSD tier. Default 50 GiB.
+    var prefixCacheSSDBudgetBytes: Int = 50 * 1024 * 1024 * 1024 {
         didSet { UserDefaults.standard.set(prefixCacheSSDBudgetBytes, forKey: Key.prefixCacheSSDBudgetBytes) }
     }
 

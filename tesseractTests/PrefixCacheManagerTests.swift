@@ -33,7 +33,6 @@ struct PrefixCacheManagerTests {
             modelID: "test-model",
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: fingerprint
         )
     }
@@ -246,96 +245,163 @@ struct PrefixCacheManagerTests {
         #expect(leafResult.snapshot == nil)
     }
 
-    /// **Regression test**: `.lastMessageBoundary` snapshots must NOT be
-    /// type-protected — only the cross-conversation `.system` (stable
-    /// prefix) is. This is the fix for the long-conversation pathology
-    /// where boundaries from every prior turn would accumulate as
-    /// "protected" snapshots and starve fresh leaves of admission room.
-    @Test func lastMessageBoundaryEvictableButStablePrefixProtected() {
-        let snapBytes = makeUniformSnapshot(offset: 10).memoryBytes
-        let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes)
+    /// Only the newest leaf on a structural branch survives. Storing a
+    /// descendant leaf must supersede older ancestor leaves immediately.
+    @Test func descendantLeafSupersedesAncestorLeaf() {
+        let mgr = makeManager()
+        let ancestorTokens = Array(1...10)
+        let descendantTokens = Array(1...15)
 
-        // Stable prefix snapshot — `.system`, type-protected.
-        let stableTokens = Array(1...10)
-        mgr.storeSnapshots(
-            promptTokens: stableTokens,
-            capturedSnapshots: [makeUniformSnapshot(offset: 10, type: .system)],
+        mgr.storeLeaf(
+            storedTokens: ancestorTokens,
+            leafSnapshot: makeUniformSnapshot(offset: ancestorTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
+        let diagnostics = mgr.storeLeaf(
+            storedTokens: descendantTokens,
+            leafSnapshot: makeUniformSnapshot(offset: descendantTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        #expect(diagnostics.supersededLeaves.count == 1)
+        #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
         #expect(mgr.stats.snapshotCount == 1)
 
-        // Last-message-boundary snapshot on a different path —
-        // `.lastMessageBoundary`, NOT type-protected. This will push
-        // budget over and force an eviction.
-        let boundaryTokens = Array(20...29)
-        let diagnostics = mgr.storeSnapshots(
-            promptTokens: boundaryTokens,
-            capturedSnapshots: [
-                makeUniformSnapshot(
-                    offset: boundaryTokens.count, type: .lastMessageBoundary
-                )
-            ],
-            partitionKey: defaultKey
-        )
-
-        // Eviction picked the older candidate. Both are now eligible
-        // (`.lastMessageBoundary` is no longer type-protected, only
-        // multi-child protection still applies). Recency rules: the
-        // older `.system` snapshot has older `lastAccessTime` so it's
-        // the LRU victim — but `.system` is still type-protected, so
-        // utility scoring excludes it from the candidate set. The new
-        // `.lastMessageBoundary` is the only candidate → evicted.
-        #expect(diagnostics.evictions.count == 1)
-        let evicted = diagnostics.evictions[0]
-        #expect(evicted.checkpointType == .lastMessageBoundary)
-
-        // Stable prefix survives.
-        let stableResult = mgr.lookup(tokens: stableTokens, partitionKey: defaultKey)
-        #expect(stableResult.snapshotTokenOffset == 10)
-        let boundaryResult = mgr.lookup(tokens: boundaryTokens, partitionKey: defaultKey)
-        #expect(boundaryResult.snapshot == nil)
+        let descendantResult = mgr.lookup(tokens: descendantTokens, partitionKey: defaultKey)
+        #expect(descendantResult.snapshotTokenOffset == descendantTokens.count)
+        let ancestorResult = mgr.lookup(tokens: ancestorTokens, partitionKey: defaultKey)
+        #expect(ancestorResult.snapshot == nil)
     }
 
-    /// Two `.lastMessageBoundary` snapshots from different turns: the
-    /// older one is evicted under recency, the fresher one survives.
-    /// This is the correct behaviour for long conversations — only the
-    /// most recent boundary is useful, and old ones can age out.
-    @Test func olderLastMessageBoundaryEvictedBeforeFreshOne() {
-        let snapBytes = makeUniformSnapshot(offset: 10).memoryBytes
-        let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes)
+    /// Supersession must also clear state-5 ancestor leaves whose RAM body was
+    /// already dropped but whose committed SSD storageRef still pins the path.
+    @Test func descendantLeafSupersedesSSDBackedAncestorLeaf() {
+        let tieredStore = TieredSnapshotStore(ssdConfig: nil)
+        let mgr = PrefixCacheManager(
+            memoryBudgetBytes: 100 * 1024 * 1024,
+            tieredStore: tieredStore
+        )
+        let ancestorTokens = Array(1...10)
+        let descendantTokens = Array(1...15)
 
-        // Old boundary (turn N-1).
-        let oldTokens = Array(1...10)
-        mgr.storeSnapshots(
-            promptTokens: oldTokens,
-            capturedSnapshots: [
-                makeUniformSnapshot(offset: 10, type: .lastMessageBoundary)
-            ],
+        mgr.storeLeaf(
+            storedTokens: ancestorTokens,
+            leafSnapshot: makeUniformSnapshot(offset: ancestorTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
+        let tree = tieredStore.tree(for: defaultKey)!
+        let (ancestorNode, _) = tree.findBestSnapshot(
+            tokens: ancestorTokens,
+            updateAccess: false
+        )!
+        let ancestorRef = PrefixCacheTestFixtures.makeStorageRef(
+            committed: true,
+            tokenOffset: ancestorTokens.count
+        )
+        ancestorNode.storageRef = ancestorRef
+        tree.evictSnapshot(node: ancestorNode)
+        #expect(ancestorNode.snapshot == nil)
+        #expect(ancestorNode.storageRef?.snapshotID == ancestorRef.snapshotID)
+
+        let diagnostics = mgr.storeLeaf(
+            storedTokens: descendantTokens,
+            leafSnapshot: makeUniformSnapshot(offset: descendantTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        #expect(diagnostics.supersededLeaves.count == 1)
+        #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
+        #expect(diagnostics.supersededLeaves[0].bodyDroppedStorageRefID == ancestorRef.snapshotID)
+        #expect(ancestorNode.storageRef == nil)
         #expect(mgr.stats.snapshotCount == 1)
 
-        // Fresh boundary (turn N) on an independent path.
-        let freshTokens = Array(20...29)
-        let diagnostics = mgr.storeSnapshots(
-            promptTokens: freshTokens,
-            capturedSnapshots: [
-                makeUniformSnapshot(
-                    offset: freshTokens.count, type: .lastMessageBoundary
-                )
-            ],
+        let ancestorResult = mgr.lookup(tokens: ancestorTokens, partitionKey: defaultKey)
+        #expect(ancestorResult.snapshot == nil)
+        let descendantResult = mgr.lookup(tokens: descendantTokens, partitionKey: defaultKey)
+        #expect(descendantResult.snapshotTokenOffset == descendantTokens.count)
+    }
+
+    /// When the nearest superseded ancestor collapses, the walk must still
+    /// continue upward and clear shallower leaves on the same branch.
+    @Test func descendantLeafSupersedesAllAncestorLeavesOnBranch() {
+        let mgr = makeManager()
+        let shallowTokens = Array(1...5)
+        let midTokens = Array(1...10)
+        let deepTokens = Array(1...15)
+
+        mgr.restoreSnapshot(
+            path: shallowTokens,
+            snapshot: makeUniformSnapshot(offset: shallowTokens.count, type: .leaf),
+            partitionKey: defaultKey,
+            lastAccessTime: .now
+        )
+        mgr.restoreSnapshot(
+            path: midTokens,
+            snapshot: makeUniformSnapshot(offset: midTokens.count, type: .leaf),
+            partitionKey: defaultKey,
+            lastAccessTime: .now
+        )
+
+        let diagnostics = mgr.storeLeaf(
+            storedTokens: deepTokens,
+            leafSnapshot: makeUniformSnapshot(offset: deepTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
 
-        // Older boundary evicted, fresh one survives.
-        #expect(diagnostics.evictions.count == 1)
-        #expect(diagnostics.evictions[0].offset == oldTokens.count)
-        #expect(diagnostics.evictions[0].checkpointType == .lastMessageBoundary)
+        #expect(diagnostics.supersededLeaves.count == 2)
+        #expect(Set(diagnostics.supersededLeaves.map(\.offset)) == Set([shallowTokens.count, midTokens.count]))
+        #expect(mgr.stats.snapshotCount == 1)
 
-        let freshResult = mgr.lookup(tokens: freshTokens, partitionKey: defaultKey)
-        #expect(freshResult.snapshotTokenOffset == freshTokens.count)
-        let oldResult = mgr.lookup(tokens: oldTokens, partitionKey: defaultKey)
-        #expect(oldResult.snapshot == nil)
+        let shallowResult = mgr.lookup(tokens: shallowTokens, partitionKey: defaultKey)
+        #expect(shallowResult.snapshot == nil)
+        let midResult = mgr.lookup(tokens: midTokens, partitionKey: defaultKey)
+        #expect(midResult.snapshot == nil)
+        let deepResult = mgr.lookup(tokens: deepTokens, partitionKey: defaultKey)
+        #expect(deepResult.snapshotTokenOffset == deepTokens.count)
+    }
+
+    /// Leaf supersession is branch-local. Replacing an ancestor leaf on one
+    /// branch must preserve sibling leaves and the stable-prefix `.system`
+    /// snapshot they share.
+    @Test func leafSupersessionPreservesSiblingBranchAndSystemSnapshot() {
+        let mgr = makeManager()
+        let stableTokens = Array(1...5)
+        mgr.storeSnapshots(
+            promptTokens: stableTokens,
+            capturedSnapshots: [makeUniformSnapshot(offset: stableTokens.count, type: .system)],
+            partitionKey: defaultKey
+        )
+
+        let ancestorTokens = Array(1...10)
+        mgr.storeLeaf(
+            storedTokens: ancestorTokens,
+            leafSnapshot: makeUniformSnapshot(offset: ancestorTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        let siblingTokens = Array(1...5) + Array(20...25)
+        mgr.storeLeaf(
+            storedTokens: siblingTokens,
+            leafSnapshot: makeUniformSnapshot(offset: siblingTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        let descendantTokens = Array(1...15)
+        let diagnostics = mgr.storeLeaf(
+            storedTokens: descendantTokens,
+            leafSnapshot: makeUniformSnapshot(offset: descendantTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        #expect(diagnostics.supersededLeaves.count == 1)
+        #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
+
+        let stableResult = mgr.lookup(tokens: stableTokens + [99], partitionKey: defaultKey)
+        #expect(stableResult.snapshotTokenOffset == stableTokens.count)
+        let siblingResult = mgr.lookup(tokens: siblingTokens, partitionKey: defaultKey)
+        #expect(siblingResult.snapshotTokenOffset == siblingTokens.count)
+        let descendantResult = mgr.lookup(tokens: descendantTokens, partitionKey: defaultKey)
+        #expect(descendantResult.snapshotTokenOffset == descendantTokens.count)
     }
 
     // MARK: - 8. memoryBudgetEnforced
@@ -677,78 +743,6 @@ struct PrefixCacheManagerTests {
         #expect(plan[0].type == .system)
     }
 
-    // MARK: - Last-message boundary checkpoint
-
-    /// `lastMessageBoundaryOffset` adds a second `.system`-type checkpoint
-    /// alongside the stable prefix. Both are planned when neither is already
-    /// stored. This captures the "end of last user message" point, which is
-    /// stable across conversation turns (unlike the leaf, which changes due
-    /// to template re-rendering of past assistants).
-    @Test func planCheckpointsIncludesLastMessageBoundary() {
-        let mgr = makeManager()
-        let tokens = Array(1...1000)
-
-        let plan = mgr.planCheckpoints(
-            tokens: tokens,
-            stablePrefixOffset: 100,
-            lastMessageBoundaryOffset: 800,
-            partitionKey: defaultKey
-        )
-
-        // Stable prefix is `.system` (cross-conversation, type-protected).
-        // Last-message boundary is `.lastMessageBoundary` (cross-turn,
-        // LRU-evictable so old boundaries don't accumulate forever).
-        #expect(plan.count == 2)
-        #expect(plan.contains { $0.offset == 100 && $0.type == .system })
-        #expect(plan.contains { $0.offset == 800 && $0.type == .lastMessageBoundary })
-    }
-
-    /// When the stable prefix and last-message boundary happen to be at the
-    /// same offset (short conversations with just system+tools), only one
-    /// checkpoint is planned — no duplicate.
-    @Test func planCheckpointsDedupesIdenticalOffsets() {
-        let mgr = makeManager()
-        let tokens = Array(1...1000)
-
-        let plan = mgr.planCheckpoints(
-            tokens: tokens,
-            stablePrefixOffset: 500,
-            lastMessageBoundaryOffset: 500,
-            partitionKey: defaultKey
-        )
-
-        #expect(plan.count == 1)
-        #expect(plan[0].offset == 500)
-    }
-
-    /// If a system snapshot already exists at the last-message boundary, the
-    /// planner skips it (no re-capture needed).
-    @Test func planCheckpointsSkipsExistingLastMessageBoundary() {
-        let mgr = makeManager()
-        let tokens = Array(1...1000)
-
-        // Pre-store a `.lastMessageBoundary` snapshot at the boundary
-        // offset (matching what the real planner stores there now).
-        let boundarySnap = makeSnapshot(offset: 700, type: .lastMessageBoundary)
-        mgr.storeSnapshots(
-            promptTokens: tokens,
-            capturedSnapshots: [boundarySnap],
-            partitionKey: defaultKey
-        )
-
-        let plan = mgr.planCheckpoints(
-            tokens: tokens,
-            stablePrefixOffset: 100,
-            lastMessageBoundaryOffset: 700,
-            partitionKey: defaultKey
-        )
-
-        // Only the stable prefix gets planned — the boundary is already stored.
-        #expect(plan.count == 1)
-        #expect(plan[0].offset == 100)
-        #expect(plan[0].type == .system)
-    }
-
     // MARK: - Speculative branch-point candidates
 
     @Test func divergenceInsideCompressedEdgeCreatesCandidate() {
@@ -792,11 +786,13 @@ struct PrefixCacheManagerTests {
 
     @Test func nodeBoundaryDivergenceDoesNotCreateIntermediateCheckpoint() {
         let mgr = makeManager()
-        // Storing both [1,2] and [1,2,3,4] materializes node [1,2] as a real
-        // boundary, so a [1,2,9] walk diverges at the boundary not mid-edge.
-        mgr.storeLeaf(
-            storedTokens: [1, 2],
-            leafSnapshot: makeSnapshot(offset: 2, type: .leaf),
+        // A materialized snapshot-bearing boundary at [1,2] should keep the
+        // divergence on [1,2,9,10] at the node boundary, not mid-edge. Use a
+        // `.system` snapshot here because descendant leaf stores supersede
+        // ancestor leaves under the newest-per-branch policy.
+        mgr.storeSnapshots(
+            promptTokens: [1, 2],
+            capturedSnapshots: [makeSnapshot(offset: 2, type: .system)],
             partitionKey: defaultKey
         )
         mgr.storeLeaf(
@@ -1020,148 +1016,100 @@ struct PrefixCacheManagerTests {
         #expect(suffixPlan.contains { $0.offset == 500 && $0.type == .branchPoint })
     }
 
-    // MARK: - Session-scoped partitioning
+    // MARK: - Global partitioning
 
-    /// Two `CachePartitionKey`s that differ only by `sessionAffinity` must
-    /// be treated as distinct partitions. A snapshot stored under one
-    /// session must not be visible to a lookup from another session.
-    /// Regression test for the "long-running subagent evicts main agent"
-    /// pathology.
-    @Test func differentSessionsIsolated() {
+    /// OpenCode session IDs no longer affect prefix-cache routing. Two
+    /// equivalent model-config keys share the same radix tree, so an
+    /// identical first-turn prompt may hit the stored leaf immediately.
+    @Test func equivalentKeysShareLeafAcrossSessions() {
         let mgr = makeManager()
-        let mainKey = CachePartitionKey(
-            modelID: "test-model", kvBits: nil, kvGroupSize: 64,
-            sessionAffinity: "ses_main"
-        )
-        let subKey = CachePartitionKey(
-            modelID: "test-model", kvBits: nil, kvGroupSize: 64,
-            sessionAffinity: "ses_sub"
-        )
+        let keyA = CachePartitionKey(modelID: "test-model", kvBits: nil, kvGroupSize: 64)
+        let keyB = CachePartitionKey(modelID: "test-model", kvBits: nil, kvGroupSize: 64)
         let tokens = Array(1...100)
-        // Store the same token sequence under both sessions.
+
         mgr.storeLeaf(
             storedTokens: tokens,
             leafSnapshot: makeSnapshot(offset: tokens.count, type: .leaf),
-            partitionKey: mainKey
-        )
-        mgr.storeLeaf(
-            storedTokens: tokens,
-            leafSnapshot: makeSnapshot(offset: tokens.count, type: .leaf),
-            partitionKey: subKey
+            partitionKey: keyA
         )
 
-        // Two independent partitions, each with its own snapshot.
-        #expect(mgr.stats.partitionCount == 2)
-        #expect(mgr.stats.snapshotCount == 2)
+        #expect(mgr.stats.partitionCount == 1)
+        #expect(mgr.stats.snapshotCount == 1)
 
-        // Each session's lookup hits its own partition.
-        let mainResult = mgr.lookup(tokens: tokens, partitionKey: mainKey)
-        #expect(mainResult.snapshotTokenOffset == tokens.count)
-        let subResult = mgr.lookup(tokens: tokens, partitionKey: subKey)
-        #expect(subResult.snapshotTokenOffset == tokens.count)
-
-        // A third session with no prior stores gets a clean miss — not
-        // the main or sub partition's snapshot.
-        let otherKey = CachePartitionKey(
-            modelID: "test-model", kvBits: nil, kvGroupSize: 64,
-            sessionAffinity: "ses_other"
-        )
-        let otherResult = mgr.lookup(tokens: tokens, partitionKey: otherKey)
-        #expect(otherResult.snapshot == nil)
+        let result = mgr.lookup(tokens: tokens, partitionKey: keyB)
+        #expect(result.snapshotTokenOffset == tokens.count)
     }
 
-    /// `nil` session affinity is a valid partition key and all `nil`
-    /// callers share a single partition (pre-session-scoping behavior).
-    @Test func nilSessionAffinityShared() {
+    /// Cross-session sharing is still bounded by the global partition
+    /// identity. A different model fingerprint must map to a different
+    /// partition and miss cleanly.
+    @Test func differentFingerprintsRemainIsolated() {
         let mgr = makeManager()
-        let key1 = CachePartitionKey(modelID: "m", kvBits: nil, kvGroupSize: 64)
-        let key2 = CachePartitionKey(modelID: "m", kvBits: nil, kvGroupSize: 64)
-        #expect(key1 == key2)
-        #expect(key1.hashValue == key2.hashValue)
+        let keyA = CachePartitionKey(
+            modelID: "m",
+            kvBits: nil,
+            kvGroupSize: 64,
+            modelFingerprint: String(repeating: "a", count: 64)
+        )
+        let keyB = CachePartitionKey(
+            modelID: "m",
+            kvBits: nil,
+            kvGroupSize: 64,
+            modelFingerprint: String(repeating: "b", count: 64)
+        )
 
         let tokens = Array(1...50)
         mgr.storeLeaf(
             storedTokens: tokens,
             leafSnapshot: makeSnapshot(offset: tokens.count, type: .leaf),
-            partitionKey: key1
+            partitionKey: keyA
         )
-        let result = mgr.lookup(tokens: tokens, partitionKey: key2)
-        #expect(result.snapshotTokenOffset == tokens.count)
+
+        let result = mgr.lookup(tokens: tokens, partitionKey: keyB)
+        #expect(result.snapshot == nil)
     }
 
-    /// **Acceptance test for the session-scoping fix.** A long-running
-    /// subagent fills the cache with its own snapshots. The idle main
-    /// agent's tall stable-prefix snapshot must survive, because eviction
-    /// prefers the writing partition (subagent) over the idle one (main).
-    ///
-    /// Setup: main agent stores one `.leaf` snapshot (the only thing
-    /// eligible for eviction in that partition — the stable prefix is
-    /// `.system` and protected). Subagent then stores many `.leaf`
-    /// snapshots, blowing past the budget. Each subagent store triggers
-    /// `evictToFitBudget`, which must evict from the subagent's own
-    /// partition first.
-    @Test func idleMainAgentSurvivesSubagentChurn() {
-        let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
-        // Budget fits exactly 3 snapshots.
-        let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 3)
+    /// Stable-prefix reuse is global too. After storing a `.system`
+    /// snapshot for one request shape, a different request that shares the
+    /// same prefix must hit that checkpoint even when the user suffix
+    /// diverges.
+    @Test func stablePrefixSharedAcrossEquivalentKeys() {
+        let mgr = makeManager()
+        let keyA = CachePartitionKey(modelID: "test-model", kvBits: nil, kvGroupSize: 64)
+        let keyB = CachePartitionKey(modelID: "test-model", kvBits: nil, kvGroupSize: 64)
 
-        let mainKey = CachePartitionKey(
-            modelID: "test-model", kvBits: nil, kvGroupSize: 64,
-            sessionAffinity: "ses_main"
-        )
-        let subKey = CachePartitionKey(
-            modelID: "test-model", kvBits: nil, kvGroupSize: 64,
-            sessionAffinity: "ses_sub"
+        let original = [1, 2, 3, 10, 11]
+        let differentUser = [1, 2, 3, 20, 21]
+        mgr.storeSnapshots(
+            promptTokens: original,
+            capturedSnapshots: [makeSnapshot(offset: 3, type: .system)],
+            partitionKey: keyA
         )
 
-        // Main agent stores one leaf, then goes idle.
-        let mainTokens = Array(1...10)
-        mgr.storeLeaf(
-            storedTokens: mainTokens,
-            leafSnapshot: makeUniformSnapshot(offset: mainTokens.count, type: .leaf),
-            partitionKey: mainKey
-        )
-        #expect(mgr.stats.snapshotCount == 1)
-
-        // Subagent churns 10 writes, each a distinct leaf. Budget only
-        // fits 3 snapshots, so eviction fires 7 times. Under the
-        // preferred-partition rule, all evictions hit the subagent's
-        // own partition; the idle main-agent leaf must survive.
-        for i in 0..<10 {
-            let subTokens = Array((1000 + i * 100)..<(1000 + i * 100 + 10))
-            mgr.storeLeaf(
-                storedTokens: subTokens,
-                leafSnapshot: makeUniformSnapshot(offset: subTokens.count, type: .leaf),
-                partitionKey: subKey
-            )
+        let result = mgr.lookup(tokens: differentUser, partitionKey: keyB)
+        #expect(result.snapshotTokenOffset == 3)
+        #expect(result.sharedPrefixLength == 3)
+        if case .hit(let offset, _, let type) = result.reason {
+            #expect(offset == 3)
+            #expect(type == .system)
+        } else {
+            #expect(Bool(false), "Expected stable-prefix hit, got \(result.reason)")
         }
-
-        // Cache is at most 3 snapshots total. At least one must be the
-        // main agent's surviving leaf.
-        #expect(mgr.stats.snapshotCount <= 3)
-        let mainResult = mgr.lookup(tokens: mainTokens, partitionKey: mainKey)
-        #expect(
-            mainResult.snapshotTokenOffset == mainTokens.count,
-            "Idle main agent's snapshot should survive subagent churn"
-        )
     }
 
     /// When the writing partition's eligible set is exhausted (all
     /// remaining snapshots are type-protected `.system`), eviction
-    /// spills over to other partitions via the global path. Verifies
-    /// that session scoping doesn't break the hard-budget invariant.
+    /// spills over to other model partitions via the global path.
     @Test func preferredPartitionSpillsToGlobalWhenExhausted() {
         let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
         // Budget fits 1 snapshot.
         let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes)
 
         let idleKey = CachePartitionKey(
-            modelID: "test-model", kvBits: nil, kvGroupSize: 64,
-            sessionAffinity: "ses_idle"
+            modelID: "idle-model", kvBits: nil, kvGroupSize: 64
         )
         let writingKey = CachePartitionKey(
-            modelID: "test-model", kvBits: nil, kvGroupSize: 64,
-            sessionAffinity: "ses_writing"
+            modelID: "writing-model", kvBits: nil, kvGroupSize: 64
         )
 
         // Idle partition: one evictable leaf.
@@ -1529,7 +1477,6 @@ struct PrefixCacheManagerTests {
             modelFingerprint: String(repeating: "a", count: 64),
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             createdAt: 0,
             schemaVersion: SnapshotManifestSchema.currentVersion
         )

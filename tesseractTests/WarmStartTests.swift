@@ -44,7 +44,6 @@ struct WarmStartTests {
             modelFingerprint: fingerprint,
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             createdAt: 100_000,
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
@@ -58,7 +57,6 @@ struct WarmStartTests {
             modelID: modelID,
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: fingerprint
         )
     }
@@ -146,7 +144,6 @@ struct WarmStartTests {
             modelID: "test-model",
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: testFingerprint
         ).partitionDigest
 
@@ -211,14 +208,12 @@ struct WarmStartTests {
             modelID: "test-model",
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: testFingerprint
         ).partitionDigest
         let invalidDigest = CachePartitionKey(
             modelID: "other-model",
             kvBits: nil,
             kvGroupSize: 64,
-            sessionAffinity: nil,
             modelFingerprint: otherFingerprint
         ).partitionDigest
 
@@ -291,6 +286,67 @@ struct WarmStartTests {
         )
         try await mgr.warmStart(modelFingerprint: testFingerprint)
         #expect(mgr.stats.partitionCount == 0)
+    }
+
+    /// An old manifest schema is a hard invalidation point: warm start
+    /// archives `manifest.json`, removes stale partition directories,
+    /// and starts from an empty cache.
+    @Test func warmStartArchivesSchemaMismatchedManifestAndRemovesPartitions() async throws {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+
+        let digest = makePartitionKey(fingerprint: testFingerprint).partitionDigest
+        let snapshotID = UUID().uuidString
+        let descriptor = PersistedSnapshotDescriptor(
+            snapshotID: snapshotID,
+            partitionDigest: digest,
+            pathFromRoot: [1, 2, 3],
+            tokenOffset: 3,
+            checkpointType: "lastMessageBoundary",
+            bytes: 4096,
+            createdAt: 100_000,
+            lastAccessAt: 100_000,
+            fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+                snapshotID: snapshotID,
+                partitionDigest: digest
+            ),
+            schemaVersion: 2
+        )
+        let staleMeta = PartitionMeta(
+            modelID: "test-model",
+            modelFingerprint: testFingerprint,
+            kvBits: nil,
+            kvGroupSize: 64,
+            createdAt: 100_000,
+            schemaVersion: 2
+        )
+        let staleManifest = SnapshotManifest(
+            schemaVersion: 2,
+            partitions: [digest: staleMeta],
+            snapshots: [descriptor.snapshotID: descriptor]
+        )
+        try writeManifest(staleManifest, rootURL: root)
+
+        let stalePartitionDir = root
+            .appendingPathComponent("partitions")
+            .appendingPathComponent(digest)
+        try FileManager.default.createDirectory(
+            at: stalePartitionDir,
+            withIntermediateDirectories: true
+        )
+
+        let (mgr, ssdStore) = makeManager(rootURL: root)
+        try await mgr.warmStart(modelFingerprint: testFingerprint)
+
+        #expect(ssdStore.currentSSDBytesForTesting() == 0)
+        #expect(mgr.stats.partitionCount == 0)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("manifest.json").path))
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("manifest.v2.bak").path))
+        #expect(await waitUntil {
+            !FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("partitions").path
+            )
+        })
     }
 
     /// A corrupt manifest with no on-disk snapshots still works:

@@ -1,8 +1,20 @@
 # Prefix Cache Investigation — 2026-04-13 Session Changes
 
-**Status:** RESEARCH — every change here is provisional. Each section ends with a
-**Keep / Discard / Evaluate** verdict so we can decide later which changes to
-ship and which to revert.
+**Status:** HISTORICAL — superseded by the 2026-04-15 Marconi simplification.
+
+**2026-04-15 update.** The current production design no longer stores a
+dedicated `.lastMessageBoundary` checkpoint in RAM or SSD. Boundary detection is
+still used, but only as a **request-local transient helper** to synthesize the
+single continuation-shaped `.leaf` on Qwen3.5-style templates. Tool-call turns
+store a direct tool-continuation leaf; non-tool turns store a canonical
+user-continuation leaf. Canonical user synthesis restores from the last real
+user boundary when available and otherwise falls back to the deepest existing
+earlier snapshot below the canonical prefix. Persisted checkpoint types are now
+only `.system`, `.leaf`, and `.branchPoint`; ancestor leaves are superseded
+immediately by newer descendant leaves on the same branch. References below to
+a stored `.lastMessageBoundary` checkpoint or to additive unstripped + stripped
+leaf coexistence are retained only as historical context for the path we
+evaluated before settling on the simpler design.
 
 **Context.** This session started as an analysis of the
 [Marconi-style hybrid prefix cache](marconi-hybrid-prefix-cache-implementation-plan.md)
@@ -27,15 +39,16 @@ chronologically.
 |---|---|---|---|---|
 | 1 | `.system`-only eviction protection (Option A) | **Keep** (as modified) | Yes | Yes |
 | 2 | AlphaTuner `bootstrapMultiplier 5 → 1` + min/max bounds | **Evaluate** | Yes | Medium |
-| 3 | Session-scoped partitioning (`sessionAffinity` in `CachePartitionKey`) | **Keep** | Yes | Yes |
+| 3 | Session-scoped partitioning (`sessionAffinity` in `CachePartitionKey`) | **Discard** | Yes | Historical |
 | 4 | Memory headroom `4 GiB → 20 GiB` | **Evaluate** | Yes | Yes for 9B |
 | 5 | Stripped leaf capture (think-stripping fix) | **Keep** | Yes | Important |
-| 6 | `.lastMessageBoundary` checkpoint type split | **Keep** | Risky (vendor file) | **The actual fix** |
+| 6 | Stored `.lastMessageBoundary` checkpoint type split | **Discard** | Risky (vendor file) | Historical |
 | 7 | `capturedThenEvicted` admission diagnostic | **Keep** | Yes | Low (observability) |
 
-**Critical takeaway**: Change #6 is the load-bearing fix for the long-conversation
-pathology. Changes #1, #3, #5 are also keepers but each has a narrower job. #2 and
-#4 are tunables that should be re-evaluated against more workloads.
+**Current takeaway:** the lasting fixes from this investigation were `.system`-only
+protection, global partitioning, and canonical stripped-leaf capture. The stored
+boundary checkpoint described below was an intermediate design that has since been
+removed.
 
 ---
 

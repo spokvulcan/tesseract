@@ -104,14 +104,14 @@ struct LLMActorExtractSnapshotPayloadsTests {
 
     @Test
     func preservesTokenOffsetAndCheckpointType() throws {
-        let snapshot = makeSimpleKVSnapshot(tokenOffset: 17, type: .lastMessageBoundary)
+        let snapshot = makeSimpleKVSnapshot(tokenOffset: 17, type: .branchPoint)
         let payloads = LLMActor.extractSnapshotPayloads(
             [snapshot], ssdEnabled: true
         )
         try #require(payloads.count == 1)
         let payload = payloads[0]
         #expect(payload.tokenOffset == 17)
-        #expect(payload.checkpointType == .lastMessageBoundary)
+        #expect(payload.checkpointType == .branchPoint)
     }
 
     @Test
@@ -390,16 +390,25 @@ struct LLMActorExtractSnapshotPayloadsTests {
     }
 
     @Test
-    func strippedLeafCallSiteForwardsStrippedLeafPayloadToStoreLeaf() throws {
-        // The stripped leaf `storeLeaf(...)` call inside the
-        // enclosing `container.perform` must pass `leafPayload:
-        // strippedLeafPayload`, the result of the extraction one-liner
-        // inserted after `HybridCacheSnapshot.capture` at the
-        // stripped-leaf site.
+    func structuredLeafHelperForwardsSharedLeafPayloadToStoreLeaf() throws {
+        // The tool-loop direct leaf and canonical user leaf now share
+        // one `captureStructuredLeafFromBoundary(...)` helper. That
+        // helper must still extract a local `leafPayload` and forward
+        // it into `prefixCache.storeLeaf(...)`; the older dedicated
+        // `strippedLeafPayload` path no longer exists under the
+        // single-leaf policy.
         let source = try readLLMActorSource()
         #expect(
-            source.contains("leafPayload: strippedLeafPayload"),
-            "Stripped leaf storeLeaf call must forward strippedLeafPayload"
+            source.contains("private static func captureStructuredLeafFromBoundary("),
+            "Structured leaf helper must exist so direct-tool and canonical-user modes share one leaf admission path"
+        )
+        #expect(
+            source.contains("leafPayload: leafPayload"),
+            "Structured leaf helper storeLeaf call must forward the extracted leafPayload"
+        )
+        #expect(
+            !source.contains("leafPayload: strippedLeafPayload"),
+            "Single-leaf policy should not retain the removed strippedLeafPayload store path"
         )
     }
 
@@ -418,7 +427,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
         )
         #expect(
             bodies.count == 3,
-            "Expected exactly 3 MainActor.run closures calling prefixCache.store*; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / unstripped-leaf / stripped-leaf sites — review before updating this assertion."
+            "Expected exactly 3 MainActor.run closures calling prefixCache.store*; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / direct-leaf / structured-leaf-helper sites — review before updating this assertion."
         )
         for (index, body) in bodies.enumerated() {
             #expect(

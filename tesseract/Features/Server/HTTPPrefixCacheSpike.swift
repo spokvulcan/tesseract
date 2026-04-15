@@ -20,6 +20,21 @@ nonisolated struct HTTPPrefixCacheToolCall: Hashable, Sendable {
         self.name = name
         self.argumentsJSON = encodeCanonicalHTTPPrefixCacheJSONObject(arguments)
     }
+
+    var promptToolCall: [String: any Sendable] {
+        let function: [String: any Sendable] = [
+            "name": name,
+            "arguments": decodedArguments.mapValues(httpPrefixCachePromptValue),
+        ]
+        return [
+            "type": "function",
+            "function": function,
+        ]
+    }
+
+    private var decodedArguments: [String: JSONValue] {
+        ToolArgumentNormalizer.decode(argumentsJSON) ?? [:]
+    }
 }
 
 nonisolated struct HTTPPrefixCacheAssistantSignature: Hashable, Sendable {
@@ -85,6 +100,24 @@ nonisolated struct HTTPPrefixCacheMessage: Hashable, Sendable {
         guard role == .assistant else { return nil }
         return HTTPPrefixCacheAssistantSignature(content: content, toolCalls: toolCalls)
     }
+
+    var promptMessage: [String: any Sendable] {
+        var message: [String: any Sendable] = [
+            "role": role.rawValue,
+            "content": content,
+        ]
+
+        guard role == .assistant else { return message }
+
+        if let reasoning {
+            message["reasoning_content"] = reasoning
+        }
+        if !toolCalls.isEmpty {
+            message["tool_calls"] = toolCalls.map(\.promptToolCall)
+        }
+
+        return message
+    }
 }
 
 nonisolated struct HTTPPrefixCacheConversation: Hashable, Sendable {
@@ -137,6 +170,19 @@ nonisolated struct HTTPPrefixCacheConversation: Hashable, Sendable {
         guard templateContextDigest == other.templateContextDigest else { return false }
         guard messages.count <= other.messages.count else { return false }
         return zip(messages, other.messages).allSatisfy(==)
+    }
+
+    var promptMessages: [[String: any Sendable]] {
+        var promptMessages: [[String: any Sendable]] = []
+        if let systemPrompt {
+            promptMessages.append(httpPrefixCachePromptMessage(
+                role: .system,
+                content: systemPrompt
+            ))
+        }
+
+        promptMessages.append(contentsOf: messages.map(\.promptMessage))
+        return promptMessages
     }
 
     var historyMessages: [Chat.Message] {
@@ -241,6 +287,35 @@ nonisolated func canonicalizeHTTPPrefixCacheToolArgumentsJSON(_ argumentsJSON: S
 
 nonisolated func httpPrefixCacheDigest(for data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+private nonisolated func httpPrefixCachePromptMessage(
+    role: Chat.Message.Role,
+    content: String
+) -> [String: any Sendable] {
+    [
+        "role": role.rawValue,
+        "content": content,
+    ]
+}
+
+private nonisolated func httpPrefixCachePromptValue(_ value: JSONValue) -> any Sendable {
+    switch value {
+    case .null:
+        return "None"
+    case .bool(let bool):
+        return bool
+    case .int(let int):
+        return int
+    case .double(let double):
+        return double
+    case .string(let string):
+        return string
+    case .array(let array):
+        return array.map(httpPrefixCachePromptValue)
+    case .object(let object):
+        return object.mapValues(httpPrefixCachePromptValue)
+    }
 }
 
 private nonisolated func formatHTTPPrefixCacheToolCallParameterValue(_ value: JSONValue) -> String {
