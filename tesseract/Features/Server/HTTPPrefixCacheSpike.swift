@@ -5,6 +5,36 @@ import MLXLMCommon
 nonisolated struct HTTPServerGenerationStart: Sendable {
     let stream: AsyncThrowingStream<AgentGeneration, Error>
     let cachedTokenCount: Int
+    let cancel: @Sendable () -> Void
+    let waitForCompletion: @Sendable () async -> Void
+
+    init(
+        stream: AsyncThrowingStream<AgentGeneration, Error>,
+        cachedTokenCount: Int,
+        cancel: @escaping @Sendable () -> Void = {},
+        waitForCompletion: @escaping @Sendable () async -> Void = {}
+    ) {
+        self.stream = stream
+        self.cachedTokenCount = cachedTokenCount
+        self.cancel = cancel
+        self.waitForCompletion = waitForCompletion
+    }
+}
+
+nonisolated struct HTTPServerRawGenerationStart: Sendable {
+    let stream: AsyncStream<Generation>
+    let cancel: @Sendable () -> Void
+    let waitForCompletion: @Sendable () async -> Void
+
+    init(
+        stream: AsyncStream<Generation>,
+        cancel: @escaping @Sendable () -> Void = {},
+        waitForCompletion: @escaping @Sendable () async -> Void = {}
+    ) {
+        self.stream = stream
+        self.cancel = cancel
+        self.waitForCompletion = waitForCompletion
+    }
 }
 
 nonisolated struct HTTPPrefixCacheToolCall: Hashable, Sendable {

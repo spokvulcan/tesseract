@@ -35,8 +35,11 @@ struct CompletionHandler: Sendable {
         /// store so that recovered reasoning content cannot cross two
         /// different physical LLM slots with the same client session.
         let visionMode: Bool
+        let completionID: String
         let stream: AsyncThrowingStream<AgentGeneration, Error>
         let cachedTokenCount: Int
+        let cancel: @Sendable () -> Void
+        let waitForCompletion: @Sendable () async -> Void
     }
 
     /// Routing decision for the request's `model` field.
@@ -235,6 +238,7 @@ struct CompletionHandler: Sendable {
         _ request: OpenAI.ChatCompletionRequest,
         sessionAffinity: String?
     ) async -> Result<StartedGeneration, Error> {
+        let completionID = "chatcmpl-\(UUID().uuidString)"
         // Read the full physical LLM slot identity (modelID + visionMode) in
         // a single MainActor hop. `loadedLLMState` is the authoritative
         // source after `ensureLoaded` has run inside the lease body —
@@ -275,7 +279,8 @@ struct CompletionHandler: Sendable {
             + "missing=\(repairedRequest.missingCount)"
         )
         Log.server.info(
-            "HTTP completion start — model=\(Self.echoModelID(requestModel: request.model, physical: modelID)) "
+            "HTTP completion start — completionID=\(completionID) "
+            + "model=\(Self.echoModelID(requestModel: request.model, physical: modelID)) "
             + "stream=\(request.stream == true) "
             + "messages=\(repairedRequest.messages.count) normalizedMessages=\(messages.count) "
             + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCache=\(prefixCacheEligibility) "
@@ -294,8 +299,11 @@ struct CompletionHandler: Sendable {
             return .success(.init(
                 modelID: modelID,
                 visionMode: visionMode,
+                completionID: completionID,
                 stream: start.stream,
-                cachedTokenCount: start.cachedTokenCount
+                cachedTokenCount: start.cachedTokenCount,
+                cancel: start.cancel,
+                waitForCompletion: start.waitForCompletion
             ))
         } catch {
             Log.server.error("HTTP completion failed to start generation: \(error)")
@@ -377,7 +385,7 @@ struct CompletionHandler: Sendable {
         let openAIToolCalls = toolCalls.isEmpty ? nil : ToolCallConverter.convertToOpenAI(toolCalls)
 
         let response = OpenAI.ChatCompletionResponse(
-            id: "chatcmpl-\(UUID().uuidString)",
+            id: start.completionID,
             model: Self.echoModelID(requestModel: request.model, physical: start.modelID),
             created: Int(Date().timeIntervalSince1970),
             system_fingerprint: "tesseract-1.0-mlx",
@@ -406,11 +414,16 @@ struct CompletionHandler: Sendable {
             (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
         }
         Log.server.info(
-            "HTTP completion finished — stream=false finishReason=\(finishReason.rawValue) "
+            "HTTP completion finished — completionID=\(start.completionID) "
+            + "stream=false finishReason=\(finishReason.rawValue) "
             + "promptTokens=\(info?.promptTokenCount ?? 0) completionTokens=\(info?.generationTokenCount ?? 0) "
             + "cachedTokens=\(start.cachedTokenCount)"
         )
-        try? await writer.send(.jsonBody(data))
+        do {
+            try await writer.send(.jsonBody(data))
+        } catch {
+            Log.server.error("Failed to send HTTP completion response: \(error)")
+        }
     }
 
     // MARK: - Streaming Completion
@@ -433,107 +446,160 @@ struct CompletionHandler: Sendable {
 
         let sse = SSEWriter(writer)
         do { try await sse.open() } catch {
+            await cancelAndDrainGeneration(start)
             Log.server.error("Failed to open SSE stream: \(error)")
             return
         }
 
-        let completionID = "chatcmpl-\(UUID().uuidString)"
         let created = Int(Date().timeIntervalSince1970)
         let model = Self.echoModelID(requestModel: request.model, physical: start.modelID)
         let includeUsage = request.stream_options?.include_usage == true
+        let idleKeepaliveInterval: Duration = .milliseconds(250)
 
         // Emit initial chunk with role
         guard await sse.send(makeChunk(
-            id: completionID, model: model, created: created,
+            id: start.completionID, model: model, created: created,
             delta: OpenAI.ChunkDelta(role: .assistant)
         )) else {
-            await sse.done()
+            await cancelAndDrainGeneration(start)
             return
         }
 
-        // Run generation and keepalive concurrently. If the client disconnects
-        // during prefill, the keepalive write fails and throws ClientDisconnected,
-        // cancelling the generation task and releasing the arbiter lease promptly.
-        let streamResult: StreamResult
-        do {
-            streamResult = try await withThrowingTaskGroup(of: StreamResult?.self) { group in
-                // Keepalive: SSE comments every 5s, throws on disconnect
-                group.addTask {
-                    while true {
-                        try await Task.sleep(nanoseconds: 5_000_000_000)
+        let outcome = await withTaskGroup(of: StreamingOutcome.self) { group in
+            group.addTask {
+                await writer.waitForDisconnect()
+                guard !Task.isCancelled else { return .cancelled }
+                start.cancel()
+                return .disconnected(.connectionState)
+            }
+
+            group.addTask {
+                // Keepalive: while the stream is idle, probe the transport
+                // frequently so client aborts cancel long prefill promptly.
+                while true {
+                    do {
+                        try await Task.sleep(for: idleKeepaliveInterval)
                         try Task.checkCancellation()
-                        guard await sse.keepalive("keepalive") else {
-                            throw ClientDisconnected()
-                        }
+                    } catch is CancellationError {
+                        return .cancelled
+                    } catch {
+                        return .failed(error.localizedDescription)
+                    }
+
+                    guard await sse.idleFor(atLeast: idleKeepaliveInterval) else {
+                        continue
+                    }
+
+                    guard await sse.keepalive("keepalive") else {
+                        start.cancel()
+                        return .disconnected(.keepaliveWrite)
                     }
                 }
-
-                // Generation: stream events, return accumulated state
-                group.addTask {
-                    await self.streamGenerationEvents(
-                        start.stream, sse: sse,
-                        completionID: completionID, model: model, created: created
-                    )
-                }
-
-                // First non-nil result is the generation task finishing
-                let result = try await group.next() ?? nil
-                group.cancelAll()
-                return result ?? StreamResult()
             }
-        } catch is ClientDisconnected {
-            Log.server.debug("Client disconnected during streaming")
-            return
-        } catch is CancellationError {
-            return
-        } catch {
-            Log.server.error("Streaming generation error: \(error)")
-            return
+
+            group.addTask {
+                await self.streamGenerationEvents(
+                    start.stream,
+                    sse: sse,
+                    completionID: start.completionID,
+                    model: model,
+                    created: created,
+                    cancel: start.cancel
+                )
+            }
+
+            let first = await group.next() ?? .cancelled
+            group.cancelAll()
+            return first
         }
 
-        // Skip final chunk if client disconnected mid-stream
-        guard await !sse.isDisconnected else { return }
+        switch outcome {
+        case .completed(let streamResult):
+            var finishReason: OpenAI.FinishReason = .stop
+            if streamResult.hasToolCalls {
+                finishReason = .tool_calls
+            } else if let info = streamResult.info, let maxTokens = request.effectiveMaxTokens,
+                      info.generationTokenCount >= maxTokens {
+                finishReason = .length
+            }
 
-        await Self.sessionReplayStore.record(
-            sessionAffinity: sessionAffinity,
-            modelID: start.modelID,
-            visionMode: start.visionMode,
-            assistantMessage: makeReplayAssistantMessage(
-                textContent: streamResult.textContent,
-                thinkingContent: streamResult.thinkingContent,
-                toolCalls: streamResult.toolCalls
+            var finalChunk = makeChunk(
+                id: start.completionID, model: model, created: created,
+                delta: OpenAI.ChunkDelta(),
+                finishReason: finishReason
             )
-        )
+            let usage: OpenAI.Usage?
+            if let info = streamResult.info {
+                usage = OpenAI.Usage(
+                    prompt_tokens: info.promptTokenCount,
+                    completion_tokens: info.generationTokenCount,
+                    total_tokens: info.promptTokenCount + info.generationTokenCount,
+                    prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: start.cachedTokenCount)
+                )
+            } else {
+                usage = nil
+            }
+            if includeUsage {
+                finalChunk.usage = usage
+            }
 
-        var finishReason: OpenAI.FinishReason = .stop
-        if streamResult.hasToolCalls {
-            finishReason = .tool_calls
-        } else if let info = streamResult.info, let maxTokens = request.effectiveMaxTokens,
-                  info.generationTokenCount >= maxTokens {
-            finishReason = .length
-        }
+            guard await sse.send(finalChunk) else {
+                start.cancel()
+                Log.server.info(
+                    "HTTP streaming disconnect — completionID=\(start.completionID) source=\(DisconnectSource.chunkWrite.rawValue)"
+                )
+                return
+            }
+            guard await sse.done() else {
+                Log.server.info(
+                    "HTTP streaming disconnect — completionID=\(start.completionID) source=\(DisconnectSource.chunkWrite.rawValue)"
+                )
+                return
+            }
 
-        var finalChunk = makeChunk(
-            id: completionID, model: model, created: created,
-            delta: OpenAI.ChunkDelta(),
-            finishReason: finishReason
-        )
-        if includeUsage, let info = streamResult.info {
-            finalChunk.usage = OpenAI.Usage(
-                prompt_tokens: info.promptTokenCount,
-                completion_tokens: info.generationTokenCount,
-                total_tokens: info.promptTokenCount + info.generationTokenCount,
-                prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: start.cachedTokenCount)
+            await Self.sessionReplayStore.record(
+                sessionAffinity: sessionAffinity,
+                modelID: start.modelID,
+                visionMode: start.visionMode,
+                assistantMessage: makeReplayAssistantMessage(
+                    textContent: streamResult.textContent,
+                    thinkingContent: streamResult.thinkingContent,
+                    toolCalls: streamResult.toolCalls
+                )
             )
+
+            Log.server.info(
+                "HTTP completion finished — completionID=\(start.completionID) "
+                + "stream=true finishReason=\(finishReason.rawValue) "
+                + "promptTokens=\(streamResult.info?.promptTokenCount ?? 0) "
+                + "completionTokens=\(streamResult.info?.generationTokenCount ?? 0) "
+                + "cachedTokens=\(start.cachedTokenCount)"
+            )
+
+        case .disconnected(let source):
+            Log.server.info(
+                "HTTP streaming disconnect — completionID=\(start.completionID) source=\(source.rawValue)"
+            )
+            Log.server.debug("HTTP streaming cancel dispatched — completionID=\(start.completionID)")
+            await cancelAndDrainGeneration(start)
+            return
+
+        case .failed(let message):
+            await cancelAndDrainGeneration(start)
+            Log.server.error(
+                "Streaming generation error — completionID=\(start.completionID) error=\(message)"
+            )
+            return
+
+        case .cancelled:
+            await cancelAndDrainGeneration(start)
+            return
         }
-        Log.server.info(
-            "HTTP completion finished — stream=true finishReason=\(finishReason.rawValue) "
-            + "promptTokens=\(streamResult.info?.promptTokenCount ?? 0) "
-            + "completionTokens=\(streamResult.info?.generationTokenCount ?? 0) "
-            + "cachedTokens=\(start.cachedTokenCount)"
-        )
-        await sse.send(finalChunk)
-        await sse.done()
+    }
+
+    private func cancelAndDrainGeneration(_ start: StartedGeneration) async {
+        start.cancel()
+        await start.waitForCompletion()
     }
 
     private func makeChunk(
@@ -568,14 +634,28 @@ struct CompletionHandler: Sendable {
         var toolCalls: [ToolCall] = []
     }
 
+    private enum DisconnectSource: String, Sendable {
+        case connectionState = "connection_state"
+        case keepaliveWrite = "keepalive_write"
+        case chunkWrite = "chunk_write"
+    }
+
+    private enum StreamingOutcome: Sendable {
+        case completed(StreamResult)
+        case disconnected(DisconnectSource)
+        case failed(String)
+        case cancelled
+    }
+
     /// Consume generation events, emit SSE chunks, return accumulated metadata.
     private func streamGenerationEvents(
         _ stream: AsyncThrowingStream<AgentGeneration, Error>,
         sse: SSEWriter,
         completionID: String,
         model: String,
-        created: Int
-    ) async -> StreamResult {
+        created: Int,
+        cancel: @escaping @Sendable () -> Void
+    ) async -> StreamingOutcome {
         var result = StreamResult()
         var toolCallIndex = 0
 
@@ -587,7 +667,10 @@ struct CompletionHandler: Sendable {
                     guard await sse.send(makeChunk(
                         id: completionID, model: model, created: created,
                         delta: OpenAI.ChunkDelta(content: chunk)
-                    )) else { break generation }
+                    )) else {
+                        cancel()
+                        return .disconnected(.chunkWrite)
+                    }
 
                 case .thinkStart:
                     break
@@ -597,7 +680,10 @@ struct CompletionHandler: Sendable {
                     guard await sse.send(makeChunk(
                         id: completionID, model: model, created: created,
                         delta: OpenAI.ChunkDelta(reasoning_content: chunk)
-                    )) else { break generation }
+                    )) else {
+                        cancel()
+                        return .disconnected(.chunkWrite)
+                    }
 
                 case .thinkEnd:
                     break
@@ -622,7 +708,10 @@ struct CompletionHandler: Sendable {
                                 function: OpenAI.FunctionCall(name: oaiCall.function?.name, arguments: ""),
                                 index: index),
                         ])
-                    )) else { break generation }
+                    )) else {
+                        cancel()
+                        return .disconnected(.chunkWrite)
+                    }
 
                     guard await sse.send(makeChunk(
                         id: completionID, model: model, created: created,
@@ -630,7 +719,10 @@ struct CompletionHandler: Sendable {
                             OpenAI.ToolCall(function: OpenAI.FunctionCall(arguments: oaiCall.function?.arguments),
                                 index: index),
                         ])
-                    )) else { break generation }
+                    )) else {
+                        cancel()
+                        return .disconnected(.chunkWrite)
+                    }
 
                 case .malformedToolCall(let raw):
                     Log.server.warning("Malformed tool call in stream: \(raw)")
@@ -639,11 +731,13 @@ struct CompletionHandler: Sendable {
                     result.info = i
                 }
             }
+        } catch is CancellationError {
+            return .cancelled
         } catch {
-            Log.server.error("Streaming generation error: \(error)")
+            return .failed(error.localizedDescription)
         }
 
-        return result
+        return .completed(result)
     }
 
     private func makeReplayAssistantMessage(
@@ -718,4 +812,3 @@ final class LeaseAcquiredSignal: Sendable {
 }
 
 struct LeaseTimeoutError: Error {}
-private struct ClientDisconnected: Error {}

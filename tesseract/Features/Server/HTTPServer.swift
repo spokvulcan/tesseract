@@ -233,11 +233,13 @@ private struct OpenAIErrorStrict: Encodable {
 /// Wraps an `NWConnection` to provide async single-shot and streaming response writing.
 final class HTTPResponseWriter: @unchecked Sendable {
     private let connection: NWConnection
+    private let lifecycle: HTTPConnectionLifecycle
     private var responseSent = false
     private var streaming = false
 
-    nonisolated init(connection: NWConnection) {
+    nonisolated init(connection: NWConnection, lifecycle: HTTPConnectionLifecycle) {
         self.connection = connection
+        self.lifecycle = lifecycle
     }
 
     /// Send a complete single-shot response. No-op if a response was already
@@ -289,13 +291,65 @@ final class HTTPResponseWriter: @unchecked Sendable {
         try await writeAll(Data("0\r\n\r\n".utf8))
     }
 
+    func isDisconnected() async -> Bool {
+        await lifecycle.isDisconnected()
+    }
+
+    func waitForDisconnect() async {
+        await lifecycle.waitForDisconnect()
+    }
+
     private func writeAll(_ data: Data) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { error in
-                if let error { cont.resume(throwing: error) }
-                else { cont.resume() }
+                if let error {
+                    Task { await self.lifecycle.markDisconnected() }
+                    cont.resume(throwing: error)
+                } else {
+                    cont.resume()
+                }
             })
         }
+    }
+}
+
+actor HTTPConnectionLifecycle {
+    private var disconnected = false
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    func markDisconnected() {
+        guard !disconnected else { return }
+        disconnected = true
+        let currentWaiters = waiters.values
+        waiters.removeAll()
+        for waiter in currentWaiters {
+            waiter.resume()
+        }
+    }
+
+    func isDisconnected() -> Bool {
+        disconnected
+    }
+
+    func waitForDisconnect() async {
+        if disconnected { return }
+        let waiterID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if disconnected || Task.isCancelled {
+                    continuation.resume()
+                } else {
+                    waiters[waiterID] = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.resumeCancelledWaiter(waiterID) }
+        }
+    }
+
+    private func resumeCancelledWaiter(_ waiterID: UUID) {
+        guard let waiter = waiters.removeValue(forKey: waiterID) else { return }
+        waiter.resume()
     }
 }
 
@@ -313,15 +367,18 @@ final class HTTPResponseWriter: @unchecked Sendable {
 /// ```
 actor SSEWriter {
     private let writer: HTTPResponseWriter
+    private let clock = ContinuousClock()
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.outputFormatting = .sortedKeys
         return e
     }()
     private var closed = false
+    private var lastWriteAt: ContinuousClock.Instant
 
     init(_ writer: HTTPResponseWriter) {
         self.writer = writer
+        self.lastWriteAt = clock.now
     }
 
     /// Send SSE headers and begin the chunked stream.
@@ -331,6 +388,7 @@ actor SSEWriter {
             ("Cache-Control", "no-cache"),
             ("Connection", "keep-alive"),
         ])
+        lastWriteAt = clock.now
     }
 
     /// Send a JSON-encoded SSE data line: `data: {json}\n\n`
@@ -356,15 +414,25 @@ actor SSEWriter {
     }
 
     /// Send the `data: [DONE]` sentinel and close the stream.
-    func done() async {
-        guard !closed else { return }
+    @discardableResult
+    func done() async -> Bool {
+        guard !closed else { return false }
         closed = true
-        try? await writer.writeChunk(Data("data: [DONE]\n\n".utf8))
-        try? await writer.finish()
+        do {
+            try await writer.writeChunk(Data("data: [DONE]\n\n".utf8))
+            try await writer.finish()
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Whether a write has failed (client disconnected).
     var isDisconnected: Bool { closed }
+
+    func idleFor(atLeast duration: Duration) -> Bool {
+        (clock.now - lastWriteAt) >= duration
+    }
 
     // MARK: - Private
 
@@ -372,6 +440,7 @@ actor SSEWriter {
         guard !closed else { return false }
         do {
             try await writer.writeChunk(data)
+            lastWriteAt = clock.now
             return true
         } catch {
             closed = true
@@ -587,6 +656,7 @@ final class HTTPServer {
 
         let routes = self.routes
         let task = Task.detached { [weak self] in
+            let lifecycle = HTTPConnectionLifecycle()
             defer {
                 connection.cancel()
                 Task { @MainActor [weak self] in
@@ -594,18 +664,33 @@ final class HTTPServer {
                 }
             }
 
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .failed, .cancelled:
+                    Task { await lifecycle.markDisconnected() }
+                default:
+                    break
+                }
+            }
             connection.start(queue: .global(qos: .userInitiated))
 
             do {
                 let request = try await HTTPServer.readRequest(from: connection)
-                let writer = HTTPResponseWriter(connection: connection)
+                let writer = HTTPResponseWriter(connection: connection, lifecycle: lifecycle)
+                let disconnectMonitor = Task {
+                    await HTTPServer.monitorPeerDisconnect(
+                        on: connection,
+                        lifecycle: lifecycle
+                    )
+                }
+                defer { disconnectMonitor.cancel() }
                 await dispatchRoute(request, writer: writer, routes: routes)
                 Task { @MainActor [weak self] in self?.totalRequestsServed += 1 }
             } catch is CancellationError {
                 // Server shutting down
             } catch {
                 Log.server.error("Connection error: \(error)")
-                let writer = HTTPResponseWriter(connection: connection)
+                let writer = HTTPResponseWriter(connection: connection, lifecycle: lifecycle)
                 try? await writer.send(.badRequest(error.localizedDescription))
             }
         }
@@ -614,6 +699,37 @@ final class HTTPServer {
         Task {
             _ = await task.result
             connectionTasks.remove(task)
+        }
+    }
+
+    nonisolated private static func monitorPeerDisconnect(
+        on connection: NWConnection,
+        lifecycle: HTTPConnectionLifecycle
+    ) async {
+        while !Task.isCancelled {
+            let state = await withCheckedContinuation { continuation in
+                connection.receive(minimumIncompleteLength: 0, maximumLength: 1) {
+                    content, _, isComplete, error in
+                    continuation.resume(returning: (
+                        contentBytes: content?.count ?? 0,
+                        isComplete: isComplete,
+                        hasError: error != nil
+                    ))
+                }
+            }
+
+            if state.isComplete || state.hasError {
+                await lifecycle.markDisconnected()
+                return
+            }
+
+            if state.contentBytes == 0 {
+                do {
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                } catch {
+                    return
+                }
+            }
         }
     }
 

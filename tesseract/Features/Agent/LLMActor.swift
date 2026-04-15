@@ -241,6 +241,40 @@ actor LLMActor {
         return try await container.generate(input: prepared, parameters: genParams)
     }
 
+    /// Start a raw text/tool generation and surface the underlying vendor task so
+    /// HTTP disconnect handling can wait for model use to actually stop.
+    func startHTTPRawGeneration(
+        input: sending UserInput,
+        parameters: AgentGenerateParameters
+    ) async throws -> HTTPServerRawGenerationStart {
+        guard let container = modelContainer else {
+            throw AgentEngineError.modelNotLoaded
+        }
+
+        Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
+
+        let genParams = Self.makeGenerateParameters(from: parameters)
+        return try await container.perform(nonSendable: input) { context, input in
+            let prepared = try await context.processor.prepare(input: input)
+            let iterator = try TokenIterator(
+                input: prepared,
+                model: context.model,
+                parameters: genParams
+            )
+            let (stream, completion) = MLXLMCommon.generateTask(
+                promptTokenCount: prepared.text.tokens.size,
+                modelConfiguration: context.configuration,
+                tokenizer: context.tokenizer,
+                iterator: iterator
+            )
+            return HTTPServerRawGenerationStart(
+                stream: stream,
+                cancel: { completion.cancel() },
+                waitForCompletion: { await completion.value }
+            )
+        }
+    }
+
     /// Start the HTTP text-based prefix-cache path for `/v1/chat/completions`.
     ///
     /// Returns `nil` when the request shape is incompatible and the caller should fall back
@@ -391,6 +425,11 @@ actor LLMActor {
                 // Wait for the underlying iterator task to finish before extracting
                 // the cache (mirrors ChatSession's pattern at vendor line 440-441).
                 await mlxStart.completion.value
+                if Task.isCancelled {
+                    Memory.clearCache()
+                    continuation.finish()
+                    return
+                }
 
                 emitParserEvents(
                     parser.finalize(),
@@ -439,6 +478,12 @@ actor LLMActor {
                     }
                     logEvictions(diagnostics.evictions)
                     storedSnapshotsForTuner = mlxStart.capturedSnapshots
+                }
+
+                if Task.isCancelled {
+                    Memory.clearCache()
+                    continuation.finish()
+                    return
                 }
 
                 // Leaf store, wrapped so any skip path falls through to
@@ -705,7 +750,15 @@ actor LLMActor {
 
         return HTTPServerGenerationStart(
             stream: stream,
-            cachedTokenCount: mlxStart.skippedPrefillTokens
+            cachedTokenCount: mlxStart.skippedPrefillTokens,
+            cancel: {
+                task.cancel()
+                mlxStartBox.value.completion.cancel()
+            },
+            waitForCompletion: {
+                _ = await task.result
+                await mlxStartBox.value.completion.value
+            }
         )
     }
 

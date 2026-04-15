@@ -234,13 +234,15 @@ final class AgentEngine {
             + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCacheConversation=\(prefixCacheConversation != nil)"
         )
 
-        let stream = try generate(
+        let input = Self.buildUserInput(
             systemPrompt: systemPrompt,
             messages: messages,
             toolSpecs: toolSpecs,
+        )
+        return try await startManagedHTTPFallbackGeneration(
+            input: input,
             parameters: parameters
         )
-        return HTTPServerGenerationStart(stream: stream, cachedTokenCount: 0)
     }
 
     /// Run a closure with the loaded `ModelContainer`. Used by loaded-model
@@ -366,6 +368,13 @@ final class AgentEngine {
         input: UserInput,
         parameters: AgentGenerateParameters
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
+        try startManagedGeneration(input: input, parameters: parameters).stream
+    }
+
+    private func startManagedGeneration(
+        input: UserInput,
+        parameters: AgentGenerateParameters
+    ) throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
             throw AgentEngineError.modelNotLoaded
         }
@@ -393,6 +402,115 @@ final class AgentEngine {
                 var libraryParsedToolCalls = false
 
                 for await generation in genStream {
+                    try Task.checkCancellation()
+
+                    switch generation {
+                    case .chunk(let text):
+                        rawChunkParts.append(text)
+                        if !libraryParsedToolCalls {
+                            for event in parser.processChunk(text) {
+                                continuation.yield(AgentGeneration(parserEvent: event))
+                            }
+                        }
+
+                    case .info(let completionInfo):
+                        if !libraryParsedToolCalls {
+                            for event in parser.finalize() {
+                                continuation.yield(AgentGeneration(parserEvent: event))
+                            }
+                        }
+                        let info = AgentGeneration.Info(
+                            promptTokenCount: completionInfo.promptTokenCount,
+                            generationTokenCount: completionInfo.generationTokenCount,
+                            promptTime: completionInfo.promptTime,
+                            generateTime: completionInfo.generateTime
+                        )
+                        continuation.yield(.info(info))
+                        Log.agent.info(
+                            "Generation complete — \(completionInfo.generationTokenCount) tokens, "
+                            + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s"
+                        )
+                        let rawChunks = rawChunkParts.joined()
+                        Log.agent.debug("Raw library chunks (after ToolCallProcessor):\n\(rawChunks)")
+
+                    case .toolCall(let call):
+                        libraryParsedToolCalls = true
+                        Log.agent.info("Library parsed tool call: \(call.function.name)(\(call.function.arguments))")
+                        continuation.yield(.toolCall(call))
+                    }
+                }
+
+                if !libraryParsedToolCalls {
+                    let rawChunks = rawChunkParts.joined()
+                    if rawChunks.contains("tool_call") || rawChunks.contains("<function") {
+                        Log.agent.warning("Raw output contains tool call markers but no .toolCall events were emitted by library")
+                    }
+                }
+
+                if !libraryParsedToolCalls {
+                    for event in parser.finalize() {
+                        continuation.yield(AgentGeneration(parserEvent: event))
+                    }
+                }
+
+                continuation.finish()
+            } catch is CancellationError {
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: AgentEngineError.generationFailed(
+                    error.localizedDescription
+                ))
+            }
+        }
+
+        generationTask = task
+        continuation.onTermination = { _ in task.cancel() }
+
+        return HTTPServerGenerationStart(
+            stream: stream,
+            cachedTokenCount: 0,
+            cancel: { task.cancel() },
+            waitForCompletion: { _ = await task.result }
+        )
+    }
+
+    private func startManagedHTTPFallbackGeneration(
+        input: UserInput,
+        parameters: AgentGenerateParameters
+    ) async throws -> HTTPServerGenerationStart {
+        guard isModelLoaded else {
+            throw AgentEngineError.modelNotLoaded
+        }
+
+        let start = try await llmActor.startHTTPRawGeneration(
+            input: input,
+            parameters: parameters
+        )
+        return wrapManagedGeneration(start)
+    }
+
+    private func wrapManagedGeneration(
+        _ start: HTTPServerRawGenerationStart
+    ) -> HTTPServerGenerationStart {
+        isGenerating = true
+
+        let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+        let startsThinking = promptStartsThinking
+
+        let task = Task { @MainActor [weak self] in
+            defer {
+                self?.isGenerating = false
+                self?.generationTask = nil
+            }
+
+            do {
+                try Task.checkCancellation()
+
+                let parser = ToolCallParser(startsInsideThinkBlock: startsThinking)
+                var rawChunkParts: [String] = []
+                var libraryParsedToolCalls = false
+
+                for await generation in start.stream {
                     try Task.checkCancellation()
 
                     switch generation {
@@ -464,7 +582,18 @@ final class AgentEngine {
         generationTask = task
         continuation.onTermination = { _ in task.cancel() }
 
-        return stream
+        return HTTPServerGenerationStart(
+            stream: stream,
+            cachedTokenCount: 0,
+            cancel: {
+                task.cancel()
+                start.cancel()
+            },
+            waitForCompletion: {
+                _ = await task.result
+                await start.waitForCompletion()
+            }
+        )
     }
 
     private func startManagedHTTPGeneration(
@@ -498,7 +627,15 @@ final class AgentEngine {
 
         return HTTPServerGenerationStart(
             stream: stream,
-            cachedTokenCount: start.cachedTokenCount
+            cachedTokenCount: start.cachedTokenCount,
+            cancel: {
+                task.cancel()
+                start.cancel()
+            },
+            waitForCompletion: {
+                _ = await task.result
+                await start.waitForCompletion()
+            }
         )
     }
 }
