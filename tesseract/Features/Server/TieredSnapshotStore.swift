@@ -246,7 +246,7 @@ final class TieredSnapshotStore: SnapshotStore {
     /// committed resident whose node is no longer tracked here. The
     /// stale `storageRef` on such a node self-cleans on the next
     /// lookup when `loadSync` reports file-missing and fires its own
-    /// `markStorageRefDropped` callback (Task 4.1.9).
+    /// `markStorageRefDropped` callback.
     func markStorageRefDropped(id: String, reason: SSDDropReason) {
         guard let pending = pendingRefsByID.removeValue(forKey: id) else {
             Log.agent.debug(

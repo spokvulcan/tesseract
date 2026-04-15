@@ -66,14 +66,31 @@ final class TokenRadixTree {
     ///
     /// Walks the tree matching tokens. Tracks the deepest snapshot-bearing node.
     /// On lookup hit, updates `lastAccessTime` on the returned node only (not ancestors).
-    func findBestSnapshot(tokens: [Int], updateAccess: Bool = true) -> (node: RadixTreeNode, sharedPrefixLength: Int)? {
+    ///
+    /// When `includeStorageRefs` is true, nodes in state 5 (committed
+    /// `storageRef` without a resident body) are also treated as
+    /// hittable: an SSD-resident snapshot can hydrate on demand, so
+    /// it counts as a hit target during lookup. Pending refs (state
+    /// 3, `committed == false`) are never hittable — returning one
+    /// would race the writer and surface a half-written file.
+    func findBestSnapshot(
+        tokens: [Int],
+        updateAccess: Bool = true,
+        includeStorageRefs: Bool = false
+    ) -> (node: RadixTreeNode, sharedPrefixLength: Int)? {
         var current = root
         var pos = 0
         var bestNode: RadixTreeNode?
         var bestPrefixLength = 0
 
+        func isHittable(_ node: RadixTreeNode) -> Bool {
+            if node.snapshot != nil { return true }
+            if includeStorageRefs, node.storageRef?.committed == true { return true }
+            return false
+        }
+
         // Root can have a snapshot (e.g. empty-prefix checkpoint)
-        if current.snapshot != nil {
+        if isHittable(current) {
             bestNode = current
             bestPrefixLength = 0
         }
@@ -94,7 +111,7 @@ final class TokenRadixTree {
             }
 
             current = child
-            if child.snapshot != nil {
+            if isHittable(child) {
                 bestNode = child
                 bestPrefixLength = pos
             }

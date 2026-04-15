@@ -1210,8 +1210,6 @@ struct PrefixCacheManagerTests {
         #expect(firstNode.parent != nil)
         let secondResult = mgr.lookup(tokens: secondTokens, partitionKey: defaultKey)
         #expect(secondResult.snapshotTokenOffset == secondTokens.count)
-        // `.ssdHit` lookup reason lands with Task 4.1.9 — until then
-        // a state-5 path reports miss.
         let firstResult = mgr.lookup(tokens: firstTokens, partitionKey: defaultKey)
         #expect(firstResult.snapshot == nil)
     }
@@ -1336,5 +1334,214 @@ struct PrefixCacheManagerTests {
         #expect(sysNode.storageRef?.committed == true)
         let leafResult = mgr.lookup(tokens: leafTokens, partitionKey: defaultKey)
         #expect(leafResult.snapshot == nil)
+    }
+
+    // MARK: - SSD hydration: lookup / promote / clearStorageRef
+
+    /// Build a tiered-store-backed manager whose SSD tier points at a
+    /// fresh scratch directory. The partition is preregistered so
+    /// state-5 refs survive the lookup's fingerprint/manifest checks.
+    private func makeSSDManager(
+        budgetBytes: Int = 1_000_000
+    ) -> (PrefixCacheManager, TieredSnapshotStore, URL) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prefix-cache-ssd-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let config = SSDPrefixCacheConfig(
+            enabled: true,
+            rootURL: root,
+            budgetBytes: budgetBytes,
+            maxPendingBytes: 10_000_000
+        )
+        let tieredStore = TieredSnapshotStore(ssdConfig: config)
+        let mgr = PrefixCacheManager(
+            memoryBudgetBytes: 10_000_000,
+            tieredStore: tieredStore
+        )
+        return (mgr, tieredStore, root)
+    }
+
+    /// State 5 lookup (body absent + committed ref) surfaces `.ssdHit`
+    /// carrying the ref, the SSD store reference, and the node.
+    @Test func lookupReturnsSSDHitForStateFiveNode() {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let tokens = Array(1...10)
+        let tree = tieredStore.getOrCreateTree(for: defaultKey)
+        let node = tree.insertPath(tokens: tokens)
+        let ref = PrefixCacheTestFixtures.makeStorageRef(
+            committed: true,
+            type: .leaf,
+            tokenOffset: tokens.count
+        )
+        node.storageRef = ref
+        // Node has a committed ref but no body — state 5.
+        #expect(node.snapshot == nil)
+
+        let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
+        guard case .ssdHit(let ctx) = result.reason else {
+            #expect(Bool(false), "Expected .ssdHit, got \(result.reason)")
+            return
+        }
+        #expect(ctx.storageRef.snapshotID == ref.snapshotID)
+        #expect(ctx.node === node)
+        #expect(result.snapshot == nil)
+        #expect(result.snapshotTokenOffset == tokens.count)
+    }
+
+    /// State 3 lookup (body absent + pending ref) stays a miss —
+    /// returning an SSD hit on an in-flight write would race the
+    /// writer and surface an absent or half-written file.
+    @Test func lookupTreatsPendingRefAsMiss() {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let tokens = Array(1...10)
+        let tree = tieredStore.getOrCreateTree(for: defaultKey)
+        let node = tree.insertPath(tokens: tokens)
+        node.storageRef = PrefixCacheTestFixtures.makeStorageRef(
+            committed: false,
+            tokenOffset: tokens.count
+        )
+
+        let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
+        if case .missNoSnapshotInPrefix = result.reason {
+            // expected
+        } else {
+            #expect(Bool(false), "Expected miss, got \(result.reason)")
+        }
+    }
+
+    /// `promote` moves a state-5 node back to state 4 by attaching
+    /// the hydrated body. Subsequent lookups surface a normal RAM hit.
+    @Test func promoteTransitionsStateFiveToStateFour() {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let tokens = Array(1...10)
+        let tree = tieredStore.getOrCreateTree(for: defaultKey)
+        let node = tree.insertPath(tokens: tokens)
+        node.storageRef = PrefixCacheTestFixtures.makeStorageRef(
+            committed: true,
+            tokenOffset: tokens.count
+        )
+
+        let hydrated = makeUniformSnapshot(offset: tokens.count, type: .leaf)
+        mgr.promote(node: node, snapshot: hydrated, partitionKey: defaultKey)
+
+        #expect(node.snapshot != nil)
+        #expect(node.storageRef != nil)  // ref preserved
+        let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
+        if case .hit = result.reason {
+            // expected
+        } else {
+            #expect(Bool(false), "Expected .hit after promote, got \(result.reason)")
+        }
+    }
+
+    /// `clearStorageRef` on a state-5 leaf with no body removes the
+    /// node from the tree entirely. Subsequent lookups miss via the
+    /// normal `missNoSnapshotInPrefix` path.
+    @Test func clearStorageRefRemovesLeafWithNoBody() {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let tokens = Array(1...10)
+        let tree = tieredStore.getOrCreateTree(for: defaultKey)
+        let node = tree.insertPath(tokens: tokens)
+        node.storageRef = PrefixCacheTestFixtures.makeStorageRef(
+            committed: true,
+            tokenOffset: tokens.count
+        )
+        let nodeCountBefore = tree.nodeCount
+
+        mgr.clearStorageRef(node: node, partitionKey: defaultKey)
+
+        #expect(node.storageRef == nil)
+        #expect(node.parent == nil)  // detached
+        #expect(tree.nodeCount < nodeCountBefore)
+        let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
+        #expect(result.snapshot == nil)
+    }
+
+    /// State-4 lookups (body + committed ref) must bump the SSD
+    /// descriptor's `lastAccessAt` so hot RAM entries do not look
+    /// stale to the SSD LRU when the body is eventually dropped.
+    @Test func lookupOnStateFourNodeBumpsSSDRecencyViaRecordHit() {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Store a leaf (body) and register the partition so the SSD
+        // store's manifest carries an entry for the ref ID.
+        let tokens = Array(1...10)
+        mgr.storeLeaf(
+            storedTokens: tokens,
+            leafSnapshot: makeUniformSnapshot(offset: tokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+        let tree = tieredStore.tree(for: defaultKey)!
+        let (node, _) = tree.findBestSnapshot(tokens: tokens, updateAccess: false)!
+
+        // Seed the SSD manifest with a descriptor so `recordHit` has
+        // a target. Partition must be registered first; the manager's
+        // warmStart normally drives this, but we mint the config
+        // directly here.
+        let ssdStore = tieredStore.ssdStore!
+        let meta = PartitionMeta(
+            modelID: "test-model",
+            modelFingerprint: String(repeating: "a", count: 64),
+            kvBits: nil,
+            kvGroupSize: 64,
+            sessionAffinity: nil,
+            createdAt: 0,
+            schemaVersion: SnapshotManifestSchema.currentVersion
+        )
+        let digest = defaultKey.partitionDigest
+        ssdStore.registerPartition(meta, digest: digest)
+
+        let ref = SnapshotStorageRef(
+            snapshotID: UUID().uuidString,
+            partitionDigest: digest,
+            tokenOffset: tokens.count,
+            checkpointType: .leaf,
+            bytesOnDisk: 1024,
+            lastAccessTime: .now,
+            committed: true
+        )
+        node.storageRef = ref
+
+        // Manually insert a descriptor with an older lastAccessAt so
+        // the recordHit bump is observable on the next read.
+        let originalAccess: Double = 0
+        let descriptor = PersistedSnapshotDescriptor(
+            snapshotID: ref.snapshotID,
+            partitionDigest: digest,
+            pathFromRoot: tokens,
+            tokenOffset: tokens.count,
+            checkpointType: HybridCacheSnapshot.CheckpointType.leaf.wireString,
+            bytes: 1024,
+            createdAt: originalAccess,
+            lastAccessAt: originalAccess,
+            fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+                snapshotID: ref.snapshotID,
+                partitionDigest: digest
+            ),
+            schemaVersion: SnapshotManifestSchema.currentVersion
+        )
+        ssdStore.seedDescriptorForTesting(descriptor)
+
+        // Lookup is a state-4 hit: body present, committed ref
+        // pointing at the seeded descriptor.
+        let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
+        if case .hit = result.reason {
+            // expected
+        } else {
+            #expect(Bool(false), "Expected RAM hit, got \(result.reason)")
+        }
+
+        // The recordHit bump should have moved lastAccessAt forward.
+        let bumped = ssdStore.lastAccessAtForTesting(id: ref.snapshotID)
+        #expect(bumped > originalAccess)
     }
 }

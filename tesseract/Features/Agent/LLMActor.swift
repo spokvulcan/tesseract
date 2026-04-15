@@ -745,13 +745,36 @@ actor LLMActor {
     /// adapts to the workload after the first eviction fires. Reset the
     /// global `EvictionPolicy.alpha` when creating a fresh cache so a
     /// previous cache's tuned value doesn't leak into the new tuner.
+    ///
+    /// When `ssdConfig?.enabled == true` the manager is composed over
+    /// a `TieredSnapshotStore` owning an `SSDSnapshotStore`, and
+    /// `warmStart` restores the radix-tree structure from the on-disk
+    /// manifest. Warm start is fingerprint-gated: partitions from a
+    /// different model layout get their descriptors skipped and
+    /// their directories scheduled for async cleanup.
     private func ensurePrefixCache() async -> PrefixCacheManager {
         if let existing = _prefixCache { return existing }
-        await MainActor.run { EvictionPolicy.alpha = 0.0 }
-        let cache = await PrefixCacheManager(
-            memoryBudgetBytes: defaultPrefixCacheMemoryBudgetBytes,
-            alphaTuner: AlphaTuner()
-        )
+        let budget = defaultPrefixCacheMemoryBudgetBytes
+        let ssdConfigSnapshot = self.ssdConfig
+        let fingerprint = self.modelFingerprint
+        let cache = await MainActor.run { () -> PrefixCacheManager in
+            EvictionPolicy.alpha = 0.0
+            let tieredStore = TieredSnapshotStore(ssdConfig: ssdConfigSnapshot)
+            return PrefixCacheManager(
+                memoryBudgetBytes: budget,
+                alphaTuner: AlphaTuner(),
+                tieredStore: tieredStore
+            )
+        }
+        if ssdConfigSnapshot?.enabled == true, let fingerprint {
+            do {
+                try await cache.warmStart(modelFingerprint: fingerprint)
+            } catch {
+                Log.agent.error(
+                    "PrefixCacheManager.warmStart failed: \(String(describing: error))"
+                )
+            }
+        }
         _prefixCache = cache
         return cache
     }
@@ -877,6 +900,32 @@ actor LLMActor {
                 "dtypeWireString missing case for MLX DType \(dtype) — "
                 + "extend the switch to preserve the SSD wire-format contract."
             )
+        }
+    }
+
+    /// Inverse of ``dtypeWireString``. Must stay exhaustive against
+    /// the forward table so round-tripping an SSD-resident snapshot
+    /// cannot silently lose dtype information; every branch in
+    /// `dtypeWireString` has a matching branch here. Returns `nil`
+    /// for unknown wire strings so the `SSDSnapshotStore` decoder
+    /// can distinguish a parse error from a supported dtype.
+    nonisolated static func dtypeFromWireString(_ wire: String) -> DType? {
+        switch wire {
+        case "bool": return .bool
+        case "uint8": return .uint8
+        case "uint16": return .uint16
+        case "uint32": return .uint32
+        case "uint64": return .uint64
+        case "int8": return .int8
+        case "int16": return .int16
+        case "int32": return .int32
+        case "int64": return .int64
+        case "float16": return .float16
+        case "float32": return .float32
+        case "bfloat16": return .bfloat16
+        case "complex64": return .complex64
+        case "float64": return .float64
+        default: return nil
         }
     }
 
@@ -1149,13 +1198,68 @@ actor LLMActor {
 
             // 5–6. Radix tree lookup + checkpoint planning (single MainActor hop).
             let lookupStarted = Date.timeIntervalSinceReferenceDate
-            let (lookupResult, initialCheckpointPlan) = await MainActor.run {
+            let (initialLookupResult, initialCheckpointPlan) = await MainActor.run {
                 prefixCache.lookupAndPlanCheckpoints(
                     tokens: fullTokens,
                     stablePrefixOffset: stablePrefixOffset,
                     lastMessageBoundaryOffset: lastMessageBoundaryOffset,
                     partitionKey: partitionKey
                 )
+            }
+            // Lazy SSD hydration: `.ssdHit` signals that the deepest
+            // reachable node carries only a committed storage ref.
+            // Materialize the body from disk inside this
+            // `container.perform` (Metal-affine), then hop to
+            // MainActor to promote the node back to state 4. On
+            // hydration failure, clear the ref and downgrade to a
+            // miss so the prefill runs cold.
+            let lookupResult: PrefixCacheManager.LookupResult
+            if case .ssdHit(let ctx) = initialLookupResult.reason,
+               let fingerprint = modelFingerprint
+            {
+                if let hydrated = ctx.ssdStore.loadSync(
+                    storageRef: ctx.storageRef,
+                    expectedFingerprint: fingerprint
+                ) {
+                    await MainActor.run {
+                        ctx.ssdStore.recordHit(id: ctx.storageRef.snapshotID)
+                        prefixCache.promote(
+                            node: ctx.node,
+                            snapshot: hydrated,
+                            partitionKey: partitionKey
+                        )
+                    }
+                    lookupResult = PrefixCacheManager.LookupResult(
+                        snapshot: hydrated,
+                        partitionKey: partitionKey,
+                        snapshotTokenOffset: hydrated.tokenOffset,
+                        sharedPrefixLength: initialLookupResult.sharedPrefixLength,
+                        reason: .hit(
+                            snapshotOffset: hydrated.tokenOffset,
+                            totalTokens: fullTokenCount,
+                            type: hydrated.checkpointType
+                        )
+                    )
+                } else {
+                    // loadSync already dropped the descriptor + file +
+                    // fired onDrop. Clear the node's ref on MainActor
+                    // so subsequent lookups see the miss directly.
+                    await MainActor.run {
+                        prefixCache.clearStorageRef(
+                            node: ctx.node,
+                            partitionKey: partitionKey
+                        )
+                    }
+                    lookupResult = PrefixCacheManager.LookupResult(
+                        snapshot: nil,
+                        partitionKey: partitionKey,
+                        snapshotTokenOffset: 0,
+                        sharedPrefixLength: initialLookupResult.sharedPrefixLength,
+                        reason: .missNoSnapshotInPrefix
+                    )
+                }
+            } else {
+                lookupResult = initialLookupResult
             }
             let lookupMs = Date.timeIntervalSinceReferenceDate - lookupStarted
             var checkpointPlan = initialCheckpointPlan

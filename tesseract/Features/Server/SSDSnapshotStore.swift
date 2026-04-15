@@ -36,6 +36,7 @@
 //
 
 import Foundation
+import MLX
 import MLXLMCommon
 
 // MARK: - Front door outcome types
@@ -106,6 +107,33 @@ nonisolated enum SSDDropReason: Sendable, Equatable {
     /// Writer hit a non-space I/O error (permissions, fsync
     /// failure, serialization error, other Foundation error).
     case writerIOError
+
+    /// `loadSync` could not materialize a resident back into RAM
+    /// (file missing, fingerprint mismatch, placeholder decode
+    /// error). The descriptor was removed from the manifest and the
+    /// file deleted before the callback fired.
+    case hydrationFailure
+}
+
+// MARK: - Warm-start outcome
+
+/// Partitioned view of a successfully loaded manifest. Returned by
+/// `SSDSnapshotStore.warmStartLoad` so `PrefixCacheManager.warmStart`
+/// can iterate the valid descriptors without taking the store's lock.
+nonisolated struct WarmStartOutcome: Sendable {
+    struct Partition: Sendable {
+        let digest: String
+        let meta: PartitionMeta
+        let descriptors: [PersistedSnapshotDescriptor]
+    }
+
+    let validPartitions: [Partition]
+    let invalidatedPartitionDigests: [String]
+
+    static let empty = WarmStartOutcome(
+        validPartitions: [],
+        invalidatedPartitionDigests: []
+    )
 }
 
 // MARK: - SSDSnapshotStore
@@ -292,10 +320,47 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     /// affinity changes between model loads.
     func registerPartition(_ meta: PartitionMeta, digest: String) {
         lock.lock()
-        defer { lock.unlock() }
         manifest.partitions[digest] = meta
         manifestDirty = true
         scheduleManifestPersistLocked()
+        lock.unlock()
+
+        // Persist a per-partition `_meta.json` sidecar so the
+        // directory-walk rebuild path (`rebuildManifestFromDirectoryWalk`)
+        // can validate partition fingerprints without relying on the
+        // top-level `manifest.json`. The file is idempotent — repeat
+        // writes for the same digest overwrite cleanly.
+        writePartitionMetaFile(meta, digest: digest)
+    }
+
+    /// Serialize a `PartitionMeta` to `partitions/{digest}/_meta.json`.
+    /// Best-effort: failures log at error level but do not abort the
+    /// caller. The only caller that depends on the file is the
+    /// corrupt-manifest rebuild path, which already falls back to
+    /// "invalidated partition" when the file is missing.
+    private nonisolated func writePartitionMetaFile(
+        _ meta: PartitionMeta,
+        digest: String
+    ) {
+        let dir = rootURL
+            .appendingPathComponent("partitions")
+            .appendingPathComponent(digest)
+        let url = dir.appendingPathComponent("_meta.json")
+        do {
+            try FileManager.default.createDirectory(
+                at: dir,
+                withIntermediateDirectories: true
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(meta)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            Log.agent.error(
+                "SSDSnapshotStore.writePartitionMetaFile failed "
+                + "digest=\(digest) error=\(String(describing: error))"
+            )
+        }
     }
 
     // MARK: - Writer loop
@@ -768,7 +833,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         manifestDirty = false
         lock.unlock()
 
-        let manifestURL = rootURL.appendingPathComponent("manifest.json")
+        let manifestURL = self.manifestURL
 
         do {
             try FileManager.default.createDirectory(
@@ -798,12 +863,32 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
     // MARK: - File path derivation
 
-    private func fileURL(for descriptor: PersistedSnapshotDescriptor) -> URL {
+    /// Canonical on-disk URL for a snapshot file. Both the writer's
+    /// descriptor-based path and the reader's `SnapshotStorageRef`
+    /// path must go through this single helper so the sharding rule
+    /// cannot drift between write and read.
+    private nonisolated func fileURL(
+        snapshotID: String,
+        partitionDigest: String
+    ) -> URL {
         let relative = PersistedSnapshotDescriptor.relativeFilePath(
+            snapshotID: snapshotID,
+            partitionDigest: partitionDigest
+        )
+        return rootURL.appendingPathComponent(relative)
+    }
+
+    private func fileURL(for descriptor: PersistedSnapshotDescriptor) -> URL {
+        fileURL(
             snapshotID: descriptor.snapshotID,
             partitionDigest: descriptor.partitionDigest
         )
-        return rootURL.appendingPathComponent(relative)
+    }
+
+    /// Authoritative on-disk manifest URL. Used by the writer's
+    /// debounced persist and by `warmStartLoad`.
+    fileprivate var manifestURL: URL {
+        rootURL.appendingPathComponent("manifest.json")
     }
 
     // MARK: - Pending write (private value type)
@@ -812,6 +897,523 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         let payload: SnapshotPayload
         let descriptor: PersistedSnapshotDescriptor
     }
+}
+
+// MARK: - Warm start + lazy hydration
+
+extension SSDSnapshotStore {
+
+    /// Read `manifest.json` from disk, validate each partition's
+    /// `modelFingerprint` against the currently loaded model, and
+    /// seed the in-memory manifest + `currentSSDBytes` with only the
+    /// valid subset. Invalidated partitions get their directories
+    /// asynchronously deleted.
+    ///
+    /// Called once at model load from `PrefixCacheManager.warmStart`.
+    /// Nonisolated so the manager can invoke it without a hop — the
+    /// underlying work is synchronous file I/O plus a lock-protected
+    /// manifest swap.
+    ///
+    /// Returns the partitioned view of the loaded manifest so the
+    /// manager can iterate valid descriptors and call
+    /// `restoreStorageRef` without re-reading the store's private
+    /// state.
+    nonisolated func warmStartLoad(
+        expectedFingerprint: String
+    ) -> WarmStartOutcome {
+        let manifestURL = self.manifestURL
+
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            return .empty
+        }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: manifestURL)
+        } catch {
+            Log.agent.error(
+                "SSDSnapshotStore.warmStartLoad read failed: \(String(describing: error))"
+            )
+            return .empty
+        }
+
+        let loaded: SnapshotManifest
+        do {
+            loaded = try JSONDecoder().decode(SnapshotManifest.self, from: data)
+        } catch {
+            Log.agent.error(
+                "SSDSnapshotStore.warmStartLoad decode failed: \(String(describing: error))"
+            )
+            // Rename the corrupt manifest for forensics, then rebuild
+            // from the on-disk snapshot headers. Each file's header
+            // carries the full `PersistedSnapshotDescriptor`, and
+            // `partitions/{digest}/_meta.json` carries the partition's
+            // fingerprint, so the rebuild reconstructs everything the
+            // normal path would produce.
+            let ts = Int(Date().timeIntervalSince1970)
+            let corruptURL = rootURL.appendingPathComponent("manifest.corrupt.\(ts).json")
+            try? FileManager.default.moveItem(at: manifestURL, to: corruptURL)
+            return rebuildManifestFromDirectoryWalk(
+                expectedFingerprint: expectedFingerprint
+            )
+        }
+
+        guard loaded.isSchemaCompatible else {
+            Log.agent.info(
+                "SSDSnapshotStore.warmStartLoad schema mismatch "
+                + "loaded=\(loaded.schemaVersion) "
+                + "current=\(SnapshotManifestSchema.currentVersion); starting fresh"
+            )
+            return .empty
+        }
+
+        return commitRestoredManifest(
+            loaded,
+            expectedFingerprint: expectedFingerprint,
+            persistManifestAfter: false,
+            source: "manifest.json"
+        )
+    }
+
+    /// Rebuild the manifest by walking `partitions/*/` after a
+    /// corrupt `manifest.json`. Reads `_meta.json` per partition for
+    /// the fingerprint, then parses each `.safetensors` file's header
+    /// (sidestepping the tensor payload) to recover every descriptor
+    /// field needed for the radix tree + LRU budget.
+    ///
+    /// Files whose header cannot be decoded are deleted so the next
+    /// admission can reuse their name space. The resulting
+    /// manifest is persisted via the debounced write path so
+    /// subsequent restarts do not retrace the directory walk.
+    private nonisolated func rebuildManifestFromDirectoryWalk(
+        expectedFingerprint: String
+    ) -> WarmStartOutcome {
+        let partitionsDir = rootURL.appendingPathComponent("partitions")
+        guard FileManager.default.fileExists(atPath: partitionsDir.path) else {
+            Log.agent.info(
+                "SSDSnapshotStore rebuild: no `partitions/` directory, starting fresh"
+            )
+            return .empty
+        }
+
+        let partitionNames: [String]
+        do {
+            partitionNames = try FileManager.default.contentsOfDirectory(
+                atPath: partitionsDir.path
+            )
+        } catch {
+            Log.agent.error(
+                "SSDSnapshotStore rebuild: partitions/ listing failed: \(String(describing: error))"
+            )
+            return .empty
+        }
+
+        var rebuilt = SnapshotManifest.empty()
+        var recoveredDescriptors = 0
+        var orphanedFiles: [URL] = []
+
+        for digest in partitionNames {
+            let partitionDir = partitionsDir.appendingPathComponent(digest)
+            let metaURL = partitionDir.appendingPathComponent("_meta.json")
+            guard let metaData = try? Data(contentsOf: metaURL),
+                  let meta = try? JSONDecoder().decode(PartitionMeta.self, from: metaData)
+            else {
+                Log.agent.error(
+                    "SSDSnapshotStore rebuild: partition \(digest) missing or "
+                    + "unreadable _meta.json"
+                )
+                // Skip the partition entirely — the normal fingerprint
+                // mismatch path in `commitRestoredManifest` handles
+                // directory cleanup for digests not in `rebuilt.partitions`.
+                continue
+            }
+            rebuilt.partitions[digest] = meta
+
+            let snapshotsDir = partitionDir.appendingPathComponent("snapshots")
+            guard let shardNames = try? FileManager.default.contentsOfDirectory(
+                atPath: snapshotsDir.path
+            ) else { continue }
+
+            for shard in shardNames {
+                let shardDir = snapshotsDir.appendingPathComponent(shard)
+                guard let fileNames = try? FileManager.default.contentsOfDirectory(
+                    atPath: shardDir.path
+                ) else { continue }
+                for name in fileNames where name.hasSuffix(".safetensors") {
+                    let fileURL = shardDir.appendingPathComponent(name)
+                    guard let descriptor = extractDescriptorFromFile(fileURL),
+                          descriptor.partitionDigest == digest
+                    else {
+                        orphanedFiles.append(fileURL)
+                        continue
+                    }
+                    rebuilt.snapshots[descriptor.snapshotID] = descriptor
+                    recoveredDescriptors += 1
+                }
+            }
+        }
+
+        Log.agent.info(
+            "SSDSnapshotStore rebuild: recovered "
+            + "partitions=\(rebuilt.partitions.count) "
+            + "descriptors=\(recoveredDescriptors) "
+            + "orphanedFiles=\(orphanedFiles.count)"
+        )
+
+        // Delete orphaned files off the hot path.
+        if !orphanedFiles.isEmpty {
+            Task.detached {
+                for url in orphanedFiles {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+        }
+
+        return commitRestoredManifest(
+            rebuilt,
+            expectedFingerprint: expectedFingerprint,
+            persistManifestAfter: true,
+            source: "rebuild"
+        )
+    }
+
+    /// Shared commit step for both the normal JSON path and the
+    /// directory-walk rebuild. Applies the fingerprint filter,
+    /// drops descriptors whose wire-format checkpoint type no longer
+    /// round-trips (so their bytes do not leak into the SSD budget),
+    /// seeds `currentSSDBytes`, schedules async cleanup of invalidated
+    /// partition directories + dead-descriptor files, and optionally
+    /// kicks the debounced manifest persist (used by the rebuild path
+    /// to overwrite the just-renamed corrupt `manifest.json`).
+    private nonisolated func commitRestoredManifest(
+        _ loaded: SnapshotManifest,
+        expectedFingerprint: String,
+        persistManifestAfter: Bool,
+        source: String
+    ) -> WarmStartOutcome {
+        var restored = SnapshotManifest.empty()
+        var invalidatedDigests: [String] = []
+        for (digest, meta) in loaded.partitions {
+            if meta.modelFingerprint == expectedFingerprint {
+                restored.partitions[digest] = meta
+            } else {
+                invalidatedDigests.append(digest)
+            }
+        }
+
+        var descriptorsByDigest: [String: [PersistedSnapshotDescriptor]] = [:]
+        var deadDescriptorFiles: [URL] = []
+        for (id, desc) in loaded.snapshots {
+            guard restored.partitions[desc.partitionDigest] != nil else { continue }
+            // Drop descriptors whose wire-format checkpoint type no
+            // longer decodes — `PrefixCacheManager.warmStart` would
+            // skip them silently otherwise, leaving their bytes
+            // stranded in `currentSSDBytes`.
+            guard HybridCacheSnapshot.CheckpointType(
+                wireString: desc.checkpointType
+            ) != nil else {
+                deadDescriptorFiles.append(
+                    fileURL(snapshotID: desc.snapshotID, partitionDigest: desc.partitionDigest)
+                )
+                continue
+            }
+            restored.snapshots[id] = desc
+            descriptorsByDigest[desc.partitionDigest, default: []].append(desc)
+        }
+
+        let seedBytes = restored.snapshots.values.reduce(0) { $0 + $1.bytes }
+
+        lock.lock()
+        self.manifest = restored
+        self.currentSSDBytes = seedBytes
+        if persistManifestAfter {
+            self.manifestDirty = true
+            scheduleManifestPersistLocked()
+        }
+        lock.unlock()
+
+        let validPartitions: [WarmStartOutcome.Partition] = restored.partitions.map {
+            digest, meta in
+            WarmStartOutcome.Partition(
+                digest: digest,
+                meta: meta,
+                descriptors: (descriptorsByDigest[digest] ?? [])
+                    .sorted { $0.snapshotID < $1.snapshotID }
+            )
+        }
+        .sorted { $0.digest < $1.digest }
+
+        if !invalidatedDigests.isEmpty {
+            let capturedRoot = rootURL
+            let capturedDigests = invalidatedDigests
+            Task.detached {
+                for digest in capturedDigests {
+                    let dir = capturedRoot
+                        .appendingPathComponent("partitions")
+                        .appendingPathComponent(digest)
+                    try? FileManager.default.removeItem(at: dir)
+                }
+            }
+        }
+
+        if !deadDescriptorFiles.isEmpty {
+            let urls = deadDescriptorFiles
+            Task.detached {
+                for url in urls {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+        }
+
+        Log.agent.info(
+            "SSDSnapshotStore.warmStartLoad source=\(source) "
+            + "partitions=\(restored.partitions.count) "
+            + "snapshots=\(restored.snapshots.count) "
+            + "bytes=\(seedBytes) "
+            + "invalidated=\(invalidatedDigests.count) "
+            + "dead=\(deadDescriptorFiles.count)"
+        )
+
+        return WarmStartOutcome(
+            validPartitions: validPartitions,
+            invalidatedPartitionDigests: invalidatedDigests
+        )
+    }
+
+    /// Read only the header of a placeholder container file and
+    /// return the embedded descriptor. Used by the rebuild path —
+    /// skips the tensor payload so the walk is fast even with
+    /// hundreds of snapshots. Returns `nil` on any read or decode
+    /// failure; caller deletes the file.
+    private nonisolated func extractDescriptorFromFile(
+        _ url: URL
+    ) -> PersistedSnapshotDescriptor? {
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: url)
+        } catch {
+            return nil
+        }
+        defer { try? handle.close() }
+
+        guard let lengthData = try? handle.read(upToCount: 8),
+              lengthData.count == 8
+        else { return nil }
+        let headerLength = lengthData.withUnsafeBytes {
+            $0.load(as: UInt64.self).littleEndian
+        }
+        guard headerLength <= UInt64(Int.max),
+              let headerData = try? handle.read(upToCount: Int(headerLength)),
+              headerData.count == Int(headerLength)
+        else { return nil }
+        guard let header = try? JSONDecoder().decode(
+            PlaceholderContainerHeader.self,
+            from: headerData
+        ) else { return nil }
+        return header.descriptor
+    }
+
+    /// Synchronously materialize an SSD-resident snapshot back into
+    /// RAM. Must be called inside `container.perform` on LLMActor —
+    /// the reconstructed MLXArrays are touched by the Metal command
+    /// queue as soon as the caller evaluates them, and a background
+    /// queue would deadlock per the oMLX regression.
+    ///
+    /// On any failure (partition not in manifest, fingerprint
+    /// mismatch, file missing, decode error) the descriptor is
+    /// removed from the manifest, the on-disk file is deleted, and
+    /// `onDrop` fires with `.hydrationFailure`. Subsequent lookups
+    /// on the same path therefore miss cleanly rather than
+    /// re-attempting hydration on a broken file.
+    ///
+    /// Returns `nil` on any failure; `HybridCacheSnapshot` on success.
+    nonisolated func loadSync(
+        storageRef: SnapshotStorageRef,
+        expectedFingerprint: String
+    ) -> HybridCacheSnapshot? {
+        // Fingerprint gate: compare the partition's persisted
+        // fingerprint against the caller's expected value. Mismatch
+        // or missing partition is terminal — drop and miss.
+        lock.lock()
+        let partitionFingerprint = manifest
+            .partitions[storageRef.partitionDigest]?
+            .modelFingerprint
+        lock.unlock()
+
+        guard let partitionFingerprint else {
+            return failLoad(
+                storageRef,
+                "partition not in manifest digest=\(storageRef.partitionDigest)"
+            )
+        }
+        guard partitionFingerprint == expectedFingerprint else {
+            return failLoad(
+                storageRef,
+                "fingerprint mismatch partition=\(partitionFingerprint.prefix(8)) "
+                + "expected=\(expectedFingerprint.prefix(8))"
+            )
+        }
+
+        // Read the file directly; let `Data(contentsOf:)` surface
+        // missing / permission / IO errors via one catch site.
+        // `.mappedIfSafe` lets the kernel page in on demand so
+        // ~200 MiB snapshots do not spike peak RSS during hydration.
+        let url = fileURL(forStorageRef: storageRef)
+        let fileData: Data
+        do {
+            fileData = try Data(contentsOf: url, options: .mappedIfSafe)
+        } catch {
+            return failLoad(storageRef, "read failed error=\(error)")
+        }
+
+        // Decode the placeholder container, reconstructing MLXArrays
+        // from raw payload bytes inside the caller's Metal-affine
+        // context.
+        do {
+            return try decodePlaceholderContainer(
+                fileData,
+                tokenOffset: storageRef.tokenOffset,
+                checkpointType: storageRef.checkpointType
+            )
+        } catch {
+            return failLoad(storageRef, "decode failed error=\(error)")
+        }
+    }
+
+    /// Shared terminal branch for every `loadSync` failure path.
+    /// Logs the `message`, drops the descriptor + on-disk file +
+    /// fires `onDrop(.hydrationFailure)`, and returns `nil` so the
+    /// caller can `return` the result directly.
+    private nonisolated func failLoad(
+        _ ref: SnapshotStorageRef,
+        _ message: @autoclosure () -> String
+    ) -> HybridCacheSnapshot? {
+        Log.agent.error(
+            "SSDSnapshotStore.loadSync: \(message()) "
+            + "id=\(ref.snapshotID.prefix(8))"
+        )
+        dropHydrationFailure(id: ref.snapshotID)
+        return nil
+    }
+
+    private nonisolated func fileURL(
+        forStorageRef ref: SnapshotStorageRef
+    ) -> URL {
+        fileURL(
+            snapshotID: ref.snapshotID,
+            partitionDigest: ref.partitionDigest
+        )
+    }
+
+    /// Remove the descriptor from the manifest, delete the on-disk
+    /// file, and fire `onDrop` with `.hydrationFailure`. Called from
+    /// every `loadSync` error path so the node's storageRef gets
+    /// cleared and subsequent lookups miss cleanly.
+    private nonisolated func dropHydrationFailure(id: String) {
+        lock.lock()
+        let evicted = removeResidentUnderLock(snapshotID: id)
+        lock.unlock()
+
+        if let evicted {
+            try? FileManager.default.removeItem(at: evicted.fileURL)
+        }
+        onDrop(id, .hydrationFailure)
+    }
+
+    /// Decode a placeholder-container file into a `HybridCacheSnapshot`.
+    /// Must run inside `container.perform` — constructing MLXArrays
+    /// from `Data` is Metal-affine.
+    ///
+    /// The placeholder header carries per-array `byte_offset` /
+    /// `byte_size` pairs relative to the blob section that follows
+    /// the header. We slice those bytes out and feed them to
+    /// `MLXArray(_:_:dtype:)` — a convenience initializer that
+    /// owns a fresh backing allocation without going through a
+    /// safetensors round-trip.
+    private nonisolated func decodePlaceholderContainer(
+        _ data: Data,
+        tokenOffset: Int,
+        checkpointType: HybridCacheSnapshot.CheckpointType
+    ) throws -> HybridCacheSnapshot {
+        let (header, blobsStart) = try parseContainerHeader(data)
+
+        var totalBytes = 0
+        var snapshotLayers: [HybridCacheSnapshot.LayerState] = []
+        snapshotLayers.reserveCapacity(header.layers.count)
+
+        for layerHeader in header.layers {
+            var stateArrays: [MLXArray] = []
+            stateArrays.reserveCapacity(layerHeader.arrays.count)
+            for arrayHeader in layerHeader.arrays {
+                guard let dtype = LLMActor.dtypeFromWireString(arrayHeader.dtype) else {
+                    throw SSDLoadError.unknownDType(arrayHeader.dtype)
+                }
+                let sliceStart = blobsStart + arrayHeader.byteOffset
+                let sliceEnd = sliceStart + arrayHeader.byteSize
+                guard sliceEnd <= data.count else {
+                    throw SSDLoadError.truncatedBlob
+                }
+                let blob = data[sliceStart..<sliceEnd]
+                stateArrays.append(MLXArray(blob, arrayHeader.shape, dtype: dtype))
+                totalBytes += arrayHeader.byteSize
+            }
+
+            snapshotLayers.append(HybridCacheSnapshot.LayerState(
+                className: layerHeader.className,
+                state: stateArrays,
+                metaState: layerHeader.metaState,
+                offset: layerHeader.offset
+            ))
+        }
+
+        return HybridCacheSnapshot(
+            tokenOffset: tokenOffset,
+            layers: snapshotLayers,
+            checkpointType: checkpointType,
+            memoryBytes: totalBytes,
+            createdAt: .now
+        )
+    }
+
+    /// Parse the 8-byte length prefix + JSON header without touching
+    /// the tensor payload. Returned `blobsStart` points at the first
+    /// byte after the header (same as `data.startIndex + 8 + headerLength`
+    /// when `data` is a fresh `Data`). Shared by `decodePlaceholderContainer`
+    /// (full hydration) and `extractDescriptorFromFile(url:)` (rebuild).
+    private nonisolated func parseContainerHeader(
+        _ data: Data
+    ) throws -> (header: PlaceholderContainerHeader, blobsStart: Int) {
+        guard data.count >= 8 else { throw SSDLoadError.truncatedHeader }
+        let headerLength = data.prefix(8).withUnsafeBytes {
+            $0.load(as: UInt64.self).littleEndian
+        }
+        let headerEnd = 8 + Int(headerLength)
+        guard headerEnd <= data.count else { throw SSDLoadError.truncatedHeader }
+        let headerData = data[8..<headerEnd]
+        let header: PlaceholderContainerHeader
+        do {
+            header = try JSONDecoder().decode(
+                PlaceholderContainerHeader.self,
+                from: headerData
+            )
+        } catch {
+            throw SSDLoadError.invalidHeader(String(describing: error))
+        }
+        return (header, headerEnd)
+    }
+
+}
+
+// MARK: - SSDLoadError
+
+/// Errors thrown by the placeholder-container decoder. All variants
+/// map to a terminal `loadSync` failure that drops the descriptor
+/// and the on-disk file before reporting a miss.
+nonisolated enum SSDLoadError: Error {
+    case truncatedHeader
+    case truncatedBlob
+    case invalidHeader(String)
+    case unknownDType(String)
 }
 
 // MARK: - Testing hooks
@@ -855,12 +1457,97 @@ extension SSDSnapshotStore {
     nonisolated func flushManifestForTesting() {
         persistManifestIfDirty()
     }
+
+    /// Inject a descriptor into the manifest without going through
+    /// the writer loop. Tests use this to drive `recordHit` /
+    /// `loadSync` scenarios deterministically — the writer path has
+    /// its own callback timing to wait on, which is overkill for
+    /// tests that just want a known manifest state.
+    ///
+    /// The partition must already be registered via
+    /// `registerPartition(_:digest:)` so the manifest invariant
+    /// holds; the seeded descriptor updates `currentSSDBytes`.
+    nonisolated func seedDescriptorForTesting(_ descriptor: PersistedSnapshotDescriptor) {
+        lock.lock()
+        defer { lock.unlock() }
+        precondition(
+            manifest.partitions[descriptor.partitionDigest] != nil,
+            "seedDescriptorForTesting: partition not registered"
+        )
+        if let previous = manifest.snapshots[descriptor.snapshotID] {
+            currentSSDBytes -= previous.bytes
+        }
+        manifest.snapshots[descriptor.snapshotID] = descriptor
+        currentSSDBytes += descriptor.bytes
+    }
+
+    /// Read a descriptor's current `lastAccessAt` without mutating
+    /// anything. Used by the `recordHit` regression test to observe
+    /// the bump without racing the writer's debounced persist.
+    nonisolated func lastAccessAtForTesting(id: String) -> Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return manifest.snapshots[id]?.lastAccessAt ?? -1
+    }
 }
 
 // MARK: - Placeholder on-disk format
 
+/// Codable header for the placeholder container. Pinned with the
+/// full `PersistedSnapshotDescriptor` so a directory walk can
+/// rebuild the authoritative manifest after a `manifest.json`
+/// corruption: every descriptor field needed to reconstruct the
+/// radix-tree shape + LRU bookkeeping survives in each file.
+///
+/// `PartitionMeta` is deliberately NOT duplicated per file — it
+/// lives in `partitions/{digest}/_meta.json` so the rebuild can
+/// validate the partition's fingerprint without paying per-file
+/// duplication. See
+/// `SSDSnapshotStore.writePartitionMetaFile(_:digest:)` and
+/// `rebuildManifestFromDirectoryWalk(_:)`.
+private nonisolated struct PlaceholderContainerHeader: Codable, Sendable {
+    let formatKind: String
+    let schemaVersion: Int
+    let descriptor: PersistedSnapshotDescriptor
+    let layers: [Layer]
+
+    nonisolated struct Layer: Codable, Sendable {
+        let className: String
+        let metaState: [String]
+        let offset: Int
+        let arrays: [ArrayEntry]
+
+        enum CodingKeys: String, CodingKey {
+            case className = "class_name"
+            case metaState = "meta_state"
+            case offset
+            case arrays
+        }
+    }
+
+    nonisolated struct ArrayEntry: Codable, Sendable {
+        let dtype: String
+        let shape: [Int]
+        let byteOffset: Int
+        let byteSize: Int
+
+        enum CodingKeys: String, CodingKey {
+            case dtype, shape
+            case byteOffset = "byte_offset"
+            case byteSize = "byte_size"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case formatKind = "format_kind"
+        case schemaVersion = "schema_version"
+        case descriptor
+        case layers
+    }
+}
+
 /// Serialize a payload into a single byte blob following the
-/// placeholder container format. Format:
+/// placeholder container format:
 ///
 /// ```
 /// [8 bytes little-endian UInt64: header JSON length]
@@ -868,52 +1555,48 @@ extension SSDSnapshotStore {
 /// [concatenated array data blobs]
 /// ```
 ///
-/// The header JSON has `"format_kind": "tesseract-cache-v1"` so the
-/// downstream real-safetensors reader can refuse these files
-/// cleanly when it ships.
+/// The header carries the full descriptor so warm start can rebuild
+/// the manifest from a directory walk when `manifest.json` is corrupt.
 private nonisolated func encodePlaceholderContainer(
     payload: SnapshotPayload,
     descriptor: PersistedSnapshotDescriptor
 ) throws -> Data {
-    // Build the header structure + a parallel list of byte blobs.
-    var layers: [[String: Any]] = []
+    var layerHeaders: [PlaceholderContainerHeader.Layer] = []
+    layerHeaders.reserveCapacity(payload.layers.count)
     var blobs: [Data] = []
     var runningByteOffset = 0
 
     for layer in payload.layers {
-        var arrayEntries: [[String: Any]] = []
+        var arrayEntries: [PlaceholderContainerHeader.ArrayEntry] = []
+        arrayEntries.reserveCapacity(layer.state.count)
         for array in layer.state {
-            arrayEntries.append([
-                "dtype": array.dtype,
-                "shape": array.shape,
-                "byte_offset": runningByteOffset,
-                "byte_size": array.data.count,
-            ])
+            arrayEntries.append(.init(
+                dtype: array.dtype,
+                shape: array.shape,
+                byteOffset: runningByteOffset,
+                byteSize: array.data.count
+            ))
             runningByteOffset += array.data.count
             blobs.append(array.data)
         }
-        layers.append([
-            "class_name": layer.className,
-            "meta_state": layer.metaState,
-            "offset": layer.offset,
-            "arrays": arrayEntries,
-        ])
+        layerHeaders.append(.init(
+            className: layer.className,
+            metaState: layer.metaState,
+            offset: layer.offset,
+            arrays: arrayEntries
+        ))
     }
 
-    let header: [String: Any] = [
-        "format_kind": "tesseract-cache-v1",
-        "schema_version": SnapshotManifestSchema.currentVersion,
-        "snapshot_id": descriptor.snapshotID,
-        "partition_digest": descriptor.partitionDigest,
-        "token_offset": descriptor.tokenOffset,
-        "checkpoint_type": descriptor.checkpointType,
-        "layers": layers,
-    ]
-
-    let headerData = try JSONSerialization.data(
-        withJSONObject: header,
-        options: [.sortedKeys]
+    let header = PlaceholderContainerHeader(
+        formatKind: "tesseract-cache-v1",
+        schemaVersion: SnapshotManifestSchema.currentVersion,
+        descriptor: descriptor,
+        layers: layerHeaders
     )
+
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let headerData = try encoder.encode(header)
 
     var out = Data(capacity: 8 + headerData.count + runningByteOffset)
     var headerLength = UInt64(headerData.count).littleEndian

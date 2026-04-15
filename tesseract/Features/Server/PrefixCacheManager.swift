@@ -138,7 +138,7 @@ final class PrefixCacheManager {
 
     // MARK: - Lookup
 
-    struct LookupResult {
+    struct LookupResult: Sendable {
         let snapshot: HybridCacheSnapshot?
         let partitionKey: CachePartitionKey?
         let snapshotTokenOffset: Int
@@ -156,8 +156,25 @@ final class PrefixCacheManager {
         }
     }
 
+    /// Handles the `MainActor`-owned `RadixTreeNode` and the
+    /// `nonisolated` `SSDSnapshotStore` that LLMActor needs to
+    /// hydrate a state-5 node. `@unchecked Sendable` because the
+    /// node is MainActor-owned — LLMActor only reads the storage
+    /// ref off-main and hops back to MainActor before touching the
+    /// node via `PrefixCacheManager.promote(node:snapshot:partitionKey:)`.
+    struct SSDHitContext: @unchecked Sendable {
+        let storageRef: SnapshotStorageRef
+        let ssdStore: SSDSnapshotStore
+        let node: RadixTreeNode
+    }
+
     enum LookupReason: CustomStringConvertible, Sendable {
         case hit(snapshotOffset: Int, totalTokens: Int, type: HybridCacheSnapshot.CheckpointType)
+        /// State 5 — body absent, committed SSD ref present. LLMActor
+        /// hydrates the body via `ssdStore.loadSync(...)` inside
+        /// `container.perform`, then promotes the node back to state 4
+        /// on MainActor.
+        case ssdHit(SSDHitContext)
         case missNoEntries
         case missNoSnapshotInPrefix
 
@@ -165,6 +182,8 @@ final class PrefixCacheManager {
             switch self {
             case .hit(let offset, let total, let type):
                 "hit(\(type) at \(offset)/\(total))"
+            case .ssdHit(let ctx):
+                "ssdHit(\(ctx.storageRef.checkpointType) at \(ctx.storageRef.tokenOffset), id=\(ctx.storageRef.snapshotID.prefix(8)))"
             case .missNoEntries:
                 "miss(no entries)"
             case .missNoSnapshotInPrefix:
@@ -182,11 +201,13 @@ final class PrefixCacheManager {
             )
         }
 
-        guard let (node, sharedLen) = tree.findBestSnapshot(tokens: tokens),
-              let snapshot = node.snapshot
-        else {
-            // No snapshot-bearing node, but the tree may still match a prefix.
-            // Report the actual token-level match depth for miss diagnostics.
+        // Consider state-5 (committed ref, no body) as hittable —
+        // LLMActor will hydrate from SSD. Pending refs (state 3) are
+        // filtered out inside `findBestSnapshot` because their
+        // `committed` flag is false.
+        guard let (node, _) = tree.findBestSnapshot(
+            tokens: tokens, includeStorageRefs: true
+        ) else {
             let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
             return LookupResult(
                 snapshot: nil, partitionKey: partitionKey,
@@ -197,16 +218,50 @@ final class PrefixCacheManager {
 
         let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
 
-        return LookupResult(
-            snapshot: snapshot,
-            partitionKey: partitionKey,
-            snapshotTokenOffset: snapshot.tokenOffset,
-            sharedPrefixLength: treeMatchDepth,
-            reason: .hit(
-                snapshotOffset: snapshot.tokenOffset,
-                totalTokens: tokens.count,
-                type: snapshot.checkpointType
+        if let snapshot = node.snapshot {
+            // States 1, 2, or 4. On state 4 (committed ref + body)
+            // bump the SSD descriptor's `lastAccessAt` so a hot RAM
+            // hit does not look stale to the SSD LRU when the body
+            // is eventually dropped to state 5.
+            if let ref = node.storageRef, ref.committed {
+                store.ssdStore?.recordHit(id: ref.snapshotID)
+            }
+            return LookupResult(
+                snapshot: snapshot,
+                partitionKey: partitionKey,
+                snapshotTokenOffset: snapshot.tokenOffset,
+                sharedPrefixLength: treeMatchDepth,
+                reason: .hit(
+                    snapshotOffset: snapshot.tokenOffset,
+                    totalTokens: tokens.count,
+                    type: snapshot.checkpointType
+                )
             )
+        }
+
+        // State 5 — body absent, committed ref present. The filter on
+        // `findBestSnapshot` guarantees `storageRef?.committed == true`
+        // when we reach this branch; force-unwrap is safe. SSD store
+        // must also be non-nil because the ref could only have been
+        // assigned through the tiered store's admission path.
+        guard let ref = node.storageRef, let ssdStore = store.ssdStore else {
+            return LookupResult(
+                snapshot: nil, partitionKey: partitionKey,
+                snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
+                reason: .missNoSnapshotInPrefix
+            )
+        }
+        let context = SSDHitContext(
+            storageRef: ref,
+            ssdStore: ssdStore,
+            node: node
+        )
+        return LookupResult(
+            snapshot: nil,
+            partitionKey: partitionKey,
+            snapshotTokenOffset: ref.tokenOffset,
+            sharedPrefixLength: treeMatchDepth,
+            reason: .ssdHit(context)
         )
     }
 
@@ -479,6 +534,124 @@ final class PrefixCacheManager {
         let node = tree.insertPath(tokens: path)
         node.storageRef = storageRef
         node.lastAccessTime = lastAccessTime
+    }
+
+    // MARK: - SSD hydration
+
+    /// State 5 → state 4 transition: attach a freshly hydrated body
+    /// to a node that currently has only a committed `storageRef`.
+    /// Called from `LLMActor` after `SSDSnapshotStore.loadSync`
+    /// succeeds, wrapped in `await MainActor.run { ... }` alongside
+    /// the `recordHit` bump.
+    ///
+    /// Budget reconciliation is deferred to the next natural
+    /// eviction call (every request path runs `storeSnapshots` +
+    /// `storeLeaf`, which both drain the budget). Running
+    /// `evictToFitBudget` inline here would add latency to the
+    /// SSD-hit hot path without any benefit — the just-promoted
+    /// node has `lastAccessTime = .now` and is the least likely
+    /// victim under α=0, so the budget stays above the hard cap
+    /// for at most one request cycle.
+    func promote(
+        node: RadixTreeNode,
+        snapshot: HybridCacheSnapshot,
+        partitionKey: CachePartitionKey
+    ) {
+        guard let tree = store.tree(for: partitionKey) else { return }
+        tree.storeSnapshot(snapshot, on: node)
+    }
+
+    /// Clear a state-5 node's storageRef after a hydration failure
+    /// (file missing / fingerprint mismatch / decode error). LLMActor
+    /// calls this on the MainActor hop so subsequent lookups on the
+    /// same path miss cleanly instead of re-attempting hydration on
+    /// a broken file.
+    ///
+    /// If the node now has no body, no ref, and no children, it is
+    /// also removed from the radix tree so it does not leak as a
+    /// structural ghost. Pending refs (state 3) never reach this
+    /// path — only state-5 hydrations can fail.
+    func clearStorageRef(
+        node: RadixTreeNode,
+        partitionKey: CachePartitionKey
+    ) {
+        node.storageRef = nil
+        guard node.snapshot == nil,
+              node.isLeaf,
+              let tree = store.tree(for: partitionKey)
+        else { return }
+        tree.evictNode(node: node)
+    }
+
+    // MARK: - Warm start
+
+    /// Restore the radix-tree structure from the SSD manifest so
+    /// lookups issued before any fresh capture can hit SSD-resident
+    /// snapshots from a previous process.
+    ///
+    /// Called once per model load from
+    /// `LLMActor.ensurePrefixCache()` right after the manager is
+    /// constructed. No bodies are loaded — state-5 nodes hydrate
+    /// lazily on first lookup via `SSDSnapshotStore.loadSync`. When
+    /// the store has no SSD tier configured (`ssdStore == nil`) this
+    /// is a no-op.
+    ///
+    /// Partition fingerprints are validated against the currently
+    /// loaded model's fingerprint inside `warmStartLoad`; mismatched
+    /// partitions are skipped here and their on-disk directories
+    /// are scheduled for async cleanup by the store.
+    func warmStart(modelFingerprint: String) async throws {
+        guard let ssdStore = store.ssdStore else { return }
+
+        let started = Date.timeIntervalSinceReferenceDate
+        let outcome = ssdStore.warmStartLoad(expectedFingerprint: modelFingerprint)
+
+        let now: ContinuousClock.Instant = .now
+        for partition in outcome.validPartitions {
+            let partitionKey = CachePartitionKey(
+                modelID: partition.meta.modelID,
+                kvBits: partition.meta.kvBits,
+                kvGroupSize: partition.meta.kvGroupSize,
+                sessionAffinity: partition.meta.sessionAffinity,
+                modelFingerprint: partition.meta.modelFingerprint
+            )
+            // Register with the store so subsequent admissions do
+            // not trip the `rejectedUnregisteredPartition` guard.
+            store.registerPartition(partition.meta, for: partitionKey)
+
+            for descriptor in partition.descriptors {
+                guard let checkpointType = HybridCacheSnapshot.CheckpointType(
+                    wireString: descriptor.checkpointType
+                ) else { continue }
+                let ref = SnapshotStorageRef(
+                    snapshotID: descriptor.snapshotID,
+                    partitionDigest: descriptor.partitionDigest,
+                    tokenOffset: descriptor.tokenOffset,
+                    checkpointType: checkpointType,
+                    bytesOnDisk: descriptor.bytes,
+                    lastAccessTime: now,
+                    committed: true
+                )
+                restoreStorageRef(
+                    path: descriptor.pathFromRoot,
+                    storageRef: ref,
+                    partitionKey: partitionKey,
+                    lastAccessTime: now
+                )
+            }
+        }
+
+        let snapshotCount = outcome.validPartitions.reduce(0) {
+            $0 + $1.descriptors.count
+        }
+        let durationMs = (Date.timeIntervalSinceReferenceDate - started) * 1000
+        Log.agent.info(
+            "PrefixCacheManager.warmStart "
+            + "partitions=\(outcome.validPartitions.count) "
+            + "snapshots=\(snapshotCount) "
+            + "invalidated=\(outcome.invalidatedPartitionDigests.count) "
+            + "durationMs=\(String(format: "%.1f", durationMs))"
+        )
     }
 
     private func makePersistedDescriptor(

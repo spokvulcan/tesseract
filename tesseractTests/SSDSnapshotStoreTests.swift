@@ -13,6 +13,7 @@
 
 import Foundation
 import Testing
+import MLX
 import MLXLMCommon
 
 @testable import Tesseract_Agent
@@ -851,5 +852,204 @@ struct SSDSnapshotStoreTests {
         }
         #expect(result != .rejectedTooLargeForBudget)
         #expect(result != .rejectedInvalidCheckpointType)
+    }
+
+    // MARK: - loadSync round trip + hydration failures
+
+    /// Build a committed `SnapshotStorageRef` from the pending ref
+    /// returned by `tryEnqueue`. The writer's commit callback flips
+    /// the ref's `committed` bit in production via
+    /// `TieredSnapshotStore.markStorageRefCommitted` — here we
+    /// reconstruct the committed shape directly because the test
+    /// talks to the store without an intermediate tier.
+    private func committedRef(
+        from ref: SnapshotStorageRef
+    ) -> SnapshotStorageRef {
+        SnapshotStorageRef(
+            snapshotID: ref.snapshotID,
+            partitionDigest: ref.partitionDigest,
+            tokenOffset: ref.tokenOffset,
+            checkpointType: ref.checkpointType,
+            bytesOnDisk: ref.bytesOnDisk,
+            lastAccessTime: ref.lastAccessTime,
+            committed: true
+        )
+    }
+
+    /// Build a payload whose shape / dtype / byte count are
+    /// internally consistent so `MLXArray(data:, shape:, dtype:)`
+    /// accepts the slice without tripping an MLX precondition.
+    /// The existing `makePayload(bytes:)` deliberately uses a mismatched
+    /// synthetic shape for writer-only tests where the bytes never
+    /// reach MLX; `loadSync` needs a real tensor layout.
+    private func makeRoundTripPayload(
+        elementCount: Int = 16
+    ) -> (SnapshotPayload, PersistedSnapshotDescriptor) {
+        let dtypeWireName = "bfloat16"
+        let itemSize = 2  // bfloat16
+        let byteCount = elementCount * itemSize
+        let payload = SnapshotPayload(
+            tokenOffset: 4_096,
+            checkpointType: .system,
+            layers: [
+                SnapshotPayload.LayerPayload(
+                    className: "KVCache",
+                    state: [
+                        SnapshotPayload.ArrayPayload(
+                            data: Data(repeating: 0xAB, count: byteCount),
+                            dtype: dtypeWireName,
+                            shape: [elementCount]
+                        )
+                    ],
+                    metaState: ["meta"],
+                    offset: 4_096
+                )
+            ]
+        )
+        let descriptor = makeDescriptor(bytes: byteCount)
+        return (payload, descriptor)
+    }
+
+    /// End-to-end round trip: enqueue a payload via `tryEnqueue`,
+    /// wait for the writer to commit, then call `loadSync` and verify
+    /// the reconstructed `HybridCacheSnapshot` matches the original
+    /// payload (layer count, class name, shape, meta state).
+    @Test
+    func loadSyncReadsBackCommittedSnapshot() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let (payload, descriptor) = makeRoundTripPayload(elementCount: 128)
+        let fingerprint = makePartitionMeta().modelFingerprint
+
+        let result = store.tryEnqueue(payload: payload, descriptor: descriptor)
+        guard case .accepted(let pending) = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+
+        let committed = await waitUntil {
+            tracker.committed.contains(pending.snapshotID)
+        }
+        #expect(committed)
+
+        let snapshot = store.loadSync(
+            storageRef: committedRef(from: pending),
+            expectedFingerprint: fingerprint
+        )
+        #expect(snapshot != nil)
+        guard let snapshot else { return }
+
+        #expect(snapshot.tokenOffset == descriptor.tokenOffset)
+        #expect(snapshot.checkpointType == pending.checkpointType)
+        #expect(snapshot.layers.count == payload.layers.count)
+
+        for (layerIndex, layerPayload) in payload.layers.enumerated() {
+            let layerState = snapshot.layers[layerIndex]
+            #expect(layerState.className == layerPayload.className)
+            #expect(layerState.offset == layerPayload.offset)
+            #expect(layerState.metaState == layerPayload.metaState)
+            #expect(layerState.state.count == layerPayload.state.count)
+            for (arrayIndex, arrayPayload) in layerPayload.state.enumerated() {
+                let mlxArray = layerState.state[arrayIndex]
+                #expect(mlxArray.shape == arrayPayload.shape)
+            }
+        }
+    }
+
+    /// Fingerprint mismatch: `loadSync` returns nil, removes the
+    /// descriptor from the manifest, deletes the on-disk file, and
+    /// fires `.hydrationFailure` via the drop callback.
+    @Test
+    func loadSyncFingerprintMismatchDropsDescriptor() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let payload = makePayload(bytes: 128)
+        let descriptor = makeDescriptor(bytes: 128)
+        let result = store.tryEnqueue(payload: payload, descriptor: descriptor)
+        guard case .accepted(let pending) = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+        _ = await waitUntil { tracker.committed.contains(pending.snapshotID) }
+
+        let snapshot = store.loadSync(
+            storageRef: committedRef(from: pending),
+            expectedFingerprint: String(repeating: "z", count: 64)
+        )
+        #expect(snapshot == nil)
+
+        let dropped = await waitUntil {
+            tracker.dropped.contains {
+                $0.id == pending.snapshotID && $0.reason == .hydrationFailure
+            }
+        }
+        #expect(dropped)
+        #expect(store.lastAccessAtForTesting(id: pending.snapshotID) == -1)
+
+        let relative = PersistedSnapshotDescriptor.relativeFilePath(
+            snapshotID: pending.snapshotID,
+            partitionDigest: pending.partitionDigest
+        )
+        let fileURL = root.appendingPathComponent(relative)
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    /// File deleted externally between commit and hydration:
+    /// `loadSync` returns nil, drops the descriptor, and fires
+    /// `.hydrationFailure`.
+    @Test
+    func loadSyncFileMissingDropsDescriptor() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let payload = makePayload(bytes: 128)
+        let descriptor = makeDescriptor(bytes: 128)
+        let result = store.tryEnqueue(payload: payload, descriptor: descriptor)
+        guard case .accepted(let pending) = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+        _ = await waitUntil { tracker.committed.contains(pending.snapshotID) }
+
+        let relative = PersistedSnapshotDescriptor.relativeFilePath(
+            snapshotID: pending.snapshotID,
+            partitionDigest: pending.partitionDigest
+        )
+        let fileURL = root.appendingPathComponent(relative)
+        try FileManager.default.removeItem(at: fileURL)
+
+        let fingerprint = makePartitionMeta().modelFingerprint
+        let snapshot = store.loadSync(
+            storageRef: committedRef(from: pending),
+            expectedFingerprint: fingerprint
+        )
+        #expect(snapshot == nil)
+
+        let dropped = await waitUntil {
+            tracker.dropped.contains {
+                $0.id == pending.snapshotID && $0.reason == .hydrationFailure
+            }
+        }
+        #expect(dropped)
     }
 }
