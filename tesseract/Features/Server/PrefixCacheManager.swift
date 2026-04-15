@@ -624,10 +624,18 @@ final class PrefixCacheManager {
                 utility: candidate.score?.utility
             ))
 
-            if candidate.node.isLeaf {
-                candidate.tree.evictNode(node: candidate.node)
-            } else if candidate.node.childCount == 1, candidate.node.snapshot == nil {
-                candidate.tree.collapseSingleChildNode(candidate.node)
+            // A live `storageRef` means the SSD tier owns a pending or
+            // committed copy of the body we just dropped. Hard-removing
+            // the node would orphan the persisted file — leave it
+            // attached so lookup can still reach it (state 3 or 5).
+            // See docs/marconi-hybrid-prefix-cache-implementation-plan.md,
+            // "Eviction + demotion" section.
+            if candidate.node.storageRef == nil {
+                if candidate.node.isLeaf {
+                    candidate.tree.evictNode(node: candidate.node)
+                } else if candidate.node.childCount == 1 {
+                    candidate.tree.collapseSingleChildNode(candidate.node)
+                }
             }
         }
         // Mark the first request that ever triggered eviction. The

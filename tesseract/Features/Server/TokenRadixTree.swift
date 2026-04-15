@@ -225,7 +225,21 @@ final class TokenRadixTree {
 
     /// Remove a leaf node and clean up empty snapshot-less ancestors.
     /// Does not remove nodes that have snapshots or other children.
+    ///
+    /// Task 4.1.8 — regression trap. `evictNode` must not be called
+    /// on a node with a live `storageRef`: removing such a node
+    /// orphans the SSD-resident copy (the persisted file lives on
+    /// disk but nothing in the tree can reach it). The actual
+    /// suppression lives at the call site in
+    /// `PrefixCacheManager.evictToFitBudget`; this assertion catches
+    /// future refactors that route around the guard.
     func evictNode(node: RadixTreeNode) {
+        assert(
+            node.storageRef == nil,
+            "evictNode must not be called on an SSD-backed leaf — "
+            + "the storageRef would be orphaned. "
+            + "See Task 4.1.8 in docs/marconi-hybrid-prefix-cache-implementation-plan.md."
+        )
         guard node.isLeaf else { return }
 
         var current: RadixTreeNode? = node
@@ -244,8 +258,16 @@ final class TokenRadixTree {
             }
             target.parent = nil
 
-            // Continue cleaning if parent is now an empty leaf with no snapshot
-            if parent.isLeaf && parent.snapshot == nil && parent !== root {
+            // Continue cleaning if parent is now an empty leaf with no
+            // snapshot AND no storageRef. Task 4.1.8: an ancestor with
+            // a pending or committed SSD ref must not be swept by the
+            // walk — doing so would orphan the persisted file the same
+            // way a direct `evictNode` on a state-3/5 victim would.
+            if parent.isLeaf
+               && parent.snapshot == nil
+               && parent.storageRef == nil
+               && parent !== root
+            {
                 current = parent
             } else {
                 break
@@ -338,9 +360,20 @@ final class TokenRadixTree {
     /// Collapse a snapshot-less node with exactly one child.
     /// Concatenates the node's edgeTokens into the child edge and re-links parent→child.
     /// Preserves radix compression after snapshot eviction.
+    ///
+    /// Task 4.1.8 — defense-in-depth against SSD-ref orphaning.
+    /// A node with a `storageRef` pins a radix path to a pending or
+    /// committed SSD copy, even while its RAM body is absent. Collapsing
+    /// such a node would silently drop the ref and orphan the persisted
+    /// file. The eviction loop at
+    /// `PrefixCacheManager.evictToFitBudget` already suppresses this
+    /// call from the primary path; this guard protects against
+    /// external callers (tests, future refactors) that reach the
+    /// function without that context.
     func collapseSingleChildNode(_ node: RadixTreeNode) {
         guard node !== root,
               node.snapshot == nil,
+              node.storageRef == nil,
               node.childCount == 1,
               let parent = node.parent,
               let onlyChild = node.children.values.first

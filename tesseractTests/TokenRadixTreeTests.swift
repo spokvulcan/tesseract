@@ -535,4 +535,78 @@ struct TokenRadixTreeTests {
         tree.insertPath(tokens: [1, 2, 3, 4, 5])
         #expect(tree.findIntermediateSplitOffsetForInsertion(tokens: [1, 2, 3]) == 3)
     }
+
+    // MARK: - Task 4.1.8: Cleanup-suppression guards
+
+    /// `collapseSingleChildNode` refuses to collapse a snapshot-less
+    /// node that still carries a storageRef. Such a node pins a radix
+    /// path to a pending or committed SSD copy and must stay intact.
+    @Test func collapseSingleChildNodeSkipsNodeWithStorageRef() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3, 4, 5])
+        let midNode = tree.insertPath(tokens: [1, 2])
+        midNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(committed: true)
+        let preNodeCount = tree.nodeCount
+        let preChild = midNode.children.values.first
+        let preEdge = midNode.edgeTokens
+
+        tree.collapseSingleChildNode(midNode)
+
+        #expect(tree.nodeCount == preNodeCount)
+        #expect(midNode.parent != nil)
+        #expect(midNode.storageRef != nil)
+        #expect(midNode.edgeTokens == preEdge)
+        #expect(midNode.childCount == 1)
+        #expect(midNode.children.values.first === preChild)
+    }
+
+    @Test func collapseSingleChildNodeSkipsNodeWithPendingStorageRef() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3, 4, 5])
+        let midNode = tree.insertPath(tokens: [1, 2])
+        midNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(committed: false)
+        let preNodeCount = tree.nodeCount
+
+        tree.collapseSingleChildNode(midNode)
+
+        #expect(tree.nodeCount == preNodeCount)
+        #expect(midNode.parent != nil)
+        #expect(midNode.storageRef?.committed == false)
+    }
+
+    /// The `evictNode` ancestor-walk must not sweep up snapshot-less
+    /// ancestors that hold a storageRef. Before the fix the walk
+    /// treated such a parent as an "empty leaf with no snapshot" and
+    /// removed it, silently orphaning the SSD file.
+    @Test func evictNodeAncestorWalkStopsAtStorageRef() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3, 4])
+        let midNode = tree.insertPath(tokens: [1, 2, 3])
+        midNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(committed: true)
+        #expect(tree.nodeCount == 3)
+
+        let leaf = midNode.children[4]!
+        tree.evictNode(node: leaf)
+
+        #expect(tree.nodeCount == 2)
+        #expect(midNode.parent != nil)
+        #expect(midNode.storageRef != nil)
+        #expect(midNode.storageRef?.committed == true)
+        #expect(midNode.isLeaf)
+    }
+
+    @Test func evictNodeAncestorWalkStopsAtPendingStorageRef() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3, 4])
+        let midNode = tree.insertPath(tokens: [1, 2, 3])
+        midNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(committed: false)
+        #expect(tree.nodeCount == 3)
+
+        let leaf = midNode.children[4]!
+        tree.evictNode(node: leaf)
+
+        #expect(tree.nodeCount == 2)
+        #expect(midNode.parent != nil)
+        #expect(midNode.storageRef?.committed == false)
+    }
 }

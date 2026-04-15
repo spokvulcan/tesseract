@@ -1164,4 +1164,177 @@ struct PrefixCacheManagerTests {
         let idleResult = mgr.lookup(tokens: idleTokens, partitionKey: idleKey)
         #expect(idleResult.snapshot == nil, "Idle leaf should have been evicted via spill")
     }
+
+    // MARK: - Task 4.1.8: Eviction body-drop + cleanup-suppression guards
+
+    /// State 4 (body + committed ref) body-drops to state 5 (body
+    /// absent + committed ref). The eviction loop must call
+    /// `evictSnapshot` but skip `evictNode`, leaving the node
+    /// attached to the tree as an SSD-backed lookup target.
+    /// Regression check for the orphan-leak bug flagged on 2026-04-14.
+    @Test func evictionBodyDropsStateFourNodeToStateFive() {
+        let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
+        let tieredStore = TieredSnapshotStore(ssdConfig: nil)
+        let mgr = PrefixCacheManager(
+            memoryBudgetBytes: snapBytes,
+            tieredStore: tieredStore
+        )
+
+        let firstTokens = Array(1...10)
+        mgr.storeLeaf(
+            storedTokens: firstTokens,
+            leafSnapshot: makeUniformSnapshot(offset: firstTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+        let tree = tieredStore.tree(for: defaultKey)!
+        let (firstNode, _) = tree.findBestSnapshot(
+            tokens: firstTokens, updateAccess: false
+        )!
+        firstNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(
+            committed: true,
+            tokenOffset: firstTokens.count
+        )
+
+        let secondTokens = Array(20...29)
+        let diag = mgr.storeLeaf(
+            storedTokens: secondTokens,
+            leafSnapshot: makeUniformSnapshot(offset: secondTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        #expect(diag.evictions.count == 1)
+        #expect(diag.evictions[0].checkpointType == .leaf)
+        #expect(firstNode.snapshot == nil)
+        #expect(firstNode.storageRef != nil)
+        #expect(firstNode.storageRef?.committed == true)
+        #expect(firstNode.parent != nil)
+        let secondResult = mgr.lookup(tokens: secondTokens, partitionKey: defaultKey)
+        #expect(secondResult.snapshotTokenOffset == secondTokens.count)
+        // `.ssdHit` lookup reason lands with Task 4.1.9 — until then
+        // a state-5 path reports miss.
+        let firstResult = mgr.lookup(tokens: firstTokens, partitionKey: defaultKey)
+        #expect(firstResult.snapshot == nil)
+    }
+
+    /// State 2 (body + pending ref) body-drops to state 3 (body
+    /// absent + pending ref). Pending refs pin the node so the
+    /// writer's commit callback can later flip it to state 5.
+    @Test func evictionBodyDropsStateTwoNodeToStateThree() {
+        let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
+        let tieredStore = TieredSnapshotStore(ssdConfig: nil)
+        let mgr = PrefixCacheManager(
+            memoryBudgetBytes: snapBytes,
+            tieredStore: tieredStore
+        )
+
+        let firstTokens = Array(1...10)
+        mgr.storeLeaf(
+            storedTokens: firstTokens,
+            leafSnapshot: makeUniformSnapshot(offset: firstTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+        let tree = tieredStore.tree(for: defaultKey)!
+        let (firstNode, _) = tree.findBestSnapshot(
+            tokens: firstTokens, updateAccess: false
+        )!
+        firstNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(
+            committed: false,
+            tokenOffset: firstTokens.count
+        )
+
+        let secondTokens = Array(20...29)
+        mgr.storeLeaf(
+            storedTokens: secondTokens,
+            leafSnapshot: makeUniformSnapshot(offset: secondTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        #expect(firstNode.snapshot == nil)
+        #expect(firstNode.storageRef != nil)
+        #expect(firstNode.storageRef?.committed == false)
+        #expect(firstNode.parent != nil)
+        // State 3 is not a hit target — returning one would race the
+        // writer and surface an absent or half-written file.
+        let firstResult = mgr.lookup(tokens: firstTokens, partitionKey: defaultKey)
+        #expect(firstResult.snapshot == nil)
+    }
+
+    /// Regression check: a ref-less state-1 victim is still hard-
+    /// deleted. The new guard must not accidentally pin RAM-only
+    /// nodes into the tree.
+    @Test func evictionHardDeletesRefLessVictim() {
+        let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
+        let tieredStore = TieredSnapshotStore(ssdConfig: nil)
+        let mgr = PrefixCacheManager(
+            memoryBudgetBytes: snapBytes,
+            tieredStore: tieredStore
+        )
+
+        let firstTokens = Array(1...10)
+        mgr.storeLeaf(
+            storedTokens: firstTokens,
+            leafSnapshot: makeUniformSnapshot(offset: firstTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+        let tree = tieredStore.tree(for: defaultKey)!
+        let (firstNode, _) = tree.findBestSnapshot(
+            tokens: firstTokens, updateAccess: false
+        )!
+        #expect(firstNode.storageRef == nil)
+        let initialNodeCount = tree.nodeCount
+
+        let secondTokens = Array(20...29)
+        mgr.storeLeaf(
+            storedTokens: secondTokens,
+            leafSnapshot: makeUniformSnapshot(offset: secondTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        #expect(firstNode.snapshot == nil)
+        #expect(firstNode.parent == nil)
+        #expect(tree.nodeCount == initialNodeCount)
+        let firstResult = mgr.lookup(tokens: firstTokens, partitionKey: defaultKey)
+        #expect(firstResult.snapshot == nil)
+    }
+
+    /// `.system` type protection still applies even when the system
+    /// node carries a committed storage ref. The `.leaf` victim is
+    /// hard-deleted; the `.system` body + ref are preserved.
+    @Test func systemTypeProtectionHoldsWithStorageRef() {
+        let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
+        let tieredStore = TieredSnapshotStore(ssdConfig: nil)
+        let mgr = PrefixCacheManager(
+            memoryBudgetBytes: snapBytes,
+            tieredStore: tieredStore
+        )
+
+        let sysTokens = Array(1...10)
+        mgr.storeSnapshots(
+            promptTokens: sysTokens,
+            capturedSnapshots: [makeUniformSnapshot(offset: 10, type: .system)],
+            partitionKey: defaultKey
+        )
+        let tree = tieredStore.tree(for: defaultKey)!
+        let (sysNode, _) = tree.findBestSnapshot(
+            tokens: sysTokens, updateAccess: false
+        )!
+        sysNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(
+            committed: true,
+            type: .system,
+            tokenOffset: sysTokens.count
+        )
+
+        let leafTokens = Array(20...29)
+        mgr.storeLeaf(
+            storedTokens: leafTokens,
+            leafSnapshot: makeUniformSnapshot(offset: leafTokens.count, type: .leaf),
+            partitionKey: defaultKey
+        )
+
+        #expect(sysNode.snapshot != nil)
+        #expect(sysNode.storageRef != nil)
+        #expect(sysNode.storageRef?.committed == true)
+        let leafResult = mgr.lookup(tokens: leafTokens, partitionKey: defaultKey)
+        #expect(leafResult.snapshot == nil)
+    }
 }
