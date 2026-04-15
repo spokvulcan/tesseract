@@ -799,13 +799,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     // MARK: - File path derivation
 
     private func fileURL(for descriptor: PersistedSnapshotDescriptor) -> URL {
-        let shardByte = String(descriptor.snapshotID.prefix(1))
-        return rootURL
-            .appendingPathComponent("partitions", isDirectory: true)
-            .appendingPathComponent(descriptor.partitionDigest, isDirectory: true)
-            .appendingPathComponent("snapshots", isDirectory: true)
-            .appendingPathComponent(shardByte, isDirectory: true)
-            .appendingPathComponent("\(descriptor.snapshotID).safetensors")
+        let relative = PersistedSnapshotDescriptor.relativeFilePath(
+            snapshotID: descriptor.snapshotID,
+            partitionDigest: descriptor.partitionDigest
+        )
+        return rootURL.appendingPathComponent(relative)
     }
 
     // MARK: - Pending write (private value type)

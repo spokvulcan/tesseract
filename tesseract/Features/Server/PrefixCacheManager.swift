@@ -68,9 +68,12 @@ final class PrefixCacheManager {
         case request(UUID)
     }
 
-    /// Per-partition tree collection. Tier-pluggable so an SSD-backed
-    /// implementation can layer on without touching the manager.
-    private let store: SnapshotStore
+    /// Per-partition tree collection. Typed as the concrete
+    /// `TieredSnapshotStore` (rather than the `SnapshotStore`
+    /// protocol) so the manager can reach `admitSnapshot` and the
+    /// storage-ref lifecycle callbacks — those are not part of the
+    /// read-only protocol.
+    private let store: TieredSnapshotStore
     /// Set by `evictToFitBudget` when the first-ever drain happens
     /// inside an in-flight request. Production passes a per-request ID
     /// so only the matching request-end `recordRequest` call can start
@@ -83,8 +86,12 @@ final class PrefixCacheManager {
     /// the tuner itself spins up sandboxed caches during grid search.
     let alphaTuner: AlphaTuner?
 
-    init(memoryBudgetBytes: Int, alphaTuner: AlphaTuner? = nil) {
-        self.store = InMemorySnapshotTier()
+    init(
+        memoryBudgetBytes: Int,
+        alphaTuner: AlphaTuner? = nil,
+        tieredStore: TieredSnapshotStore? = nil
+    ) {
+        self.store = tieredStore ?? TieredSnapshotStore(ssdConfig: nil)
         self.memoryBudgetBytes = memoryBudgetBytes
         self.alphaTuner = alphaTuner
     }
@@ -339,12 +346,12 @@ final class PrefixCacheManager {
     /// Store mid-prefill snapshots captured during prepareWithCheckpoints().
     ///
     /// `snapshotPayloads` carries the pre-extracted CPU-owned bytes for
-    /// each entry in `capturedSnapshots`, produced by
+    /// each entry in `capturedSnapshots`, positionally aligned (same
+    /// count, same order), produced by
     /// `LLMActor.extractSnapshotPayloads(_:ssdEnabled:)` inside the
     /// same `container.perform` scope that captured the snapshots.
-    /// Currently accepted and held for the tiered-store wiring that
-    /// lands in a downstream task; passing an empty array is the
-    /// documented "SSD disabled" signal.
+    /// An empty array (the default) signals SSD disabled and skips
+    /// the admission path; the radix-tree insertion always runs.
     @discardableResult
     func storeSnapshots(
         promptTokens: [Int],
@@ -360,8 +367,29 @@ final class PrefixCacheManager {
         let tree = store.getOrCreateTree(for: partitionKey)
         tree.insertPath(tokens: promptTokens)
 
-        for snapshot in capturedSnapshots {
-            tree.storeSnapshot(snapshot, forTokens: promptTokens, atOffset: snapshot.tokenOffset)
+        let payloadsAligned = snapshotPayloads.count == capturedSnapshots.count
+        for (index, snapshot) in capturedSnapshots.enumerated() {
+            let offset = snapshot.tokenOffset
+            guard offset > 0, offset <= promptTokens.count else { continue }
+            let path = Array(promptTokens[0..<offset])
+            let node = tree.insertPath(tokens: path)
+            guard node.tokenOffset == offset else { continue }
+            tree.storeSnapshot(snapshot, on: node)
+
+            guard payloadsAligned else { continue }
+            let payload = snapshotPayloads[index]
+            let descriptor = makePersistedDescriptor(
+                partitionKey: partitionKey,
+                pathFromRoot: path,
+                snapshot: snapshot,
+                payloadBytes: payload.totalBytes
+            )
+            store.admitSnapshot(
+                node: node,
+                tree: tree,
+                payload: payload,
+                descriptor: descriptor
+            )
         }
 
         let evictions = evictToFitBudget(
@@ -377,8 +405,10 @@ final class PrefixCacheManager {
     /// `leafPayload` is the pre-extracted CPU-owned bytes matching
     /// `leafSnapshot`, produced by
     /// `LLMActor.extractSnapshotPayloads(_:ssdEnabled:)` inside a
-    /// `container.perform` scope. Currently accepted and held for the
-    /// tiered-store wiring that lands in a downstream task.
+    /// `container.perform` scope. When non-nil, the pair is forwarded
+    /// to the tiered store's `admitSnapshot` for SSD write-through.
+    /// `nil` (the default) is the "SSD disabled" signal and leaves
+    /// the radix-tree insertion as the only side effect.
     @discardableResult
     func storeLeaf(
         storedTokens: [Int],
@@ -394,6 +424,21 @@ final class PrefixCacheManager {
         let tree = store.getOrCreateTree(for: partitionKey)
         let node = tree.insertPath(tokens: storedTokens)
         tree.storeSnapshot(leafSnapshot, on: node)
+
+        if let leafPayload {
+            let descriptor = makePersistedDescriptor(
+                partitionKey: partitionKey,
+                pathFromRoot: storedTokens,
+                snapshot: leafSnapshot,
+                payloadBytes: leafPayload.totalBytes
+            )
+            store.admitSnapshot(
+                node: node,
+                tree: tree,
+                payload: leafPayload,
+                descriptor: descriptor
+            )
+        }
 
         let evictions = evictToFitBudget(
             requestID: requestID,
@@ -416,6 +461,50 @@ final class PrefixCacheManager {
         let node = tree.insertPath(tokens: path)
         tree.storeSnapshot(snapshot, on: node)
         node.lastAccessTime = lastAccessTime
+    }
+
+    /// Reattach an SSD-resident `SnapshotStorageRef` to the radix tree
+    /// without touching any RAM-resident body. Mirrors
+    /// `restoreSnapshot` for state-5 nodes (body absent, ref
+    /// committed) — the warm-start path uses it after reading the
+    /// on-disk manifest. Callers must have already validated
+    /// `storageRef.committed == true`; this helper trusts the input.
+    func restoreStorageRef(
+        path: [Int],
+        storageRef: SnapshotStorageRef,
+        partitionKey: CachePartitionKey,
+        lastAccessTime: ContinuousClock.Instant
+    ) {
+        let tree = store.getOrCreateTree(for: partitionKey)
+        let node = tree.insertPath(tokens: path)
+        node.storageRef = storageRef
+        node.lastAccessTime = lastAccessTime
+    }
+
+    private func makePersistedDescriptor(
+        partitionKey: CachePartitionKey,
+        pathFromRoot: [Int],
+        snapshot: HybridCacheSnapshot,
+        payloadBytes: Int
+    ) -> PersistedSnapshotDescriptor {
+        let snapshotID = UUID().uuidString
+        let partitionDigest = partitionKey.partitionDigest
+        let now = Date().timeIntervalSinceReferenceDate
+        return PersistedSnapshotDescriptor(
+            snapshotID: snapshotID,
+            partitionDigest: partitionDigest,
+            pathFromRoot: pathFromRoot,
+            tokenOffset: snapshot.tokenOffset,
+            checkpointType: snapshot.checkpointType.wireString,
+            bytes: payloadBytes,
+            createdAt: now,
+            lastAccessAt: now,
+            fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+                snapshotID: snapshotID,
+                partitionDigest: partitionDigest
+            ),
+            schemaVersion: SnapshotManifestSchema.currentVersion
+        )
     }
 
     // MARK: - Tuner integration

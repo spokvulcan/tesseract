@@ -402,4 +402,75 @@ struct LLMActorExtractSnapshotPayloadsTests {
             "Stripped leaf storeLeaf call must forward strippedLeafPayload"
         )
     }
+
+    @Test
+    func mainActorRunClosuresAroundPrefixCacheStoresAreNonSuspending() throws {
+        // The three `MainActor.run` closures wrapping
+        // `prefixCache.storeSnapshots` / `storeLeaf` must stay
+        // synchronous. `SSDSnapshotStore.tryEnqueue` is nonisolated
+        // under an `NSLock`; an `await` inside the closure would
+        // force the HTTP hot path to suspend mid-admission and break
+        // the ordering the pending-ref map was designed around.
+        let source = try readLLMActorSource()
+        let bodies = extractMainActorRunBodies(
+            source: source,
+            containing: ["prefixCache.storeSnapshots", "prefixCache.storeLeaf"]
+        )
+        #expect(
+            bodies.count == 3,
+            "Expected exactly 3 MainActor.run closures calling prefixCache.store*; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / unstripped-leaf / stripped-leaf sites — review before updating this assertion."
+        )
+        for (index, body) in bodies.enumerated() {
+            #expect(
+                !body.contains("await"),
+                "MainActor.run closure #\(index) calling prefixCache.store* contains an `await` — non-suspending admission is broken. Body:\n\(body)"
+            )
+        }
+    }
+
+    /// Scan `source` for every `MainActor.run { ... }` trailing-closure
+    /// body and return the ones whose body contains at least one of
+    /// `anchors`. Uses naive brace matching — adequate because the
+    /// closures of interest in `LLMActor.swift` contain no string
+    /// literals with braces, no block comments, and no nested closures
+    /// wider than the enclosing `MainActor.run`. If that changes, the
+    /// call-site count assertion above will start failing and the
+    /// matcher can be upgraded then.
+    private func extractMainActorRunBodies(
+        source: String,
+        containing anchors: [String]
+    ) -> [String] {
+        var result: [String] = []
+        var cursor = source.startIndex
+        let needle = "MainActor.run"
+        while let runRange = source.range(of: needle, range: cursor..<source.endIndex) {
+            guard let braceOpen = source[runRange.upperBound...].firstIndex(of: "{") else {
+                break
+            }
+            var depth = 0
+            var scanner = braceOpen
+            var braceClose: String.Index?
+            while scanner < source.endIndex {
+                let ch = source[scanner]
+                if ch == "{" {
+                    depth += 1
+                } else if ch == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        braceClose = scanner
+                        break
+                    }
+                }
+                scanner = source.index(after: scanner)
+            }
+            guard let braceClose else { break }
+            let bodyStart = source.index(after: braceOpen)
+            let body = String(source[bodyStart..<braceClose])
+            if anchors.contains(where: { body.contains($0) }) {
+                result.append(body)
+            }
+            cursor = source.index(after: braceClose)
+        }
+        return result
+    }
 }

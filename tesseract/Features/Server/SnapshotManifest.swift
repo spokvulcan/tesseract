@@ -128,6 +128,22 @@ nonisolated struct PersistedSnapshotDescriptor: Codable, Sendable, Equatable {
     /// descriptors whose version differs from
     /// `SnapshotManifestSchema.currentVersion`.
     let schemaVersion: Int
+
+    /// Single source of truth for the on-disk path layout
+    /// (`partitions/{digest}/snapshots/{shardByte}/{id}.safetensors`,
+    /// where `shardByte` is the first character of `snapshotID`).
+    /// Called by the writer (`SSDSnapshotStore.fileURL`), the
+    /// descriptor factory (`PrefixCacheManager.makePersistedDescriptor`),
+    /// and the warm-start path. Any change to this layout invalidates
+    /// every previously persisted snapshot — see the stability
+    /// contract on `CachePartitionKey.partitionDigest`.
+    static func relativeFilePath(
+        snapshotID: String,
+        partitionDigest: String
+    ) -> String {
+        let shardByte = String(snapshotID.prefix(1))
+        return "partitions/\(partitionDigest)/snapshots/\(shardByte)/\(snapshotID).safetensors"
+    }
 }
 
 // MARK: - Partition metadata (Codable, _meta.json)
