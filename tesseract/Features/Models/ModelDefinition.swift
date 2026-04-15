@@ -112,6 +112,18 @@ extension ModelDefinition {
             dependencies: []
         ),
         ModelDefinition(
+            id: "qwen3.5-27b-paro",
+            displayName: "Qwen3.5-27B PARO",
+            description: "Highest-quality PARO agent. Requires a high-memory Mac.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "z-lab/Qwen3.5-27B-PARO",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~19 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
             id: "qwen3.5-4b",
             displayName: "Qwen3.5-4B",
             description: "Standard agent model. Reliable general-purpose assistant.",

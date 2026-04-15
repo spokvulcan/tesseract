@@ -11,6 +11,47 @@ import MLXLMCommon
 @testable import Tesseract_Agent
 
 @MainActor
+struct ModelDefinitionCatalogTests {
+
+    @Test func includesQwen35_27BParoInAgentCatalog() async throws {
+        guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.5-27b-paro" }) else {
+            Issue.record("Missing qwen3.5-27b-paro model definition")
+            return
+        }
+
+        #expect(model.displayName == "Qwen3.5-27B PARO")
+        #expect(model.category == .agent)
+        #expect(model.repoID == "z-lab/Qwen3.5-27B-PARO")
+        #expect(model.requiredExtension == "safetensors")
+        #expect(
+            ModelDefinition.byCategory()
+                .first(where: { $0.0 == .agent })?
+                .1
+                .contains(where: { $0.id == model.id }) == true
+        )
+    }
+
+    @Test func recognizes27BParoCheckpoints() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let config = """
+        {
+          "architectures": ["Qwen3_5ForConditionalGeneration"],
+          "quantization_config": {
+            "quant_method": "paroquant"
+          }
+        }
+        """
+        try config.write(to: root.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        #expect(isParoQuantModel(directory: root))
+    }
+}
+
+@MainActor
 struct ToolArgumentNormalizerTests {
 
     @Test func unwrapsWrappedStringArguments() async throws {
