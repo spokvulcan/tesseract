@@ -205,6 +205,38 @@ struct ServerInferenceServiceTests {
         #expect(fallback.promptCalls.isEmpty)
     }
 
+    @Test func summarizeClosureReclassifiesThinkingIntoReturnedText() async throws {
+        let engine = StubServerInferenceEngine()
+        let fallback = StubLegacyInternalInferenceEngine()
+        engine.promptStart = HTTPServerGenerationStart(
+            stream: makeEventStream(events: [
+                .thinkStart,
+                .thinking("draft"),
+                .thinkReclassify,
+                .text(" answer"),
+                .thinkEnd,
+            ]),
+            cachedTokenCount: 0
+        )
+        let service = ServerInferenceService(
+            engine: engine,
+            modelStateProvider: { nil }
+        )
+        let summarize = makeSummarizeClosure(
+            inferenceService: service,
+            fallbackEngine: fallback,
+            rollbackEnabled: { false },
+            parametersProvider: { .default }
+        )
+
+        let summary = try await summarize("Summarize this")
+
+        #expect(summary == "draft answer")
+        #expect(engine.calls.count == 1)
+        #expect(engine.calls[0].kind == .prompt)
+        #expect(fallback.promptCalls.isEmpty)
+    }
+
     @Test func sharedGenerateClosureRoutesToLegacyEngineWhenRollbackEnabled() async throws {
         let engine = StubServerInferenceEngine()
         let fallback = StubLegacyInternalInferenceEngine()
@@ -482,9 +514,15 @@ private func makeStart(
 private func makeEventStream(
     textChunks: [String]
 ) -> AsyncThrowingStream<AgentGeneration, Error> {
+    makeEventStream(events: textChunks.map(AgentGeneration.text))
+}
+
+private func makeEventStream(
+    events: [AgentGeneration]
+) -> AsyncThrowingStream<AgentGeneration, Error> {
     AsyncThrowingStream<AgentGeneration, Error> { continuation in
-        for chunk in textChunks {
-            continuation.yield(.text(chunk))
+        for event in events {
+            continuation.yield(event)
         }
         continuation.finish()
     }

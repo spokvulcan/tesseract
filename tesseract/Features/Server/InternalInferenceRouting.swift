@@ -170,12 +170,25 @@ nonisolated func makeSummarizeClosure(
                 )
             }
         )
-        var chunks: [String] = []
+        var textContent = ""
+        var thinkingContent: String?
         for try await gen in stream {
-            if case .text(let chunk) = gen {
-                chunks.append(chunk)
+            switch gen {
+            case .text(let chunk):
+                textContent += chunk
+            case .thinkStart:
+                if thinkingContent == nil { thinkingContent = "" }
+            case .thinking(let chunk):
+                thinkingContent = (thinkingContent ?? "") + chunk
+            case .thinkEnd:
+                thinkingContent = nil
+            case .thinkReclassify:
+                textContent += thinkingContent ?? ""
+                thinkingContent = nil
+            case .toolCall, .malformedToolCall, .info:
+                break
             }
         }
-        return chunks.joined()
+        return textContent
     }
 }
