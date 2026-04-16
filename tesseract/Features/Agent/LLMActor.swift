@@ -268,7 +268,7 @@ actor LLMActor {
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
 
         let prepared = try await container.prepare(input: input)
-        let genParams = Self.makeGenerateParameters(from: parameters)
+        let genParams = makeGenerateParameters(from: parameters)
 
         return try await container.generate(input: prepared, parameters: genParams)
     }
@@ -285,7 +285,7 @@ actor LLMActor {
 
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
 
-        let genParams = Self.makeGenerateParameters(from: parameters)
+        let genParams = makeGenerateParameters(from: parameters)
         return try await container.perform(nonSendable: input) { context, input in
             let prepared = try await context.processor.prepare(input: input)
             let iterator = try TokenIterator(
@@ -343,7 +343,7 @@ actor LLMActor {
             conversation: conversation,
             requestID: requestID,
             modelID: modelID,
-            parameters: Self.makeGenerateParameters(from: parameters),
+            parameters: makeGenerateParameters(from: parameters),
             toolSpecs: canonicalTools,
             prefixCache: prefixCache
         )
@@ -1580,10 +1580,16 @@ actor LLMActor {
         }
     }
 
-    private static func makeGenerateParameters(
+    private func makeGenerateParameters(
         from parameters: AgentGenerateParameters
     ) -> GenerateParameters {
-        GenerateParameters(
+        let calibrationArtifact: TriAttentionCalibrationArtifact? =
+            if case .loaded(let artifact, _, _) = triAttentionCalibrationArtifactLookup {
+                artifact
+            } else {
+                nil
+            }
+        return GenerateParameters(
             maxTokens: parameters.maxTokens,
             kvBits: parameters.kvBits,
             kvGroupSize: parameters.kvGroupSize,
@@ -1595,8 +1601,15 @@ actor LLMActor {
             repetitionContextSize: parameters.repetitionContextSize,
             presencePenalty: parameters.presencePenalty,
             prefillStepSize: parameters.prefillStepSize,
-            triAttention: parameters.triAttention
+            triAttention: parameters.triAttention,
+            triAttentionCalibrationArtifact: calibrationArtifact
         )
+    }
+
+    func makeGenerateParametersForTesting(
+        from parameters: AgentGenerateParameters
+    ) -> GenerateParameters {
+        makeGenerateParameters(from: parameters)
     }
 
     nonisolated static func selectHTTPLeafStoreMode(

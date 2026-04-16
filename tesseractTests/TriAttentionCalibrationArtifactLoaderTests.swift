@@ -163,6 +163,25 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         default:
             Issue.record("Expected actor to record loaded TriAttention artifact result")
         }
+
+        let generateParameters = await actor.makeGenerateParametersForTesting(
+            from: AgentGenerateParameters(
+                maxTokens: 256,
+                temperature: 0.6,
+                topP: 1.0,
+                topK: 0,
+                minP: 0.0,
+                repetitionPenalty: nil,
+                repetitionContextSize: 20,
+                presencePenalty: nil,
+                kvBits: 8,
+                kvGroupSize: 64,
+                prefillStepSize: 1024,
+                triAttention: config
+            )
+        )
+        #expect(generateParameters.triAttention == config)
+        #expect(generateParameters.triAttentionCalibrationArtifact?.metadata.headDim == 8)
     }
 
     @Test
@@ -201,6 +220,25 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         default:
             Issue.record("Expected actor to record missing TriAttention artifact result")
         }
+
+        let triAttentionConfig = await actor.currentTriAttentionConfigForTesting
+        let generateParameters = await actor.makeGenerateParametersForTesting(
+            from: AgentGenerateParameters(
+                maxTokens: 256,
+                temperature: 0.6,
+                topP: 1.0,
+                topK: 0,
+                minP: 0.0,
+                repetitionPenalty: nil,
+                repetitionContextSize: 20,
+                presencePenalty: nil,
+                kvBits: 8,
+                kvGroupSize: 64,
+                prefillStepSize: 1024,
+                triAttention: triAttentionConfig
+            )
+        )
+        #expect(generateParameters.triAttentionCalibrationArtifact == nil)
     }
 
     @Test
