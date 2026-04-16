@@ -141,8 +141,18 @@ actor LLMActor {
     /// Actor-isolated and synchronously readable from inside
     /// `container.perform`, which cannot await MainActor.
     private var ssdConfig: SSDPrefixCacheConfig?
+    private var triAttentionConfiguration: TriAttentionConfiguration = .v1Disabled
+    private let triAttentionCalibrationArtifactLoader: TriAttentionCalibrationArtifactLoader
+    private var triAttentionCalibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult?
 
     var isLoaded: Bool { modelContainer != nil }
+
+    init(
+        triAttentionCalibrationArtifactLoader: TriAttentionCalibrationArtifactLoader? = nil
+    ) {
+        self.triAttentionCalibrationArtifactLoader =
+            triAttentionCalibrationArtifactLoader ?? TriAttentionCalibrationArtifactLoader()
+    }
 
     /// Internal read-only accessor for the load-time SSD config snapshot.
     /// Production reads happen via the synchronous capture in
@@ -152,6 +162,14 @@ actor LLMActor {
 
     /// Internal read-only accessor for the load-time model fingerprint.
     var currentModelFingerprintForTesting: String? { modelFingerprint }
+
+    /// Internal read-only accessor for the load-time TriAttention config snapshot.
+    var currentTriAttentionConfigForTesting: TriAttentionConfiguration { triAttentionConfiguration }
+
+    /// Internal read-only accessor for the load-time TriAttention calibration lookup.
+    var currentTriAttentionCalibrationArtifactLookupForTesting: TriAttentionCalibrationArtifactLookupResult? {
+        triAttentionCalibrationArtifactLookup
+    }
 
     /// Loads model weights, verifies with a 1-token generation, and resolves the tokenizer.
     ///
@@ -172,7 +190,8 @@ actor LLMActor {
     func loadModel(
         from directory: URL,
         visionMode: Bool,
-        ssdConfig: SSDPrefixCacheConfig? = nil
+        ssdConfig: SSDPrefixCacheConfig? = nil,
+        triAttention: TriAttentionConfiguration = .v1Disabled
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let format = Self.detectToolCallFormat(directory: directory)
         Log.agent.info(
@@ -199,7 +218,20 @@ actor LLMActor {
         // chain — `resolveSSDConfig` → here — exercisable via a
         // real-path unit test even when no MLX container can be loaded.
         let fingerprint = try ModelFingerprint.computeFingerprint(modelDir: directory)
-        installLoadTimeSSDState(fingerprint: fingerprint, ssdConfig: ssdConfig)
+        let calibrationArtifactLookup = resolveTriAttentionCalibrationArtifactLookup(
+            modelFingerprint: fingerprint
+        )
+        let resolvedTriAttention = resolvedTriAttentionConfiguration(
+            from: triAttention,
+            calibrationArtifactLookup: calibrationArtifactLookup
+        )
+
+        installLoadTimeState(
+            fingerprint: fingerprint,
+            ssdConfig: ssdConfig,
+            triAttention: resolvedTriAttention,
+            calibrationArtifactLookup: calibrationArtifactLookup
+        )
 
         if isParoQuantModel(directory: directory) {
             Log.agent.info("Detected ParoQuant model — using \(visionMode ? "VLM" : "LLM") path")
@@ -806,6 +838,8 @@ actor LLMActor {
         defaultPrefixCacheMemoryBudgetBytes = Defaults.fallbackPrefixCacheMemoryBudgetBytes
         modelFingerprint = nil
         ssdConfig = nil
+        triAttentionConfiguration = .v1Disabled
+        triAttentionCalibrationArtifactLookup = nil
     }
 
     /// Frees unreferenced MLX buffers between tool rounds.
@@ -1145,18 +1179,53 @@ actor LLMActor {
         return (tokenizer, startsThinking)
     }
 
-    /// Single install site for per-load SSD plumbing state. Called from
+    /// Single install site for per-load snapshot state. Called from
     /// `loadModel` before the container load is attempted so the state
     /// is visible even on failed loads; this lets the unit suite exercise
-    /// the full `AgentEngine.loadModel` → `resolveSSDConfig` → here
-    /// chain via a fake directory that trips the container load. The
-    /// unload path clears both fields.
-    private func installLoadTimeSSDState(
+    /// the full config-resolution chain via a fake directory that trips
+    /// the container load. The unload path clears all of these fields.
+    private func installLoadTimeState(
         fingerprint: String,
-        ssdConfig: SSDPrefixCacheConfig?
+        ssdConfig: SSDPrefixCacheConfig?,
+        triAttention: TriAttentionConfiguration,
+        calibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult
     ) {
         self.modelFingerprint = fingerprint
         self.ssdConfig = ssdConfig
+        self.triAttentionConfiguration = triAttention
+        self.triAttentionCalibrationArtifactLookup = calibrationArtifactLookup
+    }
+
+    private func resolvedTriAttentionConfiguration(
+        from triAttention: TriAttentionConfiguration,
+        calibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult
+    ) -> TriAttentionConfiguration {
+        switch calibrationArtifactLookup {
+        case .loaded(_, let identity, _):
+            return triAttention.withCalibrationArtifactIdentity(identity)
+        case .missing, .fingerprintMismatch, .unavailable:
+            return triAttention.withCalibrationArtifactIdentity(nil)
+        }
+    }
+
+    /// TriAttention artifacts are diagnostic-only until the runtime patch lands,
+    /// so parse/read failures must not block dense model loads.
+    private func resolveTriAttentionCalibrationArtifactLookup(
+        modelFingerprint: String
+    ) -> TriAttentionCalibrationArtifactLookupResult {
+        do {
+            return try triAttentionCalibrationArtifactLoader.lookup(modelFingerprint: modelFingerprint)
+        } catch {
+            let attemptedURL = triAttentionCalibrationArtifactLoader.expectedURL(for: modelFingerprint)
+            Log.agent.error(
+                "TriAttention calibration artifact unavailable for fingerprint \(modelFingerprint): \(error.localizedDescription)"
+            )
+            return .unavailable(
+                expectedModelFingerprint: modelFingerprint,
+                attemptedURL: attemptedURL,
+                errorDescription: error.localizedDescription
+            )
+        }
     }
 
     static func autoSizedPrefixCacheMemoryBudgetBytes(
@@ -1525,7 +1594,8 @@ actor LLMActor {
             repetitionPenalty: parameters.repetitionPenalty,
             repetitionContextSize: parameters.repetitionContextSize,
             presencePenalty: parameters.presencePenalty,
-            prefillStepSize: parameters.prefillStepSize
+            prefillStepSize: parameters.prefillStepSize,
+            triAttention: parameters.triAttention
         )
     }
 

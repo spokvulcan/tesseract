@@ -4,8 +4,23 @@ import MLXLMCommon
 nonisolated struct ServerInferenceModelState: Sendable, Equatable {
     let modelID: String
     let visionMode: Bool
+    let triAttention: TriAttentionConfiguration
 
-    static let unavailable = ServerInferenceModelState(modelID: "", visionMode: false)
+    init(
+        modelID: String,
+        visionMode: Bool,
+        triAttention: TriAttentionConfiguration = .v1Disabled
+    ) {
+        self.modelID = modelID
+        self.visionMode = visionMode
+        self.triAttention = triAttention
+    }
+
+    static let unavailable = ServerInferenceModelState(
+        modelID: "",
+        visionMode: false,
+        triAttention: .v1Disabled
+    )
 }
 
 nonisolated struct ServerInferenceStart: Sendable {

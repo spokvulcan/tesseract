@@ -6,6 +6,13 @@ import Testing
 @MainActor
 struct ServerInferenceServiceTests {
 
+    private static let enabledTriAttention = TriAttentionConfiguration(
+        enabled: true,
+        budgetTokens: TriAttentionConfiguration.v1BudgetTokens,
+        calibrationArtifactIdentity: nil,
+        implementationVersion: .v1
+    )
+
     @Test func promptRequestsRouteToPromptInference() async throws {
         let engine = StubServerInferenceEngine()
         engine.promptStart = makeStart(textChunks: ["prompt path"])
@@ -13,17 +20,20 @@ struct ServerInferenceServiceTests {
             engine: engine,
             modelStateProvider: { nil }
         )
+        var parameters = AgentGenerateParameters.default
+        parameters.triAttention = Self.enabledTriAttention
 
         let start = try await service.start(
             ServerInferenceRequest(
                 input: .prompt("Summarize this"),
-                parameters: .default
+                parameters: parameters
             )
         )
 
         #expect(engine.calls.count == 1)
         #expect(engine.calls[0].kind == .prompt)
         #expect(engine.calls[0].prompt == "Summarize this")
+        #expect(engine.calls[0].parameters.triAttention == Self.enabledTriAttention)
         #expect(start.modelState == nil)
         #expect(try await collectText(from: start.stream) == "prompt path")
     }
@@ -35,6 +45,8 @@ struct ServerInferenceServiceTests {
             engine: engine,
             modelStateProvider: { nil }
         )
+        var parameters = AgentGenerateParameters.default
+        parameters.triAttention = Self.enabledTriAttention
 
         let start = try await service.start(
             ServerInferenceRequest(
@@ -44,7 +56,7 @@ struct ServerInferenceServiceTests {
                     toolSpecs: nil,
                     prefixCacheConversation: nil
                 )),
-                parameters: .default
+                parameters: parameters
             )
         )
 
@@ -53,6 +65,7 @@ struct ServerInferenceServiceTests {
         #expect(engine.calls[0].systemPrompt == "System")
         #expect(engine.calls[0].messageCount == 1)
         #expect(engine.calls[0].usedPrefixCacheConversation == false)
+        #expect(engine.calls[0].parameters.triAttention == Self.enabledTriAttention)
         #expect(try await collectText(from: start.stream) == "chat path")
     }
 
@@ -64,7 +77,8 @@ struct ServerInferenceServiceTests {
         )
         let expectedState = ServerInferenceModelState(
             modelID: "qwen3.5-4b-paro",
-            visionMode: true
+            visionMode: true,
+            triAttention: Self.enabledTriAttention
         )
         let service = ServerInferenceService(
             engine: engine,
@@ -92,6 +106,7 @@ struct ServerInferenceServiceTests {
         #expect(engine.calls[0].kind == .serverChat)
         #expect(engine.calls[0].modelID == expectedState.modelID)
         #expect(engine.calls[0].usedPrefixCacheConversation)
+        #expect(engine.calls[0].parameters.triAttention == .v1Disabled)
         #expect(start.cachedTokenCount == 42)
         #expect(start.modelState == expectedState)
         #expect(try await collectText(from: start.stream) == "server path")

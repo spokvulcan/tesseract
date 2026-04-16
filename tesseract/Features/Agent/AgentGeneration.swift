@@ -26,6 +26,7 @@ struct AgentGenerateParameters: Sendable, Codable {
     /// default that still keeps peak memory well below the larger 2048/4096
     /// settings, so that is the production default.
     var prefillStepSize: Int = 1024
+    var triAttention: TriAttentionConfiguration = .v1Disabled
 
     static let `default` = AgentGenerateParameters()
 

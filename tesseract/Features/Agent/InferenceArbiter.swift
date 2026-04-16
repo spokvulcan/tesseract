@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import MLXLMCommon
 import Observation
 import os
 
@@ -49,13 +50,23 @@ final class InferenceArbiter {
         return slots
     }
 
-    /// Identity of the currently-loaded `.llm` slot — model ID + vision mode.
-    /// Kept as a single struct so the two keys can never drift out of sync.
-    /// The next lease acquisition compares against the current settings and
-    /// triggers a reload on any mismatch.
+    /// Identity of the currently-loaded `.llm` slot — model ID, vision mode,
+    /// and the hidden TriAttention runtime snapshot. Kept as a single struct
+    /// so reload-relevant keys can never drift out of sync.
     struct LoadedLLMState: Equatable {
         let modelID: String
         let visionMode: Bool
+        let triAttention: TriAttentionConfiguration
+
+        init(
+            modelID: String,
+            visionMode: Bool,
+            triAttention: TriAttentionConfiguration = .v1Disabled
+        ) {
+            self.modelID = modelID
+            self.visionMode = visionMode
+            self.triAttention = triAttention
+        }
     }
 
     private(set) var loadedLLMState: LoadedLLMState?
@@ -259,7 +270,8 @@ final class InferenceArbiter {
             let targetModelID = llmModelIDOverride ?? settingsManager.selectedAgentModelID
             let desired = LoadedLLMState(
                 modelID: targetModelID,
-                visionMode: settingsManager.visionModeEnabled
+                visionMode: settingsManager.visionModeEnabled,
+                triAttention: settingsManager.makeTriAttentionConfig()
             )
             if loadedSlots.contains(.llm) && loadedLLMState == desired {
                 return

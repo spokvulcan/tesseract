@@ -21,7 +21,7 @@ enum AgentFactory {
         contextManager: ContextManager,
         selectedModelID: String,
         settingsManager: SettingsManager,
-        rollbackEnabled: @escaping @MainActor () -> Bool
+        rollbackEnabled: @escaping @MainActor @Sendable () -> Bool
     ) -> Agent {
         let agentRoot = PathSandbox.defaultRoot
 
@@ -72,7 +72,13 @@ enum AgentFactory {
         )
 
         // 7. Build compaction transform
-        let generateParameters = AgentGenerateParameters.forModel(selectedModelID)
+        let triAttention = settingsManager.makeTriAttentionConfig()
+        let parametersProvider: @MainActor @Sendable () -> AgentGenerateParameters = {
+            [selectedModelID, triAttention] in
+            var parameters = AgentGenerateParameters.forModel(selectedModelID)
+            parameters.triAttention = triAttention
+            return parameters
+        }
 
         let compactionTransform = makeCompactionTransform(
             contextManager: contextManager,
@@ -81,7 +87,7 @@ enum AgentFactory {
                 inferenceService: inferenceService,
                 fallbackEngine: fallbackEngine,
                 rollbackEnabled: rollbackEnabled,
-                parametersProvider: { generateParameters }
+                parametersProvider: parametersProvider
             )
         )
 
@@ -103,7 +109,7 @@ enum AgentFactory {
                 inferenceService: inferenceService,
                 fallbackEngine: fallbackEngine,
                 rollbackEnabled: rollbackEnabled,
-                parametersProvider: { generateParameters }
+                parametersProvider: parametersProvider
             )
         )
     }

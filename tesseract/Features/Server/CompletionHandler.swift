@@ -255,6 +255,7 @@ struct CompletionHandler: Sendable {
         )
         let prefixCacheConversation = prefixCacheEligibility.conversation
         var params = AgentGenerateParameters.forModel(modelState.modelID)
+        params.triAttention = modelState.triAttention
         if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
         if let temp = request.temperature { params.temperature = Float(temp) }
         if let topP = request.top_p { params.topP = Float(topP) }

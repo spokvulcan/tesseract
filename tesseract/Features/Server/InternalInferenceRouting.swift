@@ -49,10 +49,10 @@ private nonisolated struct InternalInferenceCancellationState: Sendable {
 private nonisolated func makeInternalInferenceStream(
     inferenceService: ServerInferenceService,
     fallbackEngine: any LegacyInternalInferenceEngine,
-    rollbackEnabled: @escaping @MainActor () -> Bool,
-    parametersProvider: @escaping @MainActor () -> AgentGenerateParameters,
-    requestBuilder: @escaping @MainActor (AgentGenerateParameters) -> ServerInferenceRequest,
-    fallbackStreamBuilder: @escaping @MainActor (AgentGenerateParameters) throws -> AsyncThrowingStream<AgentGeneration, Error>
+    rollbackEnabled: @escaping @MainActor @Sendable () -> Bool,
+    parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters,
+    requestBuilder: @escaping @MainActor @Sendable (AgentGenerateParameters) -> ServerInferenceRequest,
+    fallbackStreamBuilder: @escaping @MainActor @Sendable (AgentGenerateParameters) throws -> AsyncThrowingStream<AgentGeneration, Error>
 ) -> AsyncThrowingStream<AgentGeneration, Error> {
     let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
     let cancellationState = OSAllocatedUnfairLock(
@@ -110,8 +110,8 @@ private nonisolated func makeInternalInferenceStream(
 nonisolated func makeServerInferenceGenerateClosure(
     inferenceService: ServerInferenceService,
     fallbackEngine: any LegacyInternalInferenceEngine,
-    rollbackEnabled: @escaping @MainActor () -> Bool,
-    parametersProvider: @escaping @MainActor () -> AgentGenerateParameters
+    rollbackEnabled: @escaping @MainActor @Sendable () -> Bool,
+    parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters
 ) -> LLMGenerateFunction {
     return { systemPrompt, messages, tools, _ in
         makeInternalInferenceStream(
@@ -148,8 +148,8 @@ nonisolated func makeServerInferenceGenerateClosure(
 nonisolated func makeSummarizeClosure(
     inferenceService: ServerInferenceService,
     fallbackEngine: any LegacyInternalInferenceEngine,
-    rollbackEnabled: @escaping @MainActor () -> Bool,
-    parametersProvider: @escaping @MainActor () -> AgentGenerateParameters
+    rollbackEnabled: @escaping @MainActor @Sendable () -> Bool,
+    parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters
 ) -> @Sendable (String) async throws -> String {
     return { prompt in
         let stream = makeInternalInferenceStream(

@@ -7,6 +7,7 @@ import Foundation
 import Observation
 import ServiceManagement
 import AppKit
+import MLXLMCommon
 
 @Observable @MainActor
 final class SettingsManager {
@@ -47,6 +48,7 @@ final class SettingsManager {
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
         static let webAccessEnabled = "webAccessEnabled"
         static let visionModeEnabled = "visionModeEnabled"
+        static let triattentionEnabled = "triattentionEnabled"
         static let isServerEnabled = "isServerEnabled"
         static let serverPort = "serverPort"
         static let internalServerInferenceRollbackEnabled = "internalServerInferenceRollbackEnabled"
@@ -287,6 +289,13 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(visionModeEnabled, forKey: Key.visionModeEnabled) }
     }
 
+    /// Hidden runtime gate for Task 1 plumbing. UI stays out of scope until the
+    /// later operational-controls task, but the setting already persists so the
+    /// model-load and server-core seams are stable.
+    var triattentionEnabled = false {
+        didSet { UserDefaults.standard.set(triattentionEnabled, forKey: Key.triattentionEnabled) }
+    }
+
     // MARK: - Server Settings
 
     var isServerEnabled = false {
@@ -379,6 +388,7 @@ final class SettingsManager {
             Key.hasCompletedOnboarding: false,
             Key.webAccessEnabled: true,
             Key.visionModeEnabled: false,
+            Key.triattentionEnabled: false,
             Key.isServerEnabled: false,
             Key.serverPort: 8321,
             Key.internalServerInferenceRollbackEnabled: false,
@@ -421,6 +431,7 @@ final class SettingsManager {
         hasCompletedOnboarding = ud.bool(forKey: Key.hasCompletedOnboarding)
         webAccessEnabled = ud.bool(forKey: Key.webAccessEnabled)
         visionModeEnabled = ud.bool(forKey: Key.visionModeEnabled)
+        triattentionEnabled = ud.bool(forKey: Key.triattentionEnabled)
         isServerEnabled = ud.bool(forKey: Key.isServerEnabled)
         serverPort = ud.integer(forKey: Key.serverPort)
         internalServerInferenceRollbackEnabled = ud.bool(forKey: Key.internalServerInferenceRollbackEnabled)
@@ -442,6 +453,15 @@ final class SettingsManager {
         return .withAutoPendingCap(
             rootURL: resolvedSSDPrefixCacheRootURL(),
             budgetBytes: prefixCacheSSDBudgetBytes
+        )
+    }
+
+    func makeTriAttentionConfig() -> TriAttentionConfiguration {
+        TriAttentionConfiguration(
+            enabled: triattentionEnabled,
+            budgetTokens: TriAttentionConfiguration.v1BudgetTokens,
+            calibrationArtifactIdentity: nil,
+            implementationVersion: .v1
         )
     }
 
@@ -492,6 +512,7 @@ final class SettingsManager {
         heartbeatIntervalMinutes = 30
         webAccessEnabled = true
         visionModeEnabled = false
+        triattentionEnabled = false
         isServerEnabled = false
         serverPort = 8321
         internalServerInferenceRollbackEnabled = false

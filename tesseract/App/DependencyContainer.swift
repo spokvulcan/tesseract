@@ -151,7 +151,9 @@ final class DependencyContainer: ObservableObject {
                     settingsManager.internalServerInferenceRollbackEnabled
                 },
                 parametersProvider: { [settingsManager] in
-                    AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
+                    var parameters = AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
+                    parameters.triAttention = settingsManager.makeTriAttentionConfig()
+                    return parameters
                 }
             )
         )

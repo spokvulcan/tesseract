@@ -14,7 +14,8 @@ final class ServerInferenceService {
             arbiter.loadedLLMState.map {
                 ServerInferenceModelState(
                     modelID: $0.modelID,
-                    visionMode: $0.visionMode
+                    visionMode: $0.visionMode,
+                    triAttention: $0.triAttention
                 )
             }
         }

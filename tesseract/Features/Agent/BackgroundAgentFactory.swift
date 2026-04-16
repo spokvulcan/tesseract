@@ -19,7 +19,7 @@ final class BackgroundAgentFactory {
     private let sessionStore: BackgroundSessionStore
     private let settingsManager: SettingsManager
     private let arbiter: InferenceArbiter
-    private let rollbackEnabled: @MainActor () -> Bool
+    private let rollbackEnabled: @MainActor @Sendable () -> Bool
 
     // Cached at init — after running the same bootstrap as AgentFactory steps 1-4
     private let cachedSkills: [SkillMetadata]
@@ -44,7 +44,7 @@ final class BackgroundAgentFactory {
         packageRegistry: PackageRegistry,
         settingsManager: SettingsManager,
         arbiter: InferenceArbiter,
-        rollbackEnabled: @escaping @MainActor () -> Bool
+        rollbackEnabled: @escaping @MainActor @Sendable () -> Bool
     ) {
         self.inferenceService = inferenceService
         self.fallbackEngine = fallbackEngine
@@ -119,7 +119,13 @@ final class BackgroundAgentFactory {
         let systemPrompt = basePrompt + "\n\n" + preamble
 
         // 3. Build compaction transform — fresh ContextManager per run
-        let generateParameters = AgentGenerateParameters.forModel(selectedModelID)
+        let triAttention = settingsManager.makeTriAttentionConfig()
+        let parametersProvider: @MainActor @Sendable () -> AgentGenerateParameters = {
+            [selectedModelID, triAttention] in
+            var parameters = AgentGenerateParameters.forModel(selectedModelID)
+            parameters.triAttention = triAttention
+            return parameters
+        }
         let contextManager = ContextManager(settings: .standard)
 
         let compactionTransform = makeCompactionTransform(
@@ -129,7 +135,7 @@ final class BackgroundAgentFactory {
                 inferenceService: inferenceService,
                 fallbackEngine: fallbackEngine,
                 rollbackEnabled: rollbackEnabled,
-                parametersProvider: { generateParameters }
+                parametersProvider: parametersProvider
             )
         )
 
@@ -138,7 +144,7 @@ final class BackgroundAgentFactory {
             inferenceService: inferenceService,
             fallbackEngine: fallbackEngine,
             rollbackEnabled: rollbackEnabled,
-            parametersProvider: { generateParameters }
+            parametersProvider: parametersProvider
         )
 
         // 5. Create agent config — no steering/followUp queues for background

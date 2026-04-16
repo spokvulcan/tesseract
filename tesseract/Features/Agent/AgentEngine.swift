@@ -73,6 +73,7 @@ final class AgentEngine {
     }
 
     private let ssdConfigSource: SSDConfigSource
+    private let settingsManager: SettingsManager?
 
     /// `ssdConfig` takes precedence over `settingsManager`. If both are nil,
     /// the SSD tier is disabled for the lifetime of this engine — the
@@ -81,6 +82,7 @@ final class AgentEngine {
         settingsManager: SettingsManager? = nil,
         ssdConfig: SSDPrefixCacheConfig? = nil
     ) {
+        self.settingsManager = settingsManager
         if let ssdConfig {
             self.ssdConfigSource = .explicit(ssdConfig)
         } else if let settingsManager {
@@ -105,6 +107,12 @@ final class AgentEngine {
         }
     }
 
+    /// Resolve the hidden TriAttention setting at the moment of the call. The
+    /// zero-arg/test engine shape stays disabled-by-default.
+    func resolveTriAttentionConfig() -> TriAttentionConfiguration {
+        settingsManager?.makeTriAttentionConfig() ?? .v1Disabled
+    }
+
     /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
     ///
     /// - Parameters:
@@ -123,7 +131,8 @@ final class AgentEngine {
             let (tokenizer, startsThinking) = try await llmActor.loadModel(
                 from: directory,
                 visionMode: visionMode,
-                ssdConfig: resolveSSDConfig()
+                ssdConfig: resolveSSDConfig(),
+                triAttention: resolveTriAttentionConfig()
             )
 
             let st = tokenizer.specialTokens
