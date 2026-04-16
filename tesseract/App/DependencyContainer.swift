@@ -131,7 +131,7 @@ final class DependencyContainer: ObservableObject {
             extensionHost: extensionHost,
             packageRegistry: packageRegistry,
             contextManager: contextManager,
-            contextWindow: 120_000,
+            contextWindow: 262_144,
             summarize: makeSummarizeClosure(
                 engine: agentEngine,
                 parametersProvider: { [settingsManager] in
@@ -408,8 +408,8 @@ final class DependencyContainer: ObservableObject {
                             id: definition.id,
                             type: "llm",
                             owned_by: "tesseract",
-                            max_context_length: 131_072,
-                            loaded_context_length: isLoaded ? 131_072 : nil,
+                            max_context_length: 262_144,
+                            loaded_context_length: isLoaded ? 262_144 : nil,
                             state: isLoaded ? "loaded" : "available"
                         )
                     }

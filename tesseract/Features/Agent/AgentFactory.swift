@@ -74,7 +74,7 @@ enum AgentFactory {
 
         let compactionTransform = makeCompactionTransform(
             contextManager: contextManager,
-            contextWindow: 120_000,
+            contextWindow: 262_144,
             summarize: makeSummarizeClosure(
                 engine: engine,
                 parametersProvider: { generateParameters }

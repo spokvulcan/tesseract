@@ -3,9 +3,11 @@ import MLXLMCommon
 
 /// Parameters controlling text generation behavior.
 ///
-/// Defaults: temperature=0.6, top_p=0.95, repeat_penalty disabled, max_tokens=131072.
+/// Defaults: temperature=0.6, top_p=0.95, repeat_penalty disabled, max_tokens=262144
+/// (Qwen3.5 native context window — `max_position_embeddings` on every current
+/// agent-catalog checkpoint).
 struct AgentGenerateParameters: Sendable, Codable {
-    var maxTokens: Int = 131_072
+    var maxTokens: Int = 262_144
     var temperature: Float = 0.6
     var topP: Float = 0.95
     var topK: Int = 0

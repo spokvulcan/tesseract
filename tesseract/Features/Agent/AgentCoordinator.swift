@@ -115,7 +115,7 @@ final class AgentCoordinator {
         extensionHost: ExtensionHost? = nil,
         packageRegistry: PackageRegistry? = nil,
         contextManager: ContextManager? = nil,
-        contextWindow: Int = 120_000,
+        contextWindow: Int = 262_144,
         summarize: (@Sendable (String) async throws -> String)? = nil
     ) {
         self.agent = agent

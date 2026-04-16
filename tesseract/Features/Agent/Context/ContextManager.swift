@@ -11,8 +11,11 @@ nonisolated struct CompactionSettings: Sendable {
     /// Minimum tokens to keep verbatim at the tail of the conversation.
     var keepRecentTokens: Int
 
-    /// Default for 120K context window models.
-    /// Compaction triggers at ~104K tokens (120K - 16K reserve).
+    /// Default for Qwen3.5-family models (262,144 native context).
+    /// Compaction triggers at ~245K tokens (262K - 16K reserve), keeping 20K
+    /// recent verbatim. Reserve is sized for the common interactive output
+    /// length; raise it toward 81,920 if long-form generations from the agent
+    /// chat (not the HTTP server) start getting truncated by compaction.
     static let standard = CompactionSettings(
         enabled: true,
         reserveTokens: 16_384,
