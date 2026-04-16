@@ -1362,6 +1362,13 @@ extension SSDSnapshotStore {
         var restored = SnapshotManifest.empty()
         var invalidatedDigests: [String] = []
         for (digest, meta) in loaded.partitions {
+            // Stale `PartitionMeta` inside a current-version manifest
+            // signals a hand-edited or partially upgraded file — drop
+            // it rather than reattach under stale canonicalization.
+            guard meta.schemaVersion == SnapshotManifestSchema.currentVersion else {
+                invalidatedDigests.append(digest)
+                continue
+            }
             if meta.modelFingerprint == expectedFingerprint {
                 restored.partitions[digest] = meta
             } else {
@@ -1373,6 +1380,13 @@ extension SSDSnapshotStore {
         var deadDescriptorFiles: [URL] = []
         for (id, desc) in loaded.snapshots {
             guard restored.partitions[desc.partitionDigest] != nil else { continue }
+            // Same rationale as the `PartitionMeta` filter above.
+            guard desc.schemaVersion == SnapshotManifestSchema.currentVersion else {
+                deadDescriptorFiles.append(
+                    fileURL(snapshotID: desc.snapshotID, partitionDigest: desc.partitionDigest)
+                )
+                continue
+            }
             // Drop descriptors whose wire-format checkpoint type no
             // longer decodes — `PrefixCacheManager.warmStart` would
             // skip them silently otherwise, leaving their bytes
@@ -1478,6 +1492,13 @@ extension SSDSnapshotStore {
             PlaceholderContainerHeader.self,
             from: headerData
         ) else { return nil }
+        // Stale-schema files cannot be reattached safely; treat as
+        // orphaned and let the caller delete.
+        guard header.schemaVersion == SnapshotManifestSchema.currentVersion,
+              header.descriptor.schemaVersion == SnapshotManifestSchema.currentVersion
+        else {
+            return nil
+        }
         return header.descriptor
     }
 

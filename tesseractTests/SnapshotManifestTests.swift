@@ -67,10 +67,12 @@ struct SnapshotManifestTests {
     // MARK: - Schema version
 
     @Test
-    func schemaVersionIsFour() {
+    func schemaVersionIsFive() {
         // Bumping invalidates every existing manifest. Pinned so an
-        // accidental bump trips this test.
-        #expect(SnapshotManifestSchema.currentVersion == 4)
+        // accidental bump trips this test. v5 added the `triAttention`
+        // field on `PartitionMeta` and is the on-disk schema all
+        // current-build writes produce.
+        #expect(SnapshotManifestSchema.currentVersion == 5)
     }
 
     @Test
@@ -168,6 +170,56 @@ struct SnapshotManifestTests {
         let decoded = try decoder.decode(PartitionMeta.self, from: data)
 
         #expect(decoded == original)
+    }
+
+    @Test
+    func partitionMetaPreservesTriAttentionIdentityAcrossJSONRoundTrip() throws {
+        let triAttention: TriAttentionPartitionIdentity = .triAttention(
+            budgetTokens: 12_000,
+            calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
+                rawValue: "aaa"
+            ),
+            implementationVersion: .v1
+        )
+        let original = PartitionMeta(
+            modelID: "mlx-community/Qwen3-4B-paro",
+            modelFingerprint: String(repeating: "a", count: 64),
+            kvBits: 8,
+            kvGroupSize: 64,
+            createdAt: 100_000,
+            schemaVersion: SnapshotManifestSchema.currentVersion,
+            triAttention: triAttention
+        )
+        let (encoder, decoder) = jsonCodecs()
+
+        let data = try encoder.encode(original)
+        let decoded = try decoder.decode(PartitionMeta.self, from: data)
+
+        #expect(decoded == original)
+        #expect(decoded.triAttention == triAttention)
+    }
+
+    @Test
+    func partitionMetaDefaultsTriAttentionToDenseWhenFieldOmitted() throws {
+        // Forward-compat for v5 manifests written by an older build that
+        // didn't yet emit the `triAttention` key — decode must default
+        // to `.dense` rather than throwing. The bumped schemaVersion is
+        // still load-bearing as a coarse wipe gate; this default just
+        // keeps the per-partition decode resilient.
+        let json = #"""
+        {
+          "createdAt": 100000,
+          "kvBits": 8,
+          "kvGroupSize": 64,
+          "modelFingerprint": "abc",
+          "modelID": "m",
+          "schemaVersion": 5
+        }
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(PartitionMeta.self, from: json)
+        #expect(decoded.triAttention == .dense)
+        #expect(decoded.modelID == "m")
+        #expect(decoded.schemaVersion == 5)
     }
 
     @Test

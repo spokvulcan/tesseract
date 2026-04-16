@@ -9,7 +9,7 @@ import MLXLMCommon
 /// digest: a default dense key must canonicalize to the exact bytes
 /// the pre-TriAttention code produced, or persisted snapshots become
 /// unreachable.
-nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable {
+nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable, Codable {
     case dense
     case triAttention(
         budgetTokens: Int,
@@ -42,6 +42,36 @@ nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable {
 
     nonisolated static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.sortKey < rhs.sortKey
+    }
+
+    // MARK: Codable
+
+    /// Round-trips through `TriAttentionConfiguration`'s synthesized
+    /// Codable so the wire shape matches the runtime config tuple the
+    /// rest of the stack already serializes. `from(_:)` collapses any
+    /// disabled configuration back to `.dense` so a manifest written
+    /// with disabled-but-populated fields cannot fragment dense
+    /// partitions on warm start.
+    nonisolated init(from decoder: Decoder) throws {
+        self = .from(try TriAttentionConfiguration(from: decoder))
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        try asConfiguration.encode(to: encoder)
+    }
+
+    private var asConfiguration: TriAttentionConfiguration {
+        switch self {
+        case .dense:
+            return .v1Disabled
+        case .triAttention(let budget, let artifact, let impl):
+            return TriAttentionConfiguration(
+                enabled: true,
+                budgetTokens: budget,
+                calibrationArtifactIdentity: artifact,
+                implementationVersion: impl
+            )
+        }
     }
 }
 
@@ -360,6 +390,12 @@ final class PrefixCacheManager {
     /// `M`, synthesize a checkpoint at `M` so the next request can skip the
     /// already-shared gap. This is layered on top of the existing Phase 2
     /// planner and does not change its speculative branch-point rules.
+    ///
+    /// TriAttention-safe: the planner returns an offset, not a state. The
+    /// captured `.branchPoint` snapshot at `M` is produced by the prefill
+    /// loop using whatever cache type the runtime configured — dense or
+    /// TriAttention — and the partition key already isolates the two
+    /// modes so a TriAttention checkpoint cannot surface to a dense lookup.
     func alignmentCheckpointOffset(
         lookupResult: LookupResult,
         totalTokenCount: Int,
@@ -491,14 +527,12 @@ final class PrefixCacheManager {
         let tree = store.getOrCreateTree(for: partitionKey)
         tree.insertPath(tokens: promptTokens)
 
-        // SSD admission is `.dense`-only: `PartitionMeta` has no field
-        // for the TriAttention identity, so a persisted TriAttention
-        // partition would be reattached as `.dense` at warm start and
-        // surface its snapshots to dense requests. RAM admission above
-        // runs unconditionally.
+        // SSD admission is dense + TriAttention: `PartitionMeta` (v5)
+        // carries the TriAttention identity, so warm-start reconstructs
+        // the partition's full `CachePartitionKey` and the on-disk
+        // digest stays unique. RAM admission above runs unconditionally.
         let payloadsAligned =
             snapshotPayloads.count == capturedSnapshots.count
-                && partitionKey.triAttention.isDense
         if payloadsAligned {
             registerSSDPartitionIfNeeded(for: partitionKey)
         }
@@ -564,7 +598,7 @@ final class PrefixCacheManager {
             in: tree
         )
 
-        if let leafPayload, partitionKey.triAttention.isDense {
+        if let leafPayload {
             registerSSDPartitionIfNeeded(for: partitionKey)
             let descriptor = makePersistedDescriptor(
                 partitionKey: partitionKey,
@@ -749,14 +783,15 @@ final class PrefixCacheManager {
                 modelID: partition.meta.modelID,
                 kvBits: partition.meta.kvBits,
                 kvGroupSize: partition.meta.kvGroupSize,
-                modelFingerprint: partition.meta.modelFingerprint
+                modelFingerprint: partition.meta.modelFingerprint,
+                triAttention: partition.meta.triAttention
             )
-            // `PartitionMeta` cannot round-trip the TriAttention
-            // identity, so the reconstructed key is always `.dense`.
-            // A digest that no longer matches the on-disk directory
-            // name means the partition was written under a non-dense
-            // identity — drop it rather than silently reattaching it
-            // as dense and cross-contaminating at lookup time.
+            // `PartitionMeta` (v5) carries the TriAttention identity, so
+            // the reconstructed key matches the on-disk digest for both
+            // dense and TriAttention partitions. A mismatch now signals
+            // a corrupted/inconsistent meta sidecar — drop the partition
+            // rather than reattaching it under the wrong key and
+            // cross-contaminating at lookup time.
             guard partition.digest == partitionKey.partitionDigest else {
                 digestMismatchPartitions.append(partition.digest)
                 continue
@@ -844,11 +879,6 @@ final class PrefixCacheManager {
 
     private func registerSSDPartitionIfNeeded(for partitionKey: CachePartitionKey) {
         guard store.ssdStore != nil else { return }
-        // Belt for the `.dense`-only SSD invariant: callers already
-        // gate `store.admitSnapshot`, but registering a non-dense
-        // `PartitionMeta` here would still produce an unreachable
-        // partition on disk.
-        guard partitionKey.triAttention.isDense else { return }
         guard let fingerprint = partitionKey.modelFingerprint else {
             assertionFailure(
                 "SSD admission requires a model fingerprint on CachePartitionKey"
@@ -867,7 +897,8 @@ final class PrefixCacheManager {
             kvBits: partitionKey.kvBits,
             kvGroupSize: partitionKey.kvGroupSize,
             createdAt: Date().timeIntervalSinceReferenceDate,
-            schemaVersion: SnapshotManifestSchema.currentVersion
+            schemaVersion: SnapshotManifestSchema.currentVersion,
+            triAttention: partitionKey.triAttention
         )
         store.registerPartition(meta, for: partitionKey)
     }

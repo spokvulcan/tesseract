@@ -629,6 +629,33 @@ struct PrefixCacheManagerTests {
         #expect(denseHit.snapshotTokenOffset == 100)
     }
 
+    @Test func alignmentCheckpointPlanningWorksInTriAttentionPartition() {
+        // Same shape as `largeGapTriggersTwoPass`, but the snapshot lives
+        // in a TriAttention partition. The planner returns an offset only
+        // — capture and restore happen later via TriAttention-aware
+        // HybridCacheSnapshot codepaths — so the alignment-checkpoint
+        // logic must stay partition-agnostic.
+        let mgr = makeManager()
+        let triKey = makeKey(triAttention: triAttentionIdentity())
+        let matchedPath = Array(1...500)
+        mgr.storeSnapshots(
+            promptTokens: matchedPath,
+            capturedSnapshots: [makeSnapshot(offset: 100, type: .system)],
+            partitionKey: triKey
+        )
+
+        let lookup = mgr.lookup(tokens: matchedPath + [999], partitionKey: triKey)
+        #expect(lookup.snapshotTokenOffset == 100)
+        #expect(lookup.sharedPrefixLength == 500)
+
+        let alignmentOffset = mgr.alignmentCheckpointOffset(
+            lookupResult: lookup,
+            totalTokenCount: matchedPath.count + 1,
+            plannedCheckpoints: []
+        )
+        #expect(alignmentOffset == 500)
+    }
+
     @Test func triAttentionPartitionsIsolatedAcrossBudgets() {
         let mgr = makeManager()
         let tokens = Array(1...50)
@@ -1640,7 +1667,7 @@ struct PrefixCacheManagerTests {
         #expect(restoredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
     }
 
-    // MARK: - TriAttention SSD admission gate
+    // MARK: - TriAttention SSD admission (v5)
 
     private static let triAttentionIdentity: TriAttentionPartitionIdentity =
         .triAttention(
@@ -1651,11 +1678,11 @@ struct PrefixCacheManagerTests {
             implementationVersion: .v1
         )
 
-    /// `storeSnapshots` must RAM-admit but skip SSD admission for a
-    /// non-dense partition: persisting it would create a manifest that
-    /// cannot be round-tripped at warm start, opening a cross-mode
-    /// contamination path.
-    @Test func storeSnapshotsSkipsSSDForTriAttentionPartition() async throws {
+    /// v5 admits TriAttention partitions to SSD now that `PartitionMeta`
+    /// carries the TriAttention identity. The on-disk digest is unique
+    /// per identity, so warm-start can reattach the partition under the
+    /// same key without cross-contaminating dense lookups.
+    @Test func storeSnapshotsAdmitsSSDForTriAttentionPartition() async throws {
         let (mgr, tieredStore, root) = makeSSDManager()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -1674,17 +1701,15 @@ struct PrefixCacheManagerTests {
 
         #expect(mgr.stats.partitionCount == 1)
         #expect(mgr.stats.snapshotCount == 1)
-        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == 0)
+        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
 
-        let manifestURL = root.appendingPathComponent("manifest.json")
-        #expect(!FileManager.default.fileExists(atPath: manifestURL.path))
         let partitionDir = root
             .appendingPathComponent("partitions")
             .appendingPathComponent(key.partitionDigest)
-        #expect(!FileManager.default.fileExists(atPath: partitionDir.path))
+        #expect(FileManager.default.fileExists(atPath: partitionDir.path))
     }
 
-    @Test func storeLeafSkipsSSDForTriAttentionPartition() async throws {
+    @Test func storeLeafAdmitsSSDForTriAttentionPartition() async throws {
         let (mgr, tieredStore, root) = makeSSDManager()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -1702,7 +1727,7 @@ struct PrefixCacheManagerTests {
         await tieredStore.ssdStore!.flushAsync()
 
         #expect(mgr.stats.snapshotCount == 1)
-        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == 0)
+        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == leafPayload.totalBytes)
     }
 
     @Test func storeSnapshotsStillAdmitsSSDForDensePartition() async throws {

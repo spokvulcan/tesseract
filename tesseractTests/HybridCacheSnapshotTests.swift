@@ -442,6 +442,103 @@ struct HybridCacheSnapshotTests {
         }
     }
 
+    @Test func deserializePassesWhenSchemaVersionMatches() throws {
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [kv], offset: 4, type: .system
+        ))
+
+        try withTempSnapshotURL { url in
+            try snapshot.serialize(
+                to: url,
+                metadata: [
+                    HybridCacheSnapshot.MetadataKey.fingerprint: "fp",
+                    HybridCacheSnapshot.MetadataKey.schemaVersion: "5",
+                ]
+            )
+            let restored = try HybridCacheSnapshot.deserialize(
+                from: url,
+                expectedFingerprint: "fp",
+                expectedSchemaVersion: 5
+            )
+            #expect(restored.tokenOffset == 4)
+        }
+    }
+
+    @Test func deserializeThrowsOnSchemaVersionMismatch() throws {
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [kv], offset: 4, type: .system
+        ))
+
+        try withTempSnapshotURL { url in
+            try snapshot.serialize(
+                to: url,
+                metadata: [
+                    HybridCacheSnapshot.MetadataKey.fingerprint: "fp",
+                    HybridCacheSnapshot.MetadataKey.schemaVersion: "4",
+                ]
+            )
+            #expect(throws: HybridCacheSnapshot.SerializationError.self) {
+                _ = try HybridCacheSnapshot.deserialize(
+                    from: url,
+                    expectedFingerprint: "fp",
+                    expectedSchemaVersion: 5
+                )
+            }
+        }
+    }
+
+    @Test func deserializeThrowsOnMissingSchemaVersionWhenRequired() throws {
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [kv], offset: 4, type: .system
+        ))
+
+        try withTempSnapshotURL { url in
+            try snapshot.serialize(
+                to: url,
+                metadata: [HybridCacheSnapshot.MetadataKey.fingerprint: "fp"]
+            )
+            #expect(throws: HybridCacheSnapshot.SerializationError.self) {
+                _ = try HybridCacheSnapshot.deserialize(
+                    from: url,
+                    expectedFingerprint: "fp",
+                    expectedSchemaVersion: 5
+                )
+            }
+        }
+    }
+
+    @Test func deserializeIgnoresSchemaVersionWhenCallerOptsOut() throws {
+        // Backward-compat: legacy callers that don't pin a version see
+        // the same behavior as before the field existed. The metadata
+        // key may or may not be present in the file.
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [kv], offset: 4, type: .system
+        ))
+
+        try withTempSnapshotURL { url in
+            try snapshot.serialize(
+                to: url,
+                metadata: [
+                    HybridCacheSnapshot.MetadataKey.fingerprint: "fp",
+                    HybridCacheSnapshot.MetadataKey.schemaVersion: "99",
+                ]
+            )
+            let restored = try HybridCacheSnapshot.deserialize(
+                from: url,
+                expectedFingerprint: "fp"
+            )
+            #expect(restored.tokenOffset == 4)
+        }
+    }
+
     @Test func deserializeThrowsOnMissingFingerprint() throws {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]

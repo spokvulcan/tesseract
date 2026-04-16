@@ -46,7 +46,15 @@ nonisolated enum SnapshotManifestSchema {
     /// `PartitionMeta` canonicalizes changes shape, so partitions
     /// written under the old canonicalization cannot be silently
     /// reattached under a new key and surface stale state.
-    static let currentVersion: Int = 4
+    ///
+    /// **History**
+    /// - v4: pre-TriAttention dense-only persistence.
+    /// - v5: `PartitionMeta` carries `TriAttentionPartitionIdentity`
+    ///   so warm-start reconstructs partition keys (including the
+    ///   TriAttention identity) without losing the on-disk digest.
+    ///   Older v4 manifests are unable to express TriAttention
+    ///   partitions and must be wiped on first boot under v5.
+    static let currentVersion: Int = 5
 }
 
 // MARK: - Persisted descriptor (Codable, manifest.json + safetensors header)
@@ -187,6 +195,57 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
     /// `SnapshotManifestSchema.currentVersion` lifecycle as the
     /// top-level manifest.
     let schemaVersion: Int
+
+    /// TriAttention identity carried so warm-start can reconstruct
+    /// the partition's full `CachePartitionKey` — including the
+    /// TriAttention discriminator — and verify the on-disk digest
+    /// matches without collapsing TriAttention partitions back to
+    /// `.dense`. Defaults to `.dense` so v5 reads of files that
+    /// somehow omit the field still produce a valid dense partition
+    /// rather than throwing a decode error. Added in schema v5.
+    let triAttention: TriAttentionPartitionIdentity
+
+    init(
+        modelID: String,
+        modelFingerprint: String,
+        kvBits: Int?,
+        kvGroupSize: Int,
+        createdAt: Double,
+        schemaVersion: Int,
+        triAttention: TriAttentionPartitionIdentity = .dense
+    ) {
+        self.modelID = modelID
+        self.modelFingerprint = modelFingerprint
+        self.kvBits = kvBits
+        self.kvGroupSize = kvGroupSize
+        self.createdAt = createdAt
+        self.schemaVersion = schemaVersion
+        self.triAttention = triAttention
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case modelID
+        case modelFingerprint
+        case kvBits
+        case kvGroupSize
+        case createdAt
+        case schemaVersion
+        case triAttention
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.modelID = try container.decode(String.self, forKey: .modelID)
+        self.modelFingerprint = try container.decode(String.self, forKey: .modelFingerprint)
+        self.kvBits = try container.decodeIfPresent(Int.self, forKey: .kvBits)
+        self.kvGroupSize = try container.decode(Int.self, forKey: .kvGroupSize)
+        self.createdAt = try container.decode(Double.self, forKey: .createdAt)
+        self.schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        self.triAttention =
+            try container.decodeIfPresent(
+                TriAttentionPartitionIdentity.self, forKey: .triAttention
+            ) ?? .dense
+    }
 }
 
 // MARK: - Top-level manifest (Codable, manifest.json)

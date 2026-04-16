@@ -561,6 +561,170 @@ struct WarmStartTests {
         }
     }
 
+    /// v5 round-trip: a TriAttention partition whose `PartitionMeta`
+    /// carries the matching identity reattaches under the same key
+    /// rather than being dropped as a digest mismatch. Pinned because
+    /// the dense-only gate that lived in `PrefixCacheManager.storeLeaf`
+    /// for v4 was removed when v5 added the `triAttention` field —
+    /// regressing this test would silently re-introduce the gate.
+    @Test func warmStartReattachesTriAttentionPartitionWhenMetaCarriesIdentity() async throws {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+
+        let triIdentity: TriAttentionPartitionIdentity = .triAttention(
+            budgetTokens: 12_000,
+            calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
+                rawValue: "aaa"
+            ),
+            implementationVersion: .v1
+        )
+        let triKey = CachePartitionKey(
+            modelID: "test-model",
+            kvBits: nil,
+            kvGroupSize: 64,
+            modelFingerprint: testFingerprint,
+            triAttention: triIdentity
+        )
+        let triDigest = triKey.partitionDigest
+        let triMeta = PartitionMeta(
+            modelID: "test-model",
+            modelFingerprint: testFingerprint,
+            kvBits: nil,
+            kvGroupSize: 64,
+            createdAt: 100_000,
+            schemaVersion: SnapshotManifestSchema.currentVersion,
+            triAttention: triIdentity
+        )
+
+        let descriptor = makeDescriptor(
+            partitionDigest: triDigest,
+            pathFromRoot: Array(1...10),
+            tokenOffset: 10,
+            bytes: 4096
+        )
+        var manifest = SnapshotManifest.empty()
+        manifest.partitions[triDigest] = triMeta
+        manifest.snapshots[descriptor.snapshotID] = descriptor
+        try writeManifest(manifest, rootURL: root)
+
+        let (mgr, ssdStore) = makeManager(rootURL: root)
+        try await mgr.warmStart(modelFingerprint: testFingerprint)
+
+        #expect(ssdStore.currentSSDBytesForTesting() == descriptor.bytes)
+        #expect(mgr.stats.partitionCount == 1)
+
+        // Lookup under the reconstructed TriAttention key surfaces the
+        // restored ref…
+        let triLookup = mgr.lookup(
+            tokens: descriptor.pathFromRoot,
+            partitionKey: triKey
+        )
+        guard case .ssdHit(let ctx) = triLookup.reason else {
+            #expect(Bool(false), "Expected .ssdHit for TriAttention key, got \(triLookup.reason)")
+            return
+        }
+        #expect(ctx.storageRef.snapshotID == descriptor.snapshotID)
+
+        // …while a dense lookup at the same path remains a miss because
+        // the partition is isolated by digest.
+        let denseLookup = mgr.lookup(
+            tokens: descriptor.pathFromRoot,
+            partitionKey: makePartitionKey(fingerprint: testFingerprint)
+        )
+        #expect(denseLookup.snapshot == nil)
+        if case .ssdHit = denseLookup.reason {
+            #expect(Bool(false), "Dense lookup must not resolve to a TriAttention ref")
+        }
+    }
+
+    /// v5 wipe gate: a partition meta written under v4 (or any
+    /// schema-version other than the current one) must be invalidated
+    /// at warm-start, even if the top-level manifest version matches.
+    /// Defends the descriptor-level filter added to
+    /// `commitRestoredManifest` against accidental removal.
+    @Test func warmStartDropsPartitionMetaWithStaleSchemaVersion() async throws {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+
+        let denseKey = makePartitionKey(fingerprint: testFingerprint)
+        let digest = denseKey.partitionDigest
+        // Manifest itself is v5, but the per-partition meta is v4.
+        let staleMeta = PartitionMeta(
+            modelID: "test-model",
+            modelFingerprint: testFingerprint,
+            kvBits: nil,
+            kvGroupSize: 64,
+            createdAt: 100_000,
+            schemaVersion: 4
+        )
+        let descriptor = makeDescriptor(
+            partitionDigest: digest,
+            pathFromRoot: Array(1...10),
+            tokenOffset: 10,
+            bytes: 4096
+        )
+        var manifest = SnapshotManifest.empty()
+        manifest.partitions[digest] = staleMeta
+        manifest.snapshots[descriptor.snapshotID] = descriptor
+        try writeManifest(manifest, rootURL: root)
+
+        let (mgr, ssdStore) = makeManager(rootURL: root)
+        try await mgr.warmStart(modelFingerprint: testFingerprint)
+
+        #expect(mgr.stats.partitionCount == 0)
+        #expect(ssdStore.currentSSDBytesForTesting() == 0)
+    }
+
+    /// Same wipe gate, but for a `PersistedSnapshotDescriptor` whose
+    /// schemaVersion is stale even though its enclosing partition meta
+    /// is current. Pinned because the descriptor-level filter is the
+    /// only safeguard against a hand-edited manifest mixing v4 and v5
+    /// descriptors under a current partition.
+    @Test func warmStartDropsDescriptorWithStaleSchemaVersion() async throws {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+
+        let denseKey = makePartitionKey(fingerprint: testFingerprint)
+        let digest = denseKey.partitionDigest
+
+        let validDescriptor = makeDescriptor(
+            partitionDigest: digest,
+            pathFromRoot: Array(1...10),
+            tokenOffset: 10,
+            bytes: 4096
+        )
+        let staleID = UUID().uuidString
+        let staleDescriptor = PersistedSnapshotDescriptor(
+            snapshotID: staleID,
+            partitionDigest: digest,
+            pathFromRoot: Array(20...25),
+            tokenOffset: 6,
+            checkpointType: HybridCacheSnapshot.CheckpointType.leaf.wireString,
+            bytes: 9_999_999,
+            createdAt: 100_000,
+            lastAccessAt: 100_000,
+            fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+                snapshotID: staleID,
+                partitionDigest: digest
+            ),
+            schemaVersion: 4
+        )
+
+        var manifest = SnapshotManifest.empty()
+        manifest.partitions[digest] = makePartitionMeta(fingerprint: testFingerprint)
+        manifest.snapshots[validDescriptor.snapshotID] = validDescriptor
+        manifest.snapshots[staleDescriptor.snapshotID] = staleDescriptor
+        try writeManifest(manifest, rootURL: root)
+
+        let (mgr, ssdStore) = makeManager(rootURL: root)
+        try await mgr.warmStart(modelFingerprint: testFingerprint)
+
+        // Only the v5 descriptor's bytes are seeded; the stale-schema
+        // entry is dropped before the budget is summed.
+        #expect(ssdStore.currentSSDBytesForTesting() == validDescriptor.bytes)
+        #expect(mgr.stats.partitionCount == 1)
+    }
+
     @Test func warmStartAcceptsDenseDigestMatch() async throws {
         let root = makeScratchDir()
         defer { cleanup(root) }
