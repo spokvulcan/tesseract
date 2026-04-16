@@ -27,13 +27,15 @@ struct PrefixCacheManagerTests {
     }
 
     private func makeSSDKey(
-        fingerprint: String = String(repeating: "a", count: 64)
+        fingerprint: String = String(repeating: "a", count: 64),
+        triAttention: TriAttentionPartitionIdentity = .dense
     ) -> CachePartitionKey {
         CachePartitionKey(
             modelID: "test-model",
             kvBits: nil,
             kvGroupSize: 64,
-            modelFingerprint: fingerprint
+            modelFingerprint: fingerprint,
+            triAttention: triAttention
         )
     }
 
@@ -579,6 +581,65 @@ struct PrefixCacheManagerTests {
 
         let result = mgr.lookup(tokens: tokens, partitionKey: key8)
         #expect(result.snapshotTokenOffset == 100)
+    }
+
+    // MARK: - TriAttention partition isolation
+
+    private func makeKey(
+        triAttention: TriAttentionPartitionIdentity = .dense
+    ) -> CachePartitionKey {
+        CachePartitionKey(
+            modelID: "m", kvBits: 8, kvGroupSize: 64,
+            modelFingerprint: "fp",
+            triAttention: triAttention
+        )
+    }
+
+    private func triAttentionIdentity(
+        budget: Int = 12_000
+    ) -> TriAttentionPartitionIdentity {
+        .triAttention(
+            budgetTokens: budget,
+            calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
+                rawValue: "aaa"
+            ),
+            implementationVersion: .v1
+        )
+    }
+
+    @Test func denseAndTriAttentionPartitionsIsolated() {
+        let mgr = makeManager()
+        let tokens = Array(1...100)
+        let denseKey = makeKey()
+        let triKey = makeKey(triAttention: triAttentionIdentity())
+
+        let snap = makeSnapshot(offset: 100, type: .leaf)
+        mgr.storeLeaf(storedTokens: tokens, leafSnapshot: snap, partitionKey: denseKey)
+
+        #expect(mgr.stats.partitionCount == 1)
+        let missFromTri = mgr.lookup(tokens: tokens, partitionKey: triKey)
+        #expect(missFromTri.snapshot == nil)
+
+        mgr.storeLeaf(storedTokens: tokens, leafSnapshot: snap, partitionKey: triKey)
+        #expect(mgr.stats.partitionCount == 2)
+
+        let triHit = mgr.lookup(tokens: tokens, partitionKey: triKey)
+        #expect(triHit.snapshotTokenOffset == 100)
+        let denseHit = mgr.lookup(tokens: tokens, partitionKey: denseKey)
+        #expect(denseHit.snapshotTokenOffset == 100)
+    }
+
+    @Test func triAttentionPartitionsIsolatedAcrossBudgets() {
+        let mgr = makeManager()
+        let tokens = Array(1...50)
+        let keySmall = makeKey(triAttention: triAttentionIdentity(budget: 8_000))
+        let keyLarge = makeKey(triAttention: triAttentionIdentity(budget: 12_000))
+
+        let snap = makeSnapshot(offset: tokens.count, type: .leaf)
+        mgr.storeLeaf(storedTokens: tokens, leafSnapshot: snap, partitionKey: keySmall)
+
+        let result = mgr.lookup(tokens: tokens, partitionKey: keyLarge)
+        #expect(result.snapshot == nil)
     }
 
     // MARK: - 17. differentModelIDsIsolated
@@ -1577,5 +1638,90 @@ struct PrefixCacheManagerTests {
         }
         #expect(ctx.storageRef.tokenOffset == snapshot.tokenOffset)
         #expect(restoredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
+    }
+
+    // MARK: - TriAttention SSD admission gate
+
+    private static let triAttentionIdentity: TriAttentionPartitionIdentity =
+        .triAttention(
+            budgetTokens: 12_000,
+            calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
+                rawValue: "aaa"
+            ),
+            implementationVersion: .v1
+        )
+
+    /// `storeSnapshots` must RAM-admit but skip SSD admission for a
+    /// non-dense partition: persisting it would create a manifest that
+    /// cannot be round-tripped at warm start, opening a cross-mode
+    /// contamination path.
+    @Test func storeSnapshotsSkipsSSDForTriAttentionPartition() async throws {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let key = makeSSDKey(triAttention: Self.triAttentionIdentity)
+        let promptTokens = Array(1...10)
+        let snapshot = makeUniformSnapshot(offset: 5, type: .system)
+        let payload = makeSSDPayload(bytes: 256, checkpointType: .system)
+
+        mgr.storeSnapshots(
+            promptTokens: promptTokens,
+            capturedSnapshots: [snapshot],
+            snapshotPayloads: [payload],
+            partitionKey: key
+        )
+        await tieredStore.ssdStore!.flushAsync()
+
+        #expect(mgr.stats.partitionCount == 1)
+        #expect(mgr.stats.snapshotCount == 1)
+        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == 0)
+
+        let manifestURL = root.appendingPathComponent("manifest.json")
+        #expect(!FileManager.default.fileExists(atPath: manifestURL.path))
+        let partitionDir = root
+            .appendingPathComponent("partitions")
+            .appendingPathComponent(key.partitionDigest)
+        #expect(!FileManager.default.fileExists(atPath: partitionDir.path))
+    }
+
+    @Test func storeLeafSkipsSSDForTriAttentionPartition() async throws {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let key = makeSSDKey(triAttention: Self.triAttentionIdentity)
+        let tokens = Array(1...10)
+        let leafSnapshot = makeUniformSnapshot(offset: tokens.count, type: .leaf)
+        let leafPayload = makeSSDPayload(bytes: 256, checkpointType: .leaf)
+
+        mgr.storeLeaf(
+            storedTokens: tokens,
+            leafSnapshot: leafSnapshot,
+            leafPayload: leafPayload,
+            partitionKey: key
+        )
+        await tieredStore.ssdStore!.flushAsync()
+
+        #expect(mgr.stats.snapshotCount == 1)
+        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == 0)
+    }
+
+    @Test func storeSnapshotsStillAdmitsSSDForDensePartition() async throws {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let key = makeSSDKey()
+        let promptTokens = Array(1...10)
+        let snapshot = makeUniformSnapshot(offset: 5, type: .system)
+        let payload = makeSSDPayload(bytes: 256, checkpointType: .system)
+
+        mgr.storeSnapshots(
+            promptTokens: promptTokens,
+            capturedSnapshots: [snapshot],
+            snapshotPayloads: [payload],
+            partitionKey: key
+        )
+        await tieredStore.ssdStore!.flushAsync()
+
+        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
     }
 }

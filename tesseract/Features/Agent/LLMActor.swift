@@ -1325,6 +1325,9 @@ actor LLMActor {
         let promptStartsThinking = self.promptStartsThinking
         let modelFingerprint = self.modelFingerprint
         let ssdEnabled = self.ssdConfig?.enabled == true
+        let triAttentionIdentity = TriAttentionPartitionIdentity.from(
+            self.triAttentionRuntimeSelection.effectiveConfiguration
+        )
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
             modelID: modelID,
@@ -1359,7 +1362,8 @@ actor LLMActor {
                 modelID: modelID,
                 kvBits: parameters.kvBits,
                 kvGroupSize: parameters.kvGroupSize,
-                modelFingerprint: modelFingerprint
+                modelFingerprint: modelFingerprint,
+                triAttention: triAttentionIdentity
             )
 
             // 4a. Detect stable prefix boundary (system + tools) via two-probe technique.

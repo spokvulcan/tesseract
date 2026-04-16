@@ -67,11 +67,10 @@ struct SnapshotManifestTests {
     // MARK: - Schema version
 
     @Test
-    func schemaVersionIsThree() {
-        // The on-disk format is currently v3; bumping this value
-        // invalidates every existing manifest. Pinning here so an
+    func schemaVersionIsFour() {
+        // Bumping invalidates every existing manifest. Pinned so an
         // accidental bump trips this test.
-        #expect(SnapshotManifestSchema.currentVersion == 3)
+        #expect(SnapshotManifestSchema.currentVersion == 4)
     }
 
     @Test
@@ -661,6 +660,139 @@ struct SnapshotManifestTests {
                 "nil modelFingerprint collides with literal \"\(probe.label)\""
             )
         }
+    }
+
+    // MARK: - TriAttention partition identity
+
+    private func makeTriAttentionIdentity(
+        budget: Int = 12_000,
+        artifact: String? = "aaa",
+        impl: TriAttentionImplementationVersion = .v1
+    ) -> TriAttentionPartitionIdentity {
+        .triAttention(
+            budgetTokens: budget,
+            calibrationArtifactIdentity: artifact.map {
+                TriAttentionCalibrationArtifactIdentity(rawValue: $0)
+            },
+            implementationVersion: impl
+        )
+    }
+
+    private func makeKey(
+        modelID: String = "mlx-community/Qwen3-4B-4bit",
+        fingerprint: String? = "deadbeef",
+        triAttention: TriAttentionPartitionIdentity = .dense
+    ) -> CachePartitionKey {
+        CachePartitionKey(
+            modelID: modelID,
+            kvBits: 8,
+            kvGroupSize: 64,
+            modelFingerprint: fingerprint,
+            triAttention: triAttention
+        )
+    }
+
+    /// `.dense` must digest to the same value the pre-TriAttention
+    /// canonicalization produced. Any drift silently orphans every
+    /// dense snapshot persisted before TriAttention support landed.
+    @Test
+    func partitionDigestDenseMatchesPreTriAttentionWirePin() {
+        let explicitDense = makeKey(triAttention: .dense)
+        let defaulted = makeKey()
+        #expect(explicitDense.partitionDigest == "ecfce886")
+        #expect(defaulted.partitionDigest == "ecfce886")
+        #expect(explicitDense == defaulted)
+    }
+
+    @Test
+    func partitionDigestTriAttentionSplitsFromDense() {
+        let base = makeKey()
+        let triAttention = makeKey(
+            triAttention: makeTriAttentionIdentity(artifact: "cafef00d")
+        )
+        #expect(base.partitionDigest != triAttention.partitionDigest)
+        #expect(base != triAttention)
+    }
+
+    @Test
+    func partitionDigestDistinguishesTriAttentionFields() {
+        let base = makeKey(
+            modelID: "m",
+            fingerprint: "f",
+            triAttention: makeTriAttentionIdentity()
+        )
+        let diffs: [(label: String, identity: TriAttentionPartitionIdentity)] = [
+            ("budgetTokens", makeTriAttentionIdentity(budget: 8_000)),
+            ("calibrationArtifactIdentity", makeTriAttentionIdentity(artifact: "bbb")),
+            ("calibrationArtifactIdentity nil vs Some", makeTriAttentionIdentity(artifact: nil)),
+        ]
+        for diff in diffs {
+            let other = makeKey(
+                modelID: "m",
+                fingerprint: "f",
+                triAttention: diff.identity
+            )
+            #expect(
+                base.partitionDigest != other.partitionDigest,
+                "\(diff.label) does not affect the TriAttention digest"
+            )
+            #expect(base != other, "\(diff.label) does not affect equality")
+        }
+    }
+
+    @Test
+    func partitionKeySortsDenseBeforeTriAttention() {
+        let dense = makeKey(modelID: "m", fingerprint: "f")
+        let triAttention = makeKey(
+            modelID: "m", fingerprint: "f",
+            triAttention: makeTriAttentionIdentity()
+        )
+        #expect(dense < triAttention)
+        #expect(!(triAttention < dense))
+
+        let smallerBudget = makeKey(
+            modelID: "m", fingerprint: "f",
+            triAttention: makeTriAttentionIdentity(budget: 8_000)
+        )
+        #expect(smallerBudget < triAttention)
+    }
+
+    /// `enabled == false` must collapse onto `.dense` regardless of
+    /// the carried budget/artifact/impl fields; otherwise dense
+    /// partitions fragment whenever the runtime selector forwards a
+    /// non-default budget through a disabled configuration.
+    @Test
+    func triAttentionPartitionIdentityFromConfigurationCollapsesDisabled() {
+        #expect(TriAttentionPartitionIdentity.from(.v1Disabled) == .dense)
+
+        let disabledWithFields = TriAttentionPartitionIdentity.from(
+            TriAttentionConfiguration(
+                enabled: false,
+                budgetTokens: 8_000,
+                calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
+                    rawValue: "cafebabe"
+                ),
+                implementationVersion: .v1
+            )
+        )
+        #expect(disabledWithFields == .dense)
+
+        let artifact = TriAttentionCalibrationArtifactIdentity(rawValue: "cafebabe")
+        let enabled = TriAttentionPartitionIdentity.from(
+            TriAttentionConfiguration(
+                enabled: true,
+                budgetTokens: 12_000,
+                calibrationArtifactIdentity: artifact,
+                implementationVersion: .v1
+            )
+        )
+        #expect(
+            enabled == .triAttention(
+                budgetTokens: 12_000,
+                calibrationArtifactIdentity: artifact,
+                implementationVersion: .v1
+            )
+        )
     }
 
     // MARK: - Schema-version compatibility

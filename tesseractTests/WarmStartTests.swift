@@ -505,6 +505,87 @@ struct WarmStartTests {
         }
     }
 
+    // MARK: - TriAttention digest-mismatch invariant
+
+    /// A partition written under a TriAttention digest must be dropped
+    /// at warm start, not reattached under the reconstructed `.dense`
+    /// key — otherwise a dense lookup would hydrate TriAttention state.
+    @Test func warmStartDropsPartitionWhenOnDiskDigestMismatches() async throws {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+
+        let triAttentionKey = CachePartitionKey(
+            modelID: "test-model",
+            kvBits: nil,
+            kvGroupSize: 64,
+            modelFingerprint: testFingerprint,
+            triAttention: .triAttention(
+                budgetTokens: 12_000,
+                calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
+                    rawValue: "aaa"
+                ),
+                implementationVersion: .v1
+            )
+        )
+        let triDigest = triAttentionKey.partitionDigest
+        let denseKey = makePartitionKey(fingerprint: testFingerprint)
+        #expect(triDigest != denseKey.partitionDigest)
+
+        let descriptor = makeDescriptor(
+            partitionDigest: triDigest,
+            pathFromRoot: Array(1...10),
+            tokenOffset: 10,
+            bytes: 4096
+        )
+
+        var manifest = SnapshotManifest.empty()
+        manifest.partitions[triDigest] = makePartitionMeta(fingerprint: testFingerprint)
+        manifest.snapshots[descriptor.snapshotID] = descriptor
+        try writeManifest(manifest, rootURL: root)
+
+        let (mgr, _) = makeManager(rootURL: root)
+        try await mgr.warmStart(modelFingerprint: testFingerprint)
+
+        #expect(mgr.stats.partitionCount == 0)
+
+        let denseResult = mgr.lookup(
+            tokens: descriptor.pathFromRoot,
+            partitionKey: denseKey
+        )
+        #expect(denseResult.snapshot == nil)
+        if case .hit = denseResult.reason {
+            #expect(Bool(false), "dense lookup should not hit a TriAttention-digest partition")
+        }
+        if case .ssdHit = denseResult.reason {
+            #expect(Bool(false), "dense lookup should not resolve an ssdHit against TriAttention state")
+        }
+    }
+
+    @Test func warmStartAcceptsDenseDigestMatch() async throws {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+
+        let denseKey = makePartitionKey(fingerprint: testFingerprint)
+        let digest = denseKey.partitionDigest
+        let descriptor = makeDescriptor(
+            partitionDigest: digest,
+            pathFromRoot: Array(1...10),
+            tokenOffset: 10,
+            bytes: 4096
+        )
+
+        var manifest = SnapshotManifest.empty()
+        manifest.partitions[digest] = makePartitionMeta(fingerprint: testFingerprint)
+        manifest.snapshots[descriptor.snapshotID] = descriptor
+        try writeManifest(manifest, rootURL: root)
+
+        let (mgr, ssdStore) = makeManager(rootURL: root)
+        try await mgr.warmStart(modelFingerprint: testFingerprint)
+
+        #expect(ssdStore.currentSSDBytesForTesting() == descriptor.bytes)
+        #expect(mgr.stats.partitionCount == 1)
+    }
+
     // MARK: - Rebuild-path fixtures
 
     private func makeWriterPayload(bytes: Int) -> SnapshotPayload {

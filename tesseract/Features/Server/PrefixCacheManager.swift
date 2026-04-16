@@ -1,6 +1,50 @@
 import Foundation
 import MLXLMCommon
 
+/// Normalized TriAttention identity folded into `CachePartitionKey`.
+///
+/// Every `TriAttentionConfiguration` with `enabled == false` collapses
+/// to `.dense` so unused budget/impl fields cannot fragment dense
+/// partitions. The `.dense` case is also load-bearing for the on-disk
+/// digest: a default dense key must canonicalize to the exact bytes
+/// the pre-TriAttention code produced, or persisted snapshots become
+/// unreachable.
+nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable {
+    case dense
+    case triAttention(
+        budgetTokens: Int,
+        calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity?,
+        implementationVersion: TriAttentionImplementationVersion
+    )
+
+    nonisolated static func from(_ configuration: TriAttentionConfiguration) -> Self {
+        guard configuration.enabled else { return .dense }
+        return .triAttention(
+            budgetTokens: configuration.budgetTokens,
+            calibrationArtifactIdentity: configuration.calibrationArtifactIdentity,
+            implementationVersion: configuration.implementationVersion
+        )
+    }
+
+    nonisolated var isDense: Bool {
+        if case .dense = self { return true }
+        return false
+    }
+
+    private var sortKey: (Int, Int, String, String) {
+        switch self {
+        case .dense:
+            return (0, 0, "", "")
+        case .triAttention(let budget, let artifact, let impl):
+            return (1, budget, artifact?.rawValue ?? "", impl.rawValue)
+        }
+    }
+
+    nonisolated static func < (lhs: Self, rhs: Self) -> Bool {
+        lhs.sortKey < rhs.sortKey
+    }
+}
+
 /// Partition key for isolating radix trees by runtime configuration.
 ///
 /// Tool/template digests are intentionally NOT part of the partition key:
@@ -8,9 +52,9 @@ import MLXLMCommon
 /// naturally isolated within one partition.
 ///
 /// `Comparable` so partition iteration can produce a deterministic order
-/// (modelID → kvBits → kvGroupSize → modelFingerprint) for stable
-/// tie-break behavior in eviction.
-struct CachePartitionKey: Hashable, Sendable, Comparable {
+/// (modelID → kvBits → kvGroupSize → modelFingerprint → triAttention)
+/// for stable tie-break behavior in eviction.
+nonisolated struct CachePartitionKey: Hashable, Sendable, Comparable {
     let modelID: String
     let kvBits: Int?
     let kvGroupSize: Int
@@ -19,22 +63,27 @@ struct CachePartitionKey: Hashable, Sendable, Comparable {
     /// under the same `modelID` cannot surface stale persisted snapshots.
     /// `nil` for RAM-only test fixtures.
     let modelFingerprint: String?
+    let triAttention: TriAttentionPartitionIdentity
 
     nonisolated init(
         modelID: String,
         kvBits: Int?,
         kvGroupSize: Int,
-        modelFingerprint: String? = nil
+        modelFingerprint: String? = nil,
+        triAttention: TriAttentionPartitionIdentity = .dense
     ) {
         self.modelID = modelID
         self.kvBits = kvBits
         self.kvGroupSize = kvGroupSize
         self.modelFingerprint = modelFingerprint
+        self.triAttention = triAttention
     }
 
     static func < (lhs: CachePartitionKey, rhs: CachePartitionKey) -> Bool {
-        (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize, lhs.modelFingerprint ?? "")
-            < (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize, rhs.modelFingerprint ?? "")
+        let lhsHead = (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize, lhs.modelFingerprint ?? "")
+        let rhsHead = (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize, rhs.modelFingerprint ?? "")
+        if lhsHead != rhsHead { return lhsHead < rhsHead }
+        return lhs.triAttention < rhs.triAttention
     }
 }
 
@@ -442,7 +491,14 @@ final class PrefixCacheManager {
         let tree = store.getOrCreateTree(for: partitionKey)
         tree.insertPath(tokens: promptTokens)
 
-        let payloadsAligned = snapshotPayloads.count == capturedSnapshots.count
+        // SSD admission is `.dense`-only: `PartitionMeta` has no field
+        // for the TriAttention identity, so a persisted TriAttention
+        // partition would be reattached as `.dense` at warm start and
+        // surface its snapshots to dense requests. RAM admission above
+        // runs unconditionally.
+        let payloadsAligned =
+            snapshotPayloads.count == capturedSnapshots.count
+                && partitionKey.triAttention.isDense
         if payloadsAligned {
             registerSSDPartitionIfNeeded(for: partitionKey)
         }
@@ -508,7 +564,7 @@ final class PrefixCacheManager {
             in: tree
         )
 
-        if let leafPayload {
+        if let leafPayload, partitionKey.triAttention.isDense {
             registerSSDPartitionIfNeeded(for: partitionKey)
             let descriptor = makePersistedDescriptor(
                 partitionKey: partitionKey,
@@ -687,6 +743,7 @@ final class PrefixCacheManager {
         let outcome = ssdStore.warmStartLoad(expectedFingerprint: modelFingerprint)
 
         let now: ContinuousClock.Instant = .now
+        var digestMismatchPartitions: [String] = []
         for partition in outcome.validPartitions {
             let partitionKey = CachePartitionKey(
                 modelID: partition.meta.modelID,
@@ -694,6 +751,16 @@ final class PrefixCacheManager {
                 kvGroupSize: partition.meta.kvGroupSize,
                 modelFingerprint: partition.meta.modelFingerprint
             )
+            // `PartitionMeta` cannot round-trip the TriAttention
+            // identity, so the reconstructed key is always `.dense`.
+            // A digest that no longer matches the on-disk directory
+            // name means the partition was written under a non-dense
+            // identity — drop it rather than silently reattaching it
+            // as dense and cross-contaminating at lookup time.
+            guard partition.digest == partitionKey.partitionDigest else {
+                digestMismatchPartitions.append(partition.digest)
+                continue
+            }
             // Register with the store so subsequent admissions do
             // not trip the `rejectedUnregisteredPartition` guard.
             store.registerPartition(partition.meta, for: partitionKey)
@@ -731,6 +798,12 @@ final class PrefixCacheManager {
         for digest in outcome.invalidatedPartitionDigests {
             PrefixCacheDiagnostics.logSystem(
                 PrefixCacheDiagnostics.FingerprintMismatchEvent(partition: digest)
+            )
+        }
+        for digest in digestMismatchPartitions {
+            Log.agent.warning(
+                "PrefixCacheManager warmStart dropping partition \(digest): "
+                + "on-disk digest does not match digest reconstructed from PartitionMeta"
             )
         }
         PrefixCacheDiagnostics.logSystem(
@@ -771,6 +844,11 @@ final class PrefixCacheManager {
 
     private func registerSSDPartitionIfNeeded(for partitionKey: CachePartitionKey) {
         guard store.ssdStore != nil else { return }
+        // Belt for the `.dense`-only SSD invariant: callers already
+        // gate `store.admitSnapshot`, but registering a non-dense
+        // `PartitionMeta` here would still produce an unreachable
+        // partition on disk.
+        guard partitionKey.triAttention.isDense else { return }
         guard let fingerprint = partitionKey.modelFingerprint else {
             assertionFailure(
                 "SSD admission requires a model fingerprint on CachePartitionKey"

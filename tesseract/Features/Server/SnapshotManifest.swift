@@ -42,8 +42,11 @@ import MLXLMCommon
 nonisolated enum SnapshotManifestSchema {
     /// Incrementing this value invalidates every on-disk manifest
     /// and discards all previously persisted snapshots on the next
-    /// warm start.
-    static let currentVersion: Int = 3
+    /// warm start. Bump whenever a field that `partitionDigest` or
+    /// `PartitionMeta` canonicalizes changes shape, so partitions
+    /// written under the old canonicalization cannot be silently
+    /// reattached under a new key and surface stale state.
+    static let currentVersion: Int = 4
 }
 
 // MARK: - Persisted descriptor (Codable, manifest.json + safetensors header)
@@ -388,7 +391,7 @@ extension CachePartitionKey {
     /// disagree — and `SnapshotManifestTests` pins a known
     /// input→output pair as a regression trap.
     ///
-    /// **Canonicalization.** Concatenates the four fields in fixed
+    /// **Canonicalization.** Concatenates the four base fields in fixed
     /// order (`modelID`, `kvBits`, `kvGroupSize`, `modelFingerprint`)
     /// separated by a single null byte (`\0`). Nullable fields
     /// (`kvBits`, `modelFingerprint`) use a presence tag: `"N"` for `nil`,
@@ -401,14 +404,30 @@ extension CachePartitionKey {
     /// and no value starting with `"S"` can ever equal the bare
     /// `"N"` sentinel.
     ///
+    /// When `triAttention == .dense` the canonical string stops here,
+    /// keeping the pre-TriAttention digest stable so dense partitions
+    /// persisted before TriAttention landed remain reachable under the
+    /// exact same on-disk digest. `.triAttention(...)` appends a
+    /// `\0TA:` tagged segment so TriAttention-enabled partitions can
+    /// never collide with their dense counterparts (nor with each
+    /// other across budget / calibration / impl-version changes).
+    ///
     /// The null-byte separator cannot appear inside any field:
     /// `modelID` is a HuggingFace ID, `kvBits`/`kvGroupSize` are
-    /// decimal integers, and `modelFingerprint` is hex SHA-256.
+    /// decimal integers, `modelFingerprint` is hex SHA-256,
+    /// `budgetTokens` is a decimal integer,
+    /// `calibrationArtifactIdentity` is hex SHA-256, and
+    /// `implementationVersion` is a restricted identifier string
+    /// (`"v1"` today).
     nonisolated var partitionDigest: String {
         let kvBitsField = kvBits.map { "S\($0)" } ?? "N"
         let fingerprintField = modelFingerprint.map { "S" + $0 } ?? "N"
-        let canonical =
+        var canonical =
             "\(modelID)\0\(kvBitsField)\0\(kvGroupSize)\0\(fingerprintField)"
+        if case let .triAttention(budget, artifact, impl) = triAttention {
+            let artifactField = artifact.map { "S" + $0.rawValue } ?? "N"
+            canonical += "\0TA:S\(budget)\0\(artifactField)\0\(impl.rawValue)"
+        }
 
         // FNV-1a 32-bit: offset_basis = 0x811c9dc5, prime = 0x01000193.
         var hash: UInt32 = 0x811c_9dc5
