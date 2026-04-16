@@ -9,14 +9,17 @@ import Foundation
 ///
 /// Replicates `AgentFactory.makeAgent` steps 1–8 with full bootstrap parity.
 /// Each call to `createAgent` produces a fresh `Agent` with its own compaction
-/// state but shares the same `AgentEngine` and `ToolRegistry`.
+/// state but shares the same `ServerInferenceService`, legacy fallback engine,
+/// and `ToolRegistry`.
 @MainActor
 final class BackgroundAgentFactory {
 
-    private let agentEngine: AgentEngine
+    private let inferenceService: ServerInferenceService
+    private let fallbackEngine: any LegacyInternalInferenceEngine
     private let sessionStore: BackgroundSessionStore
     private let settingsManager: SettingsManager
     private let arbiter: InferenceArbiter
+    private let rollbackEnabled: @MainActor () -> Bool
 
     // Cached at init — after running the same bootstrap as AgentFactory steps 1-4
     private let cachedSkills: [SkillMetadata]
@@ -33,18 +36,22 @@ final class BackgroundAgentFactory {
     // MARK: - Init
 
     init(
-        agentEngine: AgentEngine,
+        inferenceService: ServerInferenceService,
+        fallbackEngine: any LegacyInternalInferenceEngine,
         toolRegistry: ToolRegistry,
         extensionHost: ExtensionHost,
         sessionStore: BackgroundSessionStore,
         packageRegistry: PackageRegistry,
         settingsManager: SettingsManager,
-        arbiter: InferenceArbiter
+        arbiter: InferenceArbiter,
+        rollbackEnabled: @escaping @MainActor () -> Bool
     ) {
-        self.agentEngine = agentEngine
+        self.inferenceService = inferenceService
+        self.fallbackEngine = fallbackEngine
         self.sessionStore = sessionStore
         self.settingsManager = settingsManager
         self.arbiter = arbiter
+        self.rollbackEnabled = rollbackEnabled
         self.agentRoot = PathSandbox.defaultRoot
 
         // 1. Bootstrap packages (same as AgentFactory step 1) — idempotent
@@ -114,39 +121,25 @@ final class BackgroundAgentFactory {
         // 3. Build compaction transform — fresh ContextManager per run
         let generateParameters = AgentGenerateParameters.forModel(selectedModelID)
         let contextManager = ContextManager(settings: .standard)
-        let engine = agentEngine
 
         let compactionTransform = makeCompactionTransform(
             contextManager: contextManager,
             contextWindow: 262_144,
             summarize: makeSummarizeClosure(
-                engine: engine,
+                inferenceService: inferenceService,
+                fallbackEngine: fallbackEngine,
+                rollbackEnabled: rollbackEnabled,
                 parametersProvider: { generateParameters }
             )
         )
 
-        // 4. Build generate closure — same MainActor-hopping pattern as AgentFactory
-        let generate: LLMGenerateFunction = { systemPrompt, messages, tools, _ in
-            let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
-            let task = Task { @MainActor in
-                do {
-                    let engineStream = try engine.generate(
-                        systemPrompt: systemPrompt,
-                        messages: messages,
-                        tools: tools,
-                        parameters: generateParameters
-                    )
-                    for try await generation in engineStream {
-                        continuation.yield(generation)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-            return stream
-        }
+        // 4. Build generate closure — same shared inference path as AgentFactory
+        let generate = makeServerInferenceGenerateClosure(
+            inferenceService: inferenceService,
+            fallbackEngine: fallbackEngine,
+            rollbackEnabled: rollbackEnabled,
+            parametersProvider: { generateParameters }
+        )
 
         // 5. Create agent config — no steering/followUp queues for background
         let config = AgentLoopConfig(

@@ -157,7 +157,10 @@ final class AgentEngine {
         prompt: String,
         parameters: AgentGenerateParameters = .default
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
-        try startGeneration(input: UserInput(prompt: prompt), parameters: parameters)
+        try startPromptInference(
+            prompt: prompt,
+            parameters: parameters
+        ).stream
     }
 
     /// Streams text generation from the new `LLMMessage`-based conversation format.
@@ -197,8 +200,12 @@ final class AgentEngine {
         parameters: AgentGenerateParameters = .default
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
         Log.agent.debug("generate(toolSpecs:) — \(messages.count) messages, \(toolSpecs?.count ?? 0) tool specs")
-        let input = Self.buildUserInput(systemPrompt: systemPrompt, messages: messages, toolSpecs: toolSpecs)
-        return try startGeneration(input: input, parameters: parameters)
+        return try startChatInference(
+            systemPrompt: systemPrompt,
+            messages: messages,
+            toolSpecs: toolSpecs,
+            parameters: parameters
+        ).stream
     }
 
     /// Start HTTP-server generation, opportunistically reusing a cached prefix when the
@@ -639,3 +646,54 @@ final class AgentEngine {
         )
     }
 }
+
+@MainActor
+extension AgentEngine: ServerInferenceEngine {
+    func startPromptInference(
+        prompt: String,
+        parameters: AgentGenerateParameters
+    ) throws -> HTTPServerGenerationStart {
+        try startManagedGeneration(
+            input: UserInput(prompt: prompt),
+            parameters: parameters
+        )
+    }
+
+    func startChatInference(
+        systemPrompt: String,
+        messages: [LLMMessage],
+        toolSpecs: [ToolSpec]?,
+        parameters: AgentGenerateParameters
+    ) throws -> HTTPServerGenerationStart {
+        let input = Self.buildUserInput(
+            systemPrompt: systemPrompt,
+            messages: messages,
+            toolSpecs: toolSpecs
+        )
+        return try startManagedGeneration(
+            input: input,
+            parameters: parameters
+        )
+    }
+
+    func startServerChatInference(
+        modelID: String,
+        systemPrompt: String,
+        messages: [LLMMessage],
+        toolSpecs: [ToolSpec]?,
+        prefixCacheConversation: HTTPPrefixCacheConversation?,
+        parameters: AgentGenerateParameters
+    ) async throws -> HTTPServerGenerationStart {
+        try await generateServerTextCompletion(
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: messages,
+            toolSpecs: toolSpecs,
+            prefixCacheConversation: prefixCacheConversation,
+            parameters: parameters
+        )
+    }
+}
+
+@MainActor
+extension AgentEngine: LegacyInternalInferenceEngine {}

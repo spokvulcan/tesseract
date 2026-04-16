@@ -47,7 +47,8 @@ struct ModelDefinitionCatalogTests {
         """
         try config.write(to: root.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
 
-        #expect(isParoQuantModel(directory: root))
+        let isParoModel = Tesseract_Agent.isParoQuantModel(directory: root)
+        #expect(isParoModel)
     }
 }
 

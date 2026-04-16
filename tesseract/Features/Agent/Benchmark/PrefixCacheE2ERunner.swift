@@ -63,6 +63,30 @@ final class PrefixCacheE2ERunner {
             minP: 0.0
         )
 
+        log("\n── Step 1: Managed path equivalence (direct vs service route=.standard) ──")
+        let managedEquivalence = try await runManagedPathEquivalenceCheck(
+            engine: engine,
+            systemPrompt: systemPrompt,
+            toolSpecs: toolSpecs,
+            parameters: params
+        )
+        log("  directTextChars=\(managedEquivalence.direct.generatedText.count) "
+            + "serviceTextChars=\(managedEquivalence.service.generatedText.count) "
+            + "directToolCalls=\(managedEquivalence.direct.toolCalls.count) "
+            + "serviceToolCalls=\(managedEquivalence.service.toolCalls.count)")
+        checks.append(CheckResult(
+            name: "managed_standard_route_generated_text_matches",
+            passed: managedEquivalence.direct.generatedText == managedEquivalence.service.generatedText,
+            detail: "directChars=\(managedEquivalence.direct.generatedText.count) "
+                + "serviceChars=\(managedEquivalence.service.generatedText.count)"
+        ))
+        checks.append(CheckResult(
+            name: "managed_standard_route_tool_calls_match",
+            passed: managedEquivalence.direct.toolCalls == managedEquivalence.service.toolCalls,
+            detail: "directToolCalls=\(managedEquivalence.direct.toolCalls.count) "
+                + "serviceToolCalls=\(managedEquivalence.service.toolCalls.count)"
+        ))
+
         // Step 2: Request A — baseline, cold cache.
         log("\n── Step 2: Request A (baseline, cold prefix cache) ──")
         let requestA = try await runRequest(
@@ -273,6 +297,11 @@ final class PrefixCacheE2ERunner {
         let toolCalls: [ToolCallInfo]
     }
 
+    private struct ManagedPathEquivalenceResult {
+        let direct: RequestResult
+        let service: RequestResult
+    }
+
     private enum BenchmarkMessage {
         case user(String)
         case assistant(content: String, reasoning: String?, toolCalls: [ToolCallInfo] = [])
@@ -397,6 +426,92 @@ final class PrefixCacheE2ERunner {
             messages: [.user(userMessage)],
             toolSpecs: toolSpecs,
             parameters: parameters
+        )
+    }
+
+    private func runManagedPathEquivalenceCheck(
+        engine: AgentEngine,
+        systemPrompt: String,
+        toolSpecs: [ToolSpec],
+        parameters: AgentGenerateParameters
+    ) async throws -> ManagedPathEquivalenceResult {
+        var toolLoopParams = parameters
+        toolLoopParams.maxTokens = max(parameters.maxTokens, 160)
+        let service = ServerInferenceService(
+            engine: engine,
+            modelStateProvider: { nil }
+        )
+        let prompt = """
+            Call exactly one tool now: use the `read` tool with the absolute \
+            path `/tmp/tool-loop-target.txt`. Do not answer in prose before \
+            the tool call. Emit only the tool call.
+            """
+        let messages: [LLMMessage] = [.user(content: prompt)]
+
+        let direct = try await collectManagedRequest(
+            stream: try engine.generate(
+                systemPrompt: systemPrompt,
+                messages: messages,
+                toolSpecs: toolSpecs,
+                parameters: toolLoopParams
+            )
+        )
+
+        let serviceStart = try await service.start(
+            ServerInferenceRequest(
+                input: .chat(.init(
+                    systemPrompt: systemPrompt,
+                    messages: messages,
+                    toolSpecs: toolSpecs,
+                    prefixCacheConversation: nil
+                )),
+                parameters: toolLoopParams,
+                route: .standard
+            )
+        )
+        let serviceResult = try await collectManagedRequest(stream: serviceStart.stream)
+
+        return ManagedPathEquivalenceResult(
+            direct: direct,
+            service: serviceResult
+        )
+    }
+
+    private func collectManagedRequest(
+        stream: AsyncThrowingStream<AgentGeneration, Error>
+    ) async throws -> RequestResult {
+        var generatedText = ""
+        var assistantText = ""
+        var assistantReasoning = ""
+        var toolCalls: [ToolCallInfo] = []
+
+        for try await event in stream {
+            switch event {
+            case .text(let chunk):
+                assistantText += chunk
+                generatedText += chunk
+            case .thinking(let chunk):
+                assistantReasoning += chunk
+                generatedText += chunk
+            case .toolCall(let call):
+                toolCalls.append(ToolCallInfo(
+                    id: "managed-call-\(toolCalls.count)",
+                    name: call.function.name,
+                    argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(call.function.arguments)
+                ))
+            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .info:
+                break
+            }
+        }
+
+        let trimmedReasoning = assistantReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+        return RequestResult(
+            cachedTokens: 0,
+            ttftSeconds: 0,
+            generatedText: generatedText,
+            assistantText: assistantText,
+            assistantReasoning: trimmedReasoning.isEmpty ? nil : trimmedReasoning,
+            toolCalls: toolCalls
         )
     }
 

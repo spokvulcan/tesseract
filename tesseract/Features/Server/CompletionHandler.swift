@@ -3,8 +3,8 @@ import MLXLMCommon
 import os
 
 /// Handles `POST /v1/chat/completions` requests by acquiring an inference lease
-/// from the `InferenceArbiter`, running generation through `AgentEngine`, and
-/// writing the response.
+/// from the `InferenceArbiter`, running generation through
+/// `ServerInferenceService`, and writing the response.
 ///
 /// All generation runs inside `arbiter.withExclusiveGPU(.llm)` to prevent
 /// overlap with the internal Agent chat or other HTTP requests.
@@ -15,16 +15,16 @@ struct CompletionHandler: Sendable {
     private static let sessionReplayStore = HTTPPrefixCacheSessionReplayStore()
 
     private let arbiter: InferenceArbiter
-    private let engine: AgentEngine
+    private let inferenceService: ServerInferenceService
     private let downloads: ModelDownloadManager
 
     init(
         arbiter: InferenceArbiter,
-        engine: AgentEngine,
+        inferenceService: ServerInferenceService,
         downloads: ModelDownloadManager
     ) {
         self.arbiter = arbiter
-        self.engine = engine
+        self.inferenceService = inferenceService
         self.downloads = downloads
     }
 
@@ -239,26 +239,13 @@ struct CompletionHandler: Sendable {
         sessionAffinity: String?
     ) async -> Result<StartedGeneration, Error> {
         let completionID = "chatcmpl-\(UUID().uuidString)"
-        // Read the full physical LLM slot identity (modelID + visionMode) in
-        // a single MainActor hop. `loadedLLMState` is the authoritative
-        // source after `ensureLoaded` has run inside the lease body —
-        // whatever was actually loaded for this request, whether driven by
-        // settings or the HTTP override. Using both dimensions to partition
-        // the session replay store prevents recovered reasoning from
-        // bleeding across two different physical containers that share the
-        // same client session affinity.
-        let (modelID, visionMode): (String, Bool) = await MainActor.run {
-            if let state = arbiter.loadedLLMState {
-                return (state.modelID, state.visionMode)
-            }
-            return ("", false)
-        }
+        let modelState = inferenceService.currentModelState() ?? .unavailable
 
         let repairedRequest = await Self.sessionReplayStore.repair(
             messages: request.messages,
             sessionAffinity: sessionAffinity,
-            modelID: modelID,
-            visionMode: visionMode
+            modelID: modelState.modelID,
+            visionMode: modelState.visionMode
         )
         let (systemPrompt, messages) = MessageConverter.convertMessages(repairedRequest.messages)
         let toolSpecs = MessageConverter.convertToolDefinitions(request.tools)
@@ -267,7 +254,7 @@ struct CompletionHandler: Sendable {
             tools: request.tools
         )
         let prefixCacheConversation = prefixCacheEligibility.conversation
-        var params = AgentGenerateParameters.forModel(modelID)
+        var params = AgentGenerateParameters.forModel(modelState.modelID)
         if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
         if let temp = request.temperature { params.temperature = Float(temp) }
         if let topP = request.top_p { params.topP = Float(topP) }
@@ -280,7 +267,7 @@ struct CompletionHandler: Sendable {
         )
         Log.server.info(
             "HTTP completion start — completionID=\(completionID) "
-            + "model=\(Self.echoModelID(requestModel: request.model, physical: modelID)) "
+            + "model=\(Self.echoModelID(requestModel: request.model, physical: modelState.modelID)) "
             + "stream=\(request.stream == true) "
             + "messages=\(repairedRequest.messages.count) normalizedMessages=\(messages.count) "
             + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCache=\(prefixCacheEligibility) "
@@ -288,17 +275,23 @@ struct CompletionHandler: Sendable {
         )
 
         do {
-            let start = try await engine.generateServerTextCompletion(
-                modelID: modelID,
-                systemPrompt: systemPrompt ?? "",
-                messages: messages,
-                toolSpecs: toolSpecs,
-                prefixCacheConversation: prefixCacheConversation,
-                parameters: params
+            let inferenceRequest = ServerInferenceRequest(
+                input: .chat(.init(
+                    systemPrompt: systemPrompt ?? "",
+                    messages: messages,
+                    toolSpecs: toolSpecs,
+                    prefixCacheConversation: prefixCacheConversation
+                )),
+                parameters: params,
+                route: .serverCompatible
             )
+            let start = try await inferenceService.start(
+                inferenceRequest
+            )
+            let startModelState = start.modelState ?? modelState
             return .success(.init(
-                modelID: modelID,
-                visionMode: visionMode,
+                modelID: startModelState.modelID,
+                visionMode: startModelState.visionMode,
                 completionID: completionID,
                 stream: start.stream,
                 cachedTokenCount: start.cachedTokenCount,
@@ -372,47 +365,24 @@ struct CompletionHandler: Sendable {
             )
         )
 
-        let finishReason: OpenAI.FinishReason
-        if !toolCalls.isEmpty {
-            finishReason = .tool_calls
-        } else if let info, let maxTokens = request.effectiveMaxTokens,
-                  info.generationTokenCount >= maxTokens {
-            finishReason = .length
-        } else {
-            finishReason = .stop
-        }
-
-        let openAIToolCalls = toolCalls.isEmpty ? nil : ToolCallConverter.convertToOpenAI(toolCalls)
-
-        let response = OpenAI.ChatCompletionResponse(
-            id: start.completionID,
-            model: Self.echoModelID(requestModel: request.model, physical: start.modelID),
+        let response = Self.makeNonStreamingResponse(
+            completionID: start.completionID,
+            requestModel: request.model,
+            physicalModelID: start.modelID,
             created: Int(Date().timeIntervalSince1970),
-            system_fingerprint: "tesseract-1.0-mlx",
-            choices: [
-                OpenAI.ChatCompletionChoice(
-                    index: 0,
-                    finish_reason: finishReason,
-                    message: OpenAI.ResponseMessage(
-                        role: .assistant,
-                        content: textContent.isEmpty ? nil : textContent,
-                        reasoning_content: thinkingContent.isEmpty ? nil : thinkingContent,
-                        tool_calls: openAIToolCalls
-                    )
-                ),
-            ],
-            usage: OpenAI.Usage(
-                prompt_tokens: info?.promptTokenCount ?? 0,
-                completion_tokens: info?.generationTokenCount ?? 0,
-                total_tokens: (info?.promptTokenCount ?? 0) + (info?.generationTokenCount ?? 0),
-                prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: start.cachedTokenCount)
-            )
+            textContent: textContent,
+            thinkingContent: thinkingContent,
+            toolCalls: toolCalls,
+            info: info,
+            cachedTokenCount: start.cachedTokenCount,
+            maxTokens: request.effectiveMaxTokens
         )
 
         // Encodable conformance requires MainActor context (Swift 6.2 isolation inference)
         let data: Data = await MainActor.run {
             (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
         }
+        let finishReason = response.choices[0].finish_reason ?? .stop
         Log.server.info(
             "HTTP completion finished — completionID=\(start.completionID) "
             + "stream=false finishReason=\(finishReason.rawValue) "
@@ -523,25 +493,17 @@ struct CompletionHandler: Sendable {
                 finishReason = .length
             }
 
-            var finalChunk = makeChunk(
-                id: start.completionID, model: model, created: created,
-                delta: OpenAI.ChunkDelta(),
-                finishReason: finishReason
+            let finalChunk = Self.makeFinalStreamingChunk(
+                completionID: start.completionID,
+                requestModel: request.model,
+                physicalModelID: start.modelID,
+                created: created,
+                hasToolCalls: streamResult.hasToolCalls,
+                info: streamResult.info,
+                cachedTokenCount: start.cachedTokenCount,
+                maxTokens: request.effectiveMaxTokens,
+                includeUsage: includeUsage
             )
-            let usage: OpenAI.Usage?
-            if let info = streamResult.info {
-                usage = OpenAI.Usage(
-                    prompt_tokens: info.promptTokenCount,
-                    completion_tokens: info.generationTokenCount,
-                    total_tokens: info.promptTokenCount + info.generationTokenCount,
-                    prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: start.cachedTokenCount)
-                )
-            } else {
-                usage = nil
-            }
-            if includeUsage {
-                finalChunk.usage = usage
-            }
 
             guard await sse.send(finalChunk) else {
                 start.cancel()
@@ -622,6 +584,114 @@ struct CompletionHandler: Sendable {
                 ),
             ]
         )
+    }
+
+    nonisolated static func finishReason(
+        hasToolCalls: Bool,
+        generationTokenCount: Int?,
+        maxTokens: Int?
+    ) -> OpenAI.FinishReason {
+        if hasToolCalls {
+            return .tool_calls
+        }
+        if let generationTokenCount, let maxTokens, generationTokenCount >= maxTokens {
+            return .length
+        }
+        return .stop
+    }
+
+    nonisolated static func makeUsage(
+        info: AgentGeneration.Info?,
+        cachedTokenCount: Int
+    ) -> OpenAI.Usage {
+        OpenAI.Usage(
+            prompt_tokens: info?.promptTokenCount ?? 0,
+            completion_tokens: info?.generationTokenCount ?? 0,
+            total_tokens: (info?.promptTokenCount ?? 0) + (info?.generationTokenCount ?? 0),
+            prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: cachedTokenCount)
+        )
+    }
+
+    static func makeNonStreamingResponse(
+        completionID: String,
+        requestModel: String?,
+        physicalModelID: String,
+        created: Int,
+        textContent: String,
+        thinkingContent: String,
+        toolCalls: [ToolCall],
+        info: AgentGeneration.Info?,
+        cachedTokenCount: Int,
+        maxTokens: Int?
+    ) -> OpenAI.ChatCompletionResponse {
+        let finishReason = finishReason(
+            hasToolCalls: !toolCalls.isEmpty,
+            generationTokenCount: info?.generationTokenCount,
+            maxTokens: maxTokens
+        )
+        let openAIToolCalls = toolCalls.isEmpty ? nil : ToolCallConverter.convertToOpenAI(toolCalls)
+
+        return OpenAI.ChatCompletionResponse(
+            id: completionID,
+            model: echoModelID(requestModel: requestModel, physical: physicalModelID),
+            created: created,
+            system_fingerprint: "tesseract-1.0-mlx",
+            choices: [
+                OpenAI.ChatCompletionChoice(
+                    index: 0,
+                    finish_reason: finishReason,
+                    message: OpenAI.ResponseMessage(
+                        role: .assistant,
+                        content: textContent.isEmpty ? nil : textContent,
+                        reasoning_content: thinkingContent.isEmpty ? nil : thinkingContent,
+                        tool_calls: openAIToolCalls
+                    )
+                ),
+            ],
+            usage: makeUsage(
+                info: info,
+                cachedTokenCount: cachedTokenCount
+            )
+        )
+    }
+
+    static func makeFinalStreamingChunk(
+        completionID: String,
+        requestModel: String?,
+        physicalModelID: String,
+        created: Int,
+        hasToolCalls: Bool,
+        info: AgentGeneration.Info?,
+        cachedTokenCount: Int,
+        maxTokens: Int?,
+        includeUsage: Bool
+    ) -> OpenAI.ChatCompletionChunk {
+        var chunk = OpenAI.ChatCompletionChunk(
+            id: completionID,
+            model: echoModelID(requestModel: requestModel, physical: physicalModelID),
+            created: created,
+            system_fingerprint: "tesseract-1.0-mlx",
+            choices: [
+                OpenAI.ChatCompletionChunkChoice(
+                    index: 0,
+                    delta: OpenAI.ChunkDelta(),
+                    finish_reason: finishReason(
+                        hasToolCalls: hasToolCalls,
+                        generationTokenCount: info?.generationTokenCount,
+                        maxTokens: maxTokens
+                    )
+                ),
+            ]
+        )
+        if includeUsage {
+            if let info {
+                chunk.usage = makeUsage(
+                    info: info,
+                    cachedTokenCount: cachedTokenCount
+                )
+            }
+        }
+        return chunk
     }
 
     // MARK: - Stream Event Loop

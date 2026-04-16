@@ -49,6 +49,7 @@ final class SettingsManager {
         static let visionModeEnabled = "visionModeEnabled"
         static let isServerEnabled = "isServerEnabled"
         static let serverPort = "serverPort"
+        static let internalServerInferenceRollbackEnabled = "internalServerInferenceRollbackEnabled"
         static let prefixCacheSSDEnabled = "prefixCacheSSDEnabled"
         static let prefixCacheSSDBudgetBytes = "prefixCacheSSDBudgetBytes"
         static let prefixCacheSSDDirectoryOverride = "prefixCacheSSDDirectoryOverride"
@@ -296,6 +297,14 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(serverPort, forKey: Key.serverPort) }
     }
 
+    /// Temporary hidden kill switch for the Epic 0 server-core cutover.
+    /// When enabled, internal agent/background/summarization callers bypass
+    /// `ServerInferenceService` and use the legacy direct `AgentEngine.generate`
+    /// path. HTTP completions ignore this flag.
+    var internalServerInferenceRollbackEnabled = false {
+        didSet { UserDefaults.standard.set(internalServerInferenceRollbackEnabled, forKey: Key.internalServerInferenceRollbackEnabled) }
+    }
+
     // MARK: - SSD Prefix Cache
 
     // Changes to these settings take effect on the next model unload/reload.
@@ -372,6 +381,7 @@ final class SettingsManager {
             Key.visionModeEnabled: false,
             Key.isServerEnabled: false,
             Key.serverPort: 8321,
+            Key.internalServerInferenceRollbackEnabled: false,
             Key.prefixCacheSSDEnabled: true,
             Key.prefixCacheSSDBudgetBytes: 20 * 1024 * 1024 * 1024,
             // prefixCacheSSDDirectoryOverride: unset key → sandbox Caches fallback.
@@ -413,6 +423,7 @@ final class SettingsManager {
         visionModeEnabled = ud.bool(forKey: Key.visionModeEnabled)
         isServerEnabled = ud.bool(forKey: Key.isServerEnabled)
         serverPort = ud.integer(forKey: Key.serverPort)
+        internalServerInferenceRollbackEnabled = ud.bool(forKey: Key.internalServerInferenceRollbackEnabled)
         prefixCacheSSDEnabled = ud.bool(forKey: Key.prefixCacheSSDEnabled)
         prefixCacheSSDBudgetBytes = ud.integer(forKey: Key.prefixCacheSSDBudgetBytes)
         prefixCacheSSDDirectoryOverride = ud.string(forKey: Key.prefixCacheSSDDirectoryOverride)
@@ -483,6 +494,7 @@ final class SettingsManager {
         visionModeEnabled = false
         isServerEnabled = false
         serverPort = 8321
+        internalServerInferenceRollbackEnabled = false
         prefixCacheSSDEnabled = true
         prefixCacheSSDBudgetBytes = 20 * 1024 * 1024 * 1024
         prefixCacheSSDDirectoryOverride = nil

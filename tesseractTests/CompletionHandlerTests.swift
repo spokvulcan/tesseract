@@ -1,4 +1,5 @@
 import Foundation
+import MLXLMCommon
 import Testing
 @testable import Tesseract_Agent
 
@@ -101,6 +102,138 @@ struct CompletionHandlerTests {
         } catch {
             Issue.record("Unexpected error type: \(error)")
         }
+    }
+
+    @MainActor @Test func nonStreamingResponseIncludesReasoningToolCallsAndUsage() throws {
+        let info = AgentGeneration.Info(
+            promptTokenCount: 100,
+            generationTokenCount: 24,
+            promptTime: 0.2,
+            generateTime: 0.4
+        )
+        let response = CompletionHandler.makeNonStreamingResponse(
+            completionID: "chatcmpl-123",
+            requestModel: "client-model",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            textContent: "Done",
+            thinkingContent: "Need to inspect first.",
+            toolCalls: [
+                ToolCall(function: .init(
+                    name: "bash",
+                    arguments: ["command": "ls"]
+                )),
+            ],
+            info: info,
+            cachedTokenCount: 12,
+            maxTokens: 256
+        )
+
+        #expect(response.model == "client-model")
+        #expect(response.choices[0].finish_reason == .tool_calls)
+        #expect(response.choices[0].message.content == "Done")
+        #expect(response.choices[0].message.reasoning_content == "Need to inspect first.")
+        let toolCall = try #require(response.choices[0].message.tool_calls?.first)
+        #expect(toolCall.function?.name == "bash")
+        #expect(response.usage?.prompt_tokens == 100)
+        #expect(response.usage?.completion_tokens == 24)
+        #expect(response.usage?.total_tokens == 124)
+        #expect(response.usage?.prompt_tokens_details?.cached_tokens == 12)
+    }
+
+    @MainActor @Test func nonStreamingResponseUsesLengthFinishReasonAtMaxTokens() {
+        let info = AgentGeneration.Info(
+            promptTokenCount: 80,
+            generationTokenCount: 32,
+            promptTime: 0.1,
+            generateTime: 0.3
+        )
+        let response = CompletionHandler.makeNonStreamingResponse(
+            completionID: "chatcmpl-456",
+            requestModel: "   ",
+            physicalModelID: "qwen3.5-9b-paro",
+            created: 1_712_345_678,
+            textContent: "Truncated",
+            thinkingContent: "",
+            toolCalls: [],
+            info: info,
+            cachedTokenCount: 0,
+            maxTokens: 32
+        )
+
+        #expect(response.model == "qwen3.5-9b-paro")
+        #expect(response.choices[0].finish_reason == .length)
+        #expect(response.choices[0].message.content == "Truncated")
+        #expect(response.choices[0].message.reasoning_content == nil)
+        #expect(response.choices[0].message.tool_calls == nil)
+    }
+
+    @MainActor @Test func finalStreamingChunkIncludesUsageWhenRequested() {
+        let info = AgentGeneration.Info(
+            promptTokenCount: 60,
+            generationTokenCount: 15,
+            promptTime: 0.1,
+            generateTime: 0.2
+        )
+        let chunk = CompletionHandler.makeFinalStreamingChunk(
+            completionID: "chatcmpl-789",
+            requestModel: "client-model",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            hasToolCalls: false,
+            info: info,
+            cachedTokenCount: 7,
+            maxTokens: 256,
+            includeUsage: true
+        )
+
+        #expect(chunk.model == "client-model")
+        #expect(chunk.choices[0].finish_reason == .stop)
+        #expect(chunk.usage?.prompt_tokens == 60)
+        #expect(chunk.usage?.completion_tokens == 15)
+        #expect(chunk.usage?.prompt_tokens_details?.cached_tokens == 7)
+    }
+
+    @MainActor @Test func finalStreamingChunkOmitsUsageWhenNotRequested() {
+        let info = AgentGeneration.Info(
+            promptTokenCount: 60,
+            generationTokenCount: 15,
+            promptTime: 0.1,
+            generateTime: 0.2
+        )
+        let chunk = CompletionHandler.makeFinalStreamingChunk(
+            completionID: "chatcmpl-999",
+            requestModel: nil,
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            hasToolCalls: true,
+            info: info,
+            cachedTokenCount: 7,
+            maxTokens: 256,
+            includeUsage: false
+        )
+
+        #expect(chunk.model == "qwen3.5-4b-paro")
+        #expect(chunk.choices[0].finish_reason == .tool_calls)
+        #expect(chunk.usage == nil)
+    }
+
+    @MainActor @Test func finalStreamingChunkOmitsUsageWhenMetricsAreUnavailable() {
+        let chunk = CompletionHandler.makeFinalStreamingChunk(
+            completionID: "chatcmpl-1000",
+            requestModel: "client-model",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            hasToolCalls: false,
+            info: nil,
+            cachedTokenCount: 7,
+            maxTokens: 256,
+            includeUsage: true
+        )
+
+        #expect(chunk.model == "client-model")
+        #expect(chunk.choices[0].finish_reason == .stop)
+        #expect(chunk.usage == nil)
     }
 }
 

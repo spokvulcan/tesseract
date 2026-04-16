@@ -47,15 +47,6 @@ final class DependencyContainer: ObservableObject {
     lazy var newToolRegistry: ToolRegistry = {
         ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost, schedulingService: schedulingService)
     }()
-    lazy var agent: Agent = AgentFactory.makeAgent(
-        engine: agentEngine,
-        packageRegistry: packageRegistry,
-        extensionHost: extensionHost,
-        toolRegistry: newToolRegistry,
-        contextManager: contextManager,
-        selectedModelID: settingsManager.selectedAgentModelID,
-        settingsManager: settingsManager
-    )
     lazy var agentConversationStore = AgentConversationStore()
     lazy var scheduledTaskStore = ScheduledTaskStore()
     lazy var backgroundSessionStore = BackgroundSessionStore()
@@ -69,15 +60,36 @@ final class DependencyContainer: ObservableObject {
             modelDownloadManager: modelDownloadManager
         )
     }()
+    lazy var serverInferenceService = ServerInferenceService(
+        engine: agentEngine,
+        arbiter: inferenceArbiter
+    )
+    lazy var agent: Agent = AgentFactory.makeAgent(
+        inferenceService: serverInferenceService,
+        fallbackEngine: agentEngine,
+        packageRegistry: packageRegistry,
+        extensionHost: extensionHost,
+        toolRegistry: newToolRegistry,
+        contextManager: contextManager,
+        selectedModelID: settingsManager.selectedAgentModelID,
+        settingsManager: settingsManager,
+        rollbackEnabled: { [settingsManager] in
+            settingsManager.internalServerInferenceRollbackEnabled
+        }
+    )
     lazy var backgroundAgentFactory: BackgroundAgentFactory = {
         BackgroundAgentFactory(
-            agentEngine: agentEngine,
+            inferenceService: serverInferenceService,
+            fallbackEngine: agentEngine,
             toolRegistry: newToolRegistry,
             extensionHost: extensionHost,
             sessionStore: backgroundSessionStore,
             packageRegistry: packageRegistry,
             settingsManager: settingsManager,
-            arbiter: inferenceArbiter
+            arbiter: inferenceArbiter,
+            rollbackEnabled: { [settingsManager] in
+                settingsManager.internalServerInferenceRollbackEnabled
+            }
         )
     }()
     lazy var schedulingActor: SchedulingActor = {
@@ -133,7 +145,11 @@ final class DependencyContainer: ObservableObject {
             contextManager: contextManager,
             contextWindow: 262_144,
             summarize: makeSummarizeClosure(
-                engine: agentEngine,
+                inferenceService: serverInferenceService,
+                fallbackEngine: agentEngine,
+                rollbackEnabled: { [settingsManager] in
+                    settingsManager.internalServerInferenceRollbackEnabled
+                },
                 parametersProvider: { [settingsManager] in
                     AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
                 }
@@ -421,7 +437,7 @@ final class DependencyContainer: ObservableObject {
 
         let completionHandler = CompletionHandler(
             arbiter: inferenceArbiter,
-            engine: agentEngine,
+            inferenceService: serverInferenceService,
             downloads: modelDownloadManager
         )
         httpServer.route(.POST, "/v1/chat/completions") { request, writer in

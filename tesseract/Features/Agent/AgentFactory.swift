@@ -13,13 +13,15 @@ enum AgentFactory {
     /// prompt, wire compaction, and return a fully configured `Agent`.
     @MainActor
     static func makeAgent(
-        engine: AgentEngine,
+        inferenceService: ServerInferenceService,
+        fallbackEngine: any LegacyInternalInferenceEngine,
         packageRegistry: PackageRegistry,
         extensionHost: ExtensionHost,
         toolRegistry: ToolRegistry,
         contextManager: ContextManager,
         selectedModelID: String,
-        settingsManager: SettingsManager
+        settingsManager: SettingsManager,
+        rollbackEnabled: @escaping @MainActor () -> Bool
     ) -> Agent {
         let agentRoot = PathSandbox.defaultRoot
 
@@ -76,7 +78,9 @@ enum AgentFactory {
             contextManager: contextManager,
             contextWindow: 262_144,
             summarize: makeSummarizeClosure(
-                engine: engine,
+                inferenceService: inferenceService,
+                fallbackEngine: fallbackEngine,
+                rollbackEnabled: rollbackEnabled,
                 parametersProvider: { generateParameters }
             )
         )
@@ -95,27 +99,12 @@ enum AgentFactory {
             config: config,
             systemPrompt: systemPrompt,
             tools: tools,
-            generate: { systemPrompt, messages, tools, _ in
-                let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
-                let task = Task { @MainActor in
-                    do {
-                        let engineStream = try engine.generate(
-                            systemPrompt: systemPrompt,
-                            messages: messages,
-                            tools: tools,
-                            parameters: generateParameters
-                        )
-                        for try await generation in engineStream {
-                            continuation.yield(generation)
-                        }
-                        continuation.finish()
-                    } catch {
-                        continuation.finish(throwing: error)
-                    }
-                }
-                continuation.onTermination = { _ in task.cancel() }
-                return stream
-            }
+            generate: makeServerInferenceGenerateClosure(
+                inferenceService: inferenceService,
+                fallbackEngine: fallbackEngine,
+                rollbackEnabled: rollbackEnabled,
+                parametersProvider: { generateParameters }
+            )
         )
     }
 }
