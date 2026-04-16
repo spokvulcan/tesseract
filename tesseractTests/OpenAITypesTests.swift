@@ -529,8 +529,8 @@ struct OpenAITypesTests {
                     id: "qwen3.5-9b-paro",
                     type: "llm",
                     owned_by: "tesseract",
-                    max_context_length: 131072,
-                    loaded_context_length: 131072,
+                    max_context_length: 262144,
+                    loaded_context_length: 262144,
                     state: "loaded"
                 )
             ]
@@ -545,7 +545,7 @@ struct OpenAITypesTests {
         #expect(decoded.data[0].object == "model")
         #expect(decoded.data[0].type == "llm")
         #expect(decoded.data[0].owned_by == "tesseract")
-        #expect(decoded.data[0].max_context_length == 131072)
+        #expect(decoded.data[0].max_context_length == 262144)
         #expect(decoded.data[0].state == "loaded")
     }
 
