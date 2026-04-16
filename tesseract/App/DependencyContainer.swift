@@ -328,6 +328,21 @@ final class DependencyContainer: ObservableObject {
                 await self.httpServer.updatePort(UInt16(clamping: max(1, port)))
             }
         })
+
+        // Guarded on an already-loaded `.llm` slot so the initial `Observations`
+        // emit at subscription time does not force a model load at app launch —
+        // lazy loading is preserved.
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await _ in Observations({ self.settingsManager.triattentionEnabled }) {
+                guard self.inferenceArbiter.loadedSlots.contains(.llm) else { continue }
+                do {
+                    try await self.inferenceArbiter.reloadLLMIfNeeded()
+                } catch {
+                    Log.agent.error("TriAttention reload failed: \(error.localizedDescription)")
+                }
+            }
+        })
     }
 
     private func loadWhisperModelIfAvailable() async {

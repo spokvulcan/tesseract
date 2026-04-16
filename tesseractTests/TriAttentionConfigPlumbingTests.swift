@@ -46,6 +46,26 @@ struct TriAttentionConfigPlumbingTests {
         #expect(second.makeTriAttentionConfig().enabled == true)
     }
 
+    /// `resetToDefaults()` must bring `triattentionEnabled` back to `false` and
+    /// persist that value — otherwise a fresh `SettingsManager()` would rehydrate
+    /// the stale `true` from UserDefaults and re-enable the feature silently.
+    @Test
+    func resetToDefaultsRestoresDisabledAndPersists() {
+        clearTriAttentionDefaults()
+        defer { clearTriAttentionDefaults() }
+
+        let settings = SettingsManager()
+        settings.triattentionEnabled = true
+        #expect(settings.triattentionEnabled == true)
+
+        settings.resetToDefaults()
+        #expect(settings.triattentionEnabled == false)
+
+        let rehydrated = SettingsManager()
+        #expect(rehydrated.triattentionEnabled == false)
+        #expect(rehydrated.makeTriAttentionConfig().enabled == false)
+    }
+
     @Test
     func zeroArgEngineResolvesDisabledTriAttentionConfig() {
         let engine = AgentEngine()

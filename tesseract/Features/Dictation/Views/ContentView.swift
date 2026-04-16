@@ -67,6 +67,7 @@ struct ContentView: View {
         case .server:
             ServerSettingsView()
                 .injectCoreDependencies(from: container)
+                .environment(container.inferenceArbiter)
         case .model:
             ModelsPageView()
                 .environmentObject(container)

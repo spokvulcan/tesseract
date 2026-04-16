@@ -7,6 +7,18 @@ nonisolated enum TriAttentionDenseFallbackReason: String, Sendable, Codable, Equ
     case missingCalibrationArtifact
     case mismatchedCalibrationArtifact
     case unavailableCalibrationArtifact
+
+    /// User-facing label for the dense fallback reason. Distinct from
+    /// `rawValue`, which stays machine-greppable for logs and diagnostics.
+    var displayLabel: String {
+        switch self {
+        case .unsupportedModel: "model not supported"
+        case .visionMode: "vision mode"
+        case .missingCalibrationArtifact: "missing calibration artifact"
+        case .mismatchedCalibrationArtifact: "mismatched calibration artifact"
+        case .unavailableCalibrationArtifact: "calibration artifact unavailable"
+        }
+    }
 }
 
 nonisolated struct TriAttentionRuntimeSelection: Sendable {

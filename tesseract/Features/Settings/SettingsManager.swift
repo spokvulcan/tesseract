@@ -288,9 +288,15 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(visionModeEnabled, forKey: Key.visionModeEnabled) }
     }
 
-    /// Hidden runtime gate for Task 1 plumbing. UI stays out of scope until the
-    /// later operational-controls task, but the setting already persists so the
-    /// model-load and server-core seams are stable.
+    /// Runtime gate for TriAttention sparse attention on Qwen3.5 PARO text
+    /// models. Defaults to `false`. Surfaced in `ServerSettingsView` as a plain
+    /// toggle; plumbing flows through `makeTriAttentionConfig()` →
+    /// `AgentGenerateParameters` → server core. Flipping this while an LLM is
+    /// loaded kicks off an eager reload via `InferenceArbiter.reloadLLMIfNeeded()`
+    /// (observed in `DependencyContainer`). Flipping before any LLM is loaded
+    /// is picked up at the next lazy-load `ensureLoaded(.llm)` call. The view
+    /// reads `arbiter.loadedLLMState.triAttentionFallbackReason` to surface
+    /// dense fallback reasons (non-PARO model, vision mode, missing artifact).
     var triattentionEnabled = false {
         didSet { UserDefaults.standard.set(triattentionEnabled, forKey: Key.triattentionEnabled) }
     }

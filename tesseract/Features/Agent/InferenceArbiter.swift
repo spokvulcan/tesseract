@@ -193,6 +193,19 @@ final class InferenceArbiter {
         return try await body()
     }
 
+    /// Propagate a settings change (selected model, vision mode, TriAttention
+    /// toggle) into an eager model reload. Acquires the `.llm` lease FIFO-fair,
+    /// runs `ensureLoaded(.llm)` — which compares desired state against
+    /// `loadedLLMState` and reloads on mismatch — and releases. A no-op when
+    /// nothing relevant changed and the model is already loaded. Throws the
+    /// same errors as any other `.llm` lease acquisition (including
+    /// `modelNotDownloaded` if the currently-selected model is not on disk).
+    /// Independent of `isServerEnabled`: internal server-core use must work
+    /// without the public HTTP listener enabled.
+    func reloadLLMIfNeeded() async throws {
+        try await withExclusiveGPU(.llm) { }
+    }
+
     /// Like `withExclusiveGPU`, but defers to foreground work.
     ///
     /// The caller waits until no lease is held and no FIFO waiters are queued,
