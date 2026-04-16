@@ -32,27 +32,15 @@ struct TriAttentionRuntimeSelectionTests {
         )
     }
 
-    private func makeScratchDir(prefix: String) throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
+    private func makeFakeModelDirectory(paro: Bool = false) throws -> URL {
+        try TriAttentionTestFixtures.makeFakeModelDirectory(
+            prefix: "triattention-selection-model",
+            paro: paro
+        )
     }
 
-    private func makeFakeModelDirectory(paro: Bool = false) throws -> URL {
-        let url = try makeScratchDir(prefix: "triattention-selection-model")
-        guard paro else { return url }
-
-        let config = """
-        {
-          "architectures": ["Qwen3_5ForConditionalGeneration"],
-          "quantization_config": {
-            "quant_method": "paroquant"
-          }
-        }
-        """
-        try Data(config.utf8).write(to: url.appendingPathComponent("config.json", isDirectory: false))
-        return url
+    private func makeScratchDir(prefix: String) throws -> URL {
+        try TriAttentionTestFixtures.makeScratchDir(prefix: prefix)
     }
 
     @Test

@@ -290,7 +290,12 @@ final class InferenceArbiter {
             // Model or vision mode changed, or not loaded — (re)load
             if loadedSlots.contains(.imageGen) { unload(.imageGen) }
             if loadedSlots.contains(.llm) { unload(.llm) }
-            try await loadSlot(.llm, modelID: desired.modelID, visionMode: desired.visionMode)
+            try await loadSlot(
+                .llm,
+                modelID: desired.modelID,
+                visionMode: desired.visionMode,
+                triAttention: desired.requestedTriAttention
+            )
             let triAttentionRuntimeSelection = agentEngine.triAttentionRuntimeSelection
             loadedLLMState = LoadedLLMState(
                 modelID: desired.modelID,
@@ -299,6 +304,15 @@ final class InferenceArbiter {
                 effectiveTriAttention: triAttentionRuntimeSelection.effectiveConfiguration,
                 triAttentionFallbackReason: triAttentionRuntimeSelection.fallbackReason
             )
+            if let fallbackReason = triAttentionRuntimeSelection.fallbackReason {
+                Log.general.notice(
+                    "InferenceArbiter: TriAttention dense fallback — "
+                    + "model=\(desired.modelID) visionMode=\(desired.visionMode) "
+                    + "requestedEnabled=\(desired.requestedTriAttention.enabled) "
+                    + "effectiveEnabled=\(triAttentionRuntimeSelection.effectiveConfiguration.enabled) "
+                    + "reason=\(fallbackReason.rawValue)"
+                )
+            }
 
         case .tts:
             if loadedSlots.contains(.tts) { return }
@@ -319,7 +333,8 @@ final class InferenceArbiter {
     private func loadSlot(
         _ slot: ModelSlot,
         modelID: String? = nil,
-        visionMode: Bool = false
+        visionMode: Bool = false,
+        triAttention: TriAttentionConfiguration = .v1Disabled
     ) async throws {
         switch slot {
         case .llm:
@@ -336,8 +351,16 @@ final class InferenceArbiter {
                 // Settings → Models while a request is queued.
                 throw AgentEngineError.modelNotDownloaded(modelID: modelID)
             }
-            Log.general.info("InferenceArbiter: loading LLM model '\(modelID)' visionMode=\(visionMode)")
-            try await agentEngine.loadModel(from: path, visionMode: visionMode)
+            Log.general.info(
+                "InferenceArbiter: loading LLM model '\(modelID)' "
+                + "visionMode=\(visionMode) "
+                + "triAttentionRequested=\(triAttention.enabled)"
+            )
+            try await agentEngine.loadModel(
+                from: path,
+                visionMode: visionMode,
+                triAttention: triAttention
+            )
 
         case .tts:
             Log.general.info("InferenceArbiter: loading TTS model")

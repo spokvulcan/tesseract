@@ -122,7 +122,13 @@ final class AgentEngine {
     ///   - visionMode: When `true`, loads the VLM variant of ParoQuant models (supports
     ///     image attachments but has slower prefill). When `false`, loads the LLM variant
     ///     with fast chunked prefill. Ignored for non-ParoQuant models.
-    func loadModel(from directory: URL, visionMode: Bool) async throws {
+    ///   - triAttention: Explicit TriAttention request. `nil` falls back to
+    ///     ``resolveTriAttentionConfig()``.
+    func loadModel(
+        from directory: URL,
+        visionMode: Bool,
+        triAttention: TriAttentionConfiguration? = nil
+    ) async throws {
         guard !isModelLoaded, !isLoading else { return }
 
         isLoading = true
@@ -133,7 +139,7 @@ final class AgentEngine {
                 from: directory,
                 visionMode: visionMode,
                 ssdConfig: resolveSSDConfig(),
-                triAttention: resolveTriAttentionConfig()
+                triAttention: triAttention ?? resolveTriAttentionConfig()
             )
 
             let st = tokenizer.specialTokens

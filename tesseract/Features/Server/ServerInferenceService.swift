@@ -50,11 +50,18 @@ final class ServerInferenceService {
         case .chat:
             "chat"
         }
+        let attentionMode: String
+        if let fallbackReason = modelState?.triAttentionFallbackReason {
+            attentionMode = "denseFallback(\(fallbackReason.rawValue))"
+        } else if modelState?.triAttention.enabled == true {
+            attentionMode = "triAttention"
+        } else {
+            attentionMode = "dense"
+        }
         Log.server.info(
             "Server inference start — route=\(routeDescription) input=\(inputDescription) "
             + "model=\(modelState?.modelID ?? "") visionMode=\(modelState?.visionMode ?? false) "
-            + "triAttentionEnabled=\(modelState?.triAttention.enabled ?? false) "
-            + "triAttentionFallbackReason=\(modelState?.triAttentionFallbackReason?.rawValue ?? "none")"
+            + "attentionMode=\(attentionMode)"
         )
 
         switch request.input {

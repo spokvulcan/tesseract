@@ -11,6 +11,13 @@ struct TriAttentionConfigPlumbingTests {
         UserDefaults.standard.removeObject(forKey: "triattentionEnabled")
     }
 
+    private func makeFakeModelDirectory(paro: Bool = false) throws -> URL {
+        try TriAttentionTestFixtures.makeFakeModelDirectory(
+            prefix: "triattention-plumbing-model",
+            paro: paro
+        )
+    }
+
     @Test
     func settingsDefaultToDisabledV1Configuration() {
         clearTriAttentionDefaults()
@@ -75,5 +82,81 @@ struct TriAttentionConfigPlumbingTests {
         #expect(params.topP == originalTopP)
         #expect(params.prefillStepSize == originalPrefill)
         #expect(params.triAttention == enabled)
+    }
+
+    @Test
+    func agentEngineLoadForwardsExplicitTriAttentionOverrideToActor() async throws {
+        clearTriAttentionDefaults()
+        defer { clearTriAttentionDefaults() }
+
+        let settings = SettingsManager()
+        settings.triattentionEnabled = false
+        let engine = AgentEngine(settingsManager: settings)
+        let fakeDir = try makeFakeModelDirectory(paro: true)
+        defer { try? FileManager.default.removeItem(at: fakeDir) }
+
+        let override = TriAttentionConfiguration(enabled: true)
+        do {
+            try await engine.loadModel(
+                from: fakeDir,
+                visionMode: false,
+                triAttention: override
+            )
+            Issue.record("expected loadModel to throw for a non-model directory")
+        } catch {
+            // Expected: container load fails after install runs.
+        }
+
+        let selection = await engine.llmActor.currentTriAttentionRuntimeSelectionForTesting
+        #expect(selection.requestedConfiguration == override)
+    }
+
+    @Test
+    func agentEngineLoadFallsBackToSettingsWhenNoExplicitTriAttention() async throws {
+        clearTriAttentionDefaults()
+        defer { clearTriAttentionDefaults() }
+
+        let settings = SettingsManager()
+        settings.triattentionEnabled = true
+        let engine = AgentEngine(settingsManager: settings)
+        let fakeDir = try makeFakeModelDirectory(paro: true)
+        defer { try? FileManager.default.removeItem(at: fakeDir) }
+
+        do {
+            try await engine.loadModel(from: fakeDir, visionMode: false)
+            Issue.record("expected loadModel to throw for a non-model directory")
+        } catch {
+            // Expected.
+        }
+
+        let selection = await engine.llmActor.currentTriAttentionRuntimeSelectionForTesting
+        #expect(selection.requestedConfiguration.enabled == true)
+    }
+
+    @Test
+    func agentEngineLoadRecordsDenseFallbackReasonWhenUnsupported() async throws {
+        clearTriAttentionDefaults()
+        defer { clearTriAttentionDefaults() }
+
+        let settings = SettingsManager()
+        settings.triattentionEnabled = true
+        let engine = AgentEngine(settingsManager: settings)
+        let fakeDir = try makeFakeModelDirectory(paro: true)
+        defer { try? FileManager.default.removeItem(at: fakeDir) }
+
+        do {
+            try await engine.loadModel(
+                from: fakeDir,
+                visionMode: true,
+                triAttention: TriAttentionConfiguration(enabled: true)
+            )
+            Issue.record("expected loadModel to throw for a non-model directory")
+        } catch {
+            // Expected.
+        }
+
+        let selection = await engine.llmActor.currentTriAttentionRuntimeSelectionForTesting
+        #expect(selection.effectiveConfiguration.enabled == false)
+        #expect(selection.fallbackReason == .visionMode)
     }
 }
