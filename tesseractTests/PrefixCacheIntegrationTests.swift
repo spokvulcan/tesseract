@@ -499,6 +499,70 @@ struct PrefixCacheIntegrationTests {
         #expect(kv.offset == 45)
     }
 
+    // MARK: - 16b. triAttentionLayersNotTrimmedInLeafAlignment
+
+    /// TriAttention sparse caches behave like Mamba in the leaf-alignment
+    /// loop: per-layer `trim(_:)` is a no-op, `canTrimPromptCache` flips to
+    /// false as soon as one is present, and `trimPromptCache` returns 0
+    /// instead of silently mutating the dense siblings. This is the rule
+    /// that lets the LLMActor leaf-store guard skip cleanly when
+    /// normalization would shorten the canonical token sequence.
+    @Test func triAttentionLayersNotTrimmedInLeafAlignment() {
+        let sparse = TriAttentionSparseKVCache(configuration: .v1Disabled)
+        let keys = MLXArray(Array(repeating: Float(1), count: 1 * 1 * 4 * 8)).reshaped(1, 1, 4, 8)
+        let values = MLXArray(Array(repeating: Float(2), count: 1 * 1 * 4 * 8)).reshaped(1, 1, 4, 8)
+        let _ = sparse.update(keys: keys, values: values)
+
+        #expect(sparse.isTrimmable == false)
+        #expect(sparse.trim(2) == 0)
+        #expect(sparse.offset == 4)
+
+        let kv = KVCacheSimple()
+        kv.state = [
+            MLXArray.zeros([1, 1, 4, 8]),
+            MLXArray.zeros([1, 1, 4, 8]),
+        ]
+        let mixed: [KVCache] = [kv, sparse]
+        #expect(canTrimPromptCache(mixed) == false)
+        #expect(containsTriAttentionState(mixed) == true)
+        #expect(trimPromptCache(mixed, numTokens: 2) == 0)
+        // Dense sibling must remain untouched when the array as a whole is
+        // non-trimmable — otherwise the normalization-trim guard's "skip
+        // leaf store" decision would be defeated by partial mutation.
+        #expect(kv.offset == 4)
+    }
+
+    // MARK: - 16c. triAttentionSnapshotRestoreExtendsAtAbsoluteOffset
+
+    /// Hit-restore path semantics: a TriAttention snapshot captured at offset
+    /// `K` must restore with `cache.offset == K` and accept additional updates
+    /// that advance the offset to `K + suffix`, mirroring the dense
+    /// KVCacheSimple contract used by `LLMActor`'s suffix-only prefill.
+    @Test func triAttentionSnapshotRestoreExtendsAtAbsoluteOffset() throws {
+        let original = TriAttentionSparseKVCache(configuration: .v1Disabled)
+        let keys = MLXArray(Array(repeating: Float(1), count: 1 * 1 * 4 * 8)).reshaped(1, 1, 4, 8)
+        let values = MLXArray(Array(repeating: Float(2), count: 1 * 1 * 4 * 8)).reshaped(1, 1, 4, 8)
+        let _ = original.update(keys: keys, values: values)
+
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [original], offset: original.offset, type: .system
+        ))
+
+        let restored = snapshot.restore()
+        let restoredCache = try #require(restored[0] as? TriAttentionSparseKVCache)
+        #expect(restoredCache.offset == 4)
+
+        // Suffix prefill: append two more tokens, mirroring what the
+        // hit-restore path does after `lookupResult.restoreCache()`.
+        let suffixKeys = MLXArray(Array(repeating: Float(3), count: 1 * 1 * 2 * 8)).reshaped(1, 1, 2, 8)
+        let suffixValues = MLXArray(Array(repeating: Float(4), count: 1 * 1 * 2 * 8)).reshaped(1, 1, 2, 8)
+        let _ = restoredCache.update(keys: suffixKeys, values: suffixValues)
+
+        #expect(restoredCache.offset == 6)
+        #expect(restoredCache.retainedPositions?.dim(2) == 6)
+        #expect(restoredCache.retainedPositions?.asArray(Int32.self) == [0, 1, 2, 3, 4, 5])
+    }
+
     // MARK: - 17. vlm2DTokensExtractedCorrectly
 
     /// 2D `[batch, seq]` tensor → flat `[Int]` sequence from first batch element.

@@ -636,25 +636,29 @@ actor LLMActor {
                     // 3. Offset-alignment guard: if normalization shortened the
                     //    stored conversation (whitespace-only assistant content → ""),
                     //    we can only trim attention K/V — Mamba's recurrent state
-                    //    can't be unwound. Trimming the cache and capturing it as a
-                    //    leaf produces a snapshot whose attention is aligned to
-                    //    `storedTokens.count` but whose Mamba state is from the
-                    //    full pre-trim offset. On Qwen3.5 the resulting leaf hit
-                    //    perturbs raw logits by ~10 even at trim=1: argmax stays
-                    //    stable (greedy decoding survives), but the rest of the
-                    //    distribution drifts in a way that affects sampled
-                    //    decoding. Since the HTTP server propagates the request's
-                    //    `temperature`/`top_p` and we can't predict future request
-                    //    sampling params at store time, the safe choice is to
-                    //    skip the leaf store entirely when normalization would
-                    //    require any trim. Lost cache hits on whitespace-normalized
-                    //    conversations are the trade-off for sampler-agnostic
-                    //    correctness. Verified by `HybridCacheCorrectnessRunner`
-                    //    test 9 — see the `leafHitWithNormalizationDivergence...`
-                    //    diagnostics for the empirical drift measurements.
+                    //    and TriAttention's sparse retained-position state can't
+                    //    be unwound (`canTrimPromptCache` returns `false` for
+                    //    both). Trimming the cache and capturing it as a leaf
+                    //    produces a snapshot whose attention is aligned to
+                    //    `storedTokens.count` but whose Mamba/TriAttention state
+                    //    is from the full pre-trim offset. On Qwen3.5 the
+                    //    resulting leaf hit perturbs raw logits by ~10 even at
+                    //    trim=1: argmax stays stable (greedy decoding survives),
+                    //    but the rest of the distribution drifts in a way that
+                    //    affects sampled decoding. Since the HTTP server
+                    //    propagates the request's `temperature`/`top_p` and we
+                    //    can't predict future request sampling params at store
+                    //    time, the safe choice is to skip the leaf store
+                    //    entirely when normalization would require any trim.
+                    //    Lost cache hits on whitespace-normalized conversations
+                    //    are the trade-off for sampler-agnostic correctness.
+                    //    Verified by `HybridCacheCorrectnessRunner` test 9 — see
+                    //    the `leafHitWithNormalizationDivergence...` diagnostics
+                    //    for the empirical drift measurements.
                     let actualCacheOffset = httpPrefixCacheReportedTokenCount(finalCache)
                     if actualCacheOffset > storedTokens.count {
                         let trimAmount = actualCacheOffset - storedTokens.count
+                        let hasTriAttention = containsTriAttentionState(finalCache)
                         diagnosticsContext.logSkip(
                             stage: "leafStore",
                             reason: "normalization-trim",
@@ -662,6 +666,7 @@ actor LLMActor {
                                 ("trimAmount", "\(trimAmount)"),
                                 ("offsetBefore", "\(actualCacheOffset)"),
                                 ("canonicalCount", "\(storedTokens.count)"),
+                                ("triAttention", "\(hasTriAttention)"),
                             ]
                         )
                         break leafBlock
@@ -1512,7 +1517,12 @@ actor LLMActor {
             if let snapshot = lookupResult.snapshot, snapshot.tokenOffset > 0,
                snapshot.tokenOffset < fullTokenCount
             {
-                // HIT: restore cache, prefill only the suffix.
+                // HIT: restore cache, prefill only the suffix. Suffix-only
+                // prefill is safe for both dense and TriAttention partitions:
+                // TriAttention layers are restored via `HybridCacheSnapshot`
+                // with their absolute logical offset intact, and each layer's
+                // own `makeMask` recreates the right (causal or sparse) mask
+                // for the suffix tokens — no caller-side trim needed.
                 let cacheOffset = snapshot.tokenOffset
                 let slicedTokens: MLXArray
                 if tokenNDim <= 1 {
@@ -1775,6 +1785,13 @@ actor LLMActor {
     /// token suffix, capture a `.leaf`, and store it under the given token
     /// path. Shared by direct-tool and canonical-user leaf modes so both are
     /// aligned to the structured template render, not the raw generated bytes.
+    ///
+    /// TriAttention-safe by construction: the `storedTokens.count > boundaryOffset`
+    /// guard below ensures the residual is non-empty, so no caller-side trim
+    /// is required. The leaf is captured at `storedTokens.count` after a clean
+    /// extension prefill, which works identically for dense and TriAttention
+    /// sparse caches because each cache type's `update(...)` extends its own
+    /// state at the absolute offset.
     private static func captureStructuredLeafFromBoundary(
         container: ModelContainer,
         storedTokens: [Int],
