@@ -536,6 +536,336 @@ struct HybridCacheSnapshotTests {
         }
     }
 
+    // MARK: - TriAttention snapshot compatibility (Epic 2 Task 1)
+
+    private func makeTriAttentionConfig(
+        enabled: Bool = true,
+        budgetTokens: Int = 12_000,
+        artifact: String? = "artifact-snapshot-test"
+    ) -> TriAttentionConfiguration {
+        TriAttentionConfiguration(
+            enabled: enabled,
+            budgetTokens: budgetTokens,
+            calibrationArtifactIdentity: artifact.map {
+                TriAttentionCalibrationArtifactIdentity(rawValue: $0)
+            },
+            implementationVersion: .v1
+        )
+    }
+
+    private func populateTriAttentionSparseCache(
+        _ cache: TriAttentionSparseKVCache,
+        sequenceLength: Int = 4,
+        headDim: Int = 8
+    ) {
+        let total = sequenceLength * headDim
+        let keys = MLXArray(Array(stride(from: Float(0), to: Float(total), by: 1)))
+            .reshaped([1, 1, sequenceLength, headDim])
+        let values = MLXArray(Array(stride(from: Float(total), to: Float(2 * total), by: 1)))
+            .reshaped([1, 1, sequenceLength, headDim])
+        let _ = cache.update(keys: keys, values: values)
+    }
+
+    @Test func captureRecordsTriAttentionSparseClassName() throws {
+        let cache = TriAttentionSparseKVCache(configuration: makeTriAttentionConfig())
+        populateTriAttentionSparseCache(cache)
+
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [cache], offset: cache.offset, type: .leaf
+        ))
+
+        #expect(snapshot.layers.count == 1)
+        #expect(snapshot.layers[0].className == "TriAttentionSparseKVCache")
+    }
+
+    @Test func captureRestoreRoundTripPreservesTriAttentionSparseState() throws {
+        let configuration = makeTriAttentionConfig(
+            enabled: true,
+            budgetTokens: 12_000,
+            artifact: "artifact-roundtrip"
+        )
+        let cache = TriAttentionSparseKVCache(configuration: configuration)
+        populateTriAttentionSparseCache(cache, sequenceLength: 6, headDim: 4)
+
+        let originalPositions = try #require(cache.retainedPositions).asArray(Int32.self)
+        let originalKeys = try #require(cache.retainedKeys)
+        let originalValues = try #require(cache.retainedValues)
+
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [cache], offset: cache.offset, type: .leaf
+        ))
+        let restored = snapshot.restore()
+        let restoredCache = try #require(restored[0] as? TriAttentionSparseKVCache)
+
+        #expect(restoredCache.offset == cache.offset)
+        #expect(restoredCache.configuration == configuration)
+        #expect(restoredCache.isTrimmable == false)
+        #expect(try #require(restoredCache.retainedPositions).dim(2) == 6)
+        #expect(try #require(restoredCache.retainedPositions).asArray(Int32.self) == originalPositions)
+        #expect(allClose(
+            try #require(restoredCache.retainedKeys), originalKeys, atol: 0
+        ).all().item(Bool.self))
+        #expect(allClose(
+            try #require(restoredCache.retainedValues), originalValues, atol: 0
+        ).all().item(Bool.self))
+    }
+
+    @Test func restoreReconstructsTriAttentionSparseConfigFromMetaState() throws {
+        let configuration = makeTriAttentionConfig(
+            enabled: true,
+            budgetTokens: 9_500,
+            artifact: "artifact-meta-state-recovery"
+        )
+        let cache = TriAttentionSparseKVCache(configuration: configuration)
+        populateTriAttentionSparseCache(cache)
+
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [cache], offset: cache.offset, type: .system
+        ))
+
+        #expect(snapshot.layers[0].metaState == [
+            "v1", "true", "9500", "artifact-meta-state-recovery",
+        ])
+
+        let restored = snapshot.restore()
+        let restoredCache = try #require(restored[0] as? TriAttentionSparseKVCache)
+        #expect(restoredCache.configuration == configuration)
+    }
+
+    @Test func captureReturnsNilWhenTriAttentionLayerCoexistsWithCacheList() throws {
+        let triCache = TriAttentionSparseKVCache(configuration: makeTriAttentionConfig())
+        populateTriAttentionSparseCache(triCache)
+
+        let cacheList = CacheList(KVCacheSimple(), MambaCache())
+
+        let snapshot = HybridCacheSnapshot.capture(
+            cache: [triCache, cacheList], offset: triCache.offset, type: .system
+        )
+        #expect(snapshot == nil)
+    }
+
+    @Test func denseCachesCoexistWithTriAttentionInSnapshot() throws {
+        let kv = KVCacheSimple()
+        kv.state = [
+            MLXArray.zeros([1, 1, 4, 8]),
+            MLXArray.zeros([1, 1, 4, 8]),
+        ]
+
+        let mamba = MambaCache()
+        mamba.state = [
+            MLXArray.zeros([1, 3, 32]),
+            MLXArray.zeros([1, 4, 8, 8]),
+        ]
+
+        let tri = TriAttentionSparseKVCache(configuration: makeTriAttentionConfig())
+        populateTriAttentionSparseCache(tri, sequenceLength: 4, headDim: 8)
+
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [kv, mamba, tri], offset: 4, type: .system
+        ))
+
+        #expect(snapshot.layers.count == 3)
+        #expect(snapshot.layers[0].className == "KVCache")
+        #expect(snapshot.layers[1].className == "MambaCache")
+        #expect(snapshot.layers[2].className == "TriAttentionSparseKVCache")
+
+        let restored = snapshot.restore()
+        #expect(restored[0] is KVCacheSimple)
+        #expect(restored[1] is MambaCache)
+        #expect(restored[2] is TriAttentionSparseKVCache)
+    }
+
+    @Test func serializeRoundTripPreservesTriAttentionSparseCache() throws {
+        let configuration = makeTriAttentionConfig(
+            enabled: true,
+            budgetTokens: 12_000,
+            artifact: "artifact-serialize-roundtrip"
+        )
+        let cache = TriAttentionSparseKVCache(configuration: configuration)
+        populateTriAttentionSparseCache(cache, sequenceLength: 5, headDim: 8)
+
+        let originalPositions = try #require(cache.retainedPositions).asArray(Int32.self)
+        let originalKeys = try #require(cache.retainedKeys)
+        let originalValues = try #require(cache.retainedValues)
+
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [cache], offset: cache.offset, type: .leaf
+        ))
+
+        try withTempSnapshotURL { url in
+            try snapshot.serialize(
+                to: url,
+                metadata: [HybridCacheSnapshot.MetadataKey.fingerprint: "fp-tri"]
+            )
+            let restored = try HybridCacheSnapshot.deserialize(
+                from: url,
+                expectedFingerprint: "fp-tri"
+            )
+
+            #expect(restored.layers.count == 1)
+            #expect(restored.layers[0].className == "TriAttentionSparseKVCache")
+            #expect(restored.tokenOffset == 5)
+            #expect(restored.layers[0].offset == 5)
+
+            let hydrated = restored.restore()
+            let hydratedCache = try #require(hydrated[0] as? TriAttentionSparseKVCache)
+            #expect(hydratedCache.configuration == configuration)
+            #expect(hydratedCache.isTrimmable == false)
+            #expect(hydratedCache.offset == 5)
+            #expect(try #require(hydratedCache.retainedPositions).asArray(Int32.self) == originalPositions)
+            #expect(allClose(
+                try #require(hydratedCache.retainedKeys), originalKeys, atol: 0
+            ).all().item(Bool.self))
+            #expect(allClose(
+                try #require(hydratedCache.retainedValues), originalValues, atol: 0
+            ).all().item(Bool.self))
+        }
+    }
+
+    @Test func serializeRoundTripIsBitwiseIdenticalForTriAttention() throws {
+        let configuration = makeTriAttentionConfig(
+            enabled: true,
+            budgetTokens: 12_000,
+            artifact: "artifact-bitwise"
+        )
+        let cache = TriAttentionSparseKVCache(configuration: configuration)
+        populateTriAttentionSparseCache(cache, sequenceLength: 4, headDim: 8)
+
+        let snap1 = try #require(HybridCacheSnapshot.capture(
+            cache: [cache], offset: cache.offset, type: .system
+        ))
+
+        try withTempSnapshotURL { url in
+            try snap1.serialize(
+                to: url,
+                metadata: [HybridCacheSnapshot.MetadataKey.fingerprint: "fp-tri"]
+            )
+            let snap2 = try HybridCacheSnapshot.deserialize(
+                from: url, expectedFingerprint: "fp-tri"
+            )
+            let hydrated = snap2.restore()
+            let snap3 = try #require(HybridCacheSnapshot.capture(
+                cache: hydrated, offset: snap2.tokenOffset, type: snap2.checkpointType
+            ))
+
+            #expect(snap1.layers.count == snap3.layers.count)
+            for (a, b) in zip(snap1.layers, snap3.layers) {
+                #expect(a.className == b.className)
+                #expect(a.metaState == b.metaState)
+                #expect(a.offset == b.offset)
+                #expect(a.state.count == b.state.count)
+                for (arrA, arrB) in zip(a.state, b.state) {
+                    #expect(arrA.shape == arrB.shape)
+                    #expect(arrA.dtype == arrB.dtype)
+                    #expect(arrA.asData() == arrB.asData(),
+                            "TriAttention layer state bytes mismatch after round-trip")
+                }
+            }
+        }
+    }
+
+    @Test func captureRestoreRoundTripPreservesQuantizedTriAttentionSparseState() throws {
+        let configuration = makeTriAttentionConfig(
+            enabled: true,
+            budgetTokens: 12_000,
+            artifact: "artifact-quant"
+        )
+        let cache = QuantizedTriAttentionSparseKVCache(
+            configuration: configuration,
+            groupSize: 64,
+            bits: 8
+        )
+        let sequenceLength = 4
+        let headDim = 64
+        let total = sequenceLength * headDim
+        let keys = MLXArray(Array(stride(from: Float(0), to: Float(total), by: 1)))
+            .reshaped([1, 1, sequenceLength, headDim])
+        let values = MLXArray(Array(stride(from: Float(total), to: Float(2 * total), by: 1)))
+            .reshaped([1, 1, sequenceLength, headDim])
+        let _ = cache.updateQuantized(keys: keys, values: values)
+
+        let originalState = cache.state.map { $0[.ellipsis] }
+
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [cache], offset: cache.offset, type: .leaf
+        ))
+        #expect(snapshot.layers[0].className == "QuantizedTriAttentionSparseKVCache")
+
+        let restored = snapshot.restore(kvBitsHint: 8, kvGroupSizeHint: 64)
+        let restoredCache = try #require(restored[0] as? QuantizedTriAttentionSparseKVCache)
+
+        #expect(restoredCache.offset == cache.offset)
+        #expect(restoredCache.configuration == configuration)
+        #expect(restoredCache.groupSize == 64)
+        #expect(restoredCache.bits == 8)
+        #expect(restoredCache.isTrimmable == false)
+
+        let restoredState = restoredCache.state
+        #expect(restoredState.count == originalState.count)
+        for (a, b) in zip(originalState, restoredState) {
+            #expect(a.shape == b.shape)
+            #expect(a.dtype == b.dtype)
+            #expect(a.asData() == b.asData())
+        }
+    }
+
+    @Test func serializeRoundTripPreservesQuantizedTriAttentionSparseCache() throws {
+        let configuration = makeTriAttentionConfig(
+            enabled: true,
+            budgetTokens: 12_000,
+            artifact: "artifact-quant-serialize"
+        )
+        let cache = QuantizedTriAttentionSparseKVCache(
+            configuration: configuration,
+            groupSize: 64,
+            bits: 8
+        )
+        let sequenceLength = 4
+        let headDim = 64
+        let total = sequenceLength * headDim
+        let keys = MLXArray(Array(stride(from: Float(0), to: Float(total), by: 1)))
+            .reshaped([1, 1, sequenceLength, headDim])
+        let values = MLXArray(Array(stride(from: Float(total), to: Float(2 * total), by: 1)))
+            .reshaped([1, 1, sequenceLength, headDim])
+        let _ = cache.updateQuantized(keys: keys, values: values)
+
+        let originalState = cache.state.map { $0[.ellipsis] }
+
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [cache], offset: cache.offset, type: .leaf
+        ))
+
+        try withTempSnapshotURL { url in
+            try snapshot.serialize(
+                to: url,
+                metadata: [HybridCacheSnapshot.MetadataKey.fingerprint: "fp-quant"]
+            )
+            let restored = try HybridCacheSnapshot.deserialize(
+                from: url,
+                expectedFingerprint: "fp-quant"
+            )
+
+            #expect(restored.layers.count == 1)
+            #expect(restored.layers[0].className == "QuantizedTriAttentionSparseKVCache")
+            #expect(restored.layers[0].offset == sequenceLength)
+
+            let hydrated = restored.restore(kvBitsHint: 8, kvGroupSizeHint: 64)
+            let hydratedCache = try #require(hydrated[0] as? QuantizedTriAttentionSparseKVCache)
+            #expect(hydratedCache.configuration == configuration)
+            #expect(hydratedCache.offset == sequenceLength)
+            #expect(hydratedCache.groupSize == 64)
+            #expect(hydratedCache.bits == 8)
+
+            let restoredState = hydratedCache.state
+            #expect(restoredState.count == originalState.count)
+            for (a, b) in zip(originalState, restoredState) {
+                #expect(a.shape == b.shape)
+                #expect(a.dtype == b.dtype)
+                #expect(a.asData() == b.asData())
+            }
+        }
+    }
+
     @Test func threadAffinityContractDocCommentIsPinned() throws {
         // The thread-affinity contract must appear on both serialize and
         // deserialize doc comments so future refactors can't silently drop
