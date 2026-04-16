@@ -9,17 +9,14 @@ import Foundation
 ///
 /// Replicates `AgentFactory.makeAgent` steps 1–8 with full bootstrap parity.
 /// Each call to `createAgent` produces a fresh `Agent` with its own compaction
-/// state but shares the same `ServerInferenceService`, legacy fallback engine,
-/// and `ToolRegistry`.
+/// state but shares the same `ServerInferenceService` and `ToolRegistry`.
 @MainActor
 final class BackgroundAgentFactory {
 
     private let inferenceService: ServerInferenceService
-    private let fallbackEngine: any LegacyInternalInferenceEngine
     private let sessionStore: BackgroundSessionStore
     private let settingsManager: SettingsManager
     private let arbiter: InferenceArbiter
-    private let rollbackEnabled: @MainActor @Sendable () -> Bool
 
     // Cached at init — after running the same bootstrap as AgentFactory steps 1-4
     private let cachedSkills: [SkillMetadata]
@@ -37,21 +34,17 @@ final class BackgroundAgentFactory {
 
     init(
         inferenceService: ServerInferenceService,
-        fallbackEngine: any LegacyInternalInferenceEngine,
         toolRegistry: ToolRegistry,
         extensionHost: ExtensionHost,
         sessionStore: BackgroundSessionStore,
         packageRegistry: PackageRegistry,
         settingsManager: SettingsManager,
-        arbiter: InferenceArbiter,
-        rollbackEnabled: @escaping @MainActor @Sendable () -> Bool
+        arbiter: InferenceArbiter
     ) {
         self.inferenceService = inferenceService
-        self.fallbackEngine = fallbackEngine
         self.sessionStore = sessionStore
         self.settingsManager = settingsManager
         self.arbiter = arbiter
-        self.rollbackEnabled = rollbackEnabled
         self.agentRoot = PathSandbox.defaultRoot
 
         // 1. Bootstrap packages (same as AgentFactory step 1) — idempotent
@@ -92,8 +85,6 @@ final class BackgroundAgentFactory {
     /// Create a fully configured `Agent` for the given scheduled task,
     /// returning it alongside the loaded session for later persistence.
     private func createAgent(for task: ScheduledTask, sessionType: SessionType = .cron) async -> (Agent, BackgroundSession) {
-        let selectedModelID = settingsManager.selectedAgentModelID
-
         // 1. Load or create session — populate metadata from task before save
         var session = await sessionStore.loadOrCreate(sessionId: task.sessionId)
         session.taskId = task.id
@@ -118,12 +109,13 @@ final class BackgroundAgentFactory {
         }
         let systemPrompt = basePrompt + "\n\n" + preamble
 
-        // 3. Build compaction transform — fresh ContextManager per run
-        let triAttention = settingsManager.makeTriAttentionConfig()
+        // 3. Build compaction transform — fresh ContextManager per run. The
+        // provider live-reads settings so each call honors the current model
+        // and TriAttention toggle even if the user changes them mid-run.
         let parametersProvider: @MainActor @Sendable () -> AgentGenerateParameters = {
-            [selectedModelID, triAttention] in
-            var parameters = AgentGenerateParameters.forModel(selectedModelID)
-            parameters.triAttention = triAttention
+            [settingsManager] in
+            var parameters = AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
+            parameters.triAttention = settingsManager.makeTriAttentionConfig()
             return parameters
         }
         let contextManager = ContextManager(settings: .standard)
@@ -133,8 +125,6 @@ final class BackgroundAgentFactory {
             contextWindow: 262_144,
             summarize: makeSummarizeClosure(
                 inferenceService: inferenceService,
-                fallbackEngine: fallbackEngine,
-                rollbackEnabled: rollbackEnabled,
                 parametersProvider: parametersProvider
             )
         )
@@ -142,14 +132,12 @@ final class BackgroundAgentFactory {
         // 4. Build generate closure — same shared inference path as AgentFactory
         let generate = makeServerInferenceGenerateClosure(
             inferenceService: inferenceService,
-            fallbackEngine: fallbackEngine,
-            rollbackEnabled: rollbackEnabled,
             parametersProvider: parametersProvider
         )
 
         // 5. Create agent config — no steering/followUp queues for background
         let config = AgentLoopConfig(
-            model: AgentModelRef(id: selectedModelID),
+            model: AgentModelRef(id: settingsManager.selectedAgentModelID),
             convertToLlm: { msgs in msgs.compactMap { $0.toLLMMessage() } },
             contextTransform: compactionTransform,
             getSteeringMessages: nil,

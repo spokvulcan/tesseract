@@ -351,11 +351,39 @@ final class AgentCoordinator {
         }
 
         isGenerating = true
-        agent.forceCompact(
-            contextManager: contextManager,
-            contextWindow: contextWindow,
-            summarize: summarize
-        )
+
+        // `/compact` must observe the same arbiter lease contract as a regular
+        // agent turn: wait for the current lease to drain, reload the LLM if
+        // settings drift, and hold the lease until the summarize call plus the
+        // in-agent transform finishes. Without the lease, compaction could race
+        // against a foreground turn and reach the LLM with a stale model state.
+        guard let arbiter else {
+            agent.forceCompact(
+                contextManager: contextManager,
+                contextWindow: contextWindow,
+                summarize: summarize
+            )
+            return
+        }
+
+        sendTask = Task {
+            do {
+                try await arbiter.withExclusiveGPU(.llm) {
+                    self.agent.forceCompact(
+                        contextManager: contextManager,
+                        contextWindow: self.contextWindow,
+                        summarize: summarize
+                    )
+                    await self.agent.waitForIdle()
+                }
+            } catch is CancellationError {
+                self.isGenerating = false
+            } catch {
+                self.error = error.localizedDescription
+                self.isGenerating = false
+            }
+            self.sendTask = nil
+        }
     }
 
     private func executeSkill(filePath: String, skillName: String, arguments: String) {

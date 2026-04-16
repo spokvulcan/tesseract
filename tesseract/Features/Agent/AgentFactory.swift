@@ -14,14 +14,11 @@ enum AgentFactory {
     @MainActor
     static func makeAgent(
         inferenceService: ServerInferenceService,
-        fallbackEngine: any LegacyInternalInferenceEngine,
         packageRegistry: PackageRegistry,
         extensionHost: ExtensionHost,
         toolRegistry: ToolRegistry,
         contextManager: ContextManager,
-        selectedModelID: String,
-        settingsManager: SettingsManager,
-        rollbackEnabled: @escaping @MainActor @Sendable () -> Bool
+        settingsManager: SettingsManager
     ) -> Agent {
         let agentRoot = PathSandbox.defaultRoot
 
@@ -71,12 +68,13 @@ enum AgentFactory {
             agentRoot: agentRoot.path
         )
 
-        // 7. Build compaction transform
-        let triAttention = settingsManager.makeTriAttentionConfig()
+        // 7. Build compaction transform. The provider live-reads settings so a
+        // runtime change to the selected model or TriAttention toggle takes
+        // effect on the very next inference call without rebuilding the agent.
         let parametersProvider: @MainActor @Sendable () -> AgentGenerateParameters = {
-            [selectedModelID, triAttention] in
-            var parameters = AgentGenerateParameters.forModel(selectedModelID)
-            parameters.triAttention = triAttention
+            [settingsManager] in
+            var parameters = AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
+            parameters.triAttention = settingsManager.makeTriAttentionConfig()
             return parameters
         }
 
@@ -85,15 +83,13 @@ enum AgentFactory {
             contextWindow: 262_144,
             summarize: makeSummarizeClosure(
                 inferenceService: inferenceService,
-                fallbackEngine: fallbackEngine,
-                rollbackEnabled: rollbackEnabled,
                 parametersProvider: parametersProvider
             )
         )
 
         // 8. Create agent config
         let config = AgentLoopConfig(
-            model: AgentModelRef(id: selectedModelID),
+            model: AgentModelRef(id: settingsManager.selectedAgentModelID),
             convertToLlm: { msgs in msgs.compactMap { $0.toLLMMessage() } },
             contextTransform: compactionTransform,
             getSteeringMessages: nil,
@@ -107,8 +103,6 @@ enum AgentFactory {
             tools: tools,
             generate: makeServerInferenceGenerateClosure(
                 inferenceService: inferenceService,
-                fallbackEngine: fallbackEngine,
-                rollbackEnabled: rollbackEnabled,
                 parametersProvider: parametersProvider
             )
         )

@@ -285,7 +285,6 @@ struct ServerInferenceServiceTests {
 
     @Test func sharedGenerateClosureRoutesManagedChatThroughService() async throws {
         let engine = StubServerInferenceEngine()
-        let fallback = StubLegacyInternalInferenceEngine()
         engine.chatStart = makeStart(textChunks: ["foreground", " background"])
         let service = ServerInferenceService(
             engine: engine,
@@ -293,8 +292,6 @@ struct ServerInferenceServiceTests {
         )
         let generate = makeServerInferenceGenerateClosure(
             inferenceService: service,
-            fallbackEngine: fallback,
-            rollbackEnabled: { false },
             parametersProvider: { .default }
         )
 
@@ -308,12 +305,10 @@ struct ServerInferenceServiceTests {
         #expect(try await collectText(from: stream) == "foreground background")
         #expect(engine.calls.count == 1)
         #expect(engine.calls[0].kind == .chat)
-        #expect(fallback.chatCalls.isEmpty)
     }
 
     @Test func summarizeClosureRoutesPromptThroughService() async throws {
         let engine = StubServerInferenceEngine()
-        let fallback = StubLegacyInternalInferenceEngine()
         engine.promptStart = makeStart(textChunks: ["sum", "mary"])
         let service = ServerInferenceService(
             engine: engine,
@@ -321,8 +316,6 @@ struct ServerInferenceServiceTests {
         )
         let summarize = makeSummarizeClosure(
             inferenceService: service,
-            fallbackEngine: fallback,
-            rollbackEnabled: { false },
             parametersProvider: { .default }
         )
 
@@ -331,12 +324,10 @@ struct ServerInferenceServiceTests {
         #expect(summary == "summary")
         #expect(engine.calls.count == 1)
         #expect(engine.calls[0].kind == .prompt)
-        #expect(fallback.promptCalls.isEmpty)
     }
 
     @Test func summarizeClosureReclassifiesThinkingIntoReturnedText() async throws {
         let engine = StubServerInferenceEngine()
-        let fallback = StubLegacyInternalInferenceEngine()
         engine.promptStart = HTTPServerGenerationStart(
             stream: makeEventStream(events: [
                 .thinkStart,
@@ -353,8 +344,6 @@ struct ServerInferenceServiceTests {
         )
         let summarize = makeSummarizeClosure(
             inferenceService: service,
-            fallbackEngine: fallback,
-            rollbackEnabled: { false },
             parametersProvider: { .default }
         )
 
@@ -363,59 +352,60 @@ struct ServerInferenceServiceTests {
         #expect(summary == "draft answer")
         #expect(engine.calls.count == 1)
         #expect(engine.calls[0].kind == .prompt)
-        #expect(fallback.promptCalls.isEmpty)
     }
 
-    @Test func sharedGenerateClosureRoutesToLegacyEngineWhenRollbackEnabled() async throws {
+    /// The `AgentFactory`-style parametersProvider must live-read the current
+    /// `SettingsManager` values on every call. Capturing them at agent-build
+    /// time is what made /compact and auto-compaction miss the user toggling
+    /// TriAttention or switching model mid-session.
+    @Test func agentFactoryStyleProviderLiveReadsModelAndTriAttentionFromSettings() async throws {
+        clearAgentSelectionDefaults()
+        defer { clearAgentSelectionDefaults() }
+
+        let settings = SettingsManager()
+        settings.selectedAgentModelID = "qwen3.5-4b-paro"
+        settings.triattentionEnabled = false
+
         let engine = StubServerInferenceEngine()
-        let fallback = StubLegacyInternalInferenceEngine()
-        fallback.chatStream = makeEventStream(textChunks: ["legacy", " chat"])
+        engine.chatStart = makeStart(textChunks: ["ok"])
         let service = ServerInferenceService(
             engine: engine,
             modelStateProvider: { nil }
         )
+
+        // Mirrors the provider that `AgentFactory.makeAgent` wires up: each
+        // call re-reads the live settings rather than freezing them at init.
+        let provider: @MainActor @Sendable () -> AgentGenerateParameters = {
+            [settings] in
+            var parameters = AgentGenerateParameters.forModel(settings.selectedAgentModelID)
+            parameters.triAttention = settings.makeTriAttentionConfig()
+            return parameters
+        }
         let generate = makeServerInferenceGenerateClosure(
             inferenceService: service,
-            fallbackEngine: fallback,
-            rollbackEnabled: { true },
-            parametersProvider: { .default }
+            parametersProvider: provider
         )
 
-        let stream = generate(
-            "System",
-            [.user(content: "Hello")],
-            nil,
-            nil
-        )
+        _ = try await collectText(from: generate("System", [.user(content: "q1")], nil, nil))
+        #expect(engine.calls.count == 1)
+        #expect(engine.calls[0].parameters.temperature == AgentGenerateParameters.qwen35.temperature)
+        #expect(engine.calls[0].parameters.triAttention.enabled == false)
 
-        #expect(try await collectText(from: stream) == "legacy chat")
-        #expect(engine.calls.isEmpty)
-        #expect(fallback.chatCalls.count == 1)
-        #expect(fallback.chatCalls[0].systemPrompt == "System")
+        // Flip the model and the TriAttention toggle after the closure exists.
+        // The provider must observe the new values on the very next call.
+        settings.selectedAgentModelID = "qwen3-thinking-2507"
+        settings.triattentionEnabled = true
+
+        engine.chatStart = makeStart(textChunks: ["ok"])
+        _ = try await collectText(from: generate("System", [.user(content: "q2")], nil, nil))
+        #expect(engine.calls.count == 2)
+        #expect(engine.calls[1].parameters.temperature == AgentGenerateParameters.qwen3Thinking.temperature)
+        #expect(engine.calls[1].parameters.triAttention.enabled == true)
     }
 
-    @Test func summarizeClosureRoutesToLegacyEngineWhenRollbackEnabled() async throws {
-        let engine = StubServerInferenceEngine()
-        let fallback = StubLegacyInternalInferenceEngine()
-        fallback.promptStream = makeEventStream(textChunks: ["legacy", " summary"])
-        let service = ServerInferenceService(
-            engine: engine,
-            modelStateProvider: { nil }
-        )
-        let summarize = makeSummarizeClosure(
-            inferenceService: service,
-            fallbackEngine: fallback,
-            rollbackEnabled: { true },
-            parametersProvider: { .default }
-        )
-
-        let summary = try await summarize("Summarize this")
-
-        #expect(summary == "legacy summary")
-        #expect(engine.calls.isEmpty)
-        #expect(fallback.promptCalls == ["Summarize this"])
-    }
-
+    /// Internal agent sessions must reach `ServerInferenceService` whether or
+    /// not the public HTTP listener is enabled — the listener is a transport
+    /// concern, not a dependency of the canonical inference path.
     @Test func serverEnabledFlagDoesNotAffectInternalRouting() async throws {
         clearInferenceRoutingDefaults()
         defer { clearInferenceRoutingDefaults() }
@@ -424,7 +414,6 @@ struct ServerInferenceServiceTests {
         settings.isServerEnabled = false
 
         let engine = StubServerInferenceEngine()
-        let fallback = StubLegacyInternalInferenceEngine()
         engine.chatStart = makeStart(textChunks: ["service path"])
         let service = ServerInferenceService(
             engine: engine,
@@ -432,8 +421,6 @@ struct ServerInferenceServiceTests {
         )
         let generate = makeServerInferenceGenerateClosure(
             inferenceService: service,
-            fallbackEngine: fallback,
-            rollbackEnabled: { settings.internalServerInferenceRollbackEnabled },
             parametersProvider: { .default }
         )
 
@@ -446,25 +433,10 @@ struct ServerInferenceServiceTests {
 
         #expect(try await collectText(from: stream) == "service path")
         #expect(engine.calls.count == 1)
-        #expect(fallback.chatCalls.isEmpty)
-    }
-
-    @Test func rollbackSettingDefaultsFalseAndRoundTripsAcrossInstances() {
-        clearInferenceRoutingDefaults()
-        defer { clearInferenceRoutingDefaults() }
-
-        let first = SettingsManager()
-        #expect(first.internalServerInferenceRollbackEnabled == false)
-
-        first.internalServerInferenceRollbackEnabled = true
-
-        let second = SettingsManager()
-        #expect(second.internalServerInferenceRollbackEnabled == true)
     }
 
     @Test func sharedGenerateClosureCancelsUnderlyingServiceStartWhenConsumerTaskIsCancelled() async {
         let engine = StubServerInferenceEngine()
-        let fallback = StubLegacyInternalInferenceEngine()
         let probe = ControlledInferenceStart()
         let firstChunkSeen = AsyncFlag()
         engine.chatStart = await probe.makeStart()
@@ -474,8 +446,6 @@ struct ServerInferenceServiceTests {
         )
         let generate = makeServerInferenceGenerateClosure(
             inferenceService: service,
-            fallbackEngine: fallback,
-            rollbackEnabled: { false },
             parametersProvider: { .default }
         )
 
@@ -592,44 +562,6 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
     }
 }
 
-@MainActor
-private final class StubLegacyInternalInferenceEngine: LegacyInternalInferenceEngine {
-    struct ChatCall {
-        let systemPrompt: String
-        let messages: [LLMMessage]
-        let toolSpecCount: Int
-        let parameters: AgentGenerateParameters
-    }
-
-    var promptCalls: [String] = []
-    var chatCalls: [ChatCall] = []
-    var promptStream = makeEventStream(textChunks: [])
-    var chatStream = makeEventStream(textChunks: [])
-
-    func generate(
-        prompt: String,
-        parameters: AgentGenerateParameters
-    ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
-        promptCalls.append(prompt)
-        return promptStream
-    }
-
-    func generate(
-        systemPrompt: String,
-        messages: [LLMMessage],
-        toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
-    ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
-        chatCalls.append(.init(
-            systemPrompt: systemPrompt,
-            messages: messages,
-            toolSpecCount: toolSpecs?.count ?? 0,
-            parameters: parameters
-        ))
-        return chatStream
-    }
-}
-
 private func makeStart(
     textChunks: [String],
     cachedTokenCount: Int = 0
@@ -670,13 +602,12 @@ private func collectText(
 }
 
 private func clearInferenceRoutingDefaults() {
-    let keys = [
-        "internalServerInferenceRollbackEnabled",
-        "isServerEnabled",
-    ]
-    for key in keys {
-        UserDefaults.standard.removeObject(forKey: key)
-    }
+    UserDefaults.standard.removeObject(forKey: "isServerEnabled")
+}
+
+private func clearAgentSelectionDefaults() {
+    UserDefaults.standard.removeObject(forKey: "selectedAgentModelID")
+    UserDefaults.standard.removeObject(forKey: "triattentionEnabled")
 }
 
 private actor AsyncFlag {

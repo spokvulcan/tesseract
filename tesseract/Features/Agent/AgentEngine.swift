@@ -712,6 +712,3 @@ extension AgentEngine: ServerInferenceEngine {
         )
     }
 }
-
-@MainActor
-extension AgentEngine: LegacyInternalInferenceEngine {}

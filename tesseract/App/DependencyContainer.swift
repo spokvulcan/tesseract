@@ -66,30 +66,21 @@ final class DependencyContainer: ObservableObject {
     )
     lazy var agent: Agent = AgentFactory.makeAgent(
         inferenceService: serverInferenceService,
-        fallbackEngine: agentEngine,
         packageRegistry: packageRegistry,
         extensionHost: extensionHost,
         toolRegistry: newToolRegistry,
         contextManager: contextManager,
-        selectedModelID: settingsManager.selectedAgentModelID,
-        settingsManager: settingsManager,
-        rollbackEnabled: { [settingsManager] in
-            settingsManager.internalServerInferenceRollbackEnabled
-        }
+        settingsManager: settingsManager
     )
     lazy var backgroundAgentFactory: BackgroundAgentFactory = {
         BackgroundAgentFactory(
             inferenceService: serverInferenceService,
-            fallbackEngine: agentEngine,
             toolRegistry: newToolRegistry,
             extensionHost: extensionHost,
             sessionStore: backgroundSessionStore,
             packageRegistry: packageRegistry,
             settingsManager: settingsManager,
-            arbiter: inferenceArbiter,
-            rollbackEnabled: { [settingsManager] in
-                settingsManager.internalServerInferenceRollbackEnabled
-            }
+            arbiter: inferenceArbiter
         )
     }()
     lazy var schedulingActor: SchedulingActor = {
@@ -146,10 +137,6 @@ final class DependencyContainer: ObservableObject {
             contextWindow: 262_144,
             summarize: makeSummarizeClosure(
                 inferenceService: serverInferenceService,
-                fallbackEngine: agentEngine,
-                rollbackEnabled: { [settingsManager] in
-                    settingsManager.internalServerInferenceRollbackEnabled
-                },
                 parametersProvider: { [settingsManager] in
                     var parameters = AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
                     parameters.triAttention = settingsManager.makeTriAttentionConfig()
