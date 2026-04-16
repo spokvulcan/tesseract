@@ -272,6 +272,8 @@ struct CompletionHandler: Sendable {
             + "stream=\(request.stream == true) "
             + "messages=\(repairedRequest.messages.count) normalizedMessages=\(messages.count) "
             + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCache=\(prefixCacheEligibility) "
+            + "triAttentionEnabled=\(modelState.triAttention.enabled) "
+            + "triAttentionFallbackReason=\(modelState.triAttentionFallbackReason?.rawValue ?? "none") "
             + "maxTokens=\(params.maxTokens)"
         )
 

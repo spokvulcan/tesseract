@@ -56,16 +56,22 @@ final class InferenceArbiter {
     struct LoadedLLMState: Equatable {
         let modelID: String
         let visionMode: Bool
-        let triAttention: TriAttentionConfiguration
+        let requestedTriAttention: TriAttentionConfiguration
+        let effectiveTriAttention: TriAttentionConfiguration
+        let triAttentionFallbackReason: TriAttentionDenseFallbackReason?
 
         init(
             modelID: String,
             visionMode: Bool,
-            triAttention: TriAttentionConfiguration = .v1Disabled
+            requestedTriAttention: TriAttentionConfiguration = .v1Disabled,
+            effectiveTriAttention: TriAttentionConfiguration = .v1Disabled,
+            triAttentionFallbackReason: TriAttentionDenseFallbackReason? = nil
         ) {
             self.modelID = modelID
             self.visionMode = visionMode
-            self.triAttention = triAttention
+            self.requestedTriAttention = requestedTriAttention
+            self.effectiveTriAttention = effectiveTriAttention
+            self.triAttentionFallbackReason = triAttentionFallbackReason
         }
     }
 
@@ -268,19 +274,31 @@ final class InferenceArbiter {
         switch slot {
         case .llm:
             let targetModelID = llmModelIDOverride ?? settingsManager.selectedAgentModelID
+            let requestedTriAttention = settingsManager.makeTriAttentionConfig()
             let desired = LoadedLLMState(
                 modelID: targetModelID,
                 visionMode: settingsManager.visionModeEnabled,
-                triAttention: settingsManager.makeTriAttentionConfig()
+                requestedTriAttention: requestedTriAttention
             )
-            if loadedSlots.contains(.llm) && loadedLLMState == desired {
+            if loadedSlots.contains(.llm),
+                loadedLLMState?.modelID == desired.modelID,
+                loadedLLMState?.visionMode == desired.visionMode,
+                loadedLLMState?.requestedTriAttention == desired.requestedTriAttention
+            {
                 return
             }
             // Model or vision mode changed, or not loaded — (re)load
             if loadedSlots.contains(.imageGen) { unload(.imageGen) }
             if loadedSlots.contains(.llm) { unload(.llm) }
             try await loadSlot(.llm, modelID: desired.modelID, visionMode: desired.visionMode)
-            loadedLLMState = desired
+            let triAttentionRuntimeSelection = agentEngine.triAttentionRuntimeSelection
+            loadedLLMState = LoadedLLMState(
+                modelID: desired.modelID,
+                visionMode: desired.visionMode,
+                requestedTriAttention: desired.requestedTriAttention,
+                effectiveTriAttention: triAttentionRuntimeSelection.effectiveConfiguration,
+                triAttentionFallbackReason: triAttentionRuntimeSelection.fallbackReason
+            )
 
         case .tts:
             if loadedSlots.contains(.tts) { return }

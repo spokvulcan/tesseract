@@ -78,7 +78,8 @@ struct ServerInferenceServiceTests {
         let expectedState = ServerInferenceModelState(
             modelID: "qwen3.5-4b-paro",
             visionMode: true,
-            triAttention: Self.enabledTriAttention
+            triAttention: .v1Disabled,
+            triAttentionFallbackReason: .visionMode
         )
         let service = ServerInferenceService(
             engine: engine,
@@ -109,6 +110,7 @@ struct ServerInferenceServiceTests {
         #expect(engine.calls[0].parameters.triAttention == .v1Disabled)
         #expect(start.cachedTokenCount == 42)
         #expect(start.modelState == expectedState)
+        #expect(start.modelState?.triAttentionFallbackReason == .visionMode)
         #expect(try await collectText(from: start.stream) == "server path")
     }
 

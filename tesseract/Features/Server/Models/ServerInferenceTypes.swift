@@ -5,21 +5,25 @@ nonisolated struct ServerInferenceModelState: Sendable, Equatable {
     let modelID: String
     let visionMode: Bool
     let triAttention: TriAttentionConfiguration
+    let triAttentionFallbackReason: TriAttentionDenseFallbackReason?
 
     init(
         modelID: String,
         visionMode: Bool,
-        triAttention: TriAttentionConfiguration = .v1Disabled
+        triAttention: TriAttentionConfiguration = .v1Disabled,
+        triAttentionFallbackReason: TriAttentionDenseFallbackReason? = nil
     ) {
         self.modelID = modelID
         self.visionMode = visionMode
         self.triAttention = triAttention
+        self.triAttentionFallbackReason = triAttentionFallbackReason
     }
 
     static let unavailable = ServerInferenceModelState(
         modelID: "",
         visionMode: false,
-        triAttention: .v1Disabled
+        triAttention: .v1Disabled,
+        triAttentionFallbackReason: nil
     )
 }
 

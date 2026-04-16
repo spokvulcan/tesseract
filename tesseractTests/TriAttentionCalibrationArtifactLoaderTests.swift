@@ -32,8 +32,20 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         try Data("not a torch zip archive".utf8).write(to: destinationURL)
     }
 
-    private func makeFakeModelDirectory() throws -> URL {
-        try makeScratchDir(prefix: "triattention-fake-model")
+    private func makeFakeModelDirectory(paro: Bool = false) throws -> URL {
+        let url = try makeScratchDir(prefix: "triattention-fake-model")
+        guard paro else { return url }
+
+        let config = """
+        {
+          "architectures": ["Qwen3_5ForConditionalGeneration"],
+          "quantization_config": {
+            "quant_method": "paroquant"
+          }
+        }
+        """
+        try Data(config.utf8).write(to: url.appendingPathComponent("config.json", isDirectory: false))
+        return url
     }
 
     @Test
@@ -125,7 +137,7 @@ struct TriAttentionCalibrationArtifactLoaderTests {
 
     @Test
     func llmActorLoadRecordsLoadedCalibrationArtifactAndIdentity() async throws {
-        let modelDir = try makeFakeModelDirectory()
+        let modelDir = try makeFakeModelDirectory(paro: true)
         let root = try makeScratchDir(prefix: "triattention-actor-loaded")
         defer {
             try? FileManager.default.removeItem(at: modelDir)
@@ -153,10 +165,12 @@ struct TriAttentionCalibrationArtifactLoaderTests {
 
         #expect(await actor.currentModelFingerprintForTesting == fingerprint)
 
+        let selection = await actor.currentTriAttentionRuntimeSelectionForTesting
         let config = await actor.currentTriAttentionConfigForTesting
-        let lookup = await actor.currentTriAttentionCalibrationArtifactLookupForTesting
-        switch lookup {
-        case .loaded(_, let identity, let relativeResourcePath):
+        switch selection.calibrationArtifactLookup {
+        case .some(.loaded(_, let identity, let relativeResourcePath)):
+            #expect(selection.requestedConfiguration.enabled == true)
+            #expect(selection.fallbackReason == nil)
             #expect(config.calibrationArtifactIdentity == identity)
             #expect(config.enabled == true)
             #expect(relativeResourcePath == TriAttentionCalibrationArtifactLoader.relativeResourcePath(modelFingerprint: fingerprint))
@@ -186,7 +200,7 @@ struct TriAttentionCalibrationArtifactLoaderTests {
 
     @Test
     func llmActorLoadRecordsMissingCalibrationArtifactWithoutIdentity() async throws {
-        let modelDir = try makeFakeModelDirectory()
+        let modelDir = try makeFakeModelDirectory(paro: true)
         let root = try makeScratchDir(prefix: "triattention-actor-missing")
         defer {
             try? FileManager.default.removeItem(at: modelDir)
@@ -210,18 +224,19 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         }
 
         #expect(await actor.currentModelFingerprintForTesting == fingerprint)
+        let selection = await actor.currentTriAttentionRuntimeSelectionForTesting
+        #expect(selection.effectiveConfiguration.enabled == false)
+        #expect(selection.fallbackReason == .missingCalibrationArtifact)
         #expect(await actor.currentTriAttentionConfigForTesting.calibrationArtifactIdentity == nil)
 
-        let lookup = await actor.currentTriAttentionCalibrationArtifactLookupForTesting
-        switch lookup {
-        case .missing(let expectedModelFingerprint, let expectedURL):
+        switch selection.calibrationArtifactLookup {
+        case .some(.missing(let expectedModelFingerprint, let expectedURL)):
             #expect(expectedModelFingerprint == fingerprint)
             #expect(expectedURL == root.appendingPathComponent("\(fingerprint).pt", isDirectory: false))
         default:
             Issue.record("Expected actor to record missing TriAttention artifact result")
         }
 
-        let triAttentionConfig = await actor.currentTriAttentionConfigForTesting
         let generateParameters = await actor.makeGenerateParametersForTesting(
             from: AgentGenerateParameters(
                 maxTokens: 256,
@@ -235,15 +250,16 @@ struct TriAttentionCalibrationArtifactLoaderTests {
                 kvBits: 8,
                 kvGroupSize: 64,
                 prefillStepSize: 1024,
-                triAttention: triAttentionConfig
+                triAttention: TriAttentionConfiguration(enabled: true)
             )
         )
+        #expect(generateParameters.triAttention.enabled == false)
         #expect(generateParameters.triAttentionCalibrationArtifact == nil)
     }
 
     @Test
     func llmActorLoadRecordsUnavailableCalibrationArtifactWithoutIdentity() async throws {
-        let modelDir = try makeFakeModelDirectory()
+        let modelDir = try makeFakeModelDirectory(paro: true)
         let root = try makeScratchDir(prefix: "triattention-actor-unavailable")
         defer {
             try? FileManager.default.removeItem(at: modelDir)
@@ -270,11 +286,13 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         }
 
         #expect(await actor.currentModelFingerprintForTesting == fingerprint)
+        let selection = await actor.currentTriAttentionRuntimeSelectionForTesting
+        #expect(selection.effectiveConfiguration.enabled == false)
+        #expect(selection.fallbackReason == .unavailableCalibrationArtifact)
         #expect(await actor.currentTriAttentionConfigForTesting.calibrationArtifactIdentity == nil)
 
-        let lookup = await actor.currentTriAttentionCalibrationArtifactLookupForTesting
-        switch lookup {
-        case .unavailable(let expectedModelFingerprint, let attemptedURL, let errorDescription):
+        switch selection.calibrationArtifactLookup {
+        case .some(.unavailable(let expectedModelFingerprint, let attemptedURL, let errorDescription)):
             #expect(expectedModelFingerprint == fingerprint)
             #expect(attemptedURL == artifactURL)
             #expect(errorDescription.contains("not a readable torch archive"))

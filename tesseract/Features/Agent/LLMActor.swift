@@ -141,6 +141,7 @@ actor LLMActor {
     /// Actor-isolated and synchronously readable from inside
     /// `container.perform`, which cannot await MainActor.
     private var ssdConfig: SSDPrefixCacheConfig?
+    private var triAttentionRuntimeSelection: TriAttentionRuntimeSelection = .disabledDefault
     private var triAttentionConfiguration: TriAttentionConfiguration = .v1Disabled
     private let triAttentionCalibrationArtifactLoader: TriAttentionCalibrationArtifactLoader
     private var triAttentionCalibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult?
@@ -162,6 +163,15 @@ actor LLMActor {
 
     /// Internal read-only accessor for the load-time model fingerprint.
     var currentModelFingerprintForTesting: String? { modelFingerprint }
+
+    var currentTriAttentionRuntimeSelection: TriAttentionRuntimeSelection {
+        triAttentionRuntimeSelection
+    }
+
+    /// Internal read-only accessor for the load-time TriAttention runtime selection.
+    var currentTriAttentionRuntimeSelectionForTesting: TriAttentionRuntimeSelection {
+        triAttentionRuntimeSelection
+    }
 
     /// Internal read-only accessor for the load-time TriAttention config snapshot.
     var currentTriAttentionConfigForTesting: TriAttentionConfiguration { triAttentionConfiguration }
@@ -218,22 +228,27 @@ actor LLMActor {
         // chain — `resolveSSDConfig` → here — exercisable via a
         // real-path unit test even when no MLX container can be loaded.
         let fingerprint = try ModelFingerprint.computeFingerprint(modelDir: directory)
-        let calibrationArtifactLookup = resolveTriAttentionCalibrationArtifactLookup(
+        let isParoModel = isParoQuantModel(directory: directory)
+        let triAttentionRuntimeSelection = resolveTriAttentionRuntimeSelection(
+            requestedConfiguration: triAttention,
+            isParoModel: isParoModel,
+            visionMode: visionMode,
             modelFingerprint: fingerprint
-        )
-        let resolvedTriAttention = resolvedTriAttentionConfiguration(
-            from: triAttention,
-            calibrationArtifactLookup: calibrationArtifactLookup
         )
 
         installLoadTimeState(
             fingerprint: fingerprint,
             ssdConfig: ssdConfig,
-            triAttention: resolvedTriAttention,
-            calibrationArtifactLookup: calibrationArtifactLookup
+            triAttentionRuntimeSelection: triAttentionRuntimeSelection
+        )
+        logTriAttentionRuntimeSelection(
+            triAttentionRuntimeSelection,
+            modelFingerprint: fingerprint,
+            isParoModel: isParoModel,
+            visionMode: visionMode
         )
 
-        if isParoQuantModel(directory: directory) {
+        if isParoModel {
             Log.agent.info("Detected ParoQuant model — using \(visionMode ? "VLM" : "LLM") path")
             let container: ModelContainer = visionMode
                 ? try await loadParoQuantVLMContainer(from: directory, toolCallFormat: format)
@@ -838,6 +853,7 @@ actor LLMActor {
         defaultPrefixCacheMemoryBudgetBytes = Defaults.fallbackPrefixCacheMemoryBudgetBytes
         modelFingerprint = nil
         ssdConfig = nil
+        triAttentionRuntimeSelection = .disabledDefault
         triAttentionConfiguration = .v1Disabled
         triAttentionCalibrationArtifactLookup = nil
     }
@@ -1187,29 +1203,65 @@ actor LLMActor {
     private func installLoadTimeState(
         fingerprint: String,
         ssdConfig: SSDPrefixCacheConfig?,
-        triAttention: TriAttentionConfiguration,
-        calibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult
+        triAttentionRuntimeSelection: TriAttentionRuntimeSelection
     ) {
         self.modelFingerprint = fingerprint
         self.ssdConfig = ssdConfig
-        self.triAttentionConfiguration = triAttention
-        self.triAttentionCalibrationArtifactLookup = calibrationArtifactLookup
+        self.triAttentionRuntimeSelection = triAttentionRuntimeSelection
+        self.triAttentionConfiguration = triAttentionRuntimeSelection.effectiveConfiguration
+        self.triAttentionCalibrationArtifactLookup = triAttentionRuntimeSelection.calibrationArtifactLookup
     }
 
-    private func resolvedTriAttentionConfiguration(
-        from triAttention: TriAttentionConfiguration,
-        calibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult
-    ) -> TriAttentionConfiguration {
-        switch calibrationArtifactLookup {
-        case .loaded(_, let identity, _):
-            return triAttention.withCalibrationArtifactIdentity(identity)
-        case .missing, .fingerprintMismatch, .unavailable:
-            return triAttention.withCalibrationArtifactIdentity(nil)
+    private func resolveTriAttentionRuntimeSelection(
+        requestedConfiguration: TriAttentionConfiguration,
+        isParoModel: Bool,
+        visionMode: Bool,
+        modelFingerprint: String
+    ) -> TriAttentionRuntimeSelection {
+        let calibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult? =
+            if requestedConfiguration.enabled && isParoModel && !visionMode {
+                resolveTriAttentionCalibrationArtifactLookup(modelFingerprint: modelFingerprint)
+            } else {
+                nil
+            }
+
+        return TriAttentionRuntimeSelection.resolve(
+            requestedConfiguration: requestedConfiguration,
+            isParoModel: isParoModel,
+            visionMode: visionMode,
+            calibrationArtifactLookup: calibrationArtifactLookup
+        )
+    }
+
+    private func logTriAttentionRuntimeSelection(
+        _ triAttentionRuntimeSelection: TriAttentionRuntimeSelection,
+        modelFingerprint: String,
+        isParoModel: Bool,
+        visionMode: Bool
+    ) {
+        switch (
+            triAttentionRuntimeSelection.effectiveConfiguration.enabled,
+            triAttentionRuntimeSelection.calibrationArtifactLookup
+        ) {
+        case (true, .some(.loaded(_, let identity, let relativeResourcePath))):
+            Log.agent.info(
+                "TriAttention runtime enabled — modelFingerprint=\(modelFingerprint) "
+                + "budget=\(triAttentionRuntimeSelection.effectiveConfiguration.budgetTokens) "
+                + "artifactIdentity=\(identity.rawValue) "
+                + "resourcePath=\(relativeResourcePath)"
+            )
+        default:
+            Log.agent.info(
+                "TriAttention runtime selection — requestedEnabled=\(triAttentionRuntimeSelection.requestedConfiguration.enabled) "
+                + "effectiveEnabled=\(triAttentionRuntimeSelection.effectiveConfiguration.enabled) "
+                + "fallbackReason=\(triAttentionRuntimeSelection.fallbackReason?.rawValue ?? "none") "
+                + "isParoModel=\(isParoModel) visionMode=\(visionMode) "
+                + "modelFingerprint=\(modelFingerprint)"
+            )
         }
     }
 
-    /// TriAttention artifacts are diagnostic-only until the runtime patch lands,
-    /// so parse/read failures must not block dense model loads.
+    /// Parse/read failures must not block dense model loads.
     private func resolveTriAttentionCalibrationArtifactLookup(
         modelFingerprint: String
     ) -> TriAttentionCalibrationArtifactLookupResult {
@@ -1584,7 +1636,9 @@ actor LLMActor {
         from parameters: AgentGenerateParameters
     ) -> GenerateParameters {
         let calibrationArtifact: TriAttentionCalibrationArtifact? =
-            if case .loaded(let artifact, _, _) = triAttentionCalibrationArtifactLookup {
+            if triAttentionRuntimeSelection.effectiveConfiguration.enabled,
+                case .some(.loaded(let artifact, _, _)) = triAttentionCalibrationArtifactLookup
+            {
                 artifact
             } else {
                 nil
@@ -1601,7 +1655,7 @@ actor LLMActor {
             repetitionContextSize: parameters.repetitionContextSize,
             presencePenalty: parameters.presencePenalty,
             prefillStepSize: parameters.prefillStepSize,
-            triAttention: parameters.triAttention,
+            triAttention: triAttentionRuntimeSelection.effectiveConfiguration,
             triAttentionCalibrationArtifact: calibrationArtifact
         )
     }

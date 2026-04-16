@@ -47,6 +47,7 @@ final class AgentEngine {
     private(set) var isGenerating = false
 
     private(set) var agentTokenizer: AgentTokenizer?
+    private(set) var triAttentionRuntimeSelection: TriAttentionRuntimeSelection = .disabledDefault
 
     /// Whether the loaded model's template starts generation inside a `<think>` block.
     private(set) var promptStartsThinking = false
@@ -144,6 +145,7 @@ final class AgentEngine {
 
             agentTokenizer = tokenizer
             promptStartsThinking = startsThinking
+            triAttentionRuntimeSelection = await llmActor.currentTriAttentionRuntimeSelection
             isModelLoaded = true
             loadingStatus = ""
             Log.agent.info("Model loaded — promptStartsThinking=\(promptStartsThinking)")
@@ -360,6 +362,7 @@ final class AgentEngine {
         cancelGeneration()
         agentTokenizer = nil
         promptStartsThinking = false
+        triAttentionRuntimeSelection = .disabledDefault
         isModelLoaded = false
         loadingStatus = ""
         unloadTask = Task { [llmActor] in
