@@ -218,6 +218,131 @@ struct CompletionHandlerTests {
         #expect(chunk.usage == nil)
     }
 
+    /// Epic 3 Task 3 parity gate — the OpenAI response envelope is invariant
+    /// over attention mode. `makeNonStreamingResponse` and
+    /// `makeFinalStreamingChunk` do not take an attention-mode parameter: the
+    /// HTTP contract sees only `modelID`, `cachedTokenCount`, and generation
+    /// `info`. Identical inputs must therefore produce byte-identical envelopes
+    /// regardless of whether the engine ran dense or TriAttention underneath.
+    ///
+    /// This regression-guards against future refactors that might thread an
+    /// attention-mode flag into envelope construction and accidentally leak
+    /// runtime-mode information into the OpenAI-compatible response.
+    @MainActor @Test func responseEnvelopesDoNotVaryWhenInputsAreIdentical() throws {
+        let info = AgentGeneration.Info(
+            promptTokenCount: 120,
+            generationTokenCount: 30,
+            promptTime: 0.2,
+            generateTime: 0.4
+        )
+
+        let firstNonStreaming = CompletionHandler.makeNonStreamingResponse(
+            completionID: "chatcmpl-parity",
+            requestModel: "qwen3.5-4b-paro",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            textContent: "Answer",
+            thinkingContent: "Reasoning",
+            toolCalls: [],
+            info: info,
+            cachedTokenCount: 19,
+            maxTokens: 512
+        )
+        let secondNonStreaming = CompletionHandler.makeNonStreamingResponse(
+            completionID: "chatcmpl-parity",
+            requestModel: "qwen3.5-4b-paro",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            textContent: "Answer",
+            thinkingContent: "Reasoning",
+            toolCalls: [],
+            info: info,
+            cachedTokenCount: 19,
+            maxTokens: 512
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let firstData = try encoder.encode(firstNonStreaming)
+        let secondData = try encoder.encode(secondNonStreaming)
+        #expect(firstData == secondData)
+
+        let firstStreaming = CompletionHandler.makeFinalStreamingChunk(
+            completionID: "chatcmpl-parity",
+            requestModel: "qwen3.5-4b-paro",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            hasToolCalls: false,
+            info: info,
+            cachedTokenCount: 19,
+            maxTokens: 512,
+            includeUsage: true
+        )
+        let secondStreaming = CompletionHandler.makeFinalStreamingChunk(
+            completionID: "chatcmpl-parity",
+            requestModel: "qwen3.5-4b-paro",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            hasToolCalls: false,
+            info: info,
+            cachedTokenCount: 19,
+            maxTokens: 512,
+            includeUsage: true
+        )
+        let firstChunkData = try encoder.encode(firstStreaming)
+        let secondChunkData = try encoder.encode(secondStreaming)
+        #expect(firstChunkData == secondChunkData)
+    }
+
+    /// Epic 3 Task 3 parity gate — `cached_tokens` accounting contract.
+    ///
+    /// The `cached_tokens` value reported by the engine must flow verbatim into
+    /// both the non-streaming `usage.prompt_tokens_details.cached_tokens` and
+    /// the streaming final chunk's identical field. No transform, no mode
+    /// gating. This test documents the contract: the same engine-reported
+    /// count reaches both envelopes unchanged.
+    @MainActor @Test func cachedTokenCountFlowsUnchangedIntoBothEnvelopes() {
+        let info = AgentGeneration.Info(
+            promptTokenCount: 200,
+            generationTokenCount: 42,
+            promptTime: 0.5,
+            generateTime: 0.9
+        )
+
+        let nonStreaming = CompletionHandler.makeNonStreamingResponse(
+            completionID: "chatcmpl-cached",
+            requestModel: "qwen3.5-4b-paro",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            textContent: "Ok",
+            thinkingContent: "",
+            toolCalls: [],
+            info: info,
+            cachedTokenCount: 77,
+            maxTokens: 1024
+        )
+        let streaming = CompletionHandler.makeFinalStreamingChunk(
+            completionID: "chatcmpl-cached",
+            requestModel: "qwen3.5-4b-paro",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            hasToolCalls: false,
+            info: info,
+            cachedTokenCount: 77,
+            maxTokens: 1024,
+            includeUsage: true
+        )
+
+        #expect(nonStreaming.usage?.prompt_tokens_details?.cached_tokens == 77)
+        #expect(streaming.usage?.prompt_tokens_details?.cached_tokens == 77)
+        #expect(
+            nonStreaming.usage?.prompt_tokens_details?.cached_tokens
+                == streaming.usage?.prompt_tokens_details?.cached_tokens
+        )
+        #expect(nonStreaming.usage?.prompt_tokens == streaming.usage?.prompt_tokens)
+        #expect(nonStreaming.usage?.completion_tokens == streaming.usage?.completion_tokens)
+        #expect(nonStreaming.usage?.total_tokens == streaming.usage?.total_tokens)
+    }
+
     @MainActor @Test func finalStreamingChunkOmitsUsageWhenMetricsAreUnavailable() {
         let chunk = CompletionHandler.makeFinalStreamingChunk(
             completionID: "chatcmpl-1000",

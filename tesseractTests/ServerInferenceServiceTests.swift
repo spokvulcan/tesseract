@@ -143,6 +143,118 @@ struct ServerInferenceServiceTests {
         #expect(try await collectText(from: start.stream) == "server fallback")
     }
 
+    /// Epic 3 Task 3 parity gate — identical HTTP contract between dense and
+    /// TriAttention modes. Runs the same chat request twice against a service
+    /// backed by dense and TriAttention model states, and asserts:
+    ///
+    /// - **Model routing**: engine receives identical `modelID`.
+    /// - **Tool formatting**: engine receives identical `toolSpecCount`.
+    /// - **Response envelope inputs**: engine receives identical `systemPrompt`,
+    ///   `messageCount`, and `usedPrefixCacheConversation`.
+    /// - **cached_tokens accounting**: `ServerInferenceStart.cachedTokenCount`
+    ///   is forwarded byte-identically from the engine layer.
+    ///
+    /// The one permitted difference is `parameters.triAttention`, which is the
+    /// intended carrier for the vendor cache/runtime selection below this
+    /// layer. Everything HTTP clients can observe must be invariant.
+    @Test func serverCompatibleChatPreservesParityAcrossAttentionModes() async throws {
+        let modelID = "qwen3.5-4b-paro"
+        let systemPrompt = "System"
+        let chatMessages: [LLMMessage] = [.user(content: "Hello")]
+        let toolSpec: ToolSpec = [
+            "type": "function",
+            "function": [
+                "name": "fetch",
+                "description": "Fetch data",
+                "parameters": [
+                    "type": "object",
+                    "properties": [:] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
+        let prefixConversation = HTTPPrefixCacheConversation(
+            systemPrompt: systemPrompt,
+            messages: [.init(role: .user, content: "Hello")]
+        )
+
+        func run(
+            triAttention: TriAttentionConfiguration,
+            fallbackReason: TriAttentionDenseFallbackReason?
+        ) async throws -> (call: StubServerInferenceEngine.Call, start: ServerInferenceStart) {
+            let engine = StubServerInferenceEngine()
+            engine.serverStart = makeStart(
+                textChunks: ["shared response"],
+                cachedTokenCount: 23
+            )
+            let service = ServerInferenceService(
+                engine: engine,
+                modelStateProvider: {
+                    ServerInferenceModelState(
+                        modelID: modelID,
+                        visionMode: false,
+                        triAttention: triAttention,
+                        triAttentionFallbackReason: fallbackReason
+                    )
+                }
+            )
+            var parameters = AgentGenerateParameters.default
+            parameters.triAttention = triAttention
+
+            let start = try await service.start(
+                ServerInferenceRequest(
+                    input: .chat(.init(
+                        systemPrompt: systemPrompt,
+                        messages: chatMessages,
+                        toolSpecs: [toolSpec],
+                        prefixCacheConversation: prefixConversation
+                    )),
+                    parameters: parameters,
+                    route: .serverCompatible
+                )
+            )
+            return (engine.calls[0], start)
+        }
+
+        let dense = try await run(triAttention: .v1Disabled, fallbackReason: nil)
+        let tri = try await run(
+            triAttention: Self.enabledTriAttention,
+            fallbackReason: nil
+        )
+
+        // Model routing: identical physical model targets the engine.
+        #expect(dense.call.modelID == tri.call.modelID)
+        #expect(dense.call.modelID == modelID)
+
+        // Tool formatting: the ToolSpec count reaches the engine unchanged.
+        #expect(dense.call.toolSpecCount == tri.call.toolSpecCount)
+        #expect(dense.call.toolSpecCount == 1)
+
+        // Response envelope inputs that drive chat templating are invariant.
+        #expect(dense.call.kind == tri.call.kind)
+        #expect(dense.call.kind == .serverChat)
+        #expect(dense.call.systemPrompt == tri.call.systemPrompt)
+        #expect(dense.call.messageCount == tri.call.messageCount)
+        #expect(dense.call.usedPrefixCacheConversation == tri.call.usedPrefixCacheConversation)
+
+        // cached_tokens accounting contract: the same engine-reported count
+        // reaches the transport unchanged by attention-mode selection.
+        #expect(dense.start.cachedTokenCount == tri.start.cachedTokenCount)
+        #expect(dense.start.cachedTokenCount == 23)
+
+        // Stream content is identical (the helper engine yields the same text).
+        let denseText = try await collectText(from: dense.start.stream)
+        let triText = try await collectText(from: tri.start.stream)
+        #expect(denseText == triText)
+        #expect(denseText == "shared response")
+
+        // The permitted difference — the vendor runtime carrier — is the only
+        // thing that changed. If this becomes equal in the future, TriAttention
+        // mode stopped propagating to the vendor layer.
+        #expect(dense.call.parameters.triAttention != tri.call.parameters.triAttention)
+        #expect(dense.call.parameters.triAttention.enabled == false)
+        #expect(tri.call.parameters.triAttention.enabled == true)
+    }
+
     @Test func serverCompatibleChatWithoutModelStateUsesUnavailableSentinel() async throws {
         let engine = StubServerInferenceEngine()
         engine.serverStart = makeStart(textChunks: ["server fallback"])
