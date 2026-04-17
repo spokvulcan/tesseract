@@ -70,6 +70,7 @@ extension View {
             .injectSpeechDependencies(from: container)
             .injectAgentDependencies(from: container)
             .injectModelDependencies(from: container)
+            .injectServerDependencies(from: container)
     }
 
     // MARK: - Scoped Injection
@@ -119,5 +120,12 @@ extension View {
             .environmentObject(container.imageGenEngine)
             .environmentObject(container.zimageGenEngine)
             .environment(container.inferenceArbiter)
+    }
+
+    /// Server API: activity log + observability state.
+    @MainActor
+    func injectServerDependencies(from container: DependencyContainer) -> some View {
+        self
+            .environment(container.serverGenerationLog)
     }
 }

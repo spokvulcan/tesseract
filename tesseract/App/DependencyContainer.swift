@@ -65,6 +65,7 @@ final class DependencyContainer: ObservableObject {
         engine: agentEngine,
         arbiter: inferenceArbiter
     )
+    lazy var serverGenerationLog = ServerGenerationLog()
     lazy var agent: Agent = AgentFactory.makeAgent(
         inferenceService: serverInferenceService,
         packageRegistry: packageRegistry,
@@ -512,7 +513,8 @@ final class DependencyContainer: ObservableObject {
         let completionHandler = CompletionHandler(
             arbiter: inferenceArbiter,
             inferenceService: serverInferenceService,
-            downloads: modelDownloadManager
+            downloads: modelDownloadManager,
+            activityLog: serverGenerationLog
         )
         httpServer.route(.POST, "/v1/chat/completions") { request, writer in
             try await completionHandler.handle(request: request, writer: writer)

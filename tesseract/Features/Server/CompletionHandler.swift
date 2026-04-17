@@ -17,15 +17,18 @@ struct CompletionHandler: Sendable {
     private let arbiter: InferenceArbiter
     private let inferenceService: ServerInferenceService
     private let downloads: ModelDownloadManager
+    private let activityLog: ServerGenerationLog
 
     init(
         arbiter: InferenceArbiter,
         inferenceService: ServerInferenceService,
-        downloads: ModelDownloadManager
+        downloads: ModelDownloadManager,
+        activityLog: ServerGenerationLog
     ) {
         self.arbiter = arbiter
         self.inferenceService = inferenceService
         self.downloads = downloads
+        self.activityLog = activityLog
     }
 
     private struct StartedGeneration {
@@ -40,6 +43,7 @@ struct CompletionHandler: Sendable {
         let cachedTokenCount: Int
         let cancel: @Sendable () -> Void
         let waitForCompletion: @Sendable () async -> Void
+        let diagnostics: HTTPServerGenerationStart.Diagnostics
     }
 
     /// Routing decision for the request's `model` field.
@@ -172,6 +176,18 @@ struct CompletionHandler: Sendable {
             "HTTP request logged — prefix=\(logPrefix) dir=\(HTTPRequestLogger.shared.directoryURL.path)"
         )
 
+        let completionID = "chatcmpl-\(UUID().uuidString)"
+        let requestedModelName = Self.echoModelID(
+            requestModel: completionRequest.model,
+            physical: ""
+        )
+        let logHandle = await activityLog.startRequest(
+            completionID: completionID,
+            model: requestedModelName,
+            stream: completionRequest.stream == true,
+            sessionAffinity: sessionAffinity
+        )
+
         do {
             try await withAcquisitionTimeout { signal in
                 try await arbiter.withExclusiveGPU(
@@ -179,16 +195,21 @@ struct CompletionHandler: Sendable {
                     llmModelIDOverride: llmModelIDOverride
                 ) {
                     signal.set()
+                    await self.activityLog.markLeaseAcquired(handle: logHandle)
                     await self.runCompletion(
                         completionRequest,
                         sessionAffinity: sessionAffinity,
-                        writer: writer
+                        writer: writer,
+                        completionID: completionID,
+                        logHandle: logHandle
                     )
                 }
             }
         } catch is CancellationError {
+            await activityLog.cancel(handle: logHandle)
             try await writer.send(.serviceUnavailable("Request cancelled"))
         } catch is LeaseTimeoutError {
+            await activityLog.fail(handle: logHandle, error: "Model is busy")
             let base = HTTPResponse.serviceUnavailable("Model is busy, try again later")
             try await writer.send(HTTPResponse(
                 statusCode: base.statusCode,
@@ -197,6 +218,7 @@ struct CompletionHandler: Sendable {
                 body: base.body
             ))
         } catch AgentEngineError.modelNotDownloaded(let id) {
+            await activityLog.fail(handle: logHandle, error: "Model not downloaded")
             // Post-lease race: validated pre-lease, then the model was
             // deleted from Settings → Models while we were queued. Surface
             // the same 404 `model_not_found` shape as the pre-lease path so
@@ -204,8 +226,10 @@ struct CompletionHandler: Sendable {
             // whether the check failed before or after queueing.
             try await writer.send(.modelNotFound(modelID: id, reason: .notDownloaded))
         } catch let error as AgentEngineError {
+            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
             try await writer.send(.serviceUnavailable(error.localizedDescription))
         } catch {
+            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
             Log.server.error("Completion handler error: \(error)")
             try await writer.send(.internalError(error.localizedDescription))
         }
@@ -216,19 +240,25 @@ struct CompletionHandler: Sendable {
     private func runCompletion(
         _ request: OpenAI.ChatCompletionRequest,
         sessionAffinity: String?,
-        writer: HTTPResponseWriter
+        writer: HTTPResponseWriter,
+        completionID: String,
+        logHandle: TraceHandle
     ) async {
         if request.stream == true {
             await runStreamingCompletion(
                 request,
                 sessionAffinity: sessionAffinity,
-                writer: writer
+                writer: writer,
+                completionID: completionID,
+                logHandle: logHandle
             )
         } else {
             await runNonStreamingCompletion(
                 request,
                 sessionAffinity: sessionAffinity,
-                writer: writer
+                writer: writer,
+                completionID: completionID,
+                logHandle: logHandle
             )
         }
     }
@@ -236,9 +266,9 @@ struct CompletionHandler: Sendable {
     /// Convert request, read model state, and start generation in one MainActor hop.
     private func startGeneration(
         _ request: OpenAI.ChatCompletionRequest,
-        sessionAffinity: String?
+        sessionAffinity: String?,
+        completionID: String
     ) async -> Result<StartedGeneration, Error> {
-        let completionID = "chatcmpl-\(UUID().uuidString)"
         let modelState = inferenceService.currentModelState() ?? .unavailable
 
         let repairedRequest = await Self.sessionReplayStore.repair(
@@ -299,7 +329,8 @@ struct CompletionHandler: Sendable {
                 stream: start.stream,
                 cachedTokenCount: start.cachedTokenCount,
                 cancel: start.cancel,
-                waitForCompletion: start.waitForCompletion
+                waitForCompletion: start.waitForCompletion,
+                diagnostics: start.diagnostics
             ))
         } catch {
             Log.server.error("HTTP completion failed to start generation: \(error)")
@@ -311,19 +342,27 @@ struct CompletionHandler: Sendable {
     private func runNonStreamingCompletion(
         _ request: OpenAI.ChatCompletionRequest,
         sessionAffinity: String?,
-        writer: HTTPResponseWriter
+        writer: HTTPResponseWriter,
+        completionID: String,
+        logHandle: TraceHandle
     ) async {
         let start: StartedGeneration
-        switch await startGeneration(request, sessionAffinity: sessionAffinity) {
+        switch await startGeneration(
+            request,
+            sessionAffinity: sessionAffinity,
+            completionID: completionID
+        ) {
         case .success(let started):
             start = started
         case .failure(let error):
             Log.server.error("Generation failed to start: \(error)")
+            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
             try? await writer.send(.serviceUnavailable("Generation failed: \(error.localizedDescription)"))
             return
         }
 
-        // Accumulate events
+        await recordCacheLookup(start: start, logHandle: logHandle)
+
         var textContent = ""
         var thinkingContent = ""
         var toolCalls: [ToolCall] = []
@@ -331,6 +370,7 @@ struct CompletionHandler: Sendable {
 
         do {
             for try await event in start.stream {
+                await activityLog.ingest(handle: logHandle, event: event)
                 switch event {
                 case .text(let chunk):
                     textContent += chunk
@@ -353,6 +393,7 @@ struct CompletionHandler: Sendable {
             }
         } catch {
             Log.server.error("Generation stream error: \(error)")
+            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
             try? await writer.send(.internalError("Generation error: \(error.localizedDescription)"))
             return
         }
@@ -392,6 +433,7 @@ struct CompletionHandler: Sendable {
             + "promptTokens=\(info?.promptTokenCount ?? 0) completionTokens=\(info?.generationTokenCount ?? 0) "
             + "cachedTokens=\(start.cachedTokenCount)"
         )
+        await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
         do {
             try await writer.send(.jsonBody(data))
         } catch {
@@ -405,21 +447,31 @@ struct CompletionHandler: Sendable {
     private func runStreamingCompletion(
         _ request: OpenAI.ChatCompletionRequest,
         sessionAffinity: String?,
-        writer: HTTPResponseWriter
+        writer: HTTPResponseWriter,
+        completionID: String,
+        logHandle: TraceHandle
     ) async {
         let start: StartedGeneration
-        switch await startGeneration(request, sessionAffinity: sessionAffinity) {
+        switch await startGeneration(
+            request,
+            sessionAffinity: sessionAffinity,
+            completionID: completionID
+        ) {
         case .success(let started):
             start = started
         case .failure(let error):
             Log.server.error("Streaming generation failed to start: \(error)")
+            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
             try? await writer.send(.serviceUnavailable("Generation failed: \(error.localizedDescription)"))
             return
         }
 
+        await recordCacheLookup(start: start, logHandle: logHandle)
+
         let sse = SSEWriter(writer)
         do { try await sse.open() } catch {
             await cancelAndDrainGeneration(start)
+            await activityLog.fail(handle: logHandle, error: "Failed to open SSE stream")
             Log.server.error("Failed to open SSE stream: \(error)")
             return
         }
@@ -477,7 +529,8 @@ struct CompletionHandler: Sendable {
                     completionID: start.completionID,
                     model: model,
                     created: created,
-                    cancel: start.cancel
+                    cancel: start.cancel,
+                    logHandle: logHandle
                 )
             }
 
@@ -510,6 +563,7 @@ struct CompletionHandler: Sendable {
 
             guard await sse.send(finalChunk) else {
                 start.cancel()
+                await activityLog.cancel(handle: logHandle)
                 Log.server.info(
                     "HTTP streaming disconnect — completionID=\(start.completionID) source=\(DisconnectSource.chunkWrite.rawValue)"
                 )
@@ -519,6 +573,7 @@ struct CompletionHandler: Sendable {
                 Log.server.info(
                     "HTTP streaming disconnect — completionID=\(start.completionID) source=\(DisconnectSource.chunkWrite.rawValue)"
                 )
+                await activityLog.cancel(handle: logHandle)
                 return
             }
 
@@ -540,6 +595,7 @@ struct CompletionHandler: Sendable {
                 + "completionTokens=\(streamResult.info?.generationTokenCount ?? 0) "
                 + "cachedTokens=\(start.cachedTokenCount)"
             )
+            await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
 
         case .disconnected(let source):
             Log.server.info(
@@ -547,10 +603,12 @@ struct CompletionHandler: Sendable {
             )
             Log.server.debug("HTTP streaming cancel dispatched — completionID=\(start.completionID)")
             await cancelAndDrainGeneration(start)
+            await activityLog.cancel(handle: logHandle)
             return
 
         case .failed(let message):
             await cancelAndDrainGeneration(start)
+            await activityLog.fail(handle: logHandle, error: message)
             Log.server.error(
                 "Streaming generation error — completionID=\(start.completionID) error=\(message)"
             )
@@ -558,8 +616,23 @@ struct CompletionHandler: Sendable {
 
         case .cancelled:
             await cancelAndDrainGeneration(start)
+            await activityLog.cancel(handle: logHandle)
             return
         }
+    }
+
+    private func recordCacheLookup(start: StartedGeneration, logHandle: TraceHandle) async {
+        let diagnostics = start.diagnostics
+        await activityLog.markCacheLookup(
+            handle: logHandle,
+            reason: diagnostics.cacheReason,
+            cachedTokens: start.cachedTokenCount,
+            sharedPrefixLength: diagnostics.sharedPrefixLength,
+            promptTokens: diagnostics.promptTokenCount,
+            lookupMs: diagnostics.lookupMs,
+            restoreMs: diagnostics.restoreMs,
+            prefillMs: diagnostics.prefillMs
+        )
     }
 
     private func cancelAndDrainGeneration(_ start: StartedGeneration) async {
@@ -727,13 +800,15 @@ struct CompletionHandler: Sendable {
         completionID: String,
         model: String,
         created: Int,
-        cancel: @escaping @Sendable () -> Void
+        cancel: @escaping @Sendable () -> Void,
+        logHandle: TraceHandle
     ) async -> StreamingOutcome {
         var result = StreamResult()
         var toolCallIndex = 0
 
         do {
             generation: for try await event in stream {
+                await activityLog.ingest(handle: logHandle, event: event)
                 switch event {
                 case .text(let chunk):
                     result.textContent += chunk

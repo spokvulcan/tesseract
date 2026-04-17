@@ -15,62 +15,86 @@ struct ServerSettingsView: View {
     var body: some View {
         @Bindable var settings = settings
 
-        Form {
-            Section {
-                Toggle("Enable HTTP Server", isOn: $settings.isServerEnabled)
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 0) {
+                Form {
+                    Section {
+                        Toggle("Enable HTTP Server", isOn: $settings.isServerEnabled)
 
-                LabeledContent("Port") {
-                    TextField("8321", text: $portText)
-                        .focused($isFocused)
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
-                        .onSubmit {
-                            commitPort()
+                        LabeledContent("Port") {
+                            TextField("8321", text: $portText)
+                                .focused($isFocused)
+                                .labelsHidden()
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 80)
+                                .onSubmit {
+                                    commitPort()
+                                }
                         }
-                }
 
-                if settings.isServerEnabled {
-                    LabeledContent("Endpoint") {
-                        HStack {
-                            Text("http://127.0.0.1:\(String(settings.serverPort))")
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
+                        if settings.isServerEnabled {
+                            LabeledContent("Endpoint") {
+                                HStack {
+                                    Text("http://127.0.0.1:\(String(settings.serverPort))")
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
 
-                            Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString("http://127.0.0.1:\(String(settings.serverPort))", forType: .string)
-                            } label: {
-                                Image(systemName: "doc.on.doc")
+                                    Button {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString("http://127.0.0.1:\(String(settings.serverPort))", forType: .string)
+                                    } label: {
+                                        Image(systemName: "doc.on.doc")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.secondary)
+                                    .help("Copy Endpoint")
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                            .help("Copy Endpoint")
                         }
+                    } footer: {
+                        Text("The local API server provides an OpenAI-compatible /v1/chat/completions endpoint for integration with other tools.")
+                    }
+
+                    Section {
+                        Toggle("Enable TriAttention", isOn: $settings.triattentionEnabled)
+
+                        if settings.triattentionEnabled {
+                            LabeledContent("Active mode") {
+                                Text(attentionModeDescription)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: {
+                        Text("Sparse Attention (Advanced)")
+                    } footer: {
+                        Text("TriAttention reduces attention compute on long-context text inference. Supported only on PARO quantized Qwen3.5 models — other models automatically fall back to dense attention. Vision mode also falls back to dense. Toggling reloads the currently loaded model.")
                     }
                 }
-            } footer: {
-                Text("The local API server provides an OpenAI-compatible /v1/chat/completions endpoint for integration with other tools.")
-            }
+                .formStyle(.grouped)
+                .fixedSize(horizontal: false, vertical: true)
 
-            Section {
-                Toggle("Enable TriAttention", isOn: $settings.triattentionEnabled)
-
-                if settings.triattentionEnabled {
-                    LabeledContent("Active mode") {
-                        Text(attentionModeDescription)
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    HStack {
+                        Text("Live Activity")
+                            .font(.headline)
+                        Spacer()
+                        Text("Token-by-token observability")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    .padding(.horizontal, Theme.Spacing.md)
+
+                    ServerActivityPanel()
+                        .frame(height: 520)
+                        .padding(.horizontal, Theme.Spacing.md)
                 }
-            } header: {
-                Text("Sparse Attention (Advanced)")
-            } footer: {
-                Text("TriAttention reduces attention compute on long-context text inference. Supported only on PARO quantized Qwen3.5 models — other models automatically fall back to dense attention. Vision mode also falls back to dense. Toggling reloads the currently loaded model.")
+                .padding(.top, Theme.Spacing.sm)
+                .padding(.bottom, Theme.Spacing.md)
             }
+            .frame(maxWidth: .infinity)
         }
-        .formStyle(.grouped)
         .navigationTitle("Server API")
         .onAppear {
             portText = String(settings.serverPort)

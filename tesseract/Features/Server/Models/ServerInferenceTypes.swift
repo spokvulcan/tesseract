@@ -33,19 +33,22 @@ nonisolated struct ServerInferenceStart: Sendable {
     let cancel: @Sendable () -> Void
     let waitForCompletion: @Sendable () async -> Void
     let modelState: ServerInferenceModelState?
+    let diagnostics: HTTPServerGenerationStart.Diagnostics
 
     init(
         stream: AsyncThrowingStream<AgentGeneration, Error>,
         cachedTokenCount: Int,
         cancel: @escaping @Sendable () -> Void = {},
         waitForCompletion: @escaping @Sendable () async -> Void = {},
-        modelState: ServerInferenceModelState? = nil
+        modelState: ServerInferenceModelState? = nil,
+        diagnostics: HTTPServerGenerationStart.Diagnostics = .unavailable
     ) {
         self.stream = stream
         self.cachedTokenCount = cachedTokenCount
         self.cancel = cancel
         self.waitForCompletion = waitForCompletion
         self.modelState = modelState
+        self.diagnostics = diagnostics
     }
 
     init(
@@ -57,7 +60,8 @@ nonisolated struct ServerInferenceStart: Sendable {
             cachedTokenCount: start.cachedTokenCount,
             cancel: start.cancel,
             waitForCompletion: start.waitForCompletion,
-            modelState: modelState
+            modelState: modelState,
+            diagnostics: start.diagnostics
         )
     }
 }

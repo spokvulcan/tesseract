@@ -7,17 +7,62 @@ nonisolated struct HTTPServerGenerationStart: Sendable {
     let cachedTokenCount: Int
     let cancel: @Sendable () -> Void
     let waitForCompletion: @Sendable () async -> Void
+    let diagnostics: Diagnostics
+
+    /// Observability fields surfaced to the caller. Available when the request
+    /// went through the prefix-cache path; zeroed for the fallback standard
+    /// generation path, which has no analogous measurements.
+    ///
+    /// All `Ms` fields are in milliseconds. `LLMActor` measures in seconds
+    /// (`TimeInterval`) and converts on construction via `fromSeconds(...)`.
+    nonisolated struct Diagnostics: Sendable {
+        let lookupMs: Double
+        let restoreMs: Double
+        let prefillMs: Double
+        let cacheReason: String
+        let sharedPrefixLength: Int
+        let promptTokenCount: Int
+
+        static let unavailable = Diagnostics(
+            lookupMs: 0,
+            restoreMs: 0,
+            prefillMs: 0,
+            cacheReason: "n/a",
+            sharedPrefixLength: 0,
+            promptTokenCount: 0
+        )
+
+        static func fromSeconds(
+            lookup: TimeInterval,
+            restore: TimeInterval,
+            prefill: TimeInterval,
+            cacheReason: String,
+            sharedPrefixLength: Int,
+            promptTokenCount: Int
+        ) -> Diagnostics {
+            Diagnostics(
+                lookupMs: lookup * 1000,
+                restoreMs: restore * 1000,
+                prefillMs: prefill * 1000,
+                cacheReason: cacheReason,
+                sharedPrefixLength: sharedPrefixLength,
+                promptTokenCount: promptTokenCount
+            )
+        }
+    }
 
     init(
         stream: AsyncThrowingStream<AgentGeneration, Error>,
         cachedTokenCount: Int,
         cancel: @escaping @Sendable () -> Void = {},
-        waitForCompletion: @escaping @Sendable () async -> Void = {}
+        waitForCompletion: @escaping @Sendable () async -> Void = {},
+        diagnostics: Diagnostics = .unavailable
     ) {
         self.stream = stream
         self.cachedTokenCount = cachedTokenCount
         self.cancel = cancel
         self.waitForCompletion = waitForCompletion
+        self.diagnostics = diagnostics
     }
 }
 

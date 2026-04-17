@@ -31,6 +31,10 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let promptTokenCount: Int
     /// Number of leading tokens skipped because the cache already covered them.
     let skippedPrefillTokens: Int
+    /// Lookup outcome classification, surfaced for in-app observability.
+    let lookupReason: PrefixCacheManager.LookupReason
+    /// Shared-prefix length in tokens between the request and the best cache entry.
+    let sharedPrefixLength: Int
 
     // -- Post-generation store context (radix tree flow) --
 
@@ -831,7 +835,15 @@ actor LLMActor {
             waitForCompletion: {
                 _ = await task.result
                 await mlxStartBox.value.completion.value
-            }
+            },
+            diagnostics: .fromSeconds(
+                lookup: mlxStart.lookupMs,
+                restore: mlxStart.restoreMs,
+                prefill: mlxStart.prefillMs,
+                cacheReason: String(describing: mlxStart.lookupReason),
+                sharedPrefixLength: mlxStart.sharedPrefixLength,
+                promptTokenCount: mlxStart.promptTokenCount
+            )
         )
     }
 
@@ -1684,6 +1696,8 @@ actor LLMActor {
                 prefillMs: prefillMs,
                 promptTokenCount: fullTokenCount,
                 skippedPrefillTokens: skippedTokens,
+                lookupReason: lookupResult.reason,
+                sharedPrefixLength: lookupResult.sharedPrefixLength,
                 fullTokens: fullTokens,
                 capturedSnapshots: capturedSnapshots,
                 capturedPayloads: capturedPayloads,

@@ -662,7 +662,8 @@ final class AgentEngine {
             waitForCompletion: {
                 _ = await task.result
                 await start.waitForCompletion()
-            }
+            },
+            diagnostics: start.diagnostics
         )
         continuation.onTermination = { _ in managedStart.cancel() }
         return registerActiveGeneration(managedStart, id: generationID)
