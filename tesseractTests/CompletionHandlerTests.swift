@@ -104,6 +104,84 @@ struct CompletionHandlerTests {
         }
     }
 
+    @MainActor
+    @Test func makeGenerateParametersUsesModelDefaultsWhenRequestOmitsSampling() {
+        let request = OpenAI.ChatCompletionRequest(
+            model: "qwen3.5-4b-paro",
+            messages: [.init(role: .user, content: .text("hi"))]
+        )
+        let modelState = ServerInferenceModelState(
+            modelID: "qwen3.5-4b-paro",
+            visionMode: false,
+            triAttention: .v1Disabled
+        )
+
+        let params = CompletionHandler.makeGenerateParameters(from: request, modelState: modelState)
+
+        #expect(params.maxTokens == AgentGenerateParameters.qwen35.maxTokens)
+        #expect(params.temperature == AgentGenerateParameters.qwen35.temperature)
+        #expect(params.topP == AgentGenerateParameters.qwen35.topP)
+        #expect(params.topK == AgentGenerateParameters.qwen35.topK)
+        #expect(params.minP == AgentGenerateParameters.qwen35.minP)
+        #expect(params.presencePenalty == AgentGenerateParameters.qwen35.presencePenalty)
+        #expect(params.repetitionPenalty == AgentGenerateParameters.qwen35.repetitionPenalty)
+        #expect(params.triAttention == .v1Disabled)
+    }
+
+    @MainActor
+    @Test func makeGenerateParametersAppliesRequestSamplingOverrides() {
+        let request = OpenAI.ChatCompletionRequest(
+            model: "qwen3.5-4b-paro",
+            messages: [.init(role: .user, content: .text("hi"))],
+            max_tokens: 4096,
+            temperature: 0.4,
+            top_p: 0.9,
+            top_k: 48,
+            min_p: 0.1,
+            presence_penalty: 0.75,
+            repetition_penalty: 1.1
+        )
+        let triAttention = TriAttentionConfiguration(
+            enabled: true,
+            budgetTokens: 4096,
+            calibrationArtifactIdentity: .init(rawValue: "test-artifact")
+        )
+        let modelState = ServerInferenceModelState(
+            modelID: "qwen3.5-4b-paro",
+            visionMode: false,
+            triAttention: triAttention
+        )
+
+        let params = CompletionHandler.makeGenerateParameters(from: request, modelState: modelState)
+
+        #expect(params.maxTokens == 4096)
+        #expect(params.temperature == 0.4)
+        #expect(params.topP == 0.9)
+        #expect(params.topK == 48)
+        #expect(params.minP == 0.1)
+        #expect(params.presencePenalty == 0.75)
+        #expect(params.repetitionPenalty == 1.1)
+        #expect(params.triAttention == triAttention)
+    }
+
+    @MainActor
+    @Test func makeGenerateParametersTreatsNeutralRepetitionPenaltyAsDisabled() {
+        let request = OpenAI.ChatCompletionRequest(
+            model: "qwen3.5-4b-paro",
+            messages: [.init(role: .user, content: .text("hi"))],
+            repetition_penalty: 1.0
+        )
+        let modelState = ServerInferenceModelState(
+            modelID: "qwen3.5-4b-paro",
+            visionMode: false,
+            triAttention: .v1Disabled
+        )
+
+        let params = CompletionHandler.makeGenerateParameters(from: request, modelState: modelState)
+
+        #expect(params.repetitionPenalty == nil)
+    }
+
     @MainActor @Test func nonStreamingResponseIncludesReasoningToolCallsAndUsage() throws {
         let info = AgentGeneration.Info(
             promptTokenCount: 100,

@@ -20,6 +20,10 @@ nonisolated enum OpenAI {
         var max_completion_tokens: Int?
         var temperature: Double?
         var top_p: Double?
+        var top_k: Int?
+        var min_p: Double?
+        var presence_penalty: Double?
+        var repetition_penalty: Double?
         var reasoning_effort: String?
         var stream_options: StreamOptions?
         var stop: StopSequence?

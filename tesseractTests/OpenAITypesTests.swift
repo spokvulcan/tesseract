@@ -61,6 +61,10 @@ struct OpenAITypesTests {
           "max_completion_tokens": 8192,
           "temperature": 0.6,
           "top_p": 0.95,
+          "top_k": 32,
+          "min_p": 0.05,
+          "presence_penalty": 1.2,
+          "repetition_penalty": 1.05,
           "reasoning_effort": "medium",
           "stream_options": { "include_usage": true }
         }
@@ -76,6 +80,10 @@ struct OpenAITypesTests {
         #expect(request.effectiveMaxTokens == 8192)
         #expect(request.temperature == 0.6)
         #expect(request.top_p == 0.95)
+        #expect(request.top_k == 32)
+        #expect(request.min_p == 0.05)
+        #expect(request.presence_penalty == 1.2)
+        #expect(request.repetition_penalty == 1.05)
         #expect(request.reasoning_effort == "medium")
         #expect(request.stream_options?.include_usage == true)
 

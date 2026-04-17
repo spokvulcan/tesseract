@@ -284,11 +284,7 @@ struct CompletionHandler: Sendable {
             tools: request.tools
         )
         let prefixCacheConversation = prefixCacheEligibility.conversation
-        var params = AgentGenerateParameters.forModel(modelState.modelID)
-        params.triAttention = modelState.triAttention
-        if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
-        if let temp = request.temperature { params.temperature = Float(temp) }
-        if let topP = request.top_p { params.topP = Float(topP) }
+        let params = Self.makeGenerateParameters(from: request, modelState: modelState)
 
         Log.server.info(
             "HTTP completion reasoning sources — sessionAffinityPresent=\(sessionAffinity != nil) "
@@ -336,6 +332,28 @@ struct CompletionHandler: Sendable {
             Log.server.error("HTTP completion failed to start generation: \(error)")
             return .failure(error)
         }
+    }
+
+    @MainActor
+    static func makeGenerateParameters(
+        from request: OpenAI.ChatCompletionRequest,
+        modelState: ServerInferenceModelState
+    ) -> AgentGenerateParameters {
+        var params = AgentGenerateParameters.forModel(modelState.modelID)
+        params.triAttention = modelState.triAttention
+        if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
+        if let temp = request.temperature { params.temperature = Float(temp) }
+        if let topP = request.top_p { params.topP = Float(topP) }
+        if let topK = request.top_k { params.topK = topK }
+        if let minP = request.min_p { params.minP = Float(minP) }
+        if let presencePenalty = request.presence_penalty {
+            params.presencePenalty = Float(presencePenalty)
+        }
+        if let repetitionPenalty = request.repetition_penalty {
+            let penalty = Float(repetitionPenalty)
+            params.repetitionPenalty = penalty == 1.0 ? nil : penalty
+        }
+        return params
     }
 
     /// Non-streaming: accumulate all generation events, then send a single JSON response.
