@@ -552,7 +552,8 @@ final class HTTPServer {
 
     @ObservationIgnored private var listener: NWListener?
     @ObservationIgnored private var routes: [Route] = []
-    @ObservationIgnored private var connectionTasks: Set<Task<Void, Never>> = []
+    @ObservationIgnored private var trackedConnections: [UUID: TrackedConnection] = [:]
+    @ObservationIgnored private var isStopping = false
 
     fileprivate struct Route: Sendable {
         let method: HTTPMethod
@@ -560,10 +561,23 @@ final class HTTPServer {
         let handler: @Sendable (HTTPRequest, HTTPResponseWriter) async throws -> Void
     }
 
+    private struct TrackedConnection: Sendable {
+        let task: Task<Void, Never>
+        let cancelTransport: @Sendable () -> Void
+    }
+
     // MARK: - Init
 
     init(port: UInt16 = 8321) {
         self.port = port
+    }
+
+    @discardableResult
+    func registerConnectionTaskForTesting(
+        _ task: Task<Void, Never>,
+        cancelTransport: @escaping @Sendable () -> Void = {}
+    ) -> Bool {
+        trackConnection(task: task, cancelTransport: cancelTransport)
     }
 
     // MARK: - Route Registration
@@ -580,6 +594,7 @@ final class HTTPServer {
 
     func start() async {
         guard !isRunning else { return }
+        isStopping = false
 
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             Log.server.error("Invalid port: \(self.port)")
@@ -617,11 +632,37 @@ final class HTTPServer {
     }
 
     func stop() {
-        for task in connectionTasks { task.cancel() }
-        connectionTasks.removeAll()
+        isStopping = true
+        let connections = Array(trackedConnections.values)
+        for connection in connections {
+            connection.cancelTransport()
+            connection.task.cancel()
+        }
+        trackedConnections.removeAll()
         listener?.cancel()
         listener = nil
         isRunning = false
+        Log.server.info("Server stopped")
+    }
+
+    func stopAndDrain() async {
+        isStopping = true
+        listener?.cancel()
+        listener = nil
+        isRunning = false
+        let connections = Array(trackedConnections.values)
+        Log.server.info("Server stopping — draining \(connections.count) connection task(s)")
+
+        for connection in connections {
+            connection.cancelTransport()
+            connection.task.cancel()
+        }
+
+        for connection in connections {
+            _ = await connection.task.result
+        }
+
+        trackedConnections.removeAll()
         Log.server.info("Server stopped")
     }
 
@@ -652,6 +693,10 @@ final class HTTPServer {
     // MARK: - Private — Connection
 
     private func handleNewConnection(_ connection: NWConnection) {
+        guard !isStopping else {
+            connection.cancel()
+            return
+        }
         activeConnections += 1
 
         let routes = self.routes
@@ -695,11 +740,32 @@ final class HTTPServer {
             }
         }
 
-        connectionTasks.insert(task)
-        Task {
-            _ = await task.result
-            connectionTasks.remove(task)
+        _ = trackConnection(task: task, cancelTransport: { connection.cancel() })
+    }
+
+    @discardableResult
+    private func trackConnection(
+        task: Task<Void, Never>,
+        cancelTransport: @escaping @Sendable () -> Void
+    ) -> Bool {
+        guard !isStopping else {
+            cancelTransport()
+            task.cancel()
+            return false
         }
+
+        let id = UUID()
+        trackedConnections[id] = TrackedConnection(
+            task: task,
+            cancelTransport: cancelTransport
+        )
+
+        Task { @MainActor [weak self] in
+            _ = await task.result
+            self?.trackedConnections.removeValue(forKey: id)
+        }
+
+        return true
     }
 
     nonisolated private static func monitorPeerDisconnect(

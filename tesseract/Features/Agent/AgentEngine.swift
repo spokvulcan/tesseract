@@ -56,7 +56,8 @@ final class AgentEngine {
     /// boundary to assert load/unload state transitions; production code
     /// never references this directly.
     let llmActor = LLMActor()
-    private var generationTask: Task<Void, Never>?
+    @ObservationIgnored private var activeGenerationID: UUID?
+    @ObservationIgnored private var activeGeneration: HTTPServerGenerationStart?
 
     /// Tracks the most recent `unloadModel` call's detached actor
     /// unload. Callers drain this via `awaitPendingUnload()` when
@@ -263,7 +264,7 @@ final class AgentEngine {
             messages: messages,
             toolSpecs: toolSpecs,
         )
-        return try await startManagedHTTPFallbackGeneration(
+        return try startManagedHTTPFallbackGeneration(
             input: input,
             parameters: parameters
         )
@@ -320,8 +321,20 @@ final class AgentEngine {
 
     /// Cancels any in-progress generation.
     func cancelGeneration() {
-        generationTask?.cancel()
-        generationTask = nil
+        activeGeneration?.cancel()
+        activeGeneration = nil
+        activeGenerationID = nil
+    }
+
+    /// Cancels any in-progress generation and waits for the underlying MLX work
+    /// to stop touching model state before returning.
+    func cancelGenerationAndWait() async {
+        let activeGeneration = activeGeneration
+        self.activeGeneration = nil
+        activeGenerationID = nil
+        activeGeneration?.cancel()
+        await activeGeneration?.waitForCompletion()
+        isGenerating = false
     }
 
     /// Frees unreferenced MLX buffers (safe to call between tool rounds).
@@ -388,6 +401,22 @@ final class AgentEngine {
 
     // MARK: - Private
 
+    @discardableResult
+    private func registerActiveGeneration(
+        _ start: HTTPServerGenerationStart,
+        id: UUID
+    ) -> HTTPServerGenerationStart {
+        activeGenerationID = id
+        activeGeneration = start
+        return start
+    }
+
+    private func clearActiveGeneration(id: UUID) {
+        guard activeGenerationID == id else { return }
+        activeGenerationID = nil
+        activeGeneration = nil
+    }
+
     /// Shared generation logic for both prompt-based and message-based entry points.
     private func startGeneration(
         input: UserInput,
@@ -404,131 +433,67 @@ final class AgentEngine {
             throw AgentEngineError.modelNotLoaded
         }
 
-        isGenerating = true
-
-        let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
         let actor = llmActor
-        let startsThinking = promptStartsThinking
-
-        let task = Task { @MainActor [weak self] in
-            defer {
-                self?.isGenerating = false
-                self?.generationTask = nil
-            }
-
-            do {
-                try Task.checkCancellation()
-
-                let genStream = try await actor.generate(
-                    input: input, parameters: parameters
-                )
-                let parser = ToolCallParser(startsInsideThinkBlock: startsThinking)
-                var rawChunkParts: [String] = []
-                var libraryParsedToolCalls = false
-
-                for await generation in genStream {
-                    try Task.checkCancellation()
-
-                    switch generation {
-                    case .chunk(let text):
-                        rawChunkParts.append(text)
-                        if !libraryParsedToolCalls {
-                            for event in parser.processChunk(text) {
-                                continuation.yield(AgentGeneration(parserEvent: event))
-                            }
-                        }
-
-                    case .info(let completionInfo):
-                        if !libraryParsedToolCalls {
-                            for event in parser.finalize() {
-                                continuation.yield(AgentGeneration(parserEvent: event))
-                            }
-                        }
-                        let info = AgentGeneration.Info(
-                            promptTokenCount: completionInfo.promptTokenCount,
-                            generationTokenCount: completionInfo.generationTokenCount,
-                            promptTime: completionInfo.promptTime,
-                            generateTime: completionInfo.generateTime
-                        )
-                        continuation.yield(.info(info))
-                        Log.agent.info(
-                            "Generation complete — \(completionInfo.generationTokenCount) tokens, "
-                            + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s"
-                        )
-                        let rawChunks = rawChunkParts.joined()
-                        Log.agent.debug("Raw library chunks (after ToolCallProcessor):\n\(rawChunks)")
-
-                    case .toolCall(let call):
-                        libraryParsedToolCalls = true
-                        Log.agent.info("Library parsed tool call: \(call.function.name)(\(call.function.arguments))")
-                        continuation.yield(.toolCall(call))
-                    }
-                }
-
-                if !libraryParsedToolCalls {
-                    let rawChunks = rawChunkParts.joined()
-                    if rawChunks.contains("tool_call") || rawChunks.contains("<function") {
-                        Log.agent.warning("Raw output contains tool call markers but no .toolCall events were emitted by library")
-                    }
-                }
-
-                if !libraryParsedToolCalls {
-                    for event in parser.finalize() {
-                        continuation.yield(AgentGeneration(parserEvent: event))
-                    }
-                }
-
-                continuation.finish()
-            } catch is CancellationError {
-                continuation.finish()
-            } catch {
-                continuation.finish(throwing: AgentEngineError.generationFailed(
-                    error.localizedDescription
-                ))
-            }
+        return wrapManagedGeneration {
+            try await actor.startRawGeneration(
+                input: input,
+                parameters: parameters
+            )
         }
-
-        generationTask = task
-        continuation.onTermination = { _ in task.cancel() }
-
-        return HTTPServerGenerationStart(
-            stream: stream,
-            cachedTokenCount: 0,
-            cancel: { task.cancel() },
-            waitForCompletion: { _ = await task.result }
-        )
     }
 
     private func startManagedHTTPFallbackGeneration(
         input: UserInput,
         parameters: AgentGenerateParameters
-    ) async throws -> HTTPServerGenerationStart {
+    ) throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
             throw AgentEngineError.modelNotLoaded
         }
 
-        let start = try await llmActor.startHTTPRawGeneration(
-            input: input,
-            parameters: parameters
-        )
-        return wrapManagedGeneration(start)
+        let actor = llmActor
+        return wrapManagedGeneration {
+            try await actor.startRawGeneration(
+                input: input,
+                parameters: parameters
+            )
+        }
     }
 
-    private func wrapManagedGeneration(
-        _ start: HTTPServerRawGenerationStart
+    func wrapManagedGeneration(
+        cachedTokenCount: Int = 0,
+        launch: @escaping @Sendable () async throws -> HTTPServerRawGenerationStart
     ) -> HTTPServerGenerationStart {
         isGenerating = true
 
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
         let startsThinking = promptStartsThinking
+        let generationID = UUID()
+        struct RawGenerationHandle: Sendable {
+            let cancel: @Sendable () -> Void
+            let waitForCompletion: @Sendable () async -> Void
+        }
+        struct RawGenerationState {
+            var handle: RawGenerationHandle?
+            var cancelIssued = false
+        }
+        let rawState = OSAllocatedUnfairLock<RawGenerationState>(initialState: .init())
 
         let task = Task { @MainActor [weak self] in
             defer {
                 self?.isGenerating = false
-                self?.generationTask = nil
+                self?.clearActiveGeneration(id: generationID)
             }
 
             do {
+                try Task.checkCancellation()
+
+                let start = try await launch()
+                rawState.withLock {
+                    $0.handle = .init(
+                        cancel: start.cancel,
+                        waitForCompletion: start.waitForCompletion
+                    )
+                }
                 try Task.checkCancellation()
 
                 let parser = ToolCallParser(startsInsideThinkBlock: startsThinking)
@@ -594,31 +559,70 @@ final class AgentEngine {
                     }
                 }
 
+                await start.waitForCompletion()
                 continuation.finish()
             } catch is CancellationError {
+                let cancellation = rawState.withLock { state -> (handle: RawGenerationHandle?, shouldCancel: Bool) in
+                    guard let handle = state.handle else {
+                        return (nil, false)
+                    }
+                    if state.cancelIssued {
+                        return (handle, false)
+                    }
+                    state.cancelIssued = true
+                    return (handle, true)
+                }
+                if cancellation.shouldCancel {
+                    cancellation.handle?.cancel()
+                }
+                await cancellation.handle?.waitForCompletion()
                 continuation.finish()
             } catch {
+                let cancellation = rawState.withLock { state -> (handle: RawGenerationHandle?, shouldCancel: Bool) in
+                    guard let handle = state.handle else {
+                        return (nil, false)
+                    }
+                    if state.cancelIssued {
+                        return (handle, false)
+                    }
+                    state.cancelIssued = true
+                    return (handle, true)
+                }
+                if cancellation.shouldCancel {
+                    cancellation.handle?.cancel()
+                }
+                await cancellation.handle?.waitForCompletion()
                 continuation.finish(throwing: AgentEngineError.generationFailed(
                     error.localizedDescription
                 ))
             }
         }
 
-        generationTask = task
-        continuation.onTermination = { _ in task.cancel() }
-
-        return HTTPServerGenerationStart(
+        let start = HTTPServerGenerationStart(
             stream: stream,
-            cachedTokenCount: 0,
+            cachedTokenCount: cachedTokenCount,
             cancel: {
+                let cancellation = rawState.withLock { state -> (handle: RawGenerationHandle?, shouldCancel: Bool) in
+                    guard let handle = state.handle else {
+                        return (nil, false)
+                    }
+                    if state.cancelIssued {
+                        return (handle, false)
+                    }
+                    state.cancelIssued = true
+                    return (handle, true)
+                }
+                if cancellation.shouldCancel {
+                    cancellation.handle?.cancel()
+                }
                 task.cancel()
-                start.cancel()
             },
             waitForCompletion: {
                 _ = await task.result
-                await start.waitForCompletion()
             }
         )
+        continuation.onTermination = { _ in start.cancel() }
+        return registerActiveGeneration(start, id: generationID)
     }
 
     private func startManagedHTTPGeneration(
@@ -627,11 +631,12 @@ final class AgentEngine {
         isGenerating = true
 
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+        let generationID = UUID()
 
         let task = Task { @MainActor [weak self] in
             defer {
                 self?.isGenerating = false
-                self?.generationTask = nil
+                self?.clearActiveGeneration(id: generationID)
             }
 
             do {
@@ -647,10 +652,7 @@ final class AgentEngine {
             }
         }
 
-        generationTask = task
-        continuation.onTermination = { _ in task.cancel() }
-
-        return HTTPServerGenerationStart(
+        let managedStart = HTTPServerGenerationStart(
             stream: stream,
             cachedTokenCount: start.cachedTokenCount,
             cancel: {
@@ -662,6 +664,8 @@ final class AgentEngine {
                 await start.waitForCompletion()
             }
         )
+        continuation.onTermination = { _ in managedStart.cancel() }
+        return registerActiveGeneration(managedStart, id: generationID)
     }
 }
 

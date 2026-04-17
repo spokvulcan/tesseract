@@ -7,13 +7,13 @@ import Foundation
 import AppKit
 import Observation
 import SwiftUI
-import MLX
 import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var observationTask: Task<Void, Never>?
     private var badgeObservationTask: Task<Void, Never>?
+    private var terminationTask: Task<Void, Never>?
     var container: DependencyContainer?
     var menuBarManager: MenuBarManager?
     private weak var trackedMainWindow: NSWindow?
@@ -161,41 +161,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Cancel subscriptions synchronously (we're on MainActor)
-        container?.schedulingService.cancelSubscriptions()
+        guard let container else { return .terminateNow }
+        guard terminationTask == nil else { return .terminateLater }
 
-        // Persist interrupted task state asynchronously, then allow termination.
-        // We use .terminateLater so MainActor stays free for the @MainActor-isolated
-        // ScheduledTaskStore.saveRun call inside persistInterruptedTask.
-        let actor = container?.schedulingActor
-        guard actor != nil else { return .terminateNow }
-
-        Task {
-            await actor?.stopPolling()
-            await actor?.stopHeartbeat()
-            await actor?.persistInterruptedTask()
+        terminationTask = Task { @MainActor [weak self] in
+            await container.prepareForTermination()
             NSApp.reply(toApplicationShouldTerminate: true)
+            self?.terminationTask = nil
         }
         return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        terminationTask?.cancel()
+        terminationTask = nil
         observationTask?.cancel()
         observationTask = nil
         badgeObservationTask?.cancel()
         badgeObservationTask = nil
-
-        // Stop TTS generation and unload the model before exit() destroys MLX's
-        // Metal device singleton. Pending GPU completion handlers would otherwise
-        // crash trying to lock the destroyed mutex in Device::end_encoding.
-        container?.speechCoordinator.stop()
-        container?.speechEngine.unloadModel()
-
-        // Drain any in-flight Metal command buffers so no completion handlers fire
-        // after exit() destroys C++ static objects (including MLX's device mutex).
-        Stream.gpu.synchronize()
-
-        container?.hotkeyManager.stopListening()
         menuBarManager?.teardownMenuBar()
     }
 

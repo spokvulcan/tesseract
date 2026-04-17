@@ -248,4 +248,12 @@ final class BackgroundAgentFactory {
             Log.agent.error("Failed to persist in-flight background session: \(error)")
         }
     }
+
+    /// Abort the currently-running background agent, if any, and wait for its
+    /// loop to observe cancellation before returning.
+    func abortInFlightAndWait() async {
+        guard let agent = inFlightAgent else { return }
+        agent.abort()
+        await agent.waitForIdle()
+    }
 }

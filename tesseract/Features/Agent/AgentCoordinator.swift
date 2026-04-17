@@ -226,6 +226,16 @@ final class AgentCoordinator {
         agent.abort()
     }
 
+    func cancelGenerationAndWait() async {
+        let sendTask = sendTask
+        self.sendTask = nil
+        sendTask?.cancel()
+        agent.abort()
+        await sendTask?.value
+        await agent.waitForIdle()
+        isGenerating = false
+    }
+
     // MARK: - Vision Mode Toggle
 
     /// Handles a user-initiated vision mode toggle from the composer.

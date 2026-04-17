@@ -7,6 +7,7 @@ import Foundation
 import Combine
 import Observation
 import SwiftUI
+import MLX
 import os
 
 @MainActor
@@ -117,6 +118,7 @@ final class DependencyContainer: ObservableObject {
     lazy var schedulingService: SchedulingService = {
         SchedulingService(actor: schedulingActor, store: scheduledTaskStore, settings: settingsManager, notificationService: notificationService, speechCoordinator: speechCoordinator)
     }()
+    lazy var terminationCoordinator = makeTerminationCoordinator()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
             agent: agent,
@@ -187,6 +189,63 @@ final class DependencyContainer: ObservableObject {
     private var hasSetup = false
 
     init() {}
+
+    func prepareForTermination() async {
+        await terminationCoordinator.prepareForTermination()
+    }
+
+    private func makeTerminationCoordinator() -> AppTerminationCoordinator {
+        AppTerminationCoordinator(steps: .init(
+            cancelSchedulingSubscriptions: { [schedulingService] in
+                schedulingService.cancelSubscriptions()
+            },
+            stopHotkeys: { [hotkeyManager] in
+                hotkeyManager.stopListening()
+            },
+            stopSchedulingPolling: { [schedulingActor] in
+                await schedulingActor.stopPolling()
+            },
+            stopSchedulingHeartbeat: { [schedulingActor] in
+                await schedulingActor.stopHeartbeat()
+            },
+            persistInterruptedTask: { [schedulingActor] in
+                await schedulingActor.persistInterruptedTask()
+            },
+            abortInFlightBackgroundAgent: { [backgroundAgentFactory] in
+                await backgroundAgentFactory.abortInFlightAndWait()
+            },
+            cancelForegroundGenerationAndWait: { [agentCoordinator] in
+                await agentCoordinator.cancelGenerationAndWait()
+            },
+            stopHTTPServerAndDrain: { [httpServer] in
+                await httpServer.stopAndDrain()
+            },
+            cancelLLMGenerationAndWait: { [agentEngine] in
+                await agentEngine.cancelGenerationAndWait()
+            },
+            stopSpeech: { [speechCoordinator] in
+                speechCoordinator.stop()
+            },
+            cancelSpeechGeneration: { [speechEngine] in
+                await speechEngine.cancelGeneration()
+            },
+            clearSpeechVoiceAnchor: { [speechEngine] in
+                await speechEngine.clearVoiceAnchor()
+            },
+            unloadLLM: { [agentEngine] in
+                agentEngine.unloadModel()
+            },
+            awaitLLMUnload: { [agentEngine] in
+                await agentEngine.awaitPendingUnload()
+            },
+            unloadSpeech: { [speechEngine] in
+                speechEngine.unloadModel()
+            },
+            synchronizeGPU: {
+                Stream.gpu.synchronize()
+            }
+        ))
+    }
 
     func setup() async {
         // Prevent duplicate setup from multiple window instances

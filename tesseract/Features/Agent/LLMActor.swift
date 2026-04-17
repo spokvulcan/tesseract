@@ -300,29 +300,9 @@ actor LLMActor {
         return try await verifyAndStore(container: container, directory: directory)
     }
 
-    /// Prepares input and starts generation, returning the raw stream.
-    ///
-    /// The caller is responsible for iterating the stream and mapping
-    /// `Generation` events to ``AgentGeneration``.
-    func generate(
-        input: sending UserInput,
-        parameters: AgentGenerateParameters
-    ) async throws -> AsyncStream<Generation> {
-        guard let container = modelContainer else {
-            throw AgentEngineError.modelNotLoaded
-        }
-
-        Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
-
-        let prepared = try await container.prepare(input: input)
-        let genParams = makeGenerateParameters(from: parameters)
-
-        return try await container.generate(input: prepared, parameters: genParams)
-    }
-
     /// Start a raw text/tool generation and surface the underlying vendor task so
-    /// HTTP disconnect handling can wait for model use to actually stop.
-    func startHTTPRawGeneration(
+    /// callers can deterministically wait for model use to actually stop.
+    func startRawGeneration(
         input: sending UserInput,
         parameters: AgentGenerateParameters
     ) async throws -> HTTPServerRawGenerationStart {
