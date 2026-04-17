@@ -68,6 +68,74 @@ struct PrefixCacheIntegrationTests {
         return HybridCacheSnapshot.capture(cache: cache, offset: offset, type: type)!
     }
 
+    private func makeTriAttentionRestoreContext(
+        budgetTokens: Int = 4,
+        prefixProtectionMode: TriAttentionPrefixProtectionMode = .protectStablePrefixOnly
+    ) -> TriAttentionSnapshotRestoreContext {
+        let headDim = 8
+        let sampledHeads = (0 ..< 4).map {
+            TriAttentionCalibrationHeadKey(layerIndex: 0, headIndex: $0)
+        }
+        let stats = Dictionary(uniqueKeysWithValues: sampledHeads.map { key in
+            (
+                key,
+                TriAttentionCalibrationHeadStats(
+                    qMeanReal: Array(repeating: Float(1), count: headDim / 2),
+                    qMeanImag: Array(repeating: Float(0.5), count: headDim / 2),
+                    qAbsMean: Array(repeating: Float(1.5), count: headDim / 2)
+                )
+            )
+        })
+        let artifact = TriAttentionCalibrationArtifact(
+            metadata: TriAttentionCalibrationMetadata(
+                sampledHeads: sampledHeads,
+                headDim: headDim,
+                ropeStyle: "half",
+                modelName: "tests/prefix-cache-triattention"
+            ),
+            statsByHead: stats
+        )
+        let configuration = TriAttentionConfiguration(
+            enabled: true,
+            budgetTokens: budgetTokens,
+            calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(rawValue: "artifact"),
+            implementationVersion: .v1,
+            prefixProtectionMode: prefixProtectionMode
+        )
+        let runtimeState = TriAttentionQwen35Runtime.makeState(
+            configuration: configuration,
+            artifact: artifact,
+            fullAttentionLayerIndices: [0],
+            attentionHeads: 4,
+            kvHeads: 2,
+            headDim: headDim,
+            partialRotaryFactor: 1.0,
+            ropeTheta: 100_000,
+            ropeType: "default"
+        )!
+        return TriAttentionSnapshotRestoreContext(
+            expectedConfiguration: configuration,
+            runtimeState: runtimeState
+        )
+    }
+
+    private func makeTriAttentionStates(
+        tokenCount: Int,
+        kvHeads: Int = 2,
+        headDim: Int = 8,
+        keyBase: Float = 1,
+        valueBase: Float = 2
+    ) -> (MLXArray, MLXArray) {
+        (
+            MLXArray(
+                Array(repeating: keyBase, count: 1 * kvHeads * tokenCount * headDim)
+            ).reshaped(1, kvHeads, tokenCount, headDim),
+            MLXArray(
+                Array(repeating: valueBase, count: 1 * kvHeads * tokenCount * headDim)
+            ).reshaped(1, kvHeads, tokenCount, headDim)
+        )
+    }
+
     // MARK: - 1. endToEndNormalizeTokenizeLookupHit
 
     /// Wire message → normalize → tokenize (synthetic) → store → new request →
@@ -561,6 +629,231 @@ struct PrefixCacheIntegrationTests {
         #expect(restoredCache.offset == 6)
         #expect(restoredCache.retainedPositions?.dim(2) == 6)
         #expect(restoredCache.retainedPositions?.asArray(Int32.self) == [0, 1, 2, 3, 4, 5])
+    }
+
+    @Test func lookupResultRestoreCacheForwardsTriAttentionRestoreContext() throws {
+        let restoreContext = makeTriAttentionRestoreContext()
+        let original = TriAttentionSparseKVCache(
+            configuration: restoreContext.expectedConfiguration,
+            runtimeState: restoreContext.runtimeState
+        )
+        original.offset = 4
+        original.state = [
+            MLXArray([Int32(0), 2, 1, 3]).reshaped(1, 2, 2),
+            MLXArray(Array(repeating: Float(1), count: 1 * 2 * 2 * 8)).reshaped(1, 2, 2, 8),
+            MLXArray(Array(repeating: Float(2), count: 1 * 2 * 2 * 8)).reshaped(1, 2, 2, 8),
+        ]
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [original],
+            offset: original.offset,
+            type: .leaf
+        ))
+        let partitionKey = CachePartitionKey(
+            modelID: "test-model",
+            kvBits: 8,
+            kvGroupSize: 64
+        )
+        let lookupResult = PrefixCacheManager.LookupResult(
+            snapshot: snapshot,
+            partitionKey: partitionKey,
+            snapshotTokenOffset: snapshot.tokenOffset,
+            sharedPrefixLength: snapshot.tokenOffset,
+            reason: .hit(
+                snapshotOffset: snapshot.tokenOffset,
+                totalTokens: snapshot.tokenOffset,
+                type: snapshot.checkpointType
+            )
+        )
+
+        let restored = try #require(lookupResult.restoreCache(
+            triAttentionRestoreContext: restoreContext
+        ))
+        let restoredCache = try #require(restored[0] as? TriAttentionSparseKVCache)
+
+        switch restoredCache.makeMask(n: 2, windowSize: nil, returnArray: false) {
+        case .array(let mask):
+            #expect(mask.shape == [1, 4, 2, 4])
+        default:
+            Issue.record("Expected restored TriAttention cache to use an explicit sparse mask")
+        }
+    }
+
+    @Test func triAttentionStablePrefixProtectionRetainsStablePrefixDuringColdPrefill() throws {
+        let stablePrefixOffset = 6
+        let restoreContext = makeTriAttentionRestoreContext(
+            budgetTokens: 4,
+            prefixProtectionMode: .protectStablePrefixOnly
+        )
+        let cache = TriAttentionSparseKVCache(
+            configuration: restoreContext.expectedConfiguration,
+            runtimeState: restoreContext.runtimeState
+        )
+        var parameters = GenerateParameters(triAttention: restoreContext.expectedConfiguration)
+        parameters.triAttentionStablePrefixOffset = stablePrefixOffset
+        let tokenCount = restoreContext.expectedConfiguration.budgetTokens + 129
+        parameters.configureTriAttentionCachesForPrefill([cache], inputTokenCount: tokenCount)
+
+        let (keys, values) = makeTriAttentionStates(tokenCount: tokenCount)
+        _ = cache.update(keys: keys, values: values)
+        TriAttentionQwen35Runtime.pruneIfNeeded(caches: [cache], layerIndices: [0])
+
+        let retainedPositions = Set(try #require(cache.retainedPositions?[0, 0].asArray(Int32.self)))
+        #expect(retainedPositions.isSuperset(of: Set(Int32(0) ..< Int32(stablePrefixOffset))))
+        #expect(retainedPositions.contains(Int32(tokenCount - 1)))
+        #expect(
+            cache.retainedPositions?.dim(2)
+                == restoreContext.expectedConfiguration.budgetTokens + stablePrefixOffset
+        )
+    }
+
+    @Test func triAttentionStablePrefixProtectionPersistsAcrossRestoreAndSuffixPrefill() throws {
+        let stablePrefixOffset = 6
+        let restoreContext = makeTriAttentionRestoreContext(
+            budgetTokens: 4,
+            prefixProtectionMode: .protectStablePrefixOnly
+        )
+        let original = TriAttentionSparseKVCache(
+            configuration: restoreContext.expectedConfiguration,
+            runtimeState: restoreContext.runtimeState
+        )
+        var initialParameters = GenerateParameters(triAttention: restoreContext.expectedConfiguration)
+        initialParameters.triAttentionStablePrefixOffset = stablePrefixOffset
+        let initialTokenCount = restoreContext.expectedConfiguration.budgetTokens + 129
+        initialParameters.configureTriAttentionCachesForPrefill([original], inputTokenCount: initialTokenCount)
+
+        let (initialKeys, initialValues) = makeTriAttentionStates(tokenCount: initialTokenCount)
+        _ = original.update(keys: initialKeys, values: initialValues)
+        TriAttentionQwen35Runtime.pruneIfNeeded(caches: [original], layerIndices: [0])
+
+        let snapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [original],
+            offset: original.offset,
+            type: .leaf
+        ))
+        let restored = snapshot.restore(triAttentionRestoreContext: restoreContext)
+        let restoredCache = try #require(restored[0] as? TriAttentionSparseKVCache)
+
+        var suffixParameters = GenerateParameters(
+            checkpointBaseOffset: snapshot.tokenOffset,
+            triAttention: restoreContext.expectedConfiguration
+        )
+        suffixParameters.triAttentionStablePrefixOffset = stablePrefixOffset
+        let suffixTokenCount = 128
+        suffixParameters.configureTriAttentionCachesForPrefill([restoredCache], inputTokenCount: suffixTokenCount)
+
+        let (suffixKeys, suffixValues) = makeTriAttentionStates(
+            tokenCount: suffixTokenCount,
+            keyBase: 3,
+            valueBase: 4
+        )
+        _ = restoredCache.update(keys: suffixKeys, values: suffixValues)
+        TriAttentionQwen35Runtime.pruneIfNeeded(caches: [restoredCache], layerIndices: [0])
+
+        let retainedPositions = Set(try #require(restoredCache.retainedPositions?[0, 0].asArray(Int32.self)))
+        #expect(retainedPositions.isSuperset(of: Set(Int32(0) ..< Int32(stablePrefixOffset))))
+        #expect(retainedPositions.contains(Int32(snapshot.tokenOffset + suffixTokenCount - 1)))
+    }
+
+    @Test func triAttentionBoundaryRestorePrefillAppliesStablePrefixProtection() throws {
+        let stablePrefixOffset = 6
+        let restoreContext = makeTriAttentionRestoreContext(
+            budgetTokens: 4,
+            prefixProtectionMode: .protectStablePrefixOnly
+        )
+        let boundaryCache = TriAttentionSparseKVCache(
+            configuration: restoreContext.expectedConfiguration,
+            runtimeState: restoreContext.runtimeState
+        )
+        var boundaryParameters = GenerateParameters(triAttention: restoreContext.expectedConfiguration)
+        boundaryParameters.triAttentionStablePrefixOffset = stablePrefixOffset
+        let boundaryOffset = 20
+        boundaryParameters.configureTriAttentionCachesForPrefill([boundaryCache], inputTokenCount: boundaryOffset)
+
+        let (boundaryKeys, boundaryValues) = makeTriAttentionStates(tokenCount: boundaryOffset)
+        _ = boundaryCache.update(keys: boundaryKeys, values: boundaryValues)
+        let boundarySnapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [boundaryCache],
+            offset: boundaryCache.offset,
+            type: .system
+        ))
+
+        let restored = boundarySnapshot.restore(triAttentionRestoreContext: restoreContext)
+        let restoredCache = try #require(restored[0] as? TriAttentionSparseKVCache)
+
+        var residualParameters = GenerateParameters(
+            checkpointBaseOffset: boundaryOffset,
+            triAttention: restoreContext.expectedConfiguration
+        )
+        residualParameters.triAttentionStablePrefixOffset = stablePrefixOffset
+        let residualTokenCount = restoreContext.expectedConfiguration.budgetTokens + 129
+        residualParameters.configureTriAttentionCachesForPrefill(
+            [restoredCache],
+            inputTokenCount: residualTokenCount
+        )
+
+        let (residualKeys, residualValues) = makeTriAttentionStates(
+            tokenCount: residualTokenCount,
+            keyBase: 5,
+            valueBase: 6
+        )
+        _ = restoredCache.update(keys: residualKeys, values: residualValues)
+        TriAttentionQwen35Runtime.pruneIfNeeded(caches: [restoredCache], layerIndices: [0])
+
+        let retainedPositions = Set(try #require(restoredCache.retainedPositions?[0, 0].asArray(Int32.self)))
+        #expect(retainedPositions.isSuperset(of: Set(Int32(0) ..< Int32(stablePrefixOffset))))
+        #expect(restoredCache.offset == boundaryOffset + residualTokenCount)
+    }
+
+    @Test func triAttentionBoundaryRestorePrefillUsesBoundaryOffsetForProtectAllPrefill() throws {
+        let restoreContext = makeTriAttentionRestoreContext(
+            budgetTokens: 4,
+            prefixProtectionMode: .protectAllPrefill
+        )
+        let boundaryCache = TriAttentionSparseKVCache(
+            configuration: restoreContext.expectedConfiguration,
+            runtimeState: restoreContext.runtimeState
+        )
+        let boundaryOffset = 20
+        let boundaryParameters = GenerateParameters(triAttention: restoreContext.expectedConfiguration)
+        boundaryParameters.configureTriAttentionCachesForPrefill(
+            [boundaryCache],
+            inputTokenCount: boundaryOffset
+        )
+
+        let (boundaryKeys, boundaryValues) = makeTriAttentionStates(tokenCount: boundaryOffset)
+        _ = boundaryCache.update(keys: boundaryKeys, values: boundaryValues)
+        let boundarySnapshot = try #require(HybridCacheSnapshot.capture(
+            cache: [boundaryCache],
+            offset: boundaryCache.offset,
+            type: .system
+        ))
+
+        let restored = boundarySnapshot.restore(triAttentionRestoreContext: restoreContext)
+        let restoredCache = try #require(restored[0] as? TriAttentionSparseKVCache)
+
+        let residualTokenCount = restoreContext.expectedConfiguration.budgetTokens + 129
+        var residualParameters = GenerateParameters(
+            checkpointBaseOffset: boundaryOffset,
+            triAttention: restoreContext.expectedConfiguration
+        )
+        residualParameters.configureTriAttentionCachesForPrefill(
+            [restoredCache],
+            inputTokenCount: residualTokenCount
+        )
+
+        let (residualKeys, residualValues) = makeTriAttentionStates(
+            tokenCount: residualTokenCount,
+            keyBase: 5,
+            valueBase: 6
+        )
+        _ = restoredCache.update(keys: residualKeys, values: residualValues)
+        TriAttentionQwen35Runtime.pruneIfNeeded(caches: [restoredCache], layerIndices: [0])
+
+        let retainedPositions = Set(try #require(restoredCache.retainedPositions?[0, 0].asArray(Int32.self)))
+        #expect(
+            retainedPositions == Set(Int32(0) ..< Int32(boundaryOffset + residualTokenCount))
+        )
+        #expect(restoredCache.offset == boundaryOffset + residualTokenCount)
     }
 
     // MARK: - 17. vlm2DTokensExtractedCorrectly

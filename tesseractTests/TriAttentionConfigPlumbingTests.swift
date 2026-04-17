@@ -31,6 +31,7 @@ struct TriAttentionConfigPlumbingTests {
         #expect(config.budgetTokens == TriAttentionConfiguration.v1BudgetTokens)
         #expect(config.implementationVersion == .v1)
         #expect(config.calibrationArtifactIdentity == nil)
+        #expect(config.prefixProtectionMode == .protectStablePrefixOnly)
     }
 
     @Test
@@ -44,6 +45,29 @@ struct TriAttentionConfigPlumbingTests {
         let second = SettingsManager()
         #expect(second.triattentionEnabled == true)
         #expect(second.makeTriAttentionConfig().enabled == true)
+    }
+
+    @Test
+    func triAttentionConfigurationDecodesLegacyPayloadWithoutPrefixProtectionMode() throws {
+        let legacyJSON = #"""
+        {
+          "enabled": true,
+          "budgetTokens": 4096,
+          "calibrationArtifactIdentity": { "rawValue": "artifact" },
+          "implementationVersion": "v1"
+        }
+        """#.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(
+            TriAttentionConfiguration.self,
+            from: legacyJSON
+        )
+
+        #expect(decoded.enabled == true)
+        #expect(decoded.budgetTokens == 4096)
+        #expect(decoded.calibrationArtifactIdentity?.rawValue == "artifact")
+        #expect(decoded.implementationVersion == .v1)
+        #expect(decoded.prefixProtectionMode == .protectNone)
     }
 
     /// `resetToDefaults()` must bring `triattentionEnabled` back to `false` and
@@ -91,6 +115,7 @@ struct TriAttentionConfigPlumbingTests {
         #expect(enabled.budgetTokens == TriAttentionConfiguration.v1BudgetTokens)
         #expect(enabled.implementationVersion == .v1)
         #expect(enabled.calibrationArtifactIdentity == nil)
+        #expect(enabled.prefixProtectionMode == .protectStablePrefixOnly)
 
         var params = AgentGenerateParameters.forModel("qwen3.5-4b-paro")
         let originalTemperature = params.temperature

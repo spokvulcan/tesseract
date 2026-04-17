@@ -303,6 +303,12 @@ final class InferenceArbiter {
             // Model or vision mode changed, or not loaded — (re)load
             if loadedSlots.contains(.imageGen) { unload(.imageGen) }
             if loadedSlots.contains(.llm) { unload(.llm) }
+            // Drain the detached unload task before the next load. Without
+            // this, the actor-level `llmActor.unloadModel()` can interleave
+            // after the new `llmActor.loadModel()` has already populated
+            // `triAttentionRuntimeSelection`, wiping it back to defaults and
+            // silently erasing the fallback reason surfaced to the UI.
+            await agentEngine.awaitPendingUnload()
             try await loadSlot(
                 .llm,
                 modelID: desired.modelID,

@@ -14,7 +14,8 @@ nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable, 
     case triAttention(
         budgetTokens: Int,
         calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity?,
-        implementationVersion: TriAttentionImplementationVersion
+        implementationVersion: TriAttentionImplementationVersion,
+        prefixProtectionMode: TriAttentionPrefixProtectionMode
     )
 
     nonisolated static func from(_ configuration: TriAttentionConfiguration) -> Self {
@@ -22,7 +23,8 @@ nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable, 
         return .triAttention(
             budgetTokens: configuration.budgetTokens,
             calibrationArtifactIdentity: configuration.calibrationArtifactIdentity,
-            implementationVersion: configuration.implementationVersion
+            implementationVersion: configuration.implementationVersion,
+            prefixProtectionMode: configuration.prefixProtectionMode
         )
     }
 
@@ -31,12 +33,12 @@ nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable, 
         return false
     }
 
-    private var sortKey: (Int, Int, String, String) {
+    private var sortKey: (Int, Int, String, String, String) {
         switch self {
         case .dense:
-            return (0, 0, "", "")
-        case .triAttention(let budget, let artifact, let impl):
-            return (1, budget, artifact?.rawValue ?? "", impl.rawValue)
+            return (0, 0, "", "", "")
+        case .triAttention(let budget, let artifact, let impl, let mode):
+            return (1, budget, artifact?.rawValue ?? "", impl.rawValue, mode.rawValue)
         }
     }
 
@@ -64,12 +66,13 @@ nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable, 
         switch self {
         case .dense:
             return .v1Disabled
-        case .triAttention(let budget, let artifact, let impl):
+        case .triAttention(let budget, let artifact, let impl, let mode):
             return TriAttentionConfiguration(
                 enabled: true,
                 budgetTokens: budget,
                 calibrationArtifactIdentity: artifact,
-                implementationVersion: impl
+                implementationVersion: impl,
+                prefixProtectionMode: mode
             )
         }
     }
@@ -268,9 +271,15 @@ final class PrefixCacheManager {
 
         /// Restore the cached KV/Mamba state. Each call produces an independent deep copy.
         /// Nonisolated because it operates only on the snapshot's deep-copy data.
-        nonisolated func restoreCache() -> [any KVCache]? {
+        nonisolated func restoreCache(
+            triAttentionRestoreContext: TriAttentionSnapshotRestoreContext? = nil
+        ) -> [any KVCache]? {
             guard let snapshot, let key = partitionKey else { return nil }
-            return snapshot.restore(kvBitsHint: key.kvBits, kvGroupSizeHint: key.kvGroupSize)
+            return snapshot.restore(
+                kvBitsHint: key.kvBits,
+                kvGroupSizeHint: key.kvGroupSize,
+                triAttentionRestoreContext: triAttentionRestoreContext
+            )
         }
     }
 

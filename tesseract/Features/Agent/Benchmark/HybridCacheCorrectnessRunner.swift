@@ -597,6 +597,7 @@ final class HybridCacheCorrectnessRunner {
         tokens: [Int],
         checkpoints: [Int: HybridCacheSnapshot.CheckpointType],
         checkpointBaseOffset: Int = 0,
+        generateParameters: GenerateParameters = .init(),
         cache: [any KVCache]
     ) throws -> [HybridCacheSnapshot] {
         guard !tokens.isEmpty else { return [] }
@@ -605,6 +606,12 @@ final class HybridCacheCorrectnessRunner {
         // would land at a 3D chunk and silently produce wrong logits.
         let inputArr = MLXArray(tokens.map { Int32($0) })
         let lmInput = LMInput(text: .init(tokens: inputArr, mask: nil))
+        var effectiveParameters = generateParameters
+        effectiveParameters.checkpointBaseOffset = checkpointBaseOffset
+        effectiveParameters.configureTriAttentionCachesForPrefill(
+            cache,
+            inputTokenCount: tokens.count
+        )
         let (prepareResult, snapshots) = try context.model.prepareWithCheckpoints(
             lmInput,
             cache: cache,

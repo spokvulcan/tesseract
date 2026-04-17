@@ -343,6 +343,17 @@ final class DependencyContainer: ObservableObject {
                 }
             }
         })
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await _ in Observations({ self.settingsManager.selectedAgentModelID }) {
+                guard self.inferenceArbiter.loadedSlots.contains(.llm) else { continue }
+                do {
+                    try await self.inferenceArbiter.reloadLLMIfNeeded()
+                } catch {
+                    Log.agent.error("Agent model reload failed: \(error.localizedDescription)")
+                }
+            }
+        })
     }
 
     private func loadWhisperModelIfAvailable() async {

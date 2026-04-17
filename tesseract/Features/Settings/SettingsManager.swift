@@ -456,7 +456,8 @@ final class SettingsManager {
             enabled: triattentionEnabled,
             budgetTokens: TriAttentionConfiguration.v1BudgetTokens,
             calibrationArtifactIdentity: nil,
-            implementationVersion: .v1
+            implementationVersion: .v1,
+            prefixProtectionMode: .protectStablePrefixOnly
         )
     }
 

@@ -2,6 +2,7 @@ import Foundation
 import HuggingFace
 import MLX
 import MLXHuggingFace
+import MLXLLM
 import MLXLMCommon
 import MLXNN
 import Tokenizers
@@ -68,6 +69,18 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// same chunk size when re-prefilling the canonical assistant residual
     /// on top of the restored last-message-boundary snapshot.
     let prefillStepSize: Int
+    /// Stable prefix boundary detected for the request, if any. Reused by
+    /// post-generation leaf-capture helpers so their restored-boundary
+    /// prefills apply the same TriAttention prefix-protection policy as the
+    /// main request prefill.
+    let triAttentionStablePrefixOffset: Int?
+    /// Rank of the processor-prepared token tensor (1 for pure LLMs, 2
+    /// for conditional-generation models like Qwen3.5). Post-generation
+    /// leaf-capture rebuilds residual inputs from a raw `[Int]` via
+    /// `MLXArray(...)` (which is 1D), but the MLXVLM `prepare` indexes
+    /// the tensor with two axes — passing 1D there crashes in
+    /// `getRopeIndex` on `inputIds.dim(1)`.
+    let tokenNDim: Int
 }
 
 nonisolated enum HTTPLeafContinuationKind: String, Sendable {
@@ -233,7 +246,7 @@ actor LLMActor {
             requestedConfiguration: triAttention,
             isParoModel: isParoModel,
             visionMode: visionMode,
-            modelFingerprint: fingerprint
+            modelDirectory: directory
         )
 
         installLoadTimeState(
@@ -256,10 +269,29 @@ actor LLMActor {
             return try await verifyAndStore(container: container, directory: directory)
         }
 
-        let container = try await loadModelContainer(
-            from: directory,
-            using: #huggingFaceTokenizerLoader()
-        )
+        // Non-PARO Qwen3.5 checkpoints (e.g. mlx-community/Qwen3.5-*-MLX) ship
+        // as `Qwen3_5ForConditionalGeneration` VLM bundles. The default factory
+        // registry tries MLXVLM first and resolves them to the VLM `Qwen35`,
+        // whose `prepare` indexes tokens with two axes and whose
+        // `getRopeIndex` requires a batch dim — fundamentally incompatible
+        // with the post-generation leaf-capture residual prefill path. V1
+        // TriAttention is also text-only (see
+        // `docs/tesseract-server-triattention-implementation-plan-2026-04-16.md`
+        // section 2), so in non-vision mode we force the text-only
+        // `MLXLLM.Qwen35Model` by invoking the LLM factory directly.
+        let container: ModelContainer
+        if !visionMode, Self.isQwen35Model(directory: directory) {
+            Log.agent.info("Detected Qwen3.5 non-PARO model — forcing text-only LLM path")
+            container = try await LLMModelFactory.shared.loadContainer(
+                from: directory,
+                using: #huggingFaceTokenizerLoader()
+            )
+        } else {
+            container = try await loadModelContainer(
+                from: directory,
+                using: #huggingFaceTokenizerLoader()
+            )
+        }
         if let format {
             await container.update { context in
                 context.configuration.toolCallFormat = format
@@ -350,6 +382,7 @@ actor LLMActor {
 
         let prefixCache = await ensurePrefixCache()
         let requestID = UUID()
+        let genParams = makeGenerateParameters(from: parameters)
         // Canonicalize tools once so the leaf re-tokenization uses the same dict
         // iteration order as the prefill path inside makeHTTPPrefixCacheGeneration.
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
@@ -358,7 +391,7 @@ actor LLMActor {
             conversation: conversation,
             requestID: requestID,
             modelID: modelID,
-            parameters: makeGenerateParameters(from: parameters),
+            parameters: genParams,
             toolSpecs: canonicalTools,
             prefixCache: prefixCache
         )
@@ -368,7 +401,8 @@ actor LLMActor {
         let startsInsideThinkBlock = promptStartsThinking
         let loadedModelWeightBytes = modelWeightBytes
 
-        let task = Task { [conversation, container, canonicalTools, requestID, loadedModelWeightBytes] in
+        let task = Task {
+            [conversation, container, canonicalTools, requestID, loadedModelWeightBytes, genParams] in
             let mlxStart = mlxStartBox.value
             let diagnosticsContext = mlxStart.diagnosticsContext
             var textContent = ""
@@ -544,6 +578,9 @@ actor LLMActor {
                 // - non-thinking templates store the direct post-response
                 //   leaf captured from the final cache
                 var leafStoreForTuner: AlphaTuner.LeafStore? = nil
+                var postGenerationParams = genParams
+                postGenerationParams.triAttentionStablePrefixOffset =
+                    mlxStart.triAttentionStablePrefixOffset
                 leafBlock: do {
                     // 1. Build stored conversation (prompt + generated assistant turn).
                     let storedConversation = conversation.appendingAssistant(.assistant(
@@ -586,10 +623,12 @@ actor LLMActor {
                             transientBoundarySnapshot: mlxStart.transientLastUserBoundarySnapshot,
                             partitionKey: mlxStart.partitionKey,
                             prefillStepSize: mlxStart.prefillStepSize,
+                            tokenNDim: mlxStart.tokenNDim,
                             requestID: requestID,
                             prefixCache: prefixCache,
                             diagnosticsContext: diagnosticsContext,
-                            ssdEnabled: mlxStart.ssdEnabled
+                            ssdEnabled: mlxStart.ssdEnabled,
+                            generateParameters: postGenerationParams
                         )
                         break leafBlock
                     }
@@ -602,10 +641,12 @@ actor LLMActor {
                             transientBoundarySnapshot: mlxStart.transientLastMessageBoundarySnapshot,
                             partitionKey: mlxStart.partitionKey,
                             prefillStepSize: mlxStart.prefillStepSize,
+                            tokenNDim: mlxStart.tokenNDim,
                             requestID: requestID,
                             prefixCache: prefixCache,
                             diagnosticsContext: diagnosticsContext,
-                            ssdEnabled: mlxStart.ssdEnabled
+                            ssdEnabled: mlxStart.ssdEnabled,
+                            generateParameters: postGenerationParams
                         )
                         break leafBlock
                     }
@@ -1221,11 +1262,11 @@ actor LLMActor {
         requestedConfiguration: TriAttentionConfiguration,
         isParoModel: Bool,
         visionMode: Bool,
-        modelFingerprint: String
+        modelDirectory: URL
     ) -> TriAttentionRuntimeSelection {
         let calibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult? =
             if requestedConfiguration.enabled && isParoModel && !visionMode {
-                resolveTriAttentionCalibrationArtifactLookup(modelFingerprint: modelFingerprint)
+                resolveTriAttentionCalibrationArtifactLookup(modelDirectory: modelDirectory)
             } else {
                 nil
             }
@@ -1266,19 +1307,40 @@ actor LLMActor {
         }
     }
 
+    /// Artifact lookup keys on a *content* fingerprint (bytes of config,
+    /// tokenizer, and safetensors) — not the mtime-based `computeFingerprint`
+    /// used for the local SSD cache. mtime varies per user's HuggingFace
+    /// download; content doesn't, so shipped `.pt` artifacts named by content
+    /// fingerprint resolve the same across machines.
+    ///
     /// Parse/read failures must not block dense model loads.
     private func resolveTriAttentionCalibrationArtifactLookup(
-        modelFingerprint: String
+        modelDirectory: URL
     ) -> TriAttentionCalibrationArtifactLookupResult {
+        let contentFingerprint: String
         do {
-            return try triAttentionCalibrationArtifactLoader.lookup(modelFingerprint: modelFingerprint)
+            contentFingerprint = try ModelFingerprint.computeContentFingerprint(modelDir: modelDirectory)
         } catch {
-            let attemptedURL = triAttentionCalibrationArtifactLoader.expectedURL(for: modelFingerprint)
+            let attemptedURL = triAttentionCalibrationArtifactLoader.expectedURL(for: "")
             Log.agent.error(
-                "TriAttention calibration artifact unavailable for fingerprint \(modelFingerprint): \(error.localizedDescription)"
+                "TriAttention content fingerprint failed for \(modelDirectory.lastPathComponent): \(error.localizedDescription)"
             )
             return .unavailable(
-                expectedModelFingerprint: modelFingerprint,
+                expectedModelFingerprint: "",
+                attemptedURL: attemptedURL,
+                errorDescription: error.localizedDescription
+            )
+        }
+
+        do {
+            return try triAttentionCalibrationArtifactLoader.lookup(modelFingerprint: contentFingerprint)
+        } catch {
+            let attemptedURL = triAttentionCalibrationArtifactLoader.expectedURL(for: contentFingerprint)
+            Log.agent.error(
+                "TriAttention calibration artifact unavailable for fingerprint \(contentFingerprint): \(error.localizedDescription)"
+            )
+            return .unavailable(
+                expectedModelFingerprint: contentFingerprint,
                 attemptedURL: attemptedURL,
                 errorDescription: error.localizedDescription
             )
@@ -1346,6 +1408,11 @@ actor LLMActor {
                 let value = try work()
                 return (value, Date.timeIntervalSinceReferenceDate - started)
             }
+
+            let triAttentionRestoreContext = Self.makeTriAttentionSnapshotRestoreContext(
+                model: context.model,
+                parameters: parameters
+            )
 
             // 1. Tokenize the full conversation (BEFORE cache lookup).
             let fullInput = try await context.processor.prepare(
@@ -1534,7 +1601,9 @@ actor LLMActor {
                 // and downstream code recreates attention masks from cache offset.
                 inputForGeneration = LMInput(text: LMInput.Text(tokens: slicedTokens, mask: nil))
                 let (restoredCache, measuredRestoreMs) = measure {
-                    lookupResult.restoreCache()
+                    lookupResult.restoreCache(
+                        triAttentionRestoreContext: triAttentionRestoreContext
+                    )
                 }
                 cacheToUse = restoredCache
                 restoreMs = measuredRestoreMs
@@ -1558,6 +1627,7 @@ actor LLMActor {
             genParams.checkpoints = Dictionary(
                 uniqueKeysWithValues: checkpointPlan.map { ($0.offset, $0.type) }
             )
+            genParams.triAttentionStablePrefixOffset = stablePrefixOffset
             let transientOffsets = [lastMessageBoundaryOffset, lastUserBoundaryOffset]
                 .compactMap { $0 }
                 .filter { offset in
@@ -1641,7 +1711,9 @@ actor LLMActor {
                 partitionKey: partitionKey,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
-                prefillStepSize: parameters.prefillStepSize
+                prefillStepSize: parameters.prefillStepSize,
+                triAttentionStablePrefixOffset: stablePrefixOffset,
+                tokenNDim: tokenNDim
             )
         }
     }
@@ -1678,6 +1750,19 @@ actor LLMActor {
         from parameters: AgentGenerateParameters
     ) -> GenerateParameters {
         makeGenerateParameters(from: parameters)
+    }
+
+    private nonisolated static func makeTriAttentionSnapshotRestoreContext(
+        model: any LanguageModel,
+        parameters: GenerateParameters
+    ) -> TriAttentionSnapshotRestoreContext? {
+        guard let provider = model as? TriAttentionSnapshotRestoreContextProviding else {
+            return nil
+        }
+        return provider.triAttentionSnapshotRestoreContext(
+            configuration: parameters.triAttention,
+            artifact: parameters.triAttentionCalibrationArtifact
+        )
     }
 
     nonisolated static func selectHTTPLeafStoreMode(
@@ -1798,10 +1883,12 @@ actor LLMActor {
         boundarySnapshot: HybridCacheSnapshot,
         partitionKey: CachePartitionKey,
         prefillStepSize: Int,
+        tokenNDim: Int,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         ssdEnabled: Bool,
+        generateParameters: GenerateParameters,
         storeStage: String,
         captureStage: String,
         admissionStage: String,
@@ -1822,14 +1909,35 @@ actor LLMActor {
 
         do {
             return try await container.perform { context in
+                let triAttentionRestoreContext = Self.makeTriAttentionSnapshotRestoreContext(
+                    model: context.model,
+                    parameters: generateParameters
+                )
                 let restoredCache = boundarySnapshot.restore(
                     kvBitsHint: partitionKey.kvBits,
-                    kvGroupSizeHint: partitionKey.kvGroupSize
+                    kvGroupSizeHint: partitionKey.kvGroupSize,
+                    triAttentionRestoreContext: triAttentionRestoreContext
                 )
 
                 let residual = Array(storedTokens[boundaryOffset...])
+                var prefillParameters = generateParameters
+                prefillParameters.checkpointBaseOffset = boundaryOffset
+                prefillParameters.configureTriAttentionCachesForPrefill(
+                    restoredCache,
+                    inputTokenCount: residual.count
+                )
                 let prefillStart = Date.timeIntervalSinceReferenceDate
-                let inputArr = MLXArray(residual.map { Int32($0) })
+                // Qwen3.5 is a `Qwen3_5ForConditionalGeneration` (VLM)
+                // whose `prepare` indexes tokens with two axes
+                // (`y[0..., ..<step]`) — 1D crashes in `getRopeIndex` on
+                // `inputIds.dim(1)`. Pure LLMs use the default
+                // `LLMModel.prepare`, which adds the batch dim itself via
+                // `.newAxis` and would promote a pre-batched 2D chunk to
+                // 3D. Match the processor's original rank.
+                let flatInput = MLXArray(residual.map { Int32($0) })
+                let inputArr = tokenNDim >= 2
+                    ? flatInput.expandedDimensions(axis: 0)
+                    : flatInput
                 let lmInput = LMInput(text: .init(tokens: inputArr, mask: nil))
                 let (prepareResult, _) = try context.model.prepareWithCheckpoints(
                     lmInput,
@@ -1951,10 +2059,12 @@ actor LLMActor {
         transientBoundarySnapshot: HybridCacheSnapshot?,
         partitionKey: CachePartitionKey,
         prefillStepSize: Int,
+        tokenNDim: Int,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
-        ssdEnabled: Bool
+        ssdEnabled: Bool,
+        generateParameters: GenerateParameters
     ) async -> AlphaTuner.LeafStore? {
         guard let boundarySnapshot = transientBoundarySnapshot else {
             diagnosticsContext.logSkip(
@@ -1985,10 +2095,12 @@ actor LLMActor {
                 boundarySnapshot: boundarySnapshot,
                 partitionKey: partitionKey,
                 prefillStepSize: prefillStepSize,
+                tokenNDim: tokenNDim,
                 requestID: requestID,
                 prefixCache: prefixCache,
                 diagnosticsContext: diagnosticsContext,
                 ssdEnabled: ssdEnabled,
+                generateParameters: generateParameters,
                 storeStage: "directToolLeafStore",
                 captureStage: "directToolLeafCapture",
                 admissionStage: "directToolLeafAdmission",
@@ -2096,10 +2208,12 @@ actor LLMActor {
         transientBoundarySnapshot: HybridCacheSnapshot?,
         partitionKey: CachePartitionKey,
         prefillStepSize: Int,
+        tokenNDim: Int,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
-        ssdEnabled: Bool
+        ssdEnabled: Bool,
+        generateParameters: GenerateParameters
     ) async -> AlphaTuner.LeafStore? {
         do {
             guard let canonicalStoredTokens = try await container.perform({ context in
@@ -2182,10 +2296,12 @@ actor LLMActor {
                 boundarySnapshot: boundarySnapshot,
                 partitionKey: partitionKey,
                 prefillStepSize: prefillStepSize,
+                tokenNDim: tokenNDim,
                 requestID: requestID,
                 prefixCache: prefixCache,
                 diagnosticsContext: diagnosticsContext,
                 ssdEnabled: ssdEnabled,
+                generateParameters: generateParameters,
                 storeStage: "canonicalLeafStore",
                 captureStage: "canonicalLeafCapture",
                 admissionStage: "canonicalLeafAdmission",
@@ -2231,6 +2347,17 @@ actor LLMActor {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json
+    }
+
+    /// Returns `true` if the model directory holds a Qwen3.5 checkpoint,
+    /// identified by the top-level `model_type` field (`qwen3_5`,
+    /// `qwen3_5_moe`, `qwen3_5_text`, …). Both the pure-LLM and
+    /// conditional-generation VLM variants share this prefix.
+    private static func isQwen35Model(directory: URL) -> Bool {
+        guard let json = loadConfigJSON(directory: directory),
+              let modelType = json["model_type"] as? String
+        else { return false }
+        return modelType.hasPrefix("qwen3_5")
     }
 
     /// Detects the chat-template tool-call format from the model's

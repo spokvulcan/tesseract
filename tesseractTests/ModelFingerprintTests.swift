@@ -214,6 +214,115 @@ struct ModelFingerprintTests {
         }
     }
 
+    // MARK: - Content fingerprint
+
+    /// Shipped artifacts (calibration stats) need a cross-machine-stable
+    /// identifier. mtime is per-download local state, so the content
+    /// fingerprint must be insensitive to mtime changes even when the bytes
+    /// are identical.
+    @Test
+    func contentFingerprintIgnoresMtime() throws {
+        let dir = try makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let configDate = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: configDate)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: configDate)
+
+        let weightURL = dir.appendingPathComponent("model.safetensors")
+        let payload = Data(repeating: 0xAA, count: 2048)
+
+        try writeFile(payload, at: weightURL, modificationDate: Date(timeIntervalSince1970: 1_700_000_100))
+        let fp1 = try ModelFingerprint.computeContentFingerprint(modelDir: dir)
+
+        // Same bytes, different mtime. Regular fingerprint flips; content
+        // fingerprint must not — the bytes are what another machine that
+        // downloaded the same checkpoint will see.
+        try writeFile(payload, at: weightURL, modificationDate: Date(timeIntervalSince1970: 1_700_000_200))
+        let fp2 = try ModelFingerprint.computeContentFingerprint(modelDir: dir)
+
+        #expect(fp1 == fp2, "content fingerprint must be mtime-insensitive")
+        #expect(fp1.count == 64)
+    }
+
+    @Test
+    func contentFingerprintChangesWithSafetensorsBytes() throws {
+        let dir = try makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
+
+        let weightURL = dir.appendingPathComponent("model.safetensors")
+        try writeFile(Data(repeating: 0xAA, count: 1024), at: weightURL, modificationDate: date)
+        let fp1 = try ModelFingerprint.computeContentFingerprint(modelDir: dir)
+
+        // Same size, different bytes — metadata-based fingerprint would miss
+        // this. Content-based must detect it.
+        try writeFile(Data(repeating: 0xBB, count: 1024), at: weightURL, modificationDate: date)
+        let fp2 = try ModelFingerprint.computeContentFingerprint(modelDir: dir)
+
+        #expect(fp1 != fp2, "content fingerprint must detect same-size byte changes")
+    }
+
+    @Test
+    func contentFingerprintIsStableAcrossCalls() throws {
+        let dir = try makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeFile(Data("{\"m\":\"a\"}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(Data("{\"t\":\"b\"}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
+        try writeFile(Data(repeating: 0x42, count: 4096), at: dir.appendingPathComponent("model.safetensors"), modificationDate: date)
+
+        let fp1 = try ModelFingerprint.computeContentFingerprint(modelDir: dir)
+        let fp2 = try ModelFingerprint.computeContentFingerprint(modelDir: dir)
+
+        #expect(fp1 == fp2)
+        #expect(fp1.count == 64)
+    }
+
+    /// Sanity: the two fingerprints are computed from different inputs and
+    /// must not coincidentally collide for the same directory.
+    @Test
+    func contentFingerprintDiffersFromMetadataFingerprint() throws {
+        let dir = try makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeFile(Data("{\"m\":\"a\"}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(Data("{\"t\":\"b\"}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
+        try writeFile(Data(repeating: 0x42, count: 4096), at: dir.appendingPathComponent("model.safetensors"), modificationDate: date)
+
+        let metadataFp = try ModelFingerprint.computeFingerprint(modelDir: dir)
+        let contentFp = try ModelFingerprint.computeContentFingerprint(modelDir: dir)
+
+        #expect(metadataFp != contentFp)
+    }
+
+    /// Hashing across chunk boundaries must be consistent. The streaming hash
+    /// uses 8 MiB chunks; files smaller and larger than that boundary must
+    /// both hash correctly and deterministically.
+    @Test
+    func contentFingerprintHandlesChunkBoundaryStreaming() throws {
+        let dir = try makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
+
+        // Just over one 8 MiB chunk to force the streaming loop to run twice.
+        let payload = Data(repeating: 0x7F, count: 8 * 1024 * 1024 + 17)
+        try writeFile(payload, at: dir.appendingPathComponent("model.safetensors"), modificationDate: date)
+
+        let fp1 = try ModelFingerprint.computeContentFingerprint(modelDir: dir)
+        let fp2 = try ModelFingerprint.computeContentFingerprint(modelDir: dir)
+        #expect(fp1 == fp2)
+        #expect(fp1.count == 64)
+    }
+
     @Test
     func fingerprintSucceedsWithMissingOptionalFiles() throws {
         // A directory with only safetensors (no config/tokenizer) must still

@@ -54,7 +54,11 @@ nonisolated enum SnapshotManifestSchema {
     ///   TriAttention identity) without losing the on-disk digest.
     ///   Older v4 manifests are unable to express TriAttention
     ///   partitions and must be wiped on first boot under v5.
-    static let currentVersion: Int = 5
+    /// - v6: TriAttention partition canonicalization includes the
+    ///   public prefix-protection mode, so persisted TriAttention
+    ///   partitions written under v5 must be wiped rather than
+    ///   silently reattached under a different runtime policy.
+    static let currentVersion: Int = 6
 }
 
 // MARK: - Persisted descriptor (Codable, manifest.json + safetensors header)
@@ -477,15 +481,17 @@ extension CachePartitionKey {
     /// `budgetTokens` is a decimal integer,
     /// `calibrationArtifactIdentity` is hex SHA-256, and
     /// `implementationVersion` is a restricted identifier string
-    /// (`"v1"` today).
+    /// (`"v1"` today), and `prefixProtectionMode` is a restricted
+    /// identifier string (`"protectNone"`, `"protectStablePrefixOnly"`,
+    /// or `"protectAllPrefill"`).
     nonisolated var partitionDigest: String {
         let kvBitsField = kvBits.map { "S\($0)" } ?? "N"
         let fingerprintField = modelFingerprint.map { "S" + $0 } ?? "N"
         var canonical =
             "\(modelID)\0\(kvBitsField)\0\(kvGroupSize)\0\(fingerprintField)"
-        if case let .triAttention(budget, artifact, impl) = triAttention {
+        if case let .triAttention(budget, artifact, impl, mode) = triAttention {
             let artifactField = artifact.map { "S" + $0.rawValue } ?? "N"
-            canonical += "\0TA:S\(budget)\0\(artifactField)\0\(impl.rawValue)"
+            canonical += "\0TA:S\(budget)\0\(artifactField)\0\(impl.rawValue)\0\(mode.rawValue)"
         }
 
         // FNV-1a 32-bit: offset_basis = 0x811c9dc5, prime = 0x01000193.

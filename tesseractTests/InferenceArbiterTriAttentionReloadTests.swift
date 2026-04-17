@@ -85,11 +85,11 @@ struct InferenceArbiterTriAttentionReloadTests {
     ///   1. The initial `Observations` emit at subscription time does NOT
     ///      trigger a reload when the LLM is not loaded — preserves lazy load
     ///      at app launch.
-    ///   2. A subsequent toggle flip DOES trigger a reload once the LLM slot
-    ///      reports loaded.
+    ///   2. A subsequent TriAttention toggle flip and model-selection change
+    ///      DO trigger reload once the LLM slot reports loaded.
     /// Uses a recorder stand-in for the arbiter; the primitive itself is
     /// covered by the two tests above.
-    @Test func toggleObservationSkipsInitialEmitAndFiresOnChangeWhenLLMLoaded() async throws {
+    @Test func settingsObservationsSkipInitialEmitAndFireOnChangeWhenLLMLoaded() async throws {
         clearDefaults()
         defer { clearDefaults() }
 
@@ -109,29 +109,47 @@ struct InferenceArbiterTriAttentionReloadTests {
         @MainActor final class LoadedFlag { var value = false }
         let loaded = LoadedFlag()
 
-        let observer = Task { @MainActor in
+        let triAttentionObserver = Task { @MainActor in
             for await _ in Observations({ settings.triattentionEnabled }) {
                 await counter.bumpIteration()
                 guard loaded.value else { continue }
                 await counter.record()
             }
         }
-        defer { observer.cancel() }
+        let modelObserver = Task { @MainActor in
+            for await _ in Observations({ settings.selectedAgentModelID }) {
+                await counter.bumpIteration()
+                guard loaded.value else { continue }
+                await counter.record()
+            }
+        }
+        defer {
+            triAttentionObserver.cancel()
+            modelObserver.cancel()
+        }
 
-        // Stage 1 — initial subscribe emit. Guard blocks because loaded=false.
-        try await waitUntil({ await counter.iterations >= 1 })
+        // Stage 1 — initial subscribe emits. Guard blocks because loaded=false.
+        try await waitUntil({ await counter.iterations >= 2 })
         #expect(await counter.records == 0)
 
         // Stage 2 — flip while still "not loaded". Guard continues to block.
         settings.triattentionEnabled = true
-        try await waitUntil({ await counter.iterations >= 2 })
+        try await waitUntil({ await counter.iterations >= 3 })
         #expect(await counter.records == 0)
 
-        // Stage 3 — mark loaded, flip again. Guard now passes.
+        settings.selectedAgentModelID = "qwen3.5-4b-paro"
+        try await waitUntil({ await counter.iterations >= 4 })
+        #expect(await counter.records == 0)
+
+        // Stage 3 — mark loaded, then both changes now pass the guard.
         loaded.value = true
         settings.triattentionEnabled = false
-        try await waitUntil({ await counter.iterations >= 3 })
+        try await waitUntil({ await counter.iterations >= 5 })
         #expect(await counter.records == 1)
+
+        settings.selectedAgentModelID = "qwen3-thinking-2507"
+        try await waitUntil({ await counter.iterations >= 6 })
+        #expect(await counter.records == 2)
     }
 
     /// Poll a condition until it returns true or a deadline elapses. Avoids

@@ -67,12 +67,12 @@ struct SnapshotManifestTests {
     // MARK: - Schema version
 
     @Test
-    func schemaVersionIsFive() {
+    func schemaVersionIsSix() {
         // Bumping invalidates every existing manifest. Pinned so an
-        // accidental bump trips this test. v5 added the `triAttention`
-        // field on `PartitionMeta` and is the on-disk schema all
+        // accidental bump trips this test. v6 adds TriAttention
+        // prefix-protection mode to partition canonicalization and is the on-disk schema all
         // current-build writes produce.
-        #expect(SnapshotManifestSchema.currentVersion == 5)
+        #expect(SnapshotManifestSchema.currentVersion == 6)
     }
 
     @Test
@@ -179,7 +179,8 @@ struct SnapshotManifestTests {
             calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
                 rawValue: "aaa"
             ),
-            implementationVersion: .v1
+            implementationVersion: .v1,
+            prefixProtectionMode: .protectStablePrefixOnly
         )
         let original = PartitionMeta(
             modelID: "mlx-community/Qwen3-4B-paro",
@@ -719,14 +720,16 @@ struct SnapshotManifestTests {
     private func makeTriAttentionIdentity(
         budget: Int = 12_000,
         artifact: String? = "aaa",
-        impl: TriAttentionImplementationVersion = .v1
+        impl: TriAttentionImplementationVersion = .v1,
+        mode: TriAttentionPrefixProtectionMode = .protectStablePrefixOnly
     ) -> TriAttentionPartitionIdentity {
         .triAttention(
             budgetTokens: budget,
             calibrationArtifactIdentity: artifact.map {
                 TriAttentionCalibrationArtifactIdentity(rawValue: $0)
             },
-            implementationVersion: impl
+            implementationVersion: impl,
+            prefixProtectionMode: mode
         )
     }
 
@@ -777,6 +780,7 @@ struct SnapshotManifestTests {
             ("budgetTokens", makeTriAttentionIdentity(budget: 8_000)),
             ("calibrationArtifactIdentity", makeTriAttentionIdentity(artifact: "bbb")),
             ("calibrationArtifactIdentity nil vs Some", makeTriAttentionIdentity(artifact: nil)),
+            ("prefixProtectionMode", makeTriAttentionIdentity(mode: .protectNone)),
         ]
         for diff in diffs {
             let other = makeKey(
@@ -835,14 +839,16 @@ struct SnapshotManifestTests {
                 enabled: true,
                 budgetTokens: 12_000,
                 calibrationArtifactIdentity: artifact,
-                implementationVersion: .v1
+                implementationVersion: .v1,
+                prefixProtectionMode: .protectStablePrefixOnly
             )
         )
         #expect(
             enabled == .triAttention(
                 budgetTokens: 12_000,
                 calibrationArtifactIdentity: artifact,
-                implementationVersion: .v1
+                implementationVersion: .v1,
+                prefixProtectionMode: .protectStablePrefixOnly
             )
         )
     }

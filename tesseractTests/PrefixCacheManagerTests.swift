@@ -603,7 +603,8 @@ struct PrefixCacheManagerTests {
             calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
                 rawValue: "aaa"
             ),
-            implementationVersion: .v1
+            implementationVersion: .v1,
+            prefixProtectionMode: .protectStablePrefixOnly
         )
     }
 
@@ -1667,7 +1668,7 @@ struct PrefixCacheManagerTests {
         #expect(restoredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
     }
 
-    // MARK: - TriAttention SSD admission (v5)
+    // MARK: - TriAttention SSD admission (v6)
 
     private static let triAttentionIdentity: TriAttentionPartitionIdentity =
         .triAttention(
@@ -1675,10 +1676,11 @@ struct PrefixCacheManagerTests {
             calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
                 rawValue: "aaa"
             ),
-            implementationVersion: .v1
+            implementationVersion: .v1,
+            prefixProtectionMode: .protectStablePrefixOnly
         )
 
-    /// v5 admits TriAttention partitions to SSD now that `PartitionMeta`
+    /// v6 admits TriAttention partitions to SSD now that `PartitionMeta`
     /// carries the TriAttention identity. The on-disk digest is unique
     /// per identity, so warm-start can reattach the partition under the
     /// same key without cross-contaminating dense lookups.

@@ -638,7 +638,8 @@ struct HybridCacheSnapshotTests {
     private func makeTriAttentionConfig(
         enabled: Bool = true,
         budgetTokens: Int = 12_000,
-        artifact: String? = "artifact-snapshot-test"
+        artifact: String? = "artifact-snapshot-test",
+        prefixProtectionMode: TriAttentionPrefixProtectionMode = .protectStablePrefixOnly
     ) -> TriAttentionConfiguration {
         TriAttentionConfiguration(
             enabled: enabled,
@@ -646,7 +647,8 @@ struct HybridCacheSnapshotTests {
             calibrationArtifactIdentity: artifact.map {
                 TriAttentionCalibrationArtifactIdentity(rawValue: $0)
             },
-            implementationVersion: .v1
+            implementationVersion: .v1,
+            prefixProtectionMode: prefixProtectionMode
         )
     }
 
@@ -721,7 +723,7 @@ struct HybridCacheSnapshotTests {
         ))
 
         #expect(snapshot.layers[0].metaState == [
-            "v1", "true", "9500", "artifact-meta-state-recovery",
+            "v1", "true", "9500", "artifact-meta-state-recovery", "protectStablePrefixOnly",
         ])
 
         let restored = snapshot.restore()

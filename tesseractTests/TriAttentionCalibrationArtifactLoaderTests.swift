@@ -288,4 +288,17 @@ struct TriAttentionCalibrationArtifactLoaderTests {
             Issue.record("Expected actor to record unavailable TriAttention artifact result")
         }
     }
+
+    @Test
+    func shipped4BArtifactLoadsSuccessfully() throws {
+        let shippedURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "TriAttention/v1/0b0d94803c53b186006c100dd12a26ad1f955399ce5b52100e5f607a5fcb00fe.pt",
+                isDirectory: false
+            )
+        let artifact = try TriAttentionCalibrationArtifact.load(contentsOf: shippedURL)
+        #expect(artifact.statsByHead.count == 128)
+    }
 }

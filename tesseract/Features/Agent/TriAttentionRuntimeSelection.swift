@@ -119,7 +119,8 @@ nonisolated struct TriAttentionRuntimeSelection: Sendable {
             enabled: false,
             budgetTokens: requestedConfiguration.budgetTokens,
             calibrationArtifactIdentity: nil,
-            implementationVersion: requestedConfiguration.implementationVersion
+            implementationVersion: requestedConfiguration.implementationVersion,
+            prefixProtectionMode: requestedConfiguration.prefixProtectionMode
         )
     }
 
@@ -131,7 +132,8 @@ nonisolated struct TriAttentionRuntimeSelection: Sendable {
             enabled: true,
             budgetTokens: requestedConfiguration.budgetTokens,
             calibrationArtifactIdentity: calibrationArtifactIdentity,
-            implementationVersion: requestedConfiguration.implementationVersion
+            implementationVersion: requestedConfiguration.implementationVersion,
+            prefixProtectionMode: requestedConfiguration.prefixProtectionMode
         )
     }
 }

@@ -524,7 +524,8 @@ struct WarmStartTests {
                 calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
                     rawValue: "aaa"
                 ),
-                implementationVersion: .v1
+                implementationVersion: .v1,
+                prefixProtectionMode: .protectStablePrefixOnly
             )
         )
         let triDigest = triAttentionKey.partitionDigest
@@ -561,11 +562,12 @@ struct WarmStartTests {
         }
     }
 
-    /// v5 round-trip: a TriAttention partition whose `PartitionMeta`
+    /// v6 round-trip: a TriAttention partition whose `PartitionMeta`
     /// carries the matching identity reattaches under the same key
     /// rather than being dropped as a digest mismatch. Pinned because
     /// the dense-only gate that lived in `PrefixCacheManager.storeLeaf`
-    /// for v4 was removed when v5 added the `triAttention` field —
+    /// for v4 was removed when v5 added the `triAttention` field, and
+    /// v6 extended that identity with prefix protection mode —
     /// regressing this test would silently re-introduce the gate.
     @Test func warmStartReattachesTriAttentionPartitionWhenMetaCarriesIdentity() async throws {
         let root = makeScratchDir()
@@ -576,7 +578,8 @@ struct WarmStartTests {
             calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
                 rawValue: "aaa"
             ),
-            implementationVersion: .v1
+            implementationVersion: .v1,
+            prefixProtectionMode: .protectStablePrefixOnly
         )
         let triKey = CachePartitionKey(
             modelID: "test-model",
@@ -637,7 +640,7 @@ struct WarmStartTests {
         }
     }
 
-    /// v5 wipe gate: a partition meta written under v4 (or any
+    /// v6 wipe gate: a partition meta written under v4 (or any
     /// schema-version other than the current one) must be invalidated
     /// at warm-start, even if the top-level manifest version matches.
     /// Defends the descriptor-level filter added to
@@ -648,7 +651,7 @@ struct WarmStartTests {
 
         let denseKey = makePartitionKey(fingerprint: testFingerprint)
         let digest = denseKey.partitionDigest
-        // Manifest itself is v5, but the per-partition meta is v4.
+        // Manifest itself is current, but the per-partition meta is v4.
         let staleMeta = PartitionMeta(
             modelID: "test-model",
             modelFingerprint: testFingerprint,
@@ -678,7 +681,7 @@ struct WarmStartTests {
     /// Same wipe gate, but for a `PersistedSnapshotDescriptor` whose
     /// schemaVersion is stale even though its enclosing partition meta
     /// is current. Pinned because the descriptor-level filter is the
-    /// only safeguard against a hand-edited manifest mixing v4 and v5
+    /// only safeguard against a hand-edited manifest mixing stale and current
     /// descriptors under a current partition.
     @Test func warmStartDropsDescriptorWithStaleSchemaVersion() async throws {
         let root = makeScratchDir()
@@ -719,7 +722,7 @@ struct WarmStartTests {
         let (mgr, ssdStore) = makeManager(rootURL: root)
         try await mgr.warmStart(modelFingerprint: testFingerprint)
 
-        // Only the v5 descriptor's bytes are seeded; the stale-schema
+        // Only the current descriptor's bytes are seeded; the stale-schema
         // entry is dropped before the budget is summed.
         #expect(ssdStore.currentSSDBytesForTesting() == validDescriptor.bytes)
         #expect(mgr.stats.partitionCount == 1)

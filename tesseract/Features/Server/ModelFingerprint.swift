@@ -86,12 +86,84 @@ enum ModelFingerprint {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Content-only fingerprint: SHA-256 over `config.json` + `tokenizer.json`
+    /// + sorted `(filename, size, full byte content)` of every `*.safetensors`.
+    /// Unlike `computeFingerprint`, this hash is stable across machines for the
+    /// same HuggingFace checkpoint — it does not fold in the local filesystem
+    /// mtime, and it reads weight bytes rather than trusting their mtime.
+    ///
+    /// Used for shipped-artifact lookup (e.g. TriAttention calibration stats
+    /// keyed by content-identity of the checkpoint). The local SSD prefix
+    /// cache continues to use the cheaper `computeFingerprint`.
+    ///
+    /// Cost: streams safetensors content through SHA-256 in 8 MiB chunks. On
+    /// Apple Silicon expect ~500 MB/s → a few seconds for 4B, tens of seconds
+    /// for 27B. Only call this when the result is actually needed (e.g.
+    /// TriAttention requested + model is PARO + not vision mode).
+    nonisolated static func computeContentFingerprint(modelDir: URL) throws -> String {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: modelDir.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            throw Error.missingDirectory(modelDir)
+        }
+
+        var hasher = SHA256()
+
+        let configURL = modelDir.appendingPathComponent("config.json", isDirectory: false)
+        hasher.update(data: try readIfPresent(configURL))
+        hasher.update(data: Data([0x00]))
+
+        let tokenizerURL = modelDir.appendingPathComponent("tokenizer.json", isDirectory: false)
+        hasher.update(data: try readIfPresent(tokenizerURL))
+        hasher.update(data: Data([0x00]))
+
+        let tensorEntries = try collectSafetensorsEntries(in: modelDir)
+        for entry in tensorEntries {
+            hasher.update(data: Data(entry.name.utf8))
+            hasher.update(data: Data([0x00]))
+            hasher.update(data: withUnsafeBytes(of: entry.size.littleEndian) { Data($0) })
+            hasher.update(data: Data([0x00]))
+            let entryURL = modelDir.appendingPathComponent(entry.name, isDirectory: false)
+            try hashFileContents(url: entryURL, into: &hasher)
+            hasher.update(data: Data([0x0a]))
+        }
+
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
     // MARK: - Private
 
     private struct SafetensorsEntry {
         let name: String
         let size: Int64
         let mtimeNanoseconds: Int64
+    }
+
+    /// Stream `url`'s bytes through `hasher` in 8 MiB chunks so we can hash
+    /// multi-GiB weight files without loading them into memory. Wrapped in
+    /// `autoreleasepool` so the per-chunk `Data` objects drop between reads.
+    nonisolated private static func hashFileContents(url: URL, into hasher: inout SHA256) throws {
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: url)
+        } catch {
+            throw Error.unreadableFile(url, underlying: error)
+        }
+        defer { try? handle.close() }
+
+        let chunkSize = 8 * 1024 * 1024
+        while true {
+            let chunk: Data?
+            do {
+                chunk = try autoreleasepool { try handle.read(upToCount: chunkSize) }
+            } catch {
+                throw Error.unreadableFile(url, underlying: error)
+            }
+            guard let chunk, !chunk.isEmpty else { break }
+            hasher.update(data: chunk)
+        }
     }
 
     nonisolated private static func readIfPresent(_ url: URL) throws -> Data {

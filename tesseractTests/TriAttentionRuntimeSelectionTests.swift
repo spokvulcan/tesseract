@@ -61,6 +61,7 @@ struct TriAttentionRuntimeSelectionTests {
         #expect(selection.requestedConfiguration == requested)
         #expect(selection.effectiveConfiguration.enabled == true)
         #expect(selection.effectiveConfiguration.calibrationArtifactIdentity == identity)
+        #expect(selection.effectiveConfiguration.prefixProtectionMode == requested.prefixProtectionMode)
         #expect(selection.fallbackReason == nil)
     }
 
@@ -75,6 +76,7 @@ struct TriAttentionRuntimeSelectionTests {
         )
 
         #expect(selection.effectiveConfiguration.enabled == false)
+        #expect(selection.effectiveConfiguration.prefixProtectionMode == requested.prefixProtectionMode)
         #expect(selection.fallbackReason == .visionMode)
         switch selection.calibrationArtifactLookup {
         case nil:
@@ -95,6 +97,7 @@ struct TriAttentionRuntimeSelectionTests {
         )
 
         #expect(selection.effectiveConfiguration.enabled == false)
+        #expect(selection.effectiveConfiguration.prefixProtectionMode == requested.prefixProtectionMode)
         #expect(selection.fallbackReason == .unsupportedModel)
         switch selection.calibrationArtifactLookup {
         case nil:
@@ -118,6 +121,7 @@ struct TriAttentionRuntimeSelectionTests {
         )
 
         #expect(selection.effectiveConfiguration.enabled == false)
+        #expect(selection.effectiveConfiguration.prefixProtectionMode == requested.prefixProtectionMode)
         #expect(selection.fallbackReason == .missingCalibrationArtifact)
     }
 
@@ -136,6 +140,7 @@ struct TriAttentionRuntimeSelectionTests {
         )
 
         #expect(selection.effectiveConfiguration.enabled == false)
+        #expect(selection.effectiveConfiguration.prefixProtectionMode == requested.prefixProtectionMode)
         #expect(selection.fallbackReason == .mismatchedCalibrationArtifact)
     }
 
