@@ -10,25 +10,33 @@ struct AgentConversationListView: View {
     @State private var pendingScrollTask: Task<Void, Never>?
 
     private var lastRowID: String? { coordinator.rows.last?.id }
+    private let bottomAnchorID = "agent-conversation-bottom"
 
     var body: some View {
         ScrollViewReader { proxy in
-            List {
-                SystemPromptSection()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    SystemPromptSection()
 
-                EmptyStateSection()
+                    EmptyStateSection()
 
-                ForEach(coordinator.rows) { row in
-                    ChatRowView(
-                        row: row,
-                        speakingMessageID: $speakingMessageID,
-                        isSpeechActive: isSpeechActive
-                    )
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+                    ForEach(coordinator.rows) { row in
+                        ChatRowView(
+                            row: row,
+                            speakingMessageID: $speakingMessageID,
+                            isSpeechActive: isSpeechActive
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 2)
+                    }
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(bottomAnchorID)
                 }
+                .padding(.vertical, 8)
             }
-            .listStyle(.plain)
             .defaultScrollAnchor(.bottom)
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentSize.height > 0 &&
@@ -47,13 +55,19 @@ struct AgentConversationListView: View {
                 }
             }
             .onChange(of: lastRowID) { _, newID in
-                if isNearBottom, let id = newID {
-                    Log.agent.debug("[Perf] scrollTo(lastRowID) triggered: \(id)")
-                    scheduleScrollToBottom(proxy: proxy, id: id)
+                if isNearBottom, newID != nil {
+                    Log.agent.debug("[Perf] scrollTo(bottomAnchor) triggered")
+                    scheduleScrollToBottom(proxy: proxy)
                 }
             }
             // Separate view to isolate streamingRowVersion observation from the List body
-            .overlay { StreamingScrollTrigger(proxy: proxy, isNearBottom: isNearBottom) }
+            .overlay {
+                StreamingScrollTrigger(
+                    proxy: proxy,
+                    bottomAnchorID: bottomAnchorID,
+                    isNearBottom: isNearBottom
+                )
+            }
             .onDisappear {
                 pendingScrollTask?.cancel()
                 pendingScrollTask = nil
@@ -63,14 +77,14 @@ struct AgentConversationListView: View {
     }
 
     /// Defers the scroll until the current layout pass completes. Triggering
-    /// `scrollTo` synchronously while SwiftUI is still reconciling a lazy list
+    /// `scrollTo` synchronously while SwiftUI is still reconciling a lazy stack
     /// can provoke AppKit constraint exceptions in Release builds.
-    private func scheduleScrollToBottom(proxy: ScrollViewProxy, id: String) {
+    private func scheduleScrollToBottom(proxy: ScrollViewProxy) {
         pendingScrollTask?.cancel()
         pendingScrollTask = Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled else { return }
-            proxy.scrollTo(id, anchor: .bottom)
+            proxy.scrollTo(bottomAnchorID, anchor: .bottom)
         }
     }
 }
@@ -84,8 +98,9 @@ private struct SystemPromptSection: View {
     var body: some View {
         if !coordinator.assembledSystemPrompt.isEmpty {
             AgentSystemPromptView()
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 2)
         }
     }
 }
@@ -106,8 +121,8 @@ private struct EmptyStateSection: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 80)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 2)
         }
     }
 }
@@ -115,6 +130,7 @@ private struct EmptyStateSection: View {
 /// Reads only `streamingRowVersion` — fires scroll-to-bottom without re-evaluating the List body.
 private struct StreamingScrollTrigger: View {
     let proxy: ScrollViewProxy
+    let bottomAnchorID: String
     let isNearBottom: Bool
 
     @Environment(AgentCoordinator.self) private var coordinator
@@ -124,8 +140,8 @@ private struct StreamingScrollTrigger: View {
         Color.clear
             .frame(width: 0, height: 0)
             .onChange(of: coordinator.streamingRowVersion) { _, _ in
-                if isNearBottom, let id = coordinator.rows.last?.id {
-                    scheduleScrollToBottom(id: id)
+                if isNearBottom, coordinator.rows.last != nil {
+                    scheduleScrollToBottom()
                 }
             }
             .onDisappear {
@@ -134,12 +150,12 @@ private struct StreamingScrollTrigger: View {
             }
     }
 
-    private func scheduleScrollToBottom(id: String) {
+    private func scheduleScrollToBottom() {
         pendingScrollTask?.cancel()
         pendingScrollTask = Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled else { return }
-            proxy.scrollTo(id, anchor: .bottom)
+            proxy.scrollTo(bottomAnchorID, anchor: .bottom)
         }
     }
 }
