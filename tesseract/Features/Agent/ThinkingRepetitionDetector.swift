@@ -46,6 +46,19 @@ nonisolated final class ThinkingRepetitionDetector {
         /// Raise or set to `nil` for tasks that legitimately need longer
         /// reasoning; lower for tighter worst-case latency.
         var maxThinkingChars: Int? = 16_384
+        /// Minimum accumulated thinking-content chars before ANY repetition
+        /// signal (line-repeat, n-gram, budget) is allowed to fire. Detector
+        /// state still updates during the grace period — only the trigger
+        /// decision is gated — so a pattern that was already repeating can
+        /// fire on the first post-grace ingest.
+        ///
+        /// Default `8_192` (~2K tokens at Qwen3.5's ~3.6 chars/token).
+        /// Structured reasoning on multi-field extraction tasks routinely
+        /// produces 1–2K tokens of legitimate "Field: X / Wait, check Y"
+        /// alternation; 2K tokens gives the heuristics enough evidence to
+        /// distinguish a true loop from step-by-step analysis. Set to `0`
+        /// to disable the grace period.
+        var minCharsBeforeIntervention: Int = 8_192
         /// Text appended to the safe prefix when the intervention fires. Sent
         /// downstream as a `.thinking(String)` event just before `.thinkEnd`.
         var injectionMessage: String =
@@ -71,6 +84,7 @@ nonisolated final class ThinkingRepetitionDetector {
             maxNgramRepeats: Int = 8,
             windowChars: Int = 8_192,
             maxThinkingChars: Int? = 16_384,
+            minCharsBeforeIntervention: Int = 8_192,
             injectionMessage: String =
                 "\n\nI have enough information. Responding now.\n",
             thinkCloseSuffix: String = "\n</think>\n\n"
@@ -82,6 +96,7 @@ nonisolated final class ThinkingRepetitionDetector {
             self.maxNgramRepeats = maxNgramRepeats
             self.windowChars = windowChars
             self.maxThinkingChars = maxThinkingChars
+            self.minCharsBeforeIntervention = minCharsBeforeIntervention
             self.injectionMessage = injectionMessage
             self.thinkCloseSuffix = thinkCloseSuffix
         }
@@ -122,30 +137,37 @@ nonisolated final class ThinkingRepetitionDetector {
     /// the first time any trigger fires. After intervening the caller should
     /// stop feeding this instance (or call ``reset()``).
     func ingest(chunk: String) -> Decision {
-        guard config.enabled else { return .continue }
-        guard !chunk.isEmpty else { return .continue }
+        guard config.enabled, !chunk.isEmpty else { return .continue }
 
-        // 1. Line-frequency signal. Consume characters one at a time; every
-        //    time we hit \n, classify the completed line.
+        // Grace gate: state still updates during grace, but no trigger fires
+        // until the accumulated buffer (including this chunk) clears the
+        // threshold. Computed once at the top using post-chunk size so a
+        // pattern already repeating during grace can fire on the same ingest
+        // that crosses the boundary.
+        let graceGate =
+            completedLines.count + pendingLine.count + chunk.count
+            >= config.minCharsBeforeIntervention
+
         for char in chunk {
             if char == "\n" {
-                if let decision = closePendingLine() { return decision }
+                if let decision = closePendingLine(), graceGate { return decision }
             } else {
                 pendingLine.append(char)
             }
         }
 
-        // 2. N-gram signal over the full current content.
+        guard graceGate else { return .continue }
+
         if let decision = processNgrams() { return decision }
 
-        // 3. Optional hard char budget.
         if let limit = config.maxThinkingChars {
             let total = completedLines.count + pendingLine.count
             if total >= limit {
                 let full = completedLines + pendingLine
                 return .intervene(
                     reason: .budgetExceeded,
-                    safePrefix: String(full.prefix(limit))
+                    safePrefix: Self.backtrackToLineBoundary(
+                        String(full.prefix(limit)))
                 )
             }
         }
@@ -210,6 +232,18 @@ nonisolated final class ThinkingRepetitionDetector {
         return result.lowercased()
     }
 
+    /// Snap a safe-prefix candidate back to the last `\n` so the surfaced
+    /// reasoning never ends mid-sentence or mid-word. Returns `""` when the
+    /// prefix has no newline — "show nothing" is preferable to "show a torn
+    /// line" for a user-visible reasoning surface.
+    nonisolated static func backtrackToLineBoundary(_ prefix: String) -> String {
+        if prefix.isEmpty || prefix.hasSuffix("\n") { return prefix }
+        if let idx = prefix.lastIndex(of: "\n") {
+            return String(prefix[...idx])
+        }
+        return ""
+    }
+
     // MARK: - N-gram rolling window
 
     /// Rebuild n-gram counts over the last `windowChars` characters of the
@@ -239,20 +273,16 @@ nonisolated final class ThinkingRepetitionDetector {
             let count = (ngramCounts[slice] ?? 0) + 1
             ngramCounts[slice] = count
             if count >= config.maxNgramRepeats {
-                // safePrefix = everything up to the START of the first occurrence
-                // of this n-gram in the full combined buffer.
+                // Cut at the first occurrence of the repeating n-gram; fall
+                // back to the window start if `range(of:)` can't locate it
+                // (shouldn't happen in practice — slice came FROM `combined`).
                 let needle = String(slice)
-                if let firstRange = combined.range(of: needle) {
-                    return .intervene(
-                        reason: .duplicateNgram,
-                        safePrefix: String(combined[..<firstRange.lowerBound])
-                    )
-                } else {
-                    return .intervene(
-                        reason: .duplicateNgram,
-                        safePrefix: String(combined[..<windowStart])
-                    )
-                }
+                let cut = combined.range(of: needle)?.lowerBound ?? windowStart
+                return .intervene(
+                    reason: .duplicateNgram,
+                    safePrefix: Self.backtrackToLineBoundary(
+                        String(combined[..<cut]))
+                )
             }
             i = window.index(after: i)
         }

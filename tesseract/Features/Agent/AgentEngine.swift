@@ -624,8 +624,11 @@ final class AgentEngine {
                             currentStart = newStart
                             // Continuation starts OUTSIDE `<think>` — reset
                             // the parser so its output is classified as text.
+                            // Do NOT reset the safeguard: `interventionsIssued
+                            // >= limit` already blocks re-triggering, and
+                            // resetting would erase the "we intervened" flag
+                            // that any downstream consumer relies on.
                             parser = ToolCallParser(startsInsideThinkBlock: false)
-                            safeguard.reset()
                             continue generationLoop
                         } catch {
                             Log.agent.error(

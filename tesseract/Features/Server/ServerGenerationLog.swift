@@ -138,7 +138,10 @@ final class ServerGenerationLog {
             throttledScrollBump()
         case .malformedToolCall(let raw):
             flushPending(handle: handle)
-            update(handle) { $0.appendMalformedToolCall(raw) }
+            update(handle) { trace in
+                trace.markFirstTokenIfNeeded()
+                trace.appendMalformedToolCall(raw)
+            }
             throttledScrollBump()
         case .info(let info):
             flushPending(handle: handle)

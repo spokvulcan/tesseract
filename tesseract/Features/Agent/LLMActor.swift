@@ -576,11 +576,16 @@ actor LLMActor {
                     _ event: ToolCallParser.Event,
                     allowToolEvents: Bool
                 ) -> (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)? {
-                    switch event {
-                    case .toolCall, .malformedToolCall where !allowToolEvents:
-                        return nil
-                    default:
-                        break
+                    // Swift's `where` on a compound `case` pattern only
+                    // binds to the preceding pattern, so hoist the guard
+                    // explicitly to cover both tool-call event variants.
+                    if !allowToolEvents {
+                        switch event {
+                        case .toolCall, .malformedToolCall:
+                            return nil
+                        default:
+                            break
+                        }
                     }
                     switch safeguard.observe(parserEvent: event) {
                     case .forward:
@@ -686,8 +691,13 @@ actor LLMActor {
                             }
                             // Continuation picks up AFTER `</think>` — re-init parser
                             // in out-of-think mode so its output is classified as text.
+                            // Intentionally do NOT reset `safeguard`: its
+                            // `interventionsIssued >= limit` check already
+                            // suppresses further detection, and the
+                            // post-stream leaf-store block at line ~798
+                            // relies on `hasIntervened` surviving until
+                            // the request completes.
                             parser = ToolCallParser(startsInsideThinkBlock: false)
-                            safeguard.reset()
                             currentStream = continuationStart.stream
                             continue streamLoop
                         } catch {

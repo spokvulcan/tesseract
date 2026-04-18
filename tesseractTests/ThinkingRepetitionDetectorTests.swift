@@ -28,7 +28,8 @@ struct ThinkingRepetitionDetectorTests {
 
     @Test func detectsExactLineRepeat() {
         let config = ThinkingRepetitionDetector.Config(
-            minLineLength: 20, maxLineRepeats: 6
+            minLineLength: 20, maxLineRepeats: 6,
+            minCharsBeforeIntervention: 0
         )
         let detector = ThinkingRepetitionDetector(config: config)
 
@@ -54,7 +55,8 @@ struct ThinkingRepetitionDetectorTests {
 
     @Test func safePrefixIsBufferBeforeFirstDuplicateLine() {
         let config = ThinkingRepetitionDetector.Config(
-            minLineLength: 10, maxLineRepeats: 3
+            minLineLength: 10, maxLineRepeats: 3,
+            minCharsBeforeIntervention: 0
         )
         let detector = ThinkingRepetitionDetector(config: config)
 
@@ -77,7 +79,8 @@ struct ThinkingRepetitionDetectorTests {
 
     @Test func normalizesWhitespaceAndCaseForLineMatching() {
         let config = ThinkingRepetitionDetector.Config(
-            minLineLength: 15, maxLineRepeats: 3
+            minLineLength: 15, maxLineRepeats: 3,
+            minCharsBeforeIntervention: 0
         )
         let detector = ThinkingRepetitionDetector(config: config)
 
@@ -113,7 +116,8 @@ struct ThinkingRepetitionDetectorTests {
 
     @Test func accumulatesAcrossChunkBoundariesMidLine() {
         let config = ThinkingRepetitionDetector.Config(
-            minLineLength: 10, maxLineRepeats: 3
+            minLineLength: 10, maxLineRepeats: 3,
+            minCharsBeforeIntervention: 0
         )
         let detector = ThinkingRepetitionDetector(config: config)
 
@@ -145,7 +149,8 @@ struct ThinkingRepetitionDetectorTests {
             maxLineRepeats: 100,
             ngramSize: 20,
             maxNgramRepeats: 5,
-            windowChars: 2_000
+            windowChars: 2_000,
+            minCharsBeforeIntervention: 0
         )
         let detector = ThinkingRepetitionDetector(config: config)
 
@@ -177,20 +182,19 @@ struct ThinkingRepetitionDetectorTests {
             ngramSize: 999,        // ngram signal off (n > content)
             maxNgramRepeats: 999,
             windowChars: 16,
-            maxThinkingChars: 200
+            maxThinkingChars: 200,
+            minCharsBeforeIntervention: 0
         )
         let detector = ThinkingRepetitionDetector(config: config)
 
-        // Feed 250 chars of varied content — no line, no ngram match, but budget fires.
-        let filler = String(repeating: "abcdefghij ", count: 25)  // 275 chars
+        let filler = String(repeating: "abcdefghij ", count: 25)  // 275 chars, no \n
         let decision = detector.ingest(chunk: filler)
 
         guard case .intervene(.budgetExceeded, let safe) = decision else {
             Issue.record("expected budgetExceeded, got \(decision)")
             return
         }
-        #expect(safe.count == 200)
-        #expect(safe == String(filler.prefix(200)))
+        #expect(safe == "")
     }
 
     @Test func charBudgetActiveByDefault() {
@@ -210,7 +214,12 @@ struct ThinkingRepetitionDetectorTests {
             Issue.record("expected budgetExceeded from default budget, got \(decision)")
             return
         }
-        #expect(safe.count == 16_384)
+        // safePrefix backtracks to the last `\n` within prefix(16_384).
+        // Each line is 11 chars ("tokNNNNNNN\n"); line 1488 ends at index
+        // 16_378 inclusive of its newline, so the backtracked prefix is 16_379
+        // chars and must end in "\n".
+        #expect(safe.count == 16_379)
+        #expect(safe.hasSuffix("\n"))
     }
 
     @Test func charBudgetCanBeDisabledViaNil() {
@@ -241,7 +250,10 @@ struct ThinkingRepetitionDetectorTests {
     }
 
     @Test func resetClearsStateAllowingSecondTrigger() {
-        let config = ThinkingRepetitionDetector.Config(minLineLength: 15, maxLineRepeats: 3)
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 15, maxLineRepeats: 3,
+            minCharsBeforeIntervention: 0
+        )
         let detector = ThinkingRepetitionDetector(config: config)
         let line = "A sentence that keeps repeating.\n"
         for _ in 0..<3 {
@@ -287,5 +299,141 @@ struct ThinkingRepetitionDetectorTests {
         """
         let decision = detector.ingest(chunk: legit)
         #expect(decision == .continue)
+    }
+
+    // MARK: - Grace period
+
+    @Test func gracePeriodSuppressesEarlyLineRepeat() {
+        // Default grace is 8_192 chars. A repeating 60-char line fed 7× is
+        // ~420 chars — well inside grace — so no signal should fire even
+        // though the line-repeat threshold is otherwise met.
+        let detector = ThinkingRepetitionDetector()
+        let line = "Wait, I should double-check this constraint again now.\n"
+        #expect(line.count < 70)
+        for _ in 0..<7 {
+            #expect(detector.ingest(chunk: line) == .continue)
+        }
+    }
+
+    @Test func gracePeriodExpiresThenFiresOnNextRepeat() {
+        // Small grace so we can cross it on the 6th ingest. A line already
+        // seen 5× during grace should fire on the first post-grace ingest
+        // because `lineFreq` keeps updating during grace — only the trigger
+        // decision is gated.
+        //
+        // The repeated line is 55 chars ("Wait, … now.\n"). After 5 feeds
+        // the buffer is 275 chars (< 300 grace). Feed 6 takes the buffer to
+        // 330 chars (>= 300 grace) AND bumps lineFreq to 6 (== threshold).
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 20,
+            maxLineRepeats: 6,
+            minCharsBeforeIntervention: 300
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+        let loopLine =
+            "Wait, I should double-check this constraint again now.\n"
+        #expect(loopLine.count == 55)
+        for _ in 0..<5 {
+            #expect(detector.ingest(chunk: loopLine) == .continue)
+        }
+        let decision = detector.ingest(chunk: loopLine)
+        guard case .intervene(.duplicateLine, _) = decision else {
+            Issue.record(
+                "expected .duplicateLine to fire on first post-grace ingest, got \(decision)"
+            )
+            return
+        }
+    }
+
+    @Test func gracePeriodDefaultsBlockSmallBuffers() {
+        // Explicit guard for the regression that motivated this refinement:
+        // realistic multi-field extraction reasoning under 8K chars must
+        // never trip the safeguard, regardless of structural patterns.
+        let detector = ThinkingRepetitionDetector()
+        var chunk = ""
+        for i in 1...50 {
+            chunk += "Field \(i): Let me check the value against the schema.\n"
+            chunk += "Wait, is the shape right here? Yes, looks good.\n"
+        }
+        // ~5K chars of structured, parallel reasoning — below default grace.
+        #expect(chunk.count < 8_192)
+        #expect(detector.ingest(chunk: chunk) == .continue)
+    }
+
+    // MARK: - Newline-aligned safePrefix
+
+    @Test func ngramSafePrefixEndsAtNewlineOrEmpty() {
+        // N-gram pattern starts mid-line. After trigger, safePrefix must
+        // either be empty (no `\n` before first occurrence) or end in `\n`.
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 200,   // line signal off
+            maxLineRepeats: 100,
+            ngramSize: 20,
+            maxNgramRepeats: 5,
+            windowChars: 4_000,
+            minCharsBeforeIntervention: 0
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+        let prelude = "Some introductory content.\nA second line of setup.\n"
+        // Pattern immediately follows prelude with NO intervening newline and
+        // repeats 6× in a row — mid-line n-gram repeat.
+        let pattern = "abcdefghijklmnopqrst"
+        let decision = detector.ingest(chunk: prelude
+            + String(repeating: pattern, count: 6))
+        guard case .intervene(.duplicateNgram, let safe) = decision else {
+            Issue.record("expected duplicateNgram, got \(decision)")
+            return
+        }
+        #expect(safe.isEmpty || safe.hasSuffix("\n"))
+        // The backtrack should land at the end of the prelude (last `\n`
+        // before the pattern).
+        #expect(safe == prelude)
+    }
+
+    @Test func budgetSafePrefixReturnsEmptyWhenNoNewline() {
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 9_999,
+            maxLineRepeats: 999,
+            ngramSize: 9_999,
+            maxNgramRepeats: 999,
+            windowChars: 16,
+            maxThinkingChars: 200,
+            minCharsBeforeIntervention: 0
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+        // 250 chars with no newlines — budget fires, no `\n` in prefix(200),
+        // so safePrefix is empty (not a torn mid-sentence cut).
+        let filler = String(repeating: "abcdefghij", count: 25)  // 250 chars
+        let decision = detector.ingest(chunk: filler)
+        guard case .intervene(.budgetExceeded, let safe) = decision else {
+            Issue.record("expected budgetExceeded, got \(decision)")
+            return
+        }
+        #expect(safe == "")
+    }
+
+    @Test func budgetSafePrefixSnapsToLastNewline() {
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 9_999,
+            maxLineRepeats: 999,
+            ngramSize: 9_999,
+            maxNgramRepeats: 999,
+            windowChars: 16,
+            maxThinkingChars: 200,
+            minCharsBeforeIntervention: 0
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+        // Newline at index 99; 101 more chars of filler; then enough more to
+        // cross the 200-char budget. Backtrack must land at index 99.
+        let head = String(repeating: "x", count: 99) + "\n"  // 100 chars
+        let tail = String(repeating: "y", count: 150)        // 150 chars
+        let decision = detector.ingest(chunk: head + tail)
+        guard case .intervene(.budgetExceeded, let safe) = decision else {
+            Issue.record("expected budgetExceeded, got \(decision)")
+            return
+        }
+        #expect(safe.count == 100)
+        #expect(safe.hasSuffix("\n"))
+        #expect(safe == head)
     }
 }

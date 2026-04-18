@@ -360,6 +360,9 @@ struct CompletionHandler: Sendable {
         if let sg = request.thinking_safeguard {
             if let enabled = sg.enabled { params.thinkingSafeguard.enabled = enabled }
             if let m = sg.max_thinking_chars { params.thinkingSafeguard.maxThinkingChars = m }
+            if let g = sg.min_chars_before_intervention {
+                params.thinkingSafeguard.minCharsBeforeIntervention = g
+            }
             if let r = sg.max_line_repeats { params.thinkingSafeguard.maxLineRepeats = r }
             if let msg = sg.injection_message { params.thinkingSafeguard.injectionMessage = msg }
         }

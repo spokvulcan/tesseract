@@ -120,6 +120,25 @@ struct ServerGenerationLogTests {
         if case .thinking(_, let c) = spans[2] { #expect(c == "more") } else { Issue.record("span 2 not thinking") }
     }
 
+    @Test func malformedToolCallCountsAsFirstOutputAndFlipsToDecoding() {
+        let log = ServerGenerationLog()
+        let handle = log.startRequest(
+            completionID: "id", model: "m", stream: true, sessionAffinity: nil
+        )
+        log.markLeaseAcquired(handle: handle)
+
+        log.ingest(handle: handle, event: .malformedToolCall("{not json"))
+
+        #expect(log.traces[0].phase == .decoding)
+        #expect(log.traces[0].firstTokenAt != nil)
+        #expect(log.traces[0].spans.count == 1)
+        if case .malformedToolCall(_, let raw) = log.traces[0].spans[0] {
+            #expect(raw == "{not json")
+        } else {
+            Issue.record("Expected malformed tool call span")
+        }
+    }
+
     @Test func infoEventPopulatesFinalMetrics() {
         let log = ServerGenerationLog()
         let handle = log.startRequest(

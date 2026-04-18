@@ -48,6 +48,9 @@ nonisolated enum OpenAI {
         /// Optional hard backstop measured in **characters** of accumulated
         /// thinking content (not tokens — see ``ThinkingRepetitionDetector``).
         var max_thinking_chars: Int?
+        /// Grace period in accumulated thinking **characters** before any
+        /// repetition heuristic is allowed to fire.
+        var min_chars_before_intervention: Int?
         /// Override the line-repeat trigger threshold.
         var max_line_repeats: Int?
         /// Text injected after the safe prefix when the safeguard fires.
