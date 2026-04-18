@@ -201,6 +201,66 @@ def run_mlx_calibration(
     import numpy as np
     import torch
     from paroquant.inference.backends.mlx.load import load as paro_load
+    from mlx_lm.models import qwen3_5 as _qwen3_5
+
+    # Workaround: with mlx 0.31.1 + mlx-lm 0.31.2, the lazy-evaluated
+    # GatedDeltaNet forward produces all-NaN outputs on Qwen3.5 PARO
+    # checkpoints (both 4B and 9B). Forcing eager evaluation after each
+    # intermediate op bypasses the bad kernel fusion and produces
+    # bit-identical results to the original (verified against the shipped
+    # 4B artifact). Remove once upstream MLX fixes the regression.
+    _orig_gdn_call = _qwen3_5.GatedDeltaNet.__call__
+
+    def _eager_gdn_call(self, inputs, mask=None, cache=None):
+        B, S, _ = inputs.shape
+        qkv = self.in_proj_qkv(inputs); mx.eval(qkv)
+        z = self.in_proj_z(inputs).reshape(B, S, self.num_v_heads, self.head_v_dim); mx.eval(z)
+        b = self.in_proj_b(inputs); mx.eval(b)
+        a = self.in_proj_a(inputs); mx.eval(a)
+        if cache is not None and cache[0] is not None:
+            conv_state = cache[0]
+        else:
+            conv_state = mx.zeros(
+                (B, self.conv_kernel_size - 1, self.conv_dim), dtype=inputs.dtype
+            )
+        if mask is not None:
+            qkv = mx.where(mask[..., None], qkv, 0); mx.eval(qkv)
+        conv_input = mx.concatenate([conv_state, qkv], axis=1); mx.eval(conv_input)
+        if cache is not None:
+            n_keep = self.conv_kernel_size - 1
+            if cache.lengths is not None:
+                ends = mx.clip(cache.lengths, 0, S)
+                positions = (ends[:, None] + mx.arange(n_keep))[..., None]
+                cache[0] = mx.take_along_axis(conv_input, positions, axis=1)
+            else:
+                cache[0] = mx.contiguous(conv_input[:, -n_keep:, :])
+        conv_out = nn.silu(self.conv1d(conv_input)); mx.eval(conv_out)
+        q, k, v = [
+            t.reshape(B, S, h, d)
+            for t, h, d in zip(
+                mx.split(conv_out, [self.key_dim, 2 * self.key_dim], -1),
+                [self.num_k_heads, self.num_k_heads, self.num_v_heads],
+                [self.head_k_dim, self.head_k_dim, self.head_v_dim],
+            )
+        ]
+        mx.eval(q, k, v)
+        state = cache[1] if cache else None
+        inv_scale = k.shape[-1] ** -0.5
+        q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6); mx.eval(q)
+        k = inv_scale * mx.fast.rms_norm(k, None, 1e-6); mx.eval(k)
+        out, state = _qwen3_5.gated_delta_update(
+            q, k, v, a, b, self.A_log, self.dt_bias, state, mask,
+            use_kernel=not self.training,
+        )
+        mx.eval(out)
+        if cache is not None:
+            cache[1] = state
+            cache.advance(S)
+        out = self.norm(out, z); mx.eval(out)
+        out = self.out_proj(out.reshape(B, S, -1)); mx.eval(out)
+        return out
+
+    _qwen3_5.GatedDeltaNet.__call__ = _eager_gdn_call
 
     print(f"[calibrate-mlx] loading {model_dir} ...", file=sys.stderr)
     model, processor, is_vlm = paro_load(str(model_dir), force_text=True)
