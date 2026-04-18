@@ -217,11 +217,12 @@ struct TriAttentionRuntimeSelectionTests {
     // MARK: - Eligibility gate (static API)
     //
     // Pins the decision that drives `TriAttentionRuntimeSelection.resolve`.
-    // MoE loads are ineligible independent of any artifact state, so the
-    // gate must reject them purely by config shape.
+    // Both dense and MoE Qwen3.5-family checkpoints are eligible by config
+    // shape; `isQwen35MoEModel` remains a separate discriminator for any
+    // MoE-specific runtime specialization downstream of the gate.
 
     @Test
-    func isTriAttentionEligibleModelReturnsFalseForMoE() throws {
+    func isTriAttentionEligibleModelReturnsTrueForMoE() throws {
         let modelDir = try TriAttentionTestFixtures.makeFakeModelDirectory(
             prefix: "triattention-eligibility-moe",
             kind: .qwen35MoeMlxNative
@@ -230,7 +231,7 @@ struct TriAttentionRuntimeSelectionTests {
 
         #expect(LLMActor.isQwen35Model(directory: modelDir) == true)
         #expect(LLMActor.isQwen35MoEModel(directory: modelDir) == true)
-        #expect(LLMActor.isTriAttentionEligibleModel(directory: modelDir) == false)
+        #expect(LLMActor.isTriAttentionEligibleModel(directory: modelDir) == true)
     }
 
     @Test
