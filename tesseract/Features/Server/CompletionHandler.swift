@@ -18,17 +18,20 @@ struct CompletionHandler: Sendable {
     private let inferenceService: ServerInferenceService
     private let downloads: ModelDownloadManager
     private let activityLog: ServerGenerationLog
+    private let settings: SettingsManager
 
     init(
         arbiter: InferenceArbiter,
         inferenceService: ServerInferenceService,
         downloads: ModelDownloadManager,
-        activityLog: ServerGenerationLog
+        activityLog: ServerGenerationLog,
+        settings: SettingsManager
     ) {
         self.arbiter = arbiter
         self.inferenceService = inferenceService
         self.downloads = downloads
         self.activityLog = activityLog
+        self.settings = settings
     }
 
     private struct StartedGeneration {
@@ -284,7 +287,11 @@ struct CompletionHandler: Sendable {
             tools: request.tools
         )
         let prefixCacheConversation = prefixCacheEligibility.conversation
-        let params = Self.makeGenerateParameters(from: request, modelState: modelState)
+        let params = Self.makeGenerateParameters(
+            from: request,
+            modelState: modelState,
+            userPreset: settings.samplingPreset
+        )
 
         Log.server.info(
             "HTTP completion reasoning sources — sessionAffinityPresent=\(sessionAffinity != nil) "
@@ -337,10 +344,12 @@ struct CompletionHandler: Sendable {
     @MainActor
     static func makeGenerateParameters(
         from request: OpenAI.ChatCompletionRequest,
-        modelState: ServerInferenceModelState
+        modelState: ServerInferenceModelState,
+        userPreset: SamplingPreset = .automatic
     ) -> AgentGenerateParameters {
         var params = AgentGenerateParameters.forModel(modelState.modelID)
         params.triAttention = modelState.triAttention
+        params = userPreset.apply(to: params)
         if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
         if let temp = request.temperature { params.temperature = Float(temp) }
         if let topP = request.top_p { params.topP = Float(topP) }

@@ -81,6 +81,7 @@ struct AgentGenerateParameters: Sendable, Codable {
         if modelID.contains("opus-distill") { return .qwen3OpusDistill }
         if modelID.contains("thinking") { return .qwen3Thinking }
         if modelID.hasPrefix("qwen3.5") { return .qwen35 }
+        if modelID.hasPrefix("qwen3.6") { return .qwen35 }
         if modelID.hasPrefix("qwen3") { return .qwen3 }
         return .default
     }

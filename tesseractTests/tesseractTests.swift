@@ -50,6 +50,78 @@ struct ModelDefinitionCatalogTests {
         let isParoModel = Tesseract_Agent.isParoQuantModel(directory: root)
         #expect(isParoModel)
     }
+
+    @Test func includesQwen36MoeInAgentCatalog() async throws {
+        guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.6-35b-a3b-ud" }) else {
+            Issue.record("Missing qwen3.6-35b-a3b-ud model definition")
+            return
+        }
+
+        #expect(model.category == .agent)
+        #expect(model.repoID == "unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit")
+        #expect(model.requiredExtension == "safetensors")
+        #expect(model.cacheSubdirectory == "unsloth_Qwen3.6-35B-A3B-UD-MLX-4bit")
+        #expect(
+            ModelDefinition.byCategory()
+                .first(where: { $0.0 == .agent })?
+                .1
+                .contains(where: { $0.id == model.id }) == true
+        )
+    }
+
+    @Test func includesQwen36Moe3bitInAgentCatalog() async throws {
+        guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.6-35b-a3b-ud-3bit" }) else {
+            Issue.record("Missing qwen3.6-35b-a3b-ud-3bit model definition")
+            return
+        }
+
+        #expect(model.category == .agent)
+        #expect(model.repoID == "unsloth/Qwen3.6-35B-A3B-UD-MLX-3bit")
+        #expect(model.requiredExtension == "safetensors")
+        #expect(model.cacheSubdirectory == "unsloth_Qwen3.6-35B-A3B-UD-MLX-3bit")
+        #expect(
+            ModelDefinition.byCategory()
+                .first(where: { $0.0 == .agent })?
+                .1
+                .contains(where: { $0.id == model.id }) == true
+        )
+    }
+
+    @Test func detectsQwen35MoEFamily() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let config = """
+        {
+          "model_type": "qwen3_5_moe",
+          "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+          "text_config": {
+            "num_hidden_layers": 40,
+            "hidden_size": 4096,
+            "linear_num_value_heads": 32,
+            "linear_key_head_dim": 128,
+            "full_attention_interval": 4
+          }
+        }
+        """
+        try config.write(
+            to: root.appendingPathComponent("config.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        #expect(LLMActor.isQwen35Model(directory: root) == true)
+        #expect(LLMActor.detectToolCallFormat(directory: root) == .xmlFunction)
+
+        let profile = LLMActor.detectModelFlopProfile(directory: root)
+        #expect(profile != nil)
+        #expect(profile?.hiddenSize == 4096)
+        #expect(profile?.attentionLayers == 40 / 4)
+        #expect(profile?.ssmLayers == 40 - 40 / 4)
+        #expect(profile?.mlpLayers == 40)
+    }
 }
 
 @MainActor

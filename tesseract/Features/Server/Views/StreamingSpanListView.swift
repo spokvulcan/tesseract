@@ -204,13 +204,31 @@ private struct StreamingScrollTrigger: View {
     let isNearBottom: Bool
 
     @Environment(ServerGenerationLog.self) private var log
+    @State private var pendingScrollTask: Task<Void, Never>?
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .onChange(of: log.streamingVersion) { _, _ in
                 guard isAutoScrollEnabled, isNearBottom else { return }
-                proxy.scrollTo(anchorID, anchor: .bottom)
+                scheduleScrollToBottom()
             }
+            .onDisappear {
+                pendingScrollTask?.cancel()
+                pendingScrollTask = nil
+            }
+    }
+
+    /// Defers the scroll until the current layout pass completes. Calling
+    /// `scrollTo` inline while SwiftUI is reconciling a `LazyVStack` can
+    /// re-enter AppKit constraint updates and trip the Release-only crash
+    /// guarded elsewhere in the app's streaming views.
+    private func scheduleScrollToBottom() {
+        pendingScrollTask?.cancel()
+        pendingScrollTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            proxy.scrollTo(anchorID, anchor: .bottom)
+        }
     }
 }

@@ -2601,7 +2601,7 @@ actor LLMActor {
     /// identified by the top-level `model_type` field (`qwen3_5`,
     /// `qwen3_5_moe`, `qwen3_5_text`, …). Both the pure-LLM and
     /// conditional-generation VLM variants share this prefix.
-    private static func isQwen35Model(directory: URL) -> Bool {
+    static func isQwen35Model(directory: URL) -> Bool {
         guard let json = loadConfigJSON(directory: directory),
               let modelType = json["model_type"] as? String
         else { return false }
@@ -2612,7 +2612,7 @@ actor LLMActor {
     /// `config.json`. Qwen3.5 uses XML function syntax
     /// (`<function=name>...</function>`) inside `<tool_call>` tags, which
     /// requires `.xmlFunction`.
-    private static func detectToolCallFormat(directory: URL) -> ToolCallFormat? {
+    static func detectToolCallFormat(directory: URL) -> ToolCallFormat? {
         guard let json = loadConfigJSON(directory: directory),
               let modelType = json["model_type"] as? String
         else { return nil }

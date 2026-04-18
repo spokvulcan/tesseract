@@ -364,6 +364,18 @@ struct RecordingSettingsSection: View {
                 }
             }
 
+            Section("Sampling Preset") {
+                Picker("Preset", selection: $settings.samplingPreset) {
+                    ForEach(SamplingPreset.allCases) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                Text(settings.samplingPreset.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Web Access") {
                 Toggle("Enable Web Search", isOn: $settings.webAccessEnabled)
                 Text("Search queries are sent to DuckDuckGo. No conversation data leaves your device.")

@@ -73,9 +73,7 @@ enum AgentFactory {
         // effect on the very next inference call without rebuilding the agent.
         let parametersProvider: @MainActor @Sendable () -> AgentGenerateParameters = {
             [settingsManager] in
-            var parameters = AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
-            parameters.triAttention = settingsManager.makeTriAttentionConfig()
-            return parameters
+            settingsManager.makeAgentGenerateParameters()
         }
 
         let compactionTransform = makeCompactionTransform(

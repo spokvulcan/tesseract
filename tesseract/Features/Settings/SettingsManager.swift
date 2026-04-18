@@ -49,6 +49,7 @@ final class SettingsManager {
         static let webAccessEnabled = "webAccessEnabled"
         static let visionModeEnabled = "visionModeEnabled"
         static let triattentionEnabled = "triattentionEnabled"
+        static let samplingPreset = "samplingPreset"
         static let isServerEnabled = "isServerEnabled"
         static let serverPort = "serverPort"
         static let prefixCacheSSDEnabled = "prefixCacheSSDEnabled"
@@ -91,6 +92,15 @@ final class SettingsManager {
     var overlayStyle: OverlayStyle {
         get { OverlayStyle(rawValue: overlayStyleRaw) ?? .pill }
         set { overlayStyleRaw = newValue.rawValue }
+    }
+
+    var samplingPresetRaw: String = SamplingPreset.automatic.rawValue {
+        didSet { UserDefaults.standard.set(samplingPresetRaw, forKey: Key.samplingPreset) }
+    }
+
+    var samplingPreset: SamplingPreset {
+        get { SamplingPreset(rawValue: samplingPresetRaw) ?? .automatic }
+        set { samplingPresetRaw = newValue.rawValue }
     }
 
     var glowThemeRaw: String = GlowTheme.appleIntelligence.rawValue {
@@ -386,6 +396,7 @@ final class SettingsManager {
             Key.webAccessEnabled: true,
             Key.visionModeEnabled: false,
             Key.triattentionEnabled: false,
+            Key.samplingPreset: SamplingPreset.automatic.rawValue,
             Key.isServerEnabled: false,
             Key.serverPort: 8321,
             Key.prefixCacheSSDEnabled: true,
@@ -428,6 +439,7 @@ final class SettingsManager {
         webAccessEnabled = ud.bool(forKey: Key.webAccessEnabled)
         visionModeEnabled = ud.bool(forKey: Key.visionModeEnabled)
         triattentionEnabled = ud.bool(forKey: Key.triattentionEnabled)
+        samplingPresetRaw = ud.string(forKey: Key.samplingPreset) ?? SamplingPreset.automatic.rawValue
         isServerEnabled = ud.bool(forKey: Key.isServerEnabled)
         serverPort = ud.integer(forKey: Key.serverPort)
         prefixCacheSSDEnabled = ud.bool(forKey: Key.prefixCacheSSDEnabled)
@@ -449,6 +461,18 @@ final class SettingsManager {
             rootURL: resolvedSSDPrefixCacheRootURL(),
             budgetBytes: prefixCacheSSDBudgetBytes
         )
+    }
+
+    /// Build the agent generation parameters implied by the current settings:
+    /// model-derived preset + user sampling override + TriAttention toggle.
+    /// Live-reads all three so a settings change takes effect on the very
+    /// next call. Factories should prefer this over assembling the pieces
+    /// inline to keep the ordering and sources canonical.
+    func makeAgentGenerateParameters() -> AgentGenerateParameters {
+        var parameters = AgentGenerateParameters.forModel(selectedAgentModelID)
+        parameters.triAttention = makeTriAttentionConfig()
+        parameters = samplingPreset.apply(to: parameters)
+        return parameters
     }
 
     func makeTriAttentionConfig() -> TriAttentionConfiguration {
@@ -509,6 +533,7 @@ final class SettingsManager {
         webAccessEnabled = true
         visionModeEnabled = false
         triattentionEnabled = false
+        samplingPresetRaw = SamplingPreset.automatic.rawValue
         isServerEnabled = false
         serverPort = 8321
         prefixCacheSSDEnabled = true

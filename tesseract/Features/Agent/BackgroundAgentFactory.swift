@@ -114,9 +114,7 @@ final class BackgroundAgentFactory {
         // and TriAttention toggle even if the user changes them mid-run.
         let parametersProvider: @MainActor @Sendable () -> AgentGenerateParameters = {
             [settingsManager] in
-            var parameters = AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
-            parameters.triAttention = settingsManager.makeTriAttentionConfig()
-            return parameters
+            settingsManager.makeAgentGenerateParameters()
         }
         let contextManager = ContextManager(settings: .standard)
 

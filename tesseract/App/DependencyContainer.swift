@@ -141,9 +141,7 @@ final class DependencyContainer: ObservableObject {
             summarize: makeSummarizeClosure(
                 inferenceService: serverInferenceService,
                 parametersProvider: { [settingsManager] in
-                    var parameters = AgentGenerateParameters.forModel(settingsManager.selectedAgentModelID)
-                    parameters.triAttention = settingsManager.makeTriAttentionConfig()
-                    return parameters
+                    settingsManager.makeAgentGenerateParameters()
                 }
             )
         )
@@ -514,7 +512,8 @@ final class DependencyContainer: ObservableObject {
             arbiter: inferenceArbiter,
             inferenceService: serverInferenceService,
             downloads: modelDownloadManager,
-            activityLog: serverGenerationLog
+            activityLog: serverGenerationLog,
+            settings: settingsManager
         )
         httpServer.route(.POST, "/v1/chat/completions") { request, writer in
             try await completionHandler.handle(request: request, writer: writer)

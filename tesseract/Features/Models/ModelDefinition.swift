@@ -135,6 +135,30 @@ extension ModelDefinition {
             sizeDescription: "~5 GB",
             dependencies: []
         ),
+        ModelDefinition(
+            id: "qwen3.6-35b-a3b-ud",
+            displayName: "Qwen3.6-35B-A3B UD (MLX 4bit)",
+            description: "Large sparse-MoE agent (3B active / 35B total) from Unsloth. Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5_moe.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~20 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3.6-35b-a3b-ud-3bit",
+            displayName: "Qwen3.6-35B-A3B UD (MLX 3bit)",
+            description: "Same MoE agent as the 4bit build, more aggressively quantized. Fits tighter memory budgets (32 GB Macs) at some quality cost. Ships as qwen3_5_moe.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "unsloth/Qwen3.6-35B-A3B-UD-MLX-3bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~15 GB",
+            dependencies: []
+        ),
     ]
 
     static let imageGenerationModels: [ModelDefinition] = [
