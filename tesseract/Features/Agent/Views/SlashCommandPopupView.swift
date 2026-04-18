@@ -6,11 +6,19 @@ struct SlashCommandPopupView: View {
     let onSelect: (SlashCommand) -> Void
 
     @State private var hoveredId: String?
+    @State private var pendingScrollTask: Task<Void, Never>?
+
+    private static let rowHeight: CGFloat = 38
+
+    private var popupHeight: CGFloat {
+        let contentHeight = CGFloat(max(commands.count, 1)) * Self.rowHeight + 8
+        return min(contentHeight, 240)
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(commands.enumerated()), id: \.element.id) { index, command in
                         commandRow(command, isSelected: index == selectedIndex, isHovered: hoveredId == command.id)
                             .id(command.id)
@@ -24,15 +32,15 @@ struct SlashCommandPopupView: View {
             }
             .onChange(of: selectedIndex) { _, newIndex in
                 if commands.indices.contains(newIndex) {
-                    withAnimation(.easeOut(duration: 0.1)) {
-                        proxy.scrollTo(commands[newIndex].id, anchor: .center)
-                    }
+                    scheduleScroll(proxy: proxy, id: commands[newIndex].id)
                 }
             }
+            .onDisappear {
+                pendingScrollTask?.cancel()
+                pendingScrollTask = nil
+            }
         }
-        .frame(maxHeight: 240)
-        .frame(maxWidth: 360)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 360, height: popupHeight)
         .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(color: .black.opacity(0.15), radius: 16, x: 0, y: -4)
     }
@@ -65,6 +73,7 @@ struct SlashCommandPopupView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, minHeight: Self.rowHeight, alignment: .leading)
         .contentShape(Rectangle())
         .background {
             if isSelected {
@@ -76,6 +85,15 @@ struct SlashCommandPopupView: View {
                     .fill(.quaternary)
                     .padding(.horizontal, 4)
             }
+        }
+    }
+
+    private func scheduleScroll(proxy: ScrollViewProxy, id: String) {
+        pendingScrollTask?.cancel()
+        pendingScrollTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            proxy.scrollTo(id, anchor: .center)
         }
     }
 

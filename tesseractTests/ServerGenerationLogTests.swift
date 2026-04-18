@@ -78,6 +78,7 @@ struct ServerGenerationLogTests {
         #expect(log.traces[0].firstTokenAt == nil)
 
         log.ingest(handle: handle, event: .text("Hello"))
+        log.flushPending(handle: handle)
 
         #expect(log.traces[0].phase == .decoding)
         #expect(log.traces[0].firstTokenAt != nil)
@@ -91,6 +92,7 @@ struct ServerGenerationLogTests {
         log.ingest(handle: handle, event: .text("Hel"))
         log.ingest(handle: handle, event: .text("lo, "))
         log.ingest(handle: handle, event: .text("world"))
+        log.flushPending(handle: handle)
 
         let spans = log.traces[0].spans
         #expect(spans.count == 1)
@@ -109,6 +111,7 @@ struct ServerGenerationLogTests {
         log.ingest(handle: handle, event: .thinking("thinking…"))
         log.ingest(handle: handle, event: .text("answer"))
         log.ingest(handle: handle, event: .thinking("more"))
+        log.flushPending(handle: handle)
 
         let spans = log.traces[0].spans
         #expect(spans.count == 3)
@@ -179,6 +182,7 @@ struct ServerGenerationLogTests {
         )
         log.markLeaseAcquired(handle: handle, at: fixedLease)
         log.ingest(handle: handle, event: .text("x"))
+        log.flushPending(handle: handle)
 
         // firstTokenAt is set by markFirstTokenIfNeeded to Date() which we
         // can't control. Override via a second ingest overwrite would also
@@ -220,6 +224,7 @@ struct ServerGenerationLogTests {
         // 100 KB of ASCII — well over the head+tail budget.
         let payload = String(repeating: "x", count: 100_000)
         log.ingest(handle: handle, event: .text(payload))
+        log.flushPending(handle: handle)
 
         guard case .text(_, let content) = log.traces[0].spans.first else {
             Issue.record("Expected text span")
@@ -241,6 +246,7 @@ struct ServerGenerationLogTests {
         )
         let small = String(repeating: "a", count: 100)
         log.ingest(handle: handle, event: .text(small))
+        log.flushPending(handle: handle)
 
         guard case .text(_, let content) = log.traces[0].spans.first else {
             Issue.record("Expected text span")

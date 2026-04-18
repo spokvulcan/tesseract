@@ -338,6 +338,118 @@ actor LLMActor {
         }
     }
 
+    /// Thinking-loop safeguard continuation for the HTTP prefix-cache path.
+    /// We already have the fully-tokenized original prompt (captured during
+    /// prefill as `HTTPPrefixCacheGeneration.fullTokens`), so re-tokenizing
+    /// the `UserInput` is unnecessary work — encode the appended hand-off text
+    /// straight onto the token sequence. The resulting input is fed to a
+    /// fresh `TokenIterator`; the on-device KV cache for the cancelled
+    /// generation is discarded by vendor cleanup.
+    func startThinkingContinuationFromTokens(
+        originalTokens: [Int],
+        tokenNDim: Int,
+        safeThinkingPrefix: String,
+        injection: String,
+        parameters: AgentGenerateParameters
+    ) async throws -> HTTPServerRawGenerationStart {
+        guard let container = modelContainer else {
+            throw AgentEngineError.modelNotLoaded
+        }
+        Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
+        let genParams = makeGenerateParameters(from: parameters)
+        let handoff = safeThinkingPrefix + injection
+
+        return try await container.perform { context in
+            try Self.buildThinkingContinuationStart(
+                context: context,
+                originalTokens: originalTokens,
+                tokenNDim: tokenNDim,
+                handoffText: handoff,
+                parameters: genParams
+            )
+        }
+    }
+
+    /// Thinking-loop safeguard continuation: re-prefill `originalInput` augmented
+    /// with `safeThinkingPrefix + injection` (encoded as additional tokens) so
+    /// the model picks up where it left off with the degen thinking truncated
+    /// and a hand-off phrase that closes `</think>`.
+    ///
+    /// The original chat-template prompt already ends with
+    /// `<|im_start|>assistant\n<think>\n` (Qwen3.5 thinking preset), so we append
+    /// tokens with `addSpecialTokens: false` — this extends the in-progress
+    /// assistant turn rather than starting a new one.
+    ///
+    /// This intentionally bypasses the HTTP prefix cache: the continuation is
+    /// rare, the original prompt is typically small, and routing through the
+    /// prefix cache would require first-class partial-assistant-turn support
+    /// that the Qwen3.5 chat template doesn't provide.
+    func startThinkingContinuationRaw(
+        originalInput: sending UserInput,
+        safeThinkingPrefix: String,
+        injection: String,
+        parameters: AgentGenerateParameters
+    ) async throws -> HTTPServerRawGenerationStart {
+        guard let container = modelContainer else {
+            throw AgentEngineError.modelNotLoaded
+        }
+
+        Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
+        let genParams = makeGenerateParameters(from: parameters)
+        let handoff = safeThinkingPrefix + injection
+
+        return try await container.perform(nonSendable: originalInput) { context, input in
+            let basePrepared = try await context.processor.prepare(input: input)
+            return try Self.buildThinkingContinuationStart(
+                context: context,
+                originalTokens: Self.extractTokenSequence(basePrepared.text.tokens),
+                tokenNDim: basePrepared.text.tokens.ndim,
+                handoffText: handoff,
+                parameters: genParams
+            )
+        }
+    }
+
+    /// Build an `HTTPServerRawGenerationStart` by extending a pre-tokenized
+    /// prompt with the hand-off suffix and feeding the combined sequence to
+    /// a fresh `TokenIterator`. Must run inside a
+    /// ``ModelContainer/perform(_:)`` closure on this actor.
+    private static func buildThinkingContinuationStart(
+        context: ModelContext,
+        originalTokens: [Int],
+        tokenNDim: Int,
+        handoffText: String,
+        parameters: GenerateParameters
+    ) throws -> HTTPServerRawGenerationStart {
+        let appendedIDs = try context.tokenizer.encode(
+            text: handoffText,
+            addSpecialTokens: false
+        )
+        let combined = originalTokens + appendedIDs
+        let flatArr = MLXArray(combined.map { Int32($0) })
+        let tokenArr: MLXArray = tokenNDim >= 2
+            ? flatArr.expandedDimensions(axis: 0)
+            : flatArr
+        let continued = LMInput(text: LMInput.Text(tokens: tokenArr, mask: nil))
+
+        let iterator = try TokenIterator(
+            input: continued,
+            model: context.model,
+            parameters: parameters
+        )
+        let (stream, completion) = MLXLMCommon.generateTask(
+            promptTokenCount: combined.count,
+            modelConfiguration: context.configuration,
+            tokenizer: context.tokenizer,
+            iterator: iterator
+        )
+        return HTTPServerRawGenerationStart(
+            stream: stream,
+            cancel: { completion.cancel() },
+            waitForCompletion: { await completion.value }
+        )
+    }
+
     /// Start the HTTP text-based prefix-cache path for `/v1/chat/completions`.
     ///
     /// Returns `nil` when the request shape is incompatible and the caller should fall back
@@ -385,6 +497,36 @@ actor LLMActor {
         let startsInsideThinkBlock = promptStartsThinking
         let loadedModelWeightBytes = modelWeightBytes
 
+        let safeguardConfig = parameters.thinkingSafeguard
+        parameters.warnIfThinkingLoopRiskElevated(startsThinking: startsInsideThinkBlock)
+        let fullTokensForContinuation = mlxStart.fullTokens
+        let tokenNDimForContinuation = mlxStart.tokenNDim
+        let continuationInjection = safeguardConfig.continuationHandOff
+        let actorRef = self
+        let continuationStarter:
+            @Sendable (String) async throws -> HTTPServerRawGenerationStart = { safePrefix in
+            try await actorRef.startThinkingContinuationFromTokens(
+                originalTokens: fullTokensForContinuation,
+                tokenNDim: tokenNDimForContinuation,
+                safeThinkingPrefix: safePrefix,
+                injection: continuationInjection,
+                parameters: parameters
+            )
+        }
+
+        // Mutable handle box so a client-initiated cancel after an intervention
+        // swap targets the CURRENT handle, not the original mlxStart.
+        struct PathAHandleBox: Sendable {
+            var cancel: @Sendable () -> Void
+            var waitForCompletion: @Sendable () async -> Void
+        }
+        let pathAHandle = OSAllocatedUnfairLock<PathAHandleBox>(
+            initialState: PathAHandleBox(
+                cancel: { mlxStartBox.value.completion.cancel() },
+                waitForCompletion: { await mlxStartBox.value.completion.value }
+            )
+        )
+
         let task = Task {
             [conversation, container, canonicalTools, requestID, loadedModelWeightBytes, genParams] in
             let mlxStart = mlxStartBox.value
@@ -392,10 +534,11 @@ actor LLMActor {
             var textContent = ""
             var thinkingContent = ""
             var toolCalls: [HTTPPrefixCacheToolCall] = []
-            let parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
+            var parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
             var rawChunkParts: [String] = []
             var libraryParsedToolCalls = false
             var completionInfo: AgentGeneration.Info?
+            let safeguard = ThinkingSafeguardObserver(config: safeguardConfig)
 
             do {
                 func handle(_ event: AgentGeneration) {
@@ -407,6 +550,11 @@ actor LLMActor {
                     case .thinkReclassify:
                         textContent += thinkingContent
                         thinkingContent = ""
+                    case .thinkTruncate(let safePrefix):
+                        // Safeguard fired. Canonical reasoning becomes `safePrefix`
+                        // — drop everything we've buffered so far so the leaf
+                        // store and replay store never see the degen garbage.
+                        thinkingContent = safePrefix
                     case .toolCall(let call):
                         toolCalls.append(HTTPPrefixCacheToolCall(
                             name: call.function.name,
@@ -421,15 +569,44 @@ actor LLMActor {
                     continuation.yield(event)
                 }
 
-                func emitParserEvents(_ events: [ToolCallParser.Event], allowToolEvents: Bool) {
+                // Returns the intervention payload when the safeguard fired;
+                // caller must then break stream consumption and kick off the
+                // continuation flow.
+                func emitParserEvent(
+                    _ event: ToolCallParser.Event,
+                    allowToolEvents: Bool
+                ) -> (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)? {
+                    switch event {
+                    case .toolCall, .malformedToolCall where !allowToolEvents:
+                        return nil
+                    default:
+                        break
+                    }
+                    switch safeguard.observe(parserEvent: event) {
+                    case .forward:
+                        handle(AgentGeneration(parserEvent: event))
+                        return nil
+                    case .intervene(let safe, let reason):
+                        handle(.thinkTruncate(safePrefix: safe))
+                        handle(.thinking(safeguardConfig.injectionMessage))
+                        handle(.thinkEnd)
+                        Log.agent.warning(
+                            "Thinking-loop intervention (path-A) — reason=\(reason.rawValue) "
+                            + "safe_prefix_chars=\(safe.count) request_id=\(requestID.uuidString)"
+                        )
+                        return (safe, reason)
+                    }
+                }
+
+                func emitParserEvents(_ events: [ToolCallParser.Event], allowToolEvents: Bool)
+                    -> (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)?
+                {
                     for event in events {
-                        switch event {
-                        case .toolCall, .malformedToolCall where !allowToolEvents:
-                            continue
-                        default:
-                            handle(AgentGeneration(parserEvent: event))
+                        if let fired = emitParserEvent(event, allowToolEvents: allowToolEvents) {
+                            return fired
                         }
                     }
+                    return nil
                 }
 
                 func logEvictions(_ evictions: [PrefixCacheManager.EvictionEvent]) {
@@ -460,43 +637,84 @@ actor LLMActor {
                     }
                 }
 
-                for await item in mlxStart.stream {
-                    if Task.isCancelled {
-                        break
+                var currentStream: AsyncStream<Generation> = mlxStart.stream
+
+                streamLoop: while true {
+                    var intervention: (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)? = nil
+
+                    for await item in currentStream {
+                        if Task.isCancelled { break }
+
+                        switch item {
+                        case .chunk(let text):
+                            rawChunkParts.append(text)
+                            if let fired = emitParserEvents(
+                                parser.processChunk(text),
+                                allowToolEvents: !libraryParsedToolCalls
+                            ) {
+                                intervention = fired
+                            }
+
+                        case .toolCall(let call):
+                            libraryParsedToolCalls = true
+                            handle(.toolCall(call))
+
+                        case .info(let info):
+                            completionInfo = .init(
+                                promptTokenCount: info.promptTokenCount,
+                                generationTokenCount: info.generationTokenCount,
+                                promptTime: info.promptTime,
+                                generateTime: info.generateTime
+                            )
+                        }
+                        if intervention != nil { break }
                     }
 
-                    switch item {
-                    case .chunk(let text):
-                        rawChunkParts.append(text)
-                        emitParserEvents(
-                            parser.processChunk(text),
-                            allowToolEvents: !libraryParsedToolCalls
-                        )
+                    if Task.isCancelled { break streamLoop }
 
-                    case .toolCall(let call):
-                        libraryParsedToolCalls = true
-                        handle(.toolCall(call))
+                    if let fired = intervention {
+                        // Cancel + drain the current upstream iterator.
+                        let currentHandle = pathAHandle.withLock { ($0.cancel, $0.waitForCompletion) }
+                        currentHandle.0()
+                        await currentHandle.1()
 
-                    case .info(let info):
-                        completionInfo = .init(
-                            promptTokenCount: info.promptTokenCount,
-                            generationTokenCount: info.generationTokenCount,
-                            promptTime: info.promptTime,
-                            generateTime: info.generateTime
-                        )
+                        do {
+                            let continuationStart = try await continuationStarter(fired.safePrefix)
+                            pathAHandle.withLock {
+                                $0.cancel = { continuationStart.cancel() }
+                                $0.waitForCompletion = { await continuationStart.waitForCompletion() }
+                            }
+                            // Continuation picks up AFTER `</think>` — re-init parser
+                            // in out-of-think mode so its output is classified as text.
+                            parser = ToolCallParser(startsInsideThinkBlock: false)
+                            safeguard.reset()
+                            currentStream = continuationStart.stream
+                            continue streamLoop
+                        } catch {
+                            Log.agent.error(
+                                "Path-A thinking-safeguard continuation failed: \(error.localizedDescription)"
+                            )
+                            break streamLoop
+                        }
                     }
+
+                    // Natural end of the current stream.
+                    break streamLoop
                 }
 
-                // Wait for the underlying iterator task to finish before extracting
+                // Wait for the active iterator task to finish before extracting
                 // the cache (mirrors ChatSession's pattern at vendor line 440-441).
-                await mlxStart.completion.value
+                // `pathAHandle` points at either the original mlxStart completion
+                // or — after intervention — the continuation's completion.
+                let finalWait = pathAHandle.withLock { $0.waitForCompletion }
+                await finalWait()
                 if Task.isCancelled {
                     Memory.clearCache()
                     continuation.finish()
                     return
                 }
 
-                emitParserEvents(
+                _ = emitParserEvents(
                     parser.finalize(),
                     allowToolEvents: !libraryParsedToolCalls
                 )
@@ -566,6 +784,25 @@ actor LLMActor {
                 postGenerationParams.triAttentionStablePrefixOffset =
                     mlxStart.triAttentionStablePrefixOffset
                 leafBlock: do {
+                    // Skip leaf-store when a thinking-safeguard intervention
+                    // fired: the continuation ran through the raw path, so the
+                    // on-device KV cache no longer matches the radix-tree
+                    // logical snapshot we'd compute from
+                    // `textContent + thinkingContent + toolCalls`. Storing
+                    // anything here would corrupt future prefix-cache hits
+                    // for requests sharing this prefix. The stable-prefix
+                    // snapshot captured pre-generation is still stored
+                    // unconditionally earlier in this task, so future requests
+                    // still benefit from partial cache reuse; only the leaf
+                    // is lost for this one turn.
+                    if safeguard.hasIntervened {
+                        diagnosticsContext.logSkip(
+                            stage: "leafStore",
+                            reason: "thinking-safeguard-intervention"
+                        )
+                        break leafBlock
+                    }
+
                     // 1. Build stored conversation (prompt + generated assistant turn).
                     let storedConversation = conversation.appendingAssistant(.assistant(
                         content: textContent,
@@ -830,11 +1067,15 @@ actor LLMActor {
             cachedTokenCount: mlxStart.skippedPrefillTokens,
             cancel: {
                 task.cancel()
-                mlxStartBox.value.completion.cancel()
+                // Dispatch to whichever upstream iterator is currently active
+                // — original mlxStart or a post-intervention continuation.
+                let currentCancel = pathAHandle.withLock { $0.cancel }
+                currentCancel()
             },
             waitForCompletion: {
                 _ = await task.result
-                await mlxStartBox.value.completion.value
+                let currentWait = pathAHandle.withLock { $0.waitForCompletion }
+                await currentWait()
             },
             diagnostics: .fromSeconds(
                 lookup: mlxStart.lookupMs,
@@ -1734,6 +1975,9 @@ actor LLMActor {
             repetitionPenalty: parameters.repetitionPenalty,
             repetitionContextSize: parameters.repetitionContextSize,
             presencePenalty: parameters.presencePenalty,
+            presenceContextSize: parameters.presenceContextSize,
+            frequencyPenalty: parameters.frequencyPenalty,
+            frequencyContextSize: parameters.frequencyContextSize,
             prefillStepSize: parameters.prefillStepSize,
             triAttention: triAttentionRuntimeSelection.effectiveConfiguration,
             triAttentionCalibrationArtifact: calibrationArtifact

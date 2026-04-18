@@ -324,6 +324,18 @@ private func streamAssistantResponse(
                     )
                 ))
 
+            case .thinkTruncate(let safePrefix):
+                thinkingContent = safePrefix
+                let current = AssistantMessage.fromStream(
+                    content: textContent, thinking: thinkingContent, toolCalls: toolCalls
+                )
+                emit(.messageUpdate(
+                    message: current,
+                    streamDelta: AssistantStreamDelta(
+                        textDelta: nil, thinkingDelta: nil, toolCallDelta: nil
+                    )
+                ))
+
             case .toolCall(let call):
                 let info = ToolCallInfo(
                     id: UUID().uuidString,

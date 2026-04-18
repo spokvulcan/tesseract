@@ -19,8 +19,16 @@ final class ServerGenerationLog {
     static let textTailBytes: Int = 24 * 1024
     /// Minimum interval between streaming scroll bumps during decode. Rate-
     /// limits the scroll driver without affecting the append path — spans
-    /// update synchronously on every event.
-    static let scrollThrottleMs: Double = 50
+    /// update on every flushed batch.
+    static let scrollThrottleMs: Double = 100
+
+    /// Interval at which buffered text/thinking chunks are drained into the
+    /// observed `trace.spans`. Caps SwiftUI's observation rate to ≤30 Hz
+    /// during streaming, well under the LazyVStack layout budget. Without
+    /// this coalescing, raw 80+ tok/s chunk arrival triggered a re-entrant
+    /// `LazyLayoutViewCache.invalidateSize` → `_postWindowNeedsUpdate-
+    /// Constraints` AppKit trap under bench load.
+    static let coalesceIntervalMs: Double = 33
 
     // MARK: - Public state
 
@@ -32,6 +40,18 @@ final class ServerGenerationLog {
 
     private var lastScrollBumpAt: Date?
     private var sequence: Int = 0
+
+    /// Per-trace coalescing buffer for `.text` / `.thinking` chunks. Kept
+    /// off `@Observable` storage so a chunk append doesn't notify SwiftUI —
+    /// the scheduled flush batches them into a single observed mutation.
+    @ObservationIgnored
+    private var pendingAppends: [UUID: PendingAppend] = [:]
+
+    private struct PendingAppend {
+        var pendingText: String = ""
+        var pendingThinking: String = ""
+        var flushScheduled: Bool = false
+    }
 
     // MARK: - Ingress
 
@@ -97,34 +117,49 @@ final class ServerGenerationLog {
     }
 
     func ingest(handle: TraceHandle, event: AgentGeneration) {
-        update(handle) { trace in
-            switch event {
-            case .text(let chunk):
-                trace.markFirstTokenIfNeeded()
-                trace.appendText(chunk)
-            case .thinking(let chunk):
-                trace.markFirstTokenIfNeeded()
-                trace.appendThinking(chunk)
-            case .toolCall(let call):
+        switch event {
+        case .text(let chunk):
+            enqueueAppend(handle: handle, chunk: chunk, isThinking: false)
+        case .thinking(let chunk):
+            enqueueAppend(handle: handle, chunk: chunk, isThinking: true)
+        case .thinkStart, .thinkEnd, .thinkReclassify:
+            return  // Not a span mutation — skip flush AND scroll bump.
+        case .toolCall(let call):
+            // Phase-transition / metadata events: drain any buffered chunks
+            // first so they appear BEFORE the transition in the log.
+            flushPending(handle: handle)
+            update(handle) { trace in
                 trace.markFirstTokenIfNeeded()
                 trace.appendToolCall(
                     name: call.function.name,
                     arguments: call.function.arguments
                 )
-            case .malformedToolCall(let raw):
-                trace.appendMalformedToolCall(raw)
-            case .info(let info):
+            }
+            throttledScrollBump()
+        case .malformedToolCall(let raw):
+            flushPending(handle: handle)
+            update(handle) { $0.appendMalformedToolCall(raw) }
+            throttledScrollBump()
+        case .info(let info):
+            flushPending(handle: handle)
+            update(handle) { trace in
                 trace.promptTokens = info.promptTokenCount
                 trace.generationTokens = info.generationTokenCount
                 trace.tokensPerSecond = info.tokensPerSecond
-            case .thinkStart, .thinkEnd, .thinkReclassify:
-                break
             }
+            throttledScrollBump()
+        case .thinkTruncate(let safePrefix):
+            flushPending(handle: handle)
+            update(handle) { $0.replaceThinkingWithSafePrefix(safePrefix) }
+            // Suppress the scroll bump — the span just shrank from ~16K chars
+            // to safePrefix-size in a single tick, so an auto-scroll-to-bottom
+            // is meaningless and risks racing SwiftUI's LazyVStack prefetch
+            // pass against stale ScrollView geometry.
         }
-        throttledScrollBump()
     }
 
     func complete(handle: TraceHandle, finishReason: String, at: Date = Date()) {
+        flushPending(handle: handle)
         update(handle) { trace in
             trace.phase = .completed
             trace.finishReason = finishReason
@@ -134,6 +169,7 @@ final class ServerGenerationLog {
     }
 
     func fail(handle: TraceHandle, error: String, at: Date = Date()) {
+        flushPending(handle: handle)
         update(handle) { trace in
             trace.phase = .failed
             trace.errorMessage = error
@@ -143,6 +179,7 @@ final class ServerGenerationLog {
     }
 
     func cancel(handle: TraceHandle, at: Date = Date()) {
+        flushPending(handle: handle)
         update(handle) { trace in
             trace.phase = .cancelled
             trace.completedAt = at
@@ -151,6 +188,7 @@ final class ServerGenerationLog {
     }
 
     func clear() {
+        pendingAppends.removeAll()
         traces.removeAll()
         selectedTraceID = nil
         bumpScroll()
@@ -161,6 +199,70 @@ final class ServerGenerationLog {
     private func update(_ handle: TraceHandle, _ mutate: (inout RequestTrace) -> Void) {
         guard let idx = traces.firstIndex(where: { $0.id == handle.id }) else { return }
         mutate(&traces[idx])
+    }
+
+    /// Accumulate a text/thinking chunk off the observed path. On the first
+    /// chunk of a fresh coalesce window, schedule a flush `coalesceIntervalMs`
+    /// in the future; subsequent chunks within the window piggy-back on the
+    /// same scheduled flush. If a chunk of the OPPOSITE kind arrives while a
+    /// same-kind buffer is live, the existing buffer is drained synchronously
+    /// first so on-wire order (thinking vs. text) is preserved even when a
+    /// type-switch lands in the middle of a window.
+    private func enqueueAppend(handle: TraceHandle, chunk: String, isThinking: Bool) {
+        guard !chunk.isEmpty else { return }
+
+        if let pending = pendingAppends[handle.id] {
+            let otherBuffered = isThinking
+                ? !pending.pendingText.isEmpty
+                : !pending.pendingThinking.isEmpty
+            if otherBuffered {
+                flushPending(handle: handle)
+            }
+        }
+
+        var pending = pendingAppends[handle.id] ?? PendingAppend()
+        if isThinking {
+            pending.pendingThinking += chunk
+        } else {
+            pending.pendingText += chunk
+        }
+        let needsSchedule = !pending.flushScheduled
+        pending.flushScheduled = true
+        pendingAppends[handle.id] = pending
+
+        if needsSchedule {
+            let delay = UInt64(Self.coalesceIntervalMs * 1_000_000)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: delay)
+                self?.flushPending(handle: handle)
+            }
+        }
+    }
+
+    /// Drain any buffered text/thinking into a single observed mutation on
+    /// the trace. Safe to call multiple times — no-op when nothing is
+    /// pending. Called on phase transitions, terminal events, and from the
+    /// scheduled flush task. Visible to tests so they can observe the
+    /// buffered state synchronously.
+    func flushPending(handle: TraceHandle) {
+        guard let pending = pendingAppends.removeValue(forKey: handle.id) else {
+            return
+        }
+        let thinking = pending.pendingThinking
+        let text = pending.pendingText
+        guard !thinking.isEmpty || !text.isEmpty else { return }
+
+        update(handle) { trace in
+            if !thinking.isEmpty {
+                trace.markFirstTokenIfNeeded()
+                trace.appendThinking(thinking)
+            }
+            if !text.isEmpty {
+                trace.markFirstTokenIfNeeded()
+                trace.appendText(text)
+            }
+        }
+        throttledScrollBump()
     }
 
     private func throttledScrollBump() {
@@ -287,6 +389,20 @@ struct RequestTrace: Identifiable, Equatable {
             )
         } else {
             spans.append(.thinking(id: UUID(), content: Self.cappedAppend("", chunk)))
+        }
+    }
+
+    /// Replace the most recent thinking span's content with `safePrefix`.
+    /// Called when the thinking-loop safeguard fires so the activity log
+    /// surface reflects the cleaned-up reasoning rather than the degen garbage.
+    mutating func replaceThinkingWithSafePrefix(_ safePrefix: String) {
+        if case .thinking(let id, _) = spans.last {
+            spans[spans.count - 1] = .thinking(
+                id: id,
+                content: Self.cappedAppend("", safePrefix)
+            )
+        } else {
+            spans.append(.thinking(id: UUID(), content: Self.cappedAppend("", safePrefix)))
         }
     }
 

@@ -389,6 +389,12 @@ final class PrefixCacheE2ERunner {
                     name: call.function.name,
                     argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(call.function.arguments)
                 ))
+            case .thinkTruncate(let safePrefix):
+                Self.applyThinkTruncate(
+                    safePrefix: safePrefix,
+                    generatedText: &generatedText,
+                    assistantReasoning: &assistantReasoning
+                )
             case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .info:
                 break
             }
@@ -499,6 +505,12 @@ final class PrefixCacheE2ERunner {
                     name: call.function.name,
                     argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(call.function.arguments)
                 ))
+            case .thinkTruncate(let safePrefix):
+                Self.applyThinkTruncate(
+                    safePrefix: safePrefix,
+                    generatedText: &generatedText,
+                    assistantReasoning: &assistantReasoning
+                )
             case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .info:
                 break
             }
@@ -517,6 +529,22 @@ final class PrefixCacheE2ERunner {
 
     private static func elapsedSeconds(from start: ContinuousClock.Instant) -> Double {
         start.duration(to: .now).seconds
+    }
+
+    /// Apply `.thinkTruncate` to a running (text, reasoning) accumulator pair
+    /// in the same way the production consumers do. Drops any reasoning chars
+    /// that exceed the safe prefix and trims the mirror copy of those chars
+    /// from the aggregate `generatedText` buffer.
+    private static func applyThinkTruncate(
+        safePrefix: String,
+        generatedText: inout String,
+        assistantReasoning: inout String
+    ) {
+        let removed = assistantReasoning.count - safePrefix.count
+        if removed > 0 {
+            generatedText.removeLast(min(removed, generatedText.count))
+        }
+        assistantReasoning = safePrefix
     }
 
     // MARK: - Branch-point scenario

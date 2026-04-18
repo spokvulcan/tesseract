@@ -7,6 +7,7 @@ struct AgentConversationListView: View {
 
     @Environment(AgentCoordinator.self) private var coordinator
     @State private var isNearBottom: Bool = true
+    @State private var pendingScrollTask: Task<Void, Never>?
 
     private var lastRowID: String? { coordinator.rows.last?.id }
 
@@ -48,15 +49,29 @@ struct AgentConversationListView: View {
             .onChange(of: lastRowID) { _, newID in
                 if isNearBottom, let id = newID {
                     Log.agent.debug("[Perf] scrollTo(lastRowID) triggered: \(id)")
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(id, anchor: .bottom)
-                    }
+                    scheduleScrollToBottom(proxy: proxy, id: id)
                 }
             }
             // Separate view to isolate streamingRowVersion observation from the List body
             .overlay { StreamingScrollTrigger(proxy: proxy, isNearBottom: isNearBottom) }
+            .onDisappear {
+                pendingScrollTask?.cancel()
+                pendingScrollTask = nil
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Defers the scroll until the current layout pass completes. Triggering
+    /// `scrollTo` synchronously while SwiftUI is still reconciling a lazy list
+    /// can provoke AppKit constraint exceptions in Release builds.
+    private func scheduleScrollToBottom(proxy: ScrollViewProxy, id: String) {
+        pendingScrollTask?.cancel()
+        pendingScrollTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            proxy.scrollTo(id, anchor: .bottom)
+        }
     }
 }
 
@@ -103,14 +118,28 @@ private struct StreamingScrollTrigger: View {
     let isNearBottom: Bool
 
     @Environment(AgentCoordinator.self) private var coordinator
+    @State private var pendingScrollTask: Task<Void, Never>?
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .onChange(of: coordinator.streamingRowVersion) { _, _ in
                 if isNearBottom, let id = coordinator.rows.last?.id {
-                    proxy.scrollTo(id, anchor: .bottom)
+                    scheduleScrollToBottom(id: id)
                 }
             }
+            .onDisappear {
+                pendingScrollTask?.cancel()
+                pendingScrollTask = nil
+            }
+    }
+
+    private func scheduleScrollToBottom(id: String) {
+        pendingScrollTask?.cancel()
+        pendingScrollTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            proxy.scrollTo(id, anchor: .bottom)
+        }
     }
 }

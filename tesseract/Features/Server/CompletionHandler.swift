@@ -353,6 +353,16 @@ struct CompletionHandler: Sendable {
             let penalty = Float(repetitionPenalty)
             params.repetitionPenalty = penalty == 1.0 ? nil : penalty
         }
+        if let frequencyPenalty = request.frequency_penalty {
+            let penalty = Float(frequencyPenalty)
+            params.frequencyPenalty = penalty == 0 ? nil : penalty
+        }
+        if let sg = request.thinking_safeguard {
+            if let enabled = sg.enabled { params.thinkingSafeguard.enabled = enabled }
+            if let m = sg.max_thinking_chars { params.thinkingSafeguard.maxThinkingChars = m }
+            if let r = sg.max_line_repeats { params.thinkingSafeguard.maxLineRepeats = r }
+            if let msg = sg.injection_message { params.thinkingSafeguard.injectionMessage = msg }
+        }
         return params
     }
 
@@ -385,6 +395,7 @@ struct CompletionHandler: Sendable {
         var thinkingContent = ""
         var toolCalls: [ToolCall] = []
         var info: AgentGeneration.Info?
+        var safeguardReport: OpenAI.ThinkingSafeguardReport?
 
         do {
             for try await event in start.stream {
@@ -401,6 +412,14 @@ struct CompletionHandler: Sendable {
                 case .thinkReclassify:
                     textContent += thinkingContent
                     thinkingContent = ""
+                case .thinkTruncate(let safePrefix):
+                    // Safeguard fired. Replace polluted reasoning with the clean
+                    // prefix so the client (and the session replay store) never
+                    // sees the garbage we buffered up to the trigger.
+                    thinkingContent = safePrefix
+                    safeguardReport = OpenAI.ThinkingSafeguardReport(
+                        safePrefixChars: safePrefix.count
+                    )
                 case .toolCall(let call):
                     toolCalls.append(call)
                 case .malformedToolCall(let raw):
@@ -427,7 +446,7 @@ struct CompletionHandler: Sendable {
             )
         )
 
-        let response = Self.makeNonStreamingResponse(
+        var response = Self.makeNonStreamingResponse(
             completionID: start.completionID,
             requestModel: request.model,
             physicalModelID: start.modelID,
@@ -439,6 +458,7 @@ struct CompletionHandler: Sendable {
             cachedTokenCount: start.cachedTokenCount,
             maxTokens: request.effectiveMaxTokens
         )
+        response.tesseract_thinking_safeguard = safeguardReport
 
         // Encodable conformance requires MainActor context (Swift 6.2 isolation inference)
         let data: Data = await MainActor.run {
@@ -567,6 +587,13 @@ struct CompletionHandler: Sendable {
                 finishReason = .length
             }
 
+            let safeguardReport: OpenAI.ThinkingSafeguardReport? =
+                streamResult.thinkingSafeguardTriggered
+                ? OpenAI.ThinkingSafeguardReport(
+                    safePrefixChars: streamResult.thinkingSafeguardSafePrefixChars
+                )
+                : nil
+
             let finalChunk = Self.makeFinalStreamingChunk(
                 completionID: start.completionID,
                 requestModel: request.model,
@@ -576,7 +603,8 @@ struct CompletionHandler: Sendable {
                 info: streamResult.info,
                 cachedTokenCount: start.cachedTokenCount,
                 maxTokens: request.effectiveMaxTokens,
-                includeUsage: includeUsage
+                includeUsage: includeUsage,
+                thinkingSafeguard: safeguardReport
             )
 
             guard await sse.send(finalChunk) else {
@@ -758,7 +786,8 @@ struct CompletionHandler: Sendable {
         info: AgentGeneration.Info?,
         cachedTokenCount: Int,
         maxTokens: Int?,
-        includeUsage: Bool
+        includeUsage: Bool,
+        thinkingSafeguard: OpenAI.ThinkingSafeguardReport? = nil
     ) -> OpenAI.ChatCompletionChunk {
         var chunk = OpenAI.ChatCompletionChunk(
             id: completionID,
@@ -785,6 +814,7 @@ struct CompletionHandler: Sendable {
                 )
             }
         }
+        chunk.tesseract_thinking_safeguard = thinkingSafeguard
         return chunk
     }
 
@@ -796,6 +826,11 @@ struct CompletionHandler: Sendable {
         var textContent = ""
         var thinkingContent = ""
         var toolCalls: [ToolCall] = []
+        /// Set when a `.thinkTruncate` event arrives mid-stream. Surfaces the
+        /// safeguard firing to downstream response-emission code so it can emit
+        /// a vendor sidecar / header.
+        var thinkingSafeguardTriggered = false
+        var thinkingSafeguardSafePrefixChars: Int?
     }
 
     private enum DisconnectSource: String, Sendable {
@@ -858,6 +893,16 @@ struct CompletionHandler: Sendable {
                     result.textContent += result.thinkingContent
                     result.thinkingContent = ""
                     break
+
+                case .thinkTruncate(let safePrefix):
+                    // Safeguard fired. Reset reasoning accumulator so the final
+                    // replay / non-streaming response has a clean prefix even
+                    // though streaming clients have already received the garbage
+                    // chunks. The full intervention flow also emits a subsequent
+                    // `.thinking(injectionMessage)` + `.thinkEnd`.
+                    result.thinkingContent = safePrefix
+                    result.thinkingSafeguardTriggered = true
+                    result.thinkingSafeguardSafePrefixChars = safePrefix.count
 
                 case .toolCall(let call):
                     let index = toolCallIndex

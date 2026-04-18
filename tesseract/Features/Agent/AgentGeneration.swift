@@ -15,6 +15,13 @@ struct AgentGenerateParameters: Sendable, Codable {
     var repetitionPenalty: Float? = nil
     var repetitionContextSize: Int = 20
     var presencePenalty: Float? = nil
+    var presenceContextSize: Int = 20
+    var frequencyPenalty: Float? = nil
+    var frequencyContextSize: Int = 20
+
+    /// Thinking-loop safeguard. See ``ThinkingRepetitionDetector/Config``.
+    /// Applies only when the model uses a `<think>` chat template (Qwen3/3.5 thinking).
+    var thinkingSafeguard: ThinkingRepetitionDetector.Config = .init()
 
     /// Number of bits for KV cache quantization (4 or 8). nil disables quantization.
     var kvBits: Int? = 8
@@ -32,12 +39,16 @@ struct AgentGenerateParameters: Sendable, Codable {
 
     /// Qwen3-4B-Instruct-2507 recommended parameters for non-thinking mode.
     /// See: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507
-    static let qwen3 = AgentGenerateParameters(
-        temperature: 0.7,
-        topP: 0.8,
-        topK: 20,
-        presencePenalty: 1.5
-    )
+    static let qwen3: AgentGenerateParameters = {
+        var p = AgentGenerateParameters(
+            temperature: 0.7,
+            topP: 0.8,
+            topK: 20,
+            presencePenalty: 1.5
+        )
+        p.thinkingSafeguard.enabled = false  // no `<think>` block on instruct variant
+        return p
+    }()
 
     /// Qwen3-4B-Thinking-2507 recommended parameters for thinking mode.
     /// No repetition penalty — it causes premature EOS in think blocks,
@@ -73,6 +84,19 @@ struct AgentGenerateParameters: Sendable, Codable {
         if modelID.hasPrefix("qwen3") { return .qwen3 }
         return .default
     }
+
+    /// Emit a warning when sampling configuration is known to elevate
+    /// thinking-loop risk on the active preset. Called from both HTTP
+    /// prefix-cache and fallback paths right before starting generation.
+    nonisolated func warnIfThinkingLoopRiskElevated(startsThinking: Bool) {
+        guard thinkingSafeguard.enabled, startsThinking, temperature < 0.3 else {
+            return
+        }
+        Log.agent.warning(
+            "temperature=\(temperature) on thinking-capable model — Qwen docs "
+            + "advise against greedy decoding in thinking mode; loop risk elevated."
+        )
+    }
 }
 
 /// Events emitted during streaming text generation.
@@ -95,6 +119,13 @@ nonisolated enum AgentGeneration: Sendable {
     case thinkEnd
     /// Generation ended without `</think>` — reclassify thinking content as text.
     case thinkReclassify
+
+    /// Thinking-loop safeguard fired: discard accumulated thinking and treat
+    /// `safePrefix` as the canonical reasoning for this turn. Consumers that buffer
+    /// `.thinking` chunks (CompletionHandler, Path-A `handle()`) must reset their
+    /// accumulator to exactly `safePrefix` on receipt. Emitted only by the safeguard
+    /// intervention flow, never by `ToolCallParser`.
+    case thinkTruncate(safePrefix: String)
 
     /// Completion metrics emitted once generation finishes.
     case info(Info)

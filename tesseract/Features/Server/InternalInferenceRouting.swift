@@ -105,6 +105,8 @@ nonisolated func makeSummarizeClosure(
             case .thinkReclassify:
                 textContent += thinkingContent ?? ""
                 thinkingContent = nil
+            case .thinkTruncate(let safePrefix):
+                thinkingContent = safePrefix
             case .toolCall, .malformedToolCall, .info:
                 break
             }
