@@ -40,7 +40,7 @@ nonisolated struct TriAttentionRuntimeSelection: Sendable {
 
     static func resolve(
         requestedConfiguration: TriAttentionConfiguration,
-        isParoModel: Bool,
+        isTriAttentionEligible: Bool,
         visionMode: Bool,
         calibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult?
     ) -> Self {
@@ -53,7 +53,7 @@ nonisolated struct TriAttentionRuntimeSelection: Sendable {
             )
         }
 
-        if !isParoModel {
+        if !isTriAttentionEligible {
             return Self(
                 requestedConfiguration: requestedConfiguration,
                 effectiveConfiguration: denseConfiguration(from: requestedConfiguration),
@@ -73,7 +73,7 @@ nonisolated struct TriAttentionRuntimeSelection: Sendable {
 
         guard let calibrationArtifactLookup else {
             fatalError(
-                "TriAttention runtime selection requires a calibration artifact lookup for eligible PARO text loads"
+                "TriAttention runtime selection requires a calibration artifact lookup for eligible text loads"
             )
         }
 

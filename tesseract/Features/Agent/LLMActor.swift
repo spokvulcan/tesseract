@@ -246,9 +246,10 @@ actor LLMActor {
         // real-path unit test even when no MLX container can be loaded.
         let fingerprint = try ModelFingerprint.computeFingerprint(modelDir: directory)
         let isParoModel = isParoQuantModel(directory: directory)
+        let isTriAttentionEligible = Self.isTriAttentionEligibleModel(directory: directory)
         let triAttentionRuntimeSelection = resolveTriAttentionRuntimeSelection(
             requestedConfiguration: triAttention,
-            isParoModel: isParoModel,
+            isTriAttentionEligible: isTriAttentionEligible,
             visionMode: visionMode,
             modelDirectory: directory
         )
@@ -262,6 +263,7 @@ actor LLMActor {
             triAttentionRuntimeSelection,
             modelFingerprint: fingerprint,
             isParoModel: isParoModel,
+            isTriAttentionEligible: isTriAttentionEligible,
             visionMode: visionMode
         )
 
@@ -1503,12 +1505,12 @@ actor LLMActor {
 
     private func resolveTriAttentionRuntimeSelection(
         requestedConfiguration: TriAttentionConfiguration,
-        isParoModel: Bool,
+        isTriAttentionEligible: Bool,
         visionMode: Bool,
         modelDirectory: URL
     ) -> TriAttentionRuntimeSelection {
         let calibrationArtifactLookup: TriAttentionCalibrationArtifactLookupResult? =
-            if requestedConfiguration.enabled && isParoModel && !visionMode {
+            if requestedConfiguration.enabled && isTriAttentionEligible && !visionMode {
                 resolveTriAttentionCalibrationArtifactLookup(modelDirectory: modelDirectory)
             } else {
                 nil
@@ -1516,7 +1518,7 @@ actor LLMActor {
 
         return TriAttentionRuntimeSelection.resolve(
             requestedConfiguration: requestedConfiguration,
-            isParoModel: isParoModel,
+            isTriAttentionEligible: isTriAttentionEligible,
             visionMode: visionMode,
             calibrationArtifactLookup: calibrationArtifactLookup
         )
@@ -1526,6 +1528,7 @@ actor LLMActor {
         _ triAttentionRuntimeSelection: TriAttentionRuntimeSelection,
         modelFingerprint: String,
         isParoModel: Bool,
+        isTriAttentionEligible: Bool,
         visionMode: Bool
     ) {
         switch (
@@ -1544,7 +1547,7 @@ actor LLMActor {
                 "TriAttention runtime selection — requestedEnabled=\(triAttentionRuntimeSelection.requestedConfiguration.enabled) "
                 + "effectiveEnabled=\(triAttentionRuntimeSelection.effectiveConfiguration.enabled) "
                 + "fallbackReason=\(triAttentionRuntimeSelection.fallbackReason?.rawValue ?? "none") "
-                + "isParoModel=\(isParoModel) visionMode=\(visionMode) "
+                + "isParoModel=\(isParoModel) isTriAttentionEligible=\(isTriAttentionEligible) visionMode=\(visionMode) "
                 + "modelFingerprint=\(modelFingerprint)"
             )
         }
@@ -2606,6 +2609,16 @@ actor LLMActor {
               let modelType = json["model_type"] as? String
         else { return false }
         return modelType.hasPrefix("qwen3_5")
+    }
+
+    /// Returns `true` if a model is eligible for TriAttention, regardless of
+    /// which quant format it ships in. The runtime wiring
+    /// (`TriAttentionSparseKVCache` + `Qwen35Attention.q_norm` hook) is
+    /// architecture-coupled — any Qwen3.5-family checkpoint with a valid
+    /// calibration artifact will activate it. Quant-format routing (PARO vs
+    /// standard MLX) is a separate concern handled at container-load time.
+    static func isTriAttentionEligibleModel(directory: URL) -> Bool {
+        isQwen35Model(directory: directory)
     }
 
     /// Detects the chat-template tool-call format from the model's

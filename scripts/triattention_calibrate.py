@@ -9,7 +9,7 @@ It is named by the model's *content* fingerprint — SHA-256 over `config.json` 
 downloads the same HuggingFace checkpoint. Algorithm matches
 `ModelFingerprint.computeContentFingerprint` in Swift.
 
-Three modes are supported:
+Four modes are supported:
 
   (a) Re-key an existing upstream stats file:
         scripts/triattention_calibrate.py \\
@@ -38,7 +38,19 @@ Three modes are supported:
 
       Fallback for checkpoints that HF transformers can load.
       `paroquant`-quantized weights are not supported by stock transformers
-      — use mode (b) for those.
+      — use mode (b) for those, or mode (d) for MLX-native quant.
+
+  (d) MLX-native calibration (standard MLX affine quantization, incl. MoE):
+        scripts/triattention_calibrate.py --backend mlx-native \\
+            --model-dir <local MLX-quant checkpoint> \\
+            --input <plain text file> \\
+            --output TriAttention/v1
+
+      Auto-selected when `config.json` has a top-level `quantization` field
+      but no `quantization_config.quant_method == "paroquant"`. Loads via
+      `mlx_lm.utils.load` (LLM-only; silently ignores `vision_config`).
+      Covers Qwen3.5 and `qwen3_5_moe` checkpoints shipped by mlx-community
+      / unsloth. Requires `mlx-lm`.
 
 This script is developer-only. The shipped app never runs calibration.
 """
@@ -182,34 +194,21 @@ def parse_stats_key(key: str) -> tuple[int, int]:
     return int(layer_part), int(head_part)
 
 
-def run_mlx_calibration(
-    model_dir: Path,
-    input_path: Path,
-    max_length: int,
-) -> dict[str, Any]:
-    """MLX + ParoQuant calibration path.
+def _install_gated_delta_net_eager_patch() -> None:
+    """Monkey-patch `mlx_lm.models.qwen3_5.GatedDeltaNet.__call__` to force eager
+    evaluation after each intermediate op.
 
-    Uses `paroquant.inference.backends.mlx.load` to load the quantized
-    checkpoint, then substitutes each full-attention layer's `q_norm` with
-    a probe that records its output. The probed tensor is the pre-RoPE Q
-    (since Qwen3.5's attention applies `q_norm → transpose → rope`), which
-    matches upstream's post-invert-RoPE representation when attention
-    scaling is 1.0 — Qwen3.5 config has no rope_scaling, so this holds.
+    With mlx 0.31.1 + mlx-lm 0.31.2, the lazy-evaluated GatedDeltaNet forward
+    produces all-NaN outputs on Qwen3.5 PARO and MLX-native checkpoints
+    (4B/9B/27B PARO and qwen3_5_moe). Forcing eager evaluation breaks the bad
+    kernel fusion and produces bit-identical results to the original
+    (verified against the shipped 4B artifact: max abs diff 0.0). Both
+    `qwen3_5_moe` and `qwen3_5` share this class, so one patch covers both.
+    Remove once upstream MLX fixes the regression.
     """
     import mlx.core as mx
     import mlx.nn as nn
-    import numpy as np
-    import torch
-    from paroquant.inference.backends.mlx.load import load as paro_load
     from mlx_lm.models import qwen3_5 as _qwen3_5
-
-    # Workaround: with mlx 0.31.1 + mlx-lm 0.31.2, the lazy-evaluated
-    # GatedDeltaNet forward produces all-NaN outputs on Qwen3.5 PARO
-    # checkpoints (both 4B and 9B). Forcing eager evaluation after each
-    # intermediate op bypasses the bad kernel fusion and produces
-    # bit-identical results to the original (verified against the shipped
-    # 4B artifact). Remove once upstream MLX fixes the regression.
-    _orig_gdn_call = _qwen3_5.GatedDeltaNet.__call__
 
     def _eager_gdn_call(self, inputs, mask=None, cache=None):
         B, S, _ = inputs.shape
@@ -262,12 +261,28 @@ def run_mlx_calibration(
 
     _qwen3_5.GatedDeltaNet.__call__ = _eager_gdn_call
 
-    print(f"[calibrate-mlx] loading {model_dir} ...", file=sys.stderr)
-    model, processor, is_vlm = paro_load(str(model_dir), force_text=True)
-    assert not is_vlm, "TriAttention calibration runs against the text path only"
 
-    text_model = model.language_model.model
-    full_indices = full_attention_layer_indices(read_model_config(model_dir))
+def _collect_q_norm_stats(
+    *,
+    model: Any,
+    encode: Any,
+    full_indices: list[int],
+    input_path: Path,
+    max_length: int,
+    attn_implementation: str,
+    log_tag: str,
+) -> dict[str, Any]:
+    """Probe Q at each full-attention layer's `q_norm`, run one forward pass,
+    and compute per-head real/imag/abs-mean stats.
+
+    Returns the payload in the format consumed by
+    `TriAttentionCalibrationArtifact.swift`. `encode` is expected to return
+    a list of token ids (matches `processor.encode` / `tokenizer.encode`).
+    """
+    import mlx.core as mx
+    import mlx.nn as nn
+    import numpy as np
+    import torch
 
     class _QNormProbe(nn.Module):
         def __init__(self, inner, sink, key):
@@ -281,24 +296,31 @@ def run_mlx_calibration(
             self._sink[self._key] = y
             return y
 
+    text_model = model.language_model.model
     captured: dict[int, mx.array] = {}
     for layer_idx in full_indices:
         attn = text_model.layers[layer_idx].self_attn
+        if not hasattr(attn, "q_norm"):
+            raise RuntimeError(
+                f"layer {layer_idx} self_attn has no q_norm — "
+                "not a supported Qwen3.5-family attention layer"
+            )
         attn.q_norm = _QNormProbe(attn.q_norm, captured, layer_idx)
 
     text = input_path.read_text(encoding="utf-8")
-    token_ids = processor.encode(text)
+    token_ids = encode(text)
     if len(token_ids) > max_length:
         token_ids = token_ids[:max_length]
-    print(f"[calibrate-mlx] tokenized length: {len(token_ids)}", file=sys.stderr)
+    print(f"[{log_tag}] tokenized length: {len(token_ids)}", file=sys.stderr)
 
     inputs = mx.array([list(token_ids)])
-    print("[calibrate-mlx] running forward pass ...", file=sys.stderr)
+    print(f"[{log_tag}] running forward pass ...", file=sys.stderr)
     _ = model(inputs)
     mx.eval(list(captured.values()))
 
     stats: dict[str, dict[str, torch.Tensor]] = {}
     sampled_heads: list[tuple[int, int]] = []
+    head_dim = 0
 
     for layer_idx in sorted(captured.keys()):
         q = captured[layer_idx]
@@ -306,7 +328,6 @@ def run_mlx_calibration(
         assert q_np.ndim == 4 and q_np.shape[0] == 1, (
             f"unexpected captured shape {q_np.shape} for layer {layer_idx}"
         )
-        seq_len = q_np.shape[1]
         num_heads = q_np.shape[2]
         head_dim = q_np.shape[3]
         freq_count = head_dim // 2
@@ -326,21 +347,84 @@ def run_mlx_calibration(
         del q_np, q
         captured[layer_idx] = None
 
-    text_cfg = read_model_config(model_dir).get("text_config", read_model_config(model_dir))
     metadata: dict[str, Any] = {
         "num_traces": 1,
         "head_dim": int(head_dim),
         "dtype": "float16",
         "use_chat_template": False,
         "system_prompt": "",
-        "attn_implementation": "paroquant-mlx",
+        "attn_implementation": attn_implementation,
         "rope_style": "half",
         "rope_type": "default",
         "sampled_heads": [[int(l), int(h)] for l, h in sampled_heads],
     }
-    _ = text_cfg  # reserved for future metadata extension
 
     return {"metadata": metadata, "stats": stats}
+
+
+def run_mlx_calibration(
+    model_dir: Path,
+    input_path: Path,
+    max_length: int,
+) -> dict[str, Any]:
+    """MLX + ParoQuant calibration path.
+
+    Uses `paroquant.inference.backends.mlx.load` to load the quantized
+    checkpoint, then substitutes each full-attention layer's `q_norm` with
+    a probe that records its output. The probed tensor is the pre-RoPE Q
+    (since Qwen3.5's attention applies `q_norm → transpose → rope`), which
+    matches upstream's post-invert-RoPE representation when attention
+    scaling is 1.0 — Qwen3.5 config has no rope_scaling, so this holds.
+    """
+    from paroquant.inference.backends.mlx.load import load as paro_load
+
+    _install_gated_delta_net_eager_patch()
+
+    print(f"[calibrate-mlx] loading {model_dir} ...", file=sys.stderr)
+    model, processor, is_vlm = paro_load(str(model_dir), force_text=True)
+    assert not is_vlm, "TriAttention calibration runs against the text path only"
+
+    return _collect_q_norm_stats(
+        model=model,
+        encode=processor.encode,
+        full_indices=full_attention_layer_indices(read_model_config(model_dir)),
+        input_path=input_path,
+        max_length=max_length,
+        attn_implementation="paroquant-mlx",
+        log_tag="calibrate-mlx",
+    )
+
+
+def run_mlx_native_calibration(
+    model_dir: Path,
+    input_path: Path,
+    max_length: int,
+) -> dict[str, Any]:
+    """MLX-native calibration path for standard MLX-quantized Qwen3.5 family.
+
+    Uses `mlx_lm.utils.load` (LLM-only — silently ignores `vision_config`).
+    Handles both plain `qwen3_5` and `qwen3_5_moe` checkpoints with standard
+    MLX affine quantization. Passes `lazy=True` to delay weight
+    materialization (peak memory still approaches the full weight size once
+    the forward pass runs — close any process holding a loaded model before
+    calibrating large checkpoints).
+    """
+    from mlx_lm.utils import load as mlx_load
+
+    _install_gated_delta_net_eager_patch()
+
+    print(f"[calibrate-mlx-native] loading {model_dir} (lazy) ...", file=sys.stderr)
+    model, tokenizer = mlx_load(str(model_dir), lazy=True)
+
+    return _collect_q_norm_stats(
+        model=model,
+        encode=tokenizer.encode,
+        full_indices=full_attention_layer_indices(read_model_config(model_dir)),
+        input_path=input_path,
+        max_length=max_length,
+        attn_implementation="mlx-native",
+        log_tag="calibrate-mlx-native",
+    )
 
 
 def run_hf_calibration(
@@ -537,15 +621,16 @@ def main() -> int:
     parser.add_argument(
         "--input",
         type=Path,
-        help="Plain-text calibration input (modes b and c).",
+        help="Plain-text calibration input (modes b, c, d).",
     )
     parser.add_argument(
         "--backend",
-        choices=("auto", "mlx", "hf"),
+        choices=("auto", "mlx", "mlx-native", "hf"),
         default="auto",
         help=(
             "Calibration backend when --input is given. "
-            "`auto` uses mlx for paroquant checkpoints, hf otherwise."
+            "`auto` uses mlx for paroquant checkpoints, mlx-native for MLX-quant "
+            "checkpoints (incl. qwen3_5_moe), hf otherwise."
         ),
     )
     parser.add_argument(
@@ -589,10 +674,22 @@ def main() -> int:
         backend = args.backend
         if backend == "auto":
             quant_method = (config.get("quantization_config") or {}).get("quant_method")
-            backend = "mlx" if quant_method == "paroquant" else "hf"
+            has_mlx_quant = "quantization" in config  # MLX-native affine quant
+            if quant_method == "paroquant":
+                backend = "mlx"
+            elif has_mlx_quant:
+                backend = "mlx-native"
+            else:
+                backend = "hf"
         print(f"[calibrate] backend: {backend}", file=sys.stderr)
         if backend == "mlx":
             payload = run_mlx_calibration(
+                model_dir=args.model_dir,
+                input_path=args.input,
+                max_length=args.max_length,
+            )
+        elif backend == "mlx-native":
+            payload = run_mlx_native_calibration(
                 model_dir=args.model_dir,
                 input_path=args.input,
                 max_length=args.max_length,

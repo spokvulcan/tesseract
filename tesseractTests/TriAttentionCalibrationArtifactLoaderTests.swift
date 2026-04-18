@@ -36,6 +36,13 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         )
     }
 
+    private func makeFakeModelDirectory(kind: TriAttentionTestFixtures.Kind) throws -> URL {
+        try TriAttentionTestFixtures.makeFakeModelDirectory(
+            prefix: "triattention-fake-model",
+            kind: kind
+        )
+    }
+
     @Test
     func lookupLoadsArtifactForMatchingFingerprint() throws {
         let modelDir = try makeFakeModelDirectory()
@@ -123,9 +130,17 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         }
     }
 
-    @Test
-    func llmActorLoadRecordsLoadedCalibrationArtifactAndIdentity() async throws {
-        let modelDir = try makeFakeModelDirectory(paro: true)
+    // MARK: - Actor-integration: artifact lookup + runtime-selection wiring
+    //
+    // Same scenarios exercised for both PARO (`z-lab/Qwen3.5-*-PARO`) and
+    // non-PARO MLX-native Qwen3.5 MoE (`unsloth/Qwen3.6-35B-A3B-UD-MLX-*`) —
+    // both are TriAttention-eligible under the decoupled gate in
+    // `LLMActor.isTriAttentionEligibleModel`. The shared assertions ensure
+    // the actor computes a fingerprint, performs the lookup, and wires
+    // identity/fallback into the runtime selection for both quant formats.
+
+    private func assertLoadedArtifact(kind: TriAttentionTestFixtures.Kind) async throws {
+        let modelDir = try makeFakeModelDirectory(kind: kind)
         let root = try makeScratchDir(prefix: "triattention-actor-loaded")
         defer {
             try? FileManager.default.removeItem(at: modelDir)
@@ -133,8 +148,7 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         }
 
         let fingerprint = try ModelFingerprint.computeFingerprint(modelDir: modelDir)
-        let artifactURL = root.appendingPathComponent("\(fingerprint).pt", isDirectory: false)
-        try copyFixture(to: artifactURL)
+        try copyFixture(to: root.appendingPathComponent("\(fingerprint).pt", isDirectory: false))
 
         let actor = LLMActor(
             triAttentionCalibrationArtifactLoader: TriAttentionCalibrationArtifactLoader(rootURL: root)
@@ -148,7 +162,7 @@ struct TriAttentionCalibrationArtifactLoaderTests {
             )
             Issue.record("Expected fake model load to fail before container verification")
         } catch {
-            // Expected: the fake directory is fingerprintable but not loadable.
+            // Expected: fingerprintable but not loadable.
         }
 
         #expect(await actor.currentModelFingerprintForTesting == fingerprint)
@@ -163,7 +177,7 @@ struct TriAttentionCalibrationArtifactLoaderTests {
             #expect(config.enabled == true)
             #expect(relativeResourcePath == TriAttentionCalibrationArtifactLoader.relativeResourcePath(modelFingerprint: fingerprint))
         default:
-            Issue.record("Expected actor to record loaded TriAttention artifact result")
+            Issue.record("Expected actor to record loaded TriAttention artifact result (kind=\(kind))")
         }
 
         let generateParameters = await actor.makeGenerateParametersForTesting(
@@ -186,9 +200,8 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         #expect(generateParameters.triAttentionCalibrationArtifact?.metadata.headDim == 8)
     }
 
-    @Test
-    func llmActorLoadRecordsMissingCalibrationArtifactWithoutIdentity() async throws {
-        let modelDir = try makeFakeModelDirectory(paro: true)
+    private func assertMissingArtifact(kind: TriAttentionTestFixtures.Kind) async throws {
+        let modelDir = try makeFakeModelDirectory(kind: kind)
         let root = try makeScratchDir(prefix: "triattention-actor-missing")
         defer {
             try? FileManager.default.removeItem(at: modelDir)
@@ -208,7 +221,7 @@ struct TriAttentionCalibrationArtifactLoaderTests {
             )
             Issue.record("Expected fake model load to fail before container verification")
         } catch {
-            // Expected: the fake directory is fingerprintable but not loadable.
+            // Expected: fingerprintable but not loadable.
         }
 
         #expect(await actor.currentModelFingerprintForTesting == fingerprint)
@@ -222,7 +235,7 @@ struct TriAttentionCalibrationArtifactLoaderTests {
             #expect(expectedModelFingerprint == fingerprint)
             #expect(expectedURL == root.appendingPathComponent("\(fingerprint).pt", isDirectory: false))
         default:
-            Issue.record("Expected actor to record missing TriAttention artifact result")
+            Issue.record("Expected actor to record missing TriAttention artifact result (kind=\(kind))")
         }
 
         let generateParameters = await actor.makeGenerateParametersForTesting(
@@ -245,9 +258,8 @@ struct TriAttentionCalibrationArtifactLoaderTests {
         #expect(generateParameters.triAttentionCalibrationArtifact == nil)
     }
 
-    @Test
-    func llmActorLoadRecordsUnavailableCalibrationArtifactWithoutIdentity() async throws {
-        let modelDir = try makeFakeModelDirectory(paro: true)
+    private func assertUnavailableArtifact(kind: TriAttentionTestFixtures.Kind) async throws {
+        let modelDir = try makeFakeModelDirectory(kind: kind)
         let root = try makeScratchDir(prefix: "triattention-actor-unavailable")
         defer {
             try? FileManager.default.removeItem(at: modelDir)
@@ -270,7 +282,7 @@ struct TriAttentionCalibrationArtifactLoaderTests {
             )
             Issue.record("Expected fake model load to fail before container verification")
         } catch {
-            // Expected: the fake directory is fingerprintable but not loadable.
+            // Expected: fingerprintable but not loadable.
         }
 
         #expect(await actor.currentModelFingerprintForTesting == fingerprint)
@@ -285,9 +297,16 @@ struct TriAttentionCalibrationArtifactLoaderTests {
             #expect(attemptedURL == artifactURL)
             #expect(errorDescription.contains("not a readable torch archive"))
         default:
-            Issue.record("Expected actor to record unavailable TriAttention artifact result")
+            Issue.record("Expected actor to record unavailable TriAttention artifact result (kind=\(kind))")
         }
     }
+
+    @Test func llmActorLoadRecordsLoadedArtifactForParo() async throws { try await assertLoadedArtifact(kind: .paro) }
+    @Test func llmActorLoadRecordsLoadedArtifactForNonParoMoE() async throws { try await assertLoadedArtifact(kind: .qwen35MoeMlxNative) }
+    @Test func llmActorLoadRecordsMissingArtifactForParo() async throws { try await assertMissingArtifact(kind: .paro) }
+    @Test func llmActorLoadRecordsMissingArtifactForNonParoMoE() async throws { try await assertMissingArtifact(kind: .qwen35MoeMlxNative) }
+    @Test func llmActorLoadRecordsUnavailableArtifactForParo() async throws { try await assertUnavailableArtifact(kind: .paro) }
+    @Test func llmActorLoadRecordsUnavailableArtifactForNonParoMoE() async throws { try await assertUnavailableArtifact(kind: .qwen35MoeMlxNative) }
 
     @Test
     func shipped4BArtifactLoadsSuccessfully() throws {

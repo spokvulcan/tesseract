@@ -49,7 +49,7 @@ struct TriAttentionRuntimeSelectionTests {
         let identity = TriAttentionCalibrationArtifactIdentity(rawValue: "artifact")
         let selection = TriAttentionRuntimeSelection.resolve(
             requestedConfiguration: requested,
-            isParoModel: true,
+            isTriAttentionEligible: true,
             visionMode: false,
             calibrationArtifactLookup: .loaded(
                 artifact: makeArtifact(),
@@ -70,7 +70,7 @@ struct TriAttentionRuntimeSelectionTests {
         let requested = TriAttentionConfiguration(enabled: true)
         let selection = TriAttentionRuntimeSelection.resolve(
             requestedConfiguration: requested,
-            isParoModel: true,
+            isTriAttentionEligible: true,
             visionMode: true,
             calibrationArtifactLookup: nil
         )
@@ -91,7 +91,7 @@ struct TriAttentionRuntimeSelectionTests {
         let requested = TriAttentionConfiguration(enabled: true)
         let selection = TriAttentionRuntimeSelection.resolve(
             requestedConfiguration: requested,
-            isParoModel: false,
+            isTriAttentionEligible: false,
             visionMode: false,
             calibrationArtifactLookup: nil
         )
@@ -112,7 +112,7 @@ struct TriAttentionRuntimeSelectionTests {
         let requested = TriAttentionConfiguration(enabled: true)
         let selection = TriAttentionRuntimeSelection.resolve(
             requestedConfiguration: requested,
-            isParoModel: true,
+            isTriAttentionEligible: true,
             visionMode: false,
             calibrationArtifactLookup: .missing(
                 expectedModelFingerprint: "fingerprint",
@@ -130,7 +130,7 @@ struct TriAttentionRuntimeSelectionTests {
         let requested = TriAttentionConfiguration(enabled: true)
         let selection = TriAttentionRuntimeSelection.resolve(
             requestedConfiguration: requested,
-            isParoModel: true,
+            isTriAttentionEligible: true,
             visionMode: false,
             calibrationArtifactLookup: .fingerprintMismatch(
                 expectedModelFingerprint: "expected",
