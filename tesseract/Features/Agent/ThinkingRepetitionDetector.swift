@@ -30,6 +30,17 @@ nonisolated final class ThinkingRepetitionDetector {
         var minLineLength: Int = 20
         /// A normalized line is flagged when its count reaches this value.
         var maxLineRepeats: Int = 6
+        /// Number of leading characters of a normalized line used as its
+        /// starter signature. Catches paraphrased loops that share an opening
+        /// but vary identifiers later in the line (e.g. "Let me also check
+        /// the remaining pages and the utility file…" vs "Now let me also
+        /// read the remaining page files and the lib/utils.ts…").
+        var starterPrefixChars: Int = 32
+        /// A starter signature is flagged when its count reaches this value.
+        /// `nil` disables the starter signal. Defaults to matching
+        /// ``maxLineRepeats`` so the paraphrase signal is no more aggressive
+        /// than the exact-line signal.
+        var maxStarterRepeats: Int? = 6
         /// N-gram size in characters for the rolling-hash signal (~10 tokens at
         /// Qwen3.5's ~3.6 chars/token).
         var ngramSize: Int = 40
@@ -80,6 +91,8 @@ nonisolated final class ThinkingRepetitionDetector {
             enabled: Bool = true,
             minLineLength: Int = 20,
             maxLineRepeats: Int = 6,
+            starterPrefixChars: Int = 32,
+            maxStarterRepeats: Int? = 6,
             ngramSize: Int = 40,
             maxNgramRepeats: Int = 8,
             windowChars: Int = 8_192,
@@ -92,6 +105,8 @@ nonisolated final class ThinkingRepetitionDetector {
             self.enabled = enabled
             self.minLineLength = minLineLength
             self.maxLineRepeats = maxLineRepeats
+            self.starterPrefixChars = starterPrefixChars
+            self.maxStarterRepeats = maxStarterRepeats
             self.ngramSize = ngramSize
             self.maxNgramRepeats = maxNgramRepeats
             self.windowChars = windowChars
@@ -104,6 +119,7 @@ nonisolated final class ThinkingRepetitionDetector {
 
     enum Reason: String, Sendable, Codable {
         case duplicateLine
+        case duplicateStarter
         case duplicateNgram
         case budgetExceeded
     }
@@ -128,6 +144,14 @@ nonisolated final class ThinkingRepetitionDetector {
     /// flagged line was first observed — i.e. the content *before* the
     /// repetition began.
     private var firstOccurrenceSafePrefix: [String: String] = [:]
+    /// Counts of each starter signature (first `starterPrefixChars` of a
+    /// normalized line) seen so far. Separate from `lineFreq` because two
+    /// lines with the same starter but different tails are distinct line
+    /// entries but share a starter entry — paraphrase detection lives here.
+    private var starterFreq: [String: Int] = [:]
+    /// First-occurrence snapshot keyed by starter signature, mirroring
+    /// `firstOccurrenceSafePrefix` for the line-frequency signal.
+    private var firstOccurrenceSafePrefixForStarter: [String: String] = [:]
 
     init(config: Config = .init()) {
         self.config = config
@@ -180,6 +204,8 @@ nonisolated final class ThinkingRepetitionDetector {
         pendingLine.removeAll(keepingCapacity: true)
         lineFreq.removeAll(keepingCapacity: true)
         firstOccurrenceSafePrefix.removeAll(keepingCapacity: true)
+        starterFreq.removeAll(keepingCapacity: true)
+        firstOccurrenceSafePrefixForStarter.removeAll(keepingCapacity: true)
     }
 
     // MARK: - Line frequency
@@ -195,21 +221,56 @@ nonisolated final class ThinkingRepetitionDetector {
         let normalized = Self.normalize(pendingLine)
         guard normalized.count >= config.minLineLength else { return nil }
 
-        let prior = lineFreq[normalized] ?? 0
-        if prior == 0 {
-            // Capture the buffer BEFORE the line itself. completedLines is exactly
-            // that — we haven't appended the pending line yet (defer runs on
-            // return).
-            firstOccurrenceSafePrefix[normalized] = completedLines
+        // completedLines at this point is the buffer BEFORE the current
+        // line — `defer` appends pendingLine on return. Safe-prefix
+        // snapshots captured here are therefore the correct "content
+        // before the repetition began."
+        if let decision = bumpAndCheck(
+            key: normalized,
+            freq: &lineFreq,
+            firstOccurrence: &firstOccurrenceSafePrefix,
+            threshold: config.maxLineRepeats,
+            reason: .duplicateLine
+        ) {
+            return decision
         }
-        let next = prior + 1
-        lineFreq[normalized] = next
 
-        if next >= config.maxLineRepeats {
-            let safe = firstOccurrenceSafePrefix[normalized] ?? completedLines
-            return .intervene(reason: .duplicateLine, safePrefix: safe)
+        if let maxStarterRepeats = config.maxStarterRepeats,
+           config.starterPrefixChars > 0,
+           normalized.count >= config.starterPrefixChars {
+            let starter = String(normalized.prefix(config.starterPrefixChars))
+            if let decision = bumpAndCheck(
+                key: starter,
+                freq: &starterFreq,
+                firstOccurrence: &firstOccurrenceSafePrefixForStarter,
+                threshold: maxStarterRepeats,
+                reason: .duplicateStarter
+            ) {
+                return decision
+            }
         }
+
         return nil
+    }
+
+    /// Increment `freq[key]`, stash the first-occurrence safe-prefix snapshot,
+    /// and return an intervention once the count reaches `threshold`.
+    private func bumpAndCheck(
+        key: String,
+        freq: inout [String: Int],
+        firstOccurrence: inout [String: String],
+        threshold: Int,
+        reason: Reason
+    ) -> Decision? {
+        let prior = freq[key] ?? 0
+        if prior == 0 { firstOccurrence[key] = completedLines }
+        let next = prior + 1
+        freq[key] = next
+        guard next >= threshold else { return nil }
+        return .intervene(
+            reason: reason,
+            safePrefix: firstOccurrence[key] ?? completedLines
+        )
     }
 
     /// Lowercase + collapse runs of whitespace to a single space + trim edges.

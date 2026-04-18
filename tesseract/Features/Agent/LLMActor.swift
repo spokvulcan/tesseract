@@ -2611,14 +2611,28 @@ actor LLMActor {
         return modelType.hasPrefix("qwen3_5")
     }
 
-    /// Returns `true` if a model is eligible for TriAttention, regardless of
-    /// which quant format it ships in. The runtime wiring
-    /// (`TriAttentionSparseKVCache` + `Qwen35Attention.q_norm` hook) is
-    /// architecture-coupled — any Qwen3.5-family checkpoint with a valid
-    /// calibration artifact will activate it. Quant-format routing (PARO vs
-    /// standard MLX) is a separate concern handled at container-load time.
+    /// Returns `true` if the model directory holds a Qwen3.5-family MoE
+    /// checkpoint (e.g. `unsloth/Qwen3.6-35B-A3B-UD-MLX-*`), identified by
+    /// the exact `model_type == qwen3_5_moe`. Distinct from the dense
+    /// Qwen3.5 variants (which match the `qwen3_5` / `qwen3_5_text` prefix
+    /// without `_moe`).
+    static func isQwen35MoEModel(directory: URL) -> Bool {
+        guard let json = loadConfigJSON(directory: directory),
+              let modelType = json["model_type"] as? String
+        else { return false }
+        return modelType == "qwen3_5_moe"
+    }
+
+    /// Returns `true` if a model is eligible for TriAttention.
+    ///
+    /// Qwen3.5-family MoE is currently excluded: the sparse-KV runtime
+    /// regresses decode by 15–25× on Qwen3.6-35B-A3B once the context
+    /// exceeds the retention budget. MoE loads fall back to dense attention
+    /// via the existing resolver path (`fallbackReason = .unsupportedModel`)
+    /// until the MoE sparse-KV runtime is profiled and fixed.
     static func isTriAttentionEligibleModel(directory: URL) -> Bool {
-        isQwen35Model(directory: directory)
+        guard isQwen35Model(directory: directory) else { return false }
+        return !isQwen35MoEModel(directory: directory)
     }
 
     /// Detects the chat-template tool-call format from the model's

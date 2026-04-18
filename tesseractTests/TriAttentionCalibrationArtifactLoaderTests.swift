@@ -132,12 +132,11 @@ struct TriAttentionCalibrationArtifactLoaderTests {
 
     // MARK: - Actor-integration: artifact lookup + runtime-selection wiring
     //
-    // Same scenarios exercised for both PARO (`z-lab/Qwen3.5-*-PARO`) and
-    // non-PARO MLX-native Qwen3.5 MoE (`unsloth/Qwen3.6-35B-A3B-UD-MLX-*`) —
-    // both are TriAttention-eligible under the decoupled gate in
-    // `LLMActor.isTriAttentionEligibleModel`. The shared assertions ensure
-    // the actor computes a fingerprint, performs the lookup, and wires
-    // identity/fallback into the runtime selection for both quant formats.
+    // Exercised only for PARO (`z-lab/Qwen3.5-*-PARO`). MLX-native MoE
+    // (`unsloth/Qwen3.6-35B-A3B-UD-MLX-*`) is gated out of TriAttention at
+    // `LLMActor.isTriAttentionEligibleModel` and therefore never reaches
+    // artifact lookup; its dense-gate behavior is covered below by
+    // `assertMoEFallsBackToUnsupported`.
 
     private func assertLoadedArtifact(kind: TriAttentionTestFixtures.Kind) async throws {
         let modelDir = try makeFakeModelDirectory(kind: kind)
@@ -302,11 +301,61 @@ struct TriAttentionCalibrationArtifactLoaderTests {
     }
 
     @Test func llmActorLoadRecordsLoadedArtifactForParo() async throws { try await assertLoadedArtifact(kind: .paro) }
-    @Test func llmActorLoadRecordsLoadedArtifactForNonParoMoE() async throws { try await assertLoadedArtifact(kind: .qwen35MoeMlxNative) }
     @Test func llmActorLoadRecordsMissingArtifactForParo() async throws { try await assertMissingArtifact(kind: .paro) }
-    @Test func llmActorLoadRecordsMissingArtifactForNonParoMoE() async throws { try await assertMissingArtifact(kind: .qwen35MoeMlxNative) }
     @Test func llmActorLoadRecordsUnavailableArtifactForParo() async throws { try await assertUnavailableArtifact(kind: .paro) }
-    @Test func llmActorLoadRecordsUnavailableArtifactForNonParoMoE() async throws { try await assertUnavailableArtifact(kind: .qwen35MoeMlxNative) }
+
+    // MoE is gated out of TriAttention regardless of artifact state — the
+    // sparse-KV runtime regresses decode by 15–25× on Qwen3.6-35B-A3B at
+    // p > budget (see bench logs). These tests pin that gate.
+
+    private func assertMoEFallsBackToUnsupported(artifactPresent: Bool) async throws {
+        let modelDir = try makeFakeModelDirectory(kind: .qwen35MoeMlxNative)
+        let root = try makeScratchDir(prefix: "triattention-actor-moe-gate")
+        defer {
+            try? FileManager.default.removeItem(at: modelDir)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let fingerprint = try ModelFingerprint.computeFingerprint(modelDir: modelDir)
+        if artifactPresent {
+            try copyFixture(to: root.appendingPathComponent("\(fingerprint).pt", isDirectory: false))
+        }
+
+        let actor = LLMActor(
+            triAttentionCalibrationArtifactLoader: TriAttentionCalibrationArtifactLoader(rootURL: root)
+        )
+
+        do {
+            try await actor.loadModel(
+                from: modelDir,
+                visionMode: false,
+                triAttention: TriAttentionConfiguration(enabled: true)
+            )
+            Issue.record("Expected fake model load to fail before container verification")
+        } catch {
+            // Expected: fingerprintable but not loadable.
+        }
+
+        let selection = await actor.currentTriAttentionRuntimeSelectionForTesting
+        let config = await actor.currentTriAttentionConfigForTesting
+        #expect(selection.effectiveConfiguration.enabled == false)
+        #expect(selection.fallbackReason == .unsupportedModel)
+        #expect(config.enabled == false)
+        #expect(config.calibrationArtifactIdentity == nil)
+        switch selection.calibrationArtifactLookup {
+        case nil:
+            break
+        default:
+            Issue.record("MoE eligibility gate should skip calibration lookup entirely")
+        }
+    }
+
+    @Test func llmActorFallsBackToUnsupportedForMoEWithoutArtifact() async throws {
+        try await assertMoEFallsBackToUnsupported(artifactPresent: false)
+    }
+    @Test func llmActorFallsBackToUnsupportedForMoEWithArtifact() async throws {
+        try await assertMoEFallsBackToUnsupported(artifactPresent: true)
+    }
 
     @Test
     func shipped4BArtifactLoadsSuccessfully() throws {

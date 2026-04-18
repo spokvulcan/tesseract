@@ -140,6 +140,135 @@ struct ThinkingRepetitionDetectorTests {
         }
     }
 
+    // MARK: - Starter (paraphrase) signal
+
+    @Test func detectsStarterRepeatOnParaphrasedTail() {
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 30,
+            maxLineRepeats: 100,            // line-freq effectively off
+            starterPrefixChars: 22,
+            maxStarterRepeats: 6,
+            maxNgramRepeats: 1_000,         // n-gram effectively off
+            windowChars: 2_000,
+            maxThinkingChars: nil,
+            minCharsBeforeIntervention: 0
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+
+        // Six lines that share the first 24 normalized chars
+        // ("let me check the file ") but differ in the filename suffix.
+        // Line-freq sees 6 distinct normalized lines (no trigger), starter
+        // signal sees one signature with count 6.
+        let names = [
+            "foo.ts", "bar.ts", "baz.ts", "qux.ts", "quux.ts", "corge.ts",
+        ]
+        var decision: ThinkingRepetitionDetector.Decision = .continue
+        for (i, name) in names.enumerated() {
+            decision = detector.ingest(chunk: "Let me check the file \(name) now.\n")
+            if case .intervene = decision {
+                #expect(i == 5)
+                break
+            }
+        }
+        guard case .intervene(let reason, _) = decision else {
+            Issue.record("expected starter intervention, got .continue")
+            return
+        }
+        #expect(reason == .duplicateStarter)
+    }
+
+    @Test func starterSafePrefixIsBufferBeforeFirstMatch() {
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 30,
+            maxLineRepeats: 100,
+            starterPrefixChars: 22,
+            maxStarterRepeats: 3,
+            maxNgramRepeats: 1_000,
+            windowChars: 2_000,
+            maxThinkingChars: nil,
+            minCharsBeforeIntervention: 0
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+
+        let prelude = "Some real reasoning happens before the loop starts.\n"
+        _ = detector.ingest(chunk: prelude)
+        _ = detector.ingest(chunk: "Let me check the file foo.ts now.\n")   // 1
+        _ = detector.ingest(chunk: "Let me check the file bar.ts now.\n")   // 2
+        let decision = detector.ingest(
+            chunk: "Let me check the file baz.ts now.\n")                   // 3 → trigger
+
+        guard case .intervene(.duplicateStarter, let safe) = decision else {
+            Issue.record("expected duplicateStarter, got \(decision)")
+            return
+        }
+        #expect(safe == prelude)
+    }
+
+    @Test func starterSignalCanBeDisabledViaNil() {
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 30,
+            maxLineRepeats: 100,
+            starterPrefixChars: 22,
+            maxStarterRepeats: nil,         // explicitly disabled
+            maxNgramRepeats: 1_000,
+            maxThinkingChars: nil,
+            minCharsBeforeIntervention: 0
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+        for i in 0..<12 {
+            let d = detector.ingest(chunk: "Let me check the file file\(i).ts now.\n")
+            #expect(d == .continue)
+        }
+    }
+
+    @Test func starterIgnoresLinesShorterThanPrefix() {
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 1,               // line-length gate off
+            maxLineRepeats: 100,
+            starterPrefixChars: 40,         // long prefix, real lines won't reach
+            maxStarterRepeats: 3,
+            maxNgramRepeats: 1_000,
+            maxThinkingChars: nil,
+            minCharsBeforeIntervention: 0
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+        // 10-char lines × 20 — well under starter prefix length, so starter
+        // never accumulates a signature.
+        for _ in 0..<20 {
+            let d = detector.ingest(chunk: "short one.\n")
+            if case .intervene(.duplicateStarter, _) = d {
+                Issue.record("starter should not trigger on lines shorter than prefix")
+                return
+            }
+        }
+    }
+
+    @Test func resetClearsStarterState() {
+        let config = ThinkingRepetitionDetector.Config(
+            minLineLength: 30,
+            maxLineRepeats: 100,
+            starterPrefixChars: 22,
+            maxStarterRepeats: 3,
+            maxNgramRepeats: 1_000,
+            maxThinkingChars: nil,
+            minCharsBeforeIntervention: 0
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+        _ = detector.ingest(chunk: "Let me check the file foo.ts now.\n")
+        _ = detector.ingest(chunk: "Let me check the file bar.ts now.\n")
+        detector.reset()
+        // After reset the starter counter restarts — need 3 more before triggering.
+        let first = detector.ingest(chunk: "Let me check the file a.ts now.\n")
+        let second = detector.ingest(chunk: "Let me check the file b.ts now.\n")
+        let third = detector.ingest(chunk: "Let me check the file c.ts now.\n")
+        #expect(first == .continue)
+        #expect(second == .continue)
+        guard case .intervene(.duplicateStarter, _) = third else {
+            Issue.record("expected starter trigger after reset + 3 repeats, got \(third)")
+            return
+        }
+    }
+
     // MARK: - N-gram signal
 
     @Test func detectsNgramRepeatWithoutNewlines() {

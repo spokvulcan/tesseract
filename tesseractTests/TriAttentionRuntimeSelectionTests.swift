@@ -213,4 +213,36 @@ struct TriAttentionRuntimeSelectionTests {
             Issue.record("Vision-mode fallback should not perform a calibration lookup")
         }
     }
+
+    // MARK: - Eligibility gate (static API)
+    //
+    // Pins the decision that drives `TriAttentionRuntimeSelection.resolve`.
+    // MoE loads are ineligible independent of any artifact state, so the
+    // gate must reject them purely by config shape.
+
+    @Test
+    func isTriAttentionEligibleModelReturnsFalseForMoE() throws {
+        let modelDir = try TriAttentionTestFixtures.makeFakeModelDirectory(
+            prefix: "triattention-eligibility-moe",
+            kind: .qwen35MoeMlxNative
+        )
+        defer { try? FileManager.default.removeItem(at: modelDir) }
+
+        #expect(LLMActor.isQwen35Model(directory: modelDir) == true)
+        #expect(LLMActor.isQwen35MoEModel(directory: modelDir) == true)
+        #expect(LLMActor.isTriAttentionEligibleModel(directory: modelDir) == false)
+    }
+
+    @Test
+    func isTriAttentionEligibleModelReturnsTrueForParoDense() throws {
+        let modelDir = try TriAttentionTestFixtures.makeFakeModelDirectory(
+            prefix: "triattention-eligibility-paro",
+            kind: .paro
+        )
+        defer { try? FileManager.default.removeItem(at: modelDir) }
+
+        #expect(LLMActor.isQwen35Model(directory: modelDir) == true)
+        #expect(LLMActor.isQwen35MoEModel(directory: modelDir) == false)
+        #expect(LLMActor.isTriAttentionEligibleModel(directory: modelDir) == true)
+    }
 }

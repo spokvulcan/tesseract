@@ -76,12 +76,21 @@ struct AgentGenerateParameters: Sendable, Codable {
         presencePenalty: 1.5
     )
 
+    /// Qwen3.6 thinking-mode defaults. No presencePenalty — inside `<think>`
+    /// it drives paraphrase-with-changing-identifiers loops rather than
+    /// preventing repetition.
+    static let qwen36Thinking = AgentGenerateParameters(
+        temperature: 0.6,
+        topP: 0.95,
+        topK: 20
+    )
+
     /// Returns the recommended parameters for a given model ID.
     static func forModel(_ modelID: String) -> AgentGenerateParameters {
         if modelID.contains("opus-distill") { return .qwen3OpusDistill }
         if modelID.contains("thinking") { return .qwen3Thinking }
         if modelID.hasPrefix("qwen3.5") { return .qwen35 }
-        if modelID.hasPrefix("qwen3.6") { return .qwen35 }
+        if modelID.hasPrefix("qwen3.6") { return .qwen36Thinking }
         if modelID.hasPrefix("qwen3") { return .qwen3 }
         return .default
     }

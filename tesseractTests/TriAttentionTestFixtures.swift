@@ -19,7 +19,9 @@ enum TriAttentionTestFixtures {
         case paro
         /// Qwen3.5-family MoE with standard MLX-native affine quantization
         /// (e.g. `unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit`). Does NOT pass
-        /// `isParoQuantModel`, but DOES pass `isTriAttentionEligibleModel`.
+        /// `isParoQuantModel`, and no longer passes
+        /// `isTriAttentionEligibleModel` after the MoE gate — still needed
+        /// to exercise the dense-gate fallback path.
         case qwen35MoeMlxNative
     }
 
