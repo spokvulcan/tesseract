@@ -32,7 +32,15 @@ struct TriAttentionMoEDecodeRateTests {
     /// 8K is still under the 12K budget; 14K/16K/20K/28K cross it. Pre-fix
     /// decode on Qwen3.6-35B-A3B with TriAttention enabled drops from ~65
     /// tok/s at 8K to 4 tok/s at 14K and 2 tok/s past 27K.
+    ///
+    /// The full sweep is gated behind a macro flag so the quicker default
+    /// suite finishes in bounded wall time; pass
+    /// `-Xswiftc -DFULL_DECODE_RATE_SWEEP` to cover all five points.
+    #if FULL_DECODE_RATE_SWEEP
     private static let promptTokenTargets = [8_192, 14_336, 16_384, 20_480, 28_672]
+    #else
+    private static let promptTokenTargets = [8_192, 16_384]
+    #endif
 
     /// Conservative floor. Dense Qwen3.5-27B PARO + TriAttention decodes at
     /// 35–45 tok/s; MoE pre-regression was 63–72 tok/s. 50 tok/s sits safely
@@ -40,7 +48,10 @@ struct TriAttentionMoEDecodeRateTests {
     /// so the test catches the cliff with margin to spare.
     private static let decodeRateFloor: Double = 50.0
 
-    private static let maxOutputTokens = 256
+    /// Keep output short enough to exercise decode regime without dominating
+    /// wall time. 128 tokens at 4 tok/s is 32 s; at 65 tok/s it's 2 s. That
+    /// ratio surfaces a 15-25× regression cleanly.
+    private static let maxOutputTokens = 128
 
     // MARK: - Seed paragraphs for deterministic long-context prompt construction.
     //
@@ -161,13 +172,19 @@ struct TriAttentionMoEDecodeRateTests {
     /// because the retention-budget cliff depends on total context length,
     /// and the system prompt carries it with the least noise from chat-
     /// template framing.
+    ///
+    /// Uses an O(1)-tokenizer-call construction: tokenize the seed paragraph
+    /// once, compute the repeat count, and join. Incremental re-encoding of
+    /// a growing string is O(N²) at these prompt sizes and was the stall
+    /// point of the first test run (20K+ target never completed a single
+    /// generation in reasonable wall time in Debug).
     private static func buildPromptPair(
         engine: AgentEngine,
         targetSystemTokens: Int
     ) async throws -> (systemPrompt: String, userMessage: String) {
         let systemPrompt = try await engine.withModelContainer { container in
             await container.perform { context in
-                PrefillStepBenchmarkSupport.buildText(
+                buildRepeatedPrompt(
                     targetTokens: targetSystemTokens,
                     measureTextTokens: { text in
                         context.tokenizer.encode(text: text, addSpecialTokens: false).count
@@ -179,6 +196,25 @@ struct TriAttentionMoEDecodeRateTests {
         // Short, fixed user trigger — same across every context point so
         // the only variable is the system-prompt token count.
         return (systemPrompt, userSeedParagraph)
+    }
+
+    /// O(1)-tokenizer-call prompt builder. Tokenizes the seed paragraph once
+    /// to estimate tokens-per-repeat, then joins that many copies to reach
+    /// `targetTokens` without re-encoding the growing string. Final length
+    /// may be ±tokens-per-repeat of target; that's fine for decode-rate
+    /// regression measurement since the retention-budget cliff is coarse.
+    nonisolated static func buildRepeatedPrompt(
+        targetTokens: Int,
+        measureTextTokens: (String) -> Int,
+        seedParagraph: String
+    ) -> String {
+        let seed = seedParagraph.trimmingCharacters(in: .whitespacesAndNewlines)
+        let separator = "\n\n"
+        let seedTokens = max(1, measureTextTokens(seed))
+        let separatorTokens = measureTextTokens(separator)
+        let tokensPerRepeat = max(1, seedTokens + separatorTokens)
+        let repeats = max(1, (targetTokens + tokensPerRepeat - 1) / tokensPerRepeat)
+        return Array(repeating: seed, count: repeats).joined(separator: separator)
     }
 
     /// Sampling params mirroring `qwen36Thinking` — the documented preset for
