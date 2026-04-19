@@ -16,23 +16,7 @@ struct StreamingSpanListView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                    if trace.spans.isEmpty {
-                        PhaseHint(trace: trace)
-                    } else {
-                        ForEach(trace.spans) { span in
-                            SpanView(span: span)
-                        }
-                    }
-
-                    if trace.phase == .decoding {
-                        BlinkingCursor()
-                    }
-
-                    Color.clear
-                        .frame(height: 1)
-                        .id(bottomAnchorID)
-                }
+                spanRows
                 .padding(Theme.Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -53,6 +37,42 @@ struct StreamingSpanListView: View {
                 )
             }
         }
+    }
+
+    /// The same AppKit trap that shows up in the agent chat can be triggered
+    /// here if SwiftUI lazy-prefetch runs while spans are still streaming and
+    /// auto-scroll is nudging the view. Use an eager stack only for active
+    /// traces; completed traces keep lazy loading.
+    @ViewBuilder
+    private var spanRows: some View {
+        if trace.isActive {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                spanRowContents
+            }
+        } else {
+            LazyVStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                spanRowContents
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var spanRowContents: some View {
+        if trace.spans.isEmpty {
+            PhaseHint(trace: trace)
+        } else {
+            ForEach(trace.spans) { span in
+                SpanView(span: span)
+            }
+        }
+
+        if trace.phase == .decoding {
+            BlinkingCursor()
+        }
+
+        Color.clear
+            .frame(height: 1)
+            .id(bottomAnchorID)
     }
 }
 

@@ -15,26 +15,7 @@ struct AgentConversationListView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    SystemPromptSection()
-
-                    EmptyStateSection()
-
-                    ForEach(coordinator.rows) { row in
-                        ChatRowView(
-                            row: row,
-                            speakingMessageID: $speakingMessageID,
-                            isSpeechActive: isSpeechActive
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 2)
-                    }
-
-                    Color.clear
-                        .frame(height: 1)
-                        .id(bottomAnchorID)
-                }
+                conversationRows
                 .padding(.vertical, 8)
             }
             .defaultScrollAnchor(.bottom)
@@ -74,6 +55,45 @@ struct AgentConversationListView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// SwiftUI's lazy prefetch path still re-enters AppKit constraint updates
+    /// under high-frequency row mutation + auto-scroll. Keep the stack eager
+    /// while a generation is actively streaming, then return to lazy loading
+    /// for idle conversations.
+    @ViewBuilder
+    private var conversationRows: some View {
+        if coordinator.isGenerating {
+            VStack(alignment: .leading, spacing: 0) {
+                conversationRowContents
+            }
+        } else {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                conversationRowContents
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var conversationRowContents: some View {
+        SystemPromptSection()
+
+        EmptyStateSection()
+
+        ForEach(coordinator.rows) { row in
+            ChatRowView(
+                row: row,
+                speakingMessageID: $speakingMessageID,
+                isSpeechActive: isSpeechActive
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 2)
+        }
+
+        Color.clear
+            .frame(height: 1)
+            .id(bottomAnchorID)
     }
 
     /// Defers the scroll until the current layout pass completes. Triggering

@@ -15,66 +15,62 @@ struct ServerSettingsView: View {
     var body: some View {
         @Bindable var settings = settings
 
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 0) {
-                Form {
-                    Section {
-                        Toggle("Enable HTTP Server", isOn: $settings.isServerEnabled)
+        Form {
+            Section {
+                Toggle("Enable HTTP Server", isOn: $settings.isServerEnabled)
 
-                        LabeledContent("Port") {
-                            TextField("8321", text: $portText)
-                                .focused($isFocused)
-                                .labelsHidden()
-                                .textFieldStyle(.roundedBorder)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 80)
-                                .onSubmit {
-                                    commitPort()
-                                }
+                LabeledContent("Port") {
+                    TextField("8321", text: $portText)
+                        .focused($isFocused)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                        .onSubmit {
+                            commitPort()
                         }
+                }
 
-                        if settings.isServerEnabled {
-                            LabeledContent("Endpoint") {
-                                HStack {
-                                    Text("http://127.0.0.1:\(String(settings.serverPort))")
-                                        .font(.system(.body, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                        .textSelection(.enabled)
+                if settings.isServerEnabled {
+                    LabeledContent("Endpoint") {
+                        HStack {
+                            Text("http://127.0.0.1:\(String(settings.serverPort))")
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
 
-                                    Button {
-                                        NSPasteboard.general.clearContents()
-                                        NSPasteboard.general.setString("http://127.0.0.1:\(String(settings.serverPort))", forType: .string)
-                                    } label: {
-                                        Image(systemName: "doc.on.doc")
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(.secondary)
-                                    .help("Copy Endpoint")
-                                }
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString("http://127.0.0.1:\(String(settings.serverPort))", forType: .string)
+                            } label: {
+                                Image(systemName: "doc.on.doc")
                             }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Copy Endpoint")
                         }
-                    } footer: {
-                        Text("The local API server provides an OpenAI-compatible /v1/chat/completions endpoint for integration with other tools.")
-                    }
-
-                    Section {
-                        Toggle("Enable TriAttention", isOn: $settings.triattentionEnabled)
-
-                        if settings.triattentionEnabled {
-                            LabeledContent("Active mode") {
-                                Text(attentionModeDescription)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    } header: {
-                        Text("Sparse Attention (Advanced)")
-                    } footer: {
-                        Text("TriAttention reduces attention compute on long-context text inference. Supported only on PARO quantized Qwen3.5 models — other models automatically fall back to dense attention. Vision mode also falls back to dense. Toggling reloads the currently loaded model.")
                     }
                 }
-                .formStyle(.grouped)
-                .fixedSize(horizontal: false, vertical: true)
+            } footer: {
+                Text("The local API server provides an OpenAI-compatible /v1/chat/completions endpoint for integration with other tools.")
+            }
 
+            Section {
+                Toggle("Enable TriAttention", isOn: $settings.triattentionEnabled)
+
+                if settings.triattentionEnabled {
+                    LabeledContent("Active mode") {
+                        Text(attentionModeDescription)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Sparse Attention (Advanced)")
+            } footer: {
+                Text("TriAttention reduces attention compute on long-context text inference. Supported only on PARO quantized Qwen3.5 models — other models automatically fall back to dense attention. Vision mode also falls back to dense. Toggling reloads the currently loaded model.")
+            }
+
+            Section {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                     HStack {
                         Text("Live Activity")
@@ -88,13 +84,11 @@ struct ServerSettingsView: View {
 
                     ServerActivityPanel()
                         .frame(height: 520)
-                        .padding(.horizontal, Theme.Spacing.md)
                 }
-                .padding(.top, Theme.Spacing.sm)
-                .padding(.bottom, Theme.Spacing.md)
+                .padding(.vertical, Theme.Spacing.xs)
             }
-            .frame(maxWidth: .infinity)
         }
+        .formStyle(.grouped)
         .navigationTitle("Server API")
         .onAppear {
             portText = String(settings.serverPort)
