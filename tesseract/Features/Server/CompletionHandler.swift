@@ -599,6 +599,30 @@ struct CompletionHandler: Sendable {
                 finishReason = .length
             }
 
+            // Diagnostic log before any client bytes go out: correlates which
+            // state inputs produced the finish_reason. Warning path catches
+            // the exact shape of request #68 (stop with empty text AND empty
+            // tool_calls but non-empty reasoning) — this is the
+            // jundot/omlx#825 stale-recurrent-state symptom on Qwen3.6.
+            let stopWithEmptyPayload = finishReason == .stop
+                && streamResult.textContent.isEmpty
+                && streamResult.toolCalls.isEmpty
+            let finishReasonLog =
+                "HTTP streaming finish_reason decision — "
+                + "completionID=\(start.completionID) "
+                + "finishReason=\(finishReason.rawValue) "
+                + "textLen=\(streamResult.textContent.count) "
+                + "toolCalls=\(streamResult.toolCalls.count) "
+                + "reasoningLen=\(streamResult.thinkingContent.count) "
+                + "genTokens=\(streamResult.info?.generationTokenCount ?? 0) "
+                + "maxTokens=\(request.effectiveMaxTokens ?? -1) "
+                + "stopReason=\(streamResult.info.map { describeStopReason($0.stopReason) } ?? "nil")"
+            if stopWithEmptyPayload && streamResult.thinkingContent.isEmpty == false {
+                Log.server.warning("\(finishReasonLog) — EMPTY PAYLOAD WITH REASONING")
+            } else {
+                Log.server.info("\(finishReasonLog)")
+            }
+
             let safeguardReport: OpenAI.ThinkingSafeguardReport? =
                 streamResult.thinkingSafeguardTriggered
                 ? OpenAI.ThinkingSafeguardReport(
@@ -763,6 +787,29 @@ struct CompletionHandler: Sendable {
             generationTokenCount: info?.generationTokenCount,
             maxTokens: maxTokens
         )
+
+        // Mirror of the streaming-path diagnostic at ~line 603: record the
+        // state that produced this finish_reason so an empty-payload .stop
+        // on the non-streaming path leaves the same log fingerprint.
+        let stopWithEmptyPayload = finishReason == .stop
+            && textContent.isEmpty
+            && toolCalls.isEmpty
+        let finishReasonLog =
+            "HTTP non-streaming finish_reason decision — "
+            + "completionID=\(completionID) "
+            + "finishReason=\(finishReason.rawValue) "
+            + "textLen=\(textContent.count) "
+            + "toolCalls=\(toolCalls.count) "
+            + "reasoningLen=\(thinkingContent.count) "
+            + "genTokens=\(info?.generationTokenCount ?? 0) "
+            + "maxTokens=\(maxTokens ?? -1) "
+            + "stopReason=\(info.map { describeStopReason($0.stopReason) } ?? "nil")"
+        if stopWithEmptyPayload && !thinkingContent.isEmpty {
+            Log.server.warning("\(finishReasonLog) — EMPTY PAYLOAD WITH REASONING")
+        } else {
+            Log.server.info("\(finishReasonLog)")
+        }
+
         let openAIToolCalls = toolCalls.isEmpty ? nil : ToolCallConverter.convertToOpenAI(toolCalls)
 
         return OpenAI.ChatCompletionResponse(

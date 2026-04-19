@@ -1,5 +1,6 @@
 import Foundation
 import MLXLMCommon
+import os
 
 /// Streaming parser that detects `<tool_call>` and `<think>` tags in generated text.
 ///
@@ -72,6 +73,13 @@ nonisolated final class ToolCallParser {
     /// Flush any remaining buffered text as events.
     /// Call this when generation is complete.
     nonisolated func finalize() -> [Event] {
+        let preState = FinalizeState(
+            insideThinkBlock: insideThinkBlock,
+            thinkBlockClosed: thinkBlockClosed,
+            pendingThinkStart: pendingThinkStart,
+            bufferLen: buffer.count,
+            bufferHead: String(buffer.prefix(120))
+        )
         var events: [Event] = []
 
         if pendingThinkStart {
@@ -87,6 +95,7 @@ nonisolated final class ToolCallParser {
                 }
                 events.append(.thinkEnd)
             }
+            logFinalize(preState: preState, emittedCount: events.count)
             return events
         }
 
@@ -102,11 +111,55 @@ nonisolated final class ToolCallParser {
                 if !remaining.isEmpty { events.append(.thinking(remaining)) }
             }
             events.append(.thinkEnd)
+            logFinalize(preState: preState, emittedCount: events.count)
             return events
         }
 
         events.append(.text(remaining))
+        logFinalize(preState: preState, emittedCount: events.count)
         return events
+    }
+
+    /// Read-only snapshot of parser state at the point `finalize()` is
+    /// about to run. Exposed for diagnostic logging by callers that want
+    /// to record parser state alongside other generation metadata (e.g.
+    /// `LLMActor` silent-close path) without triggering finalize themselves.
+    nonisolated struct FinalizeState: Sendable {
+        let insideThinkBlock: Bool
+        let thinkBlockClosed: Bool
+        let pendingThinkStart: Bool
+        let bufferLen: Int
+        let bufferHead: String
+    }
+
+    nonisolated func snapshotFinalizeState() -> FinalizeState {
+        FinalizeState(
+            insideThinkBlock: insideThinkBlock,
+            thinkBlockClosed: thinkBlockClosed,
+            pendingThinkStart: pendingThinkStart,
+            bufferLen: buffer.count,
+            bufferHead: String(buffer.prefix(120))
+        )
+    }
+
+    private nonisolated func logFinalize(preState: FinalizeState, emittedCount: Int) {
+        let logger = Logger(subsystem: "app.tesseract.agent", category: "agent")
+        let isSilentCloseShape = preState.insideThinkBlock
+            && preState.thinkBlockClosed
+            && preState.bufferLen == 0
+        let message =
+            "ToolCallParser.finalize — "
+            + "insideThinkBlock=\(preState.insideThinkBlock) "
+            + "thinkBlockClosed=\(preState.thinkBlockClosed) "
+            + "pendingThinkStart=\(preState.pendingThinkStart) "
+            + "bufferLen=\(preState.bufferLen) "
+            + "bufferHead=\(preState.bufferHead.debugDescription) "
+            + "emitted=\(emittedCount)"
+        if isSilentCloseShape {
+            logger.warning("\(message, privacy: .public) — SILENT CLOSE SHAPE")
+        } else {
+            logger.info("\(message, privacy: .public)")
+        }
     }
 
     // MARK: - Private

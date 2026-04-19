@@ -577,12 +577,14 @@ final class AgentEngine {
                                 promptTokenCount: completionInfo.promptTokenCount,
                                 generationTokenCount: completionInfo.generationTokenCount,
                                 promptTime: completionInfo.promptTime,
-                                generateTime: completionInfo.generateTime
+                                generateTime: completionInfo.generateTime,
+                                stopReason: completionInfo.stopReason
                             )
                             continuation.yield(.info(info))
                             Log.agent.info(
                                 "Generation complete — \(completionInfo.generationTokenCount) tokens, "
-                                + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s"
+                                + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s, "
+                                + "stopReason=\(describeStopReason(completionInfo.stopReason))"
                             )
                             let rawChunks = rawChunkParts.joined()
                             Log.agent.debug("Raw library chunks (after ToolCallProcessor):\n\(rawChunks)")

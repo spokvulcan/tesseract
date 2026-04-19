@@ -1,6 +1,17 @@
 import Foundation
 import MLXLMCommon
 
+/// Human-readable label for `GenerateStopReason`, used in diagnostic logs so
+/// operators can distinguish natural EOS from length-limit from cancellation
+/// without decoding enum raw-values.
+nonisolated func describeStopReason(_ reason: GenerateStopReason) -> String {
+    switch reason {
+    case .stop: return "stop(eos)"
+    case .length: return "length(maxTokens)"
+    case .cancelled: return "cancelled"
+    }
+}
+
 /// Parameters controlling text generation behavior.
 ///
 /// Defaults: temperature=0.6, top_p=0.95, repeat_penalty disabled, max_tokens=262144
@@ -145,6 +156,7 @@ nonisolated enum AgentGeneration: Sendable {
         let generationTokenCount: Int
         let promptTime: TimeInterval
         let generateTime: TimeInterval
+        let stopReason: GenerateStopReason
 
         var tokensPerSecond: Double {
             guard generateTime > 0 else { return 0 }

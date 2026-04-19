@@ -646,6 +646,21 @@ actor LLMActor {
 
                 var currentStream: AsyncStream<Generation> = mlxStart.stream
 
+                // Restore-state snapshot: what cache state does this generation
+                // begin from? Pair this with A2's silent-close warning to
+                // correlate model misbehavior with cache hits (e.g. the Qwen3.6
+                // hybrid-linear-attention stale-state bug, jundot/omlx#825).
+                Log.agent.info(
+                    "Generation starting — "
+                    + "request_id=\(requestID.uuidString) "
+                    + "cached=\(mlxStart.skippedPrefillTokens)/"
+                    + "\(mlxStart.promptTokenCount) "
+                    + "sharedPrefix=\(mlxStart.sharedPrefixLength) "
+                    + "lookup=\(mlxStart.lookupReason) "
+                    + "restoreMs=\(String(format: "%.1f", mlxStart.restoreMs * 1000)) "
+                    + "prefillMs=\(String(format: "%.1f", mlxStart.prefillMs * 1000))"
+                )
+
                 streamLoop: while true {
                     var intervention: (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)? = nil
 
@@ -655,6 +670,11 @@ actor LLMActor {
                         switch item {
                         case .chunk(let text):
                             rawChunkParts.append(text)
+                            Log.agent.debug(
+                                "MLX chunk — len=\(text.count) "
+                                + "head=\(String(text.prefix(48)).debugDescription) "
+                                + "tail=\(String(text.suffix(32)).debugDescription)"
+                            )
                             if let fired = emitParserEvents(
                                 parser.processChunk(text),
                                 allowToolEvents: !libraryParsedToolCalls
@@ -664,6 +684,10 @@ actor LLMActor {
 
                         case .toolCall(let call):
                             libraryParsedToolCalls = true
+                            Log.agent.debug(
+                                "MLX library-parsed toolCall — name=\(call.function.name) "
+                                + "argKeys=\(Array(call.function.arguments.keys))"
+                            )
                             handle(.toolCall(call))
 
                         case .info(let info):
@@ -671,7 +695,14 @@ actor LLMActor {
                                 promptTokenCount: info.promptTokenCount,
                                 generationTokenCount: info.generationTokenCount,
                                 promptTime: info.promptTime,
-                                generateTime: info.generateTime
+                                generateTime: info.generateTime,
+                                stopReason: info.stopReason
+                            )
+                            Log.agent.debug(
+                                "MLX generation info — gen=\(info.generationTokenCount) "
+                                + "prompt=\(info.promptTokenCount) "
+                                + "stopReason=\(describeStopReason(info.stopReason)) "
+                                + "tok/s=\(String(format: "%.1f", info.tokensPerSecond))"
                             )
                         }
                         if intervention != nil { break }
@@ -741,7 +772,8 @@ actor LLMActor {
                     ))
                     Log.agent.info(
                         "Generation complete — \(completionInfo.generationTokenCount) tokens, "
-                        + "\(String(format: "%.1f", completionInfo.tokensPerSecond)) tok/s"
+                        + "\(String(format: "%.1f", completionInfo.tokensPerSecond)) tok/s, "
+                        + "stopReason=\(describeStopReason(completionInfo.stopReason))"
                     )
                     let rawChunks = rawChunkParts.joined()
                     Log.agent.debug("Raw library chunks (after ToolCallProcessor):\n\(rawChunks)")
@@ -752,6 +784,28 @@ actor LLMActor {
                             "Raw output contains tool call markers but no .toolCall events were emitted by library"
                         )
                     }
+                } else {
+                    // Stream closed without an `.info` event from MLX — the case we
+                    // were previously blind to (jundot/omlx#825: Qwen3.6 hybrid
+                    // linear attention losing tool-calling after prefix-cache hit).
+                    // Emit every diagnostic we have so the operator can correlate
+                    // model behavior with cache state in a single log line cluster.
+                    let rawChunks = rawChunkParts.joined()
+                    let parserState = parser.snapshotFinalizeState()
+                    Log.agent.warning(
+                        "Generation stream closed without .info event — "
+                        + "request_id=\(requestID.uuidString) "
+                        + "chunks=\(rawChunkParts.count) "
+                        + "rawLen=\(rawChunks.count) "
+                        + "libraryParsedToolCalls=\(libraryParsedToolCalls) "
+                        + "cachedTokens=\(mlxStart.skippedPrefillTokens)/"
+                        + "\(mlxStart.promptTokenCount) "
+                        + "lookupReason=\(mlxStart.lookupReason) "
+                        + "parserInsideThink=\(parserState.insideThinkBlock) "
+                        + "parserThinkClosed=\(parserState.thinkBlockClosed) "
+                        + "parserBufferLen=\(parserState.bufferLen) "
+                        + "rawTail=\(String(rawChunks.suffix(200)).debugDescription)"
+                    )
                 }
 
                 // -- Post-generation: store snapshots in radix tree --
