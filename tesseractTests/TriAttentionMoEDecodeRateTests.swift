@@ -132,11 +132,9 @@ struct TriAttentionMoEDecodeRateTests {
         }
     }
 
-    // NOTE: A TriAttention-disabled baseline at p≈14K will be reintroduced
-    // as a separate test once the primary regression is fixed. Running both
-    // tests in the same xcodebuild invocation requires ~2× 35B model loads
-    // which exceeds 48GB unified memory; scheduling them as separate runs
-    // is the right shape. Kept as a TODO until the decode-rate floor holds.
+    // NOTE: A TriAttention-disabled axis-isolation test was used for the
+    // investigation pass and folded into the PR report rather than kept as
+    // a permanent regression gate. See PR description for numbers.
 
     // MARK: - Helpers
 
