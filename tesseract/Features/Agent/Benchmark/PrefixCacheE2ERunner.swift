@@ -395,7 +395,7 @@ final class PrefixCacheE2ERunner {
                     generatedText: &generatedText,
                     assistantReasoning: &assistantReasoning
                 )
-            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .info:
+            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta, .info:
                 break
             }
         }
@@ -511,7 +511,7 @@ final class PrefixCacheE2ERunner {
                     generatedText: &generatedText,
                     assistantReasoning: &assistantReasoning
                 )
-            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .info:
+            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta, .info:
                 break
             }
         }

@@ -436,6 +436,12 @@ struct CompletionHandler: Sendable {
                     toolCalls.append(call)
                 case .malformedToolCall(let raw):
                     Log.server.warning("Malformed tool call in HTTP response: \(raw)")
+                case .toolCallDelta:
+                    // Non-streaming path accumulates the final `.toolCall` event
+                    // only; in-flight deltas are consumed by the activity log
+                    // above (live Requests-log rendering) and not by this
+                    // accumulator, which has no progressive output channel.
+                    break
                 case .info(let i):
                     info = i
                 }
@@ -996,6 +1002,15 @@ struct CompletionHandler: Sendable {
 
                 case .malformedToolCall(let raw):
                     Log.server.warning("Malformed tool call in stream: \(raw)")
+
+                case .toolCallDelta:
+                    // SSE forwarding of tool-call argument deltas is deferred
+                    // (OpenAI protocol supports it via
+                    // `choices[].delta.tool_calls[].function.arguments`, but
+                    // the current ask is in-app UI streaming only — see the
+                    // plan's Part B7). The activity log above already receives
+                    // `.toolCallDelta` and drives live UI rendering.
+                    break
 
                 case .info(let i):
                     result.info = i

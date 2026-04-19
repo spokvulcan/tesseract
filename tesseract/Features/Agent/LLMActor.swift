@@ -564,6 +564,13 @@ actor LLMActor {
                         ))
                     case .malformedToolCall:
                         break
+                    case .toolCallDelta:
+                        // In-flight tool-call body deltas are surfaced to
+                        // consumers (the Requests log UI) via the continuation
+                        // yield below. The textContent / toolCalls accumulators
+                        // are populated only on the final `.toolCall` event, so
+                        // there's nothing to mutate here.
+                        break
                     case .thinkStart, .thinkEnd, .info:
                         break
                     }
@@ -583,7 +590,7 @@ actor LLMActor {
                     // explicitly to cover both tool-call event variants.
                     if !allowToolEvents {
                         switch event {
-                        case .toolCall, .malformedToolCall:
+                        case .toolCall, .malformedToolCall, .toolCallDelta:
                             return nil
                         default:
                             break

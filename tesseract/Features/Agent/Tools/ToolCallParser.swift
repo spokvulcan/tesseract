@@ -36,6 +36,16 @@ nonisolated final class ToolCallParser {
         case thinkEnd
         /// Generation ended without `</think>` — consumer should reclassify thinking as text.
         case thinkReclassify
+        /// A chunk of tool-call body text observed inside `<tool_call>…</tool_call>`
+        /// before the closing tag. Consumers that want to surface in-flight tool
+        /// arguments (e.g. the in-app Requests log) can update a "building"
+        /// span on each delta. The authoritative `.toolCall` / `.malformedToolCall`
+        /// event still fires once on `</tool_call>` close with the parsed payload.
+        /// - Parameter name: non-nil once the parser has scanned past the
+        ///   first `"name":"X"` literal. `nil` before that point.
+        /// - Parameter argumentsDelta: append-only raw text that was added to the
+        ///   internal tool-call buffer on this chunk. Not parsed JSON.
+        case toolCallDelta(name: String?, argumentsDelta: String)
     }
 
     private static let toolStartTag = "<tool_call>"
@@ -47,6 +57,26 @@ nonisolated final class ToolCallParser {
     private var insideThinkBlock = false
     private var pendingThinkStart = false
     private var thinkBlockClosed = false
+
+    /// True between emitting the open-tag boundary for `<tool_call>` and
+    /// emitting the close event on `</tool_call>`. Used to decide whether
+    /// a buffered suffix (no end tag yet on this chunk) should be surfaced
+    /// as a `.toolCallDelta` to consumers.
+    private var insideToolCall = false
+    /// Total characters forwarded to consumers as `.toolCallDelta`
+    /// `argumentsDelta` payloads inside the current `<tool_call>` block.
+    /// Reset on every `</tool_call>` close so the next in-flight tool
+    /// call starts from zero.
+    private var toolCallDeltaForwarded = 0
+    /// First non-nil once the parser has scanned past the first
+    /// `"name":"X"` literal inside the current `<tool_call>` block.
+    /// Reset on every `</tool_call>` close.
+    private var toolCallCurrentName: String?
+
+    private static let nameFieldRegex: NSRegularExpression = {
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: #""name"\s*:\s*"([^"]+)""#)
+    }()
 
     /// - Parameter startsInsideThinkBlock: When `true`, the parser assumes the generation
     ///   begins inside a `<think>` block (e.g. Qwen3.5 chat template appends `<think>\n`
@@ -252,14 +282,54 @@ nonisolated final class ToolCallParser {
             // Look for end tag
             let afterStart = String(buffer[startRange.upperBound...])
             guard let endRange = afterStart.range(of: Self.toolEndTag) else {
-                // No end tag yet — keep buffering from start tag onward
+                // No end tag yet — keep buffering from start tag onward.
+                // Emit a delta for everything after the start tag that
+                // hasn't been forwarded yet so consumers can surface the
+                // in-flight `"name":"…", "arguments":…` body live.
                 buffer = String(buffer[startRange.lowerBound...])
+                insideToolCall = true
+
+                // Body is everything after `<tool_call>` in the buffer.
+                let bodySoFar = String(buffer.dropFirst(Self.toolStartTag.count))
+                if bodySoFar.count > toolCallDeltaForwarded {
+                    let newChars = bodySoFar.dropFirst(toolCallDeltaForwarded)
+                    toolCallDeltaForwarded = bodySoFar.count
+
+                    // Re-scan for name only if we haven't locked one yet —
+                    // avoids rerunning the regex on every single delta
+                    // after the name is already known.
+                    if toolCallCurrentName == nil {
+                        toolCallCurrentName = Self.extractName(from: bodySoFar)
+                    }
+
+                    events.append(.toolCallDelta(
+                        name: toolCallCurrentName,
+                        argumentsDelta: String(newChars)
+                    ))
+                }
                 break
             }
 
             // Extract and parse JSON content between tags
             let jsonContent = String(afterStart[..<endRange.lowerBound])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Emit any remaining tail delta before the close event so a
+            // consumer watching the `.toolCallBuilding` span sees the full
+            // body before the `.toolCall` / `.malformedToolCall` finalize
+            // replaces it. Otherwise the last chunk containing `</tool_call>`
+            // never surfaces as a delta and the building span stays stale.
+            let bodyBeforeClose = String(afterStart[..<endRange.lowerBound])
+            if bodyBeforeClose.count > toolCallDeltaForwarded {
+                let newChars = bodyBeforeClose.dropFirst(toolCallDeltaForwarded)
+                if toolCallCurrentName == nil {
+                    toolCallCurrentName = Self.extractName(from: bodyBeforeClose)
+                }
+                events.append(.toolCallDelta(
+                    name: toolCallCurrentName,
+                    argumentsDelta: String(newChars)
+                ))
+            }
 
             if let data = jsonContent.data(using: .utf8),
                let function = try? JSONDecoder().decode(ToolCall.Function.self, from: data)
@@ -273,11 +343,30 @@ nonisolated final class ToolCallParser {
                 events.append(.malformedToolCall(jsonContent))
             }
 
-            // Continue processing after end tag
+            // Continue processing after end tag — reset in-flight state
+            // so a subsequent `<tool_call>` in the same stream starts
+            // fresh.
+            insideToolCall = false
+            toolCallDeltaForwarded = 0
+            toolCallCurrentName = nil
             buffer = String(afterStart[endRange.upperBound...])
         }
 
         return events
+    }
+
+    /// Extract the function name from a partial or complete JSON body between
+    /// `<tool_call>` and `</tool_call>`. Returns `nil` until the closing quote
+    /// of the `"name":"X"` value has been observed so consumers don't flicker
+    /// between partial names like "re" → "read".
+    private static func extractName(from body: String) -> String? {
+        let ns = body as NSString
+        let match = nameFieldRegex.firstMatch(
+            in: body,
+            range: NSRange(location: 0, length: ns.length)
+        )
+        guard let match, match.numberOfRanges >= 2 else { return nil }
+        return ns.substring(with: match.range(at: 1))
     }
 
     /// Returns the earliest index where a partial prefix of any relevant tag

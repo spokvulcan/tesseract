@@ -132,6 +132,19 @@ nonisolated enum AgentGeneration: Sendable {
     /// The associated string is the raw content between the tags.
     case malformedToolCall(String)
 
+    /// In-flight chunk of tool-call body text observed inside
+    /// `<tool_call>…</tool_call>` before the closing tag. Consumers that
+    /// want to surface live tool-call arguments (the in-app Requests log)
+    /// append `argumentsDelta` to the most recent "building" span for this
+    /// tool call. The authoritative `.toolCall` / `.malformedToolCall`
+    /// event still fires once on close with the parsed payload and should
+    /// replace the building span with the finalized one.
+    /// - Parameter name: non-nil once the parser has scanned past the
+    ///   first `"name":"X"` literal. `nil` before that point.
+    /// - Parameter argumentsDelta: append-only raw text added to the parser
+    ///   buffer on this chunk. Not parsed JSON.
+    case toolCallDelta(name: String?, argumentsDelta: String)
+
     /// The model started a `<think>` block.
     case thinkStart
     /// A streaming chunk of thinking content.
@@ -174,6 +187,8 @@ nonisolated enum AgentGeneration: Sendable {
         case .thinking(let text): self = .thinking(text)
         case .thinkEnd: self = .thinkEnd
         case .thinkReclassify: self = .thinkReclassify
+        case .toolCallDelta(let name, let argumentsDelta):
+            self = .toolCallDelta(name: name, argumentsDelta: argumentsDelta)
         }
     }
 }

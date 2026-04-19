@@ -360,6 +360,13 @@ private func streamAssistantResponse(
                 Log.agent.warning("Malformed tool call ignored: \(raw)")
                 emit(.malformedToolCall(raw: raw))
 
+            case .toolCallDelta:
+                // Progressive tool-call body deltas. The agent double-loop
+                // consumes only the finalized `.toolCall` event emitted when
+                // `</tool_call>` closes — partial JSON is not actionable for
+                // tool execution. These deltas exist for live UI rendering.
+                break
+
             case .info:
                 // Metrics — useful for logging but don't affect the message
                 break

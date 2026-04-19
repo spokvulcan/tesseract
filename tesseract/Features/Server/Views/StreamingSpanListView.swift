@@ -112,6 +112,37 @@ private struct SpanView: View {
                     .fill(Color.orange.opacity(0.06))
             )
 
+        case .toolCallBuilding(_, let name, let argumentsJSON):
+            // Visually identical to `.toolCall` — the only difference is
+            // that content streams in as `.toolCallDelta` events arrive.
+            // On `</tool_call>` close the span transitions to `.toolCall`
+            // (or `.malformedToolCall` on parse failure) with the same
+            // span id, so SwiftUI preserves position and styling.
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Image(systemName: "wrench.and.screwdriver.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    Text("tool_call")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.orange)
+                    Text(name.isEmpty ? "…" : name)
+                        .font(.caption.monospaced().weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+                Text(argumentsJSON)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.leading, 8)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.orange.opacity(0.06))
+            )
+
         case .malformedToolCall(_, let raw):
             VStack(alignment: .leading, spacing: 2) {
                 Text("malformed tool_call")
