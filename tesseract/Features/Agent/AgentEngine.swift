@@ -594,6 +594,17 @@ final class AgentEngine {
                             libraryParsedToolCalls = true
                             Log.agent.info("Library parsed tool call: \(call.function.name)(\(call.function.arguments))")
                             continuation.yield(.toolCall(call))
+
+                        case .toolCallBufferDelta(let delta):
+                            // Vendor is buffering `<tool_call>…</tool_call>` and
+                            // just appended `delta` characters. Forward as a
+                            // progressive UI event; the final `.toolCall` still
+                            // fires atomically once the close tag parses.
+                            libraryParsedToolCalls = true
+                            continuation.yield(.toolCallDelta(
+                                name: nil,
+                                argumentsDelta: delta
+                            ))
                         }
                     }
 

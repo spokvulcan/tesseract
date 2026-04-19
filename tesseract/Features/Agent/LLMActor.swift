@@ -697,6 +697,17 @@ actor LLMActor {
                             )
                             handle(.toolCall(call))
 
+                        case .toolCallBufferDelta(let delta):
+                            // Vendor library is buffering a `<tool_call>` block
+                            // and just added `delta` characters to its internal
+                            // buffer. Forward as a progressive UI event so the
+                            // Requests log can render arguments live, then
+                            // suppress app-level parser events on the eventual
+                            // close (the vendor will surface the final
+                            // `.toolCall` atomically).
+                            libraryParsedToolCalls = true
+                            handle(.toolCallDelta(name: nil, argumentsDelta: delta))
+
                         case .info(let info):
                             completionInfo = .init(
                                 promptTokenCount: info.promptTokenCount,
