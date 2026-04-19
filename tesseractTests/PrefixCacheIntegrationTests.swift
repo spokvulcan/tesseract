@@ -690,7 +690,8 @@ struct PrefixCacheIntegrationTests {
         )
         var parameters = GenerateParameters(triAttention: restoreContext.expectedConfiguration)
         parameters.triAttentionStablePrefixOffset = stablePrefixOffset
-        let tokenCount = restoreContext.expectedConfiguration.budgetTokens + 129
+        let tokenCount =
+            restoreContext.expectedConfiguration.budgetTokens + stablePrefixOffset + 129
         parameters.configureTriAttentionCachesForPrefill([cache], inputTokenCount: tokenCount)
 
         let (keys, values) = makeTriAttentionStates(tokenCount: tokenCount)
