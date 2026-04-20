@@ -149,7 +149,8 @@ struct ServerGenerationLogTests {
             promptTokenCount: 1024,
             generationTokenCount: 256,
             promptTime: 0.5,
-            generateTime: 8.0
+            generateTime: 8.0,
+            stopReason: .stop
         )))
 
         let trace = log.traces[0]

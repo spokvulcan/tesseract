@@ -1,6 +1,17 @@
 import Foundation
 import MLXLMCommon
 
+/// Human-readable label for `GenerateStopReason`, used in diagnostic logs so
+/// operators can distinguish natural EOS from length-limit from cancellation
+/// without decoding enum raw-values.
+nonisolated func describeStopReason(_ reason: GenerateStopReason) -> String {
+    switch reason {
+    case .stop: return "stop(eos)"
+    case .length: return "length(maxTokens)"
+    case .cancelled: return "cancelled"
+    }
+}
+
 /// Parameters controlling text generation behavior.
 ///
 /// Defaults: temperature=0.6, top_p=0.95, repeat_penalty disabled, max_tokens=262144
@@ -121,6 +132,19 @@ nonisolated enum AgentGeneration: Sendable {
     /// The associated string is the raw content between the tags.
     case malformedToolCall(String)
 
+    /// In-flight chunk of tool-call body text observed inside
+    /// `<tool_call>…</tool_call>` before the closing tag. Consumers that
+    /// want to surface live tool-call arguments (the in-app Requests log)
+    /// append `argumentsDelta` to the most recent "building" span for this
+    /// tool call. The authoritative `.toolCall` / `.malformedToolCall`
+    /// event still fires once on close with the parsed payload and should
+    /// replace the building span with the finalized one.
+    /// - Parameter name: non-nil once the parser has scanned past the
+    ///   first `"name":"X"` literal. `nil` before that point.
+    /// - Parameter argumentsDelta: append-only raw text added to the parser
+    ///   buffer on this chunk. Not parsed JSON.
+    case toolCallDelta(name: String?, argumentsDelta: String)
+
     /// The model started a `<think>` block.
     case thinkStart
     /// A streaming chunk of thinking content.
@@ -145,6 +169,7 @@ nonisolated enum AgentGeneration: Sendable {
         let generationTokenCount: Int
         let promptTime: TimeInterval
         let generateTime: TimeInterval
+        let stopReason: GenerateStopReason
 
         var tokensPerSecond: Double {
             guard generateTime > 0 else { return 0 }
@@ -162,6 +187,8 @@ nonisolated enum AgentGeneration: Sendable {
         case .thinking(let text): self = .thinking(text)
         case .thinkEnd: self = .thinkEnd
         case .thinkReclassify: self = .thinkReclassify
+        case .toolCallDelta(let name, let argumentsDelta):
+            self = .toolCallDelta(name: name, argumentsDelta: argumentsDelta)
         }
     }
 }

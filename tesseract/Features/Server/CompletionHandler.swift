@@ -408,6 +408,7 @@ struct CompletionHandler: Sendable {
         var toolCalls: [ToolCall] = []
         var info: AgentGeneration.Info?
         var safeguardReport: OpenAI.ThinkingSafeguardReport?
+        var malformedToolCallRaw = ""
 
         do {
             for try await event in start.stream {
@@ -435,7 +436,20 @@ struct CompletionHandler: Sendable {
                 case .toolCall(let call):
                     toolCalls.append(call)
                 case .malformedToolCall(let raw):
-                    Log.server.warning("Malformed tool call in HTTP response: \(raw)")
+                    malformedToolCallRaw += raw
+                    Log.server.warning(
+                        "Malformed tool call in HTTP response — "
+                        + "completionID=\(start.completionID) "
+                        + "rawLen=\(raw.count) "
+                        + "head=\(String(raw.prefix(120)).debugDescription) "
+                        + "tail=\(String(raw.suffix(80)).debugDescription)"
+                    )
+                case .toolCallDelta:
+                    // Non-streaming path accumulates the final `.toolCall` event
+                    // only; in-flight deltas are consumed by the activity log
+                    // above (live Requests-log rendering) and not by this
+                    // accumulator, which has no progressive output channel.
+                    break
                 case .info(let i):
                     info = i
                 }
@@ -445,6 +459,19 @@ struct CompletionHandler: Sendable {
             await activityLog.fail(handle: logHandle, error: error.localizedDescription)
             try? await writer.send(.internalError("Generation error: \(error.localizedDescription)"))
             return
+        }
+
+        // Surface a dropped tool-call buffer as text so the caller sees the
+        // attempted tool call instead of an empty-stop response. See the
+        // parallel block in the streaming path for the rationale.
+        if toolCalls.isEmpty,
+           textContent.isEmpty,
+           !malformedToolCallRaw.isEmpty {
+            textContent = malformedToolCallRaw
+            Log.server.info(
+                "Surfaced dropped tool-call buffer as text content — "
+                + "completionID=\(start.completionID) rawLen=\(malformedToolCallRaw.count)"
+            )
         }
 
         await Self.sessionReplayStore.record(
@@ -599,12 +626,69 @@ struct CompletionHandler: Sendable {
                 finishReason = .length
             }
 
+            // Diagnostic log before any client bytes go out: correlates which
+            // state inputs produced the finish_reason. Warning path catches
+            // the exact shape of request #68 (stop with empty text AND empty
+            // tool_calls but non-empty reasoning) — this is the
+            // jundot/omlx#825 stale-recurrent-state symptom on Qwen3.6.
+            let stopWithEmptyPayload = finishReason == .stop
+                && streamResult.textContent.isEmpty
+                && streamResult.toolCalls.isEmpty
+            let finishReasonLog =
+                "HTTP streaming finish_reason decision — "
+                + "completionID=\(start.completionID) "
+                + "finishReason=\(finishReason.rawValue) "
+                + "textLen=\(streamResult.textContent.count) "
+                + "toolCalls=\(streamResult.toolCalls.count) "
+                + "reasoningLen=\(streamResult.thinkingContent.count) "
+                + "malformedLen=\(streamResult.malformedToolCallRaw.count) "
+                + "genTokens=\(streamResult.info?.generationTokenCount ?? 0) "
+                + "maxTokens=\(request.effectiveMaxTokens ?? -1) "
+                + "stopReason=\(streamResult.info.map { describeStopReason($0.stopReason) } ?? "nil")"
+            let hadMalformed = !streamResult.malformedToolCallRaw.isEmpty
+            if stopWithEmptyPayload && streamResult.thinkingContent.isEmpty == false {
+                Log.server.warning("\(finishReasonLog) — EMPTY PAYLOAD WITH REASONING")
+            } else if hadMalformed && streamResult.toolCalls.isEmpty {
+                Log.server.warning("\(finishReasonLog) — MALFORMED TOOL CALL DROPPED")
+            } else {
+                Log.server.info("\(finishReasonLog)")
+            }
+
             let safeguardReport: OpenAI.ThinkingSafeguardReport? =
                 streamResult.thinkingSafeguardTriggered
                 ? OpenAI.ThinkingSafeguardReport(
                     safePrefixChars: streamResult.thinkingSafeguardSafePrefixChars
                 )
                 : nil
+
+            // Surface a dropped tool-call buffer as final text content when the
+            // response would otherwise be empty. Without this the client sees
+            // `finish_reason=stop` with empty `content` and empty `tool_calls`
+            // and has no way to know the model attempted a tool call — it
+            // treats the turn as "model chose to stop", so no retry happens at
+            // the agent-loop layer upstream. Emitting the raw buffer lets the
+            // caller detect the pattern (e.g. content contains `<tool_call>`)
+            // and decide how to recover.
+            var streamResult = streamResult
+            if streamResult.toolCalls.isEmpty,
+               streamResult.textContent.isEmpty,
+               !streamResult.malformedToolCallRaw.isEmpty {
+                let raw = streamResult.malformedToolCallRaw
+                streamResult.textContent = raw
+                _ = await sse.send(makeChunk(
+                    id: start.completionID,
+                    model: Self.echoModelID(
+                        requestModel: request.model,
+                        physical: start.modelID
+                    ),
+                    created: created,
+                    delta: OpenAI.ChunkDelta(content: raw)
+                ))
+                Log.server.info(
+                    "Surfaced dropped tool-call buffer as text content — "
+                    + "completionID=\(start.completionID) rawLen=\(raw.count)"
+                )
+            }
 
             let finalChunk = Self.makeFinalStreamingChunk(
                 completionID: start.completionID,
@@ -763,6 +847,29 @@ struct CompletionHandler: Sendable {
             generationTokenCount: info?.generationTokenCount,
             maxTokens: maxTokens
         )
+
+        // Mirror of the streaming-path diagnostic at ~line 603: record the
+        // state that produced this finish_reason so an empty-payload .stop
+        // on the non-streaming path leaves the same log fingerprint.
+        let stopWithEmptyPayload = finishReason == .stop
+            && textContent.isEmpty
+            && toolCalls.isEmpty
+        let finishReasonLog =
+            "HTTP non-streaming finish_reason decision — "
+            + "completionID=\(completionID) "
+            + "finishReason=\(finishReason.rawValue) "
+            + "textLen=\(textContent.count) "
+            + "toolCalls=\(toolCalls.count) "
+            + "reasoningLen=\(thinkingContent.count) "
+            + "genTokens=\(info?.generationTokenCount ?? 0) "
+            + "maxTokens=\(maxTokens ?? -1) "
+            + "stopReason=\(info.map { describeStopReason($0.stopReason) } ?? "nil")"
+        if stopWithEmptyPayload && !thinkingContent.isEmpty {
+            Log.server.warning("\(finishReasonLog) — EMPTY PAYLOAD WITH REASONING")
+        } else {
+            Log.server.info("\(finishReasonLog)")
+        }
+
         let openAIToolCalls = toolCalls.isEmpty ? nil : ToolCallConverter.convertToOpenAI(toolCalls)
 
         return OpenAI.ChatCompletionResponse(
@@ -843,6 +950,12 @@ struct CompletionHandler: Sendable {
         /// a vendor sidecar / header.
         var thinkingSafeguardTriggered = false
         var thinkingSafeguardSafePrefixChars: Int?
+        /// Accumulates raw content from `.malformedToolCall` events. When set,
+        /// the model tried to emit a tool call that couldn't be parsed (usually
+        /// vendor ToolCallProcessor's EOS-drop path for Qwen3.6 intermittent
+        /// malformed output). Surfaced in the finish_reason decision log and
+        /// used by the empty-content retry signal.
+        var malformedToolCallRaw = ""
     }
 
     private enum DisconnectSource: String, Sendable {
@@ -948,7 +1061,23 @@ struct CompletionHandler: Sendable {
                     }
 
                 case .malformedToolCall(let raw):
-                    Log.server.warning("Malformed tool call in stream: \(raw)")
+                    result.malformedToolCallRaw += raw
+                    Log.server.warning(
+                        "Malformed tool call in stream — "
+                        + "completionID=\(completionID) "
+                        + "rawLen=\(raw.count) "
+                        + "head=\(String(raw.prefix(120)).debugDescription) "
+                        + "tail=\(String(raw.suffix(80)).debugDescription)"
+                    )
+
+                case .toolCallDelta:
+                    // SSE forwarding of tool-call argument deltas is deferred
+                    // (OpenAI protocol supports it via
+                    // `choices[].delta.tool_calls[].function.arguments`, but
+                    // the current ask is in-app UI streaming only — see the
+                    // plan's Part B7). The activity log above already receives
+                    // `.toolCallDelta` and drives live UI rendering.
+                    break
 
                 case .info(let i):
                     result.info = i

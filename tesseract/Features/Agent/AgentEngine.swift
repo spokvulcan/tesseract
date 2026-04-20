@@ -266,6 +266,7 @@ final class AgentEngine {
         )
         return try startManagedHTTPFallbackGeneration(
             input: input,
+            toolSpecs: toolSpecs,
             parameters: parameters
         )
     }
@@ -420,13 +421,19 @@ final class AgentEngine {
     /// Shared generation logic for both prompt-based and message-based entry points.
     private func startGeneration(
         input: UserInput,
+        toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
-        try startManagedGeneration(input: input, parameters: parameters).stream
+        try startManagedGeneration(
+            input: input,
+            toolSpecs: toolSpecs,
+            parameters: parameters
+        ).stream
     }
 
     private func startManagedGeneration(
         input: UserInput,
+        toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters
     ) throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
@@ -436,10 +443,12 @@ final class AgentEngine {
         let actor = llmActor
         return wrapManagedGeneration(
             input: input,
+            toolSpecs: toolSpecs,
             parameters: parameters
         ) {
             try await actor.startRawGeneration(
                 input: input,
+                toolSpecs: toolSpecs,
                 parameters: parameters
             )
         }
@@ -447,6 +456,7 @@ final class AgentEngine {
 
     private func startManagedHTTPFallbackGeneration(
         input: UserInput,
+        toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters
     ) throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
@@ -456,10 +466,12 @@ final class AgentEngine {
         let actor = llmActor
         return wrapManagedGeneration(
             input: input,
+            toolSpecs: toolSpecs,
             parameters: parameters
         ) {
             try await actor.startRawGeneration(
                 input: input,
+                toolSpecs: toolSpecs,
                 parameters: parameters
             )
         }
@@ -468,6 +480,7 @@ final class AgentEngine {
     func wrapManagedGeneration(
         cachedTokenCount: Int = 0,
         input: UserInput? = nil,
+        toolSpecs: [ToolSpec]? = nil,
         parameters: AgentGenerateParameters = .default,
         launch: @escaping @Sendable () async throws -> HTTPServerRawGenerationStart
     ) -> HTTPServerGenerationStart {
@@ -577,12 +590,14 @@ final class AgentEngine {
                                 promptTokenCount: completionInfo.promptTokenCount,
                                 generationTokenCount: completionInfo.generationTokenCount,
                                 promptTime: completionInfo.promptTime,
-                                generateTime: completionInfo.generateTime
+                                generateTime: completionInfo.generateTime,
+                                stopReason: completionInfo.stopReason
                             )
                             continuation.yield(.info(info))
                             Log.agent.info(
                                 "Generation complete — \(completionInfo.generationTokenCount) tokens, "
-                                + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s"
+                                + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s, "
+                                + "stopReason=\(describeStopReason(completionInfo.stopReason))"
                             )
                             let rawChunks = rawChunkParts.joined()
                             Log.agent.debug("Raw library chunks (after ToolCallProcessor):\n\(rawChunks)")
@@ -592,6 +607,17 @@ final class AgentEngine {
                             libraryParsedToolCalls = true
                             Log.agent.info("Library parsed tool call: \(call.function.name)(\(call.function.arguments))")
                             continuation.yield(.toolCall(call))
+
+                        case .toolCallBufferDelta(let delta):
+                            // Vendor is buffering `<tool_call>…</tool_call>` and
+                            // just appended `delta` characters. Forward as a
+                            // progressive UI event; the final `.toolCall` still
+                            // fires atomically once the close tag parses.
+                            libraryParsedToolCalls = true
+                            continuation.yield(.toolCallDelta(
+                                name: nil,
+                                argumentsDelta: delta
+                            ))
                         }
                     }
 
@@ -612,6 +638,7 @@ final class AgentEngine {
                                 originalInput: originalInput,
                                 safeThinkingPrefix: fired.safePrefix,
                                 injection: safeguardConfig.continuationHandOff,
+                                toolSpecs: toolSpecs,
                                 parameters: parameters
                             )
                             rawState.withLock {
@@ -776,6 +803,7 @@ extension AgentEngine: ServerInferenceEngine {
     ) throws -> HTTPServerGenerationStart {
         try startManagedGeneration(
             input: UserInput(prompt: prompt),
+            toolSpecs: nil,
             parameters: parameters
         )
     }
@@ -793,6 +821,7 @@ extension AgentEngine: ServerInferenceEngine {
         )
         return try startManagedGeneration(
             input: input,
+            toolSpecs: toolSpecs,
             parameters: parameters
         )
     }

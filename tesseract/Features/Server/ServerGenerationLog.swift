@@ -50,6 +50,16 @@ final class ServerGenerationLog {
     private struct PendingAppend {
         var pendingText: String = ""
         var pendingThinking: String = ""
+        /// Accumulated tool-call body text since the last flush. Paired with
+        /// `pendingToolCallName` for name-update propagation. Separate from
+        /// text/thinking because tool-call spans live in their own building
+        /// span type and must not flush when text/thinking does (a tool call
+        /// can be interrupted by neither — it's always a contiguous block).
+        var pendingToolCallDelta: String = ""
+        /// Latest non-nil name seen across tool-call deltas in the current
+        /// window. Once the parser locks the name, it stays stable for the
+        /// remainder of the `<tool_call>` block.
+        var pendingToolCallName: String?
         var flushScheduled: Bool = false
     }
 
@@ -124,13 +134,17 @@ final class ServerGenerationLog {
             enqueueAppend(handle: handle, chunk: chunk, isThinking: true)
         case .thinkStart, .thinkEnd, .thinkReclassify:
             return  // Not a span mutation — skip flush AND scroll bump.
+        case .toolCallDelta(let name, let delta):
+            enqueueToolCallDelta(handle: handle, name: name, delta: delta)
         case .toolCall(let call):
             // Phase-transition / metadata events: drain any buffered chunks
-            // first so they appear BEFORE the transition in the log.
+            // first so they appear BEFORE the transition in the log. Replace
+            // the in-flight `.toolCallBuilding` span in place so the visual
+            // location and ordering is preserved.
             flushPending(handle: handle)
             update(handle) { trace in
                 trace.markFirstTokenIfNeeded()
-                trace.appendToolCall(
+                trace.finalizeToolCall(
                     name: call.function.name,
                     arguments: call.function.arguments
                 )
@@ -140,7 +154,7 @@ final class ServerGenerationLog {
             flushPending(handle: handle)
             update(handle) { trace in
                 trace.markFirstTokenIfNeeded()
-                trace.appendMalformedToolCall(raw)
+                trace.finalizeMalformedToolCall(raw)
             }
             throttledScrollBump()
         case .info(let info):
@@ -242,9 +256,43 @@ final class ServerGenerationLog {
         }
     }
 
-    /// Drain any buffered text/thinking into a single observed mutation on
-    /// the trace. Safe to call multiple times — no-op when nothing is
-    /// pending. Called on phase transitions, terminal events, and from the
+    /// Accumulate a tool-call body delta off the observed path. On the first
+    /// delta of a fresh coalesce window, schedule a flush `coalesceIntervalMs`
+    /// in the future; subsequent deltas within the window piggy-back on the
+    /// same scheduled flush. If a chunk of a DIFFERENT kind (text/thinking)
+    /// arrives while a tool-call buffer is live, the existing tool-call
+    /// buffer is drained synchronously first so on-wire order is preserved.
+    private func enqueueToolCallDelta(
+        handle: TraceHandle,
+        name: String?,
+        delta: String
+    ) {
+        guard !delta.isEmpty || name != nil else { return }
+
+        if let pending = pendingAppends[handle.id],
+           !pending.pendingText.isEmpty || !pending.pendingThinking.isEmpty {
+            flushPending(handle: handle)
+        }
+
+        var pending = pendingAppends[handle.id] ?? PendingAppend()
+        pending.pendingToolCallDelta += delta
+        if let name { pending.pendingToolCallName = name }
+        let needsSchedule = !pending.flushScheduled
+        pending.flushScheduled = true
+        pendingAppends[handle.id] = pending
+
+        if needsSchedule {
+            let delay = UInt64(Self.coalesceIntervalMs * 1_000_000)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: delay)
+                self?.flushPending(handle: handle)
+            }
+        }
+    }
+
+    /// Drain any buffered text/thinking/tool-call-delta into a single observed
+    /// mutation on the trace. Safe to call multiple times — no-op when nothing
+    /// is pending. Called on phase transitions, terminal events, and from the
     /// scheduled flush task. Visible to tests so they can observe the
     /// buffered state synchronously.
     func flushPending(handle: TraceHandle) {
@@ -253,7 +301,10 @@ final class ServerGenerationLog {
         }
         let thinking = pending.pendingThinking
         let text = pending.pendingText
-        guard !thinking.isEmpty || !text.isEmpty else { return }
+        let toolCallDelta = pending.pendingToolCallDelta
+        let toolCallName = pending.pendingToolCallName
+        let hasToolCallUpdate = !toolCallDelta.isEmpty || toolCallName != nil
+        guard !thinking.isEmpty || !text.isEmpty || hasToolCallUpdate else { return }
 
         update(handle) { trace in
             if !thinking.isEmpty {
@@ -263,6 +314,10 @@ final class ServerGenerationLog {
             if !text.isEmpty {
                 trace.markFirstTokenIfNeeded()
                 trace.appendText(text)
+            }
+            if hasToolCallUpdate {
+                trace.markFirstTokenIfNeeded()
+                trace.appendToolCallDelta(name: toolCallName, delta: toolCallDelta)
             }
         }
         throttledScrollBump()
@@ -313,13 +368,20 @@ struct RequestTrace: Identifiable, Equatable {
         case thinking(id: UUID, content: String)
         case toolCall(id: UUID, name: String, argumentsJSON: String)
         case malformedToolCall(id: UUID, raw: String)
+        /// In-flight tool-call body being assembled as `.toolCallDelta`
+        /// events arrive. Replaced in place by `.toolCall` (on successful
+        /// parse) or `.malformedToolCall` (on failed parse) when the
+        /// `</tool_call>` close event fires. Rendered identically to
+        /// `.toolCall` so the visual transition on finalize is seamless.
+        case toolCallBuilding(id: UUID, name: String, argumentsJSON: String)
 
         var id: UUID {
             switch self {
             case .text(let id, _),
                  .thinking(let id, _),
                  .toolCall(let id, _, _),
-                 .malformedToolCall(let id, _):
+                 .malformedToolCall(let id, _),
+                 .toolCallBuilding(let id, _, _):
                 return id
             }
         }
@@ -419,6 +481,57 @@ struct RequestTrace: Identifiable, Equatable {
 
     mutating func appendMalformedToolCall(_ raw: String) {
         spans.append(.malformedToolCall(id: UUID(), raw: raw))
+    }
+
+    /// Append a `.toolCallDelta` payload to the in-flight tool-call span.
+    /// If the last span is already a `.toolCallBuilding`, the delta is
+    /// concatenated to its `argumentsJSON` and the `name` is updated if
+    /// it newly became non-nil. Otherwise a fresh `.toolCallBuilding`
+    /// span is inserted.
+    mutating func appendToolCallDelta(name: String?, delta: String) {
+        if case .toolCallBuilding(let id, let existingName, let existingArgs) = spans.last {
+            let updatedName = name ?? existingName
+            spans[spans.count - 1] = .toolCallBuilding(
+                id: id,
+                name: updatedName,
+                argumentsJSON: Self.cappedAppend(existingArgs, delta)
+            )
+        } else {
+            spans.append(.toolCallBuilding(
+                id: UUID(),
+                name: name ?? "",
+                argumentsJSON: Self.cappedAppend("", delta)
+            ))
+        }
+    }
+
+    /// Finalize a tool call. If the last span is a matching
+    /// `.toolCallBuilding`, it is replaced in place with the parsed
+    /// `.toolCall` so the UI sees a seamless transition. Otherwise
+    /// (e.g. the vendor library parsed this tool call atomically,
+    /// bypassing the app-level parser and never emitting deltas), a
+    /// fresh `.toolCall` span is appended.
+    mutating func finalizeToolCall(name: String, arguments: [String: JSONValue]) {
+        let encoded = ToolArgumentNormalizer.encode(arguments)
+        if case .toolCallBuilding(let id, _, _) = spans.last {
+            spans[spans.count - 1] = .toolCall(
+                id: id,
+                name: name,
+                argumentsJSON: encoded
+            )
+        } else {
+            spans.append(.toolCall(id: UUID(), name: name, argumentsJSON: encoded))
+        }
+    }
+
+    /// Finalize a malformed tool call. Mirror of ``finalizeToolCall``
+    /// but emits the red-boxed `.malformedToolCall` variant.
+    mutating func finalizeMalformedToolCall(_ raw: String) {
+        if case .toolCallBuilding(let id, _, _) = spans.last {
+            spans[spans.count - 1] = .malformedToolCall(id: id, raw: raw)
+        } else {
+            spans.append(.malformedToolCall(id: UUID(), raw: raw))
+        }
     }
 
     /// Concatenate all `.text` spans into a single string for "Copy full output".

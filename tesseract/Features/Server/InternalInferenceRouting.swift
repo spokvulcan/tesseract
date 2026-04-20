@@ -107,7 +107,7 @@ nonisolated func makeSummarizeClosure(
                 thinkingContent = nil
             case .thinkTruncate(let safePrefix):
                 thinkingContent = safePrefix
-            case .toolCall, .malformedToolCall, .info:
+            case .toolCall, .malformedToolCall, .toolCallDelta, .info:
                 break
             }
         }

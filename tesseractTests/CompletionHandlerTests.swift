@@ -187,7 +187,8 @@ struct CompletionHandlerTests {
             promptTokenCount: 100,
             generationTokenCount: 24,
             promptTime: 0.2,
-            generateTime: 0.4
+            generateTime: 0.4,
+            stopReason: .stop
         )
         let response = CompletionHandler.makeNonStreamingResponse(
             completionID: "chatcmpl-123",
@@ -224,7 +225,8 @@ struct CompletionHandlerTests {
             promptTokenCount: 80,
             generationTokenCount: 32,
             promptTime: 0.1,
-            generateTime: 0.3
+            generateTime: 0.3,
+            stopReason: .length
         )
         let response = CompletionHandler.makeNonStreamingResponse(
             completionID: "chatcmpl-456",
@@ -251,7 +253,8 @@ struct CompletionHandlerTests {
             promptTokenCount: 60,
             generationTokenCount: 15,
             promptTime: 0.1,
-            generateTime: 0.2
+            generateTime: 0.2,
+            stopReason: .stop
         )
         let chunk = CompletionHandler.makeFinalStreamingChunk(
             completionID: "chatcmpl-789",
@@ -277,7 +280,8 @@ struct CompletionHandlerTests {
             promptTokenCount: 60,
             generationTokenCount: 15,
             promptTime: 0.1,
-            generateTime: 0.2
+            generateTime: 0.2,
+            stopReason: .stop
         )
         let chunk = CompletionHandler.makeFinalStreamingChunk(
             completionID: "chatcmpl-999",
@@ -311,7 +315,8 @@ struct CompletionHandlerTests {
             promptTokenCount: 120,
             generationTokenCount: 30,
             promptTime: 0.2,
-            generateTime: 0.4
+            generateTime: 0.4,
+            stopReason: .stop
         )
 
         let firstNonStreaming = CompletionHandler.makeNonStreamingResponse(
@@ -383,7 +388,8 @@ struct CompletionHandlerTests {
             promptTokenCount: 200,
             generationTokenCount: 42,
             promptTime: 0.5,
-            generateTime: 0.9
+            generateTime: 0.9,
+            stopReason: .stop
         )
 
         let nonStreaming = CompletionHandler.makeNonStreamingResponse(

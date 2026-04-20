@@ -310,6 +310,7 @@ actor LLMActor {
     /// callers can deterministically wait for model use to actually stop.
     func startRawGeneration(
         input: sending UserInput,
+        toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters
     ) async throws -> HTTPServerRawGenerationStart {
         guard let container = modelContainer else {
@@ -319,6 +320,10 @@ actor LLMActor {
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
 
         let genParams = makeGenerateParameters(from: parameters)
+        // Canonicalize once so the loop-handler sees the same dict iteration
+        // order the tokenizer uses for the prompt. Type-aware tool-call
+        // parsing reads this schema via `XMLFunctionParser.parse(content:tools:)`.
+        let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
         return try await container.perform(nonSendable: input) { context, input in
             let prepared = try await context.processor.prepare(input: input)
             let iterator = try TokenIterator(
@@ -330,7 +335,8 @@ actor LLMActor {
                 promptTokenCount: prepared.text.tokens.size,
                 modelConfiguration: context.configuration,
                 tokenizer: context.tokenizer,
-                iterator: iterator
+                iterator: iterator,
+                tools: canonicalTools
             )
             return HTTPServerRawGenerationStart(
                 stream: stream,
@@ -352,6 +358,7 @@ actor LLMActor {
         tokenNDim: Int,
         safeThinkingPrefix: String,
         injection: String,
+        toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters
     ) async throws -> HTTPServerRawGenerationStart {
         guard let container = modelContainer else {
@@ -360,6 +367,7 @@ actor LLMActor {
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
         let genParams = makeGenerateParameters(from: parameters)
         let handoff = safeThinkingPrefix + injection
+        let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
 
         return try await container.perform { context in
             try Self.buildThinkingContinuationStart(
@@ -367,6 +375,7 @@ actor LLMActor {
                 originalTokens: originalTokens,
                 tokenNDim: tokenNDim,
                 handoffText: handoff,
+                tools: canonicalTools,
                 parameters: genParams
             )
         }
@@ -390,6 +399,7 @@ actor LLMActor {
         originalInput: sending UserInput,
         safeThinkingPrefix: String,
         injection: String,
+        toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters
     ) async throws -> HTTPServerRawGenerationStart {
         guard let container = modelContainer else {
@@ -399,6 +409,7 @@ actor LLMActor {
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
         let genParams = makeGenerateParameters(from: parameters)
         let handoff = safeThinkingPrefix + injection
+        let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
 
         return try await container.perform(nonSendable: originalInput) { context, input in
             let basePrepared = try await context.processor.prepare(input: input)
@@ -407,6 +418,7 @@ actor LLMActor {
                 originalTokens: Self.extractTokenSequence(basePrepared.text.tokens),
                 tokenNDim: basePrepared.text.tokens.ndim,
                 handoffText: handoff,
+                tools: canonicalTools,
                 parameters: genParams
             )
         }
@@ -421,6 +433,7 @@ actor LLMActor {
         originalTokens: [Int],
         tokenNDim: Int,
         handoffText: String,
+        tools: [ToolSpec]?,
         parameters: GenerateParameters
     ) throws -> HTTPServerRawGenerationStart {
         let appendedIDs = try context.tokenizer.encode(
@@ -443,7 +456,8 @@ actor LLMActor {
             promptTokenCount: combined.count,
             modelConfiguration: context.configuration,
             tokenizer: context.tokenizer,
-            iterator: iterator
+            iterator: iterator,
+            tools: tools
         )
         return HTTPServerRawGenerationStart(
             stream: stream,
@@ -504,6 +518,7 @@ actor LLMActor {
         let fullTokensForContinuation = mlxStart.fullTokens
         let tokenNDimForContinuation = mlxStart.tokenNDim
         let continuationInjection = safeguardConfig.continuationHandOff
+        let continuationToolSpecs = canonicalTools
         let actorRef = self
         let continuationStarter:
             @Sendable (String) async throws -> HTTPServerRawGenerationStart = { safePrefix in
@@ -512,6 +527,7 @@ actor LLMActor {
                 tokenNDim: tokenNDimForContinuation,
                 safeThinkingPrefix: safePrefix,
                 injection: continuationInjection,
+                toolSpecs: continuationToolSpecs,
                 parameters: parameters
             )
         }
@@ -539,6 +555,15 @@ actor LLMActor {
             var parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
             var rawChunkParts: [String] = []
             var libraryParsedToolCalls = false
+            // Vendor's ToolCallProcessor silently drops its in-flight buffer at
+            // EOS if `parseEOS` can't decode it (e.g. the model emitted
+            // `<tool_call>…malformed…` then hit EOS without `</tool_call>`).
+            // Accumulate every `.toolCallBufferDelta` so we can surface the
+            // lost content as `.malformedToolCall` to the caller; without this
+            // the client sees `finish_reason=stop` with empty tool_calls and
+            // has no way to detect that a tool call was attempted.
+            var libraryToolCallBufferAccum = ""
+            var libraryToolCallEventCount = 0
             var completionInfo: AgentGeneration.Info?
             let safeguard = ThinkingSafeguardObserver(config: safeguardConfig)
 
@@ -564,6 +589,13 @@ actor LLMActor {
                         ))
                     case .malformedToolCall:
                         break
+                    case .toolCallDelta:
+                        // In-flight tool-call body deltas are surfaced to
+                        // consumers (the Requests log UI) via the continuation
+                        // yield below. The textContent / toolCalls accumulators
+                        // are populated only on the final `.toolCall` event, so
+                        // there's nothing to mutate here.
+                        break
                     case .thinkStart, .thinkEnd, .info:
                         break
                     }
@@ -583,7 +615,7 @@ actor LLMActor {
                     // explicitly to cover both tool-call event variants.
                     if !allowToolEvents {
                         switch event {
-                        case .toolCall, .malformedToolCall:
+                        case .toolCall, .malformedToolCall, .toolCallDelta:
                             return nil
                         default:
                             break
@@ -646,6 +678,21 @@ actor LLMActor {
 
                 var currentStream: AsyncStream<Generation> = mlxStart.stream
 
+                // Restore-state snapshot: what cache state does this generation
+                // begin from? Pair this with A2's silent-close warning to
+                // correlate model misbehavior with cache hits (e.g. the Qwen3.6
+                // hybrid-linear-attention stale-state bug, jundot/omlx#825).
+                Log.agent.info(
+                    "Generation starting — "
+                    + "request_id=\(requestID.uuidString) "
+                    + "cached=\(mlxStart.skippedPrefillTokens)/"
+                    + "\(mlxStart.promptTokenCount) "
+                    + "sharedPrefix=\(mlxStart.sharedPrefixLength) "
+                    + "lookup=\(mlxStart.lookupReason) "
+                    + "restoreMs=\(String(format: "%.1f", mlxStart.restoreMs * 1000)) "
+                    + "prefillMs=\(String(format: "%.1f", mlxStart.prefillMs * 1000))"
+                )
+
                 streamLoop: while true {
                     var intervention: (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)? = nil
 
@@ -655,6 +702,11 @@ actor LLMActor {
                         switch item {
                         case .chunk(let text):
                             rawChunkParts.append(text)
+                            Log.agent.debug(
+                                "MLX chunk — len=\(text.count) "
+                                + "head=\(String(text.prefix(48)).debugDescription) "
+                                + "tail=\(String(text.suffix(32)).debugDescription)"
+                            )
                             if let fired = emitParserEvents(
                                 parser.processChunk(text),
                                 allowToolEvents: !libraryParsedToolCalls
@@ -664,14 +716,51 @@ actor LLMActor {
 
                         case .toolCall(let call):
                             libraryParsedToolCalls = true
+                            libraryToolCallEventCount += 1
+                            // A successful close-tag parse consumed whatever
+                            // buffer the deltas were building toward — reset
+                            // the accumulator so a *subsequent* in-flight
+                            // tool call that fails to parse doesn't include
+                            // this already-parsed block's deltas in its
+                            // malformed surface.
+                            libraryToolCallBufferAccum = ""
+                            Log.agent.debug(
+                                "MLX library-parsed toolCall — name=\(call.function.name) "
+                                + "argKeys=\(Array(call.function.arguments.keys))"
+                            )
                             handle(.toolCall(call))
+
+                        case .toolCallBufferDelta(let delta):
+                            // Vendor library is buffering a `<tool_call>` block
+                            // and just added `delta` characters to its internal
+                            // buffer. Forward as a progressive UI event so the
+                            // Requests log can render arguments live, then
+                            // suppress app-level parser events on the eventual
+                            // close (the vendor will surface the final
+                            // `.toolCall` atomically).
+                            libraryParsedToolCalls = true
+                            libraryToolCallBufferAccum += delta
+                            Log.agent.debug(
+                                "MLX toolCallBufferDelta — len=\(delta.count) "
+                                + "head=\(String(delta.prefix(48)).debugDescription) "
+                                + "tail=\(String(delta.suffix(32)).debugDescription) "
+                                + "accumLen=\(libraryToolCallBufferAccum.count)"
+                            )
+                            handle(.toolCallDelta(name: nil, argumentsDelta: delta))
 
                         case .info(let info):
                             completionInfo = .init(
                                 promptTokenCount: info.promptTokenCount,
                                 generationTokenCount: info.generationTokenCount,
                                 promptTime: info.promptTime,
-                                generateTime: info.generateTime
+                                generateTime: info.generateTime,
+                                stopReason: info.stopReason
+                            )
+                            Log.agent.debug(
+                                "MLX generation info — gen=\(info.generationTokenCount) "
+                                + "prompt=\(info.promptTokenCount) "
+                                + "stopReason=\(describeStopReason(info.stopReason)) "
+                                + "tok/s=\(String(format: "%.1f", info.tokensPerSecond))"
                             )
                         }
                         if intervention != nil { break }
@@ -731,6 +820,38 @@ actor LLMActor {
                     allowToolEvents: !libraryParsedToolCalls
                 )
 
+                // Surface the vendor's dropped in-flight buffer. When the
+                // model emits `<tool_call>…malformed…` and hits EOS before
+                // closing the tag, ToolCallProcessor.processEOS silently drops
+                // the buffer if parseEOS can't decode it — the call path then
+                // returns empty content with finish_reason=stop, and the
+                // client has no way to know a tool call was attempted. We
+                // raise the content back through the existing malformed
+                // channel so CompletionHandler's per-event warning log fires
+                // and the Requests log shows a red "malformed" span.
+                let droppedBuffer = libraryToolCallBufferAccum
+                libraryToolCallBufferAccum = ""
+                if libraryParsedToolCalls,
+                   libraryToolCallEventCount == 0,
+                   !droppedBuffer.isEmpty {
+                    // Wrap with `<tool_call>…</tool_call>` so clients (opencode,
+                    // etc.) can always detect a tool-call attempt was made
+                    // even when the model was interrupted before emitting the
+                    // close tag. The vendor buffer starts with `<tool_call>`
+                    // but frequently lacks the closing tag in Qwen3.5/3.6
+                    // interrupted-completion cases.
+                    let wrappedBuffer = Self.wrapMalformedToolCallBuffer(droppedBuffer)
+                    Log.agent.warning(
+                        "Vendor ToolCallProcessor dropped unparseable buffer at EOS — "
+                        + "request_id=\(requestID.uuidString) "
+                        + "bufferLen=\(droppedBuffer.count) "
+                        + "wrappedLen=\(wrappedBuffer.count) "
+                        + "head=\(String(wrappedBuffer.prefix(120)).debugDescription) "
+                        + "tail=\(String(wrappedBuffer.suffix(80)).debugDescription)"
+                    )
+                    handle(.malformedToolCall(wrappedBuffer))
+                }
+
                 if let completionInfo {
                     handle(.info(completionInfo))
                     diagnosticsContext.log(PrefixCacheDiagnostics.TTFTEvent(
@@ -741,10 +862,17 @@ actor LLMActor {
                     ))
                     Log.agent.info(
                         "Generation complete — \(completionInfo.generationTokenCount) tokens, "
-                        + "\(String(format: "%.1f", completionInfo.tokensPerSecond)) tok/s"
+                        + "\(String(format: "%.1f", completionInfo.tokensPerSecond)) tok/s, "
+                        + "stopReason=\(describeStopReason(completionInfo.stopReason))"
                     )
                     let rawChunks = rawChunkParts.joined()
                     Log.agent.debug("Raw library chunks (after ToolCallProcessor):\n\(rawChunks)")
+                    if !droppedBuffer.isEmpty {
+                        Log.agent.debug(
+                            "Dropped in-flight toolCall buffer (vendor-buffered, "
+                            + "never surfaced as .toolCall):\n\(droppedBuffer)"
+                        )
+                    }
                     if !libraryParsedToolCalls &&
                         (rawChunks.contains("tool_call") || rawChunks.contains("<function"))
                     {
@@ -752,6 +880,28 @@ actor LLMActor {
                             "Raw output contains tool call markers but no .toolCall events were emitted by library"
                         )
                     }
+                } else {
+                    // Stream closed without an `.info` event from MLX — the case we
+                    // were previously blind to (jundot/omlx#825: Qwen3.6 hybrid
+                    // linear attention losing tool-calling after prefix-cache hit).
+                    // Emit every diagnostic we have so the operator can correlate
+                    // model behavior with cache state in a single log line cluster.
+                    let rawChunks = rawChunkParts.joined()
+                    let parserState = parser.snapshotFinalizeState()
+                    Log.agent.warning(
+                        "Generation stream closed without .info event — "
+                        + "request_id=\(requestID.uuidString) "
+                        + "chunks=\(rawChunkParts.count) "
+                        + "rawLen=\(rawChunks.count) "
+                        + "libraryParsedToolCalls=\(libraryParsedToolCalls) "
+                        + "cachedTokens=\(mlxStart.skippedPrefillTokens)/"
+                        + "\(mlxStart.promptTokenCount) "
+                        + "lookupReason=\(mlxStart.lookupReason) "
+                        + "parserInsideThink=\(parserState.insideThinkBlock) "
+                        + "parserThinkClosed=\(parserState.thinkBlockClosed) "
+                        + "parserBufferLen=\(parserState.bufferLen) "
+                        + "rawTail=\(String(rawChunks.suffix(200)).debugDescription)"
+                    )
                 }
 
                 // -- Post-generation: store snapshots in radix tree --
@@ -1362,6 +1512,26 @@ actor LLMActor {
         }
     }
 
+    /// Ensure a malformed tool-call buffer surfaced from the vendor's
+    /// ToolCallProcessor is wrapped with both `<tool_call>` and `</tool_call>`
+    /// tags. The vendor's in-flight buffer always starts with `<tool_call>`
+    /// by construction (see `ToolCallProcessor.processTaggedChunk`), but the
+    /// close tag may be missing when the model was interrupted before
+    /// emitting it — in that case the HTTP client (e.g. opencode) otherwise
+    /// sees only an opening tag and can't detect the tool-call attempt.
+    /// Idempotent: if the buffer already has both tags, returns it unchanged.
+    nonisolated static func wrapMalformedToolCallBuffer(_ buffer: String) -> String {
+        var wrapped = buffer
+        if !wrapped.hasPrefix("<tool_call>") {
+            wrapped = "<tool_call>\n" + wrapped
+        }
+        if !wrapped.hasSuffix("</tool_call>") {
+            if !wrapped.hasSuffix("\n") { wrapped.append("\n") }
+            wrapped.append("</tool_call>")
+        }
+        return wrapped
+    }
+
     /// Canonicalize tool specs by round-tripping through `JSONSerialization` with
     /// `.sortedKeys`. Returns dicts with deterministic key ordering, so downstream
     /// Jinja `tojson` calls produce the same token sequence on every invocation.
@@ -1937,7 +2107,8 @@ actor LLMActor {
                 promptTokenCount: fullTokenCount,
                 modelConfiguration: context.configuration,
                 tokenizer: context.tokenizer,
-                iterator: iterator
+                iterator: iterator,
+                tools: canonicalTools
             )
 
             return HTTPPrefixCacheGeneration(
@@ -2623,16 +2794,17 @@ actor LLMActor {
         return modelType == "qwen3_5_moe"
     }
 
-    /// Returns `true` if a model is eligible for TriAttention.
+    /// Returns `true` if a model is eligible for TriAttention, regardless of
+    /// which quant format it ships in. The runtime wiring
+    /// (`TriAttentionSparseKVCache` + `Qwen35Attention.q_norm` hook) is
+    /// architecture-coupled — any Qwen3.5-family checkpoint with a valid
+    /// calibration artifact will activate it. Quant-format routing (PARO vs
+    /// standard MLX) is a separate concern handled at container-load time.
     ///
-    /// Qwen3.5-family MoE is currently excluded: the sparse-KV runtime
-    /// regresses decode by 15–25× on Qwen3.6-35B-A3B once the context
-    /// exceeds the retention budget. MoE loads fall back to dense attention
-    /// via the existing resolver path (`fallbackReason = .unsupportedModel`)
-    /// until the MoE sparse-KV runtime is profiled and fixed.
+    /// `isQwen35MoEModel(directory:)` remains available as a discriminator
+    /// for MoE-specific runtime specialization downstream of this gate.
     static func isTriAttentionEligibleModel(directory: URL) -> Bool {
-        guard isQwen35Model(directory: directory) else { return false }
-        return !isQwen35MoEModel(directory: directory)
+        isQwen35Model(directory: directory)
     }
 
     /// Detects the chat-template tool-call format from the model's

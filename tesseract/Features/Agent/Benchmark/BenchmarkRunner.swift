@@ -497,7 +497,8 @@ final class BenchmarkRunner {
             promptTokenCount: totalPromptTokens,
             generationTokenCount: totalGenTokens,
             promptTime: totalPromptTime,
-            generateTime: totalGenTime
+            generateTime: totalGenTime,
+            stopReason: .stop
         )
     }
 
