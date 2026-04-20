@@ -299,7 +299,7 @@ final class SettingsManager {
     }
 
     /// Runtime gate for TriAttention sparse attention on Qwen3.5 PARO text
-    /// models. Defaults to `false`. Surfaced in `ServerSettingsView` as a plain
+    /// models. Defaults to `false`. Surfaced in `ServerConfigurationView` as a plain
     /// toggle; plumbing flows through `makeTriAttentionConfig()` →
     /// `AgentGenerateParameters` → server core. Flipping this while an LLM is
     /// loaded kicks off an eager reload via `InferenceArbiter.reloadLLMIfNeeded()`

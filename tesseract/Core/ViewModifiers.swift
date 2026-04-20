@@ -122,10 +122,11 @@ extension View {
             .environment(container.inferenceArbiter)
     }
 
-    /// Server API: activity log + observability state.
+    /// Server API: activity log + observability state + HTTP listener lifecycle.
     @MainActor
     func injectServerDependencies(from container: DependencyContainer) -> some View {
         self
             .environment(container.serverGenerationLog)
+            .environment(container.httpServer)
     }
 }

@@ -64,11 +64,17 @@ struct ContentView: View {
                 .injectModelDependencies(from: container)
         case .general:
             GeneralSettingsSection()
-        case .server:
-            ServerSettingsView()
+        case .serverDashboard:
+            ServerDashboardView()
                 .injectCoreDependencies(from: container)
                 .injectServerDependencies(from: container)
                 .environment(container.inferenceArbiter)
+        case .serverConfiguration:
+            ServerConfigurationView()
+                .injectCoreDependencies(from: container)
+                .environment(container.inferenceArbiter)
+        case .serverPromptCache:
+            ServerPromptCacheView()
         case .model:
             ModelsPageView()
                 .environmentObject(container)

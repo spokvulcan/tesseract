@@ -543,6 +543,10 @@ final class HTTPServer {
     private(set) var isRunning = false
     private(set) var activeConnections = 0
     private(set) var totalRequestsServed = 0
+    /// Non-nil when the most recent enable attempt failed to bind or the listener
+    /// transitioned to `.failed`. Cleared on successful start or user-initiated
+    /// stop. Used by the Dashboard to distinguish "starting" from "failed".
+    private(set) var lastStartError: String?
 
     // MARK: - Configuration
 
@@ -598,6 +602,7 @@ final class HTTPServer {
 
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             Log.server.error("Invalid port: \(self.port)")
+            lastStartError = "Invalid port \(port)"
             return
         }
 
@@ -625,9 +630,11 @@ final class HTTPServer {
 
             newListener.start(queue: .global(qos: .userInitiated))
             isRunning = true
+            lastStartError = nil
             Log.server.info("Server starting on 127.0.0.1:\(self.port)")
         } catch {
             Log.server.error("Failed to create listener: \(error)")
+            lastStartError = "Bind failed: \(error.localizedDescription)"
         }
     }
 
@@ -642,6 +649,7 @@ final class HTTPServer {
         listener?.cancel()
         listener = nil
         isRunning = false
+        lastStartError = nil
         Log.server.info("Server stopped")
     }
 
@@ -650,6 +658,7 @@ final class HTTPServer {
         listener?.cancel()
         listener = nil
         isRunning = false
+        lastStartError = nil
         let connections = Array(trackedConnections.values)
         Log.server.info("Server stopping — draining \(connections.count) connection task(s)")
 
@@ -680,9 +689,11 @@ final class HTTPServer {
         switch state {
         case .ready:
             Log.server.info("Server ready on 127.0.0.1:\(self.port)")
+            lastStartError = nil
         case .failed(let error):
             Log.server.error("Server listener failed: \(error)")
             isRunning = false
+            lastStartError = "Listener failed: \(error.localizedDescription)"
         case .cancelled:
             isRunning = false
         default:

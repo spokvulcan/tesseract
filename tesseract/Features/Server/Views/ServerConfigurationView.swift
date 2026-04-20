@@ -1,12 +1,12 @@
 //
-//  ServerSettingsView.swift
+//  ServerConfigurationView.swift
 //  tesseract
 //
 
 import MLXLMCommon
 import SwiftUI
 
-struct ServerSettingsView: View {
+struct ServerConfigurationView: View {
     @Environment(SettingsManager.self) private var settings
     @Environment(InferenceArbiter.self) private var arbiter
     @State private var portText: String = ""
@@ -34,14 +34,13 @@ struct ServerSettingsView: View {
                 if settings.isServerEnabled {
                     LabeledContent("Endpoint") {
                         HStack {
-                            Text("http://127.0.0.1:\(String(settings.serverPort))")
+                            Text(serverEndpointURL(port: settings.serverPort))
                                 .font(.system(.body, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
 
                             Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString("http://127.0.0.1:\(String(settings.serverPort))", forType: .string)
+                                copyServerEndpointToPasteboard(port: settings.serverPort)
                             } label: {
                                 Image(systemName: "doc.on.doc")
                             }
@@ -60,7 +59,7 @@ struct ServerSettingsView: View {
 
                 if settings.triattentionEnabled {
                     LabeledContent("Active mode") {
-                        Text(attentionModeDescription)
+                        Text(triAttentionModeDescription(for: arbiter))
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -69,27 +68,9 @@ struct ServerSettingsView: View {
             } footer: {
                 Text("TriAttention reduces attention compute on long-context text inference. Supported only on PARO quantized Qwen3.5 models — other models automatically fall back to dense attention. Vision mode also falls back to dense. Toggling reloads the currently loaded model.")
             }
-
-            Section {
-                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                    HStack {
-                        Text("Live Activity")
-                            .font(.headline)
-                        Spacer()
-                        Text("Token-by-token observability")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, Theme.Spacing.md)
-
-                    ServerActivityPanel()
-                        .frame(height: 520)
-                }
-                .padding(.vertical, Theme.Spacing.xs)
-            }
         }
         .formStyle(.grouped)
-        .navigationTitle("Server API")
+        .navigationTitle("Configuration")
         .onAppear {
             portText = String(settings.serverPort)
         }
@@ -117,18 +98,7 @@ struct ServerSettingsView: View {
                 settings.serverPort = port
             }
         } else {
-            // Revert to the current valid port if input was invalid or empty
             portText = String(settings.serverPort)
         }
-    }
-
-    private var attentionModeDescription: String {
-        guard let state = arbiter.loadedLLMState else {
-            return "Pending — no model loaded yet"
-        }
-        if let reason = state.triAttentionFallbackReason {
-            return "Dense (fallback: \(reason.displayLabel))"
-        }
-        return state.effectiveTriAttention.enabled ? "TriAttention" : "Dense"
     }
 }

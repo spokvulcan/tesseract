@@ -10,7 +10,6 @@ struct ServerActivityPanel: View {
         HStack(spacing: 0) {
             RequestRail()
                 .frame(width: 220)
-                .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
 
             Divider()
 
@@ -22,14 +21,8 @@ struct ServerActivityPanel: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
-                .fill(Color(nsColor: .underPageBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous)
-                .strokeBorder(.separator, lineWidth: 0.5)
-        )
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
     }
 
     private var selectedTrace: RequestTrace? {
@@ -59,8 +52,7 @@ private struct RequestRail: View {
                         Image(systemName: "trash")
                             .font(.caption)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                    .buttonStyle(.glass)
                     .help("Clear all")
                 }
             }

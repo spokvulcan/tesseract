@@ -27,6 +27,14 @@ struct SidebarView: View {
                     }
                 }
             }
+
+            Section("Server") {
+                ForEach(NavigationItem.serverPages) { page in
+                    NavigationLink(value: page) {
+                        Label(page.name, systemImage: page.symbolName)
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
         .frame(minWidth: 180)

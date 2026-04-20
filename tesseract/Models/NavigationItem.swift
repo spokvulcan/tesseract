@@ -13,14 +13,17 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case image
     case zimage
     case general
-    case server
+    case serverDashboard
+    case serverConfiguration
+    case serverPromptCache
     case model
     case recording
 
     var id: String { rawValue }
 
     static let mainPages: [NavigationItem] = [.agent, .scheduled, .dictation, .speech]
-    static let settingsPages: [NavigationItem] = [.general, .server, .recording, .model]
+    static let settingsPages: [NavigationItem] = [.general, .recording, .model]
+    static let serverPages: [NavigationItem] = [.serverDashboard, .serverConfiguration, .serverPromptCache]
 
     var name: LocalizedStringResource {
         switch self {
@@ -31,7 +34,9 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .image: "Image"
         case .zimage: "Z-Image"
         case .general: "General"
-        case .server: "Server API"
+        case .serverDashboard: "Dashboard"
+        case .serverConfiguration: "Configuration"
+        case .serverPromptCache: "Prompt Cache"
         case .model: "Models"
         case .recording: "Preferences"
         }
@@ -46,7 +51,9 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .image: "photo.fill"
         case .zimage: "photo.artframe"
         case .general: "gear"
-        case .server: "server.rack"
+        case .serverDashboard: "gauge"
+        case .serverConfiguration: "server.rack"
+        case .serverPromptCache: "tray.2.fill"
         case .model: "brain"
         case .recording: "slider.horizontal.3"
         }
@@ -69,8 +76,12 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
             ZImageGenContentView()
         case .general:
             GeneralSettingsSection()
-        case .server:
-            ServerSettingsView()
+        case .serverDashboard:
+            ServerDashboardView()
+        case .serverConfiguration:
+            ServerConfigurationView()
+        case .serverPromptCache:
+            ServerPromptCacheView()
         case .model:
             ModelsPageView()
         case .recording:

@@ -122,34 +122,39 @@ struct ActiveTraceDetailView: View {
     @ViewBuilder
     private var footer: some View {
         HStack(spacing: Theme.Spacing.md) {
-            Toggle(isOn: $isAutoScrollEnabled) {
-                Label("Auto-scroll", systemImage: isAutoScrollEnabled
-                      ? "arrow.down.to.line"
-                      : "pause.rectangle")
-                    .labelStyle(.iconOnly)
-            }
-            .toggleStyle(.button)
-            .help(isAutoScrollEnabled
-                  ? "Auto-scroll on — toggle to pin scroll"
-                  : "Auto-scroll paused")
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    Toggle(isOn: $isAutoScrollEnabled) {
+                        Label("Auto-scroll", systemImage: isAutoScrollEnabled
+                              ? "arrow.down.to.line"
+                              : "pause.rectangle")
+                            .labelStyle(.iconOnly)
+                    }
+                    .toggleStyle(.button)
+                    .buttonStyle(.glass)
+                    .help(isAutoScrollEnabled
+                          ? "Auto-scroll on — toggle to pin scroll"
+                          : "Auto-scroll paused")
 
-            Button {
-                copyOutput()
-            } label: {
-                Label("Copy", systemImage: "doc.on.doc")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.borderless)
-            .help("Copy generated text")
+                    Button {
+                        copyOutput()
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.glass)
+                    .help("Copy generated text")
 
-            Button {
-                revealRawRequest()
-            } label: {
-                Label("Raw JSON", systemImage: "doc.text.magnifyingglass")
-                    .labelStyle(.iconOnly)
+                    Button {
+                        revealRawRequest()
+                    } label: {
+                        Label("Raw JSON", systemImage: "doc.text.magnifyingglass")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.glass)
+                    .help("Reveal raw request JSON in Finder")
+                }
             }
-            .buttonStyle(.borderless)
-            .help("Reveal raw request JSON in Finder")
 
             Spacer()
 
