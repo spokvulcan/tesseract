@@ -541,6 +541,7 @@ final class HTTPServer {
     // MARK: - Observable State
 
     private(set) var isRunning = false
+    private(set) var isStarting = false
     private(set) var activeConnections = 0
     private(set) var totalRequestsServed = 0
     /// Non-nil when the most recent enable attempt failed to bind or the listener
@@ -597,11 +598,12 @@ final class HTTPServer {
     // MARK: - Lifecycle
 
     func start() async {
-        guard !isRunning else { return }
+        guard !isRunning, !isStarting else { return }
         isStopping = false
 
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             Log.server.error("Invalid port: \(self.port)")
+            isStarting = false
             lastStartError = "Invalid port \(port)"
             return
         }
@@ -629,11 +631,13 @@ final class HTTPServer {
             }
 
             newListener.start(queue: .global(qos: .userInitiated))
-            isRunning = true
+            isStarting = true
+            isRunning = false
             lastStartError = nil
             Log.server.info("Server starting on 127.0.0.1:\(self.port)")
         } catch {
             Log.server.error("Failed to create listener: \(error)")
+            isStarting = false
             lastStartError = "Bind failed: \(error.localizedDescription)"
         }
     }
@@ -648,6 +652,7 @@ final class HTTPServer {
         trackedConnections.removeAll()
         listener?.cancel()
         listener = nil
+        isStarting = false
         isRunning = false
         lastStartError = nil
         Log.server.info("Server stopped")
@@ -657,6 +662,7 @@ final class HTTPServer {
         isStopping = true
         listener?.cancel()
         listener = nil
+        isStarting = false
         isRunning = false
         lastStartError = nil
         let connections = Array(trackedConnections.values)
@@ -677,10 +683,10 @@ final class HTTPServer {
 
     func updatePort(_ newPort: UInt16) async {
         guard newPort != port else { return }
-        let wasRunning = isRunning
-        if wasRunning { stop() }
+        let shouldRestart = isRunning || isStarting
+        if shouldRestart { stop() }
         port = newPort
-        if wasRunning { await start() }
+        if shouldRestart { await start() }
     }
 
     // MARK: - Private — Listener
@@ -689,12 +695,16 @@ final class HTTPServer {
         switch state {
         case .ready:
             Log.server.info("Server ready on 127.0.0.1:\(self.port)")
+            isStarting = false
+            isRunning = true
             lastStartError = nil
         case .failed(let error):
             Log.server.error("Server listener failed: \(error)")
+            isStarting = false
             isRunning = false
             lastStartError = "Listener failed: \(error.localizedDescription)"
         case .cancelled:
+            isStarting = false
             isRunning = false
         default:
             break

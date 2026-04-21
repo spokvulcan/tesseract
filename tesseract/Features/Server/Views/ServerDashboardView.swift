@@ -25,6 +25,7 @@ struct ServerDashboardView: View {
         ServerRunState(
             enabled: settings.isServerEnabled,
             isRunning: httpServer.isRunning,
+            isStarting: httpServer.isStarting,
             lastStartError: httpServer.lastStartError
         )
     }
