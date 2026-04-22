@@ -20,14 +20,12 @@ struct AgentGenerateParametersTests {
         // Qwen3.6 must not inherit qwen3.5's presencePenalty = 1.5 — inside
         // `<think>` the penalty drives paraphrased loops with changing
         // identifiers, which downstream signals don't catch as cleanly.
-        for modelID in ["qwen3.6-35b-a3b-ud", "qwen3.6-35b-a3b-ud-3bit"] {
-            let params = AgentGenerateParameters.forModel(modelID)
-            #expect(params.temperature == AgentGenerateParameters.qwen36Thinking.temperature)
-            #expect(params.topP == AgentGenerateParameters.qwen36Thinking.topP)
-            #expect(params.topK == AgentGenerateParameters.qwen36Thinking.topK)
-            #expect(params.presencePenalty == nil)
-            #expect(params.thinkingSafeguard.enabled == true)
-        }
+        let params = AgentGenerateParameters.forModel("qwen3.6-35b-a3b-ud")
+        #expect(params.temperature == AgentGenerateParameters.qwen36Thinking.temperature)
+        #expect(params.topP == AgentGenerateParameters.qwen36Thinking.topP)
+        #expect(params.topK == AgentGenerateParameters.qwen36Thinking.topK)
+        #expect(params.presencePenalty == nil)
+        #expect(params.thinkingSafeguard.enabled == true)
     }
 
     @MainActor

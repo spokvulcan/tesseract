@@ -69,24 +69,6 @@ struct ModelDefinitionCatalogTests {
         )
     }
 
-    @Test func includesQwen36Moe3bitInAgentCatalog() async throws {
-        guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.6-35b-a3b-ud-3bit" }) else {
-            Issue.record("Missing qwen3.6-35b-a3b-ud-3bit model definition")
-            return
-        }
-
-        #expect(model.category == .agent)
-        #expect(model.repoID == "unsloth/Qwen3.6-35B-A3B-UD-MLX-3bit")
-        #expect(model.requiredExtension == "safetensors")
-        #expect(model.cacheSubdirectory == "unsloth_Qwen3.6-35B-A3B-UD-MLX-3bit")
-        #expect(
-            ModelDefinition.byCategory()
-                .first(where: { $0.0 == .agent })?
-                .1
-                .contains(where: { $0.id == model.id }) == true
-        )
-    }
-
     @Test func detectsQwen35MoEFamily() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
