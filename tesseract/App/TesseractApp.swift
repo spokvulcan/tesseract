@@ -49,6 +49,10 @@ struct TesseractApp: App {
             Self.runHarness("Prefill step benchmark") {
                 try await PrefillStepBenchmarkRunner(runner: BenchmarkRunner()).run()
             }
+        } else if args.contains("--paroquant-vlm-smoke") {
+            Self.runHarness("ParoQuant VLM smoke") {
+                try await ParoQuantVLMSmokeRunner(runner: BenchmarkRunner()).run()
+            }
         }
     }
 

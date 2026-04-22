@@ -248,6 +248,10 @@ cmd_prefill_step_benchmark() {
     _run_loaded_model_check --prefill-step-benchmark prefill-step-benchmark
 }
 
+cmd_paroquant_vlm_smoke() {
+    _run_loaded_model_check --paroquant-vlm-smoke paroquant-vlm-smoke
+}
+
 cmd_archive() {
     local archive_path="$PROJECT_DIR/build/Tesseract.xcarchive"
     echo "Archiving tesseract for App Store (arm64 only)..."
@@ -347,6 +351,7 @@ usage() {
     echo "  prefix-cache-e2e         Build + run Task 1.8 HybridPrefixCacheE2E (loaded-model cache verification)"
     echo "  hybrid-cache-correctness Build + run Task 2.2 logit-equivalence harness (mid-prefill restore bitwise check)"
     echo "  prefill-step-benchmark   Build + run Task 3.2 prefill-step-size benchmark sweep"
+    echo "  paroquant-vlm-smoke      Build + run VLM load smoke for PARO models (PR #164 C5 gate)"
     echo "  archive     Create release archive for App Store submission"
     echo "  resolve     Resolve SPM package dependencies"
     echo "  clean       Clean build artifacts and derived data"
@@ -364,6 +369,7 @@ case "${1:-}" in
     prefix-cache-e2e)         cmd_prefix_cache_e2e ;;
     hybrid-cache-correctness) cmd_hybrid_cache_correctness ;;
     prefill-step-benchmark)   cmd_prefill_step_benchmark ;;
+    paroquant-vlm-smoke)      cmd_paroquant_vlm_smoke ;;
     archive)     cmd_archive ;;
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;
