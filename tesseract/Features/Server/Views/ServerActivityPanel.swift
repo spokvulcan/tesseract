@@ -37,8 +37,6 @@ private struct RequestRail: View {
     @Environment(ServerGenerationLog.self) private var log
 
     var body: some View {
-        @Bindable var log = log
-
         VStack(spacing: 0) {
             HStack {
                 Text("Requests")
@@ -71,20 +69,59 @@ private struct RequestRail: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(selection: $log.selectedTraceID) {
-                    // Newest first for easy scanning.
-                    ForEach(log.traces.reversed()) { trace in
-                        RequestTraceRow(trace: trace)
-                            .tag(trace.id as UUID?)
-                            .listRowInsets(EdgeInsets(
-                                top: 4, leading: 8, bottom: 4, trailing: 8
-                            ))
+                // Eager `ScrollView { VStack { ForEach } }` instead of
+                // `List(selection:)`: List's per-row NSHostingView prefetch
+                // (LazyLayoutViewCache.signalPrefetch) races constraint
+                // updates against the 33ms streamingVersion bumps + 100ms
+                // TimelineView ticks inside active rows and trips an AppKit
+                // re-entrant layout trap. Same workaround StreamingSpanListView
+                // uses for active traces.
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(log.traces.reversed()) { trace in
+                            RequestRailRow(
+                                trace: trace,
+                                isSelected: log.selectedTraceID == trace.id
+                            ) {
+                                log.selectedTraceID = trace.id
+                            }
+                        }
                     }
+                    .padding(.vertical, Theme.Spacing.xs)
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.hidden)
+                .scrollBounceBehavior(.basedOnSize)
             }
         }
+    }
+}
+
+// MARK: - Request rail row
+
+private struct RequestRailRow: View {
+    let trace: RequestTrace
+    let isSelected: Bool
+    let onSelect: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        RequestTraceRow(trace: trace)
+            .padding(.vertical, 4)
+            .padding(.horizontal, Theme.Spacing.sm)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous)
+                    .fill(fillStyle)
+            )
+            .onHover { isHovered = $0 }
+            .onTapGesture(perform: onSelect)
+            .padding(.horizontal, Theme.Spacing.xs)
+    }
+
+    private var fillStyle: AnyShapeStyle {
+        if isSelected { return AnyShapeStyle(.selection) }
+        if isHovered  { return AnyShapeStyle(.quaternary) }
+        return AnyShapeStyle(Color.clear)
     }
 }
 
