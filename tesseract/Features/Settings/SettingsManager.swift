@@ -445,6 +445,8 @@ final class SettingsManager {
         prefixCacheSSDEnabled = ud.bool(forKey: Key.prefixCacheSSDEnabled)
         prefixCacheSSDBudgetBytes = ud.integer(forKey: Key.prefixCacheSSDBudgetBytes)
         prefixCacheSSDDirectoryOverride = ud.string(forKey: Key.prefixCacheSSDDirectoryOverride)
+
+        normalizePersistedSelectionsIfNeeded()
     }
 
     // MARK: - Methods
@@ -553,6 +555,28 @@ final class SettingsManager {
         } catch {
             Log.general.error("Failed to update launch at login: \(error)")
         }
+    }
+
+    private func normalizePersistedSelectionsIfNeeded() {
+        let normalizedModelID = Self.normalizedAgentModelID(selectedAgentModelID)
+        guard normalizedModelID != selectedAgentModelID else { return }
+        selectedAgentModelID = normalizedModelID
+        UserDefaults.standard.set(normalizedModelID, forKey: Key.selectedAgentModelID)
+    }
+
+    private static func normalizedAgentModelID(_ candidate: String) -> String {
+        let agentModelIDs = Set(
+            ModelDefinition.all
+                .filter { $0.category == .agent }
+                .map(\.id)
+        )
+        if agentModelIDs.contains(candidate) {
+            return candidate
+        }
+        if agentModelIDs.contains(ModelDefinition.defaultAgentModelID) {
+            return ModelDefinition.defaultAgentModelID
+        }
+        return ModelDefinition.all.first(where: { $0.category == .agent })?.id ?? candidate
     }
 
     func applyDockVisibility() {
