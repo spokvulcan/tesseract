@@ -75,6 +75,9 @@ struct ContentView: View {
                 .environment(container.inferenceArbiter)
         case .serverPromptCache:
             ServerPromptCacheView()
+                .injectCoreDependencies(from: container)
+                .injectAgentDependencies(from: container)
+                .injectServerDependencies(from: container)
         case .model:
             ModelsPageView()
                 .environmentObject(container)

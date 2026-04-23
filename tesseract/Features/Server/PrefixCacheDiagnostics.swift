@@ -16,6 +16,9 @@ nonisolated enum PrefixCacheDiagnostics {
             let line = render(payload)
             Log.agent.info(line)
             PrefixCacheDiagnostics.forwardToSink(line)
+            PrefixCacheDiagnostics.forwardTelemetryEvent(
+                PrefixCacheDiagnostics.telemetryEvent(payload, context: self)
+            )
         }
 
         func logSkip(
@@ -36,6 +39,13 @@ nonisolated enum PrefixCacheDiagnostics {
                 Log.agent.error(line)
             }
             PrefixCacheDiagnostics.forwardToSink(line)
+            PrefixCacheDiagnostics.forwardTelemetryEvent(
+                PrefixCacheDiagnostics.telemetryEvent(SkipEvent(
+                    stage: stage,
+                    reason: reason,
+                    extraFields: extraFields
+                ), context: self)
+            )
         }
     }
 
@@ -476,6 +486,7 @@ nonisolated enum PrefixCacheDiagnostics {
         let line = renderSystem(payload)
         Log.agent.info(line)
         forwardToSink(line)
+        forwardTelemetryEvent(telemetrySystemEvent(payload))
     }
 
     /// Test-only event sink registry. Every emitted diagnostic line
@@ -523,6 +534,70 @@ nonisolated enum PrefixCacheDiagnostics {
         for (_, handler) in snapshot {
             handler(line)
         }
+    }
+
+    /// Structured event sink registry for in-app observability. The string
+    /// renderer above remains the stable wire contract for tests and Console;
+    /// this side channel carries the same event fields as values so SwiftUI
+    /// does not need to parse log lines.
+    nonisolated final class TelemetrySinkHandle: @unchecked Sendable {
+        let id: UUID
+        init(id: UUID) { self.id = id }
+    }
+
+    nonisolated(unsafe) private static var _telemetrySinks:
+        [(UUID, @Sendable (PromptCacheTelemetryEvent) -> Void)] = []
+    private static let _telemetrySinkLock = NSLock()
+
+    @discardableResult
+    nonisolated static func addTelemetrySink(
+        _ handler: @escaping @Sendable (PromptCacheTelemetryEvent) -> Void
+    ) -> TelemetrySinkHandle {
+        _telemetrySinkLock.lock()
+        defer { _telemetrySinkLock.unlock() }
+        let id = UUID()
+        _telemetrySinks.append((id, handler))
+        return TelemetrySinkHandle(id: id)
+    }
+
+    nonisolated static func removeTelemetrySink(_ handle: TelemetrySinkHandle) {
+        _telemetrySinkLock.lock()
+        defer { _telemetrySinkLock.unlock() }
+        _telemetrySinks.removeAll { $0.0 == handle.id }
+    }
+
+    nonisolated static func forwardTelemetryEvent(_ event: PromptCacheTelemetryEvent) {
+        _telemetrySinkLock.lock()
+        let snapshot = _telemetrySinks
+        _telemetrySinkLock.unlock()
+        for (_, handler) in snapshot {
+            handler(event)
+        }
+    }
+
+    private static func telemetryEvent(
+        _ payload: some Payload,
+        context: Context
+    ) -> PromptCacheTelemetryEvent {
+        PromptCacheTelemetryEvent(
+            scope: .request,
+            eventName: payload.eventName,
+            requestID: context.requestID,
+            modelID: context.modelID,
+            kvBits: context.kvBits,
+            kvGroupSize: context.kvGroupSize,
+            fields: payload.fields
+        )
+    }
+
+    private static func telemetrySystemEvent(
+        _ payload: some Payload
+    ) -> PromptCacheTelemetryEvent {
+        PromptCacheTelemetryEvent(
+            scope: .system,
+            eventName: payload.eventName,
+            fields: payload.fields
+        )
     }
 
     /// Wire-format string for an `SSDDropReason`. Pinned in tests so

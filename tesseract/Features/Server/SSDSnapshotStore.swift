@@ -335,6 +335,28 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         )
     }
 
+    nonisolated func diagnosticsSnapshot() -> PromptCacheSSDSnapshot {
+        lock.lock()
+        let currentBytes = currentSSDBytes
+        let queuedBytes = pendingBytes
+        let queuedCount = pending.count
+        let residentSnapshots = manifest.snapshots.count
+        let residentPartitions = manifest.partitions.count
+        lock.unlock()
+
+        return PromptCacheSSDSnapshot(
+            enabled: true,
+            rootPath: rootURL.path,
+            budgetBytes: budgetBytes,
+            currentBytes: currentBytes,
+            pendingBytes: queuedBytes,
+            maxPendingBytes: maxPendingBytes,
+            pendingCount: queuedCount,
+            snapshotCount: residentSnapshots,
+            partitionCount: residentPartitions
+        )
+    }
+
     /// Block until the writer's pending queue is fully drained and
     /// the in-memory manifest has been persisted to disk. Used by
     /// `LLMActor.unloadModel` / benchmark restart scenarios to

@@ -304,6 +304,64 @@ struct PrefixCacheDiagnosticsTests {
         #expect(commit == "event=storageRefCommit id=diag-snap-10")
     }
 
+    @Test func telemetrySinkCapturesStructuredFieldsWithoutChangingRenderedLogs() {
+        let sink = TelemetryRecordingSink()
+        let handle = PrefixCacheDiagnostics.addTelemetrySink(sink.handler)
+        defer { PrefixCacheDiagnostics.removeTelemetrySink(handle) }
+
+        let lookup = PrefixCacheDiagnostics.LookupEvent(
+            reason: .hit(snapshotOffset: 768, totalTokens: 1024, type: .system),
+            promptTokens: 1024,
+            sharedPrefixLength: 900,
+            skippedPrefillTokens: 768,
+            newTokensToPrefill: 256,
+            lookupMs: 0.012,
+            restoreMs: 0.003,
+            plannedCheckpoints: [(offset: 900, type: .branchPoint)]
+        )
+        let rendered = context.render(lookup)
+        #expect(rendered ==
+            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=hit promptTokens=1024 sharedPrefixLength=900 snapshotOffset=768 checkpointType=system skippedPrefillTokens=768 newTokensToPrefill=256 lookupMs=12.000 restoreMs=3.000 plannedCheckpoints=[900:branchPoint]")
+
+        let runID = UUID()
+        let localContext = PrefixCacheDiagnostics.Context(
+            requestID: runID,
+            modelID: "qwen3.5",
+            kvBits: 8,
+            kvGroupSize: 64
+        )
+        let systemID = "telemetry-\(runID.uuidString)"
+
+        localContext.log(lookup)
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.SSDAdmitEvent(
+                id: systemID,
+                bytes: 4096,
+                outcome: .accepted
+            )
+        )
+
+        let mine = sink.drain().filter {
+            $0.requestID == runID || $0.field("id") == systemID
+        }
+        #expect(mine.count == 2)
+
+        let structuredLookup = mine.first { $0.eventName == "lookup" }
+        #expect(structuredLookup?.scope == .request)
+        #expect(structuredLookup?.requestID == runID)
+        #expect(structuredLookup?.modelID == "qwen3.5")
+        #expect(structuredLookup?.kvBits == 8)
+        #expect(structuredLookup?.kvGroupSize == 64)
+        #expect(structuredLookup?.field("reason") == "hit")
+        #expect(structuredLookup?.field("plannedCheckpoints") == "[900:branchPoint]")
+
+        let structuredSystem = mine.first { $0.eventName == "ssdAdmit" }
+        #expect(structuredSystem?.scope == .system)
+        #expect(structuredSystem?.requestID == nil)
+        #expect(structuredSystem?.field("id") == systemID)
+        #expect(structuredSystem?.field("outcome") == "accepted")
+    }
+
     private final class RecordingSink: @unchecked Sendable {
         private let lock = NSLock()
         private var lines: [String] = []
@@ -322,6 +380,28 @@ struct PrefixCacheDiagnosticsTests {
             defer { lock.unlock() }
             let copy = lines
             lines.removeAll()
+            return copy
+        }
+    }
+
+    private final class TelemetryRecordingSink: @unchecked Sendable {
+        private let lock = NSLock()
+        private var events: [PromptCacheTelemetryEvent] = []
+
+        var handler: @Sendable (PromptCacheTelemetryEvent) -> Void {
+            { [weak self] event in
+                guard let self else { return }
+                self.lock.lock()
+                self.events.append(event)
+                self.lock.unlock()
+            }
+        }
+
+        func drain() -> [PromptCacheTelemetryEvent] {
+            lock.lock()
+            defer { lock.unlock() }
+            let copy = events
+            events.removeAll()
             return copy
         }
     }

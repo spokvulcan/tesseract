@@ -355,6 +355,10 @@ final class AgentEngine {
         await llmActor.prefixCacheStats()
     }
 
+    func promptCacheTelemetrySnapshot() async -> PromptCacheTelemetrySnapshot? {
+        await llmActor.promptCacheTelemetrySnapshot()
+    }
+
     /// Override the prefix-cache memory budget, triggering an immediate
     /// eviction pass. Observer hook intended for the loaded-model E2E
     /// runner; production code should not call this.

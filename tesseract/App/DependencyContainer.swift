@@ -66,6 +66,7 @@ final class DependencyContainer: ObservableObject {
         arbiter: inferenceArbiter
     )
     lazy var serverGenerationLog = ServerGenerationLog()
+    lazy var promptCacheTelemetryStore = PromptCacheTelemetryStore()
     lazy var agent: Agent = AgentFactory.makeAgent(
         inferenceService: serverInferenceService,
         packageRegistry: packageRegistry,

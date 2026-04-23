@@ -127,6 +127,7 @@ extension View {
     func injectServerDependencies(from container: DependencyContainer) -> some View {
         self
             .environment(container.serverGenerationLog)
+            .environment(container.promptCacheTelemetryStore)
             .environment(container.httpServer)
     }
 }

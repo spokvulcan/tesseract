@@ -2,6 +2,7 @@ import SwiftUI
 import Testing
 @testable import Tesseract_Agent
 
+@MainActor
 struct ServerRunStateTests {
 
     @Test

@@ -24,6 +24,11 @@ scripts/dev.sh clean       # Clean build artifacts
 scripts/dev.sh archive     # Create .xcarchive for App Store
 ```
 
+After any implementation change, finish by running a Release build for manual
+testing with `scripts/dev.sh dev-release`, unless the user explicitly asks not
+to launch the app or the Release build is blocked. Still run the relevant Debug
+build/tests first when they are needed for fast compiler or regression feedback.
+
 ## Tests
 
 Tests use Swift `Testing` framework (not XCTest), in `tesseractTests/`. Run before committing changes to server, caching, or agent engine code.

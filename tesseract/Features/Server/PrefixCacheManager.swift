@@ -1083,6 +1083,29 @@ final class PrefixCacheManager {
         store.totalSnapshotBytes
     }
 
+    func makeTelemetrySnapshot(now: Date = Date()) -> PromptCacheTelemetrySnapshot {
+        let cacheStats = stats
+        let clockNow: ContinuousClock.Instant = .now
+        let trees = store.orderedPartitions().map { key, tree in
+            tree.makeTopologySnapshot(partition: key, now: clockNow)
+        }
+        let snapshotsByType = Dictionary(
+            uniqueKeysWithValues: cacheStats.snapshotsByType.map { ($0.key.wireString, $0.value) }
+        )
+
+        return PromptCacheTelemetrySnapshot(
+            capturedAt: now,
+            memoryBudgetBytes: memoryBudgetBytes,
+            residentSnapshotBytes: cacheStats.totalSnapshotBytes,
+            partitionCount: cacheStats.partitionCount,
+            totalNodeCount: cacheStats.totalNodeCount,
+            snapshotCount: cacheStats.snapshotCount,
+            snapshotsByType: snapshotsByType,
+            ssd: store.ssdDiagnosticsSnapshot(),
+            trees: trees
+        )
+    }
+
     // MARK: - Private
 
     /// Pick one snapshot to evict from the supplied (already-sorted) trees.

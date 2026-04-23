@@ -118,6 +118,10 @@ final class TieredSnapshotStore: SnapshotStore {
 
     var totalSnapshotBytes: Int { ramTier.totalSnapshotBytes }
 
+    func ssdDiagnosticsSnapshot() -> PromptCacheSSDSnapshot {
+        ssdStore?.diagnosticsSnapshot() ?? .disabled
+    }
+
     // MARK: - SSD partition registration
 
     /// Register a `PartitionMeta` with the SSD tier so subsequent

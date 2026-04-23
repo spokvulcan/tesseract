@@ -334,6 +334,38 @@ final class TokenRadixTree {
         return segments.reversed().flatMap { $0 }
     }
 
+    func makeTopologySnapshot(
+        partition: CachePartitionKey,
+        now: ContinuousClock.Instant = .now
+    ) -> PromptCacheTreeSnapshot {
+        var nodes: [PromptCacheTreeNodeSnapshot] = []
+        var edges: [PromptCacheTreeEdgeSnapshot] = []
+        collectTelemetryNode(
+            root,
+            partitionDigest: partition.partitionDigest,
+            parentID: nil,
+            path: [],
+            depth: 0,
+            now: now,
+            nodes: &nodes,
+            edges: &edges
+        )
+
+        return PromptCacheTreeSnapshot(
+            id: partition.partitionDigest,
+            partitionDigest: partition.partitionDigest,
+            partitionSummary: partition.telemetrySummary,
+            nodeCount: nodeCount,
+            totalSnapshotBytes: totalSnapshotBytes,
+            snapshotCount: snapshotCount,
+            snapshotsByType: Dictionary(
+                uniqueKeysWithValues: snapshotCountByType.map { ($0.key.wireString, $0.value) }
+            ),
+            nodes: nodes,
+            edges: edges
+        )
+    }
+
     // MARK: - Speculative branch-point detection
 
     /// Dry-run insertion: returns the absolute token offset at which
@@ -446,5 +478,121 @@ final class TokenRadixTree {
         for child in node.children.values {
             collectEligible(node: child, into: &result)
         }
+    }
+
+    private func collectTelemetryNode(
+        _ node: RadixTreeNode,
+        partitionDigest: String,
+        parentID: String?,
+        path: [Int],
+        depth: Int,
+        now: ContinuousClock.Instant,
+        nodes: inout [PromptCacheTreeNodeSnapshot],
+        edges: inout [PromptCacheTreeEdgeSnapshot]
+    ) {
+        let pathHash = Self.telemetryPathHash(path)
+        let nodeID = "\(partitionDigest):\(pathHash)"
+        let storageState = Self.telemetryStorageState(node)
+        let snapshot = node.snapshot
+        let storageRef = node.storageRef
+        let checkpointType = snapshot?.checkpointType.wireString ?? storageRef?.checkpointType.wireString
+        let snapshotBytes = snapshot?.memoryBytes ?? 0
+        let storageBytes = storageRef?.bytesOnDisk ?? 0
+        let scores = snapshot.map { _ in telemetryEvictionScore(for: node, now: now) } ?? nil
+
+        nodes.append(PromptCacheTreeNodeSnapshot(
+            id: nodeID,
+            parentID: parentID,
+            pathHash: pathHash,
+            tokenOffset: node.tokenOffset,
+            pathTokenCount: path.count,
+            edgeTokenCount: node.edgeTokens.count,
+            childCount: node.childCount,
+            depth: depth,
+            hasSnapshot: snapshot != nil,
+            checkpointType: checkpointType,
+            snapshotBytes: snapshotBytes,
+            storageState: storageState,
+            storageRefID: storageRef?.snapshotID,
+            storageBytes: storageBytes,
+            lastAccessAgeSeconds: max((now - node.lastAccessTime).seconds, 0),
+            normalizedRecency: scores?.normalizedRecency,
+            normalizedFlopEfficiency: scores?.normalizedFlopEfficiency,
+            utility: scores?.utility
+        ))
+
+        for child in node.children.values.sorted(by: Self.telemetryChildSort) {
+            let childPath = path + child.edgeTokens
+            let childHash = Self.telemetryPathHash(childPath)
+            let childID = "\(partitionDigest):\(childHash)"
+            edges.append(PromptCacheTreeEdgeSnapshot(
+                id: "\(nodeID)->\(childID)",
+                parentID: nodeID,
+                childID: childID,
+                tokenCount: child.edgeTokens.count
+            ))
+            collectTelemetryNode(
+                child,
+                partitionDigest: partitionDigest,
+                parentID: nodeID,
+                path: childPath,
+                depth: depth + 1,
+                now: now,
+                nodes: &nodes,
+                edges: &edges
+            )
+        }
+    }
+
+    private func telemetryEvictionScore(
+        for node: RadixTreeNode,
+        now: ContinuousClock.Instant
+    ) -> EvictionScore? {
+        guard node.snapshot != nil,
+              node.childCount <= 1,
+              node.snapshot?.checkpointType != .system
+        else { return nil }
+        return EvictionPolicy.computeScores(candidates: [node], now: now).first
+    }
+
+    private static func telemetryStorageState(_ node: RadixTreeNode) -> PromptCacheStorageState {
+        let hasSnapshot = node.snapshot != nil
+        guard let ref = node.storageRef else {
+            return hasSnapshot ? .ramOnly : .empty
+        }
+        switch (hasSnapshot, ref.committed) {
+        case (true, false): return .pendingWrite
+        case (false, false): return .pendingWriteBodyDropped
+        case (true, true): return .ramAndSSD
+        case (false, true): return .ssdOnly
+        }
+    }
+
+    private static func telemetryChildSort(_ lhs: RadixTreeNode, _ rhs: RadixTreeNode) -> Bool {
+        if lhs.tokenOffset != rhs.tokenOffset { return lhs.tokenOffset < rhs.tokenOffset }
+        return lhs.edgeTokens.lexicographicallyPrecedes(rhs.edgeTokens)
+    }
+
+    private static func telemetryPathHash(_ tokens: [Int]) -> String {
+        guard !tokens.isEmpty else { return "root" }
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for token in tokens {
+            var value = UInt64(bitPattern: Int64(token))
+            for _ in 0..<8 {
+                hash ^= value & 0xff
+                hash &*= 0x0000_0100_0000_01b3
+                value >>= 8
+            }
+        }
+        return String(format: "%016llx", hash)
+    }
+}
+
+private extension CachePartitionKey {
+    var telemetrySummary: String {
+        let kv = kvBits.map { "kv\($0)" } ?? "denseKV"
+        let tri: String = triAttention.isDense ? "dense" : "triattention"
+        let fingerprint = modelFingerprint.map { String($0.prefix(8)) } ?? "nofp"
+        return "\(modelID) · \(kv)/g\(kvGroupSize) · \(tri) · \(fingerprint)"
     }
 }

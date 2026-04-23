@@ -609,4 +609,99 @@ struct TokenRadixTreeTests {
         #expect(midNode.parent != nil)
         #expect(midNode.storageRef?.committed == false)
     }
+
+    // MARK: - Prompt-cache telemetry topology
+
+    @Test func topologySnapshotCapturesCompressedEdgesAndPathHashes() {
+        let tree = TokenRadixTree()
+        let node = tree.insertPath(tokens: [1, 2, 3, 4])
+        tree.storeSnapshot(makeSnapshot(offset: 4, type: .leaf), on: node)
+        let partition = CachePartitionKey(modelID: "telemetry-model", kvBits: 8, kvGroupSize: 64)
+
+        let snapshot = tree.makeTopologySnapshot(partition: partition)
+        let root = snapshot.nodes.first { $0.parentID == nil }
+        let leaf = snapshot.nodes.first { $0.tokenOffset == 4 }
+        let edge = snapshot.edges.first
+
+        #expect(snapshot.id == partition.partitionDigest)
+        #expect(snapshot.nodeCount == 2)
+        #expect(snapshot.nodes.count == 2)
+        #expect(snapshot.edges.count == 1)
+        #expect(snapshot.snapshotCount == 1)
+        #expect(snapshot.snapshotsByType["leaf"] == 1)
+        #expect(root?.pathHash == "root")
+        #expect(leaf?.pathHash != "root")
+        #expect(leaf?.id.hasPrefix("\(partition.partitionDigest):") == true)
+        #expect(leaf?.pathTokenCount == 4)
+        #expect(leaf?.edgeTokenCount == 4)
+        #expect(leaf?.checkpointType == "leaf")
+        #expect(leaf?.storageState == .ramOnly)
+        #expect(leaf?.hasSnapshot == true)
+        #expect(edge?.parentID == root?.id)
+        #expect(edge?.childID == leaf?.id)
+        #expect(edge?.tokenCount == 4)
+    }
+
+    @Test func topologySnapshotCapturesBranchPointsAndStorageStates() {
+        let tree = TokenRadixTree()
+        tree.insertPath(tokens: [1, 2, 3, 4])
+        let pendingLeaf = tree.insertPath(tokens: [1, 2, 9, 10])
+        let branch = tree.insertPath(tokens: [1, 2])
+        tree.storeSnapshot(makeSnapshot(offset: 2, type: .branchPoint), on: branch)
+        branch.storageRef = PrefixCacheTestFixtures.makeStorageRef(
+            committed: true,
+            type: .branchPoint,
+            tokenOffset: 2
+        )
+        pendingLeaf.storageRef = PrefixCacheTestFixtures.makeStorageRef(
+            committed: false,
+            type: .leaf,
+            tokenOffset: 4
+        )
+
+        let snapshot = tree.makeTopologySnapshot(
+            partition: CachePartitionKey(
+                modelID: "telemetry-model",
+                kvBits: nil,
+                kvGroupSize: 64,
+                modelFingerprint: "abcdef123456"
+            )
+        )
+        let branchNode = snapshot.nodes.first { $0.tokenOffset == 2 }
+        let pendingNode = snapshot.nodes.first { $0.storageRefID == pendingLeaf.storageRef?.snapshotID }
+
+        #expect(snapshot.partitionSummary.contains("telemetry-model"))
+        #expect(snapshot.partitionSummary.contains("denseKV"))
+        #expect(snapshot.partitionSummary.contains("abcdef12"))
+        #expect(branchNode?.checkpointType == "branchPoint")
+        #expect(branchNode?.storageState == .ramAndSSD)
+        #expect(branchNode?.storageBytes == 1024)
+        #expect(branchNode?.storageRefID == branch.storageRef?.snapshotID)
+        #expect(pendingNode?.checkpointType == "leaf")
+        #expect(pendingNode?.storageState == .pendingWriteBodyDropped)
+        #expect(pendingNode?.hasSnapshot == false)
+    }
+
+    @Test func topologySnapshotTraversesLargeBranchyTree() {
+        let tree = TokenRadixTree()
+        for branch in 0..<160 {
+            let node = tree.insertPath(tokens: [1, branch, branch + 1_000, branch + 2_000])
+            if branch.isMultiple(of: 10) {
+                tree.storeSnapshot(makeSnapshot(offset: 4, type: .leaf), on: node)
+            }
+        }
+
+        let snapshot = tree.makeTopologySnapshot(
+            partition: CachePartitionKey(modelID: "large-tree", kvBits: 4, kvGroupSize: 32)
+        )
+        let nodeIDs = Set(snapshot.nodes.map(\.id))
+        let edgeIDs = Set(snapshot.edges.map(\.id))
+
+        #expect(snapshot.nodes.count == tree.nodeCount)
+        #expect(snapshot.edges.count == snapshot.nodes.count - 1)
+        #expect(nodeIDs.count == snapshot.nodes.count)
+        #expect(edgeIDs.count == snapshot.edges.count)
+        #expect(snapshot.snapshotCount == 16)
+        #expect(snapshot.snapshotsByType["leaf"] == 16)
+    }
 }

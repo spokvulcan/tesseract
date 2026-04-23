@@ -1370,6 +1370,11 @@ actor LLMActor {
         return await cache.stats
     }
 
+    func promptCacheTelemetrySnapshot() async -> PromptCacheTelemetrySnapshot? {
+        guard let cache = _prefixCache else { return nil }
+        return await cache.makeTelemetrySnapshot()
+    }
+
     /// Override the prefix-cache memory budget at runtime. Used by the
     /// loaded-model E2E runner to deliberately trigger eviction pressure.
     func setPrefixCacheBudgetBytes(_ bytes: Int) async {
