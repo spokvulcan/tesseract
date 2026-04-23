@@ -1,78 +1,50 @@
 import SwiftUI
 
-/// Monospace, scrolling span list for a single `RequestTrace`. Token-by-token
-/// updates flow through `ServerGenerationLog.streamingVersion`, which triggers
-/// a scroll-to-bottom only when auto-scroll is enabled and we are already
-/// near the bottom (mirrors `AgentConversationListView`'s pattern).
+/// Passive monospace span list for a single `RequestTrace`.
+/// This view intentionally avoids lazy stacks, scroll readers, geometry
+/// callbacks, timeline ticks, and programmatic scrolling; it is rendered from
+/// the current trace snapshot only.
 struct StreamingSpanListView: View {
+    private static let maxRenderedSpans = 200
+
     let trace: RequestTrace
-    let isAutoScrollEnabled: Bool
 
-    @Environment(ServerGenerationLog.self) private var log
-    @State private var isNearBottom: Bool = true
+    private var hiddenSpanCount: Int {
+        max(0, trace.spans.count - Self.maxRenderedSpans)
+    }
 
-    private var bottomAnchorID: String { "trace-bottom-\(trace.id)" }
+    private var displayedSpans: ArraySlice<RequestTrace.Span> {
+        trace.spans.suffix(Self.maxRenderedSpans)
+    }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                spanRows
-                .padding(Theme.Spacing.md)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.6))
-            .defaultScrollAnchor(.bottom)
-            .onScrollGeometryChange(for: Bool.self) { geo in
-                geo.contentSize.height > 0
-                && geo.visibleRect.maxY >= geo.contentSize.height - 80
-            } action: { _, nearBottom in
-                isNearBottom = nearBottom
-            }
-            .overlay {
-                StreamingScrollTrigger(
-                    anchorID: bottomAnchorID,
-                    proxy: proxy,
-                    isAutoScrollEnabled: isAutoScrollEnabled,
-                    isNearBottom: isNearBottom
-                )
-            }
-        }
-    }
-
-    /// The same AppKit trap that shows up in the agent chat can be triggered
-    /// here if SwiftUI lazy-prefetch runs while spans are still streaming and
-    /// auto-scroll is nudging the view. Use an eager stack only for active
-    /// traces; completed traces keep lazy loading.
-    @ViewBuilder
-    private var spanRows: some View {
-        if trace.isActive {
+        ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                spanRowContents
+                spanContents
             }
-        } else {
-            LazyVStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                spanRowContents
-            }
+            .padding(Theme.Spacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(.background)
     }
 
     @ViewBuilder
-    private var spanRowContents: some View {
+    private var spanContents: some View {
         if trace.spans.isEmpty {
             PhaseHint(trace: trace)
         } else {
-            ForEach(trace.spans) { span in
+            if hiddenSpanCount > 0 {
+                OmittedSpanNotice(count: hiddenSpanCount)
+            }
+
+            ForEach(displayedSpans) { span in
                 SpanView(span: span)
             }
         }
 
         if trace.phase == .decoding {
-            BlinkingCursor()
+            DecodingMarker()
         }
-
-        Color.clear
-            .frame(height: 1)
-            .id(bottomAnchorID)
     }
 }
 
@@ -87,7 +59,6 @@ private struct SpanView: View {
             Text(content)
                 .font(.system(.body, design: .monospaced))
                 .foregroundStyle(.primary)
-                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case .thinking(_, let content):
@@ -98,7 +69,6 @@ private struct SpanView: View {
                 Text(content)
                     .font(.system(.body, design: .monospaced).italic())
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
                     .padding(.leading, 8)
                 Text("</think>")
                     .font(.caption2.monospaced())
@@ -122,7 +92,6 @@ private struct SpanView: View {
                 Text(argumentsJSON)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
                     .padding(.leading, 8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -153,7 +122,6 @@ private struct SpanView: View {
                 Text(argumentsJSON)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
                     .padding(.leading, 8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -171,7 +139,6 @@ private struct SpanView: View {
                 Text(raw)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
                     .padding(.leading, 8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -181,6 +148,19 @@ private struct SpanView: View {
                     .fill(Color.red.opacity(0.06))
             )
         }
+    }
+}
+
+// MARK: - Omitted span notice
+
+private struct OmittedSpanNotice: View {
+    let count: Int
+
+    var body: some View {
+        Text("\(count) older spans hidden")
+            .font(.caption.monospaced())
+            .foregroundStyle(.tertiary)
+            .padding(.vertical, Theme.Spacing.xs)
     }
 }
 
@@ -229,57 +209,13 @@ private struct PhaseHint: View {
     }
 }
 
-// MARK: - Blinking cursor
+// MARK: - Decoding marker
 
-private struct BlinkingCursor: View {
+private struct DecodingMarker: View {
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.5)) { context in
-            let visible = Int(context.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
-            Rectangle()
-                .fill(Color.primary)
-                .frame(width: 8, height: 14)
-                .opacity(visible ? 0.7 : 0.0)
-        }
-    }
-}
-
-// MARK: - Streaming scroll trigger
-
-/// Reads only `streamingVersion` from the log, then scrolls to the bottom
-/// anchor if auto-scroll is enabled and the user was already near the
-/// bottom. Isolated so the parent view body doesn't re-diff on every bump.
-private struct StreamingScrollTrigger: View {
-    let anchorID: String
-    let proxy: ScrollViewProxy
-    let isAutoScrollEnabled: Bool
-    let isNearBottom: Bool
-
-    @Environment(ServerGenerationLog.self) private var log
-    @State private var pendingScrollTask: Task<Void, Never>?
-
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onChange(of: log.streamingVersion) { _, _ in
-                guard isAutoScrollEnabled, isNearBottom else { return }
-                scheduleScrollToBottom()
-            }
-            .onDisappear {
-                pendingScrollTask?.cancel()
-                pendingScrollTask = nil
-            }
-    }
-
-    /// Defers the scroll until the current layout pass completes. Calling
-    /// `scrollTo` inline while SwiftUI is reconciling a `LazyVStack` can
-    /// re-enter AppKit constraint updates and trip the Release-only crash
-    /// guarded elsewhere in the app's streaming views.
-    private func scheduleScrollToBottom() {
-        pendingScrollTask?.cancel()
-        pendingScrollTask = Task { @MainActor in
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            proxy.scrollTo(anchorID, anchor: .bottom)
-        }
+        Text("decoding...")
+            .font(.caption.monospaced())
+            .foregroundStyle(.tertiary)
+            .padding(.top, Theme.Spacing.xs)
     }
 }

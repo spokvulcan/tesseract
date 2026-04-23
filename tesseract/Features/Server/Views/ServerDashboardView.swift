@@ -50,9 +50,10 @@ struct ServerDashboardView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .glassEffect(
-            runState == .stopped ? .regular : .regular.tint(runState.dotColor),
-            in: Capsule()
+        .background(runState.dotColor.opacity(runState == .stopped ? 0.08 : 0.12), in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(runState.dotColor.opacity(0.25), lineWidth: 0.5)
         )
         .help(runState.failureMessage ?? runState.displayLabel)
     }
@@ -70,7 +71,8 @@ struct ServerDashboardView: View {
             } label: {
                 Image(systemName: "doc.on.doc")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
             .help("Copy Endpoint")
         }
     }
@@ -87,6 +89,10 @@ struct ServerDashboardView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .glassEffect(.regular, in: Capsule())
+        .background(Color.secondary.opacity(0.08), in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 0.5)
+        )
     }
 }

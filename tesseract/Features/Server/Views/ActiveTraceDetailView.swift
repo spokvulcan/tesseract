@@ -1,12 +1,12 @@
-import AppKit
 import SwiftUI
 
 /// Detail pane for the currently-selected request. Header + streaming span
 /// list + footer controls, all monospace.
 struct ActiveTraceDetailView: View {
+    @Environment(\.openURL) private var openURL
+
     let trace: RequestTrace
 
-    @State private var isAutoScrollEnabled: Bool = true
     @State private var showDiagnosticsDetail: Bool = false
 
     var body: some View {
@@ -14,14 +14,11 @@ struct ActiveTraceDetailView: View {
             header
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm)
-                .background(.thinMaterial)
+                .background(.background)
 
             Divider()
 
-            StreamingSpanListView(
-                trace: trace,
-                isAutoScrollEnabled: isAutoScrollEnabled
-            )
+            StreamingSpanListView(trace: trace)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
@@ -29,7 +26,7 @@ struct ActiveTraceDetailView: View {
             footer
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm)
-                .background(.thinMaterial)
+                .background(.background)
         }
     }
 
@@ -111,10 +108,8 @@ struct ActiveTraceDetailView: View {
                             .truncationMode(.middle)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: showDiagnosticsDetail)
     }
 
     // MARK: - Footer
@@ -122,38 +117,22 @@ struct ActiveTraceDetailView: View {
     @ViewBuilder
     private var footer: some View {
         HStack(spacing: Theme.Spacing.md) {
-            GlassEffectContainer(spacing: 8) {
-                HStack(spacing: 8) {
-                    Toggle(isOn: $isAutoScrollEnabled) {
-                        Label("Auto-scroll", systemImage: isAutoScrollEnabled
-                              ? "arrow.down.to.line"
-                              : "pause.rectangle")
-                            .labelStyle(.iconOnly)
-                    }
-                    .toggleStyle(.button)
-                    .buttonStyle(.glass)
-                    .help(isAutoScrollEnabled
-                          ? "Auto-scroll on — toggle to pin scroll"
-                          : "Auto-scroll paused")
-
-                    Button {
-                        copyOutput()
-                    } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
-                            .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(.glass)
-                    .help("Copy generated text")
-
-                    Button {
-                        revealRawRequest()
-                    } label: {
-                        Label("Raw JSON", systemImage: "doc.text.magnifyingglass")
-                            .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(.glass)
-                    .help("Reveal raw request JSON in Finder")
+            HStack(spacing: 8) {
+                ShareLink(item: trace.concatenatedText) {
+                    Label("Share Output", systemImage: "square.and.arrow.up")
+                        .labelStyle(.iconOnly)
                 }
+                .buttonStyle(.borderless)
+                .help("Share generated text")
+
+                Button {
+                    revealRawRequest()
+                } label: {
+                    Label("Raw JSON", systemImage: "doc.text.magnifyingglass")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .help("Reveal raw request JSON in Finder")
             }
 
             Spacer()
@@ -203,13 +182,8 @@ struct ActiveTraceDetailView: View {
         return String(format: "%.0fms", v)
     }
 
-    private func copyOutput() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(trace.concatenatedText, forType: .string)
-    }
-
     private func revealRawRequest() {
-        NSWorkspace.shared.open(HTTPRequestLogger.shared.directoryURL)
+        openURL(HTTPRequestLogger.shared.directoryURL)
     }
 }
 

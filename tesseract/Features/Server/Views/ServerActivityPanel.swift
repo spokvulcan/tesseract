@@ -1,14 +1,19 @@
-import AppKit
 import SwiftUI
 
 /// Live generation activity panel shown on the Server API settings page.
 /// Split layout: request rail (left) + selected-trace detail (right).
 struct ServerActivityPanel: View {
     @Environment(ServerGenerationLog.self) private var log
+    @State private var selectedTraceID: UUID?
 
     var body: some View {
         HStack(spacing: 0) {
-            RequestRail()
+            RequestRail(
+                traces: log.traces,
+                selectedTraceID: effectiveSelectedTraceID,
+                onSelect: { selectedTraceID = $0 },
+                onClear: clearTraces
+            )
                 .frame(width: 220)
 
             Divider()
@@ -21,20 +26,40 @@ struct ServerActivityPanel: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
+        .background(.background, in: RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
+        )
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
     }
 
+    private var effectiveSelectedTraceID: UUID? {
+        if let selectedTraceID,
+           log.traces.contains(where: { $0.id == selectedTraceID }) {
+            return selectedTraceID
+        }
+        return log.traces.last?.id
+    }
+
     private var selectedTrace: RequestTrace? {
-        guard let id = log.selectedTraceID else { return log.traces.last }
+        guard let id = effectiveSelectedTraceID else { return nil }
         return log.traces.first { $0.id == id }
+    }
+
+    private func clearTraces() {
+        selectedTraceID = nil
+        log.clear()
     }
 }
 
 // MARK: - Request Rail
 
 private struct RequestRail: View {
-    @Environment(ServerGenerationLog.self) private var log
+    let traces: [RequestTrace]
+    let selectedTraceID: UUID?
+    let onSelect: (UUID) -> Void
+    let onClear: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,14 +68,14 @@ private struct RequestRail: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                if !log.traces.isEmpty {
+                if !traces.isEmpty {
                     Button {
-                        log.clear()
+                        onClear()
                     } label: {
                         Image(systemName: "trash")
                             .font(.caption)
                     }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.borderless)
                     .help("Clear all")
                 }
             }
@@ -59,7 +84,7 @@ private struct RequestRail: View {
 
             Divider()
 
-            if log.traces.isEmpty {
+            if traces.isEmpty {
                 VStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "waveform")
                         .foregroundStyle(.tertiary)
@@ -69,21 +94,14 @@ private struct RequestRail: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                // Eager `ScrollView { VStack { ForEach } }` instead of
-                // `List(selection:)`: List's per-row NSHostingView prefetch
-                // (LazyLayoutViewCache.signalPrefetch) races constraint
-                // updates against the 33ms streamingVersion bumps + 100ms
-                // TimelineView ticks inside active rows and trips an AppKit
-                // re-entrant layout trap. Same workaround StreamingSpanListView
-                // uses for active traces.
                 ScrollView {
                     VStack(spacing: 0) {
-                        ForEach(log.traces.reversed()) { trace in
+                        ForEach(traces.reversed()) { trace in
                             RequestRailRow(
                                 trace: trace,
-                                isSelected: log.selectedTraceID == trace.id
+                                isSelected: selectedTraceID == trace.id
                             ) {
-                                log.selectedTraceID = trace.id
+                                onSelect(trace.id)
                             }
                         }
                     }

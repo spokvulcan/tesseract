@@ -47,10 +47,14 @@ struct RequestTraceRow: View {
     @ViewBuilder
     private var rightMetric: some View {
         switch trace.phase {
-        case .queued, .lookingUp:
-            TickingElapsed(since: trace.startedAt)
+        case .queued:
+            Text("queued")
+                .foregroundStyle(.secondary)
+        case .lookingUp:
+            Text("lookup")
+                .foregroundStyle(.indigo)
         case .prefilling:
-            TickingElapsed(since: trace.leaseAcquiredAt ?? trace.startedAt)
+            Text("prefill")
                 .foregroundStyle(.blue)
         case .decoding:
             if trace.tokensPerSecond > 0 {
@@ -96,31 +100,5 @@ struct StatusLED: View {
         case .failed: return .red
         case .cancelled: return .orange
         }
-    }
-}
-
-// MARK: - Ticking elapsed
-
-/// Shows elapsed time since a fixed date, tick every 100ms. Isolated so only
-/// this tiny text view re-renders on each tick.
-struct TickingElapsed: View {
-    let since: Date
-
-    var body: some View {
-        TimelineView(.periodic(from: since, by: 0.1)) { context in
-            Text(formatted(context.date.timeIntervalSince(since)))
-        }
-    }
-
-    private func formatted(_ seconds: TimeInterval) -> String {
-        if seconds < 1 {
-            return String(format: "%.0fms", seconds * 1000)
-        }
-        if seconds < 60 {
-            return String(format: "%.1fs", seconds)
-        }
-        let minutes = Int(seconds) / 60
-        let remainder = Int(seconds) % 60
-        return String(format: "%dm %02ds", minutes, remainder)
     }
 }

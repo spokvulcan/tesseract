@@ -17,14 +17,14 @@ final class ServerGenerationLog {
     /// check and the slicing consistent.
     static let textHeadBytes: Int = 8 * 1024
     static let textTailBytes: Int = 24 * 1024
-    /// Minimum interval between streaming scroll bumps during decode. Rate-
-    /// limits the scroll driver without affecting the append path — spans
-    /// update on every flushed batch.
-    static let scrollThrottleMs: Double = 100
+    /// Minimum interval between streaming-version bumps during decode.
+    /// Kept for compatibility with tests and any non-dashboard consumers;
+    /// the dashboard no longer observes this as a scroll driver.
+    static let streamingVersionThrottleMs: Double = 100
 
     /// Interval at which buffered text/thinking chunks are drained into the
     /// observed `trace.spans`. Caps SwiftUI's observation rate to ≤30 Hz
-    /// during streaming, well under the LazyVStack layout budget. Without
+    /// during streaming, well under SwiftUI's layout budget. Without
     /// this coalescing, raw 80+ tok/s chunk arrival triggered a re-entrant
     /// `LazyLayoutViewCache.invalidateSize` → `_postWindowNeedsUpdate-
     /// Constraints` AppKit trap under bench load.
@@ -38,7 +38,7 @@ final class ServerGenerationLog {
 
     // MARK: - Private
 
-    private var lastScrollBumpAt: Date?
+    private var lastStreamingVersionBumpAt: Date?
     private var sequence: Int = 0
 
     /// Per-trace coalescing buffer for `.text` / `.thinking` chunks. Kept
@@ -89,7 +89,7 @@ final class ServerGenerationLog {
             traces.removeFirst(overflow)
         }
         selectedTraceID = trace.id
-        bumpScroll()
+        bumpStreamingVersion()
         return TraceHandle(id: trace.id)
     }
 
@@ -149,14 +149,14 @@ final class ServerGenerationLog {
                     arguments: call.function.arguments
                 )
             }
-            throttledScrollBump()
+            throttledStreamingVersionBump()
         case .malformedToolCall(let raw):
             flushPending(handle: handle)
             update(handle) { trace in
                 trace.markFirstTokenIfNeeded()
                 trace.finalizeMalformedToolCall(raw)
             }
-            throttledScrollBump()
+            throttledStreamingVersionBump()
         case .info(let info):
             flushPending(handle: handle)
             update(handle) { trace in
@@ -164,14 +164,14 @@ final class ServerGenerationLog {
                 trace.generationTokens = info.generationTokenCount
                 trace.tokensPerSecond = info.tokensPerSecond
             }
-            throttledScrollBump()
+            throttledStreamingVersionBump()
         case .thinkTruncate(let safePrefix):
             flushPending(handle: handle)
             update(handle) { $0.replaceThinkingWithSafePrefix(safePrefix) }
             // Suppress the scroll bump — the span just shrank from ~16K chars
             // to safePrefix-size in a single tick, so an auto-scroll-to-bottom
-            // is meaningless and risks racing SwiftUI's LazyVStack prefetch
-            // pass against stale ScrollView geometry.
+            // is meaningless and risks racing SwiftUI layout against stale
+            // ScrollView geometry.
         }
     }
 
@@ -182,7 +182,7 @@ final class ServerGenerationLog {
             trace.finishReason = finishReason
             trace.completedAt = at
         }
-        bumpScroll()
+        bumpStreamingVersion()
     }
 
     func fail(handle: TraceHandle, error: String, at: Date = Date()) {
@@ -192,7 +192,7 @@ final class ServerGenerationLog {
             trace.errorMessage = error
             trace.completedAt = at
         }
-        bumpScroll()
+        bumpStreamingVersion()
     }
 
     func cancel(handle: TraceHandle, at: Date = Date()) {
@@ -201,14 +201,14 @@ final class ServerGenerationLog {
             trace.phase = .cancelled
             trace.completedAt = at
         }
-        bumpScroll()
+        bumpStreamingVersion()
     }
 
     func clear() {
         pendingAppends.removeAll()
         traces.removeAll()
         selectedTraceID = nil
-        bumpScroll()
+        bumpStreamingVersion()
     }
 
     // MARK: - Helpers
@@ -320,21 +320,21 @@ final class ServerGenerationLog {
                 trace.appendToolCallDelta(name: toolCallName, delta: toolCallDelta)
             }
         }
-        throttledScrollBump()
+        throttledStreamingVersionBump()
     }
 
-    private func throttledScrollBump() {
+    private func throttledStreamingVersionBump() {
         let now = Date()
-        if let last = lastScrollBumpAt,
-           now.timeIntervalSince(last) * 1000 < Self.scrollThrottleMs {
+        if let last = lastStreamingVersionBumpAt,
+           now.timeIntervalSince(last) * 1000 < Self.streamingVersionThrottleMs {
             return
         }
-        lastScrollBumpAt = now
+        lastStreamingVersionBumpAt = now
         streamingVersion &+= 1
     }
 
-    private func bumpScroll() {
-        lastScrollBumpAt = Date()
+    private func bumpStreamingVersion() {
+        lastStreamingVersionBumpAt = Date()
         streamingVersion &+= 1
     }
 }
