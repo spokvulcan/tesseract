@@ -81,6 +81,7 @@ final class AudioCaptureEngine: AudioCapturing {
     private(set) var audioLevel: Float = 0
 
     private var audioEngine: AVAudioEngine?
+    private var inputTapInstalled = false
     private let sampleBuffer = SampleBuffer()
     private var captureStartTime: Date?
     private let levelRelay = AudioLevelRelay()
@@ -134,6 +135,7 @@ final class AudioCaptureEngine: AudioCapturing {
             format: recordingFormat,
             block: Self.makeAudioTapHandler(buffer: buffer, relay: relay)
         )
+        inputTapInstalled = true
 
         // Start timer to poll audio level on main thread
         levelUpdateTimer = Timer.scheduledTimer(withTimeInterval: Defaults.meterInterval, repeats: true) { [weak self] _ in
@@ -150,8 +152,7 @@ final class AudioCaptureEngine: AudioCapturing {
         } catch {
             levelUpdateTimer?.invalidate()
             levelUpdateTimer = nil
-            inputNode.removeTap(onBus: 0)
-            audioEngine.stop()
+            tearDownAudioEngine(audioEngine)
             self.audioEngine = nil
             throw DictationError.audioCaptureFailed(error.localizedDescription)
         }
@@ -160,16 +161,20 @@ final class AudioCaptureEngine: AudioCapturing {
     func stopCapture() -> AudioData? {
         guard isCapturing else { return nil }
 
+        isCapturing = false
         levelUpdateTimer?.invalidate()
         levelUpdateTimer = nil
-        audioEngine?.inputNode.removeTap(onBus: 0)
-        audioEngine?.stop()
+
+        let engine = audioEngine
         audioEngine = nil
-        isCapturing = false
         audioLevel = 0
+        levelRelay.level = 0
+
+        tearDownAudioEngine(engine)
 
         let samples = sampleBuffer.getAndClear()
         let duration = captureStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        captureStartTime = nil
 
         // Resample to 16kHz if needed
         let resampledSamples: [Float]
@@ -187,6 +192,24 @@ final class AudioCaptureEngine: AudioCapturing {
     }
 
     // MARK: - Private
+
+    private func tearDownAudioEngine(_ engine: AVAudioEngine?) {
+        guard let engine else {
+            inputTapInstalled = false
+            return
+        }
+
+        // Keep the tap callback alive while CoreAudio stops its IO thread. Removing
+        // the tap first can leave AudioOutputUnitStop racing a nil tap callback.
+        engine.stop()
+
+        if inputTapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            inputTapInstalled = false
+        }
+
+        engine.reset()
+    }
 
     /// Creates an audio tap handler that runs on the real-time audio thread.
     /// This is nonisolated to prevent MainActor isolation inheritance.
