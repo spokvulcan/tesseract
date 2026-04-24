@@ -4,14 +4,13 @@ import SwiftUI
 /// Split layout: request rail (left) + selected-trace detail (right).
 struct ServerActivityPanel: View {
     @Environment(ServerGenerationLog.self) private var log
-    @State private var selectedTraceID: UUID?
 
     var body: some View {
         HStack(spacing: 0) {
             RequestRail(
                 traces: log.traces,
                 selectedTraceID: effectiveSelectedTraceID,
-                onSelect: { selectedTraceID = $0 },
+                onSelect: { log.selectedTraceID = $0 },
                 onClear: clearTraces
             )
                 .frame(width: 220)
@@ -35,7 +34,7 @@ struct ServerActivityPanel: View {
     }
 
     private var effectiveSelectedTraceID: UUID? {
-        if let selectedTraceID,
+        if let selectedTraceID = log.selectedTraceID,
            log.traces.contains(where: { $0.id == selectedTraceID }) {
             return selectedTraceID
         }
@@ -48,7 +47,6 @@ struct ServerActivityPanel: View {
     }
 
     private func clearTraces() {
-        selectedTraceID = nil
         log.clear()
     }
 }
