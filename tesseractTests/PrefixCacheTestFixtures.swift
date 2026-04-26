@@ -22,12 +22,24 @@ enum PrefixCacheTestFixtures {
         type: HybridCacheSnapshot.CheckpointType = .system,
         length: Int = 16
     ) -> HybridCacheSnapshot {
-        let kv = KVCacheSimple()
-        kv.state = [
+        let state = [
             MLXArray.zeros([1, 1, length, 64]),
             MLXArray.zeros([1, 1, length, 64]),
         ]
-        return HybridCacheSnapshot.capture(cache: [kv], offset: offset, type: type)!
+        return HybridCacheSnapshot(
+            tokenOffset: offset,
+            layers: [
+                HybridCacheSnapshot.LayerState(
+                    className: "KVCache",
+                    state: state,
+                    metaState: [""],
+                    offset: offset
+                )
+            ],
+            checkpointType: type,
+            memoryBytes: state.reduce(0) { $0 + $1.nbytes },
+            createdAt: .now
+        )
     }
 
     /// Fabricate a `SnapshotStorageRef` for tests that exercise the

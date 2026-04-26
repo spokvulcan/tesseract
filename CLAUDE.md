@@ -29,6 +29,15 @@ testing with `scripts/dev.sh dev-release`, unless the user explicitly asks not
 to launch the app or the Release build is blocked. Still run the relevant Debug
 build/tests first when they are needed for fast compiler or regression feedback.
 
+**Always use `scripts/dev.sh dev-release` for Release builds — never
+`scripts/dev.sh build Release` or a direct `xcodebuild -configuration Release`.**
+The `build Release` path has been observed to print "BUILD SUCCEEDED" while
+silently skipping relink, leaving the previous Release binary in place. The
+result is a confusing "I fixed it in source but the running app still misbehaves"
+situation. `dev-release` does build + kill + relaunch atomically and avoids this
+trap. If the user is running the server themselves and you can't relaunch, ask
+them to run `dev-release` rather than working around it.
+
 ## Tests
 
 Tests use Swift `Testing` framework (not XCTest), in `tesseractTests/`. Run before committing changes to server, caching, or agent engine code.

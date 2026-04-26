@@ -7,6 +7,8 @@ nonisolated struct HTTPServerGenerationStart: Sendable {
     let cachedTokenCount: Int
     let cancel: @Sendable () -> Void
     let waitForCompletion: @Sendable () async -> Void
+    let hasPostCompletionWork: Bool
+    let postCompletionWork: @Sendable () async -> Void
     let diagnostics: Diagnostics
 
     /// Observability fields surfaced to the caller. Available when the request
@@ -56,12 +58,16 @@ nonisolated struct HTTPServerGenerationStart: Sendable {
         cachedTokenCount: Int,
         cancel: @escaping @Sendable () -> Void = {},
         waitForCompletion: @escaping @Sendable () async -> Void = {},
+        hasPostCompletionWork: Bool = false,
+        postCompletionWork: @escaping @Sendable () async -> Void = {},
         diagnostics: Diagnostics = .unavailable
     ) {
         self.stream = stream
         self.cachedTokenCount = cachedTokenCount
         self.cancel = cancel
         self.waitForCompletion = waitForCompletion
+        self.hasPostCompletionWork = hasPostCompletionWork
+        self.postCompletionWork = postCompletionWork
         self.diagnostics = diagnostics
     }
 }

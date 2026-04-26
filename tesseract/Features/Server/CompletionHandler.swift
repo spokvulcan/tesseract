@@ -46,6 +46,8 @@ struct CompletionHandler: Sendable {
         let cachedTokenCount: Int
         let cancel: @Sendable () -> Void
         let waitForCompletion: @Sendable () async -> Void
+        let hasPostCompletionWork: Bool
+        let postCompletionWork: @Sendable () async -> Void
         let diagnostics: HTTPServerGenerationStart.Diagnostics
     }
 
@@ -333,6 +335,8 @@ struct CompletionHandler: Sendable {
                 cachedTokenCount: start.cachedTokenCount,
                 cancel: start.cancel,
                 waitForCompletion: start.waitForCompletion,
+                hasPostCompletionWork: start.hasPostCompletionWork,
+                postCompletionWork: start.postCompletionWork,
                 diagnostics: start.diagnostics
             ))
         } catch {
@@ -513,6 +517,7 @@ struct CompletionHandler: Sendable {
         await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
         do {
             try await writer.send(.jsonBody(data))
+            schedulePostCompletionWork(start)
         } catch {
             Log.server.error("Failed to send HTTP completion response: \(error)")
         }
@@ -738,6 +743,7 @@ struct CompletionHandler: Sendable {
                 + "cachedTokens=\(start.cachedTokenCount)"
             )
             await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
+            schedulePostCompletionWork(start)
 
         case .disconnected(let source):
             Log.server.info(
@@ -775,6 +781,29 @@ struct CompletionHandler: Sendable {
             restoreMs: diagnostics.restoreMs,
             prefillMs: diagnostics.prefillMs
         )
+    }
+
+    private func schedulePostCompletionWork(_ start: StartedGeneration) {
+        guard start.hasPostCompletionWork else { return }
+        Task { @MainActor [arbiter, start] in
+            do {
+                try await arbiter.withDeferredGPU(
+                    .llm,
+                    llmModelIDOverride: start.modelID
+                ) {
+                    await start.postCompletionWork()
+                }
+            } catch is CancellationError {
+                Log.server.debug(
+                    "HTTP post-completion cache work cancelled — completionID=\(start.completionID)"
+                )
+            } catch {
+                Log.server.warning(
+                    "HTTP post-completion cache work failed — "
+                    + "completionID=\(start.completionID) error=\(error.localizedDescription)"
+                )
+            }
+        }
     }
 
     private func cancelAndDrainGeneration(_ start: StartedGeneration) async {

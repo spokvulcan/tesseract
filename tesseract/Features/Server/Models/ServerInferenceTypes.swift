@@ -32,6 +32,8 @@ nonisolated struct ServerInferenceStart: Sendable {
     let cachedTokenCount: Int
     let cancel: @Sendable () -> Void
     let waitForCompletion: @Sendable () async -> Void
+    let hasPostCompletionWork: Bool
+    let postCompletionWork: @Sendable () async -> Void
     let modelState: ServerInferenceModelState?
     let diagnostics: HTTPServerGenerationStart.Diagnostics
 
@@ -40,6 +42,8 @@ nonisolated struct ServerInferenceStart: Sendable {
         cachedTokenCount: Int,
         cancel: @escaping @Sendable () -> Void = {},
         waitForCompletion: @escaping @Sendable () async -> Void = {},
+        hasPostCompletionWork: Bool = false,
+        postCompletionWork: @escaping @Sendable () async -> Void = {},
         modelState: ServerInferenceModelState? = nil,
         diagnostics: HTTPServerGenerationStart.Diagnostics = .unavailable
     ) {
@@ -47,6 +51,8 @@ nonisolated struct ServerInferenceStart: Sendable {
         self.cachedTokenCount = cachedTokenCount
         self.cancel = cancel
         self.waitForCompletion = waitForCompletion
+        self.hasPostCompletionWork = hasPostCompletionWork
+        self.postCompletionWork = postCompletionWork
         self.modelState = modelState
         self.diagnostics = diagnostics
     }
@@ -60,6 +66,8 @@ nonisolated struct ServerInferenceStart: Sendable {
             cachedTokenCount: start.cachedTokenCount,
             cancel: start.cancel,
             waitForCompletion: start.waitForCompletion,
+            hasPostCompletionWork: start.hasPostCompletionWork,
+            postCompletionWork: start.postCompletionWork,
             modelState: modelState,
             diagnostics: start.diagnostics
         )

@@ -26,6 +26,31 @@ struct PrefixCacheManagerTests {
         PrefixCacheTestFixtures.makeUniformSnapshot(offset: offset, type: type)
     }
 
+    private func makeOffsetMismatchedSnapshot(
+        offset: Int,
+        layerOffset: Int,
+        type: HybridCacheSnapshot.CheckpointType = .leaf
+    ) -> HybridCacheSnapshot {
+        let state = [
+            MLXArray.zeros([1, 1, max(layerOffset, 1), 64]),
+            MLXArray.zeros([1, 1, max(layerOffset, 1), 64]),
+        ]
+        return HybridCacheSnapshot(
+            tokenOffset: offset,
+            layers: [
+                HybridCacheSnapshot.LayerState(
+                    className: "KVCache",
+                    state: state,
+                    metaState: [""],
+                    offset: layerOffset
+                )
+            ],
+            checkpointType: type,
+            memoryBytes: state.reduce(0) { $0 + $1.nbytes },
+            createdAt: .now
+        )
+    }
+
     private func makeSSDKey(
         fingerprint: String = String(repeating: "a", count: 64),
         triAttention: TriAttentionPartitionIdentity = .dense
@@ -362,6 +387,36 @@ struct PrefixCacheManagerTests {
         #expect(deepResult.snapshotTokenOffset == deepTokens.count)
     }
 
+    @Test func lookupFallsBackPastOffsetMismatchedResidentSnapshot() {
+        let mgr = makeManager()
+        let ancestorTokens = Array(1...5)
+        let badLeafTokens = Array(1...10)
+        let queryTokens = Array(1...12)
+
+        mgr.restoreSnapshot(
+            path: ancestorTokens,
+            snapshot: makeSnapshot(offset: ancestorTokens.count, type: .system),
+            partitionKey: defaultKey,
+            lastAccessTime: .now
+        )
+        mgr.restoreSnapshot(
+            path: badLeafTokens,
+            snapshot: makeOffsetMismatchedSnapshot(
+                offset: badLeafTokens.count,
+                layerOffset: badLeafTokens.count + 7,
+                type: .leaf
+            ),
+            partitionKey: defaultKey,
+            lastAccessTime: .now
+        )
+
+        let result = mgr.lookup(tokens: queryTokens, partitionKey: defaultKey)
+
+        #expect(result.snapshotTokenOffset == ancestorTokens.count)
+        #expect(result.sharedPrefixLength == badLeafTokens.count)
+        #expect(mgr.stats.snapshotCount == 1)
+    }
+
     /// Leaf supersession is branch-local. Replacing an ancestor leaf on one
     /// branch must preserve sibling leaves and the stable-prefix `.system`
     /// snapshot they share.
@@ -452,6 +507,31 @@ struct PrefixCacheManagerTests {
         #expect(plan.isEmpty)
     }
 
+    @Test func planCheckpointsReplacesOffsetMismatchedSnapshotAtBoundary() {
+        let mgr = makeManager()
+        let tokens = Array(1...1000)
+        let boundary = 500
+
+        mgr.restoreSnapshot(
+            path: Array(tokens[0..<boundary]),
+            snapshot: makeOffsetMismatchedSnapshot(
+                offset: boundary,
+                layerOffset: boundary + 11,
+                type: .system
+            ),
+            partitionKey: defaultKey,
+            lastAccessTime: .now
+        )
+
+        let plan = mgr.planCheckpoints(
+            tokens: tokens,
+            stablePrefixOffset: boundary,
+            partitionKey: defaultKey
+        )
+
+        #expect(plan.contains { $0.offset == boundary && $0.type == .system })
+    }
+
     // MARK: - 11. planCheckpointsNeverIncludesLeaf
 
     @Test func planCheckpointsNeverIncludesLeaf() {
@@ -507,6 +587,67 @@ struct PrefixCacheManagerTests {
         // Lookup with storedTokens hits the leaf
         let result = mgr.lookup(tokens: storedTokens, partitionKey: defaultKey)
         #expect(result.snapshotTokenOffset == storedTokens.count)
+    }
+
+    @Test func generationLookupRejectsExactFullPromptLeafAndUsesAncestor() {
+        let mgr = makeManager()
+        let storedTokens = Array(1...120)
+        let systemSnapshot = makeSnapshot(offset: 100, type: .system)
+        let leafSnapshot = makeSnapshot(offset: storedTokens.count, type: .leaf)
+
+        mgr.storeSnapshots(
+            promptTokens: storedTokens,
+            capturedSnapshots: [systemSnapshot],
+            partitionKey: defaultKey
+        )
+        mgr.storeLeaf(
+            storedTokens: storedTokens,
+            leafSnapshot: leafSnapshot,
+            partitionKey: defaultKey
+        )
+
+        let regularLookup = mgr.lookup(tokens: storedTokens, partitionKey: defaultKey)
+        #expect(regularLookup.snapshotTokenOffset == storedTokens.count)
+
+        let generationLookup = mgr.lookup(
+            tokens: storedTokens,
+            partitionKey: defaultKey,
+            maximumReusableSnapshotOffsetExclusive: storedTokens.count
+        )
+        #expect(generationLookup.snapshotTokenOffset == 100)
+        #expect(generationLookup.sharedPrefixLength == storedTokens.count)
+        if case .hit(let offset, _, let type) = generationLookup.reason {
+            #expect(offset == 100)
+            #expect(type == .system)
+        } else {
+            Issue.record("Expected ancestor hit, got \(generationLookup.reason)")
+        }
+    }
+
+    @Test func generationLookupDoesNotReportExactLeafAsUsableHitWithoutAncestor() {
+        let mgr = makeManager()
+        let storedTokens = Array(1...120)
+        let leafSnapshot = makeSnapshot(offset: storedTokens.count, type: .leaf)
+
+        mgr.storeLeaf(
+            storedTokens: storedTokens,
+            leafSnapshot: leafSnapshot,
+            partitionKey: defaultKey
+        )
+
+        let generationLookup = mgr.lookup(
+            tokens: storedTokens,
+            partitionKey: defaultKey,
+            maximumReusableSnapshotOffsetExclusive: storedTokens.count
+        )
+        #expect(generationLookup.snapshot == nil)
+        #expect(generationLookup.snapshotTokenOffset == 0)
+        #expect(generationLookup.sharedPrefixLength == storedTokens.count)
+        if case .missNoSnapshotInPrefix = generationLookup.reason {
+            // expected
+        } else {
+            Issue.record("Expected miss for exact-only leaf, got \(generationLookup.reason)")
+        }
     }
 
     // MARK: - 14b. leafSnapshotOffsetMatchesStoredTokenCount

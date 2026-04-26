@@ -74,7 +74,7 @@ struct ServerConfigurationView: View {
             } header: {
                 Text("Speculative Decoding (Experimental)")
             } footer: {
-                Text("DFlash uses a small block-diffusion draft model to speed up agent decoding by ~1.5× on supported targets. Currently supports only Qwen3.6-27B with greedy sampling — other models or non-greedy sampling silently fall back to autoregressive. The draft (~3.2 GB) must be downloaded separately from the Models tab. Toggling reloads the currently loaded model.")
+                Text("DFlash uses a small block-diffusion draft model to speed up agent decoding by ~1.5× on supported targets. Currently supports Qwen3.6-27B, honors sampling settings, and falls back to autoregressive for unsupported models, penalties, or TriAttention. The draft (~3.2 GB) must be downloaded separately from the Models tab. Toggling reloads the currently loaded model.")
             }
         }
         .formStyle(.grouped)

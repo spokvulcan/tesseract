@@ -812,6 +812,11 @@ final class AgentEngine {
                 _ = await task.result
                 await start.waitForCompletion()
             },
+            hasPostCompletionWork: start.hasPostCompletionWork,
+            postCompletionWork: {
+                _ = await task.result
+                await start.postCompletionWork()
+            },
             diagnostics: start.diagnostics
         )
         continuation.onTermination = { _ in managedStart.cancel() }

@@ -1,12 +1,49 @@
 import Foundation
 import MLXLMCommon
 
+/// Draft-side DFlash cache state paired with a target ``HybridCacheSnapshot``.
+///
+/// The target prefix-cache partition already includes the active target model
+/// fingerprint and, when DFlash is bound, the draft config identity. Keeping
+/// the companion on the same radix node lets restored HTTP hits recover both
+/// target and draft offsets without replaying the cached prefix.
+nonisolated struct DFlashDraftCacheSnapshot: @unchecked Sendable {
+    let cacheSnapshot: HybridCacheSnapshot
+
+    var tokenOffset: Int { cacheSnapshot.tokenOffset }
+    var memoryBytes: Int { cacheSnapshot.memoryBytes }
+
+    nonisolated static func capture(
+        cache: [KVCache],
+        offset: Int,
+        type: HybridCacheSnapshot.CheckpointType
+    ) -> DFlashDraftCacheSnapshot? {
+        guard let snapshot = HybridCacheSnapshot.capture(
+            cache: cache,
+            offset: offset,
+            type: type
+        ) else {
+            return nil
+        }
+        return DFlashDraftCacheSnapshot(cacheSnapshot: snapshot)
+    }
+
+    nonisolated func restore() -> [KVCache] {
+        cacheSnapshot.restore()
+    }
+}
+
 /// Node in a token-level radix (compressed trie) tree.
 /// Edge tokens represent the compressed path segment from parent to this node.
 final class RadixTreeNode {
     var edgeTokens: [Int]
     var children: [Int: RadixTreeNode]
     var snapshot: HybridCacheSnapshot?
+    /// Optional DFlash draft-side companion for ``snapshot``. This is
+    /// RAM-resident only for now; when the target body is evicted or hydrated
+    /// from SSD, the companion is cleared and DFlash skips that restored hit
+    /// instead of replaying the prefix.
+    var dflashDraftSnapshot: DFlashDraftCacheSnapshot?
     /// SSD persistence tier back-reference. Non-nil while an SSD
     /// write is pending (`committed == false`) or has landed
     /// (`committed == true`); `nil` for RAM-only nodes and after a
@@ -27,6 +64,7 @@ final class RadixTreeNode {
         self.edgeTokens = edgeTokens
         self.children = [:]
         self.snapshot = nil
+        self.dflashDraftSnapshot = nil
         self.storageRef = nil
         self.tokenOffset = tokenOffset
         self.lastAccessTime = .now
@@ -73,19 +111,40 @@ final class TokenRadixTree {
     /// it counts as a hit target during lookup. Pending refs (state
     /// 3, `committed == false`) are never hittable — returning one
     /// would race the writer and surface a half-written file.
+    ///
+    /// `maximumTokenOffsetExclusive` lets generation lookups reject an
+    /// exact full-prompt snapshot, because that state has no saved logits
+    /// for sampling the first generated token. The tree still reports the
+    /// full structural match through `sharedPrefixLength`.
     func findBestSnapshot(
         tokens: [Int],
         updateAccess: Bool = true,
-        includeStorageRefs: Bool = false
+        includeStorageRefs: Bool = false,
+        snapshotPredicate: ((HybridCacheSnapshot) -> Bool)? = nil,
+        maximumTokenOffsetExclusive: Int? = nil
     ) -> (node: RadixTreeNode, sharedPrefixLength: Int)? {
         var current = root
         var pos = 0
         var bestNode: RadixTreeNode?
         var bestPrefixLength = 0
 
+        func offsetIsAllowed(_ offset: Int) -> Bool {
+            guard let maximumTokenOffsetExclusive else { return true }
+            return offset < maximumTokenOffsetExclusive
+        }
+
         func isHittable(_ node: RadixTreeNode) -> Bool {
-            if node.snapshot != nil { return true }
-            if includeStorageRefs, node.storageRef?.committed == true { return true }
+            if let snapshot = node.snapshot {
+                guard offsetIsAllowed(snapshot.tokenOffset) else { return false }
+                return snapshotPredicate?(snapshot) ?? true
+            }
+            if includeStorageRefs,
+               let storageRef = node.storageRef,
+               storageRef.committed,
+               offsetIsAllowed(storageRef.tokenOffset)
+            {
+                return true
+            }
             return false
         }
 
@@ -120,6 +179,30 @@ final class TokenRadixTree {
         guard let node = bestNode else { return nil }
         if updateAccess { node.lastAccessTime = .now }
         return (node: node, sharedPrefixLength: bestPrefixLength)
+    }
+
+    /// Returns the node whose path exactly equals `tokens`, regardless of
+    /// whether it currently carries a snapshot or storage ref.
+    func findNode(tokens: [Int]) -> RadixTreeNode? {
+        guard !tokens.isEmpty else { return root }
+
+        var current = root
+        var pos = 0
+
+        while pos < tokens.count {
+            guard let child = current.children[tokens[pos]] else { return nil }
+
+            let edge = child.edgeTokens
+            guard pos + edge.count <= tokens.count else { return nil }
+            for edgePos in 0..<edge.count {
+                guard edge[edgePos] == tokens[pos + edgePos] else { return nil }
+            }
+
+            pos += edge.count
+            current = child
+        }
+
+        return current
     }
 
     /// Returns how many leading tokens from `tokens` match the tree, regardless of
@@ -200,12 +283,30 @@ final class TokenRadixTree {
 
     /// Attach a snapshot to a node. Use the node returned by `insertPath`.
     func storeSnapshot(_ snapshot: HybridCacheSnapshot, on node: RadixTreeNode) {
+        storeSnapshot(snapshot, dflashDraftSnapshot: nil, on: node)
+    }
+
+    /// Attach a target snapshot and optional DFlash draft companion to a node.
+    /// Replacing the target body also replaces the companion so stale draft
+    /// state cannot survive under a newer target snapshot.
+    func storeSnapshot(
+        _ snapshot: HybridCacheSnapshot,
+        dflashDraftSnapshot: DFlashDraftCacheSnapshot?,
+        on node: RadixTreeNode
+    ) {
         if let old = node.snapshot {
             totalSnapshotBytes -= old.memoryBytes
             snapshotCountByType[old.checkpointType, default: 0] -= 1
         }
+        if let oldDraft = node.dflashDraftSnapshot {
+            totalSnapshotBytes -= oldDraft.memoryBytes
+        }
         node.snapshot = snapshot
+        node.dflashDraftSnapshot = dflashDraftSnapshot
         totalSnapshotBytes += snapshot.memoryBytes
+        if let dflashDraftSnapshot {
+            totalSnapshotBytes += dflashDraftSnapshot.memoryBytes
+        }
         snapshotCountByType[snapshot.checkpointType, default: 0] += 1
         node.lastAccessTime = .now
     }
@@ -238,6 +339,10 @@ final class TokenRadixTree {
         totalSnapshotBytes -= snap.memoryBytes
         snapshotCountByType[snap.checkpointType, default: 0] -= 1
         node.snapshot = nil
+        if let draft = node.dflashDraftSnapshot {
+            totalSnapshotBytes -= draft.memoryBytes
+            node.dflashDraftSnapshot = nil
+        }
     }
 
     /// Remove a leaf node and clean up empty snapshot-less ancestors.
@@ -272,6 +377,10 @@ final class TokenRadixTree {
                 totalSnapshotBytes -= snap.memoryBytes
                 snapshotCountByType[snap.checkpointType, default: 0] -= 1
                 target.snapshot = nil
+            }
+            if let draft = target.dflashDraftSnapshot {
+                totalSnapshotBytes -= draft.memoryBytes
+                target.dflashDraftSnapshot = nil
             }
             target.parent = nil
 
@@ -496,7 +605,8 @@ final class TokenRadixTree {
         let snapshot = node.snapshot
         let storageRef = node.storageRef
         let checkpointType = snapshot?.checkpointType.wireString ?? storageRef?.checkpointType.wireString
-        let snapshotBytes = snapshot?.memoryBytes ?? 0
+        let snapshotBytes = (snapshot?.memoryBytes ?? 0)
+            + (node.dflashDraftSnapshot?.memoryBytes ?? 0)
         let storageBytes = storageRef?.bytesOnDisk ?? 0
         let scores = snapshot.map { _ in telemetryEvictionScore(for: node, now: now) } ?? nil
 

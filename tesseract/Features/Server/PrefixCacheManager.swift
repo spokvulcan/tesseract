@@ -237,6 +237,7 @@ final class PrefixCacheManager {
 
     struct LookupResult: Sendable {
         let snapshot: HybridCacheSnapshot?
+        let dflashDraftSnapshot: DFlashDraftCacheSnapshot?
         let partitionKey: CachePartitionKey?
         let snapshotTokenOffset: Int
         /// Actual token-level match depth in the radix tree, which may be
@@ -255,6 +256,7 @@ final class PrefixCacheManager {
 
         nonisolated init(
             snapshot: HybridCacheSnapshot?,
+            dflashDraftSnapshot: DFlashDraftCacheSnapshot? = nil,
             partitionKey: CachePartitionKey?,
             snapshotTokenOffset: Int,
             sharedPrefixLength: Int,
@@ -262,6 +264,7 @@ final class PrefixCacheManager {
             recordedHitSnapshotID: String? = nil
         ) {
             self.snapshot = snapshot
+            self.dflashDraftSnapshot = dflashDraftSnapshot
             self.partitionKey = partitionKey
             self.snapshotTokenOffset = snapshotTokenOffset
             self.sharedPrefixLength = sharedPrefixLength
@@ -319,7 +322,11 @@ final class PrefixCacheManager {
         }
     }
 
-    func lookup(tokens: [Int], partitionKey: CachePartitionKey) -> LookupResult {
+    func lookup(
+        tokens: [Int],
+        partitionKey: CachePartitionKey,
+        maximumReusableSnapshotOffsetExclusive: Int? = nil
+    ) -> LookupResult {
         guard let tree = store.tree(for: partitionKey) else {
             return LookupResult(
                 snapshot: nil, partitionKey: nil,
@@ -328,12 +335,21 @@ final class PrefixCacheManager {
             )
         }
 
+        pruneInvalidResidentSnapshots(
+            tokens: tokens,
+            partitionKey: partitionKey,
+            tree: tree
+        )
+
         // Consider state-5 (committed ref, no body) as hittable —
         // LLMActor will hydrate from SSD. Pending refs (state 3) are
         // filtered out inside `findBestSnapshot` because their
         // `committed` flag is false.
         guard let (node, _) = tree.findBestSnapshot(
-            tokens: tokens, includeStorageRefs: true
+            tokens: tokens,
+            includeStorageRefs: true,
+            snapshotPredicate: Self.hasAlignedMaxLayerOffset,
+            maximumTokenOffsetExclusive: maximumReusableSnapshotOffsetExclusive
         ) else {
             let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
             return LookupResult(
@@ -357,6 +373,7 @@ final class PrefixCacheManager {
             }
             return LookupResult(
                 snapshot: snapshot,
+                dflashDraftSnapshot: node.dflashDraftSnapshot,
                 partitionKey: partitionKey,
                 snapshotTokenOffset: snapshot.tokenOffset,
                 sharedPrefixLength: treeMatchDepth,
@@ -440,9 +457,14 @@ final class PrefixCacheManager {
     func lookupAndPlanCheckpoints(
         tokens: [Int],
         stablePrefixOffset: Int?,
-        partitionKey: CachePartitionKey
+        partitionKey: CachePartitionKey,
+        maximumReusableSnapshotOffsetExclusive: Int? = nil
     ) -> (lookup: LookupResult, plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]) {
-        let lookup = lookup(tokens: tokens, partitionKey: partitionKey)
+        let lookup = lookup(
+            tokens: tokens,
+            partitionKey: partitionKey,
+            maximumReusableSnapshotOffsetExclusive: maximumReusableSnapshotOffsetExclusive
+        )
         let basePlan = planCheckpoints(
             tokens: tokens,
             stablePrefixOffset: stablePrefixOffset,
@@ -487,7 +509,10 @@ final class PrefixCacheManager {
         func alreadyStored(offset: Int, type: HybridCacheSnapshot.CheckpointType) -> Bool {
             guard let tree,
                   let (node, _) = tree.findBestSnapshot(
-                      tokens: Array(tokens[0..<offset]), updateAccess: false)
+                      tokens: Array(tokens[0..<offset]),
+                      updateAccess: false,
+                      snapshotPredicate: Self.hasAlignedMaxLayerOffset
+                  )
             else { return false }
             return node.tokenOffset == offset && node.snapshot?.checkpointType == type
         }
@@ -525,6 +550,7 @@ final class PrefixCacheManager {
     func storeSnapshots(
         promptTokens: [Int],
         capturedSnapshots: [HybridCacheSnapshot],
+        dflashDraftSnapshots: [Int: DFlashDraftCacheSnapshot] = [:],
         snapshotPayloads: [SnapshotPayload] = [],
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
@@ -548,10 +574,23 @@ final class PrefixCacheManager {
         for (index, snapshot) in capturedSnapshots.enumerated() {
             let offset = snapshot.tokenOffset
             guard offset > 0, offset <= promptTokens.count else { continue }
+            guard Self.hasAlignedMaxLayerOffset(snapshot) else {
+                Log.agent.warning(
+                    "PrefixCacheManager.storeSnapshots skipped offset-mismatched snapshot — "
+                    + "tokenOffset=\(snapshot.tokenOffset) "
+                    + "maxLayerOffset=\(Self.maxLayerOffset(snapshot)) "
+                    + "type=\(snapshot.checkpointType)"
+                )
+                continue
+            }
             let path = Array(promptTokens[0..<offset])
             let node = tree.insertPath(tokens: path)
             guard node.tokenOffset == offset else { continue }
-            tree.storeSnapshot(snapshot, on: node)
+            tree.storeSnapshot(
+                snapshot,
+                dflashDraftSnapshot: dflashDraftSnapshots[offset],
+                on: node
+            )
 
             guard payloadsAligned else { continue }
             let payload = snapshotPayloads[index]
@@ -590,6 +629,7 @@ final class PrefixCacheManager {
     func storeLeaf(
         storedTokens: [Int],
         leafSnapshot: HybridCacheSnapshot,
+        dflashDraftSnapshot: DFlashDraftCacheSnapshot? = nil,
         leafPayload: SnapshotPayload? = nil,
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
@@ -597,10 +637,23 @@ final class PrefixCacheManager {
         guard leafSnapshot.tokenOffset == storedTokens.count else {
             return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
         }
+        guard Self.hasAlignedMaxLayerOffset(leafSnapshot) else {
+            Log.agent.warning(
+                "PrefixCacheManager.storeLeaf skipped offset-mismatched snapshot — "
+                + "tokenOffset=\(leafSnapshot.tokenOffset) "
+                + "maxLayerOffset=\(Self.maxLayerOffset(leafSnapshot)) "
+                + "type=\(leafSnapshot.checkpointType)"
+            )
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
+        }
 
         let tree = store.getOrCreateTree(for: partitionKey)
         let node = tree.insertPath(tokens: storedTokens)
-        tree.storeSnapshot(leafSnapshot, on: node)
+        tree.storeSnapshot(
+            leafSnapshot,
+            dflashDraftSnapshot: dflashDraftSnapshot,
+            on: node
+        )
 
         let supersededLeaves = supersedeAncestorLeaves(
             for: node,
@@ -632,6 +685,52 @@ final class PrefixCacheManager {
             supersededLeaves: supersededLeaves,
             stats: stats
         )
+    }
+
+    /// Attach or replace the DFlash draft companion for an already-stored
+    /// target snapshot. Used to bootstrap durable draft state for cache
+    /// entries created before DFlash companions existed.
+    @discardableResult
+    func storeDFlashDraftSnapshot(
+        promptTokens: [Int],
+        offset: Int,
+        draftSnapshot: DFlashDraftCacheSnapshot,
+        partitionKey: CachePartitionKey,
+        requestID: UUID? = nil
+    ) -> StoreDiagnostics {
+        guard offset > 0,
+              offset <= promptTokens.count,
+              draftSnapshot.tokenOffset == offset,
+              let tree = store.tree(for: partitionKey)
+        else {
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
+        }
+
+        let path = Array(promptTokens[0..<offset])
+        guard let (node, _) = tree.findBestSnapshot(
+            tokens: path,
+            updateAccess: false,
+            includeStorageRefs: false,
+            snapshotPredicate: Self.hasAlignedMaxLayerOffset
+        ) else {
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
+        }
+        guard node.tokenOffset == offset,
+              let targetSnapshot = node.snapshot
+        else {
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
+        }
+
+        tree.storeSnapshot(
+            targetSnapshot,
+            dflashDraftSnapshot: draftSnapshot,
+            on: node
+        )
+        let evictions = evictToFitBudget(
+            requestID: requestID,
+            preferredPartitionKey: partitionKey
+        )
+        return StoreDiagnostics(evictions: evictions, supersededLeaves: [], stats: stats)
     }
 
     private func supersedeAncestorLeaves(
@@ -729,7 +828,44 @@ final class PrefixCacheManager {
         partitionKey: CachePartitionKey
     ) {
         guard let tree = store.tree(for: partitionKey) else { return }
+        guard Self.hasAlignedMaxLayerOffset(snapshot) else {
+            _ = invalidateSnapshot(
+                node: node,
+                tree: tree,
+                partitionKey: partitionKey,
+                reason: "promote-offset-mismatch tokenOffset=\(snapshot.tokenOffset) maxLayerOffset=\(Self.maxLayerOffset(snapshot))"
+            )
+            return
+        }
         tree.storeSnapshot(snapshot, on: node)
+    }
+
+    /// Remove a corrupted or stale snapshot from an exact radix path and
+    /// delete its SSD backing, if present. Used when lazy hydration or
+    /// restore validation discovers that a persisted snapshot's declared
+    /// token offset does not match the offsets embedded in the layer states.
+    @discardableResult
+    func invalidateSnapshot(
+        tokens: [Int],
+        offset: Int,
+        partitionKey: CachePartitionKey,
+        reason: String
+    ) -> Bool {
+        guard offset >= 0, offset <= tokens.count,
+              let tree = store.tree(for: partitionKey)
+        else { return false }
+
+        let path = Array(tokens.prefix(offset))
+        guard let node = tree.findNode(tokens: path),
+              node.tokenOffset == offset
+        else { return false }
+
+        return invalidateSnapshot(
+            node: node,
+            tree: tree,
+            partitionKey: partitionKey,
+            reason: reason
+        )
     }
 
     /// Clear a state-5 node's storageRef after a hydration failure
@@ -912,6 +1048,80 @@ final class PrefixCacheManager {
         store.registerPartition(meta, for: partitionKey)
     }
 
+    private func pruneInvalidResidentSnapshots(
+        tokens: [Int],
+        partitionKey: CachePartitionKey,
+        tree: TokenRadixTree
+    ) {
+        var pruned = 0
+        let pruneLimit = 16
+
+        while pruned < pruneLimit,
+              let (node, _) = tree.findBestSnapshot(
+                  tokens: tokens,
+                  updateAccess: false,
+                  includeStorageRefs: false
+              ),
+              let snapshot = node.snapshot,
+              !Self.hasAlignedMaxLayerOffset(snapshot)
+        {
+            pruned += 1
+            let maxLayerOffset = Self.maxLayerOffset(snapshot)
+            _ = invalidateSnapshot(
+                node: node,
+                tree: tree,
+                partitionKey: partitionKey,
+                reason: "offset-mismatch tokenOffset=\(snapshot.tokenOffset) maxLayerOffset=\(maxLayerOffset)"
+            )
+        }
+
+        if pruned == pruneLimit {
+            Log.agent.warning(
+                "PrefixCacheManager.lookup stopped pruning invalid resident snapshots at limit — "
+                + "partition=\(partitionKey.partitionDigest)"
+            )
+        }
+    }
+
+    @discardableResult
+    private func invalidateSnapshot(
+        node: RadixTreeNode,
+        tree: TokenRadixTree,
+        partitionKey: CachePartitionKey,
+        reason: String
+    ) -> Bool {
+        let offset = node.snapshot?.tokenOffset ?? node.storageRef?.tokenOffset ?? node.tokenOffset
+        let checkpointType = node.snapshot?.checkpointType ?? node.storageRef?.checkpointType
+        let hadSnapshot = node.snapshot != nil
+        let storageRefID = node.storageRef?.snapshotID
+
+        if let ref = node.storageRef {
+            store.deleteSnapshot(snapshotID: ref.snapshotID)
+            node.storageRef = nil
+        }
+        tree.evictSnapshot(node: node)
+
+        guard hadSnapshot || storageRefID != nil else { return false }
+
+        Log.agent.warning(
+            "PrefixCacheManager invalidated prefix snapshot — "
+            + "offset=\(offset) "
+            + "type=\(checkpointType?.wireString ?? "unknown") "
+            + "storageRefID=\(storageRefID ?? "none") "
+            + "partition=\(partitionKey.partitionDigest) "
+            + "reason=\(reason)"
+        )
+        return true
+    }
+
+    private static func maxLayerOffset(_ snapshot: HybridCacheSnapshot) -> Int {
+        snapshot.layers.map(\.offset).max() ?? 0
+    }
+
+    private static func hasAlignedMaxLayerOffset(_ snapshot: HybridCacheSnapshot) -> Bool {
+        maxLayerOffset(snapshot) == snapshot.tokenOffset
+    }
+
     // MARK: - Tuner integration
 
     /// Forward a request lifecycle record to the attached `AlphaTuner`,
@@ -973,7 +1183,7 @@ final class PrefixCacheManager {
                     partitionKey: key,
                     path: tree.pathToNode(node),
                     offset: node.tokenOffset,
-                    bytes: snap.memoryBytes,
+                    bytes: snap.memoryBytes + (node.dflashDraftSnapshot?.memoryBytes ?? 0),
                     type: snap.checkpointType,
                     lastAccessTime: node.lastAccessTime
                 ))
@@ -1015,12 +1225,14 @@ final class PrefixCacheManager {
                   let snapshot = candidate.node.snapshot
             else { break }
 
+            let freedBytes = snapshot.memoryBytes
+                + (candidate.node.dflashDraftSnapshot?.memoryBytes ?? 0)
             candidate.tree.evictSnapshot(node: candidate.node)
             events.append(EvictionEvent(
                 strategy: candidate.strategy,
                 offset: candidate.node.tokenOffset,
                 checkpointType: snapshot.checkpointType,
-                freedBytes: snapshot.memoryBytes,
+                freedBytes: freedBytes,
                 budgetBytes: memoryBudgetBytes,
                 snapshotBytesAfter: totalSnapshotBytes,
                 normalizedRecency: candidate.score?.normalizedRecency,

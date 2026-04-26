@@ -11,6 +11,8 @@
 #   archive     Create release archive for App Store submission
 #   clean       Clean build artifacts and derived data
 #   log         Tail system log filtered to tesseract
+#   log --record
+#               Tail logs and save a timestamped copy under /tmp/tesseract-logs
 
 set -euo pipefail
 
@@ -295,10 +297,7 @@ cmd_clean() {
     echo "Clean complete."
 }
 
-cmd_log() {
-    echo "Tailing tesseract logs (Ctrl-C to stop)..."
-    echo ""
-
+stream_logs() {
     # Whitelist: our subsystem + print()/NSLog from our process (empty subsystem).
     # To reveal <private> values, mark interpolations as public: \(path, privacy: .public)
     log stream \
@@ -345,6 +344,44 @@ cmd_log() {
     done
 }
 
+cmd_log() {
+    local record=0
+    local logfile=""
+    case "${1:-}" in
+        --record)
+            record=1
+            ;;
+        --record=*)
+            record=1
+            logfile="${1#--record=}"
+            ;;
+        "")
+            ;;
+        *)
+            echo "Unknown log option: $1" >&2
+            echo "Usage: scripts/dev.sh log [--record[=/path/to/file.log]]" >&2
+            return 2
+            ;;
+    esac
+
+    if [ "$record" -eq 1 ]; then
+        if [ -z "$logfile" ]; then
+            mkdir -p /tmp/tesseract-logs
+            logfile="/tmp/tesseract-logs/tesseract-agent-$(date +%Y%m%d-%H%M%S).log"
+        else
+            mkdir -p "$(dirname "$logfile")"
+        fi
+        ln -sfn "$logfile" /tmp/tesseract-logs/latest.log 2>/dev/null || true
+        echo "Tailing tesseract logs and recording to: $logfile"
+        echo ""
+        stream_logs | tee "$logfile"
+    else
+        echo "Tailing tesseract logs (Ctrl-C to stop)..."
+        echo ""
+        stream_logs
+    fi
+}
+
 usage() {
     echo "Usage: scripts/dev.sh <command>"
     echo ""
@@ -363,6 +400,8 @@ usage() {
     echo "  resolve     Resolve SPM package dependencies"
     echo "  clean       Clean build artifacts and derived data"
     echo "  log         Tail system log filtered to tesseract"
+    echo "  log --record"
+    echo "              Tail logs and save a timestamped copy under /tmp/tesseract-logs"
 }
 
 # --- Main ------------------------------------------------------------------
@@ -381,6 +420,6 @@ case "${1:-}" in
     archive)     cmd_archive ;;
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;
-    log)         cmd_log ;;
+    log)         shift; cmd_log "$@" ;;
     *)           usage ;;
 esac

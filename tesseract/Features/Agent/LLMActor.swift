@@ -16,6 +16,33 @@ nonisolated final class UnsafeSendableBox<T>: @unchecked Sendable {
     }
 }
 
+nonisolated final class HTTPPostCompletionWork: @unchecked Sendable {
+    private struct State {
+        var operation: (@Sendable () async -> Void)?
+        var didRun = false
+    }
+
+    private let state = OSAllocatedUnfairLock<State>(initialState: .init())
+
+    func set(_ operation: @escaping @Sendable () async -> Void) {
+        state.withLock {
+            guard !$0.didRun else { return }
+            $0.operation = operation
+        }
+    }
+
+    func runOnce() async {
+        let operation = state.withLock { state -> (@Sendable () async -> Void)? in
+            guard !state.didRun else { return nil }
+            state.didRun = true
+            let operation = state.operation
+            state.operation = nil
+            return operation
+        }
+        await operation?()
+    }
+}
+
 /// Output of `LLMActor.makeHTTPPrefixCacheGeneration`. Bundles the lower-level MLX
 /// generation handles together so the caller can drive the stream and recover the
 /// final KV cache after generation completes.
@@ -42,6 +69,10 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let fullTokens: [Int]
     /// Snapshots captured during prefill at checkpoint offsets (e.g. stable-prefix boundary).
     let capturedSnapshots: [HybridCacheSnapshot]
+    /// DFlash draft-cache companions captured at the same offsets as
+    /// ``capturedSnapshots``. These let future HTTP prefix-cache hits restore
+    /// the draft side without replaying the cached prefix.
+    let dflashDraftSnapshotsByOffset: [Int: DFlashDraftCacheSnapshot]
     /// Pre-extracted `SnapshotPayload` values for each entry in
     /// ``capturedSnapshots``, produced inside the
     /// ``ModelContainer/perform(_:)`` block that captured the snapshots
@@ -160,6 +191,22 @@ actor LLMActor {
         let blockSize: Int
     }
 
+    private struct PendingHTTPPostCompletionCacheWork {
+        let requestID: UUID
+        let partitionKey: CachePartitionKey
+        let work: HTTPPostCompletionWork
+    }
+
+    private var pendingHTTPPostCompletionCacheWork: [UUID: PendingHTTPPostCompletionCacheWork] = [:]
+
+    private struct HTTPPrefixCacheDFlashIteratorResult {
+        let iterator: DFlashTokenIterator
+        let draftSnapshotsByOffset: [Int: DFlashDraftCacheSnapshot]
+        let draftPrefixSource: String
+        let draftReplaySeconds: TimeInterval
+        let draftRestoreSeconds: TimeInterval
+    }
+
     var isDFlashLoaded: Bool { dflashContext != nil }
 
     /// Stable SHA-256 of the loaded model's weight files. Folded into every
@@ -184,6 +231,46 @@ actor LLMActor {
     ) {
         self.triAttentionCalibrationArtifactLoader =
             triAttentionCalibrationArtifactLoader ?? TriAttentionCalibrationArtifactLoader()
+    }
+
+    private func enqueueHTTPPostCompletionCacheWork(
+        requestID: UUID,
+        partitionKey: CachePartitionKey,
+        work: HTTPPostCompletionWork
+    ) {
+        pendingHTTPPostCompletionCacheWork[requestID] = PendingHTTPPostCompletionCacheWork(
+            requestID: requestID,
+            partitionKey: partitionKey,
+            work: work
+        )
+        Log.agent.debug(
+            "HTTP post-completion cache work queued — request_id=\(requestID.uuidString)"
+        )
+    }
+
+    private func forgetHTTPPostCompletionCacheWork(requestID: UUID) {
+        pendingHTTPPostCompletionCacheWork.removeValue(forKey: requestID)
+    }
+
+    private func drainHTTPPostCompletionCacheWork(
+        partitionKey: CachePartitionKey? = nil,
+        reason: String
+    ) async {
+        let workItems = pendingHTTPPostCompletionCacheWork.values
+            .filter { partitionKey == nil || $0.partitionKey == partitionKey }
+            .sorted { $0.requestID.uuidString < $1.requestID.uuidString }
+        guard !workItems.isEmpty else { return }
+
+        for item in workItems {
+            pendingHTTPPostCompletionCacheWork.removeValue(forKey: item.requestID)
+        }
+
+        Log.agent.debug(
+            "HTTP post-completion cache work draining — reason=\(reason) count=\(workItems.count)"
+        )
+        for item in workItems {
+            await item.work.runOnce()
+        }
     }
 
     /// Internal read-only accessor for the load-time SSD config snapshot.
@@ -384,7 +471,10 @@ actor LLMActor {
     }
 
     /// Returns a `DFlashTokenIterator` when `dflash != nil` and the request
-    /// is greedy + non-TriAttention; otherwise the standard `TokenIterator`.
+    /// is non-TriAttention + penalty-free; otherwise the standard `TokenIterator`.
+    /// Sampling temperature / top-p / top-k / min-p are honored — the verify
+    /// rule is distributionally equivalent to AR sampling at any temperature
+    /// (matches upstream `model_mlx.stream_generate`).
     ///
     /// `nonisolated static` so it can run from inside `container.perform { ... }`.
     /// Callers must snapshot `dflashContext` and pass it in — actor state
@@ -418,16 +508,46 @@ actor LLMActor {
         )
     }
 
-    /// v0: greedy temperature-zero only, no penalties, no TriAttention. The
-    /// DFlash iterator builds only `parameters.sampler()` and never calls
-    /// `parameters.processor()`, so any active repetition / presence /
-    /// frequency penalty would be silently dropped — fall back to AR
-    /// instead so the user-specified penalty is honored.
+    /// DFlash samples target tokens with `parameters.sampler()`, so
+    /// temperature / top-p / top-k / min-p configured by the caller is honored.
+    /// The draft proposal path is greedy for better acceptance, which is still
+    /// distributionally correct because every emitted token is target-verified.
+    ///
+    /// Two gates remain:
+    ///
+    /// 1. `processor()` is unsupported. The DFlash iterator never calls
+    ///    `parameters.processor()`, so an active repetition / presence /
+    ///    frequency penalty would be silently dropped. Fall back to AR
+    ///    so the user-specified penalty is honored.
+    /// 2. TriAttention reshapes the prefill cache layout in ways the
+    ///    DFlash seed-state extraction has not been validated against.
+    ///    Independent integration concern; gated until that work lands.
     private nonisolated static func isDFlashEligible(_ parameters: GenerateParameters) -> Bool {
-        guard parameters.temperature == 0 else { return false }
-        guard !parameters.triAttention.enabled else { return false }
-        guard parameters.processor() == nil else { return false }
-        return true
+        dflashBaseSkipReason(parameters) == nil
+    }
+
+    private nonisolated static func dflashBaseSkipReason(_ parameters: GenerateParameters) -> String? {
+        if parameters.triAttention.enabled {
+            return "TriAttention enabled"
+        }
+        if parameters.processor() != nil {
+            return "logit processor active"
+        }
+        return nil
+    }
+
+    nonisolated static func dflashHTTPPrefixCacheSkipReason(
+        _ parameters: GenerateParameters,
+        checkpointBaseOffset: Int,
+        hasRestoredDraftSnapshot: Bool
+    ) -> String? {
+        if let reason = dflashBaseSkipReason(parameters) {
+            return reason
+        }
+        if checkpointBaseOffset > 0 && !hasRestoredDraftSnapshot {
+            return "missing DFlash draft snapshot for restored prefix"
+        }
+        return nil
     }
 
     /// Build a `DFlashTokenIterator` over the prefix-cache HTTP path.
@@ -447,9 +567,10 @@ actor LLMActor {
         context: ModelContext,
         inputForGeneration: LMInput,
         cacheToUse: [KVCache]?,
+        restoredDraftSnapshot: DFlashDraftCacheSnapshot?,
         genParams: GenerateParameters,
         prefillStepSize: Int
-    ) throws -> DFlashTokenIterator {
+    ) throws -> HTTPPrefixCacheDFlashIteratorResult {
         guard let tappable = context.model as? (any HiddenStateTappable) else {
             throw DFlashHTTPPrefixCacheError.targetNotTappable(typeName: "\(type(of: context.model))")
         }
@@ -471,6 +592,38 @@ actor LLMActor {
         let recorder = ChunkAccumulatingRecorder(layerIDs: Set(cfg.targetLayerIDs))
 
         let prefillStart = CFAbsoluteTimeGetCurrent()
+        let primedDraftCache: [KVCache]?
+        let draftPrefixSource: String
+        let draftReplaySeconds: TimeInterval
+        let draftRestoreSeconds: TimeInterval
+        if genParams.checkpointBaseOffset > 0 {
+            if let restoredDraftSnapshot {
+                guard restoredDraftSnapshot.tokenOffset == genParams.checkpointBaseOffset else {
+                    throw DFlashHTTPPrefixCacheError.draftSnapshotOffsetMismatch(
+                        expected: genParams.checkpointBaseOffset,
+                        actual: restoredDraftSnapshot.tokenOffset
+                    )
+                }
+                let draftRestoreStart = CFAbsoluteTimeGetCurrent()
+                primedDraftCache = restoredDraftSnapshot.restore()
+                if let primedDraftCache {
+                    eval(primedDraftCache)
+                }
+                draftRestoreSeconds = CFAbsoluteTimeGetCurrent() - draftRestoreStart
+                draftReplaySeconds = 0
+                draftPrefixSource = "snapshot"
+            } else {
+                throw DFlashHTTPPrefixCacheError.missingDraftSnapshotForRestoredPrefix(
+                    offset: genParams.checkpointBaseOffset
+                )
+            }
+        } else {
+            primedDraftCache = nil
+            draftReplaySeconds = 0
+            draftRestoreSeconds = 0
+            draftPrefixSource = "cold"
+        }
+
         let (prepareResult, snapshots) = try tappable.prepareWithCheckpointsAndTap(
             inputForGeneration,
             cache: cache,
@@ -519,7 +672,11 @@ actor LLMActor {
         }
         let prefillSeconds = CFAbsoluteTimeGetCurrent() - prefillStart
 
-        let lastHidden = recorder.concatenated(orderedLayerIDs: cfg.targetLayerIDs.sorted())
+        guard let lastHidden = recorder.concatenatedIfPresent(
+            orderedLayerIDs: cfg.targetLayerIDs.sorted()
+        ) else {
+            throw DFlashHTTPPrefixCacheError.missingHiddenStates(stage: "suffix-prefill")
+        }
         eval(lastHidden)
 
         // Split snapshots into stored vs transient — same partitioning the
@@ -534,10 +691,24 @@ actor LLMActor {
                 storedSnapshots.append(snap)
             }
         }
+        let draftSnapshotsByOffset = Self.captureDFlashDraftSnapshotsForPrefill(
+            draft: dflash.draft,
+            targetSnapshots: storedSnapshots,
+            baseOffset: genParams.checkpointBaseOffset,
+            suffixHidden: lastHidden,
+            restoredDraftCache: primedDraftCache,
+            prefillStepSize: prefillStepSize
+        )
 
-        // Authoritative prompt length: the cache offset after both
-        // chunked prefill and the residual forward have advanced it.
-        let promptLength = (cache.first as? BaseKVCache)?.offset ?? 0
+        // Authoritative prompt length: restored prefix offset + residual
+        // tokens just prefilled. Reading `cache.first?.offset` is unsafe on
+        // hybrid models (Qwen3.5 / Qwen3.6) — layer 0 is linear, so
+        // `cache.first` is a `MambaCache`, and only KV-attn caches bump
+        // `offset` during forward. Use the same canonical formula as
+        // `GenerateParameters.configureTriAttentionCachesForPrefill`
+        // (Evaluate.swift): checkpointBaseOffset + residual length.
+        let promptLength =
+            genParams.checkpointBaseOffset + inputForGeneration.text.tokens.dim(-1)
 
         let primed = DFlashPrimedPrefill(
             firstEmittedToken: firstToken,
@@ -545,10 +716,13 @@ actor LLMActor {
             promptLength: promptLength,
             capturedSnapshots: storedSnapshots,
             transientSnapshots: transientByOffset,
+            draftCache: primedDraftCache,
+            draftReplaySeconds: draftReplaySeconds,
+            draftRestoreSeconds: draftRestoreSeconds,
             prefillSeconds: prefillSeconds
         )
 
-        return try DFlashTokenIterator(
+        let iterator = try DFlashTokenIterator(
             primed: primed,
             target: context.model,
             draft: dflash.draft,
@@ -558,6 +732,105 @@ actor LLMActor {
             maskTokenID: cfg.maskTokenID,
             targetLayerIDs: cfg.targetLayerIDs
         )
+        return HTTPPrefixCacheDFlashIteratorResult(
+            iterator: iterator,
+            draftSnapshotsByOffset: draftSnapshotsByOffset,
+            draftPrefixSource: draftPrefixSource,
+            draftReplaySeconds: draftReplaySeconds,
+            draftRestoreSeconds: draftRestoreSeconds
+        )
+    }
+
+    private nonisolated static func primeDFlashDraftCache(
+        draft: DFlashDraftModel,
+        prefixHidden: MLXArray,
+        draftCache: [KVCache],
+        prefillStepSize: Int
+    ) {
+        let totalTokens = prefixHidden.dim(1)
+        let stepSize = Swift.max(prefillStepSize, 1)
+        var start = 0
+        while start < totalTokens {
+            let end = Swift.min(start + stepSize, totalTokens)
+            let hiddenChunk = prefixHidden[0..., start..<end, 0...]
+            let output = draft.primeCache(
+                targetHidden: hiddenChunk,
+                cache: draftCache.map { $0 as KVCache? }
+            )
+            eval(output)
+            eval(draftCache)
+            Memory.clearCache()
+            start = end
+        }
+    }
+
+    private nonisolated static func captureDFlashDraftSnapshotsForPrefill(
+        draft: DFlashDraftModel,
+        targetSnapshots: [HybridCacheSnapshot],
+        baseOffset: Int,
+        suffixHidden: MLXArray,
+        restoredDraftCache: [KVCache]?,
+        prefillStepSize: Int
+    ) -> [Int: DFlashDraftCacheSnapshot] {
+        guard !targetSnapshots.isEmpty else { return [:] }
+
+        let suffixTokenCount = suffixHidden.dim(1)
+        let draftCache = restoredDraftCache.map(Self.copyKVCacheArray) ?? draft.newCache()
+        var result: [Int: DFlashDraftCacheSnapshot] = [:]
+        var consumed = 0
+
+        for targetSnapshot in targetSnapshots.sorted(by: { $0.tokenOffset < $1.tokenOffset }) {
+            let relativeEnd = targetSnapshot.tokenOffset - baseOffset
+            guard relativeEnd > consumed, relativeEnd <= suffixTokenCount else {
+                Log.agent.warning(
+                    "DFlash draft snapshot capture skipped — targetOffset=\(targetSnapshot.tokenOffset) "
+                    + "baseOffset=\(baseOffset) suffixTokens=\(suffixTokenCount) consumed=\(consumed)"
+                )
+                continue
+            }
+
+            let hiddenSlice = suffixHidden[0..., consumed..<relativeEnd, 0...]
+            Self.primeDFlashDraftCache(
+                draft: draft,
+                prefixHidden: hiddenSlice,
+                draftCache: draftCache,
+                prefillStepSize: prefillStepSize
+            )
+
+            if let draftSnapshot = DFlashDraftCacheSnapshot.capture(
+                cache: draftCache,
+                offset: targetSnapshot.tokenOffset,
+                type: targetSnapshot.checkpointType
+            ) {
+                result[targetSnapshot.tokenOffset] = draftSnapshot
+                Log.agent.debug(
+                    "DFlash draft snapshot captured — offset=\(targetSnapshot.tokenOffset) "
+                    + "bytes=\(draftSnapshot.memoryBytes) draftOffset=\(Self.maxCacheOffset(draftCache))"
+                )
+            } else {
+                Log.agent.warning(
+                    "DFlash draft snapshot capture failed — offset=\(targetSnapshot.tokenOffset)"
+                )
+            }
+            consumed = relativeEnd
+        }
+
+        return result
+    }
+
+    private nonisolated static func copyKVCacheArray(_ cache: [KVCache]) -> [KVCache] {
+        cache.map { $0.copy() }
+    }
+
+    private nonisolated static func maxCacheOffset(_ cache: [KVCache]) -> Int {
+        cache.map(\.offset).max() ?? 0
+    }
+
+    private nonisolated static func mismatchedMaxLayerOffset(
+        _ snapshot: HybridCacheSnapshot
+    ) -> Int? {
+        let maxLayerOffset = snapshot.layers.map(\.offset).max() ?? 0
+        return maxLayerOffset == snapshot.tokenOffset ? nil : maxLayerOffset
     }
 
     /// Recorder that accumulates per-target-layer hidden states across
@@ -582,8 +855,9 @@ actor LLMActor {
             }
         }
 
-        func concatenated(orderedLayerIDs: [Int]) -> MLXArray {
+        func concatenatedIfPresent(orderedLayerIDs: [Int]) -> MLXArray? {
             let pieces = orderedLayerIDs.compactMap { byLayer[$0] }
+            guard !pieces.isEmpty else { return nil }
             return MLX.concatenated(pieces, axis: -1)
         }
     }
@@ -592,6 +866,9 @@ actor LLMActor {
         case targetNotTappable(typeName: String)
         case targetNotDFlashCapable(typeName: String)
         case emptyResidual
+        case missingHiddenStates(stage: String)
+        case missingDraftSnapshotForRestoredPrefix(offset: Int)
+        case draftSnapshotOffsetMismatch(expected: Int, actual: Int)
 
         var description: String {
             switch self {
@@ -601,6 +878,12 @@ actor LLMActor {
                 return "DFlash HTTP prefix-cache: target \(name) does not conform to DFlashTarget"
             case .emptyResidual:
                 return "DFlash HTTP prefix-cache: residual prefill is empty"
+            case .missingHiddenStates(let stage):
+                return "DFlash HTTP prefix-cache: no hidden states captured during \(stage)"
+            case .missingDraftSnapshotForRestoredPrefix(let offset):
+                return "DFlash HTTP prefix-cache: missing draft snapshot for restored prefix at \(offset)"
+            case .draftSnapshotOffsetMismatch(let expected, let actual):
+                return "DFlash HTTP prefix-cache: draft snapshot offset \(actual) does not match restored target offset \(expected)"
             }
         }
     }
@@ -817,6 +1100,7 @@ actor LLMActor {
 
         let mlxStartBox = UnsafeSendableBox(mlxStart)
         let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
+        let postCompletionCacheWork = HTTPPostCompletionWork()
         let startsInsideThinkBlock = promptStartsThinking
         let loadedModelWeightBytes = modelWeightBytes
 
@@ -955,7 +1239,7 @@ actor LLMActor {
                     return nil
                 }
 
-                func logEvictions(_ evictions: [PrefixCacheManager.EvictionEvent]) {
+                @Sendable func logEvictions(_ evictions: [PrefixCacheManager.EvictionEvent]) {
                     for event in evictions {
                         diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
                         // Body-drop with live storage ref → state 2→3
@@ -972,7 +1256,7 @@ actor LLMActor {
                     }
                 }
 
-                func logSupersededLeaves(
+                @Sendable func logSupersededLeaves(
                     _ supersededLeaves: [PrefixCacheManager.LeafSupersession]
                 ) {
                     for supersession in supersededLeaves {
@@ -1223,6 +1507,7 @@ actor LLMActor {
                         prefixCache.storeSnapshots(
                             promptTokens: mlxStart.fullTokens,
                             capturedSnapshots: mlxStart.capturedSnapshots,
+                            dflashDraftSnapshots: mlxStart.dflashDraftSnapshotsByOffset,
                             snapshotPayloads: mlxStart.capturedPayloads,
                             partitionKey: mlxStart.partitionKey,
                             requestID: requestID
@@ -1238,285 +1523,313 @@ actor LLMActor {
                     return
                 }
 
-                // Leaf store, wrapped so any skip path falls through to
-                // the request-end recordRequest call below — the alpha
-                // tuner needs to see every request, not just the ones
-                // whose leaf store completed.
-                //
-                // Canonical leaf policy:
-                // - thinking templates store one template-canonical leaf
-                //   synthesized from the transient boundary snapshot
-                // - non-thinking templates store the direct post-response
-                //   leaf captured from the final cache
-                var leafStoreForTuner: AlphaTuner.LeafStore? = nil
-                var postGenerationParams = genParams
-                postGenerationParams.triAttentionStablePrefixOffset =
-                    mlxStart.triAttentionStablePrefixOffset
-                leafBlock: do {
-                    // Skip leaf-store when a thinking-safeguard intervention
-                    // fired: the continuation ran through the raw path, so the
-                    // on-device KV cache no longer matches the radix-tree
-                    // logical snapshot we'd compute from
-                    // `textContent + thinkingContent + toolCalls`. Storing
-                    // anything here would corrupt future prefix-cache hits
-                    // for requests sharing this prefix. The stable-prefix
-                    // snapshot captured pre-generation is still stored
-                    // unconditionally earlier in this task, so future requests
-                    // still benefit from partial cache reuse; only the leaf
-                    // is lost for this one turn.
-                    if safeguard.hasIntervened {
-                        diagnosticsContext.logSkip(
-                            stage: "leafStore",
-                            reason: "thinking-safeguard-intervention"
-                        )
-                        break leafBlock
-                    }
+                let finalTextContent = textContent
+                let finalThinkingContent = thinkingContent
+                let finalToolCalls = toolCalls
+                let safeguardIntervened = safeguard.hasIntervened
+                let capturedSnapshotsForTuner = storedSnapshotsForTuner
 
-                    // 1. Build stored conversation (prompt + generated assistant turn).
-                    let storedConversation = conversation.appendingAssistant(.assistant(
-                        content: textContent,
-                        reasoning: thinkingContent,
-                        toolCalls: toolCalls
-                    ))
-
-                    // 2. Re-tokenize stored conversation → flat token sequence.
-                    guard let storedTokens = await Self.measureStoredTokenSequence(
-                        container: container,
-                        conversation: storedConversation,
-                        toolSpecs: canonicalTools
-                    ) else {
-                        diagnosticsContext.logSkip(
-                            stage: "leafStore",
-                            reason: "tokenization-failed",
-                            level: .warning
-                        )
-                        break leafBlock
-                    }
-
-                    let leafStoreMode = Self.selectHTTPLeafStoreMode(
-                        promptStartsThinking: startsInsideThinkBlock,
-                        emittedToolCalls: !toolCalls.isEmpty
+                postCompletionCacheWork.set {
+                    Log.agent.debug(
+                        "HTTP post-completion cache work starting — request_id=\(requestID.uuidString)"
                     )
-                    diagnosticsContext.log(PrefixCacheDiagnostics.LeafModeEvent(
-                        mode: leafStoreMode.rawValue,
-                        continuation: toolCalls.isEmpty
-                            ? HTTPLeafContinuationKind.userTurn.rawValue
-                            : HTTPLeafContinuationKind.toolResult.rawValue
-                    ))
 
-                    if leafStoreMode == .canonicalUserLeaf {
-                        leafStoreForTuner = await Self.captureCanonicalTemplateLeaf(
-                            container: container,
-                            storedConversation: storedConversation,
-                            storedTokens: storedTokens,
-                            toolSpecs: canonicalTools,
-                            transientBoundarySnapshot: mlxStart.transientLastUserBoundarySnapshot,
-                            partitionKey: mlxStart.partitionKey,
-                            prefillStepSize: mlxStart.prefillStepSize,
-                            tokenNDim: mlxStart.tokenNDim,
-                            requestID: requestID,
-                            prefixCache: prefixCache,
-                            diagnosticsContext: diagnosticsContext,
-                            ssdEnabled: mlxStart.ssdEnabled,
-                            generateParameters: postGenerationParams
-                        )
-                        break leafBlock
-                    }
-
-                    if leafStoreMode == .directToolLeaf {
-                        leafStoreForTuner = await Self.captureDirectToolLeaf(
-                            container: container,
-                            storedConversation: storedConversation,
-                            toolSpecs: canonicalTools,
-                            transientBoundarySnapshot: mlxStart.transientLastMessageBoundarySnapshot,
-                            partitionKey: mlxStart.partitionKey,
-                            prefillStepSize: mlxStart.prefillStepSize,
-                            tokenNDim: mlxStart.tokenNDim,
-                            requestID: requestID,
-                            prefixCache: prefixCache,
-                            diagnosticsContext: diagnosticsContext,
-                            ssdEnabled: mlxStart.ssdEnabled,
-                            generateParameters: postGenerationParams
-                        )
-                        break leafBlock
-                    }
-
-                    guard !Task.isCancelled,
-                          let finalCache = await mlxStart.finalCacheHandle.takeFinalCache()
-                    else {
-                        if !Task.isCancelled {
+                    // Leaf store, wrapped so any skip path falls through to
+                    // the request-end recordRequest call below — the alpha
+                    // tuner needs to see every request, not just the ones
+                    // whose leaf store completed.
+                    //
+                    // Canonical leaf policy:
+                    // - thinking templates store one template-canonical leaf
+                    //   synthesized from the transient boundary snapshot
+                    // - non-thinking templates store the direct post-response
+                    //   leaf captured from the final cache
+                    var leafStoreForTuner: AlphaTuner.LeafStore? = nil
+                    var postGenerationParams = genParams
+                    postGenerationParams.triAttentionStablePrefixOffset =
+                        mlxStart.triAttentionStablePrefixOffset
+                    leafBlock: do {
+                        // Skip leaf-store when a thinking-safeguard intervention
+                        // fired: the continuation ran through the raw path, so the
+                        // on-device KV cache no longer matches the radix-tree
+                        // logical snapshot we'd compute from
+                        // `textContent + thinkingContent + toolCalls`. Storing
+                        // anything here would corrupt future prefix-cache hits
+                        // for requests sharing this prefix. The stable-prefix
+                        // snapshot captured pre-generation is still stored
+                        // unconditionally earlier in this task, so future requests
+                        // still benefit from partial cache reuse; only the leaf
+                        // is lost for this one turn.
+                        if safeguardIntervened {
                             diagnosticsContext.logSkip(
-                                stage: "store",
-                                reason: "no-final-cache",
+                                stage: "leafStore",
+                                reason: "thinking-safeguard-intervention"
+                            )
+                            break leafBlock
+                        }
+
+                        // 1. Build stored conversation (prompt + generated assistant turn).
+                        let storedConversation = conversation.appendingAssistant(.assistant(
+                            content: finalTextContent,
+                            reasoning: finalThinkingContent,
+                            toolCalls: finalToolCalls
+                        ))
+
+                        // 2. Re-tokenize stored conversation → flat token sequence.
+                        guard let storedTokens = await Self.measureStoredTokenSequence(
+                            container: container,
+                            conversation: storedConversation,
+                            toolSpecs: canonicalTools
+                        ) else {
+                            diagnosticsContext.logSkip(
+                                stage: "leafStore",
+                                reason: "tokenization-failed",
                                 level: .warning
                             )
+                            break leafBlock
                         }
-                        break leafBlock
-                    }
 
-                    let cacheOffsets = httpPrefixCacheOffsets(finalCache)
-                    guard httpPrefixCacheHasReusableState(finalCache) else {
-                        diagnosticsContext.logSkip(
-                            stage: "store",
-                            reason: "no-reusable-cache-state",
-                            extraFields: [("cacheOffsets", "\(cacheOffsets)")]
+                        let leafStoreMode = Self.selectHTTPLeafStoreMode(
+                            promptStartsThinking: startsInsideThinkBlock,
+                            emittedToolCalls: !finalToolCalls.isEmpty
                         )
-                        break leafBlock
-                    }
+                        diagnosticsContext.log(PrefixCacheDiagnostics.LeafModeEvent(
+                            mode: leafStoreMode.rawValue,
+                            continuation: finalToolCalls.isEmpty
+                                ? HTTPLeafContinuationKind.userTurn.rawValue
+                                : HTTPLeafContinuationKind.toolResult.rawValue
+                        ))
 
-                    // 3. Offset-alignment guard: if normalization shortened the
-                    //    stored conversation (whitespace-only assistant content → ""),
-                    //    we can only trim attention K/V — Mamba's recurrent state
-                    //    and TriAttention's sparse retained-position state can't
-                    //    be unwound (`canTrimPromptCache` returns `false` for
-                    //    both). Trimming the cache and capturing it as a leaf
-                    //    produces a snapshot whose attention is aligned to
-                    //    `storedTokens.count` but whose Mamba/TriAttention state
-                    //    is from the full pre-trim offset. On Qwen3.5 the
-                    //    resulting leaf hit perturbs raw logits by ~10 even at
-                    //    trim=1: argmax stays stable (greedy decoding survives),
-                    //    but the rest of the distribution drifts in a way that
-                    //    affects sampled decoding. Since the HTTP server
-                    //    propagates the request's `temperature`/`top_p` and we
-                    //    can't predict future request sampling params at store
-                    //    time, the safe choice is to skip the leaf store
-                    //    entirely when normalization would require any trim.
-                    //    Lost cache hits on whitespace-normalized conversations
-                    //    are the trade-off for sampler-agnostic correctness.
-                    //    Verified by `HybridCacheCorrectnessRunner` test 9 — see
-                    //    the `leafHitWithNormalizationDivergence...` diagnostics
-                    //    for the empirical drift measurements.
-                    let actualCacheOffset = httpPrefixCacheReportedTokenCount(finalCache)
-                    if actualCacheOffset > storedTokens.count {
-                        let trimAmount = actualCacheOffset - storedTokens.count
-                        let hasTriAttention = containsTriAttentionState(finalCache)
-                        diagnosticsContext.logSkip(
-                            stage: "leafStore",
-                            reason: "normalization-trim",
-                            extraFields: [
-                                ("trimAmount", "\(trimAmount)"),
-                                ("offsetBefore", "\(actualCacheOffset)"),
-                                ("canonicalCount", "\(storedTokens.count)"),
-                                ("triAttention", "\(hasTriAttention)"),
-                            ]
-                        )
-                        break leafBlock
-                    }
-
-                    // 4. Capture leaf snapshot AND extract its payload
-                    //    inside a Metal-affine `container.perform` so
-                    //    the per-array `asData()` calls run on the
-                    //    inference thread. `finalCache` is non-`Sendable`
-                    //    `[any KVCache]` — routed through the vendor's
-                    //    `nonSendable` perform overload. The offset
-                    //    guard above ensures no per-layer trimming is
-                    //    needed before capture.
-                    let ssdEnabled = mlxStart.ssdEnabled
-                    let (maybeLeaf, leafPayload): (HybridCacheSnapshot?, SnapshotPayload?) =
-                        try await container.perform(
-                            nonSendable: finalCache
-                        ) { _, cache in
-                            guard let snap = HybridCacheSnapshot.capture(
-                                cache: cache,
-                                offset: storedTokens.count,
-                                type: .leaf
-                            ) else {
-                                return (nil, nil)
-                            }
-                            let payload = Self.extractSnapshotPayloads(
-                                [snap],
-                                ssdEnabled: ssdEnabled
-                            ).first
-                            return (snap, payload)
-                        }
-                    guard let leafSnapshot = maybeLeaf else {
-                        diagnosticsContext.logSkip(
-                            stage: "leafCapture",
-                            reason: "unsupported-cache-type",
-                            extraFields: [("cacheOffsets", "\(cacheOffsets)")]
-                        )
-                        break leafBlock
-                    }
-                    diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
-                        offset: leafSnapshot.tokenOffset,
-                        checkpointType: leafSnapshot.checkpointType,
-                        bytes: leafSnapshot.memoryBytes,
-                        duringPrefill: false,
-                        source: "leaf"
-                    ))
-
-                    // Coalesce storeLeaf + stats read in one MainActor
-                    // hop — saves one cross-actor switch on the success
-                    // path (the request hot path). Includes the post-store
-                    // budget/total snapshot so the admission diagnostic can
-                    // be logged from this actor without another hop.
-                    let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
-                        await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
-                            let d = prefixCache.storeLeaf(
+                        if leafStoreMode == .canonicalUserLeaf {
+                            leafStoreForTuner = await Self.captureCanonicalTemplateLeaf(
+                                container: container,
+                                storedConversation: storedConversation,
                                 storedTokens: storedTokens,
-                                leafSnapshot: leafSnapshot,
-                                leafPayload: leafPayload,
+                                toolSpecs: canonicalTools,
+                                transientBoundarySnapshot: mlxStart.transientLastUserBoundarySnapshot,
                                 partitionKey: mlxStart.partitionKey,
-                                requestID: requestID
+                                prefillStepSize: mlxStart.prefillStepSize,
+                                tokenNDim: mlxStart.tokenNDim,
+                                requestID: requestID,
+                                prefixCache: prefixCache,
+                                diagnosticsContext: diagnosticsContext,
+                                ssdEnabled: mlxStart.ssdEnabled,
+                                generateParameters: postGenerationParams
                             )
-                            return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
+                            break leafBlock
                         }
-                    logEvictions(diagnostics.evictions)
-                    logSupersededLeaves(diagnostics.supersededLeaves)
-                    let directAdmissionEvicted = diagnostics.evictions.contains { event in
-                        event.offset == leafSnapshot.tokenOffset
-                            && event.checkpointType == .leaf
-                    }
-                    if directAdmissionEvicted {
-                        diagnosticsContext.logSkip(
-                            stage: "leafAdmission",
-                            reason: "capturedThenEvicted",
-                            level: .warning,
-                            extraFields: [
-                                ("offset", "\(leafSnapshot.tokenOffset)"),
-                                ("bytes", "\(leafSnapshot.memoryBytes)"),
-                                ("budgetBytes", "\(postStoreBudgetBytes)"),
-                                ("snapshotBytesAfter", "\(postStoreSnapshotBytes)"),
-                            ]
-                        )
-                    } else {
-                        leafStoreForTuner = AlphaTuner.LeafStore(
-                            storedTokens: storedTokens,
-                            bytes: leafSnapshot.memoryBytes
-                        )
+
+                        if leafStoreMode == .directToolLeaf {
+                            leafStoreForTuner = await Self.captureDirectToolLeaf(
+                                container: container,
+                                storedConversation: storedConversation,
+                                toolSpecs: canonicalTools,
+                                transientBoundarySnapshot: mlxStart.transientLastMessageBoundarySnapshot,
+                                partitionKey: mlxStart.partitionKey,
+                                prefillStepSize: mlxStart.prefillStepSize,
+                                tokenNDim: mlxStart.tokenNDim,
+                                requestID: requestID,
+                                prefixCache: prefixCache,
+                                diagnosticsContext: diagnosticsContext,
+                                ssdEnabled: mlxStart.ssdEnabled,
+                                generateParameters: postGenerationParams
+                            )
+                            break leafBlock
+                        }
+
+                        guard !Task.isCancelled,
+                              let finalCache = await mlxStart.finalCacheHandle.takeFinalCache()
+                        else {
+                            if !Task.isCancelled {
+                                diagnosticsContext.logSkip(
+                                    stage: "store",
+                                    reason: "no-final-cache",
+                                    level: .warning
+                                )
+                            }
+                            break leafBlock
+                        }
+
+                        let cacheOffsets = httpPrefixCacheOffsets(finalCache)
+                        guard httpPrefixCacheHasReusableState(finalCache) else {
+                            diagnosticsContext.logSkip(
+                                stage: "store",
+                                reason: "no-reusable-cache-state",
+                                extraFields: [("cacheOffsets", "\(cacheOffsets)")]
+                            )
+                            break leafBlock
+                        }
+
+                        // 3. Offset-alignment guard: if normalization shortened the
+                        //    stored conversation (whitespace-only assistant content → ""),
+                        //    we can only trim attention K/V — Mamba's recurrent state
+                        //    and TriAttention's sparse retained-position state can't
+                        //    be unwound (`canTrimPromptCache` returns `false` for
+                        //    both). Trimming the cache and capturing it as a leaf
+                        //    produces a snapshot whose attention is aligned to
+                        //    `storedTokens.count` but whose Mamba/TriAttention state
+                        //    is from the full pre-trim offset. On Qwen3.5 the
+                        //    resulting leaf hit perturbs raw logits by ~10 even at
+                        //    trim=1: argmax stays stable (greedy decoding survives),
+                        //    but the rest of the distribution drifts in a way that
+                        //    affects sampled decoding. Since the HTTP server
+                        //    propagates the request's `temperature`/`top_p` and we
+                        //    can't predict future request sampling params at store
+                        //    time, the safe choice is to skip the leaf store
+                        //    entirely when normalization would require any trim.
+                        //    Lost cache hits on whitespace-normalized conversations
+                        //    are the trade-off for sampler-agnostic correctness.
+                        //    Verified by `HybridCacheCorrectnessRunner` test 9 — see
+                        //    the `leafHitWithNormalizationDivergence...` diagnostics
+                        //    for the empirical drift measurements.
+                        let actualCacheOffset = httpPrefixCacheReportedTokenCount(finalCache)
+                        if actualCacheOffset > storedTokens.count {
+                            let trimAmount = actualCacheOffset - storedTokens.count
+                            let hasTriAttention = containsTriAttentionState(finalCache)
+                            diagnosticsContext.logSkip(
+                                stage: "leafStore",
+                                reason: "normalization-trim",
+                                extraFields: [
+                                    ("trimAmount", "\(trimAmount)"),
+                                    ("offsetBefore", "\(actualCacheOffset)"),
+                                    ("canonicalCount", "\(storedTokens.count)"),
+                                    ("triAttention", "\(hasTriAttention)"),
+                                ]
+                            )
+                            break leafBlock
+                        }
+
+                        // 4. Capture leaf snapshot AND extract its payload
+                        //    inside a Metal-affine `container.perform` so
+                        //    the per-array `asData()` calls run on the
+                        //    inference thread. `finalCache` is non-`Sendable`
+                        //    `[any KVCache]` — routed through the vendor's
+                        //    `nonSendable` perform overload. The offset
+                        //    guard above ensures no per-layer trimming is
+                        //    needed before capture.
+                        let ssdEnabled = mlxStart.ssdEnabled
+                        let maybeCaptured: (HybridCacheSnapshot?, SnapshotPayload?)
+                        do {
+                            maybeCaptured = try await container.perform(
+                                nonSendable: finalCache
+                            ) { _, cache in
+                                guard let snap = HybridCacheSnapshot.capture(
+                                    cache: cache,
+                                    offset: storedTokens.count,
+                                    type: .leaf
+                                ) else {
+                                    return (nil, nil)
+                                }
+                                let payload = Self.extractSnapshotPayloads(
+                                    [snap],
+                                    ssdEnabled: ssdEnabled
+                                ).first
+                                return (snap, payload)
+                            }
+                        } catch {
+                            diagnosticsContext.logSkip(
+                                stage: "leafCapture",
+                                reason: "capture-threw",
+                                level: .warning,
+                                extraFields: [("error", error.localizedDescription)]
+                            )
+                            break leafBlock
+                        }
+
+                        let (maybeLeaf, leafPayload) = maybeCaptured
+                        guard let leafSnapshot = maybeLeaf else {
+                            diagnosticsContext.logSkip(
+                                stage: "leafCapture",
+                                reason: "unsupported-cache-type",
+                                extraFields: [("cacheOffsets", "\(cacheOffsets)")]
+                            )
+                            break leafBlock
+                        }
+                        diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
+                            offset: leafSnapshot.tokenOffset,
+                            checkpointType: leafSnapshot.checkpointType,
+                            bytes: leafSnapshot.memoryBytes,
+                            duringPrefill: false,
+                            source: "leaf"
+                        ))
+
+                        // Coalesce storeLeaf + stats read in one MainActor
+                        // hop — saves one cross-actor switch on the success
+                        // path (the request hot path). Includes the post-store
+                        // budget/total snapshot so the admission diagnostic can
+                        // be logged from this actor without another hop.
+                        let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
+                            await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
+                                let d = prefixCache.storeLeaf(
+                                    storedTokens: storedTokens,
+                                    leafSnapshot: leafSnapshot,
+                                    leafPayload: leafPayload,
+                                    partitionKey: mlxStart.partitionKey,
+                                    requestID: requestID
+                                )
+                                return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
+                            }
+                        logEvictions(diagnostics.evictions)
+                        logSupersededLeaves(diagnostics.supersededLeaves)
+                        let directAdmissionEvicted = diagnostics.evictions.contains { event in
+                            event.offset == leafSnapshot.tokenOffset
+                                && event.checkpointType == .leaf
+                        }
+                        if directAdmissionEvicted {
+                            diagnosticsContext.logSkip(
+                                stage: "leafAdmission",
+                                reason: "capturedThenEvicted",
+                                level: .warning,
+                                extraFields: [
+                                    ("offset", "\(leafSnapshot.tokenOffset)"),
+                                    ("bytes", "\(leafSnapshot.memoryBytes)"),
+                                    ("budgetBytes", "\(postStoreBudgetBytes)"),
+                                    ("snapshotBytesAfter", "\(postStoreSnapshotBytes)"),
+                                ]
+                            )
+                        } else {
+                            leafStoreForTuner = AlphaTuner.LeafStore(
+                                storedTokens: storedTokens,
+                                bytes: leafSnapshot.memoryBytes
+                            )
+                        }
                     }
 
-                    // Release the MLX free buffer pool back to the OS so it
-                    // doesn't accumulate transient prefill intermediates
-                    // across requests.
+                    // Record the request lifecycle for the alpha tuner. Fires
+                    // for every request, including the leaf-skipped paths
+                    // — the tuner needs the full workload trace, not just
+                    // successful leaf stores.
+                    let leafCapture = leafStoreForTuner
+                    let (finalStats, finalBudgetBytes) = await MainActor.run {
+                        prefixCache.recordRequest(
+                            partitionKey: mlxStart.partitionKey,
+                            promptTokens: mlxStart.fullTokens,
+                            capturedSnapshots: capturedSnapshotsForTuner,
+                            leafStore: leafCapture,
+                            requestID: requestID
+                        )
+                        return (prefixCache.stats, prefixCache.memoryBudgetBytes)
+                    }
+                    diagnosticsContext.log(PrefixCacheDiagnostics.MemoryEvent(
+                        stats: finalStats,
+                        budgetBytes: finalBudgetBytes,
+                        modelWeightBytes: loadedModelWeightBytes,
+                        activeMlxBytes: Int64(clamping: Memory.activeMemory),
+                        peakMlxBytes: Int64(clamping: Memory.peakMemory),
+                        mlxCacheLimitBytes: Int64(clamping: Memory.cacheLimit)
+                    ))
                     Memory.clearCache()
-                }
 
-                // Record the request lifecycle for the alpha tuner. Fires
-                // for every request, including the leaf-skipped paths
-                // — the tuner needs the full workload trace, not just
-                // successful leaf stores.
-                let capturedSnapshots = storedSnapshotsForTuner
-                let leafCapture = leafStoreForTuner
-                let (finalStats, finalBudgetBytes) = await MainActor.run {
-                    prefixCache.recordRequest(
-                        partitionKey: mlxStart.partitionKey,
-                        promptTokens: mlxStart.fullTokens,
-                        capturedSnapshots: capturedSnapshots,
-                        leafStore: leafCapture,
-                        requestID: requestID
+                    Log.agent.debug(
+                        "HTTP post-completion cache work finished — request_id=\(requestID.uuidString)"
                     )
-                    return (prefixCache.stats, prefixCache.memoryBudgetBytes)
                 }
-                diagnosticsContext.log(PrefixCacheDiagnostics.MemoryEvent(
-                    stats: finalStats,
-                    budgetBytes: finalBudgetBytes,
-                    modelWeightBytes: loadedModelWeightBytes,
-                    activeMlxBytes: Int64(clamping: Memory.activeMemory),
-                    peakMlxBytes: Int64(clamping: Memory.peakMemory),
-                    mlxCacheLimitBytes: Int64(clamping: Memory.cacheLimit)
-                ))
 
+                await actorRef.enqueueHTTPPostCompletionCacheWork(
+                    requestID: requestID,
+                    partitionKey: mlxStart.partitionKey,
+                    work: postCompletionCacheWork
+                )
                 continuation.finish()
             } catch is CancellationError {
                 continuation.finish()
@@ -1545,6 +1858,12 @@ actor LLMActor {
                 _ = await task.result
                 let currentWait = pathAHandle.withLock { $0.waitForCompletion }
                 await currentWait()
+            },
+            hasPostCompletionWork: true,
+            postCompletionWork: {
+                _ = await task.result
+                await postCompletionCacheWork.runOnce()
+                await actorRef.forgetHTTPPostCompletionCacheWork(requestID: requestID)
             },
             diagnostics: .fromSeconds(
                 lookup: mlxStart.lookupMs,
@@ -1598,6 +1917,7 @@ actor LLMActor {
         promptStartsThinking = false
         modelWeightBytes = 0
         _prefixCache = nil
+        pendingHTTPPostCompletionCacheWork.removeAll()
         defaultPrefixCacheMemoryBudgetBytes = Defaults.fallbackPrefixCacheMemoryBudgetBytes
         modelFingerprint = nil
         ssdConfig = nil
@@ -1619,6 +1939,7 @@ actor LLMActor {
     /// "flush before shutdown" flows). No-op when SSD is disabled
     /// or the prefix cache was never instantiated.
     func flushPrefixCache() async {
+        await drainHTTPPostCompletionCacheWork(reason: "flush-prefix-cache")
         guard let cache = _prefixCache else { return }
         await cache.flushSSDWrites()
     }
@@ -2131,6 +2452,18 @@ actor LLMActor {
             kvBits: parameters.kvBits,
             kvGroupSize: parameters.kvGroupSize
         )
+        let partitionKey = CachePartitionKey(
+            modelID: modelID,
+            kvBits: parameters.kvBits,
+            kvGroupSize: parameters.kvGroupSize,
+            modelFingerprint: modelFingerprint,
+            triAttention: triAttentionIdentity
+        )
+
+        await drainHTTPPostCompletionCacheWork(
+            partitionKey: partitionKey,
+            reason: "before-http-prefix-lookup"
+        )
 
         return try await container.perform { context in
             func measure<T>(_ work: () throws -> T) rethrows -> (T, TimeInterval) {
@@ -2156,19 +2489,7 @@ actor LLMActor {
             // 2. Extract flat token sequence for radix tree operations.
             let fullTokens = Self.extractTokenSequence(fullInput.text.tokens)
 
-            // 3. Build the global Marconi partition key for this model
-            //    configuration. Cross-session sharing is intentional:
-            //    identical prompts under the same model config should
-            //    reuse the same radix tree.
-            let partitionKey = CachePartitionKey(
-                modelID: modelID,
-                kvBits: parameters.kvBits,
-                kvGroupSize: parameters.kvGroupSize,
-                modelFingerprint: modelFingerprint,
-                triAttention: triAttentionIdentity
-            )
-
-            // 4a. Detect stable prefix boundary (system + tools) via two-probe technique.
+            // 3. Detect stable prefix boundary (system + tools) via two-probe technique.
             let stablePrefixOffset = try StablePrefixDetector.detect(
                 systemPrompt: conversation.systemPrompt,
                 toolSpecs: canonicalTools,
@@ -2176,7 +2497,7 @@ actor LLMActor {
                 tokenizer: context.tokenizer
             )
 
-            // 4b. Detect the last-message boundary: the offset where the final
+            // 3b. Detect the last-message boundary: the offset where the final
             // history message ends, right before the assistant-generation
             // prompt (e.g. `<|im_start|>assistant\n<think>\n` for Qwen3.5).
             //
@@ -2229,80 +2550,153 @@ actor LLMActor {
 
             // 5–6. Radix tree lookup + checkpoint planning (single MainActor hop).
             let lookupStarted = Date.timeIntervalSinceReferenceDate
-            let (initialLookupResult, initialCheckpointPlan) = await MainActor.run {
-                prefixCache.lookupAndPlanCheckpoints(
-                    tokens: fullTokens,
-                    stablePrefixOffset: stablePrefixOffset,
-                    partitionKey: partitionKey
-                )
-            }
-            // Lazy SSD hydration: `.ssdHit` signals that the deepest
-            // reachable node carries only a committed storage ref.
-            // Materialize the body from disk inside this existing
-            // `container.perform` (Metal-affine), then hop to
-            // MainActor to promote the node back to state 4. On
-            // hydration failure, clear the ref and downgrade to a
-            // miss so the prefill runs cold.
-            let lookupResult: PrefixCacheManager.LookupResult
-            if case .ssdHit(let ctx) = initialLookupResult.reason,
-               let fingerprint = modelFingerprint
-            {
-                let (hydrated, hydrateSeconds) = measure {
-                    ctx.ssdStore.loadSync(
-                        storageRef: ctx.storageRef,
-                        expectedFingerprint: fingerprint
+            var lookupResult = PrefixCacheManager.LookupResult(
+                snapshot: nil,
+                partitionKey: nil,
+                snapshotTokenOffset: 0,
+                sharedPrefixLength: 0,
+                reason: .missNoEntries
+            )
+            var checkpointPlan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] = []
+            var lookupRetryCount = 0
+            let maxLookupRetries = 8
+
+            while true {
+                let (candidateLookup, candidatePlan) = await MainActor.run {
+                    prefixCache.lookupAndPlanCheckpoints(
+                        tokens: fullTokens,
+                        stablePrefixOffset: stablePrefixOffset,
+                        partitionKey: partitionKey,
+                        maximumReusableSnapshotOffsetExclusive: fullTokens.count
                     )
                 }
-                if let hydrated {
-                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
-                        id: ctx.storageRef.snapshotID,
-                        hydrateMs: hydrateSeconds
-                    ))
-                    await MainActor.run {
-                        ctx.ssdStore.recordHit(id: ctx.storageRef.snapshotID)
-                        prefixCache.promote(
-                            node: ctx.node,
+                checkpointPlan = candidatePlan
+
+                // Lazy SSD hydration: `.ssdHit` signals that the deepest
+                // reachable node carries only a committed storage ref.
+                // Validate the hydrated body before promotion so a stale
+                // on-disk offset mismatch cannot become a RAM hit and poison
+                // subsequent lookups.
+                if case .ssdHit(let ctx) = candidateLookup.reason,
+                   let fingerprint = modelFingerprint
+                {
+                    let (hydrated, hydrateSeconds) = measure {
+                        ctx.ssdStore.loadSync(
+                            storageRef: ctx.storageRef,
+                            expectedFingerprint: fingerprint
+                        )
+                    }
+                    if let hydrated {
+                        if let maxLayerOffset = Self.mismatchedMaxLayerOffset(hydrated) {
+                            Log.agent.warning(
+                                "HTTP prefix-cache SSD hit rejected — "
+                                + "snapshotOffset=\(hydrated.tokenOffset) "
+                                + "maxLayerOffset=\(maxLayerOffset) "
+                                + "type=\(hydrated.checkpointType) "
+                                + "id=\(ctx.storageRef.snapshotID)"
+                            )
+                            await MainActor.run {
+                                prefixCache.invalidateSnapshot(
+                                    tokens: fullTokens,
+                                    offset: ctx.storageRef.tokenOffset,
+                                    partitionKey: partitionKey,
+                                    reason: "ssd-offset-mismatch maxLayerOffset=\(maxLayerOffset)"
+                                )
+                            }
+                            lookupRetryCount += 1
+                            if lookupRetryCount < maxLookupRetries { continue }
+                            lookupResult = PrefixCacheManager.LookupResult(
+                                snapshot: nil,
+                                partitionKey: candidateLookup.partitionKey,
+                                snapshotTokenOffset: 0,
+                                sharedPrefixLength: candidateLookup.sharedPrefixLength,
+                                reason: .missNoSnapshotInPrefix
+                            )
+                            break
+                        }
+
+                        diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
+                            id: ctx.storageRef.snapshotID,
+                            hydrateMs: hydrateSeconds
+                        ))
+                        await MainActor.run {
+                            ctx.ssdStore.recordHit(id: ctx.storageRef.snapshotID)
+                            prefixCache.promote(
+                                node: ctx.node,
+                                snapshot: hydrated,
+                                partitionKey: partitionKey
+                            )
+                        }
+                        diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(
+                            id: ctx.storageRef.snapshotID
+                        ))
+                        lookupResult = PrefixCacheManager.LookupResult(
                             snapshot: hydrated,
-                            partitionKey: partitionKey
+                            partitionKey: partitionKey,
+                            snapshotTokenOffset: hydrated.tokenOffset,
+                            sharedPrefixLength: candidateLookup.sharedPrefixLength,
+                            reason: .hit(
+                                snapshotOffset: hydrated.tokenOffset,
+                                totalTokens: fullTokenCount,
+                                type: hydrated.checkpointType
+                            )
                         )
+                        break
                     }
-                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(
-                        id: ctx.storageRef.snapshotID
-                    ))
-                    lookupResult = PrefixCacheManager.LookupResult(
-                        snapshot: hydrated,
-                        partitionKey: partitionKey,
-                        snapshotTokenOffset: hydrated.tokenOffset,
-                        sharedPrefixLength: initialLookupResult.sharedPrefixLength,
-                        reason: .hit(
-                            snapshotOffset: hydrated.tokenOffset,
-                            totalTokens: fullTokenCount,
-                            type: hydrated.checkpointType
-                        )
-                    )
-                } else {
+
                     await MainActor.run {
-                        prefixCache.clearStorageRef(
-                            node: ctx.node,
-                            partitionKey: partitionKey
+                        prefixCache.invalidateSnapshot(
+                            tokens: fullTokens,
+                            offset: ctx.storageRef.tokenOffset,
+                            partitionKey: partitionKey,
+                            reason: "ssd-hydration-failed"
                         )
                     }
+                    lookupRetryCount += 1
+                    if lookupRetryCount < maxLookupRetries { continue }
                     lookupResult = PrefixCacheManager.LookupResult(
                         snapshot: nil,
-                        partitionKey: partitionKey,
+                        partitionKey: candidateLookup.partitionKey,
                         snapshotTokenOffset: 0,
-                        sharedPrefixLength: initialLookupResult.sharedPrefixLength,
+                        sharedPrefixLength: candidateLookup.sharedPrefixLength,
+                        reason: .missNoSnapshotInPrefix
+                    )
+                    break
+                }
+
+                lookupResult = candidateLookup
+                if let id = candidateLookup.recordedHitSnapshotID {
+                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: id))
+                }
+
+                if let snapshot = lookupResult.snapshot,
+                   let maxLayerOffset = Self.mismatchedMaxLayerOffset(snapshot)
+                {
+                    Log.agent.warning(
+                        "HTTP prefix-cache hit rejected — snapshotOffset=\(snapshot.tokenOffset) "
+                        + "maxLayerOffset=\(maxLayerOffset) type=\(snapshot.checkpointType)"
+                    )
+                    await MainActor.run {
+                        prefixCache.invalidateSnapshot(
+                            tokens: fullTokens,
+                            offset: snapshot.tokenOffset,
+                            partitionKey: partitionKey,
+                            reason: "resident-offset-mismatch maxLayerOffset=\(maxLayerOffset)"
+                        )
+                    }
+                    lookupRetryCount += 1
+                    if lookupRetryCount < maxLookupRetries { continue }
+                    lookupResult = PrefixCacheManager.LookupResult(
+                        snapshot: nil,
+                        partitionKey: candidateLookup.partitionKey,
+                        snapshotTokenOffset: 0,
+                        sharedPrefixLength: candidateLookup.sharedPrefixLength,
                         reason: .missNoSnapshotInPrefix
                     )
                 }
-            } else {
-                lookupResult = initialLookupResult
-                if let id = initialLookupResult.recordedHitSnapshotID {
-                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: id))
-                }
+                break
             }
             let lookupMs = Date.timeIntervalSinceReferenceDate - lookupStarted
-            var checkpointPlan = initialCheckpointPlan
 
             // 7. Determine input for generation and cache to restore.
             let inputForGeneration: LMInput
@@ -2372,31 +2766,51 @@ actor LLMActor {
             // NO separate prepare() call. TokenIterator owns prefill.
             //
             // DFlash branch: when a draft is bound and the request meets
-            // the speculative-decoding gates (greedy + non-TriAttention +
+            // the speculative-decoding gates (non-TriAttention +
             // penalty-free), drive a tap-aware chunked prefill so the
-            // verify loop can pick up with primed state. On any failure
-            // mode (target not HiddenStateTappable, empty residual, etc.)
-            // log + fall back to the standard AR path so the request
-            // succeeds.
+            // verify loop can pick up with primed state. Sampling
+            // temperature/top-p/top-k pass through to both draft and
+            // target sample steps. Restored prefix-cache hits require a
+            // durable draft-cache companion at the same offset; otherwise
+            // the AR path keeps the target hit and prefills only the suffix.
+            // On real failure modes (target not HiddenStateTappable, empty
+            // residual, etc.) log + fall back to AR so the request succeeds.
             let iterator: any TokenIteratorProtocol
             let capturedSnapshots: [HybridCacheSnapshot]
+            let dflashDraftSnapshotsByOffset: [Int: DFlashDraftCacheSnapshot]
             let transientSnapshotsByOffset: [Int: HybridCacheSnapshot]
             let prefillMs: TimeInterval
-            if let dflash = dflashSnapshot, Self.isDFlashEligible(genParams) {
+            let dflashSkipReason = Self.dflashHTTPPrefixCacheSkipReason(
+                genParams,
+                checkpointBaseOffset: checkpointBaseOffset,
+                hasRestoredDraftSnapshot: lookupResult.dflashDraftSnapshot != nil
+            )
+            if let dflash = dflashSnapshot, dflashSkipReason == nil {
                 do {
                     let dflashStart = Date.timeIntervalSinceReferenceDate
-                    let dflashIter = try Self.makeHTTPPrefixCacheDFlashIterator(
+                    let dflashResult = try Self.makeHTTPPrefixCacheDFlashIterator(
                         dflash: dflash,
                         context: context,
                         inputForGeneration: inputForGeneration,
                         cacheToUse: cacheToUse,
+                        restoredDraftSnapshot: lookupResult.dflashDraftSnapshot,
                         genParams: genParams,
                         prefillStepSize: parameters.prefillStepSize
                     )
-                    iterator = dflashIter
-                    capturedSnapshots = dflashIter.capturedSnapshots
-                    transientSnapshotsByOffset = dflashIter.transientSnapshots
+                    iterator = dflashResult.iterator
+                    capturedSnapshots = dflashResult.iterator.capturedSnapshots
+                    dflashDraftSnapshotsByOffset = dflashResult.draftSnapshotsByOffset
+                    transientSnapshotsByOffset = dflashResult.iterator.transientSnapshots
                     prefillMs = Date.timeIntervalSinceReferenceDate - dflashStart
+                    Log.agent.info(
+                        "DFlash engaged for HTTP request — promptTokens=\(inputForGeneration.text.tokens.dim(-1)) "
+                        + "snapshots=\(capturedSnapshots.count) transient=\(transientSnapshotsByOffset.count) "
+                        + "draftSnapshots=\(dflashDraftSnapshotsByOffset.count) "
+                        + "draftPrefixSource=\(dflashResult.draftPrefixSource) "
+                        + "draftReplayMs=\(Int(dflashResult.draftReplaySeconds * 1000)) "
+                        + "draftRestoreMs=\(Int(dflashResult.draftRestoreSeconds * 1000)) "
+                        + "prefillMs=\(Int(prefillMs * 1000)) blockSize=\(dflash.blockSize)"
+                    )
                 } catch {
                     Log.agent.error("DFlash HTTP prefix-cache path failed; falling back to AR: \(error)")
                     let (it, ms) = try measure {
@@ -2409,10 +2823,21 @@ actor LLMActor {
                     }
                     iterator = it
                     capturedSnapshots = it.capturedSnapshots
+                    dflashDraftSnapshotsByOffset = [:]
                     transientSnapshotsByOffset = it.transientSnapshots
                     prefillMs = ms
                 }
             } else {
+                if dflashSnapshot != nil {
+                    Log.agent.info(
+                        "DFlash bound but skipped — reason=\(dflashSkipReason ?? "not bound") "
+                        + "temperature=\(genParams.temperature) "
+                        + "triAttention=\(genParams.triAttention.enabled) "
+                        + "hasProcessor=\(genParams.processor() != nil) "
+                        + "checkpointBaseOffset=\(genParams.checkpointBaseOffset) "
+                        + "hasDraftSnapshot=\(lookupResult.dflashDraftSnapshot != nil)"
+                    )
+                }
                 let (it, ms) = try measure {
                     try TokenIterator(
                         input: inputForGeneration,
@@ -2423,6 +2848,7 @@ actor LLMActor {
                 }
                 iterator = it
                 capturedSnapshots = it.capturedSnapshots
+                dflashDraftSnapshotsByOffset = [:]
                 transientSnapshotsByOffset = it.transientSnapshots
                 prefillMs = ms
             }
@@ -2486,6 +2912,7 @@ actor LLMActor {
                 sharedPrefixLength: lookupResult.sharedPrefixLength,
                 fullTokens: fullTokens,
                 capturedSnapshots: capturedSnapshots,
+                dflashDraftSnapshotsByOffset: dflashDraftSnapshotsByOffset,
                 capturedPayloads: capturedPayloads,
                 ssdEnabled: ssdEnabled,
                 partitionKey: partitionKey,
@@ -2849,14 +3276,6 @@ actor LLMActor {
         ssdEnabled: Bool,
         generateParameters: GenerateParameters
     ) async -> AlphaTuner.LeafStore? {
-        guard let boundarySnapshot = transientBoundarySnapshot else {
-            diagnosticsContext.logSkip(
-                stage: "directToolLeafStore",
-                reason: "no-transient-boundary-snapshot"
-            )
-            return nil
-        }
-
         do {
             guard let toolContinuationStoredTokens = try await container.perform({ context in
                 try await Self.computeToolContinuationStoredTokens(
@@ -2868,6 +3287,48 @@ actor LLMActor {
                 diagnosticsContext.logSkip(
                     stage: "directToolLeafStore",
                     reason: "probe-divergence-failed"
+                )
+                return nil
+            }
+
+            let boundarySnapshot: HybridCacheSnapshot?
+            if let transientBoundarySnapshot,
+               transientBoundarySnapshot.tokenOffset < toolContinuationStoredTokens.count {
+                boundarySnapshot = transientBoundarySnapshot
+            } else {
+                let initialFallbackLookup = await MainActor.run {
+                    prefixCache.lookup(
+                        tokens: toolContinuationStoredTokens,
+                        partitionKey: partitionKey,
+                        maximumReusableSnapshotOffsetExclusive: toolContinuationStoredTokens.count
+                    )
+                }
+                let fallbackLookup = await Self.hydrateSSDLookupIfNeeded(
+                    container: container,
+                    lookupResult: initialFallbackLookup,
+                    tokens: toolContinuationStoredTokens,
+                    partitionKey: partitionKey,
+                    totalTokens: toolContinuationStoredTokens.count,
+                    prefixCache: prefixCache,
+                    diagnosticsContext: diagnosticsContext
+                )
+                if let snapshot = fallbackLookup.snapshot,
+                   snapshot.tokenOffset > 0,
+                   snapshot.tokenOffset < toolContinuationStoredTokens.count {
+                    boundarySnapshot = snapshot
+                } else {
+                    boundarySnapshot = nil
+                }
+            }
+
+            guard let boundarySnapshot else {
+                diagnosticsContext.logSkip(
+                    stage: "directToolLeafStore",
+                    reason: "no-direct-restore-boundary",
+                    extraFields: [
+                        ("continuationLen", "\(toolContinuationStoredTokens.count)"),
+                        ("transientOffset", "\(transientBoundarySnapshot?.tokenOffset ?? -1)"),
+                    ]
                 )
                 return nil
             }
@@ -2907,6 +3368,7 @@ actor LLMActor {
     private static func hydrateSSDLookupIfNeeded(
         container: ModelContainer,
         lookupResult: PrefixCacheManager.LookupResult,
+        tokens: [Int],
         partitionKey: CachePartitionKey,
         totalTokens: Int,
         prefixCache: PrefixCacheManager,
@@ -2928,6 +3390,31 @@ actor LLMActor {
         }
 
         if let hydrated {
+            if let maxLayerOffset = Self.mismatchedMaxLayerOffset(hydrated) {
+                Log.agent.warning(
+                    "HTTP prefix-cache SSD fallback rejected — "
+                    + "snapshotOffset=\(hydrated.tokenOffset) "
+                    + "maxLayerOffset=\(maxLayerOffset) "
+                    + "type=\(hydrated.checkpointType) "
+                    + "id=\(ctx.storageRef.snapshotID)"
+                )
+                await MainActor.run {
+                    prefixCache.invalidateSnapshot(
+                        tokens: tokens,
+                        offset: ctx.storageRef.tokenOffset,
+                        partitionKey: partitionKey,
+                        reason: "ssd-fallback-offset-mismatch maxLayerOffset=\(maxLayerOffset)"
+                    )
+                }
+                return PrefixCacheManager.LookupResult(
+                    snapshot: nil,
+                    partitionKey: partitionKey,
+                    snapshotTokenOffset: 0,
+                    sharedPrefixLength: lookupResult.sharedPrefixLength,
+                    reason: .missNoSnapshotInPrefix
+                )
+            }
+
             diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
                 id: ctx.storageRef.snapshotID,
                 hydrateMs: hydrateSeconds
@@ -2957,9 +3444,11 @@ actor LLMActor {
         }
 
         await MainActor.run {
-            prefixCache.clearStorageRef(
-                node: ctx.node,
-                partitionKey: partitionKey
+            prefixCache.invalidateSnapshot(
+                tokens: tokens,
+                offset: ctx.storageRef.tokenOffset,
+                partitionKey: partitionKey,
+                reason: "ssd-fallback-hydration-failed"
             )
         }
         return PrefixCacheManager.LookupResult(
@@ -3019,11 +3508,16 @@ actor LLMActor {
                 boundarySnapshot = transientBoundarySnapshot
             } else {
                 let initialFallbackLookup = await MainActor.run {
-                    prefixCache.lookup(tokens: canonicalStoredTokens, partitionKey: partitionKey)
+                    prefixCache.lookup(
+                        tokens: canonicalStoredTokens,
+                        partitionKey: partitionKey,
+                        maximumReusableSnapshotOffsetExclusive: canonicalStoredTokens.count
+                    )
                 }
                 let fallbackLookup = await Self.hydrateSSDLookupIfNeeded(
                     container: container,
                     lookupResult: initialFallbackLookup,
+                    tokens: canonicalStoredTokens,
                     partitionKey: partitionKey,
                     totalTokens: canonicalStoredTokens.count,
                     prefixCache: prefixCache,
