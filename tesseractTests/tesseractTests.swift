@@ -69,6 +69,24 @@ struct ModelDefinitionCatalogTests {
         )
     }
 
+    @Test func includesQwen36_27BInAgentCatalog() async throws {
+        guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.6-27b" }) else {
+            Issue.record("Missing qwen3.6-27b model definition")
+            return
+        }
+
+        #expect(model.category == .agent)
+        #expect(model.repoID == "mlx-community/Qwen3.6-27B-4bit")
+        #expect(model.requiredExtension == "safetensors")
+        #expect(model.cacheSubdirectory == "mlx-community_Qwen3.6-27B-4bit")
+        #expect(
+            ModelDefinition.byCategory()
+                .first(where: { $0.0 == .agent })?
+                .1
+                .contains(where: { $0.id == model.id }) == true
+        )
+    }
+
     @Test func detectsQwen35MoEFamily() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

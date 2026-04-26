@@ -147,6 +147,18 @@ extension ModelDefinition {
             sizeDescription: "~20 GB",
             dependencies: []
         ),
+        ModelDefinition(
+            id: "qwen3.6-27b",
+            displayName: "Qwen3.6-27B (MLX 4bit)",
+            description: "Dense 27B agent (uniform 4-bit MLX). Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "mlx-community/Qwen3.6-27B-4bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~16 GB",
+            dependencies: []
+        ),
     ]
 
     static let imageGenerationModels: [ModelDefinition] = [

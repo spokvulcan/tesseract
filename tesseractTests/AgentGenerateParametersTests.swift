@@ -29,6 +29,16 @@ struct AgentGenerateParametersTests {
     }
 
     @MainActor
+    @Test func qwen36_27BMlxCommunityIdMapsToQwen36ThinkingPreset() {
+        let params = AgentGenerateParameters.forModel("qwen3.6-27b")
+        #expect(params.temperature == AgentGenerateParameters.qwen36Thinking.temperature)
+        #expect(params.topP == AgentGenerateParameters.qwen36Thinking.topP)
+        #expect(params.topK == AgentGenerateParameters.qwen36Thinking.topK)
+        #expect(params.presencePenalty == nil)
+        #expect(params.thinkingSafeguard.enabled == true)
+    }
+
+    @MainActor
     @Test func qwen36ThinkingPresetHasNoPresencePenalty() {
         #expect(AgentGenerateParameters.qwen36Thinking.temperature == 0.6)
         #expect(AgentGenerateParameters.qwen36Thinking.topP == 0.95)
