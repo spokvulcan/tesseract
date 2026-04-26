@@ -446,7 +446,7 @@ actor LLMActor {
         dflash: DFlashContext,
         context: ModelContext,
         inputForGeneration: LMInput,
-        cacheToUse: [KVCache],
+        cacheToUse: [KVCache]?,
         genParams: GenerateParameters,
         prefillStepSize: Int
     ) throws -> DFlashTokenIterator {
@@ -457,13 +457,23 @@ actor LLMActor {
             throw DFlashHTTPPrefixCacheError.targetNotDFlashCapable(typeName: "\(type(of: context.model))")
         }
 
+        // Mirror the standard TokenIterator: cold starts (no restored
+        // cache) get a freshly-allocated per-layer cache before prefill.
+        // Passing an empty array would crash inside the model on the
+        // first `cacheArray[faIdx]` lookup (full-attention layer probe).
+        let cache: [KVCache] = cacheToUse ?? context.model.newCache(parameters: genParams)
+        genParams.configureTriAttentionCachesForPrefill(
+            cache,
+            inputTokenCount: inputForGeneration.text.tokens.dim(-1)
+        )
+
         let cfg = dflash.draft.config.dflashConfig
         let recorder = ChunkAccumulatingRecorder(layerIDs: Set(cfg.targetLayerIDs))
 
         let prefillStart = CFAbsoluteTimeGetCurrent()
         let (prepareResult, snapshots) = try tappable.prepareWithCheckpointsAndTap(
             inputForGeneration,
-            cache: cacheToUse,
+            cache: cache,
             windowSize: prefillStepSize,
             checkpoints: genParams.checkpoints,
             checkpointBaseOffset: genParams.checkpointBaseOffset,
@@ -486,7 +496,7 @@ actor LLMActor {
                 : y.tokens
             let logits = dflashTarget.forwardWithDFlashTaps(
                 chunkTokens,
-                cache: cacheToUse,
+                cache: cache,
                 hiddenStateTap: { layerIndex, hiddenState in
                     recorder.record(layerIndex: layerIndex, state: hiddenState)
                 },
@@ -527,7 +537,7 @@ actor LLMActor {
 
         // Authoritative prompt length: the cache offset after both
         // chunked prefill and the residual forward have advanced it.
-        let promptLength = (cacheToUse.first as? BaseKVCache)?.offset ?? 0
+        let promptLength = (cache.first as? BaseKVCache)?.offset ?? 0
 
         let primed = DFlashPrimedPrefill(
             firstEmittedToken: firstToken,
@@ -542,7 +552,7 @@ actor LLMActor {
             primed: primed,
             target: context.model,
             draft: dflash.draft,
-            cache: cacheToUse,
+            cache: cache,
             parameters: genParams,
             blockSize: dflash.blockSize,
             maskTokenID: cfg.maskTokenID,
@@ -2379,9 +2389,9 @@ actor LLMActor {
                         dflash: dflash,
                         context: context,
                         inputForGeneration: inputForGeneration,
-                        cacheToUse: cacheToUse ?? [],
+                        cacheToUse: cacheToUse,
                         genParams: genParams,
-                        prefillStepSize: parameters.prefillStepSize ?? 512
+                        prefillStepSize: parameters.prefillStepSize
                     )
                     iterator = dflashIter
                     capturedSnapshots = dflashIter.capturedSnapshots
