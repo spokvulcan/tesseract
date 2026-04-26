@@ -68,6 +68,14 @@ struct ServerConfigurationView: View {
             } footer: {
                 Text("TriAttention reduces attention compute on long-context text inference. Supported only on PARO quantized Qwen3.5 models — other models automatically fall back to dense attention. Vision mode also falls back to dense. Toggling reloads the currently loaded model.")
             }
+
+            Section {
+                Toggle("Enable DFlash speculative decoding", isOn: $settings.dflashEnabled)
+            } header: {
+                Text("Speculative Decoding (Experimental)")
+            } footer: {
+                Text("DFlash uses a small block-diffusion draft model to speed up agent decoding by ~1.5× on supported targets. Currently supports only Qwen3.6-27B with greedy sampling — other models or non-greedy sampling silently fall back to autoregressive. The draft (~3.2 GB) must be downloaded separately from the Models tab. Toggling reloads the currently loaded model.")
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Configuration")

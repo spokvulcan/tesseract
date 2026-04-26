@@ -115,6 +115,15 @@ final class AgentEngine {
         settingsManager?.makeTriAttentionConfig() ?? .v1Disabled
     }
 
+    /// Resolve the DFlash draft load config for a target. Returns `nil`
+    /// when DFlash is off, the target has no registered draft, or the
+    /// draft hasn't been downloaded — silently falls back to AR. Live-
+    /// reads `SettingsManager.dflashEnabled` so flipping the toggle takes
+    /// effect on the next reload.
+    func resolveDFlashLoadConfig(targetModelID: String) -> DFlashLoadConfig? {
+        settingsManager?.makeDFlashLoadConfig(targetModelID: targetModelID)
+    }
+
     /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
     ///
     /// - Parameters:
@@ -128,7 +137,8 @@ final class AgentEngine {
     func loadModel(
         from directory: URL,
         visionMode: Bool,
-        triAttention: TriAttentionConfiguration? = nil
+        triAttention: TriAttentionConfiguration? = nil,
+        dflashConfig: DFlashLoadConfig? = nil
     ) async throws {
         guard !isModelLoaded, !isLoading else { return }
 
@@ -136,11 +146,16 @@ final class AgentEngine {
         loadingStatus = "Loading model…"
 
         do {
+            let resolvedDFlash = dflashConfig
+                ?? settingsManager.flatMap { mgr in
+                    resolveDFlashLoadConfig(targetModelID: mgr.selectedAgentModelID)
+                }
             let (tokenizer, startsThinking) = try await llmActor.loadModel(
                 from: directory,
                 visionMode: visionMode,
                 ssdConfig: resolveSSDConfig(),
-                triAttention: triAttention ?? resolveTriAttentionConfig()
+                triAttention: triAttention ?? resolveTriAttentionConfig(),
+                dflashConfig: resolvedDFlash
             )
 
             let st = tokenizer.specialTokens

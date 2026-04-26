@@ -148,6 +148,20 @@ actor LLMActor {
     private var defaultPrefixCacheMemoryBudgetBytes =
         Defaults.fallbackPrefixCacheMemoryBudgetBytes
 
+    /// `nil` when DFlash is disabled or the load path failed; iterator
+    /// construction falls back to the standard `TokenIterator`.
+    private var dflashContext: DFlashContext?
+
+    /// `@unchecked Sendable` so callers can snapshot it out of the actor and
+    /// pass into a `container.perform { ... }` closure. The held draft is
+    /// read-only post-bind.
+    private struct DFlashContext: @unchecked Sendable {
+        let draft: DFlashDraftModel
+        let blockSize: Int
+    }
+
+    var isDFlashLoaded: Bool { dflashContext != nil }
+
     /// Stable SHA-256 of the loaded model's weight files. Folded into every
     /// `CachePartitionKey` so a weight swap under the same `modelID`
     /// cannot surface stale persisted snapshots. `nil` before load and
@@ -218,7 +232,8 @@ actor LLMActor {
         from directory: URL,
         visionMode: Bool,
         ssdConfig: SSDPrefixCacheConfig? = nil,
-        triAttention: TriAttentionConfiguration = .v1Disabled
+        triAttention: TriAttentionConfiguration = .v1Disabled,
+        dflashConfig: DFlashLoadConfig? = nil
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let format = Self.detectToolCallFormat(directory: directory)
         Log.agent.info(
@@ -272,7 +287,9 @@ actor LLMActor {
             let container: ModelContainer = visionMode
                 ? try await loadParoQuantVLMContainer(from: directory, toolCallFormat: format)
                 : try await loadParoQuantLLMContainer(from: directory, toolCallFormat: format)
-            return try await verifyAndStore(container: container, directory: directory)
+            let result = try await verifyAndStore(container: container, directory: directory)
+            await bindDFlashIfNeeded(dflashConfig)
+            return result
         }
 
         // Non-PARO Qwen3.5 checkpoints (e.g. mlx-community/Qwen3.5-*-MLX) ship
@@ -303,7 +320,99 @@ actor LLMActor {
                 context.configuration.toolCallFormat = format
             }
         }
-        return try await verifyAndStore(container: container, directory: directory)
+        let result = try await verifyAndStore(container: container, directory: directory)
+        await bindDFlashIfNeeded(dflashConfig)
+        return result
+    }
+
+    /// Errors are logged and swallowed — DFlash is opt-in experimental and
+    /// must never block the main model load.
+    private func bindDFlashIfNeeded(_ config: DFlashLoadConfig?) async {
+        guard let config else {
+            dflashContext = nil
+            return
+        }
+        guard let container = modelContainer else {
+            Log.agent.error("DFlash bind skipped: model container missing")
+            return
+        }
+        do {
+            let loaded: DFlashContext = try await container.perform { context in
+                guard let dflashTarget = context.model as? (any DFlashTarget) else {
+                    throw DFlashBindError.targetNotDFlashCapable(typeName: "\(type(of: context.model))")
+                }
+                let draft = try DFlashDraftLoader.load(directory: config.draftDirectory)
+                draft.bind(
+                    embedTokens: dflashTarget.dflashEmbedTokens,
+                    lmHead: dflashTarget.dflashLMHead,
+                    tiesEmbedding: dflashTarget.dflashTiesEmbedding
+                )
+                return DFlashContext(draft: draft, blockSize: config.blockSize)
+            }
+            dflashContext = loaded
+            let cfg = loaded.draft.config.dflashConfig
+            Log.agent.info(
+                "DFlash draft bound — layers=\(loaded.draft.config.numHiddenLayers) "
+                + "block=\(loaded.blockSize) maskID=\(cfg.maskTokenID) "
+                + "targetLayers=\(cfg.targetLayerIDs)"
+            )
+        } catch {
+            dflashContext = nil
+            Log.agent.error("DFlash bind failed; falling back to AR: \(error)")
+        }
+    }
+
+    private enum DFlashBindError: Error, CustomStringConvertible {
+        case targetNotDFlashCapable(typeName: String)
+        var description: String {
+            switch self {
+            case .targetNotDFlashCapable(let name):
+                return "DFlash bind: target type \(name) does not conform to DFlashTarget"
+            }
+        }
+    }
+
+    /// Returns a `DFlashTokenIterator` when `dflash != nil` and the request
+    /// is greedy + non-TriAttention; otherwise the standard `TokenIterator`.
+    ///
+    /// `nonisolated static` so it can run from inside `container.perform { ... }`.
+    /// Callers must snapshot `dflashContext` and pass it in — actor state
+    /// cannot cross the perform-closure boundary.
+    private nonisolated static func makeIterator(
+        dflash: DFlashContext?,
+        context: ModelContext,
+        input: LMInput,
+        cache: [KVCache]?,
+        parameters: GenerateParameters
+    ) throws -> any TokenIteratorProtocol {
+        if let dfx = dflash, isDFlashEligible(parameters) {
+            do {
+                let cfg = dfx.draft.config.dflashConfig
+                return try DFlashTokenIterator(
+                    input: input,
+                    target: context.model,
+                    draft: dfx.draft,
+                    cache: cache,
+                    parameters: parameters,
+                    blockSize: dfx.blockSize,
+                    maskTokenID: cfg.maskTokenID,
+                    targetLayerIDs: cfg.targetLayerIDs
+                )
+            } catch {
+                Log.agent.error("DFlashTokenIterator init failed; falling back to AR: \(error)")
+            }
+        }
+        return try TokenIterator(
+            input: input, model: context.model, cache: cache, parameters: parameters
+        )
+    }
+
+    /// v0: greedy temperature-zero only. Non-greedy samplers and TriAttention
+    /// fall back to the standard AR iterator.
+    private nonisolated static func isDFlashEligible(_ parameters: GenerateParameters) -> Bool {
+        guard parameters.temperature == 0 else { return false }
+        guard !parameters.triAttention.enabled else { return false }
+        return true
     }
 
     /// Start a raw text/tool generation and surface the underlying vendor task so
@@ -324,11 +433,14 @@ actor LLMActor {
         // order the tokenizer uses for the prompt. Type-aware tool-call
         // parsing reads this schema via `XMLFunctionParser.parse(content:tools:)`.
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
+        let dflashSnapshot = dflashContext
         return try await container.perform(nonSendable: input) { context, input in
             let prepared = try await context.processor.prepare(input: input)
-            let iterator = try TokenIterator(
+            let iterator = try Self.makeIterator(
+                dflash: dflashSnapshot,
+                context: context,
                 input: prepared,
-                model: context.model,
+                cache: nil,
                 parameters: genParams
             )
             let (stream, completion) = MLXLMCommon.generateTask(
@@ -369,8 +481,10 @@ actor LLMActor {
         let handoff = safeThinkingPrefix + injection
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
 
+        let dflashSnapshot = dflashContext
         return try await container.perform { context in
             try Self.buildThinkingContinuationStart(
+                dflash: dflashSnapshot,
                 context: context,
                 originalTokens: originalTokens,
                 tokenNDim: tokenNDim,
@@ -411,9 +525,11 @@ actor LLMActor {
         let handoff = safeThinkingPrefix + injection
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
 
+        let dflashSnapshot = dflashContext
         return try await container.perform(nonSendable: originalInput) { context, input in
             let basePrepared = try await context.processor.prepare(input: input)
             return try Self.buildThinkingContinuationStart(
+                dflash: dflashSnapshot,
                 context: context,
                 originalTokens: Self.extractTokenSequence(basePrepared.text.tokens),
                 tokenNDim: basePrepared.text.tokens.ndim,
@@ -424,11 +540,10 @@ actor LLMActor {
         }
     }
 
-    /// Build an `HTTPServerRawGenerationStart` by extending a pre-tokenized
-    /// prompt with the hand-off suffix and feeding the combined sequence to
-    /// a fresh `TokenIterator`. Must run inside a
-    /// ``ModelContainer/perform(_:)`` closure on this actor.
-    private static func buildThinkingContinuationStart(
+    /// Runs inside `container.perform { ... }` so callers must snapshot
+    /// `dflashContext` and pass it in — actor state cannot cross the boundary.
+    private nonisolated static func buildThinkingContinuationStart(
+        dflash: DFlashContext?,
         context: ModelContext,
         originalTokens: [Int],
         tokenNDim: Int,
@@ -447,9 +562,11 @@ actor LLMActor {
             : flatArr
         let continued = LMInput(text: LMInput.Text(tokens: tokenArr, mask: nil))
 
-        let iterator = try TokenIterator(
+        let iterator = try makeIterator(
+            dflash: dflash,
+            context: context,
             input: continued,
-            model: context.model,
+            cache: nil,
             parameters: parameters
         )
         let (stream, completion) = MLXLMCommon.generateTask(
@@ -1295,6 +1412,7 @@ actor LLMActor {
         modelFingerprint = nil
         ssdConfig = nil
         triAttentionRuntimeSelection = .disabledDefault
+        dflashContext = nil
         triAttentionConfiguration = .v1Disabled
         triAttentionCalibrationArtifactLookup = nil
     }

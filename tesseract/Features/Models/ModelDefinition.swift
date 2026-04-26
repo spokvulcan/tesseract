@@ -9,6 +9,7 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
     case speechToText = "Speech-to-Text"
     case textToSpeech = "Text-to-Speech"
     case agent = "Agent"
+    case draft = "Draft"
     case imageGeneration = "Image Generation"
 
     var id: String { rawValue }
@@ -18,6 +19,7 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
         case .speechToText: "mic.fill"
         case .textToSpeech: "speaker.wave.3.fill"
         case .agent: "brain"
+        case .draft: "bolt.fill"
         case .imageGeneration: "photo.fill"
         }
     }
@@ -35,6 +37,13 @@ struct ModelDefinition: Identifiable, Sendable {
     let source: ModelSource
     let sizeDescription: String
     let dependencies: [String]
+    /// Optional pointer to a DFlash speculative-decoding draft for this
+    /// target. The draft is its own catalog entry (gated download); we
+    /// don't list it in `dependencies` so the target can be downloaded
+    /// without forcing draft acceptance. Resolution happens at load time
+    /// in `AgentEngine.resolveDFlashLoadConfig` when the user enables
+    /// DFlash in settings.
+    var dflashDraftID: String? = nil
 
     var cacheSubdirectory: String? {
         guard case .huggingFace(let repo, _, _) = source else { return nil }
@@ -157,6 +166,19 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~16 GB",
+            dependencies: [],
+            dflashDraftID: "qwen3.6-27b-dflash"
+        ),
+        ModelDefinition(
+            id: "qwen3.6-27b-dflash",
+            displayName: "Qwen3.6-27B DFlash Draft",
+            description: "Block-diffusion speculative decoding draft for Qwen3.6-27B. BF16 (~3.2 GB). Requires gate acceptance at https://huggingface.co/z-lab/Qwen3.6-27B-DFlash before download.",
+            category: .draft,
+            source: .huggingFace(
+                repo: "z-lab/Qwen3.6-27B-DFlash",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~3.2 GB",
             dependencies: []
         ),
     ]

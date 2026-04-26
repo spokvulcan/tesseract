@@ -207,10 +207,12 @@ cmd_dev_profile() {
 
 # Build the app, kill any running instance, then exec the binary with the
 # given CLI flag. Tails the runner's `latest.log` and propagates the binary's
-# exit code. Used by all loaded-model verification subcommands.
+# exit code. Used by all loaded-model verification subcommands. Any args
+# after the first two are passed through to the binary verbatim.
 _run_loaded_model_check() {
     local flag="$1"
     local report_subdir="$2"
+    shift 2
     local configuration="Debug"
     cmd_build "$configuration"
     echo ""
@@ -224,7 +226,7 @@ _run_loaded_model_check() {
     local report_dir="$HOME/Library/Containers/app.tesseract.agent/Data/tmp/tesseract-debug/benchmark/$report_subdir"
 
     local exit_code=0
-    "$binary" "$flag" || exit_code=$?
+    "$binary" "$flag" "$@" || exit_code=$?
 
     if [ -f "$report_dir/latest.log" ]; then
         echo ""
@@ -242,6 +244,10 @@ cmd_prefix_cache_e2e() {
 
 cmd_hybrid_cache_correctness() {
     _run_loaded_model_check --hybrid-cache-correctness hybrid-cache-correctness
+}
+
+cmd_dflash_correctness() {
+    _run_loaded_model_check --dflash-correctness dflash-correctness "$@"
 }
 
 cmd_prefill_step_benchmark() {
@@ -350,6 +356,7 @@ usage() {
     echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
     echo "  prefix-cache-e2e         Build + run Task 1.8 HybridPrefixCacheE2E (loaded-model cache verification)"
     echo "  hybrid-cache-correctness Build + run Task 2.2 logit-equivalence harness (mid-prefill restore bitwise check)"
+    echo "  dflash-correctness       Build + run DFlash byte-equivalence harness (AR vs DFlash greedy match; needs draft downloaded)"
     echo "  prefill-step-benchmark   Build + run Task 3.2 prefill-step-size benchmark sweep"
     echo "  paroquant-vlm-smoke      Build + run VLM load smoke for PARO models (PR #164 C5 gate)"
     echo "  archive     Create release archive for App Store submission"
@@ -368,6 +375,7 @@ case "${1:-}" in
     dev-profile) cmd_dev_profile ;;
     prefix-cache-e2e)         cmd_prefix_cache_e2e ;;
     hybrid-cache-correctness) cmd_hybrid_cache_correctness ;;
+    dflash-correctness)       shift; cmd_dflash_correctness "$@" ;;
     prefill-step-benchmark)   cmd_prefill_step_benchmark ;;
     paroquant-vlm-smoke)      cmd_paroquant_vlm_smoke ;;
     archive)     cmd_archive ;;

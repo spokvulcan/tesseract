@@ -45,6 +45,10 @@ struct TesseractApp: App {
             Self.runHarness("Hybrid cache correctness") {
                 try await HybridCacheCorrectnessRunner(runner: BenchmarkRunner()).run()
             }
+        } else if args.contains("--dflash-correctness") {
+            Self.runHarness("DFlash correctness") {
+                try await DFlashCorrectnessRunner(runner: BenchmarkRunner()).run()
+            }
         } else if args.contains("--prefill-step-benchmark") {
             Self.runHarness("Prefill step benchmark") {
                 try await PrefillStepBenchmarkRunner(runner: BenchmarkRunner()).run()

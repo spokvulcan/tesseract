@@ -55,6 +55,8 @@ final class SettingsManager {
         static let prefixCacheSSDEnabled = "prefixCacheSSDEnabled"
         static let prefixCacheSSDBudgetBytes = "prefixCacheSSDBudgetBytes"
         static let prefixCacheSSDDirectoryOverride = "prefixCacheSSDDirectoryOverride"
+        static let dflashEnabled = "dflashEnabled"
+        static let dflashBlockSize = "dflashBlockSize"
     }
 
     // MARK: - General Settings
@@ -349,6 +351,21 @@ final class SettingsManager {
         }
     }
 
+    // MARK: - DFlash Speculative Decoding
+
+    /// Experimental: when on, the agent target loads a DFlash draft for
+    /// block-verified decoding (~1.5–2× speedup, ~3.2 GB extra memory for
+    /// the Qwen3.6-27B draft). Silent AR fallback if any precondition fails.
+    var dflashEnabled: Bool = false {
+        didSet { UserDefaults.standard.set(dflashEnabled, forKey: Key.dflashEnabled) }
+    }
+
+    /// Larger B exposes more verify parallelism but reduces acceptance rate.
+    /// 16 is the upstream default and what z-lab's draft was trained for.
+    var dflashBlockSize: Int = 16 {
+        didSet { UserDefaults.standard.set(dflashBlockSize, forKey: Key.dflashBlockSize) }
+    }
+
     // MARK: - Onboarding
 
     var hasCompletedOnboarding = false {
@@ -402,6 +419,8 @@ final class SettingsManager {
             Key.prefixCacheSSDEnabled: true,
             Key.prefixCacheSSDBudgetBytes: 20 * 1024 * 1024 * 1024,
             // prefixCacheSSDDirectoryOverride: unset key → sandbox Caches fallback.
+            Key.dflashEnabled: false,
+            Key.dflashBlockSize: 16,
         ])
 
         // Load persisted values (didSet does NOT fire during init).
@@ -445,6 +464,8 @@ final class SettingsManager {
         prefixCacheSSDEnabled = ud.bool(forKey: Key.prefixCacheSSDEnabled)
         prefixCacheSSDBudgetBytes = ud.integer(forKey: Key.prefixCacheSSDBudgetBytes)
         prefixCacheSSDDirectoryOverride = ud.string(forKey: Key.prefixCacheSSDDirectoryOverride)
+        dflashEnabled = ud.bool(forKey: Key.dflashEnabled)
+        dflashBlockSize = ud.integer(forKey: Key.dflashBlockSize)
 
         normalizePersistedSelectionsIfNeeded()
     }
@@ -484,6 +505,21 @@ final class SettingsManager {
             calibrationArtifactIdentity: nil,
             implementationVersion: .v1,
             prefixProtectionMode: .protectStablePrefixOnly
+        )
+    }
+
+    /// `nil` if DFlash is off or the target has no registered draft. The
+    /// directory is returned unchecked; `DFlashDraftLoader` surfaces a
+    /// clearer error when the draft isn't downloaded.
+    func makeDFlashLoadConfig(targetModelID: String) -> DFlashLoadConfig? {
+        guard dflashEnabled else { return nil }
+        guard let target = ModelDefinition.all.first(where: { $0.id == targetModelID }),
+              let draftID = target.dflashDraftID,
+              let draftDir = ModelDownloadManager.modelPath(for: draftID)
+        else { return nil }
+        return DFlashLoadConfig(
+            draftDirectory: draftDir,
+            blockSize: dflashBlockSize > 0 ? dflashBlockSize : 16
         )
     }
 
@@ -541,6 +577,8 @@ final class SettingsManager {
         prefixCacheSSDEnabled = true
         prefixCacheSSDBudgetBytes = 20 * 1024 * 1024 * 1024
         prefixCacheSSDDirectoryOverride = nil
+        dflashEnabled = false
+        dflashBlockSize = 16
     }
 
     // MARK: - Private

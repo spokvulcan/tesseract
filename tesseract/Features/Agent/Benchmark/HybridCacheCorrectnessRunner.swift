@@ -74,10 +74,10 @@ final class HybridCacheCorrectnessRunner {
         var logs: [String] = []
         var checks: [CheckResult] = []
 
-        let shortPrompt = buildPrompt(targetTokens: 2048, tokenizer: context.tokenizer)
+        let shortPrompt = BenchmarkPrompts.deterministic(targetTokens: 2048, tokenizer: context.tokenizer, base: BenchmarkPrompts.hybridCacheBase)
         // Test 8 wants a 16K prompt with restore at 8K — exercises cache shapes
         // and chunk-loop handling well past the 4K-context typical case.
-        let longPrompt = buildPrompt(targetTokens: 16384, tokenizer: context.tokenizer)
+        let longPrompt = BenchmarkPrompts.deterministic(targetTokens: 16384, tokenizer: context.tokenizer, base: BenchmarkPrompts.hybridCacheBase)
         logs.append("\n── Token sequences ──")
         logs.append("  short prompt: \(shortPrompt.count) tokens")
         logs.append("  long prompt:  \(longPrompt.count) tokens")
@@ -737,37 +737,6 @@ final class HybridCacheCorrectnessRunner {
         return (aF - bF).abs().max().item(Float.self)
     }
 
-    // MARK: - Helpers — prompt construction
-
-    /// Build a deterministic token sequence of `targetTokens` length. Repeats
-    /// a fixed lorem-ipsum passage until the tokenizer produces enough tokens,
-    /// then truncates exactly so each run yields identical bytes.
-    nonisolated private static func buildPrompt(
-        targetTokens: Int, tokenizer: any Tokenizer
-    ) -> [Int] {
-        let base = """
-            The cache verification harness must produce a deterministic, \
-            reproducible token sequence. We compose long passages from a \
-            fixed lexicon so the same target length yields identical bytes \
-            on every run, which in turn guarantees identical model state \
-            and lets the bitwise equality assertions hold. Lorem ipsum dolor \
-            sit amet, consectetur adipiscing elit. Sed do eiusmod tempor \
-            incididunt ut labore et dolore magna aliqua. Ut enim ad minim \
-            veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip \
-            ex ea commodo consequat. Duis aute irure dolor in reprehenderit \
-            in voluptate velit esse cillum dolore eu fugiat nulla pariatur. \
-            Excepteur sint occaecat cupidatat non proident, sunt in culpa qui \
-            officia deserunt mollit anim id est laborum.
-            """
-
-        var combined = base
-        var encoded = tokenizer.encode(text: combined, addSpecialTokens: false)
-        while encoded.count < targetTokens {
-            combined += " " + base
-            encoded = tokenizer.encode(text: combined, addSpecialTokens: false)
-        }
-        return Array(encoded.prefix(targetTokens))
-    }
 
     // MARK: - Reporting
 

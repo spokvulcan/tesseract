@@ -394,16 +394,20 @@ final class ModelDownloadManager: ObservableObject {
 
     // MARK: - Path Resolution
 
-    func modelPath(for modelID: String) -> URL? {
+    static func modelPath(for modelID: String) -> URL? {
         guard let model = ModelDefinition.all.first(where: { $0.id == modelID }) else { return nil }
         guard let subdir = model.cacheSubdirectory else { return nil }
 
-        var path = Self.modelStorageURL.appendingPathComponent(subdir)
+        var path = modelStorageURL.appendingPathComponent(subdir)
         if let prefix = model.pathPrefix {
             path = path.appendingPathComponent(prefix)
         }
 
         return path
+    }
+
+    func modelPath(for modelID: String) -> URL? {
+        Self.modelPath(for: modelID)
     }
 
     // MARK: - Computed

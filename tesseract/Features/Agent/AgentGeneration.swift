@@ -1,6 +1,14 @@
 import Foundation
 import MLXLMCommon
 
+/// Produced by `SettingsManager.makeDFlashLoadConfig` and consumed by
+/// `LLMActor.loadModel`. `nil` at any step means inference falls back to
+/// the standard `TokenIterator`.
+struct DFlashLoadConfig: Sendable {
+    let draftDirectory: URL
+    let blockSize: Int
+}
+
 /// Human-readable label for `GenerateStopReason`, used in diagnostic logs so
 /// operators can distinguish natural EOS from length-limit from cancellation
 /// without decoding enum raw-values.
