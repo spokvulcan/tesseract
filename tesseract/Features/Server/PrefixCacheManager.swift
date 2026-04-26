@@ -551,6 +551,7 @@ final class PrefixCacheManager {
         promptTokens: [Int],
         capturedSnapshots: [HybridCacheSnapshot],
         dflashDraftSnapshots: [Int: DFlashDraftCacheSnapshot] = [:],
+        dflashDraftPayloads: [Int: SnapshotPayload] = [:],
         snapshotPayloads: [SnapshotPayload] = [],
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
@@ -598,12 +599,14 @@ final class PrefixCacheManager {
                 partitionKey: partitionKey,
                 pathFromRoot: path,
                 snapshot: snapshot,
-                payloadBytes: payload.totalBytes
+                payloadBytes: payload.totalBytes,
+                dflashDraftPayloadBytes: dflashDraftPayloads[offset]?.totalBytes
             )
             store.admitSnapshot(
                 node: node,
                 tree: tree,
                 payload: payload,
+                dflashDraftPayload: dflashDraftPayloads[offset],
                 descriptor: descriptor
             )
         }
@@ -631,6 +634,7 @@ final class PrefixCacheManager {
         leafSnapshot: HybridCacheSnapshot,
         dflashDraftSnapshot: DFlashDraftCacheSnapshot? = nil,
         leafPayload: SnapshotPayload? = nil,
+        dflashDraftPayload: SnapshotPayload? = nil,
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
     ) -> StoreDiagnostics {
@@ -666,12 +670,14 @@ final class PrefixCacheManager {
                 partitionKey: partitionKey,
                 pathFromRoot: storedTokens,
                 snapshot: leafSnapshot,
-                payloadBytes: leafPayload.totalBytes
+                payloadBytes: leafPayload.totalBytes,
+                dflashDraftPayloadBytes: dflashDraftPayload?.totalBytes
             )
             store.admitSnapshot(
                 node: node,
                 tree: tree,
                 payload: leafPayload,
+                dflashDraftPayload: dflashDraftPayload,
                 descriptor: descriptor
             )
         }
@@ -825,6 +831,7 @@ final class PrefixCacheManager {
     func promote(
         node: RadixTreeNode,
         snapshot: HybridCacheSnapshot,
+        dflashDraftSnapshot: DFlashDraftCacheSnapshot? = nil,
         partitionKey: CachePartitionKey
     ) {
         guard let tree = store.tree(for: partitionKey) else { return }
@@ -837,7 +844,11 @@ final class PrefixCacheManager {
             )
             return
         }
-        tree.storeSnapshot(snapshot, on: node)
+        tree.storeSnapshot(
+            snapshot,
+            dflashDraftSnapshot: dflashDraftSnapshot,
+            on: node
+        )
     }
 
     /// Remove a corrupted or stale snapshot from an exact radix path and
@@ -1000,24 +1011,33 @@ final class PrefixCacheManager {
         partitionKey: CachePartitionKey,
         pathFromRoot: [Int],
         snapshot: HybridCacheSnapshot,
-        payloadBytes: Int
+        payloadBytes: Int,
+        dflashDraftPayloadBytes: Int? = nil
     ) -> PersistedSnapshotDescriptor {
         let snapshotID = UUID().uuidString
         let partitionDigest = partitionKey.partitionDigest
         let now = Date().timeIntervalSinceReferenceDate
+        let dflashDraftRelativePath = dflashDraftPayloadBytes.map { _ in
+            PersistedSnapshotDescriptor.relativeDFlashDraftFilePath(
+                snapshotID: snapshotID,
+                partitionDigest: partitionDigest
+            )
+        }
         return PersistedSnapshotDescriptor(
             snapshotID: snapshotID,
             partitionDigest: partitionDigest,
             pathFromRoot: pathFromRoot,
             tokenOffset: snapshot.tokenOffset,
             checkpointType: snapshot.checkpointType.wireString,
-            bytes: payloadBytes,
+            bytes: payloadBytes + (dflashDraftPayloadBytes ?? 0),
+            dflashDraftBytes: dflashDraftPayloadBytes,
             createdAt: now,
             lastAccessAt: now,
             fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
                 snapshotID: snapshotID,
                 partitionDigest: partitionDigest
             ),
+            dflashDraftFileRelativePath: dflashDraftRelativePath,
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
     }

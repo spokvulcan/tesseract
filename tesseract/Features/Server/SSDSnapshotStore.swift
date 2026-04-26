@@ -231,6 +231,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     /// boundary — safe to call from inside a MainActor closure.
     func tryEnqueue(
         payload: SnapshotPayload,
+        dflashDraftPayload: SnapshotPayload? = nil,
         descriptor: PersistedSnapshotDescriptor
     ) -> TryEnqueueResult {
         // Parse the wire-format checkpoint type before taking the lock;
@@ -248,7 +249,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             return .rejectedInvalidCheckpointType
         }
 
-        let payloadBytes = payload.totalBytes
+        let payloadBundle = SnapshotPayloadBundle(
+            target: payload,
+            dflashDraft: dflashDraftPayload
+        )
+        let payloadBytes = payloadBundle.totalBytes
 
         // A single payload larger than the cap cannot be queued at
         // all; no amount of back-pressure eviction can create room.
@@ -289,13 +294,13 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         while pendingBytes + payloadBytes > maxPendingBytes,
               let oldest = pending.first {
             pending.removeFirst()
-            pendingBytes -= oldest.payload.totalBytes
+            pendingBytes -= oldest.payloadBundle.totalBytes
             droppedItems.append(
-                (id: oldest.descriptor.snapshotID, bytes: oldest.payload.totalBytes)
+                (id: oldest.descriptor.snapshotID, bytes: oldest.payloadBundle.totalBytes)
             )
         }
 
-        pending.append(PendingWrite(payload: payload, descriptor: descriptor))
+        pending.append(PendingWrite(payloadBundle: payloadBundle, descriptor: descriptor))
         pendingBytes += payloadBytes
 
         lock.unlock()
@@ -458,17 +463,20 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
         if let pendingIndex = pending.firstIndex(where: { $0.descriptor.snapshotID == snapshotID }) {
             let removed = pending.remove(at: pendingIndex)
-            pendingBytes -= removed.payload.totalBytes
+            pendingBytes -= removed.payloadBundle.totalBytes
             if pendingBytes < 0 { pendingBytes = 0 }
             lock.unlock()
             return
         }
 
         if let resident = removeResidentUnderLock(snapshotID: snapshotID) {
-            fileURLToDelete = resident.fileURL
+            fileURLToDelete = resident.primaryFileURL
             lock.unlock()
             if let fileURLToDelete {
                 try? FileManager.default.removeItem(at: fileURLToDelete)
+            }
+            if let draftURL = resident.dflashDraftFileURL {
+                try? FileManager.default.removeItem(at: draftURL)
             }
             return
         }
@@ -550,7 +558,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
     private func processPendingItem(_ item: PendingWrite) async {
         if shouldSkipDeletedWrite(snapshotID: item.descriptor.snapshotID) {
-            releasePendingBytes(item.payload.totalBytes)
+            releasePendingBytes(item.payloadBundle.totalBytes)
             return
         }
 
@@ -580,10 +588,10 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         case .admit:
             break
         case .drop(let reason):
-            releasePendingBytes(item.payload.totalBytes)
+            releasePendingBytes(item.payloadBundle.totalBytes)
             emitWriterDrop(
                 id: item.descriptor.snapshotID,
-                bytes: item.payload.totalBytes,
+                bytes: item.payloadBundle.totalBytes,
                 reason: reason
             )
             return
@@ -594,7 +602,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         //    victim is also cleaned up outside the lock. Any other
         //    error drops the incoming and fires the drop callback.
         do {
-            try writePayload(item.payload, descriptor: item.descriptor)
+            try writePayloadBundle(item.payloadBundle, descriptor: item.descriptor)
         } catch WriteError.diskFull {
             if let retryVictim = retryAfterDiskFull(item.descriptor) {
                 PrefixCacheDiagnostics.logSystem(
@@ -605,16 +613,16 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 )
                 finalizeEvictions([retryVictim])
                 do {
-                    try writePayload(item.payload, descriptor: item.descriptor)
+                    try writePayloadBundle(item.payloadBundle, descriptor: item.descriptor)
                 } catch {
                     Log.agent.error(
                         "SSD writer diskFull retry failed for \(item.descriptor.snapshotID): "
                         + "\(String(describing: error))"
                     )
-                    releasePendingBytes(item.payload.totalBytes)
+                    releasePendingBytes(item.payloadBundle.totalBytes)
                     emitWriterDrop(
                         id: item.descriptor.snapshotID,
-                        bytes: item.payload.totalBytes,
+                        bytes: item.payloadBundle.totalBytes,
                         reason: .diskFull
                     )
                     return
@@ -624,10 +632,10 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                     "SSD writer diskFull and no eviction victim available for "
                     + "\(item.descriptor.snapshotID)"
                 )
-                releasePendingBytes(item.payload.totalBytes)
+                releasePendingBytes(item.payloadBundle.totalBytes)
                 emitWriterDrop(
                     id: item.descriptor.snapshotID,
-                    bytes: item.payload.totalBytes,
+                    bytes: item.payloadBundle.totalBytes,
                     reason: .diskFull
                 )
                 return
@@ -637,29 +645,29 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 "SSD writer I/O failure for \(item.descriptor.snapshotID): "
                 + "\(String(describing: error))"
             )
-            releasePendingBytes(item.payload.totalBytes)
+            releasePendingBytes(item.payloadBundle.totalBytes)
             emitWriterDrop(
                 id: item.descriptor.snapshotID,
-                bytes: item.payload.totalBytes,
+                bytes: item.payloadBundle.totalBytes,
                 reason: .writerIOError
             )
             return
         }
 
         if shouldSkipDeletedWrite(snapshotID: item.descriptor.snapshotID) {
-            try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
-            releasePendingBytes(item.payload.totalBytes)
+            deleteResidentFiles(fileURLs(for: item.descriptor))
+            releasePendingBytes(item.payloadBundle.totalBytes)
             return
         }
 
         // 3. Write succeeded: register the descriptor, release the
         //    pending byte budget, and fire the commit callback.
         guard commitDescriptorToManifest(item.descriptor) else {
-            try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
-            releasePendingBytes(item.payload.totalBytes)
+            deleteResidentFiles(fileURLs(for: item.descriptor))
+            releasePendingBytes(item.payloadBundle.totalBytes)
             return
         }
-        releasePendingBytes(item.payload.totalBytes)
+        releasePendingBytes(item.payloadBundle.totalBytes)
         PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
             id: item.descriptor.snapshotID,
             bytes: item.descriptor.bytes,
@@ -725,7 +733,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     /// synchronous `tryEnqueue` path never pays for filesystem I/O.
     private func finalizeEvictions(_ evicted: [EvictedResident]) {
         for resident in evicted {
-            deleteResidentFile(resident.fileURL)
+            deleteResidentFiles(resident.fileURLs)
             PrefixCacheDiagnostics.logSystem(
                 PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
                     id: resident.snapshotID,
@@ -736,13 +744,15 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         }
     }
 
-    private func deleteResidentFile(_ url: URL) {
-        do {
-            try FileManager.default.removeItem(at: url)
-        } catch {
-            Log.agent.warning(
-                "SSD eviction failed to remove \(url.path): \(String(describing: error))"
-            )
+    private func deleteResidentFiles(_ urls: [URL]) {
+        for url in urls {
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                Log.agent.warning(
+                    "SSD eviction failed to remove \(url.path): \(String(describing: error))"
+                )
+            }
         }
     }
 
@@ -760,7 +770,15 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     /// `finalizeEvictions(_:)`.
     private struct EvictedResident {
         let snapshotID: String
-        let fileURL: URL
+        let primaryFileURL: URL
+        let dflashDraftFileURL: URL?
+
+        var fileURLs: [URL] {
+            if let dflashDraftFileURL {
+                return [primaryFileURL, dflashDraftFileURL]
+            }
+            return [primaryFileURL]
+        }
     }
 
     /// Type-protected LRU cut, exactly mirroring the plan's
@@ -902,7 +920,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         scheduleManifestPersistLocked()
         return EvictedResident(
             snapshotID: descriptor.snapshotID,
-            fileURL: fileURL(for: descriptor)
+            primaryFileURL: fileURL(for: descriptor),
+            dflashDraftFileURL: dflashDraftFileURL(for: descriptor)
         )
     }
 
@@ -943,11 +962,46 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     /// rename atomically to `{snapshotID}.safetensors`. Any
     /// ENOSPC/EDQUOT error is surfaced as `.diskFull` so the caller
     /// can retry after eviction.
-    private func writePayload(
-        _ payload: SnapshotPayload,
+    private func writePayloadBundle(
+        _ bundle: SnapshotPayloadBundle,
         descriptor: PersistedSnapshotDescriptor
     ) throws {
-        let finalURL = fileURL(for: descriptor)
+        do {
+            try writePayload(
+                bundle.target,
+                descriptor: descriptor,
+                finalURL: fileURL(for: descriptor)
+            )
+            if let draftPayload = bundle.dflashDraft {
+                guard let draftURL = dflashDraftFileURL(for: descriptor) else {
+                    throw WriteError.ioError(
+                        underlying: NSError(
+                            domain: NSCocoaErrorDomain,
+                            code: NSFileWriteInvalidFileNameError,
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "missing DFlash draft companion path for \(descriptor.snapshotID)"
+                            ]
+                        )
+                    )
+                }
+                try writePayload(
+                    draftPayload,
+                    descriptor: descriptor,
+                    finalURL: draftURL
+                )
+            }
+        } catch {
+            deleteResidentFiles(fileURLs(for: descriptor))
+            throw error
+        }
+    }
+
+    private func writePayload(
+        _ payload: SnapshotPayload,
+        descriptor: PersistedSnapshotDescriptor,
+        finalURL: URL
+    ) throws {
         let tempURL = finalURL.appendingPathExtension("tmp")
 
         // Ensure directory tree exists before attempting the write.
@@ -1155,11 +1209,45 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         return rootURL.appendingPathComponent(relative)
     }
 
-    private func fileURL(for descriptor: PersistedSnapshotDescriptor) -> URL {
+    private nonisolated func fileURL(for descriptor: PersistedSnapshotDescriptor) -> URL {
         fileURL(
             snapshotID: descriptor.snapshotID,
             partitionDigest: descriptor.partitionDigest
         )
+    }
+
+    private nonisolated func dflashDraftFileURL(
+        snapshotID: String,
+        partitionDigest: String
+    ) -> URL {
+        let relative = PersistedSnapshotDescriptor.relativeDFlashDraftFilePath(
+            snapshotID: snapshotID,
+            partitionDigest: partitionDigest
+        )
+        return rootURL.appendingPathComponent(relative)
+    }
+
+    private nonisolated func dflashDraftFileURL(
+        for descriptor: PersistedSnapshotDescriptor
+    ) -> URL? {
+        guard descriptor.hasDFlashDraftCompanion else { return nil }
+        if let relative = descriptor.dflashDraftFileRelativePath {
+            return rootURL.appendingPathComponent(relative)
+        }
+        return dflashDraftFileURL(
+            snapshotID: descriptor.snapshotID,
+            partitionDigest: descriptor.partitionDigest
+        )
+    }
+
+    private nonisolated func fileURLs(
+        for descriptor: PersistedSnapshotDescriptor
+    ) -> [URL] {
+        var urls = [fileURL(for: descriptor)]
+        if let draftURL = dflashDraftFileURL(for: descriptor) {
+            urls.append(draftURL)
+        }
+        return urls
     }
 
     /// Authoritative on-disk manifest URL. Used by the writer's
@@ -1171,12 +1259,17 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     // MARK: - Pending write (private value type)
 
     private struct PendingWrite: Sendable {
-        let payload: SnapshotPayload
+        let payloadBundle: SnapshotPayloadBundle
         let descriptor: PersistedSnapshotDescriptor
     }
 }
 
 // MARK: - Warm start + lazy hydration
+
+nonisolated struct SSDHydratedSnapshotBundle: @unchecked Sendable {
+    let snapshot: HybridCacheSnapshot
+    let dflashDraftSnapshot: DFlashDraftCacheSnapshot?
+}
 
 extension SSDSnapshotStore {
 
@@ -1329,7 +1422,10 @@ extension SSDSnapshotStore {
                 guard let fileNames = try? FileManager.default.contentsOfDirectory(
                     atPath: shardDir.path
                 ) else { continue }
-                for name in fileNames where name.hasSuffix(".safetensors") {
+                for name in fileNames
+                    where name.hasSuffix(".safetensors")
+                        && !name.hasSuffix(".dflash.safetensors")
+                {
                     let fileURL = shardDir.appendingPathComponent(name)
                     guard let descriptor = extractDescriptorFromFile(fileURL),
                           descriptor.partitionDigest == digest
@@ -1404,9 +1500,7 @@ extension SSDSnapshotStore {
             guard restored.partitions[desc.partitionDigest] != nil else { continue }
             // Same rationale as the `PartitionMeta` filter above.
             guard desc.schemaVersion == SnapshotManifestSchema.currentVersion else {
-                deadDescriptorFiles.append(
-                    fileURL(snapshotID: desc.snapshotID, partitionDigest: desc.partitionDigest)
-                )
+                deadDescriptorFiles.append(contentsOf: fileURLs(for: desc))
                 continue
             }
             // Drop descriptors whose wire-format checkpoint type no
@@ -1416,9 +1510,7 @@ extension SSDSnapshotStore {
             guard HybridCacheSnapshot.CheckpointType(
                 wireString: desc.checkpointType
             ) != nil else {
-                deadDescriptorFiles.append(
-                    fileURL(snapshotID: desc.snapshotID, partitionDigest: desc.partitionDigest)
-                )
+                deadDescriptorFiles.append(contentsOf: fileURLs(for: desc))
                 continue
             }
             restored.snapshots[id] = desc
@@ -1542,6 +1634,19 @@ extension SSDSnapshotStore {
         storageRef: SnapshotStorageRef,
         expectedFingerprint: String
     ) -> HybridCacheSnapshot? {
+        loadBundleSync(
+            storageRef: storageRef,
+            expectedFingerprint: expectedFingerprint
+        )?.snapshot
+    }
+
+    /// Hydrate a target snapshot plus its optional DFlash draft-cache
+    /// companion. Target failures remain terminal; draft companion failures
+    /// degrade to a target-only hit and clear the broken companion metadata.
+    nonisolated func loadBundleSync(
+        storageRef: SnapshotStorageRef,
+        expectedFingerprint: String
+    ) -> SSDHydratedSnapshotBundle? {
         // Fingerprint gate: compare the partition's persisted
         // fingerprint against the caller's expected value. Mismatch
         // or missing partition is terminal — drop and miss.
@@ -1549,6 +1654,7 @@ extension SSDSnapshotStore {
         let partitionFingerprint = manifest
             .partitions[storageRef.partitionDigest]?
             .modelFingerprint
+        let descriptor = manifest.snapshots[storageRef.snapshotID]
         lock.unlock()
 
         guard let partitionFingerprint else {
@@ -1564,6 +1670,13 @@ extension SSDSnapshotStore {
                 reason: .fingerprintMismatch,
                 "fingerprint mismatch partition=\(partitionFingerprint.prefix(8)) "
                 + "expected=\(expectedFingerprint.prefix(8))"
+            )
+        }
+        guard let descriptor else {
+            return failLoad(
+                storageRef,
+                reason: .readFailed,
+                "descriptor not in manifest digest=\(storageRef.partitionDigest)"
             )
         }
 
@@ -1587,10 +1700,18 @@ extension SSDSnapshotStore {
         // from raw payload bytes inside the caller's Metal-affine
         // context.
         do {
-            return try decodePlaceholderContainer(
+            let snapshot = try decodePlaceholderContainer(
                 fileData,
                 tokenOffset: storageRef.tokenOffset,
                 checkpointType: storageRef.checkpointType
+            )
+            let draftSnapshot = loadDFlashDraftCompanionIfPresent(
+                descriptor: descriptor,
+                storageRef: storageRef
+            )
+            return SSDHydratedSnapshotBundle(
+                snapshot: snapshot,
+                dflashDraftSnapshot: draftSnapshot
             )
         } catch {
             return failLoad(
@@ -1599,6 +1720,73 @@ extension SSDSnapshotStore {
                 "decode failed error=\(error)"
             )
         }
+    }
+
+    private nonisolated func loadDFlashDraftCompanionIfPresent(
+        descriptor: PersistedSnapshotDescriptor,
+        storageRef: SnapshotStorageRef
+    ) -> DFlashDraftCacheSnapshot? {
+        guard descriptor.hasDFlashDraftCompanion,
+              let draftURL = dflashDraftFileURL(for: descriptor)
+        else {
+            return nil
+        }
+
+        let draftData: Data
+        do {
+            draftData = try Data(contentsOf: draftURL, options: .mappedIfSafe)
+        } catch {
+            dropDFlashDraftCompanion(
+                descriptor: descriptor,
+                fileURL: draftURL,
+                reason: "read failed error=\(error)"
+            )
+            return nil
+        }
+
+        do {
+            let snapshot = try decodePlaceholderContainer(
+                draftData,
+                tokenOffset: storageRef.tokenOffset,
+                checkpointType: storageRef.checkpointType
+            )
+            return DFlashDraftCacheSnapshot(cacheSnapshot: snapshot)
+        } catch {
+            dropDFlashDraftCompanion(
+                descriptor: descriptor,
+                fileURL: draftURL,
+                reason: "decode failed error=\(error)"
+            )
+            return nil
+        }
+    }
+
+    private nonisolated func dropDFlashDraftCompanion(
+        descriptor: PersistedSnapshotDescriptor,
+        fileURL: URL,
+        reason: @autoclosure () -> String
+    ) {
+        Log.agent.warning(
+            "SSDSnapshotStore.loadSync: DFlash draft companion unavailable; "
+            + "keeping target snapshot id=\(descriptor.snapshotID.prefix(8)) "
+            + "\(reason())"
+        )
+
+        lock.lock()
+        if let current = manifest.snapshots[descriptor.snapshotID],
+           current.hasDFlashDraftCompanion
+        {
+            let draftBytes = current.dflashDraftBytes ?? 0
+            manifest.snapshots[descriptor.snapshotID] =
+                current.withoutDFlashDraftCompanion()
+            currentSSDBytes -= draftBytes
+            if currentSSDBytes < 0 { currentSSDBytes = 0 }
+            manifestDirty = true
+            scheduleManifestPersistLocked()
+        }
+        lock.unlock()
+
+        try? FileManager.default.removeItem(at: fileURL)
     }
 
     /// Shared terminal branch for every `loadSync` failure path.
@@ -1611,7 +1799,7 @@ extension SSDSnapshotStore {
         _ ref: SnapshotStorageRef,
         reason: PrefixCacheDiagnostics.SSDMissReason,
         _ message: @autoclosure () -> String
-    ) -> HybridCacheSnapshot? {
+    ) -> SSDHydratedSnapshotBundle? {
         Log.agent.error(
             "SSDSnapshotStore.loadSync: \(message()) "
             + "id=\(ref.snapshotID.prefix(8))"
@@ -1643,7 +1831,7 @@ extension SSDSnapshotStore {
         lock.unlock()
 
         if let evicted {
-            try? FileManager.default.removeItem(at: evicted.fileURL)
+            deleteResidentFiles(evicted.fileURLs)
         }
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.StorageRefDropCallbackEvent(

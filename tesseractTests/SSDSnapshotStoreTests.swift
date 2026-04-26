@@ -909,6 +909,35 @@ struct SSDSnapshotStoreTests {
         return (payload, descriptor)
     }
 
+    private func descriptorWithDFlashDraft(
+        targetPayload: SnapshotPayload,
+        draftPayload: SnapshotPayload,
+        checkpointType: String = "leaf"
+    ) -> PersistedSnapshotDescriptor {
+        let id = UUID().uuidString
+        let partition = "abcd1234"
+        return PersistedSnapshotDescriptor(
+            snapshotID: id,
+            partitionDigest: partition,
+            pathFromRoot: [1, 2, 3],
+            tokenOffset: targetPayload.tokenOffset,
+            checkpointType: checkpointType,
+            bytes: targetPayload.totalBytes + draftPayload.totalBytes,
+            dflashDraftBytes: draftPayload.totalBytes,
+            createdAt: 100_000,
+            lastAccessAt: 0,
+            fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+                snapshotID: id,
+                partitionDigest: partition
+            ),
+            dflashDraftFileRelativePath: PersistedSnapshotDescriptor.relativeDFlashDraftFilePath(
+                snapshotID: id,
+                partitionDigest: partition
+            ),
+            schemaVersion: SnapshotManifestSchema.currentVersion
+        )
+    }
+
     /// End-to-end round trip: enqueue a payload via `tryEnqueue`,
     /// wait for the writer to commit, then call `loadSync` and verify
     /// the reconstructed `HybridCacheSnapshot` matches the original
@@ -960,6 +989,274 @@ struct SSDSnapshotStoreTests {
                 #expect(mlxArray.shape == arrayPayload.shape)
             }
         }
+    }
+
+    @Test
+    func loadBundleSyncRestoresDFlashDraftCompanion() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let (targetPayload, _) = makeRoundTripPayload(elementCount: 128)
+        let (draftPayload, _) = makeRoundTripPayload(elementCount: 64)
+        let descriptor = descriptorWithDFlashDraft(
+            targetPayload: targetPayload,
+            draftPayload: draftPayload
+        )
+        let fingerprint = makePartitionMeta().modelFingerprint
+
+        let result = store.tryEnqueue(
+            payload: targetPayload,
+            dflashDraftPayload: draftPayload,
+            descriptor: descriptor
+        )
+        guard case .accepted(let pending) = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+
+        let committed = await waitUntil {
+            tracker.committed.contains(pending.snapshotID)
+        }
+        #expect(committed)
+        #expect(store.currentSSDBytesForTesting() == descriptor.bytes)
+
+        let bundle = store.loadBundleSync(
+            storageRef: committedRef(from: pending),
+            expectedFingerprint: fingerprint
+        )
+        #expect(bundle?.snapshot.tokenOffset == descriptor.tokenOffset)
+        #expect(bundle?.dflashDraftSnapshot?.tokenOffset == descriptor.tokenOffset)
+        #expect(bundle?.dflashDraftSnapshot?.memoryBytes == draftPayload.totalBytes)
+
+        let draftURL = root.appendingPathComponent(
+            PersistedSnapshotDescriptor.relativeDFlashDraftFilePath(
+                snapshotID: descriptor.snapshotID,
+                partitionDigest: descriptor.partitionDigest
+            )
+        )
+        #expect(FileManager.default.fileExists(atPath: draftURL.path))
+    }
+
+    @Test
+    func loadBundleSyncMissingDFlashDraftDegradesToTargetOnly() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let (targetPayload, _) = makeRoundTripPayload(elementCount: 128)
+        let (draftPayload, _) = makeRoundTripPayload(elementCount: 64)
+        let descriptor = descriptorWithDFlashDraft(
+            targetPayload: targetPayload,
+            draftPayload: draftPayload
+        )
+        let fingerprint = makePartitionMeta().modelFingerprint
+
+        let result = store.tryEnqueue(
+            payload: targetPayload,
+            dflashDraftPayload: draftPayload,
+            descriptor: descriptor
+        )
+        guard case .accepted(let pending) = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+        _ = await waitUntil { tracker.committed.contains(pending.snapshotID) }
+
+        let draftURL = root.appendingPathComponent(
+            PersistedSnapshotDescriptor.relativeDFlashDraftFilePath(
+                snapshotID: descriptor.snapshotID,
+                partitionDigest: descriptor.partitionDigest
+            )
+        )
+        try FileManager.default.removeItem(at: draftURL)
+
+        let bundle = store.loadBundleSync(
+            storageRef: committedRef(from: pending),
+            expectedFingerprint: fingerprint
+        )
+        #expect(bundle?.snapshot.tokenOffset == descriptor.tokenOffset)
+        #expect(bundle?.dflashDraftSnapshot == nil)
+        #expect(store.currentSSDBytesForTesting() == targetPayload.totalBytes)
+        #expect(!tracker.dropped.contains { $0.reason == .hydrationFailure })
+    }
+
+    @Test
+    func loadBundleSyncCorruptDFlashDraftDegradesToTargetOnly() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let (targetPayload, _) = makeRoundTripPayload(elementCount: 128)
+        let (draftPayload, _) = makeRoundTripPayload(elementCount: 64)
+        let descriptor = descriptorWithDFlashDraft(
+            targetPayload: targetPayload,
+            draftPayload: draftPayload
+        )
+        let fingerprint = makePartitionMeta().modelFingerprint
+
+        let result = store.tryEnqueue(
+            payload: targetPayload,
+            dflashDraftPayload: draftPayload,
+            descriptor: descriptor
+        )
+        guard case .accepted(let pending) = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+        _ = await waitUntil { tracker.committed.contains(pending.snapshotID) }
+
+        let draftURL = root.appendingPathComponent(
+            PersistedSnapshotDescriptor.relativeDFlashDraftFilePath(
+                snapshotID: descriptor.snapshotID,
+                partitionDigest: descriptor.partitionDigest
+            )
+        )
+        try Data("corrupt draft companion".utf8).write(to: draftURL)
+
+        let bundle = store.loadBundleSync(
+            storageRef: committedRef(from: pending),
+            expectedFingerprint: fingerprint
+        )
+        #expect(bundle?.snapshot.tokenOffset == descriptor.tokenOffset)
+        #expect(bundle?.dflashDraftSnapshot == nil)
+        #expect(store.currentSSDBytesForTesting() == targetPayload.totalBytes)
+        #expect(!FileManager.default.fileExists(atPath: draftURL.path))
+        #expect(!tracker.dropped.contains { $0.reason == .hydrationFailure })
+    }
+
+    @Test
+    func admissionEvictionDeletesDFlashDraftCompanionAndAccountsBytes() async throws {
+        let (config, root) = makeConfig(
+            budgetBytes: 1_100,
+            maxPendingBytes: 10_000_000
+        )
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let victimTarget = makePayload(bytes: 400)
+        let victimDraft = makePayload(bytes: 200)
+        let victim = descriptorWithDFlashDraft(
+            targetPayload: victimTarget,
+            draftPayload: victimDraft
+        )
+        _ = store.tryEnqueue(
+            payload: victimTarget,
+            dflashDraftPayload: victimDraft,
+            descriptor: victim
+        )
+        #expect(await waitUntil { tracker.committed.contains(victim.snapshotID) })
+        #expect(store.currentSSDBytesForTesting() == victim.bytes)
+
+        let victimURL = root.appendingPathComponent(victim.fileRelativePath)
+        let victimDraftURL = root.appendingPathComponent(
+            victim.dflashDraftFileRelativePath ?? ""
+        )
+        #expect(FileManager.default.fileExists(atPath: victimURL.path))
+        #expect(FileManager.default.fileExists(atPath: victimDraftURL.path))
+
+        try? await Task.sleep(for: .milliseconds(10))
+
+        let filler = makeDescriptor(
+            id: "filler-dflash-evict",
+            checkpointType: "leaf",
+            bytes: 400
+        )
+        _ = store.tryEnqueue(payload: makePayload(bytes: 400), descriptor: filler)
+        #expect(await waitUntil { tracker.committed.contains(filler.snapshotID) })
+
+        try? await Task.sleep(for: .milliseconds(10))
+
+        let incoming = makeDescriptor(
+            id: "incoming-dflash-evict",
+            checkpointType: "leaf",
+            bytes: 400
+        )
+        _ = store.tryEnqueue(payload: makePayload(bytes: 400), descriptor: incoming)
+        #expect(await waitUntil { tracker.committed.contains(incoming.snapshotID) })
+
+        #expect(await waitUntil {
+            tracker.dropped.contains {
+                $0.id == victim.snapshotID && $0.reason == .evictedByLRU
+            }
+        })
+        #expect(await waitUntil {
+            !FileManager.default.fileExists(atPath: victimURL.path)
+                && !FileManager.default.fileExists(atPath: victimDraftURL.path)
+        })
+        #expect(store.currentSSDBytesForTesting() == filler.bytes + incoming.bytes)
+    }
+
+    @Test
+    func loadBundleSyncFingerprintMismatchDeletesDFlashDraftCompanion() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let (targetPayload, _) = makeRoundTripPayload(elementCount: 128)
+        let (draftPayload, _) = makeRoundTripPayload(elementCount: 64)
+        let descriptor = descriptorWithDFlashDraft(
+            targetPayload: targetPayload,
+            draftPayload: draftPayload
+        )
+
+        let result = store.tryEnqueue(
+            payload: targetPayload,
+            dflashDraftPayload: draftPayload,
+            descriptor: descriptor
+        )
+        guard case .accepted(let pending) = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+        _ = await waitUntil { tracker.committed.contains(pending.snapshotID) }
+
+        let targetURL = root.appendingPathComponent(descriptor.fileRelativePath)
+        let draftURL = root.appendingPathComponent(
+            descriptor.dflashDraftFileRelativePath ?? ""
+        )
+        #expect(FileManager.default.fileExists(atPath: targetURL.path))
+        #expect(FileManager.default.fileExists(atPath: draftURL.path))
+
+        let bundle = store.loadBundleSync(
+            storageRef: committedRef(from: pending),
+            expectedFingerprint: String(repeating: "z", count: 64)
+        )
+        #expect(bundle == nil)
+
+        #expect(await waitUntil {
+            tracker.dropped.contains {
+                $0.id == pending.snapshotID && $0.reason == .hydrationFailure
+            }
+        })
+        #expect(!FileManager.default.fileExists(atPath: targetURL.path))
+        #expect(!FileManager.default.fileExists(atPath: draftURL.path))
+        #expect(store.currentSSDBytesForTesting() == 0)
     }
 
     /// Fingerprint mismatch: `loadSync` returns nil, removes the

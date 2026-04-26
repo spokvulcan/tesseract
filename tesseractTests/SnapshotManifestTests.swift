@@ -159,6 +159,65 @@ struct SnapshotManifestTests {
         #expect(Set(wire.keys) == expectedKeys)
     }
 
+    @Test
+    func persistedSnapshotDescriptorCarriesOptionalDFlashDraftCompanion() throws {
+        let id = "deadbeef-0000-1111-2222-333344445555"
+        let partition = "cafef00d"
+        let descriptor = PersistedSnapshotDescriptor(
+            snapshotID: id,
+            partitionDigest: partition,
+            pathFromRoot: [1, 2, 3],
+            tokenOffset: 128,
+            checkpointType: "leaf",
+            bytes: 3_000,
+            dflashDraftBytes: 1_000,
+            createdAt: 10,
+            lastAccessAt: 11,
+            fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+                snapshotID: id,
+                partitionDigest: partition
+            ),
+            dflashDraftFileRelativePath: PersistedSnapshotDescriptor.relativeDFlashDraftFilePath(
+                snapshotID: id,
+                partitionDigest: partition
+            ),
+            schemaVersion: SnapshotManifestSchema.currentVersion
+        )
+
+        let (encoder, decoder) = jsonCodecs()
+        let data = try encoder.encode(descriptor)
+        let decoded = try decoder.decode(PersistedSnapshotDescriptor.self, from: data)
+
+        #expect(decoded == descriptor)
+        #expect(decoded.hasDFlashDraftCompanion)
+        #expect(decoded.withoutDFlashDraftCompanion().bytes == 2_000)
+        #expect(decoded.withoutDFlashDraftCompanion().dflashDraftBytes == nil)
+        #expect(decoded.withoutDFlashDraftCompanion().dflashDraftFileRelativePath == nil)
+    }
+
+    @Test
+    func persistedSnapshotDescriptorDecodesOldTargetOnlyWireShape() throws {
+        let json = #"""
+        {
+          "snapshotID": "11111111-2222-3333-4444-555555555555",
+          "partitionDigest": "abcd1234",
+          "pathFromRoot": [1, 2, 3],
+          "tokenOffset": 128,
+          "checkpointType": "leaf",
+          "bytes": 2000,
+          "createdAt": 10,
+          "lastAccessAt": 11,
+          "fileRelativePath": "partitions/abcd1234/snapshots/1/11111111-2222-3333-4444-555555555555.safetensors",
+          "schemaVersion": 6
+        }
+        """#.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(PersistedSnapshotDescriptor.self, from: json)
+        #expect(decoded.dflashDraftBytes == nil)
+        #expect(decoded.dflashDraftFileRelativePath == nil)
+        #expect(!decoded.hasDFlashDraftCompanion)
+    }
+
     // MARK: - PartitionMeta round-trip
 
     @Test

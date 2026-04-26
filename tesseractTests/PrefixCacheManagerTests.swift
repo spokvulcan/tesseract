@@ -121,6 +121,26 @@ struct PrefixCacheManagerTests {
         }
     }
 
+    @Test func storeLeafReturnsDFlashDraftCompanionOnLookup() {
+        let mgr = makeManager()
+        let tokens = Array(1...64)
+        let leaf = makeSnapshot(offset: tokens.count, type: .leaf)
+        let draft = DFlashDraftCacheSnapshot(
+            cacheSnapshot: makeSnapshot(offset: tokens.count, type: .leaf)
+        )
+
+        mgr.storeLeaf(
+            storedTokens: tokens,
+            leafSnapshot: leaf,
+            dflashDraftSnapshot: draft,
+            partitionKey: defaultKey
+        )
+
+        let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
+        #expect(result.snapshotTokenOffset == tokens.count)
+        #expect(result.dflashDraftSnapshot?.tokenOffset == tokens.count)
+    }
+
     // MARK: - 3. systemSnapshotSharedAcrossConversations
 
     @Test func systemSnapshotSharedAcrossConversations() {

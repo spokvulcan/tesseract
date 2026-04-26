@@ -73,6 +73,10 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// ``capturedSnapshots``. These let future HTTP prefix-cache hits restore
     /// the draft side without replaying the cached prefix.
     let dflashDraftSnapshotsByOffset: [Int: DFlashDraftCacheSnapshot]
+    /// SSD payloads for DFlash draft companions, keyed by absolute
+    /// snapshot offset. Includes stored and transient offsets; only
+    /// entries whose target snapshot is stored are admitted to SSD.
+    let dflashDraftPayloadsByOffset: [Int: SnapshotPayload]
     /// Pre-extracted `SnapshotPayload` values for each entry in
     /// ``capturedSnapshots``, produced inside the
     /// ``ModelContainer/perform(_:)`` block that captured the snapshots
@@ -99,6 +103,15 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// canonical user-continuation leaf for templates that rewrite the
     /// assistant/tool suffix after the last user.
     let transientLastUserBoundarySnapshot: HybridCacheSnapshot?
+    /// Request-local DFlash draft companion matching
+    /// ``transientLastMessageBoundarySnapshot``.
+    let transientLastMessageBoundaryDraftSnapshot: DFlashDraftCacheSnapshot?
+    /// Request-local DFlash draft companion matching
+    /// ``transientLastUserBoundarySnapshot``.
+    let transientLastUserBoundaryDraftSnapshot: DFlashDraftCacheSnapshot?
+    /// Bound DFlash draft model captured from actor state for
+    /// post-completion leaf companion capture.
+    let dflashDraftModel: DFlashDraftModel?
     /// Chunked prefill step size from the request's `GenerateParameters`,
     /// plumbed out so the post-generation canonical-leaf path can use the
     /// same chunk size when re-prefilling the canonical assistant residual
@@ -550,6 +563,26 @@ actor LLMActor {
         return nil
     }
 
+    nonisolated static func dflashPrefixCacheHitRejectionReason(
+        _ parameters: GenerateParameters,
+        dflashBound: Bool,
+        snapshotOffset: Int,
+        hasRestoredDraftSnapshot: Bool
+    ) -> String? {
+        guard dflashBound else { return nil }
+        guard snapshotOffset > 0 else { return nil }
+        guard dflashBaseSkipReason(parameters) == nil else { return nil }
+        guard !hasRestoredDraftSnapshot else { return nil }
+        return "missing DFlash draft snapshot for restored prefix"
+    }
+
+    nonisolated static func dflashRequiresDraftCompanionForLeafStorage(
+        _ parameters: GenerateParameters,
+        dflashBound: Bool
+    ) -> Bool {
+        dflashBound && dflashBaseSkipReason(parameters) == nil
+    }
+
     /// Build a `DFlashTokenIterator` over the prefix-cache HTTP path.
     ///
     /// Drives a tap-aware chunked prefill via
@@ -693,7 +726,7 @@ actor LLMActor {
         }
         let draftSnapshotsByOffset = Self.captureDFlashDraftSnapshotsForPrefill(
             draft: dflash.draft,
-            targetSnapshots: storedSnapshots,
+            targetSnapshots: snapshots,
             baseOffset: genParams.checkpointBaseOffset,
             suffixHidden: lastHidden,
             restoredDraftCache: primedDraftCache,
@@ -797,6 +830,17 @@ actor LLMActor {
                 prefillStepSize: prefillStepSize
             )
 
+            let draftOffset = Self.maxCacheOffset(draftCache)
+            guard draftOffset == targetSnapshot.tokenOffset else {
+                Log.agent.warning(
+                    "DFlash draft snapshot capture skipped — "
+                    + "targetOffset=\(targetSnapshot.tokenOffset) "
+                    + "draftOffset=\(draftOffset)"
+                )
+                consumed = relativeEnd
+                continue
+            }
+
             if let draftSnapshot = DFlashDraftCacheSnapshot.capture(
                 cache: draftCache,
                 offset: targetSnapshot.tokenOffset,
@@ -805,7 +849,7 @@ actor LLMActor {
                 result[targetSnapshot.tokenOffset] = draftSnapshot
                 Log.agent.debug(
                     "DFlash draft snapshot captured — offset=\(targetSnapshot.tokenOffset) "
-                    + "bytes=\(draftSnapshot.memoryBytes) draftOffset=\(Self.maxCacheOffset(draftCache))"
+                    + "bytes=\(draftSnapshot.memoryBytes) draftOffset=\(draftOffset)"
                 )
             } else {
                 Log.agent.warning(
@@ -1508,6 +1552,7 @@ actor LLMActor {
                             promptTokens: mlxStart.fullTokens,
                             capturedSnapshots: mlxStart.capturedSnapshots,
                             dflashDraftSnapshots: mlxStart.dflashDraftSnapshotsByOffset,
+                            dflashDraftPayloads: mlxStart.dflashDraftPayloadsByOffset,
                             snapshotPayloads: mlxStart.capturedPayloads,
                             partitionKey: mlxStart.partitionKey,
                             requestID: requestID
@@ -1607,6 +1652,8 @@ actor LLMActor {
                                 storedTokens: storedTokens,
                                 toolSpecs: canonicalTools,
                                 transientBoundarySnapshot: mlxStart.transientLastUserBoundarySnapshot,
+                                transientBoundaryDraftSnapshot: mlxStart.transientLastUserBoundaryDraftSnapshot,
+                                dflashDraftModel: mlxStart.dflashDraftModel,
                                 partitionKey: mlxStart.partitionKey,
                                 prefillStepSize: mlxStart.prefillStepSize,
                                 tokenNDim: mlxStart.tokenNDim,
@@ -1625,6 +1672,8 @@ actor LLMActor {
                                 storedConversation: storedConversation,
                                 toolSpecs: canonicalTools,
                                 transientBoundarySnapshot: mlxStart.transientLastMessageBoundarySnapshot,
+                                transientBoundaryDraftSnapshot: mlxStart.transientLastMessageBoundaryDraftSnapshot,
+                                dflashDraftModel: mlxStart.dflashDraftModel,
                                 partitionKey: mlxStart.partitionKey,
                                 prefillStepSize: mlxStart.prefillStepSize,
                                 tokenNDim: mlxStart.tokenNDim,
@@ -1633,6 +1682,62 @@ actor LLMActor {
                                 diagnosticsContext: diagnosticsContext,
                                 ssdEnabled: mlxStart.ssdEnabled,
                                 generateParameters: postGenerationParams
+                            )
+                            break leafBlock
+                        }
+
+                        if let dflashDraftModel = mlxStart.dflashDraftModel {
+                            if let boundarySnapshot = mlxStart.transientLastMessageBoundarySnapshot,
+                               let boundaryDraftSnapshot =
+                                   mlxStart.transientLastMessageBoundaryDraftSnapshot,
+                               boundarySnapshot.tokenOffset < storedTokens.count
+                            {
+                                let structuredDirectLeaf =
+                                    await Self.captureStructuredLeafFromBoundary(
+                                        container: container,
+                                        storedTokens: storedTokens,
+                                        boundarySnapshot: boundarySnapshot,
+                                        boundaryDraftSnapshot: boundaryDraftSnapshot,
+                                        dflashDraftModel: dflashDraftModel,
+                                        partitionKey: mlxStart.partitionKey,
+                                        prefillStepSize: mlxStart.prefillStepSize,
+                                        tokenNDim: mlxStart.tokenNDim,
+                                        requestID: requestID,
+                                        prefixCache: prefixCache,
+                                        diagnosticsContext: diagnosticsContext,
+                                        ssdEnabled: mlxStart.ssdEnabled,
+                                        generateParameters: postGenerationParams,
+                                        storeStage: "directLeafStore",
+                                        captureStage: "directLeafCapture",
+                                        admissionStage: "directLeafAdmission",
+                                        captureSource: "directLeaf"
+                                    )
+                                if let structuredDirectLeaf {
+                                    leafStoreForTuner = structuredDirectLeaf
+                                    break leafBlock
+                                }
+                            } else {
+                                Log.agent.info(
+                                    "directLeaf DFlash draft companion skipped — "
+                                    + "reason=missing-direct-boundary-draft "
+                                    + "storedLen=\(storedTokens.count) "
+                                    + "boundaryOffset=\(mlxStart.transientLastMessageBoundarySnapshot?.tokenOffset ?? -1)"
+                                )
+                            }
+                        }
+
+                        if Self.dflashRequiresDraftCompanionForLeafStorage(
+                            postGenerationParams,
+                            dflashBound: mlxStart.dflashDraftModel != nil
+                        ) {
+                            diagnosticsContext.logSkip(
+                                stage: "leafStore",
+                                reason: "dflash-target-only-leaf-suppressed",
+                                extraFields: [
+                                    ("storedLen", "\(storedTokens.count)"),
+                                    ("boundaryOffset", "\(mlxStart.transientLastMessageBoundarySnapshot?.tokenOffset ?? -1)"),
+                                    ("hasBoundaryDraft", "\(mlxStart.transientLastMessageBoundaryDraftSnapshot != nil)"),
+                                ]
                             )
                             break leafBlock
                         }
@@ -2078,6 +2183,25 @@ actor LLMActor {
             ))
         }
 
+        return result
+    }
+
+    nonisolated static func extractDFlashDraftPayloads(
+        _ snapshotsByOffset: [Int: DFlashDraftCacheSnapshot],
+        ssdEnabled: Bool
+    ) -> [Int: SnapshotPayload] {
+        guard ssdEnabled, !snapshotsByOffset.isEmpty else { return [:] }
+
+        var result: [Int: SnapshotPayload] = [:]
+        result.reserveCapacity(snapshotsByOffset.count)
+        for (offset, draftSnapshot) in snapshotsByOffset {
+            if let payload = extractSnapshotPayloads(
+                [draftSnapshot.cacheSnapshot],
+                ssdEnabled: true
+            ).first {
+                result[offset] = payload
+            }
+        }
         return result
     }
 
@@ -2559,7 +2683,7 @@ actor LLMActor {
             )
             var checkpointPlan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] = []
             var lookupRetryCount = 0
-            let maxLookupRetries = 8
+            let maxLookupRetries = 32
 
             while true {
                 let (candidateLookup, candidatePlan) = await MainActor.run {
@@ -2580,13 +2704,14 @@ actor LLMActor {
                 if case .ssdHit(let ctx) = candidateLookup.reason,
                    let fingerprint = modelFingerprint
                 {
-                    let (hydrated, hydrateSeconds) = measure {
-                        ctx.ssdStore.loadSync(
+                    let (hydratedBundle, hydrateSeconds) = measure {
+                        ctx.ssdStore.loadBundleSync(
                             storageRef: ctx.storageRef,
                             expectedFingerprint: fingerprint
                         )
                     }
-                    if let hydrated {
+                    if let hydratedBundle {
+                        let hydrated = hydratedBundle.snapshot
                         if let maxLayerOffset = Self.mismatchedMaxLayerOffset(hydrated) {
                             Log.agent.warning(
                                 "HTTP prefix-cache SSD hit rejected — "
@@ -2615,6 +2740,40 @@ actor LLMActor {
                             break
                         }
 
+                        if let rejectionReason = Self.dflashPrefixCacheHitRejectionReason(
+                            parameters,
+                            dflashBound: dflashSnapshot != nil,
+                            snapshotOffset: hydrated.tokenOffset,
+                            hasRestoredDraftSnapshot: hydratedBundle.dflashDraftSnapshot != nil
+                        ) {
+                            Log.agent.info(
+                                "HTTP prefix-cache SSD hit rejected for DFlash — "
+                                + "reason=\(rejectionReason) "
+                                + "snapshotOffset=\(hydrated.tokenOffset) "
+                                + "type=\(hydrated.checkpointType) "
+                                + "id=\(ctx.storageRef.snapshotID) "
+                                + "action=invalidate-and-refill"
+                            )
+                            await MainActor.run {
+                                prefixCache.invalidateSnapshot(
+                                    tokens: fullTokens,
+                                    offset: ctx.storageRef.tokenOffset,
+                                    partitionKey: partitionKey,
+                                    reason: "dflash-missing-draft-companion"
+                                )
+                            }
+                            lookupRetryCount += 1
+                            if lookupRetryCount < maxLookupRetries { continue }
+                            lookupResult = PrefixCacheManager.LookupResult(
+                                snapshot: nil,
+                                partitionKey: candidateLookup.partitionKey,
+                                snapshotTokenOffset: 0,
+                                sharedPrefixLength: candidateLookup.sharedPrefixLength,
+                                reason: .missNoSnapshotInPrefix
+                            )
+                            break
+                        }
+
                         diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
                             id: ctx.storageRef.snapshotID,
                             hydrateMs: hydrateSeconds
@@ -2624,6 +2783,7 @@ actor LLMActor {
                             prefixCache.promote(
                                 node: ctx.node,
                                 snapshot: hydrated,
+                                dflashDraftSnapshot: hydratedBundle.dflashDraftSnapshot,
                                 partitionKey: partitionKey
                             )
                         }
@@ -2632,6 +2792,7 @@ actor LLMActor {
                         ))
                         lookupResult = PrefixCacheManager.LookupResult(
                             snapshot: hydrated,
+                            dflashDraftSnapshot: hydratedBundle.dflashDraftSnapshot,
                             partitionKey: partitionKey,
                             snapshotTokenOffset: hydrated.tokenOffset,
                             sharedPrefixLength: candidateLookup.sharedPrefixLength,
@@ -2682,6 +2843,40 @@ actor LLMActor {
                             offset: snapshot.tokenOffset,
                             partitionKey: partitionKey,
                             reason: "resident-offset-mismatch maxLayerOffset=\(maxLayerOffset)"
+                        )
+                    }
+                    lookupRetryCount += 1
+                    if lookupRetryCount < maxLookupRetries { continue }
+                    lookupResult = PrefixCacheManager.LookupResult(
+                        snapshot: nil,
+                        partitionKey: candidateLookup.partitionKey,
+                        snapshotTokenOffset: 0,
+                        sharedPrefixLength: candidateLookup.sharedPrefixLength,
+                        reason: .missNoSnapshotInPrefix
+                    )
+                }
+
+                if let snapshot = lookupResult.snapshot,
+                   let rejectionReason = Self.dflashPrefixCacheHitRejectionReason(
+                       parameters,
+                       dflashBound: dflashSnapshot != nil,
+                       snapshotOffset: snapshot.tokenOffset,
+                       hasRestoredDraftSnapshot: lookupResult.dflashDraftSnapshot != nil
+                   )
+                {
+                    Log.agent.info(
+                        "HTTP prefix-cache hit rejected for DFlash — "
+                        + "reason=\(rejectionReason) "
+                        + "snapshotOffset=\(snapshot.tokenOffset) "
+                        + "type=\(snapshot.checkpointType) "
+                        + "action=invalidate-and-refill"
+                    )
+                    await MainActor.run {
+                        prefixCache.invalidateSnapshot(
+                            tokens: fullTokens,
+                            offset: snapshot.tokenOffset,
+                            partitionKey: partitionKey,
+                            reason: "dflash-missing-draft-companion"
                         )
                     }
                     lookupRetryCount += 1
@@ -2865,8 +3060,19 @@ actor LLMActor {
                 transientSnapshotsByOffset[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
+            let transientLastMessageBoundaryDraftSnapshot =
+                lastMessageBoundaryOffset.flatMap { dflashDraftSnapshotsByOffset[$0] }
+            let transientLastUserBoundaryDraftSnapshot =
+                lastUserBoundaryOffset.flatMap { dflashDraftSnapshotsByOffset[$0] }
             let capturedPayloads = Self.extractSnapshotPayloads(
                 capturedSnapshots,
+                ssdEnabled: ssdEnabled
+            )
+            let storedSnapshotOffsets = Set(capturedSnapshots.map(\.tokenOffset))
+            let storedDFlashDraftSnapshotsByOffset =
+                dflashDraftSnapshotsByOffset.filter { storedSnapshotOffsets.contains($0.key) }
+            let dflashDraftPayloadsByOffset = Self.extractDFlashDraftPayloads(
+                storedDFlashDraftSnapshotsByOffset,
                 ssdEnabled: ssdEnabled
             )
             diagnosticsContext.log(PrefixCacheDiagnostics.LookupEvent(
@@ -2913,11 +3119,15 @@ actor LLMActor {
                 fullTokens: fullTokens,
                 capturedSnapshots: capturedSnapshots,
                 dflashDraftSnapshotsByOffset: dflashDraftSnapshotsByOffset,
+                dflashDraftPayloadsByOffset: dflashDraftPayloadsByOffset,
                 capturedPayloads: capturedPayloads,
                 ssdEnabled: ssdEnabled,
                 partitionKey: partitionKey,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
+                transientLastMessageBoundaryDraftSnapshot: transientLastMessageBoundaryDraftSnapshot,
+                transientLastUserBoundaryDraftSnapshot: transientLastUserBoundaryDraftSnapshot,
+                dflashDraftModel: dflashSnapshot?.draft,
                 prefillStepSize: parameters.prefillStepSize,
                 triAttentionStablePrefixOffset: stablePrefixOffset,
                 tokenNDim: tokenNDim
@@ -3091,6 +3301,8 @@ actor LLMActor {
         container: ModelContainer,
         storedTokens: [Int],
         boundarySnapshot: HybridCacheSnapshot,
+        boundaryDraftSnapshot: DFlashDraftCacheSnapshot?,
+        dflashDraftModel: DFlashDraftModel?,
         partitionKey: CachePartitionKey,
         prefillStepSize: Int,
         tokenNDim: Int,
@@ -3137,6 +3349,30 @@ actor LLMActor {
                     inputTokenCount: residual.count
                 )
                 let prefillStart = Date.timeIntervalSinceReferenceDate
+                var draftCacheForLeaf: [KVCache]?
+                var draftSkipReason: String?
+                if let dflashDraftModel {
+                    if let reason = Self.dflashBaseSkipReason(generateParameters) {
+                        draftSkipReason = reason
+                    } else if boundaryOffset == 0 {
+                        draftCacheForLeaf = dflashDraftModel.newCache()
+                    } else if let boundaryDraftSnapshot {
+                        if boundaryDraftSnapshot.tokenOffset == boundaryOffset {
+                            let restoredDraft = boundaryDraftSnapshot.restore()
+                            eval(restoredDraft)
+                            draftCacheForLeaf = restoredDraft
+                        } else {
+                            draftSkipReason =
+                                "boundary-draft-offset-mismatch expected=\(boundaryOffset) "
+                                + "actual=\(boundaryDraftSnapshot.tokenOffset)"
+                        }
+                    } else {
+                        draftSkipReason = "missing-boundary-draft"
+                    }
+                } else {
+                    draftSkipReason = "not-bound"
+                }
+
                 // Qwen3.5 is a `Qwen3_5ForConditionalGeneration` (VLM)
                 // whose `prepare` indexes tokens with two axes
                 // (`y[0..., ..<step]`) — 1D crashes in `getRopeIndex` on
@@ -3149,22 +3385,159 @@ actor LLMActor {
                     ? flatInput.expandedDimensions(axis: 0)
                     : flatInput
                 let lmInput = LMInput(text: .init(tokens: inputArr, mask: nil))
-                let (prepareResult, _) = try context.model.prepareWithCheckpoints(
-                    lmInput,
-                    cache: restoredCache,
-                    windowSize: prefillStepSize,
-                    checkpoints: [:],
-                    checkpointBaseOffset: boundaryOffset
-                )
-                if case .tokens(let leftover) = prepareResult, leftover.tokens.size > 0 {
-                    let batched = LMInput.Text(
-                        tokens: leftover.tokens.expandedDimensions(axis: 0),
-                        mask: leftover.mask
+                let draftRecorder: ChunkAccumulatingRecorder?
+                if draftCacheForLeaf != nil {
+                    let cfg = dflashDraftModel?.config.dflashConfig
+                    draftRecorder = cfg.map {
+                        ChunkAccumulatingRecorder(layerIDs: Set($0.targetLayerIDs))
+                    }
+                } else {
+                    draftRecorder = nil
+                }
+
+                if let draftRecorder,
+                   let tappable = context.model as? (any HiddenStateTappable),
+                   let dflashTarget = context.model as? (any DFlashTarget)
+                {
+                    let (prepareResult, _) = try tappable.prepareWithCheckpointsAndTap(
+                        lmInput,
+                        cache: restoredCache,
+                        windowSize: prefillStepSize,
+                        checkpoints: [:],
+                        checkpointBaseOffset: boundaryOffset,
+                        hiddenStateTap: { layerIndex, hiddenState in
+                            draftRecorder.record(layerIndex: layerIndex, state: hiddenState)
+                        }
                     )
-                    _ = context.model(batched, cache: restoredCache, state: nil)
+                    switch prepareResult {
+                    case .tokens(let leftover) where leftover.tokens.size > 0:
+                        let batchedTokens = leftover.tokens.ndim == 1
+                            ? leftover.tokens.expandedDimensions(axis: 0)
+                            : leftover.tokens
+                        let logits = dflashTarget.forwardWithDFlashTaps(
+                            batchedTokens,
+                            cache: restoredCache,
+                            hiddenStateTap: { layerIndex, hiddenState in
+                                draftRecorder.record(
+                                    layerIndex: layerIndex,
+                                    state: hiddenState
+                                )
+                            },
+                            gdnTap: nil
+                        )
+                        eval(logits)
+                    case .tokens:
+                        break
+                    case .logits(let out):
+                        eval(out.logits)
+                    }
                     eval(restoredCache)
+                } else {
+                    if draftCacheForLeaf != nil {
+                        draftSkipReason = "target-not-dflash-tappable"
+                        draftCacheForLeaf = nil
+                    }
+                    let (prepareResult, _) = try context.model.prepareWithCheckpoints(
+                        lmInput,
+                        cache: restoredCache,
+                        windowSize: prefillStepSize,
+                        checkpoints: [:],
+                        checkpointBaseOffset: boundaryOffset
+                    )
+                    if case .tokens(let leftover) = prepareResult, leftover.tokens.size > 0 {
+                        let batched = LMInput.Text(
+                            tokens: leftover.tokens.expandedDimensions(axis: 0),
+                            mask: leftover.mask
+                        )
+                        _ = context.model(batched, cache: restoredCache, state: nil)
+                        eval(restoredCache)
+                    }
+                    if case .logits(let out) = prepareResult {
+                        eval(out.logits)
+                    }
                 }
                 let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStart
+
+                var leafDraftSnapshot: DFlashDraftCacheSnapshot?
+                var leafDraftPayload: SnapshotPayload?
+                let draftCaptureStart = Date.timeIntervalSinceReferenceDate
+                if let draftCacheForLeaf,
+                   let dflashDraftModel,
+                   let draftRecorder,
+                   let hidden = draftRecorder.concatenatedIfPresent(
+                       orderedLayerIDs: dflashDraftModel.config.dflashConfig.targetLayerIDs.sorted()
+                   )
+                {
+                    eval(hidden)
+                    Self.primeDFlashDraftCache(
+                        draft: dflashDraftModel,
+                        prefixHidden: hidden,
+                        draftCache: draftCacheForLeaf,
+                        prefillStepSize: prefillStepSize
+                    )
+                    let draftOffset = Self.maxCacheOffset(draftCacheForLeaf)
+                    if draftOffset == storedTokens.count {
+                        leafDraftSnapshot = DFlashDraftCacheSnapshot.capture(
+                            cache: draftCacheForLeaf,
+                            offset: storedTokens.count,
+                            type: .leaf
+                        )
+                        if leafDraftSnapshot == nil {
+                            draftSkipReason = "capture-failed"
+                        }
+                    } else {
+                        draftSkipReason =
+                            "draft-offset-mismatch expected=\(storedTokens.count) "
+                            + "actual=\(draftOffset)"
+                    }
+                } else if draftCacheForLeaf != nil {
+                    draftSkipReason = "missing-hidden-states"
+                }
+
+                let draftCaptureMs = Date.timeIntervalSinceReferenceDate - draftCaptureStart
+                if let leafDraftSnapshot {
+                    leafDraftPayload = Self.extractSnapshotPayloads(
+                        [leafDraftSnapshot.cacheSnapshot],
+                        ssdEnabled: ssdEnabled
+                    ).first
+                    Log.agent.info(
+                        "\(captureSource) DFlash draft companion captured — "
+                        + "boundaryOffset=\(boundaryOffset) "
+                        + "leafOffset=\(storedTokens.count) "
+                        + "residualTokens=\(residual.count) "
+                        + "draftOffset=\(Self.maxCacheOffset(draftCacheForLeaf ?? [])) "
+                        + "bytes=\(leafDraftSnapshot.memoryBytes) "
+                        + "replayMs=\(String(format: "%.3f", draftCaptureMs * 1000))"
+                    )
+                } else if dflashDraftModel != nil {
+                    Log.agent.info(
+                        "\(captureSource) DFlash draft companion skipped — "
+                        + "reason=\(draftSkipReason ?? "unknown") "
+                        + "boundaryOffset=\(boundaryOffset) "
+                        + "leafOffset=\(storedTokens.count) "
+                        + "residualTokens=\(residual.count)"
+                    )
+                }
+
+                if leafDraftSnapshot == nil,
+                   Self.dflashRequiresDraftCompanionForLeafStorage(
+                       generateParameters,
+                       dflashBound: dflashDraftModel != nil
+                   )
+                {
+                    diagnosticsContext.logSkip(
+                        stage: storeStage,
+                        reason: "dflash-draft-companion-unavailable",
+                        extraFields: [
+                            ("draftReason", draftSkipReason ?? "unknown"),
+                            ("boundaryOffset", "\(boundaryOffset)"),
+                            ("leafOffset", "\(storedTokens.count)"),
+                            ("residualTokens", "\(residual.count)"),
+                        ]
+                    )
+                    Memory.clearCache()
+                    return nil
+                }
 
                 guard let leaf = HybridCacheSnapshot.capture(
                     cache: restoredCache,
@@ -3202,7 +3575,9 @@ actor LLMActor {
                         let d = prefixCache.storeLeaf(
                             storedTokens: storedTokens,
                             leafSnapshot: leaf,
+                            dflashDraftSnapshot: leafDraftSnapshot,
                             leafPayload: leafPayload,
+                            dflashDraftPayload: leafDraftPayload,
                             partitionKey: partitionKey,
                             requestID: requestID
                         )
@@ -3245,7 +3620,7 @@ actor LLMActor {
                 Memory.clearCache()
                 return AlphaTuner.LeafStore(
                     storedTokens: storedTokens,
-                    bytes: leaf.memoryBytes
+                    bytes: leaf.memoryBytes + (leafDraftSnapshot?.memoryBytes ?? 0)
                 )
             }
         } catch {
@@ -3267,6 +3642,8 @@ actor LLMActor {
         storedConversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         transientBoundarySnapshot: HybridCacheSnapshot?,
+        transientBoundaryDraftSnapshot: DFlashDraftCacheSnapshot?,
+        dflashDraftModel: DFlashDraftModel?,
         partitionKey: CachePartitionKey,
         prefillStepSize: Int,
         tokenNDim: Int,
@@ -3291,52 +3668,27 @@ actor LLMActor {
                 return nil
             }
 
-            let boundarySnapshot: HybridCacheSnapshot?
-            if let transientBoundarySnapshot,
-               transientBoundarySnapshot.tokenOffset < toolContinuationStoredTokens.count {
-                boundarySnapshot = transientBoundarySnapshot
-            } else {
-                let initialFallbackLookup = await MainActor.run {
-                    prefixCache.lookup(
-                        tokens: toolContinuationStoredTokens,
-                        partitionKey: partitionKey,
-                        maximumReusableSnapshotOffsetExclusive: toolContinuationStoredTokens.count
-                    )
-                }
-                let fallbackLookup = await Self.hydrateSSDLookupIfNeeded(
-                    container: container,
-                    lookupResult: initialFallbackLookup,
-                    tokens: toolContinuationStoredTokens,
-                    partitionKey: partitionKey,
-                    totalTokens: toolContinuationStoredTokens.count,
-                    prefixCache: prefixCache,
-                    diagnosticsContext: diagnosticsContext
-                )
-                if let snapshot = fallbackLookup.snapshot,
-                   snapshot.tokenOffset > 0,
-                   snapshot.tokenOffset < toolContinuationStoredTokens.count {
-                    boundarySnapshot = snapshot
-                } else {
-                    boundarySnapshot = nil
-                }
-            }
-
-            guard let boundarySnapshot else {
-                diagnosticsContext.logSkip(
-                    stage: "directToolLeafStore",
-                    reason: "no-direct-restore-boundary",
-                    extraFields: [
-                        ("continuationLen", "\(toolContinuationStoredTokens.count)"),
-                        ("transientOffset", "\(transientBoundarySnapshot?.tokenOffset ?? -1)"),
-                    ]
-                )
+            guard let boundary = await Self.resolveStructuredLeafBoundary(
+                container: container,
+                storedTokens: toolContinuationStoredTokens,
+                transientBoundarySnapshot: transientBoundarySnapshot,
+                transientBoundaryDraftSnapshot: transientBoundaryDraftSnapshot,
+                dflashDraftModel: dflashDraftModel,
+                partitionKey: partitionKey,
+                prefixCache: prefixCache,
+                diagnosticsContext: diagnosticsContext,
+                generateParameters: generateParameters,
+                stage: "directToolLeafStore"
+            ) else {
                 return nil
             }
 
             return await Self.captureStructuredLeafFromBoundary(
                 container: container,
                 storedTokens: toolContinuationStoredTokens,
-                boundarySnapshot: boundarySnapshot,
+                boundarySnapshot: boundary.snapshot,
+                boundaryDraftSnapshot: boundary.draftSnapshot,
+                dflashDraftModel: dflashDraftModel,
                 partitionKey: partitionKey,
                 prefillStepSize: prefillStepSize,
                 tokenNDim: tokenNDim,
@@ -3380,16 +3732,17 @@ actor LLMActor {
             return lookupResult
         }
 
-        let (hydrated, hydrateSeconds) = await container.perform { _ in
+        let (hydratedBundle, hydrateSeconds) = await container.perform { _ in
             let hydrateStarted = Date.timeIntervalSinceReferenceDate
-            let hydrated = ctx.ssdStore.loadSync(
+            let hydrated = ctx.ssdStore.loadBundleSync(
                 storageRef: ctx.storageRef,
                 expectedFingerprint: fingerprint
             )
             return (hydrated, Date.timeIntervalSinceReferenceDate - hydrateStarted)
         }
 
-        if let hydrated {
+        if let hydratedBundle {
+            let hydrated = hydratedBundle.snapshot
             if let maxLayerOffset = Self.mismatchedMaxLayerOffset(hydrated) {
                 Log.agent.warning(
                     "HTTP prefix-cache SSD fallback rejected — "
@@ -3424,6 +3777,7 @@ actor LLMActor {
                 prefixCache.promote(
                     node: ctx.node,
                     snapshot: hydrated,
+                    dflashDraftSnapshot: hydratedBundle.dflashDraftSnapshot,
                     partitionKey: partitionKey
                 )
             }
@@ -3432,6 +3786,7 @@ actor LLMActor {
             ))
             return PrefixCacheManager.LookupResult(
                 snapshot: hydrated,
+                dflashDraftSnapshot: hydratedBundle.dflashDraftSnapshot,
                 partitionKey: partitionKey,
                 snapshotTokenOffset: hydrated.tokenOffset,
                 sharedPrefixLength: lookupResult.sharedPrefixLength,
@@ -3460,6 +3815,146 @@ actor LLMActor {
         )
     }
 
+    private static func resolveStructuredLeafBoundary(
+        container: ModelContainer,
+        storedTokens: [Int],
+        transientBoundarySnapshot: HybridCacheSnapshot?,
+        transientBoundaryDraftSnapshot: DFlashDraftCacheSnapshot?,
+        dflashDraftModel: DFlashDraftModel?,
+        partitionKey: CachePartitionKey,
+        prefixCache: PrefixCacheManager,
+        diagnosticsContext: PrefixCacheDiagnostics.Context,
+        generateParameters: GenerateParameters,
+        stage: String
+    ) async -> (snapshot: HybridCacheSnapshot, draftSnapshot: DFlashDraftCacheSnapshot?)? {
+        let dflashBound = dflashDraftModel != nil
+        if let transientBoundarySnapshot,
+           transientBoundarySnapshot.tokenOffset > 0,
+           transientBoundarySnapshot.tokenOffset < storedTokens.count
+        {
+            if let rejectionReason = Self.dflashPrefixCacheHitRejectionReason(
+                generateParameters,
+                dflashBound: dflashBound,
+                snapshotOffset: transientBoundarySnapshot.tokenOffset,
+                hasRestoredDraftSnapshot: transientBoundaryDraftSnapshot != nil
+            ) {
+                Log.agent.info(
+                    "\(stage) transient boundary rejected for DFlash — "
+                    + "reason=\(rejectionReason) "
+                    + "boundaryOffset=\(transientBoundarySnapshot.tokenOffset) "
+                    + "storedLen=\(storedTokens.count) "
+                    + "action=lookup-ancestor"
+                )
+            } else {
+                return (transientBoundarySnapshot, transientBoundaryDraftSnapshot)
+            }
+        }
+
+        var retryCount = 0
+        let maxRetries = 32
+        while retryCount < maxRetries {
+            let initialLookup = await MainActor.run {
+                prefixCache.lookup(
+                    tokens: storedTokens,
+                    partitionKey: partitionKey,
+                    maximumReusableSnapshotOffsetExclusive: storedTokens.count
+                )
+            }
+            let lookup = await Self.hydrateSSDLookupIfNeeded(
+                container: container,
+                lookupResult: initialLookup,
+                tokens: storedTokens,
+                partitionKey: partitionKey,
+                totalTokens: storedTokens.count,
+                prefixCache: prefixCache,
+                diagnosticsContext: diagnosticsContext
+            )
+            if let id = lookup.recordedHitSnapshotID {
+                diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: id))
+            }
+
+            guard let snapshot = lookup.snapshot else {
+                diagnosticsContext.logSkip(
+                    stage: stage,
+                    reason: "no-restore-boundary",
+                    extraFields: [
+                        ("storedLen", "\(storedTokens.count)"),
+                        ("transientOffset", "\(transientBoundarySnapshot?.tokenOffset ?? -1)"),
+                    ]
+                )
+                return nil
+            }
+
+            guard snapshot.tokenOffset > 0,
+                  snapshot.tokenOffset < storedTokens.count
+            else {
+                diagnosticsContext.logSkip(
+                    stage: stage,
+                    reason: "boundary-out-of-range",
+                    extraFields: [
+                        ("storedLen", "\(storedTokens.count)"),
+                        ("boundaryOffset", "\(snapshot.tokenOffset)"),
+                    ]
+                )
+                return nil
+            }
+
+            if let maxLayerOffset = Self.mismatchedMaxLayerOffset(snapshot) {
+                Log.agent.warning(
+                    "\(stage) boundary rejected — "
+                    + "snapshotOffset=\(snapshot.tokenOffset) "
+                    + "maxLayerOffset=\(maxLayerOffset) "
+                    + "type=\(snapshot.checkpointType)"
+                )
+                await MainActor.run {
+                    prefixCache.invalidateSnapshot(
+                        tokens: storedTokens,
+                        offset: snapshot.tokenOffset,
+                        partitionKey: partitionKey,
+                        reason: "\(stage)-offset-mismatch maxLayerOffset=\(maxLayerOffset)"
+                    )
+                }
+                retryCount += 1
+                continue
+            }
+
+            if let rejectionReason = Self.dflashPrefixCacheHitRejectionReason(
+                generateParameters,
+                dflashBound: dflashBound,
+                snapshotOffset: snapshot.tokenOffset,
+                hasRestoredDraftSnapshot: lookup.dflashDraftSnapshot != nil
+            ) {
+                Log.agent.info(
+                    "\(stage) boundary rejected for DFlash — "
+                    + "reason=\(rejectionReason) "
+                    + "boundaryOffset=\(snapshot.tokenOffset) "
+                    + "type=\(snapshot.checkpointType) "
+                    + "action=invalidate-and-retry"
+                )
+                await MainActor.run {
+                    prefixCache.invalidateSnapshot(
+                        tokens: storedTokens,
+                        offset: snapshot.tokenOffset,
+                        partitionKey: partitionKey,
+                        reason: "dflash-missing-draft-companion-leaf-boundary"
+                    )
+                }
+                retryCount += 1
+                continue
+            }
+
+            return (snapshot, lookup.dflashDraftSnapshot)
+        }
+
+        diagnosticsContext.logSkip(
+            stage: stage,
+            reason: "boundary-retry-limit",
+            level: .warning,
+            extraFields: [("storedLen", "\(storedTokens.count)")]
+        )
+        return nil
+    }
+
     /// Capture the canonical leaf for templates whose non-latest assistant turns
     /// may differ from the just-generated latest assistant form.
     ///
@@ -3478,6 +3973,8 @@ actor LLMActor {
         storedTokens: [Int],
         toolSpecs: [ToolSpec]?,
         transientBoundarySnapshot: HybridCacheSnapshot?,
+        transientBoundaryDraftSnapshot: DFlashDraftCacheSnapshot?,
+        dflashDraftModel: DFlashDraftModel?,
         partitionKey: CachePartitionKey,
         prefillStepSize: Int,
         tokenNDim: Int,
@@ -3502,58 +3999,6 @@ actor LLMActor {
                 return nil
             }
 
-            let boundarySnapshot: HybridCacheSnapshot?
-            if let transientBoundarySnapshot,
-               transientBoundarySnapshot.tokenOffset < canonicalStoredTokens.count {
-                boundarySnapshot = transientBoundarySnapshot
-            } else {
-                let initialFallbackLookup = await MainActor.run {
-                    prefixCache.lookup(
-                        tokens: canonicalStoredTokens,
-                        partitionKey: partitionKey,
-                        maximumReusableSnapshotOffsetExclusive: canonicalStoredTokens.count
-                    )
-                }
-                let fallbackLookup = await Self.hydrateSSDLookupIfNeeded(
-                    container: container,
-                    lookupResult: initialFallbackLookup,
-                    tokens: canonicalStoredTokens,
-                    partitionKey: partitionKey,
-                    totalTokens: canonicalStoredTokens.count,
-                    prefixCache: prefixCache,
-                    diagnosticsContext: diagnosticsContext
-                )
-                if let snapshot = fallbackLookup.snapshot,
-                   snapshot.tokenOffset > 0,
-                   snapshot.tokenOffset < canonicalStoredTokens.count {
-                    boundarySnapshot = snapshot
-                } else {
-                    boundarySnapshot = nil
-                }
-            }
-
-            guard let boundarySnapshot else {
-                diagnosticsContext.logSkip(
-                    stage: "canonicalLeafStore",
-                    reason: "no-canonical-restore-boundary",
-                    extraFields: [("canonicalLen", "\(canonicalStoredTokens.count)")]
-                )
-                return nil
-            }
-            let boundaryOffset = boundarySnapshot.tokenOffset
-
-            guard canonicalStoredTokens.count > boundaryOffset else {
-                diagnosticsContext.logSkip(
-                    stage: "canonicalLeafStore",
-                    reason: "canonical-at-or-before-boundary",
-                    extraFields: [
-                        ("canonicalLen", "\(canonicalStoredTokens.count)"),
-                        ("boundaryOffset", "\(boundaryOffset)"),
-                    ]
-                )
-                return nil
-            }
-
             guard canonicalStoredTokens.count <= storedTokens.count else {
                 diagnosticsContext.logSkip(
                     stage: "canonicalLeafStore",
@@ -3567,10 +4012,27 @@ actor LLMActor {
                 return nil
             }
 
+            guard let boundary = await Self.resolveStructuredLeafBoundary(
+                container: container,
+                storedTokens: canonicalStoredTokens,
+                transientBoundarySnapshot: transientBoundarySnapshot,
+                transientBoundaryDraftSnapshot: transientBoundaryDraftSnapshot,
+                dflashDraftModel: dflashDraftModel,
+                partitionKey: partitionKey,
+                prefixCache: prefixCache,
+                diagnosticsContext: diagnosticsContext,
+                generateParameters: generateParameters,
+                stage: "canonicalLeafStore"
+            ) else {
+                return nil
+            }
+
             return await Self.captureStructuredLeafFromBoundary(
                 container: container,
                 storedTokens: canonicalStoredTokens,
-                boundarySnapshot: boundarySnapshot,
+                boundarySnapshot: boundary.snapshot,
+                boundaryDraftSnapshot: boundary.draftSnapshot,
+                dflashDraftModel: dflashDraftModel,
                 partitionKey: partitionKey,
                 prefillStepSize: prefillStepSize,
                 tokenNDim: tokenNDim,

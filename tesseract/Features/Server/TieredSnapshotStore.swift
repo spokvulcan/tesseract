@@ -165,12 +165,14 @@ final class TieredSnapshotStore: SnapshotStore {
         node: RadixTreeNode,
         tree: TokenRadixTree,
         payload: SnapshotPayload,
+        dflashDraftPayload: SnapshotPayload? = nil,
         descriptor: PersistedSnapshotDescriptor
     ) -> TryEnqueueResult? {
         guard let ssdStore else { return nil }
 
         let result = ssdStore.tryEnqueue(
             payload: payload,
+            dflashDraftPayload: dflashDraftPayload,
             descriptor: descriptor
         )
 

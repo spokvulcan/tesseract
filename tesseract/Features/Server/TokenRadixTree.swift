@@ -39,10 +39,10 @@ final class RadixTreeNode {
     var edgeTokens: [Int]
     var children: [Int: RadixTreeNode]
     var snapshot: HybridCacheSnapshot?
-    /// Optional DFlash draft-side companion for ``snapshot``. This is
-    /// RAM-resident only for now; when the target body is evicted or hydrated
-    /// from SSD, the companion is cleared and DFlash skips that restored hit
-    /// instead of replaying the prefix.
+    /// Optional DFlash draft-side companion for ``snapshot``. When SSD
+    /// persistence has a companion payload, hydration restores this with
+    /// the target body; old target-only residents leave it nil and DFlash
+    /// skips that restored hit instead of replaying the prefix.
     var dflashDraftSnapshot: DFlashDraftCacheSnapshot?
     /// SSD persistence tier back-reference. Non-nil while an SSD
     /// write is pending (`committed == false`) or has landed

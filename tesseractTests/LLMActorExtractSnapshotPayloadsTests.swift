@@ -266,7 +266,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 16 * 1024 * 1024
         )
-        let snapshot = makeSimpleKVSnapshot(tokenOffset: 6)
+        let snapshot = makeSimpleKVSnapshot(tokenOffset: 4)
         let payload = LLMActor.extractSnapshotPayloads(
             [snapshot], ssdEnabled: true
         ).first
@@ -274,7 +274,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
             modelID: "test-model", kvBits: nil, kvGroupSize: 64
         )
         let diagnostics = manager.storeLeaf(
-            storedTokens: [10, 20, 30, 40, 50, 60],
+            storedTokens: [10, 20, 30, 40],
             leafSnapshot: snapshot,
             leafPayload: payload,
             partitionKey: partitionKey,
@@ -295,12 +295,12 @@ struct LLMActorExtractSnapshotPayloadsTests {
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 16 * 1024 * 1024
         )
-        let snapshot = makeSimpleKVSnapshot(tokenOffset: 5)
+        let snapshot = makeSimpleKVSnapshot(tokenOffset: 4)
         let partitionKey = CachePartitionKey(
             modelID: "test-model", kvBits: nil, kvGroupSize: 64
         )
         let diagnostics = manager.storeSnapshots(
-            promptTokens: [7, 8, 9, 10, 11],
+            promptTokens: [7, 8, 9, 10],
             capturedSnapshots: [snapshot],
             snapshotPayloads: [],
             partitionKey: partitionKey,

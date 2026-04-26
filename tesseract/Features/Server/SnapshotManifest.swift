@@ -28,6 +28,9 @@
 //    that crosses the LLMActor → `SSDSnapshotStore` writer boundary.
 //    Sendable value type, never Codable — consumed immediately by
 //    the safetensors write and never serialized through JSON.
+//  - `SnapshotPayloadBundle` — a target payload plus an optional
+//    DFlash draft companion payload admitted and evicted as one SSD
+//    resident.
 //
 
 import Foundation
@@ -118,8 +121,14 @@ nonisolated struct PersistedSnapshotDescriptor: Codable, Sendable, Equatable {
 
     /// On-disk file size in bytes. Matches
     /// `SnapshotStorageRef.bytesOnDisk` and is the sole byte-budget
-    /// input for the writer's admission-time LRU cut.
+    /// input for the writer's admission-time LRU cut. For descriptors
+    /// with a DFlash draft companion this is target bytes + draft bytes.
     let bytes: Int
+
+    /// Optional on-disk size of the DFlash draft-cache companion.
+    /// Missing for old target-only descriptors and for snapshots
+    /// captured while DFlash was unavailable.
+    let dflashDraftBytes: Int?
 
     /// Seconds since Date's reference date (2001-01-01). Stable across
     /// restarts (unlike `ContinuousClock.Instant`) and suitable for
@@ -139,10 +148,63 @@ nonisolated struct PersistedSnapshotDescriptor: Codable, Sendable, Equatable {
     /// store's URL-construction helper.
     let fileRelativePath: String
 
+    /// Optional relative path to the DFlash draft-cache companion.
+    /// Stored separately so target-only snapshots remain readable when
+    /// the companion is absent or corrupt.
+    let dflashDraftFileRelativePath: String?
+
     /// Schema version stamped at write time. Warm start rejects
     /// descriptors whose version differs from
     /// `SnapshotManifestSchema.currentVersion`.
     let schemaVersion: Int
+
+    init(
+        snapshotID: String,
+        partitionDigest: String,
+        pathFromRoot: [Int],
+        tokenOffset: Int,
+        checkpointType: String,
+        bytes: Int,
+        dflashDraftBytes: Int? = nil,
+        createdAt: Double,
+        lastAccessAt: Double,
+        fileRelativePath: String,
+        dflashDraftFileRelativePath: String? = nil,
+        schemaVersion: Int
+    ) {
+        self.snapshotID = snapshotID
+        self.partitionDigest = partitionDigest
+        self.pathFromRoot = pathFromRoot
+        self.tokenOffset = tokenOffset
+        self.checkpointType = checkpointType
+        self.bytes = bytes
+        self.dflashDraftBytes = dflashDraftBytes
+        self.createdAt = createdAt
+        self.lastAccessAt = lastAccessAt
+        self.fileRelativePath = fileRelativePath
+        self.dflashDraftFileRelativePath = dflashDraftFileRelativePath
+        self.schemaVersion = schemaVersion
+    }
+
+    var hasDFlashDraftCompanion: Bool {
+        dflashDraftBytes != nil && dflashDraftFileRelativePath != nil
+    }
+
+    func withoutDFlashDraftCompanion() -> PersistedSnapshotDescriptor {
+        let draftBytes = dflashDraftBytes ?? 0
+        return PersistedSnapshotDescriptor(
+            snapshotID: snapshotID,
+            partitionDigest: partitionDigest,
+            pathFromRoot: pathFromRoot,
+            tokenOffset: tokenOffset,
+            checkpointType: checkpointType,
+            bytes: max(0, bytes - draftBytes),
+            createdAt: createdAt,
+            lastAccessAt: lastAccessAt,
+            fileRelativePath: fileRelativePath,
+            schemaVersion: schemaVersion
+        )
+    }
 
     /// Single source of truth for the on-disk path layout
     /// (`partitions/{digest}/snapshots/{shardByte}/{id}.safetensors`,
@@ -158,6 +220,14 @@ nonisolated struct PersistedSnapshotDescriptor: Codable, Sendable, Equatable {
     ) -> String {
         let shardByte = String(snapshotID.prefix(1))
         return "partitions/\(partitionDigest)/snapshots/\(shardByte)/\(snapshotID).safetensors"
+    }
+
+    static func relativeDFlashDraftFilePath(
+        snapshotID: String,
+        partitionDigest: String
+    ) -> String {
+        let shardByte = String(snapshotID.prefix(1))
+        return "partitions/\(partitionDigest)/snapshots/\(shardByte)/\(snapshotID).dflash.safetensors"
     }
 }
 
@@ -432,6 +502,20 @@ nonisolated struct SnapshotPayload: Sendable {
             }
         }
         return total
+    }
+}
+
+nonisolated struct SnapshotPayloadBundle: Sendable {
+    let target: SnapshotPayload
+    let dflashDraft: SnapshotPayload?
+
+    init(target: SnapshotPayload, dflashDraft: SnapshotPayload? = nil) {
+        self.target = target
+        self.dflashDraft = dflashDraft
+    }
+
+    var totalBytes: Int {
+        target.totalBytes + (dflashDraft?.totalBytes ?? 0)
     }
 }
 
