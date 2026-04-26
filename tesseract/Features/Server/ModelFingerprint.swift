@@ -178,6 +178,16 @@ enum ModelFingerprint {
         }
     }
 
+    /// Lowercase-hex SHA-256 over the bytes of a single file. Used by the
+    /// DFlash bind path to mix the draft's `config.json` identity into the
+    /// effective `modelFingerprint` so a draft swap forces a partition
+    /// flush. Returns `nil` if the file cannot be read; caller decides
+    /// whether to treat that as fatal.
+    nonisolated static func sha256OfFile(_ url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     nonisolated private static func collectSafetensorsEntries(in modelDir: URL) throws -> [SafetensorsEntry] {
         let fm = FileManager.default
         let contents: [URL]

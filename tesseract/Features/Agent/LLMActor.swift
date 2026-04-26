@@ -356,6 +356,17 @@ actor LLMActor {
                 + "block=\(loaded.blockSize) maskID=\(cfg.maskTokenID) "
                 + "targetLayers=\(cfg.targetLayerIDs)"
             )
+            // Mix the draft's config.json SHA-256 into the active model
+            // fingerprint so prefix-cache partitions invalidate on a draft
+            // swap. The base fingerprint is recomputed on every load, so
+            // the next AR-only load returns to the un-mixed value
+            // automatically.
+            let draftCfgURL = config.draftDirectory.appendingPathComponent("config.json")
+            if let baseFp = self.modelFingerprint,
+               let draftSha = ModelFingerprint.sha256OfFile(draftCfgURL)
+            {
+                self.modelFingerprint = baseFp + ":dflash:" + draftSha
+            }
         } catch {
             dflashContext = nil
             Log.agent.error("DFlash bind failed; falling back to AR: \(error)")
@@ -417,6 +428,171 @@ actor LLMActor {
         guard !parameters.triAttention.enabled else { return false }
         guard parameters.processor() == nil else { return false }
         return true
+    }
+
+    /// Build a `DFlashTokenIterator` over the prefix-cache HTTP path.
+    ///
+    /// Drives a tap-aware chunked prefill via
+    /// `HiddenStateTappable.prepareWithCheckpointsAndTap` so the radix-tree
+    /// checkpoints are captured exactly the way the AR `TokenIterator`
+    /// captures them, and per-target-layer hidden states accumulate across
+    /// chunks for the draft. The residual `y` tail is drained via a final
+    /// tap-aware `forwardWithDFlashTaps` to produce the verify-loop seed
+    /// (first sampled token + last-position logits).
+    ///
+    /// Throws when the loaded target doesn't conform to the required
+    /// protocols; caller should fall back to AR on any throw.
+    private nonisolated static func makeHTTPPrefixCacheDFlashIterator(
+        dflash: DFlashContext,
+        context: ModelContext,
+        inputForGeneration: LMInput,
+        cacheToUse: [KVCache],
+        genParams: GenerateParameters,
+        prefillStepSize: Int
+    ) throws -> DFlashTokenIterator {
+        guard let tappable = context.model as? (any HiddenStateTappable) else {
+            throw DFlashHTTPPrefixCacheError.targetNotTappable(typeName: "\(type(of: context.model))")
+        }
+        guard let dflashTarget = context.model as? (any DFlashTarget) else {
+            throw DFlashHTTPPrefixCacheError.targetNotDFlashCapable(typeName: "\(type(of: context.model))")
+        }
+
+        let cfg = dflash.draft.config.dflashConfig
+        let recorder = ChunkAccumulatingRecorder(layerIDs: Set(cfg.targetLayerIDs))
+
+        let prefillStart = CFAbsoluteTimeGetCurrent()
+        let (prepareResult, snapshots) = try tappable.prepareWithCheckpointsAndTap(
+            inputForGeneration,
+            cache: cacheToUse,
+            windowSize: prefillStepSize,
+            checkpoints: genParams.checkpoints,
+            checkpointBaseOffset: genParams.checkpointBaseOffset,
+            hiddenStateTap: { layerIndex, hiddenState in
+                recorder.record(layerIndex: layerIndex, state: hiddenState)
+            }
+        )
+
+        // Drain the residual chunk via a final tap-aware forward to
+        // capture last-chunk hidden states + sample the seed token from
+        // the last-position logits. Mirrors the standard
+        // `TokenIterator.prepare` step that runs `model(y)` on the
+        // remaining prompt before generation begins.
+        let firstToken: Int
+        let sampler = genParams.sampler()
+        switch prepareResult {
+        case .tokens(let y) where y.tokens.size > 0:
+            let chunkTokens = y.tokens.ndim == 1
+                ? y.tokens.expandedDimensions(axis: 0)
+                : y.tokens
+            let logits = dflashTarget.forwardWithDFlashTaps(
+                chunkTokens,
+                cache: cacheToUse,
+                hiddenStateTap: { layerIndex, hiddenState in
+                    recorder.record(layerIndex: layerIndex, state: hiddenState)
+                },
+                gdnTap: nil
+            )
+            let lastLogits = logits[0..., -1, 0...]
+            let firstTokenArr = sampler.sample(logits: lastLogits)
+            eval(firstTokenArr)
+            firstToken = firstTokenArr.asArray(Int.self)[0]
+        case .tokens:
+            // Empty residual is unusual but not impossible (residual
+            // exactly aligned to a checkpoint). Treat as misuse: the
+            // iterator needs at least one residual position to seed.
+            throw DFlashHTTPPrefixCacheError.emptyResidual
+        case .logits(let out):
+            let lastLogits = out.logits[0..., -1, 0...]
+            let firstTokenArr = sampler.sample(logits: lastLogits)
+            eval(firstTokenArr)
+            firstToken = firstTokenArr.asArray(Int.self)[0]
+        }
+        let prefillSeconds = CFAbsoluteTimeGetCurrent() - prefillStart
+
+        let lastHidden = recorder.concatenated(orderedLayerIDs: cfg.targetLayerIDs.sorted())
+        eval(lastHidden)
+
+        // Split snapshots into stored vs transient — same partitioning the
+        // standard `TokenIterator.prepare` performs internally.
+        var storedSnapshots: [HybridCacheSnapshot] = []
+        var transientByOffset: [Int: HybridCacheSnapshot] = [:]
+        storedSnapshots.reserveCapacity(snapshots.count)
+        for snap in snapshots {
+            if genParams.transientCheckpointOffsets.contains(snap.tokenOffset) {
+                transientByOffset[snap.tokenOffset] = snap
+            } else {
+                storedSnapshots.append(snap)
+            }
+        }
+
+        // Authoritative prompt length: the cache offset after both
+        // chunked prefill and the residual forward have advanced it.
+        let promptLength = (cacheToUse.first as? BaseKVCache)?.offset ?? 0
+
+        let primed = DFlashPrimedPrefill(
+            firstEmittedToken: firstToken,
+            lastHidden: lastHidden,
+            promptLength: promptLength,
+            capturedSnapshots: storedSnapshots,
+            transientSnapshots: transientByOffset,
+            prefillSeconds: prefillSeconds
+        )
+
+        return try DFlashTokenIterator(
+            primed: primed,
+            target: context.model,
+            draft: dflash.draft,
+            cache: cacheToUse,
+            parameters: genParams,
+            blockSize: dflash.blockSize,
+            maskTokenID: cfg.maskTokenID,
+            targetLayerIDs: cfg.targetLayerIDs
+        )
+    }
+
+    /// Recorder that accumulates per-target-layer hidden states across
+    /// chunks of a chunked prefill by concatenating along axis 1 (sequence
+    /// dim). Reference-typed so the tap closure can mutate it across
+    /// successive chunk forwards.
+    private final class ChunkAccumulatingRecorder: @unchecked Sendable {
+        let layerIDs: Set<Int>
+        var byLayer: [Int: MLXArray] = [:]
+
+        init(layerIDs: Set<Int>) { self.layerIDs = layerIDs }
+
+        func record(layerIndex: Int, state: MLXArray) {
+            guard layerIDs.contains(layerIndex) else { return }
+            // Snapshot via `[.ellipsis]` so subsequent in-place writes by
+            // the kernel don't mutate this captured tensor.
+            let snap = state[.ellipsis]
+            if let existing = byLayer[layerIndex] {
+                byLayer[layerIndex] = MLX.concatenated([existing, snap], axis: 1)
+            } else {
+                byLayer[layerIndex] = snap
+            }
+        }
+
+        func concatenated(orderedLayerIDs: [Int]) -> MLXArray {
+            let pieces = orderedLayerIDs.compactMap { byLayer[$0] }
+            return MLX.concatenated(pieces, axis: -1)
+        }
+    }
+
+    private enum DFlashHTTPPrefixCacheError: Error, CustomStringConvertible {
+        case targetNotTappable(typeName: String)
+        case targetNotDFlashCapable(typeName: String)
+        case emptyResidual
+
+        var description: String {
+            switch self {
+            case .targetNotTappable(let name):
+                return "DFlash HTTP prefix-cache: target \(name) does not conform to HiddenStateTappable"
+            case .targetNotDFlashCapable(let name):
+                return "DFlash HTTP prefix-cache: target \(name) does not conform to DFlashTarget"
+            case .emptyResidual:
+                return "DFlash HTTP prefix-cache: residual prefill is empty"
+            }
+        }
     }
 
     /// Start a raw text/tool generation and surface the underlying vendor task so
@@ -1935,6 +2111,7 @@ actor LLMActor {
         let promptStartsThinking = self.promptStartsThinking
         let modelFingerprint = self.modelFingerprint
         let ssdEnabled = self.ssdConfig?.enabled == true
+        let dflashSnapshot = self.dflashContext
         let triAttentionIdentity = TriAttentionPartitionIdentity.from(
             self.triAttentionRuntimeSelection.effectiveConfiguration
         )
@@ -2183,26 +2360,73 @@ actor LLMActor {
 
             // 9. Create TokenIterator — this calls model.prepare() internally with checkpoints.
             // NO separate prepare() call. TokenIterator owns prefill.
-            let (iterator, prefillMs) = try measure {
-                try TokenIterator(
-                    input: inputForGeneration,
-                    model: context.model,
-                    cache: cacheToUse,
-                    parameters: genParams
-                )
+            //
+            // DFlash branch: when a draft is bound and the request meets
+            // the speculative-decoding gates (greedy + non-TriAttention +
+            // penalty-free), drive a tap-aware chunked prefill so the
+            // verify loop can pick up with primed state. On any failure
+            // mode (target not HiddenStateTappable, empty residual, etc.)
+            // log + fall back to the standard AR path so the request
+            // succeeds.
+            let iterator: any TokenIteratorProtocol
+            let capturedSnapshots: [HybridCacheSnapshot]
+            let transientSnapshotsByOffset: [Int: HybridCacheSnapshot]
+            let prefillMs: TimeInterval
+            if let dflash = dflashSnapshot, Self.isDFlashEligible(genParams) {
+                do {
+                    let dflashStart = Date.timeIntervalSinceReferenceDate
+                    let dflashIter = try Self.makeHTTPPrefixCacheDFlashIterator(
+                        dflash: dflash,
+                        context: context,
+                        inputForGeneration: inputForGeneration,
+                        cacheToUse: cacheToUse ?? [],
+                        genParams: genParams,
+                        prefillStepSize: parameters.prefillStepSize ?? 512
+                    )
+                    iterator = dflashIter
+                    capturedSnapshots = dflashIter.capturedSnapshots
+                    transientSnapshotsByOffset = dflashIter.transientSnapshots
+                    prefillMs = Date.timeIntervalSinceReferenceDate - dflashStart
+                } catch {
+                    Log.agent.error("DFlash HTTP prefix-cache path failed; falling back to AR: \(error)")
+                    let (it, ms) = try measure {
+                        try TokenIterator(
+                            input: inputForGeneration,
+                            model: context.model,
+                            cache: cacheToUse,
+                            parameters: genParams
+                        )
+                    }
+                    iterator = it
+                    capturedSnapshots = it.capturedSnapshots
+                    transientSnapshotsByOffset = it.transientSnapshots
+                    prefillMs = ms
+                }
+            } else {
+                let (it, ms) = try measure {
+                    try TokenIterator(
+                        input: inputForGeneration,
+                        model: context.model,
+                        cache: cacheToUse,
+                        parameters: genParams
+                    )
+                }
+                iterator = it
+                capturedSnapshots = it.capturedSnapshots
+                transientSnapshotsByOffset = it.transientSnapshots
+                prefillMs = ms
             }
 
-            // 10. Read captured snapshots (populated by prepare() inside TokenIterator.init),
+            // 10. Read captured snapshots (populated during prefill above),
             // then extract their payloads inside this `container.perform` so
             // `MLXArray.asData()` runs on the Metal-affine thread before the
             // later MainActor store hop.
-            let capturedSnapshots = iterator.capturedSnapshots
             let transientLastMessageBoundarySnapshot = lastMessageBoundaryOffset.flatMap { offset in
-                iterator.transientSnapshots[offset]
+                transientSnapshotsByOffset[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
             let transientLastUserBoundarySnapshot = lastUserBoundaryOffset.flatMap { offset in
-                iterator.transientSnapshots[offset]
+                transientSnapshotsByOffset[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
             let capturedPayloads = Self.extractSnapshotPayloads(
