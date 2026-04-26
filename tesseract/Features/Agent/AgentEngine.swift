@@ -134,11 +134,16 @@ final class AgentEngine {
     ///     with fast chunked prefill. Ignored for non-ParoQuant models.
     ///   - triAttention: Explicit TriAttention request. `nil` falls back to
     ///     ``resolveTriAttentionConfig()``.
+    ///   - modelID: Catalog ID of the model being loaded. Used to resolve the
+    ///     DFlash draft against the *target being loaded* rather than the
+    ///     settings-selected model, which can differ (e.g. an HTTP request
+    ///     overrides the model). Falls back to settings when `nil`.
     func loadModel(
         from directory: URL,
         visionMode: Bool,
         triAttention: TriAttentionConfiguration? = nil,
-        dflashConfig: DFlashLoadConfig? = nil
+        dflashConfig: DFlashLoadConfig? = nil,
+        modelID: String? = nil
     ) async throws {
         guard !isModelLoaded, !isLoading else { return }
 
@@ -147,8 +152,8 @@ final class AgentEngine {
 
         do {
             let resolvedDFlash = dflashConfig
-                ?? settingsManager.flatMap { mgr in
-                    resolveDFlashLoadConfig(targetModelID: mgr.selectedAgentModelID)
+                ?? (modelID ?? settingsManager?.selectedAgentModelID).flatMap { id in
+                    resolveDFlashLoadConfig(targetModelID: id)
                 }
             let (tokenizer, startsThinking) = try await llmActor.loadModel(
                 from: directory,

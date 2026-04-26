@@ -59,19 +59,24 @@ final class InferenceArbiter {
         let requestedTriAttention: TriAttentionConfiguration
         let effectiveTriAttention: TriAttentionConfiguration
         let triAttentionFallbackReason: TriAttentionDenseFallbackReason?
+        /// Captured at load time so toggling the user-facing DFlash setting
+        /// triggers a reload (the existing context can't be rebound at runtime).
+        let dflashEnabled: Bool
 
         init(
             modelID: String,
             visionMode: Bool,
             requestedTriAttention: TriAttentionConfiguration = .v1Disabled,
             effectiveTriAttention: TriAttentionConfiguration = .v1Disabled,
-            triAttentionFallbackReason: TriAttentionDenseFallbackReason? = nil
+            triAttentionFallbackReason: TriAttentionDenseFallbackReason? = nil,
+            dflashEnabled: Bool = false
         ) {
             self.modelID = modelID
             self.visionMode = visionMode
             self.requestedTriAttention = requestedTriAttention
             self.effectiveTriAttention = effectiveTriAttention
             self.triAttentionFallbackReason = triAttentionFallbackReason
+            self.dflashEnabled = dflashEnabled
         }
     }
 
@@ -291,12 +296,14 @@ final class InferenceArbiter {
             let desired = LoadedLLMState(
                 modelID: targetModelID,
                 visionMode: settingsManager.visionModeEnabled,
-                requestedTriAttention: requestedTriAttention
+                requestedTriAttention: requestedTriAttention,
+                dflashEnabled: settingsManager.dflashEnabled
             )
             if loadedSlots.contains(.llm),
                 loadedLLMState?.modelID == desired.modelID,
                 loadedLLMState?.visionMode == desired.visionMode,
-                loadedLLMState?.requestedTriAttention == desired.requestedTriAttention
+                loadedLLMState?.requestedTriAttention == desired.requestedTriAttention,
+                loadedLLMState?.dflashEnabled == desired.dflashEnabled
             {
                 return
             }
@@ -321,7 +328,8 @@ final class InferenceArbiter {
                 visionMode: desired.visionMode,
                 requestedTriAttention: desired.requestedTriAttention,
                 effectiveTriAttention: triAttentionRuntimeSelection.effectiveConfiguration,
-                triAttentionFallbackReason: triAttentionRuntimeSelection.fallbackReason
+                triAttentionFallbackReason: triAttentionRuntimeSelection.fallbackReason,
+                dflashEnabled: desired.dflashEnabled
             )
             if let fallbackReason = triAttentionRuntimeSelection.fallbackReason {
                 Log.general.notice(
@@ -378,7 +386,8 @@ final class InferenceArbiter {
             try await agentEngine.loadModel(
                 from: path,
                 visionMode: visionMode,
-                triAttention: triAttention
+                triAttention: triAttention,
+                modelID: modelID
             )
 
         case .tts:

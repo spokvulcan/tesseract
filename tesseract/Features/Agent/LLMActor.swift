@@ -407,11 +407,15 @@ actor LLMActor {
         )
     }
 
-    /// v0: greedy temperature-zero only. Non-greedy samplers and TriAttention
-    /// fall back to the standard AR iterator.
+    /// v0: greedy temperature-zero only, no penalties, no TriAttention. The
+    /// DFlash iterator builds only `parameters.sampler()` and never calls
+    /// `parameters.processor()`, so any active repetition / presence /
+    /// frequency penalty would be silently dropped — fall back to AR
+    /// instead so the user-specified penalty is honored.
     private nonisolated static func isDFlashEligible(_ parameters: GenerateParameters) -> Bool {
         guard parameters.temperature == 0 else { return false }
         guard !parameters.triAttention.enabled else { return false }
+        guard parameters.processor() == nil else { return false }
         return true
     }
 
