@@ -6,9 +6,11 @@
   production Qwen3.6-27B dims.
 - **M2 (greedy correctness)**: end-to-end pipeline runs and passes the
   relaxed near-AR gate. Target+draft load, hidden-state taps fire, hybrid
-  rollback executes. **1.5× speedup** at **42.8% acceptance** on the
-  64-token harness prompt with `maxTokens=256` (Debug build: 27 vs 18 tok/s);
-  common prefix 89.8%.
+  rollback executes. **1.56× speedup** at **45.5% acceptance** on the
+  64-token harness prompt with `maxTokens=256` (Debug build: 28 vs 18 tok/s),
+  **byte-identical to AR for all 256 tokens** after the post-layer tap fix
+  (see Update 2026-04-26 below). Prior measurement before the tap fix: 1.50×
+  / 42.8% / 230 byte-identical.
 - **M4 skeleton (LLMActor wiring)**: complete. `SettingsManager.dflashEnabled`
   toggle in **Server → Configuration**. `AgentEngine.loadModel` resolves
   `DFlashLoadConfig` from settings, `LLMActor.bindDFlashIfNeeded` loads +
@@ -17,9 +19,45 @@
   in both `startRawGeneration` and `startThinkingContinuation*`. Toggling
   `dflashEnabled` triggers an `InferenceArbiter.reloadLLMIfNeeded()` so
   changes take effect immediately.
-- **Byte-identical to AR**: holds for first **229 tokens**, diverges at 230
-  due to upstream MLX precision drift (see below). Gate is relaxed to
-  near-equivalence — see "Decision" section.
+- **Byte-identical to AR**: holds for **all 256 tokens** in the harness
+  prompt after the post-layer tap fix. Prior status (pre-fix) was 229 byte-
+  identical with divergence at 230; the SDPA precision drift described
+  below is real but did not surface in this rerun, suggesting the tap
+  shift moved the sampled trajectory off the precision-tied logit cliff.
+
+## Update 2026-04-26 — hidden-state tap moved to layer OUTPUT
+
+Initial hypothesis (recorded earlier in this doc) was that Python z-lab
+DFlash hooks `decoder_layer.input_layernorm` via PyTorch's
+`register_forward_hook`, capturing the layernorm's OUTPUT (post-norm).
+Verified against the actual upstream source
+(`https://github.com/z-lab/dflash/blob/main/dflash/model_mlx.py`): they
+do NOT use `register_forward_hook`. They wrap each target decoder layer
+in a custom callable (`_LayerHook`) that stores
+`out = self._layer(*args, **kwargs)` post-call — so the captured tensor
+is the **decoder layer's full output** (post-residual, post-MLP), not
+the post-`input_layernorm` value.
+
+Tested both candidate locations against AR; results on the 64-token
+prompt with `maxTokens=256`:
+
+| Tap location               | Speedup | Acceptance | Common prefix      |
+|----------------------------|---------|------------|--------------------|
+| Layer INPUT (M2 baseline)  | 1.50×   | 42.8%      | 230 / 256 (89.8%)  |
+| Post-`input_layernorm`     | 1.21×   | 32.0%      | 230 / 256 (89.8%)  |
+| Layer OUTPUT (matches z-lab) | 1.56× | 45.5%      | 256 / 256 (100%)   |
+
+Layer-output tap is the correct location and is now what ships.
+Implementation: in `Qwen35TextModelInner.callAsFunction`, fire
+`hiddenStateTap(i, hiddenStates)` AFTER `hiddenStates = layer(…)` runs.
+
+Acceptance is still meaningfully below z-lab's reported ~85%. Likely
+remaining causes (in priority order, NOT addressed in this fix): (1)
+4-bit quantized target vs the BF16 reference the draft was trained
+against, distribution-shifting the captured hidden states; (2)
+sliding-window attention not yet wired for the draft's
+`sliding_attention` layer types. Worth investigating after M4-E2E /
+M5 land.
 
 ## Root cause of the 230-token divergence
 
@@ -97,15 +135,23 @@ not from kernel-level numerics.
    (i.e. after generating ~2K tokens). Wire `RotatingKVCache` for the
    sliding layers before any production use.
 
-3. **Hidden-state tap point.** Python z-lab DFlash hooks
-   `decoder_layer.input_layernorm` (post-norm). Our Swift tap fires
-   pre-norm. The draft was trained on post-norm taps, so this affects
-   draft *quality* (acceptance rate observed at 42.8% vs the ~85%
-   z-lab reports). Move the tap to fire post-`inputLayerNorm` and re-measure.
-   If acceptance jumps, this was the dominant DFlash speed loss.
+3. **Hidden-state tap point.** ~~Move tap from layer-input to
+   post-`inputLayerNorm`.~~ **Resolved 2026-04-26**: verified against
+   z-lab source — they wrap the entire `decoder_layer` and capture its
+   OUTPUT post-call (not the post-input_layernorm value). Tap now fires
+   AFTER each layer runs in `Qwen35TextModelInner`. Acceptance: 42.8%
+   → 45.5%, common prefix: 230 → 256 byte-identical. See "Update
+   2026-04-26" in the Status section.
 
-4. **Acceptance-rate decay.** Acceptance drops from 50% at 128 tokens to
-   ~40% at 232+. Likely correlated with (3); confirm after fixing the tap point.
+4. **Acceptance gap to ~85% z-lab reference.** Even with the corrected
+   tap, acceptance is 45.5% vs z-lab's reported ~85%. The most likely
+   cause is the precision mismatch between the 4-bit quantized target
+   we run and the BF16 reference the draft was trained against — the
+   captured layer outputs distribute-shift under quantization, hurting
+   the draft's predictions even at the right tap point. Secondary
+   suspect: the draft's `sliding_attention` layers running with
+   `KVCacheSimple` (full attention) instead of `RotatingKVCache`. Both
+   are out of scope for the post-norm fix; revisit after M4-E2E lands.
 
 5. **DFlashCorrectnessRunner gate definition.** Pick the relaxed metric and
    bake it in. Suggested: edit distance ≤ 5 over ≥1024 generated tokens, plus
