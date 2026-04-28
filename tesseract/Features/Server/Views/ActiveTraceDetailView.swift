@@ -65,6 +65,8 @@ struct ActiveTraceDetailView: View {
                            value: "\(trace.cachedTokens)")
                 MetricCell(label: "prompt",
                            value: formatOpt(trace.promptTokens))
+                MetricCell(label: "prefill",
+                           value: formatOpt(trace.newTokensToPrefill))
                 MetricCell(label: "out",
                            value: "\(trace.generationTokens)")
                 MetricCell(label: "tok/s",

@@ -200,6 +200,12 @@ private struct PhaseHint: View {
         case .lookingUp:
             return "Scanning radix tree for a reusable KV snapshot."
         case .prefilling:
+            if trace.cachedTokens == 0, let promptTokens = trace.promptTokens {
+                return "Cache miss; processing \(promptTokens) prompt tokens."
+            }
+            if let newTokens = trace.newTokensToPrefill {
+                return "Processing \(newTokens) uncached prompt tokens after reusing \(trace.cachedTokens)."
+            }
             return "Processing the prompt through the model. This can take a while on cold caches and long contexts."
         case .decoding:
             return "First tokens are on the way."

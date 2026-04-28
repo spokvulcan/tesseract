@@ -114,6 +114,67 @@ struct ServerInferenceServiceTests {
         #expect(try await collectText(from: start.stream) == "server path")
     }
 
+    @Test func serverCompatibleChatForwardsProgressBeforeStreamConsumption() async throws {
+        let engine = StubServerInferenceEngine()
+        engine.serverStart = makeStart(textChunks: ["server path"])
+        engine.serverProgressEvents = [
+            .cacheLookupStarted,
+            .cacheLookupFinished(.init(
+                reason: "missNoEntries",
+                cachedTokens: 0,
+                sharedPrefixLength: 0,
+                promptTokens: 4096,
+                newTokensToPrefill: 4096,
+                lookupMs: 2.0,
+                restoreMs: 0
+            )),
+            .prefillStarted(.init(
+                promptTokens: 4096,
+                cachedTokens: 0,
+                newTokensToPrefill: 4096,
+                prefillMs: nil
+            )),
+        ]
+        let log = ServerGenerationLog()
+        let handle = log.startRequest(
+            completionID: "id", model: "m", stream: true, sessionAffinity: nil
+        )
+        log.markLeaseAcquired(handle: handle)
+        let service = ServerInferenceService(
+            engine: engine,
+            modelStateProvider: {
+                ServerInferenceModelState(modelID: "qwen3.5-4b-paro", visionMode: false)
+            }
+        )
+        let prefixConversation = HTTPPrefixCacheConversation(
+            systemPrompt: "System",
+            messages: [.init(role: .user, content: "Hello")]
+        )
+
+        let start = try await service.start(
+            ServerInferenceRequest(
+                input: .chat(.init(
+                    systemPrompt: "System",
+                    messages: [.user(content: "Hello")],
+                    toolSpecs: nil,
+                    prefixCacheConversation: prefixConversation,
+                    progressHandler: CompletionHandler.makeProgressHandler(
+                        activityLog: log,
+                        logHandle: handle
+                    )
+                )),
+                parameters: .default,
+                route: .serverCompatible
+            )
+        )
+
+        #expect(engine.calls[0].progressHandlerForwarded)
+        #expect(log.traces[0].phase == .prefilling)
+        #expect(log.traces[0].cachedTokens == 0)
+        #expect(log.traces[0].newTokensToPrefill == 4096)
+        #expect(try await collectText(from: start.stream) == "server path")
+    }
+
     @Test func serverCompatibleChatWithoutPrefixConversationStillUsesServerPath() async throws {
         let engine = StubServerInferenceEngine()
         engine.serverStart = makeStart(textChunks: ["server fallback"])
@@ -496,6 +557,7 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
         let toolSpecCount: Int
         let modelID: String?
         let usedPrefixCacheConversation: Bool
+        let progressHandlerForwarded: Bool
         let parameters: AgentGenerateParameters
     }
 
@@ -503,6 +565,7 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
     var promptStart = makeStart(textChunks: [])
     var chatStart = makeStart(textChunks: [])
     var serverStart = makeStart(textChunks: [])
+    var serverProgressEvents: [ServerInferenceProgressEvent] = []
 
     func startPromptInference(
         prompt: String,
@@ -516,6 +579,7 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
             toolSpecCount: 0,
             modelID: nil,
             usedPrefixCacheConversation: false,
+            progressHandlerForwarded: false,
             parameters: parameters
         ))
         return promptStart
@@ -535,6 +599,7 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
             toolSpecCount: toolSpecs?.count ?? 0,
             modelID: nil,
             usedPrefixCacheConversation: false,
+            progressHandlerForwarded: false,
             parameters: parameters
         ))
         return chatStart
@@ -546,7 +611,8 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         prefixCacheConversation: HTTPPrefixCacheConversation?,
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart {
         calls.append(.init(
             kind: .serverChat,
@@ -556,8 +622,12 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
             toolSpecCount: toolSpecs?.count ?? 0,
             modelID: modelID,
             usedPrefixCacheConversation: prefixCacheConversation != nil,
+            progressHandlerForwarded: progressHandler != nil,
             parameters: parameters
         ))
+        for event in serverProgressEvents {
+            progressHandler?(event)
+        }
         return serverStart
     }
 }

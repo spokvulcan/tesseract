@@ -270,7 +270,8 @@ struct CompletionHandler: Sendable {
     private func startGeneration(
         _ request: OpenAI.ChatCompletionRequest,
         sessionAffinity: String?,
-        completionID: String
+        completionID: String,
+        logHandle: TraceHandle
     ) async -> Result<StartedGeneration, Error> {
         let modelState = inferenceService.currentModelState() ?? .unavailable
 
@@ -316,7 +317,11 @@ struct CompletionHandler: Sendable {
                     systemPrompt: systemPrompt ?? "",
                     messages: messages,
                     toolSpecs: toolSpecs,
-                    prefixCacheConversation: prefixCacheConversation
+                    prefixCacheConversation: prefixCacheConversation,
+                    progressHandler: Self.makeProgressHandler(
+                        activityLog: activityLog,
+                        logHandle: logHandle
+                    )
                 )),
                 parameters: params,
                 route: .serverCompatible
@@ -390,7 +395,8 @@ struct CompletionHandler: Sendable {
         switch await startGeneration(
             request,
             sessionAffinity: sessionAffinity,
-            completionID: completionID
+            completionID: completionID,
+            logHandle: logHandle
         ) {
         case .success(let started):
             start = started
@@ -532,7 +538,8 @@ struct CompletionHandler: Sendable {
         switch await startGeneration(
             request,
             sessionAffinity: sessionAffinity,
-            completionID: completionID
+            completionID: completionID,
+            logHandle: logHandle
         ) {
         case .success(let started):
             start = started
@@ -765,7 +772,7 @@ struct CompletionHandler: Sendable {
 
     private func recordCacheLookup(start: StartedGeneration, logHandle: TraceHandle) async {
         let diagnostics = start.diagnostics
-        await activityLog.markCacheLookup(
+        await activityLog.markCacheLookupFinished(
             handle: logHandle,
             reason: diagnostics.cacheReason,
             cachedTokens: start.cachedTokenCount,
@@ -773,8 +780,59 @@ struct CompletionHandler: Sendable {
             promptTokens: diagnostics.promptTokenCount,
             lookupMs: diagnostics.lookupMs,
             restoreMs: diagnostics.restoreMs,
+            newTokensToPrefill: max(0, diagnostics.promptTokenCount - start.cachedTokenCount)
+        )
+        await activityLog.markPrefillFinished(
+            handle: logHandle,
             prefillMs: diagnostics.prefillMs
         )
+    }
+
+    static func makeProgressHandler(
+        activityLog: ServerGenerationLog,
+        logHandle: TraceHandle
+    ) -> ServerInferenceProgressHandler {
+        { event in
+            applyProgressEvent(event, activityLog: activityLog, logHandle: logHandle)
+        }
+    }
+
+    @MainActor
+    static func applyProgressEvent(
+        _ event: ServerInferenceProgressEvent,
+        activityLog: ServerGenerationLog,
+        logHandle: TraceHandle
+    ) {
+        switch event {
+        case .cacheLookupStarted:
+            activityLog.markCacheLookupStarted(handle: logHandle)
+        case .cacheLookupFinished(let info):
+            activityLog.markCacheLookupFinished(
+                handle: logHandle,
+                reason: info.reason,
+                cachedTokens: info.cachedTokens,
+                sharedPrefixLength: info.sharedPrefixLength,
+                promptTokens: info.promptTokens,
+                lookupMs: info.lookupMs,
+                restoreMs: info.restoreMs,
+                newTokensToPrefill: info.newTokensToPrefill
+            )
+        case .prefillStarted(let info):
+            activityLog.markPrefillStarted(
+                handle: logHandle,
+                promptTokens: info.promptTokens,
+                cachedTokens: info.cachedTokens,
+                newTokensToPrefill: info.newTokensToPrefill
+            )
+        case .prefillFinished(let info):
+            activityLog.markPrefillFinished(
+                handle: logHandle,
+                prefillMs: info.prefillMs,
+                promptTokens: info.promptTokens,
+                cachedTokens: info.cachedTokens,
+                newTokensToPrefill: info.newTokensToPrefill
+            )
+        }
     }
 
     private func cancelAndDrainGeneration(_ start: StartedGeneration) async {

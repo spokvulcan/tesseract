@@ -102,7 +102,15 @@ final class ServerGenerationLog {
         }
     }
 
-    func markCacheLookup(
+    func markCacheLookupStarted(handle: TraceHandle) {
+        update(handle) { trace in
+            if trace.phase == .queued {
+                trace.phase = .lookingUp
+            }
+        }
+    }
+
+    func markCacheLookupFinished(
         handle: TraceHandle,
         reason: String,
         cachedTokens: Int,
@@ -110,7 +118,7 @@ final class ServerGenerationLog {
         promptTokens: Int,
         lookupMs: Double,
         restoreMs: Double,
-        prefillMs: Double
+        newTokensToPrefill: Int
     ) {
         update(handle) { trace in
             trace.cacheReason = reason
@@ -119,7 +127,41 @@ final class ServerGenerationLog {
             trace.promptTokens = promptTokens
             trace.lookupMs = lookupMs
             trace.restoreMs = restoreMs
-            trace.prefillMs = prefillMs
+            trace.newTokensToPrefill = newTokensToPrefill
+            if trace.phase == .queued {
+                trace.phase = .lookingUp
+            }
+        }
+    }
+
+    func markPrefillStarted(
+        handle: TraceHandle,
+        promptTokens: Int? = nil,
+        cachedTokens: Int? = nil,
+        newTokensToPrefill: Int? = nil
+    ) {
+        update(handle) { trace in
+            if let promptTokens { trace.promptTokens = promptTokens }
+            if let cachedTokens { trace.cachedTokens = cachedTokens }
+            if let newTokensToPrefill { trace.newTokensToPrefill = newTokensToPrefill }
+            if trace.phase == .queued || trace.phase == .lookingUp {
+                trace.phase = .prefilling
+            }
+        }
+    }
+
+    func markPrefillFinished(
+        handle: TraceHandle,
+        prefillMs: Double?,
+        promptTokens: Int? = nil,
+        cachedTokens: Int? = nil,
+        newTokensToPrefill: Int? = nil
+    ) {
+        update(handle) { trace in
+            if let prefillMs { trace.prefillMs = prefillMs }
+            if let promptTokens { trace.promptTokens = promptTokens }
+            if let cachedTokens { trace.cachedTokens = cachedTokens }
+            if let newTokensToPrefill { trace.newTokensToPrefill = newTokensToPrefill }
             if trace.phase == .queued || trace.phase == .lookingUp {
                 trace.phase = .prefilling
             }
@@ -405,6 +447,7 @@ struct RequestTrace: Identifiable, Equatable {
     var cacheReason: String?
     var cachedTokens: Int = 0
     var sharedPrefixLength: Int = 0
+    var newTokensToPrefill: Int?
     var lookupMs: Double?
     var restoreMs: Double?
     var prefillMs: Double?

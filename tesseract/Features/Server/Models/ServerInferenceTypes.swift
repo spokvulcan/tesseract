@@ -1,6 +1,32 @@
 import Foundation
 import MLXLMCommon
 
+typealias ServerInferenceProgressHandler = @MainActor @Sendable (ServerInferenceProgressEvent) -> Void
+
+nonisolated enum ServerInferenceProgressEvent: Sendable, Equatable {
+    case cacheLookupStarted
+    case cacheLookupFinished(CacheLookupInfo)
+    case prefillStarted(PrefillInfo)
+    case prefillFinished(PrefillInfo)
+
+    nonisolated struct CacheLookupInfo: Sendable, Equatable {
+        let reason: String
+        let cachedTokens: Int
+        let sharedPrefixLength: Int
+        let promptTokens: Int
+        let newTokensToPrefill: Int
+        let lookupMs: Double
+        let restoreMs: Double
+    }
+
+    nonisolated struct PrefillInfo: Sendable, Equatable {
+        let promptTokens: Int
+        let cachedTokens: Int
+        let newTokensToPrefill: Int
+        let prefillMs: Double?
+    }
+}
+
 nonisolated struct ServerInferenceModelState: Sendable, Equatable {
     let modelID: String
     let visionMode: Bool
@@ -82,17 +108,20 @@ nonisolated struct ServerInferenceRequest: Sendable {
         let messages: [LLMMessage]
         let toolSpecs: [ToolSpec]?
         let prefixCacheConversation: HTTPPrefixCacheConversation?
+        let progressHandler: ServerInferenceProgressHandler?
 
         init(
             systemPrompt: String,
             messages: [LLMMessage],
             toolSpecs: [ToolSpec]?,
-            prefixCacheConversation: HTTPPrefixCacheConversation?
+            prefixCacheConversation: HTTPPrefixCacheConversation?,
+            progressHandler: ServerInferenceProgressHandler? = nil
         ) {
             self.systemPrompt = systemPrompt
             self.messages = messages
             self.toolSpecs = toolSpecs
             self.prefixCacheConversation = prefixCacheConversation
+            self.progressHandler = progressHandler
         }
     }
 
@@ -131,6 +160,7 @@ protocol ServerInferenceEngine: AnyObject {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         prefixCacheConversation: HTTPPrefixCacheConversation?,
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart
 }

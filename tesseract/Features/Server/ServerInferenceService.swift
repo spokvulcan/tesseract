@@ -91,7 +91,8 @@ final class ServerInferenceService {
                     messages: chat.messages,
                     toolSpecs: chat.toolSpecs,
                     prefixCacheConversation: chat.prefixCacheConversation,
-                    parameters: request.parameters
+                    parameters: request.parameters,
+                    progressHandler: chat.progressHandler
                 )
                 return ServerInferenceStart(start, modelState: modelState)
             }

@@ -234,7 +234,8 @@ final class AgentEngine {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         prefixCacheConversation: HTTPPrefixCacheConversation?,
-        parameters: AgentGenerateParameters = .default
+        parameters: AgentGenerateParameters = .default,
+        progressHandler: ServerInferenceProgressHandler? = nil
     ) async throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
             throw AgentEngineError.modelNotLoaded
@@ -245,7 +246,8 @@ final class AgentEngine {
                 modelID: modelID,
                 conversation: prefixCacheConversation,
                 toolSpecs: toolSpecs,
-                parameters: parameters
+                parameters: parameters,
+                progressHandler: progressHandler
            ) {
             Log.agent.info(
                 "HTTP completion using prefix-cache path — model=\(modelID) "
@@ -836,7 +838,8 @@ extension AgentEngine: ServerInferenceEngine {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         prefixCacheConversation: HTTPPrefixCacheConversation?,
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart {
         try await generateServerTextCompletion(
             modelID: modelID,
@@ -844,7 +847,8 @@ extension AgentEngine: ServerInferenceEngine {
             messages: messages,
             toolSpecs: toolSpecs,
             prefixCacheConversation: prefixCacheConversation,
-            parameters: parameters
+            parameters: parameters,
+            progressHandler: progressHandler
         )
     }
 }

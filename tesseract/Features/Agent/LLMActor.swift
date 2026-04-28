@@ -474,7 +474,8 @@ actor LLMActor {
         modelID: String,
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        progressHandler: ServerInferenceProgressHandler? = nil
     ) async throws -> HTTPServerGenerationStart? {
         guard let container = modelContainer else {
             throw AgentEngineError.modelNotLoaded
@@ -505,7 +506,8 @@ actor LLMActor {
             modelID: modelID,
             parameters: genParams,
             toolSpecs: canonicalTools,
-            prefixCache: prefixCache
+            prefixCache: prefixCache,
+            progressHandler: progressHandler
         )
 
         let mlxStartBox = UnsafeSendableBox(mlxStart)
@@ -1799,7 +1801,8 @@ actor LLMActor {
         modelID: String,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
-        prefixCache: PrefixCacheManager
+        prefixCache: PrefixCacheManager,
+        progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPPrefixCacheGeneration {
         // Canonicalize tools once so the stable-prefix detector and the real
         // prefill tokenize against identical dict representations. Historically
@@ -1919,6 +1922,7 @@ actor LLMActor {
             }
 
             // 5–6. Radix tree lookup + checkpoint planning (single MainActor hop).
+            await progressHandler?(.cacheLookupStarted)
             let lookupStarted = Date.timeIntervalSinceReferenceDate
             let (initialLookupResult, initialCheckpointPlan) = await MainActor.run {
                 prefixCache.lookupAndPlanCheckpoints(
@@ -2040,6 +2044,26 @@ actor LLMActor {
                 skippedTokens = 0
                 checkpointBaseOffset = 0
             }
+            let newTokensToPrefill = fullTokenCount - skippedTokens
+            await progressHandler?(.cacheLookupFinished(.init(
+                reason: String(describing: lookupResult.reason),
+                cachedTokens: skippedTokens,
+                sharedPrefixLength: lookupResult.sharedPrefixLength,
+                promptTokens: fullTokenCount,
+                newTokensToPrefill: newTokensToPrefill,
+                lookupMs: lookupMs * 1000,
+                restoreMs: restoreMs * 1000
+            )))
+            diagnosticsContext.log(PrefixCacheDiagnostics.LookupEvent(
+                reason: lookupResult.reason,
+                promptTokens: fullTokenCount,
+                sharedPrefixLength: lookupResult.sharedPrefixLength,
+                skippedPrefillTokens: skippedTokens,
+                newTokensToPrefill: newTokensToPrefill,
+                lookupMs: lookupMs,
+                restoreMs: restoreMs,
+                plannedCheckpoints: checkpointPlan
+            ))
 
             // 8. Set checkpoint offsets on parameters — flows into TokenIterator → prepare().
             // Planner guarantees offset uniqueness, so uniqueKeysWithValues traps loudly
@@ -2061,6 +2085,12 @@ actor LLMActor {
 
             // 9. Create TokenIterator — this calls model.prepare() internally with checkpoints.
             // NO separate prepare() call. TokenIterator owns prefill.
+            await progressHandler?(.prefillStarted(.init(
+                promptTokens: fullTokenCount,
+                cachedTokens: skippedTokens,
+                newTokensToPrefill: newTokensToPrefill,
+                prefillMs: nil
+            )))
             let (iterator, prefillMs) = try measure {
                 try TokenIterator(
                     input: inputForGeneration,
@@ -2069,6 +2099,12 @@ actor LLMActor {
                     parameters: genParams
                 )
             }
+            await progressHandler?(.prefillFinished(.init(
+                promptTokens: fullTokenCount,
+                cachedTokens: skippedTokens,
+                newTokensToPrefill: newTokensToPrefill,
+                prefillMs: prefillMs * 1000
+            )))
 
             // 10. Read captured snapshots (populated by prepare() inside TokenIterator.init),
             // then extract their payloads inside this `container.perform` so
@@ -2087,16 +2123,6 @@ actor LLMActor {
                 capturedSnapshots,
                 ssdEnabled: ssdEnabled
             )
-            diagnosticsContext.log(PrefixCacheDiagnostics.LookupEvent(
-                reason: lookupResult.reason,
-                promptTokens: fullTokenCount,
-                sharedPrefixLength: lookupResult.sharedPrefixLength,
-                skippedPrefillTokens: skippedTokens,
-                newTokensToPrefill: fullTokenCount - skippedTokens,
-                lookupMs: lookupMs,
-                restoreMs: restoreMs,
-                plannedCheckpoints: checkpointPlan
-            ))
             for snapshot in capturedSnapshots {
                 diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
                     offset: snapshot.tokenOffset,

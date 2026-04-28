@@ -41,13 +41,13 @@ struct ServerGenerationLogTests {
         #expect(log.traces[0].leaseAcquiredAt != nil)
     }
 
-    @Test func cacheLookupRecordsMetadataAndMovesToPrefilling() {
+    @Test func cacheLookupRecordsMetadataWithoutMovingToPrefilling() {
         let log = ServerGenerationLog()
         let handle = log.startRequest(
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
         log.markLeaseAcquired(handle: handle)
-        log.markCacheLookup(
+        log.markCacheLookupFinished(
             handle: handle,
             reason: "hit(directLeaf at 1024/2048)",
             cachedTokens: 1024,
@@ -55,18 +55,104 @@ struct ServerGenerationLogTests {
             promptTokens: 2048,
             lookupMs: 2.3,
             restoreMs: 0.9,
-            prefillMs: 55.0
+            newTokensToPrefill: 1024
         )
 
         let trace = log.traces[0]
-        #expect(trace.phase == .prefilling)
+        #expect(trace.phase == .lookingUp)
         #expect(trace.cacheReason == "hit(directLeaf at 1024/2048)")
         #expect(trace.cachedTokens == 1024)
         #expect(trace.sharedPrefixLength == 1024)
         #expect(trace.promptTokens == 2048)
+        #expect(trace.newTokensToPrefill == 1024)
         #expect(trace.lookupMs == 2.3)
         #expect(trace.restoreMs == 0.9)
+        #expect(trace.prefillMs == nil)
+    }
+
+    @Test func prefillStartedMovesColdMissToPrefillingBeforeOutput() {
+        let log = ServerGenerationLog()
+        let handle = log.startRequest(
+            completionID: "id", model: "m", stream: true, sessionAffinity: nil
+        )
+        log.markLeaseAcquired(handle: handle)
+        log.markCacheLookupFinished(
+            handle: handle,
+            reason: "missNoEntries",
+            cachedTokens: 0,
+            sharedPrefixLength: 0,
+            promptTokens: 4096,
+            lookupMs: 1.2,
+            restoreMs: 0,
+            newTokensToPrefill: 4096
+        )
+        log.markPrefillStarted(
+            handle: handle,
+            promptTokens: 4096,
+            cachedTokens: 0,
+            newTokensToPrefill: 4096
+        )
+
+        let trace = log.traces[0]
+        #expect(trace.phase == .prefilling)
+        #expect(trace.firstTokenAt == nil)
+        #expect(trace.cachedTokens == 0)
+        #expect(trace.newTokensToPrefill == 4096)
+    }
+
+    @Test func prefillFinishedRecordsTiming() {
+        let log = ServerGenerationLog()
+        let handle = log.startRequest(
+            completionID: "id", model: "m", stream: true, sessionAffinity: nil
+        )
+        log.markLeaseAcquired(handle: handle)
+        log.markPrefillStarted(
+            handle: handle,
+            promptTokens: 2048,
+            cachedTokens: 512,
+            newTokensToPrefill: 1536
+        )
+        log.markPrefillFinished(handle: handle, prefillMs: 55.0)
+
+        let trace = log.traces[0]
+        #expect(trace.phase == .prefilling)
         #expect(trace.prefillMs == 55.0)
+    }
+
+    @Test func progressLifecycleReachesDecodingFromPrefill() {
+        let log = ServerGenerationLog()
+        let handle = log.startRequest(
+            completionID: "id", model: "m", stream: true, sessionAffinity: nil
+        )
+        log.markLeaseAcquired(handle: handle)
+        #expect(log.traces[0].phase == .lookingUp)
+
+        log.markCacheLookupStarted(handle: handle)
+        #expect(log.traces[0].phase == .lookingUp)
+
+        log.markCacheLookupFinished(
+            handle: handle,
+            reason: "hit",
+            cachedTokens: 256,
+            sharedPrefixLength: 512,
+            promptTokens: 1024,
+            lookupMs: 2,
+            restoreMs: 1,
+            newTokensToPrefill: 768
+        )
+        #expect(log.traces[0].phase == .lookingUp)
+
+        log.markPrefillStarted(
+            handle: handle,
+            promptTokens: 1024,
+            cachedTokens: 256,
+            newTokensToPrefill: 768
+        )
+        #expect(log.traces[0].phase == .prefilling)
+
+        log.ingest(handle: handle, event: .text("x"))
+        log.flushPending(handle: handle)
+        #expect(log.traces[0].phase == .decoding)
     }
 
     @Test func firstTextTokenFlipsPhaseToDecodingAndRecordsFirstTokenAt() {
