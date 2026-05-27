@@ -311,7 +311,8 @@ actor LLMActor {
     func startRawGeneration(
         input: sending UserInput,
         toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        progressHandler: ServerInferenceProgressHandler? = nil
     ) async throws -> HTTPServerRawGenerationStart {
         guard let container = modelContainer else {
             throw AgentEngineError.modelNotLoaded
@@ -325,14 +326,41 @@ actor LLMActor {
         // parsing reads this schema via `XMLFunctionParser.parse(content:tools:)`.
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
         return try await container.perform(nonSendable: input) { context, input in
+            await progressHandler?(.cacheLookupStarted)
+            let lookupStarted = Date.timeIntervalSinceReferenceDate
             let prepared = try await context.processor.prepare(input: input)
+            let lookupMs = (Date.timeIntervalSinceReferenceDate - lookupStarted) * 1000
+            let promptTokenCount = prepared.text.tokens.size
+            await progressHandler?(.cacheLookupFinished(.init(
+                reason: "standardGenerationNoPrefixCache",
+                cachedTokens: 0,
+                sharedPrefixLength: 0,
+                promptTokens: promptTokenCount,
+                newTokensToPrefill: promptTokenCount,
+                lookupMs: lookupMs,
+                restoreMs: 0
+            )))
+            await progressHandler?(.prefillStarted(.init(
+                promptTokens: promptTokenCount,
+                cachedTokens: 0,
+                newTokensToPrefill: promptTokenCount,
+                prefillMs: nil
+            )))
+            let prefillStarted = Date.timeIntervalSinceReferenceDate
             let iterator = try TokenIterator(
                 input: prepared,
                 model: context.model,
                 parameters: genParams
             )
+            let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
+            await progressHandler?(.prefillFinished(.init(
+                promptTokens: promptTokenCount,
+                cachedTokens: 0,
+                newTokensToPrefill: promptTokenCount,
+                prefillMs: prefillMs
+            )))
             let (stream, completion) = MLXLMCommon.generateTask(
-                promptTokenCount: prepared.text.tokens.size,
+                promptTokenCount: promptTokenCount,
                 modelConfiguration: context.configuration,
                 tokenizer: context.tokenizer,
                 iterator: iterator,

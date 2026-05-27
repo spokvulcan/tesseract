@@ -269,7 +269,8 @@ final class AgentEngine {
         return try startManagedHTTPFallbackGeneration(
             input: input,
             toolSpecs: toolSpecs,
-            parameters: parameters
+            parameters: parameters,
+            progressHandler: progressHandler
         )
     }
 
@@ -463,7 +464,8 @@ final class AgentEngine {
     private func startManagedHTTPFallbackGeneration(
         input: UserInput,
         toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        progressHandler: ServerInferenceProgressHandler?
     ) throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
             throw AgentEngineError.modelNotLoaded
@@ -478,7 +480,8 @@ final class AgentEngine {
             try await actor.startRawGeneration(
                 input: input,
                 toolSpecs: toolSpecs,
-                parameters: parameters
+                parameters: parameters,
+                progressHandler: progressHandler
             )
         }
     }
