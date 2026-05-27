@@ -37,8 +37,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 Not unit tests — these run against a real model.
 
 ```bash
-scripts/dev.sh prefix-cache-e2e          # Task 1.8 PrefixCacheE2ERunner — TTFT/output equivalence proxy
-scripts/dev.sh hybrid-cache-correctness  # Task 2.2 HybridCacheCorrectnessRunner — bitwise logit + state equivalence
+scripts/dev.sh prefix-cache-e2e          # PrefixCacheE2ERunner — TTFT/output equivalence proxy
+scripts/dev.sh hybrid-cache-correctness  # HybridCacheCorrectnessRunner — bitwise logit + state equivalence
 ```
 
 Both exit non-zero on any failed check. Run before releases and after any change
