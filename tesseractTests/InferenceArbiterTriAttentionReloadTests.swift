@@ -23,8 +23,6 @@ struct InferenceArbiterTriAttentionReloadTests {
         InferenceArbiter(
             agentEngine: AgentEngine(),
             speechEngine: SpeechEngine(),
-            imageGenEngine: ImageGenEngine(),
-            zimageGenEngine: ZImageGenEngine(),
             settingsManager: settings,
             modelDownloadManager: ModelDownloadManager()
         )

@@ -200,7 +200,7 @@ cmd_dev_profile() {
     app_path=$(find_app "$configuration") || return 1
     kill_app
     echo "Launching $app_path with profiling..."
-    open "$app_path" --args --flux2-profile --qwen3tts-profile
+    open "$app_path" --args --qwen3tts-profile
     echo "App launched with profiling enabled."
     print_data_paths
 }
@@ -347,7 +347,7 @@ usage() {
     echo "  run         Kill running app + launch the built app (Debug)"
     echo "  dev         Build + kill + run using Debug (fast iteration)"
     echo "  dev-release Build + kill + run using Release (perf testing)"
-    echo "  dev-profile Build + kill + run with profiling (FLUX2_PROFILE=1, QWEN3TTS_PROFILE=1)"
+    echo "  dev-profile Build + kill + run with profiling (QWEN3TTS_PROFILE=1)"
     echo "  prefix-cache-e2e         Build + run Task 1.8 HybridPrefixCacheE2E (loaded-model cache verification)"
     echo "  hybrid-cache-correctness Build + run Task 2.2 logit-equivalence harness (mid-prefill restore bitwise check)"
     echo "  prefill-step-benchmark   Build + run Task 3.2 prefill-step-size benchmark sweep"

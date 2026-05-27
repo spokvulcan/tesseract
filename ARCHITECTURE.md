@@ -112,7 +112,6 @@ tesseract/
 │   ├── Settings/
 │   │   ├── SettingsManager.swift      # @Observable, manual UserDefaults
 │   │   └── SettingsView.swift         # Settings UI sections
-│   ├── ImageGen/                      # FLUX image generation (hidden)
 │   └── Models/                        # Model download management
 │
 └── Models/                      # Shared data types
@@ -187,7 +186,7 @@ final class SettingsManager {
 //   .injectDictationDependencies(...)  — coordinator, engine, history, audio
 //   .injectSpeechDependencies(...)     — coordinator, engine
 //   .injectAgentDependencies(...)      — coordinator, engine, conversation store
-//   .injectModelDependencies(...)      — download manager, image gen
+//   .injectModelDependencies(...)      — download manager, inference arbiter
 ```
 
 AppKit consumers (MenuBarManager, panel controllers) receive dependencies via constructor injection — they cannot use `@Environment`.

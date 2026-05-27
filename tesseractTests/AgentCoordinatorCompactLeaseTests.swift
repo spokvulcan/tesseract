@@ -82,8 +82,6 @@ struct AgentCoordinatorCompactLeaseTests {
         let arbiter = InferenceArbiter(
             agentEngine: AgentEngine(),
             speechEngine: SpeechEngine(),
-            imageGenEngine: ImageGenEngine(),
-            zimageGenEngine: ZImageGenEngine(),
             settingsManager: settings,
             modelDownloadManager: ModelDownloadManager()
         )

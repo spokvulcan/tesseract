@@ -29,7 +29,7 @@ On-Device Intelligence
 
 ## Promotional Text (170 chars max)
 
-AI that lives on your Mac. Dictation, text-to-speech, image generation, and more — powered by open models, processed entirely on-device. No cloud. No accounts. Just you.
+AI that lives on your Mac. Dictation, text-to-speech, and more — powered by open models, processed entirely on-device. No cloud. No accounts. Just you.
 
 ## Description
 
@@ -42,10 +42,6 @@ Press a hotkey, speak, release. Your words are transcribed with Whisper and type
 Speech
 
 Natural text-to-speech powered by Qwen3-TTS. Hear any text read aloud with consistent, high-quality voice synthesis — generated in real time, entirely on-device.
-
-Image Generation
-
-Create images from text descriptions using on-device diffusion models. No waiting for a server, no usage limits, no content filtering by a third party.
 
 What's Next
 
@@ -61,7 +57,7 @@ Built Different
 
 ## Keywords (100 chars max)
 
-dictation,voice,tts,speech,ai,offline,privacy,whisper,image,generation,local,llm,productivity,mac
+dictation,voice,tts,speech,ai,offline,privacy,whisper,local,llm,productivity,mac
 
 ## Category
 

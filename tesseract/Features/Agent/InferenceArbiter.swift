@@ -11,17 +11,14 @@ import os
 /// Which model occupies a GPU slot.
 ///
 /// Co-resident slots (`.llm`, `.tts`) can coexist in memory.
-/// Exclusive slots (`.imageGen`) evict all co-residents when loaded.
 enum ModelSlot: Sendable, Hashable, CustomStringConvertible {
     case llm
     case tts
-    case imageGen
 
     var description: String {
         switch self {
         case .llm: "llm"
         case .tts: "tts"
-        case .imageGen: "imageGen"
         }
     }
 }
@@ -34,8 +31,6 @@ enum ModelSlot: Sendable, Hashable, CustomStringConvertible {
 /// Memory residency model:
 ///   - LLM + TTS are co-resident (independently lazy-loaded, both allowed in
 ///     memory simultaneously). Neither evicts the other.
-///   - ImageGen is exclusive (evicts co-resident models when loaded, and
-///     co-resident loads evict ImageGen). Prototype-only, hidden from UI.
 ///   - STT (WhisperKit) runs on CoreML in a separate memory pool — not managed here.
 @Observable @MainActor
 final class InferenceArbiter {
@@ -46,7 +41,6 @@ final class InferenceArbiter {
         var slots: Set<ModelSlot> = []
         if agentEngine.isModelLoaded { slots.insert(.llm) }
         if speechEngine.isModelLoaded { slots.insert(.tts) }
-        if imageGenEngine.isModelLoaded || zimageGenEngine.isModelLoaded { slots.insert(.imageGen) }
         return slots
     }
 
@@ -94,23 +88,17 @@ final class InferenceArbiter {
 
     private let agentEngine: AgentEngine
     private let speechEngine: SpeechEngine
-    private let imageGenEngine: ImageGenEngine
-    private let zimageGenEngine: ZImageGenEngine
     private let settingsManager: SettingsManager
     private let modelDownloadManager: ModelDownloadManager
 
     init(
         agentEngine: AgentEngine,
         speechEngine: SpeechEngine,
-        imageGenEngine: ImageGenEngine,
-        zimageGenEngine: ZImageGenEngine,
         settingsManager: SettingsManager,
         modelDownloadManager: ModelDownloadManager
     ) {
         self.agentEngine = agentEngine
         self.speechEngine = speechEngine
-        self.imageGenEngine = imageGenEngine
-        self.zimageGenEngine = zimageGenEngine
         self.settingsManager = settingsManager
         self.modelDownloadManager = modelDownloadManager
     }
@@ -258,22 +246,9 @@ final class InferenceArbiter {
         }
     }
 
-    /// Releases whichever image engine the caller does NOT need.
-    /// Call inside a `withExclusiveGPU(.imageGen)` body before loading your engine,
-    /// so that only one image pipeline is resident at a time.
-    enum ImageEngine { case flux, zImage }
-    func releaseOtherImageEngine(keeping: ImageEngine) {
-        switch keeping {
-        case .flux:
-            if zimageGenEngine.isModelLoaded { zimageGenEngine.releaseModel() }
-        case .zImage:
-            if imageGenEngine.isModelLoaded { imageGenEngine.releaseModel() }
-        }
-    }
-
     // MARK: - Model Management
 
-    /// Load a model slot. Co-resident slots coexist; ImageGen is exclusive.
+    /// Load a model slot. Co-resident slots coexist.
     /// For `.llm`: checks if the loaded model ID and vision mode match the
     /// target. The target model ID is `llmModelIDOverride` when the caller
     /// passed one (HTTP requests honoring `request.model`), otherwise the
@@ -301,7 +276,6 @@ final class InferenceArbiter {
                 return
             }
             // Model or vision mode changed, or not loaded — (re)load
-            if loadedSlots.contains(.imageGen) { unload(.imageGen) }
             if loadedSlots.contains(.llm) { unload(.llm) }
             // Drain the detached unload task before the next load. Without
             // this, the actor-level `llmActor.unloadModel()` can interleave
@@ -335,17 +309,7 @@ final class InferenceArbiter {
 
         case .tts:
             if loadedSlots.contains(.tts) { return }
-            if loadedSlots.contains(.imageGen) { unload(.imageGen) }
             try await loadSlot(.tts)
-
-        case .imageGen:
-            // Exclusive — evict co-resident models (LLM, TTS).
-            // Don't early-return when an image engine is already loaded: the caller
-            // may need a different image engine (Flux vs Z-Image) and will load it
-            // inside the lease body. We only guarantee co-residents are cleared.
-            if loadedSlots.contains(.llm) { unload(.llm) }
-            if loadedSlots.contains(.tts) { unload(.tts) }
-            loadedLLMState = nil
         }
     }
 
@@ -384,12 +348,6 @@ final class InferenceArbiter {
         case .tts:
             Log.general.info("InferenceArbiter: loading TTS model")
             try await speechEngine.loadModel()
-
-        case .imageGen:
-            // ImageGen loading requires a model path — callers must load manually
-            // for now since there's no standardized model ID for image gen.
-            // The arbiter manages eviction; ImageGen UI handles its own loading.
-            break
         }
     }
 
@@ -403,15 +361,6 @@ final class InferenceArbiter {
         case .tts:
             speechEngine.unloadModel()
             Log.general.info("InferenceArbiter: unloaded TTS")
-
-        case .imageGen:
-            if imageGenEngine.isModelLoaded {
-                imageGenEngine.releaseModel()
-            }
-            if zimageGenEngine.isModelLoaded {
-                zimageGenEngine.releaseModel()
-            }
-            Log.general.info("InferenceArbiter: unloaded ImageGen")
         }
     }
 }

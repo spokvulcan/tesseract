@@ -55,8 +55,6 @@ final class DependencyContainer: ObservableObject {
         InferenceArbiter(
             agentEngine: agentEngine,
             speechEngine: speechEngine,
-            imageGenEngine: imageGenEngine,
-            zimageGenEngine: zimageGenEngine,
             settingsManager: settingsManager,
             modelDownloadManager: modelDownloadManager
         )
@@ -147,10 +145,6 @@ final class DependencyContainer: ObservableObject {
             )
         )
     }()
-
-    // Image Generation
-    lazy var imageGenEngine = ImageGenEngine()
-    lazy var zimageGenEngine = ZImageGenEngine()
 
     // Speech (TTS)
     lazy var textExtractor = TextExtractor()

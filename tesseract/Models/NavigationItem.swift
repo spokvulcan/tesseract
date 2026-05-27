@@ -10,8 +10,6 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case speech
     case agent
     case scheduled
-    case image
-    case zimage
     case general
     case serverDashboard
     case serverConfiguration
@@ -31,8 +29,6 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .speech: "Speech"
         case .agent: "Agent"
         case .scheduled: "Scheduled"
-        case .image: "Image"
-        case .zimage: "Z-Image"
         case .general: "General"
         case .serverDashboard: "Dashboard"
         case .serverConfiguration: "Configuration"
@@ -48,8 +44,6 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .speech: "speaker.wave.3.fill"
         case .agent: "brain.head.profile"
         case .scheduled: "calendar.badge.clock"
-        case .image: "photo.fill"
-        case .zimage: "photo.artframe"
         case .general: "gear"
         case .serverDashboard: "gauge"
         case .serverConfiguration: "server.rack"
@@ -70,10 +64,6 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
             AgentContentView()
         case .scheduled:
             ScheduledTasksView()
-        case .image:
-            ImageGenContentView()
-        case .zimage:
-            ZImageGenContentView()
         case .general:
             GeneralSettingsSection()
         case .serverDashboard:

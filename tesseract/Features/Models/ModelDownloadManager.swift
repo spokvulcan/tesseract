@@ -145,8 +145,8 @@ final class ModelDownloadManager: ObservableObject {
                         pathPrefix: pathPrefix
                     )
                 } else if requiredExtension == "safetensors" {
-                    // Repos with nested directories (e.g. FLUX with transformer/, vae/,
-                    // scheduler/ subdirs) fail with downloadSnapshot due to file/directory
+                    // Repos with nested directories (transformer/, vae/, scheduler/
+                    // subdirs) fail with downloadSnapshot due to file/directory
                     // naming conflicts. Download files individually instead.
                     try await self?.downloadFileByFile(
                         modelID: modelID,

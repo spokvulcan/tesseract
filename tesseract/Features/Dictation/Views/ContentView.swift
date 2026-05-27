@@ -56,12 +56,6 @@ struct ContentView: View {
         case .scheduled:
             ScheduledTasksView()
                 .injectAgentDependencies(from: container)
-        case .image:
-            ImageGenContentView()
-                .injectModelDependencies(from: container)
-        case .zimage:
-            ZImageGenContentView()
-                .injectModelDependencies(from: container)
         case .general:
             GeneralSettingsSection()
         case .serverDashboard:
