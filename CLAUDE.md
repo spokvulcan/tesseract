@@ -157,3 +157,17 @@ private let logger = Logger(subsystem: "app.tesseract.agent", category: "mylib")
 - `docs/macos26-swiftui-architecture-review.md` — Architecture review and modernization plan (Observation migration, Window scene, modularity decisions)
 - `docs/marconi-hybrid-prefix-cache-implementation-plan.md` — Prefix cache design (Phase 1 shipped 2026-04-12; Phase 2 is Marconi utility-scored eviction). Read this before touching `LLMActor.generateServerTextCompletion`, `PrefixCacheManager`, `TokenRadixTree`, `StablePrefixDetector`, or `HybridCacheSnapshot`.
 - `docs/` — TTS streaming/performance, image gen, agent prompt engineering research, tool call XML reconstruction
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (`spokvulcan/tesseract`) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
