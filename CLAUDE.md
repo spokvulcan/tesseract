@@ -19,8 +19,7 @@ an on-device tool-calling LLM agent). macOS 26+, Swift 6.2 / SwiftUI.
 
 - Architecture → `ARCHITECTURE.md`
 - Tests & suites → `docs/testing.md`
-- Prefix cache → `docs/marconi-hybrid-prefix-cache-implementation-plan.md`
-- Deeper design notes → `docs/`
+- Decisions & domain → `CONTEXT.md`, `docs/adr/`
 
 ## Agent skills
 
