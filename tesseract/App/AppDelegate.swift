@@ -7,21 +7,16 @@ import Foundation
 import AppKit
 import Observation
 import SwiftUI
-import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var observationTask: Task<Void, Never>?
-    private var badgeObservationTask: Task<Void, Never>?
     private var terminationTask: Task<Void, Never>?
     var container: DependencyContainer?
     var menuBarManager: MenuBarManager?
     private weak var trackedMainWindow: NSWindow?
     private var navigationSelection: Binding<NavigationItem?>?
     var onOpenWindow: (() -> Void)?
-    /// Stores the session ID from a notification click. Survives cold launch —
-    /// TesseractApp reads it after setup and forwards to schedulingService.
-    var pendingBackgroundSessionId: UUID?
     private var hasSetupWithContainer = false
     private var isRunningUnderTests: Bool {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -33,9 +28,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Setup window lifecycle tracking
         setupWindowTracking()
-
-        // Register as notification delegate so we handle clicks and foreground presentation
-        UNUserNotificationCenter.current().delegate = self
 
         // Setup will be done by the App struct after container is created
     }
@@ -100,7 +92,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarManager?.coordinator = container.dictationCoordinator
         menuBarManager?.history = container.transcriptionHistory
         menuBarManager?.speechCoordinator = container.speechCoordinator
-        menuBarManager?.schedulingService = container.schedulingService
         menuBarManager?.onShowMainWindow = { [weak self] in
             self?.showMainWindow()
         }
@@ -123,14 +114,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Subscribe to unread result count for menu bar badge
-        badgeObservationTask = Task { [weak self] in
-            guard let container = self?.container else { return }
-            for await count in Observations({ container.schedulingService.unreadResultCount }) {
-                self?.menuBarManager?.unreadBadgeCount = count
-            }
-        }
-
         // Apply initial dock visibility (didSet doesn't fire during SettingsManager.init)
         container.settingsManager.applyDockVisibility()
     }
@@ -145,15 +128,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showMainWindow()
         }
         return true
-    }
-
-    func applicationDidBecomeActive(_ notification: Notification) {
-        // Re-check notification permission in case the user changed it in System Settings
-        Task {
-            guard let container else { return }
-            let authorized = await container.permissionsManager.checkNotificationPermission()
-            container.notificationService.syncAuthorization(authorized)
-        }
     }
 
     func applicationWillResignActive(_ notification: Notification) {
@@ -177,8 +151,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminationTask = nil
         observationTask?.cancel()
         observationTask = nil
-        badgeObservationTask?.cancel()
-        badgeObservationTask = nil
         menuBarManager?.teardownMenuBar()
     }
 
@@ -218,39 +190,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func navigateToAgent() {
         navigationSelection?.wrappedValue = .agent
         showMainWindow()
-    }
-}
-
-// MARK: - UNUserNotificationCenterDelegate
-
-extension AppDelegate: UNUserNotificationCenterDelegate {
-
-    nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
-    }
-
-    nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
-        let userInfo = response.notification.request.content.userInfo
-        let sessionIdString = userInfo[NotificationService.sessionIdKey] as? String
-
-        await MainActor.run {
-            navigateToAgent()
-
-            if let sessionIdString, let sessionId = UUID(uuidString: sessionIdString) {
-                if let service = container?.schedulingService {
-                    // Warm launch: forward directly, no need to store on AppDelegate
-                    service.pendingBackgroundSessionId = sessionId
-                } else {
-                    // Cold launch: stash for TesseractApp to forward after setup
-                    pendingBackgroundSessionId = sessionId
-                }
-            }
-        }
     }
 }

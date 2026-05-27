@@ -25,11 +25,6 @@ final class AgentCoordinator {
     private(set) var voiceState: AgentVoiceState = .idle
     var error: String?
 
-    // Background session viewing (read-only mode for notification deep-links)
-    private(set) var isViewingBackgroundSession: Bool = false
-    private(set) var viewingSessionId: UUID?
-    private(set) var viewingSessionName: String?
-
     // System prompt transparency
     private(set) var assembledSystemPrompt: String = ""
     private(set) var rawChatMLPrompt: String?
@@ -64,7 +59,6 @@ final class AgentCoordinator {
     private let speechCoordinator: SpeechCoordinator?
     private let arbiter: InferenceArbiter?
     private let formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))?
-    @ObservationIgnored var loadBackgroundSessionById: (@MainActor (UUID) async throws -> (messages: [any AgentMessageProtocol & Sendable], name: String))?
     private let debugLogger = AgentDebugLogger()
 
     // MARK: - Slash Commands
@@ -445,13 +439,7 @@ final class AgentCoordinator {
 
     func newConversation() {
         cancelGeneration()
-        if isViewingBackgroundSession {
-            // Exit read-only mode without persisting background messages
-            isViewingBackgroundSession = false
-            viewingSessionName = nil
-        } else {
-            persistCurrentConversation()
-        }
+        persistCurrentConversation()
         conversationStore.createNew()
         agent.resetMessages([])
         resetState()
@@ -464,12 +452,7 @@ final class AgentCoordinator {
 
     func loadConversation(_ id: UUID) {
         cancelGeneration()
-        if isViewingBackgroundSession {
-            isViewingBackgroundSession = false
-            viewingSessionName = nil
-        } else {
-            persistCurrentConversation()
-        }
+        persistCurrentConversation()
         conversationStore.load(id: id)
         if let current = conversationStore.currentConversation {
             agent.loadMessages(current.messages)
@@ -500,52 +483,6 @@ final class AgentCoordinator {
 
     func clearConversation() {
         newConversation()
-    }
-
-    // MARK: - Background Session Viewing
-
-    @discardableResult
-    func openBackgroundSession(id: UUID) async -> Bool {
-        guard let loader = loadBackgroundSessionById else {
-            error = "Background session loading not available"
-            return false
-        }
-        do {
-            let (messages, name) = try await loader(id)
-            cancelGeneration()
-            if !isViewingBackgroundSession {
-                persistCurrentConversation()
-            }
-            agent.loadMessages(messages)
-            resetState()
-            rebuildRows()
-            isViewingBackgroundSession = true
-            viewingSessionId = id
-            viewingSessionName = name
-            error = nil
-            debugLogger.reset()
-            Log.agent.info("Viewing background session '\(name)' with \(self.rows.count) rows")
-            return true
-        } catch {
-            self.error = "Failed to load background session"
-            Log.agent.error("Failed to load background session \(id): \(error)")
-            return false
-        }
-    }
-
-    func dismissBackgroundSession() {
-        isViewingBackgroundSession = false
-        viewingSessionId = nil
-        viewingSessionName = nil
-        error = nil
-        // Restore the previous conversation
-        if let current = conversationStore.currentConversation {
-            agent.loadMessages(current.messages)
-        } else {
-            agent.resetMessages([])
-        }
-        resetState()
-        rebuildRows()
     }
 
     // MARK: - Voice Input

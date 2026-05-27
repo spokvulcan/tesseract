@@ -7,7 +7,6 @@ import SwiftUI
 
 struct SidebarView: View {
     @Binding var selection: NavigationItem?
-    @Environment(SchedulingService.self) private var schedulingService
 
     var body: some View {
         List(selection: $selection) {
@@ -16,7 +15,6 @@ struct SidebarView: View {
                     NavigationLink(value: page) {
                         Label(page.name, systemImage: page.symbolName)
                     }
-                    .badge(page == .scheduled ? schedulingService.unreadResultCount : 0)
                 }
             }
 

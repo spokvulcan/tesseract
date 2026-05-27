@@ -142,8 +142,7 @@ struct ContextManagerCompactionTests {
 
     /// When the context exceeds budget, the transform must route through the
     /// injected `summarize` closure and mark the result as mutated. This is
-    /// the exact wiring `AgentFactory` and `BackgroundAgentFactory` use for
-    /// the live chat and background agent paths.
+    /// the exact wiring `AgentFactory` uses for the live chat path.
     @Test func compactionTransformRoutesThroughInjectedSummarizeWhenOverBudget() async throws {
         let manager = ContextManager(settings: .small)
         let recorder = SummarizeRecorder()

@@ -15,23 +15,18 @@ final class MenuBarManager: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var historyObservationTask: Task<Void, Never>?
     private var settingsObservationTask: Task<Void, Never>?
-    private var schedulingObservationTask: Task<Void, Never>?
     private weak var toggleItem: NSMenuItem?
     private weak var copyLastItem: NSMenuItem?
     private weak var speakItem: NSMenuItem?
     private weak var talkItem: NSMenuItem?
-    private weak var pauseSchedulingItem: NSMenuItem?
 
     @Published var isRecording = false
     @Published var hasHistory = false
-    @Published var isSchedulingPaused = false
-    var unreadBadgeCount: Int = 0 { didSet { updateBadge() } }
 
     let settings: SettingsManager
     weak var coordinator: DictationCoordinator?
     weak var history: TranscriptionHistory?
     weak var speechCoordinator: SpeechCoordinator?
-    weak var schedulingService: SchedulingService?
 
     var onShowMainWindow: (() -> Void)?
     var onShowSettings: (() -> Void)?
@@ -73,14 +68,6 @@ final class MenuBarManager: ObservableObject {
             }
         }
 
-        schedulingObservationTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            for await isPaused in Observations({ self.schedulingService?.isPaused ?? false }) {
-                self.isSchedulingPaused = isPaused
-                self.updateMenuItems()
-            }
-        }
-
         applyCurrentSettings()
     }
 
@@ -89,8 +76,6 @@ final class MenuBarManager: ObservableObject {
         historyObservationTask = nil
         settingsObservationTask?.cancel()
         settingsObservationTask = nil
-        schedulingObservationTask?.cancel()
-        schedulingObservationTask = nil
         if let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
@@ -99,8 +84,6 @@ final class MenuBarManager: ObservableObject {
         copyLastItem = nil
         speakItem = nil
         talkItem = nil
-        pauseSchedulingItem = nil
-        badgeLabel = nil
     }
 
     func updateState(from dictationState: DictationState) {
@@ -125,54 +108,6 @@ final class MenuBarManager: ObservableObject {
         }
     }
 
-    private var badgeLabel: NSTextField?
-
-    private func updateBadge() {
-        guard let button = statusItem?.button else { return }
-
-        guard unreadBadgeCount > 0 else {
-            badgeLabel?.removeFromSuperview()
-            badgeLabel = nil
-            button.setAccessibilityValue(nil)
-            return
-        }
-
-        let text = unreadBadgeCount > 99 ? "99+" : "\(unreadBadgeCount)"
-        let badgeFont = NSFont.monospacedSystemFont(ofSize: 8, weight: .bold)
-
-        if let existing = badgeLabel {
-            // Update in place
-            existing.stringValue = text
-        } else {
-            // Create badge label once
-            let label = NSTextField(labelWithString: text)
-            label.font = badgeFont
-            label.textColor = .white
-            label.alignment = .center
-            label.backgroundColor = .systemRed
-            label.isBezeled = false
-            label.isEditable = false
-            label.wantsLayer = true
-            label.layer?.masksToBounds = true
-            label.layer?.backgroundColor = NSColor.systemRed.cgColor
-            button.addSubview(label)
-            badgeLabel = label
-        }
-
-        // Size and position badge
-        let textWidth = NSAttributedString(string: text, attributes: [.font: badgeFont]).size().width
-        let width = max(textWidth + 4, 14)
-        let height: CGFloat = 14
-        badgeLabel?.frame = NSRect(
-            x: button.bounds.width - width + 2,
-            y: button.bounds.height - height,
-            width: width,
-            height: height
-        )
-        badgeLabel?.layer?.cornerRadius = height / 2
-        button.setAccessibilityValue("\(unreadBadgeCount) unread")
-    }
-
     private func updateMenuItems() {
         guard statusItem != nil else { return }
 
@@ -184,7 +119,6 @@ final class MenuBarManager: ObservableObject {
         copyLastItem?.isEnabled = hasHistory
         speakItem?.title = "Speak Selected Text (\(settings.ttsHotkey.displayString))"
         talkItem?.title = "Talk to Tesse (\(settings.agentHotkey.displayString))"
-        pauseSchedulingItem?.title = isSchedulingPaused ? "Resume Agent Scheduling" : "Pause Agent Scheduling"
     }
 
     private func applyCurrentSettings() {
@@ -205,7 +139,6 @@ final class MenuBarManager: ObservableObject {
             copyLastItem = nil
             speakItem = nil
             talkItem = nil
-            pauseSchedulingItem = nil
         }
     }
 
@@ -252,17 +185,6 @@ final class MenuBarManager: ObservableObject {
         talkItem.target = self
         menu.addItem(talkItem)
         self.talkItem = talkItem
-
-        menu.addItem(NSMenuItem.separator())
-        
-        let pauseItem = NSMenuItem(
-            title: "Pause Agent Scheduling",
-            action: #selector(toggleSchedulingPause),
-            keyEquivalent: ""
-        )
-        pauseItem.target = self
-        menu.addItem(pauseItem)
-        self.pauseSchedulingItem = pauseItem
 
         menu.addItem(NSMenuItem.separator())
 
@@ -321,13 +243,5 @@ final class MenuBarManager: ObservableObject {
 
     @objc private func quit() {
         onQuit?()
-    }
-
-    @objc private func toggleSchedulingPause() {
-        if isSchedulingPaused {
-            schedulingService?.resumeAll()
-        } else {
-            schedulingService?.pauseAll()
-        }
     }
 }

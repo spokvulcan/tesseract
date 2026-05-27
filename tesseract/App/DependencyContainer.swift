@@ -46,11 +46,9 @@ final class DependencyContainer: ObservableObject {
     lazy var packageRegistry = PackageRegistry()
     lazy var contextManager = ContextManager(settings: .standard)
     lazy var newToolRegistry: ToolRegistry = {
-        ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost, schedulingService: schedulingService)
+        ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
     }()
     lazy var agentConversationStore = AgentConversationStore()
-    lazy var scheduledTaskStore = ScheduledTaskStore()
-    lazy var backgroundSessionStore = BackgroundSessionStore()
     lazy var inferenceArbiter: InferenceArbiter = {
         InferenceArbiter(
             agentEngine: agentEngine,
@@ -73,51 +71,9 @@ final class DependencyContainer: ObservableObject {
         contextManager: contextManager,
         settingsManager: settingsManager
     )
-    lazy var backgroundAgentFactory: BackgroundAgentFactory = {
-        BackgroundAgentFactory(
-            inferenceService: serverInferenceService,
-            toolRegistry: newToolRegistry,
-            extensionHost: extensionHost,
-            sessionStore: backgroundSessionStore,
-            packageRegistry: packageRegistry,
-            settingsManager: settingsManager,
-            arbiter: inferenceArbiter
-        )
-    }()
-    lazy var schedulingActor: SchedulingActor = {
-        SchedulingActor(
-            taskStore: scheduledTaskStore,
-            executeTask: { [weak self] task in
-                guard let factory = await MainActor.run(body: {
-                    self?.schedulingService.resetAgentTurnCounter()
-                    return self?.backgroundAgentFactory
-                }) else {
-                    return .error(message: "DependencyContainer deallocated")
-                }
-                return await factory.executeAndPersist(task: task)
-            },
-            executeHeartbeat: { [weak self] task in
-                guard let factory = await MainActor.run(body: {
-                    self?.schedulingService.resetAgentTurnCounter()
-                    return self?.backgroundAgentFactory
-                }) else {
-                    return .error(message: "DependencyContainer deallocated")
-                }
-                return await factory.executeAndPersist(task: task, sessionType: .heartbeat)
-            },
-            persistInFlightSession: { [weak self] in
-                guard let factory = await MainActor.run(body: { self?.backgroundAgentFactory }) else { return }
-                await factory.persistInFlightSession()
-            }
-        )
-    }()
     // HTTP Server
     lazy var httpServer = HTTPServer(port: UInt16(clamping: max(1, settingsManager.serverPort)))
 
-    lazy var notificationService = NotificationService(settings: settingsManager)
-    lazy var schedulingService: SchedulingService = {
-        SchedulingService(actor: schedulingActor, store: scheduledTaskStore, settings: settingsManager, notificationService: notificationService, speechCoordinator: speechCoordinator)
-    }()
     lazy var terminationCoordinator = makeTerminationCoordinator()
     lazy var agentCoordinator: AgentCoordinator = {
         AgentCoordinator(
@@ -166,7 +122,6 @@ final class DependencyContainer: ObservableObject {
     lazy var overlayPanelController = OverlayPanelController(settings: settingsManager)
     lazy var fullScreenBorderController = FullScreenBorderPanelController(settings: settingsManager)
     private var cancellables = Set<AnyCancellable>()
-    private var agentUnsubscribe: (@MainActor () -> Void)?
     private var observationTasks: [Task<Void, Never>] = []
 
     // Coordinator
@@ -190,23 +145,8 @@ final class DependencyContainer: ObservableObject {
 
     private func makeTerminationCoordinator() -> AppTerminationCoordinator {
         AppTerminationCoordinator(steps: .init(
-            cancelSchedulingSubscriptions: { [schedulingService] in
-                schedulingService.cancelSubscriptions()
-            },
             stopHotkeys: { [hotkeyManager] in
                 hotkeyManager.stopListening()
-            },
-            stopSchedulingPolling: { [schedulingActor] in
-                await schedulingActor.stopPolling()
-            },
-            stopSchedulingHeartbeat: { [schedulingActor] in
-                await schedulingActor.stopHeartbeat()
-            },
-            persistInterruptedTask: { [schedulingActor] in
-                await schedulingActor.persistInterruptedTask()
-            },
-            abortInFlightBackgroundAgent: { [backgroundAgentFactory] in
-                await backgroundAgentFactory.abortInFlightAndWait()
             },
             cancelForegroundGenerationAndWait: { [agentCoordinator] in
                 await agentCoordinator.cancelGenerationAndWait()
@@ -330,36 +270,6 @@ final class DependencyContainer: ObservableObject {
                 }
             }
             .store(in: &cancellables)
-
-        // Wire background session loader for notification deep-links
-        agentCoordinator.loadBackgroundSessionById = { [backgroundSessionStore] sessionId in
-            guard let session = await backgroundSessionStore.load(sessionId: sessionId) else {
-                throw CocoaError(.fileNoSuchFile)
-            }
-            let messages = try SyncMessageCodec.decodeAll(session.messages)
-            return (messages, session.displayName)
-        }
-
-        // Reset agent turn counter when a new agent run starts
-        agentUnsubscribe = agent.subscribe { [weak schedulingService] event in
-            if case .agentStart = event {
-                schedulingService?.resetAgentTurnCounter()
-            }
-        }
-
-        // Sync notification authorization changes from PermissionsManager → NotificationService
-        permissionsManager.onNotificationAuthorizationChanged = { [weak self] authorized in
-            self?.notificationService.syncAuthorization(authorized)
-        }
-
-        // Request notification authorization before starting the scheduling service so that
-        // missed-run catch-ups on launch can post notifications immediately.
-        await notificationService.requestAuthorization()
-        let authorized = await permissionsManager.checkNotificationPermission()
-        notificationService.syncAuthorization(authorized)
-
-        // Start scheduling service (includes polling loop + heartbeat from persisted config)
-        await schedulingService.start()
 
         // Register HTTP server routes
         registerHTTPRoutes()

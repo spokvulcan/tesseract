@@ -9,7 +9,6 @@ import SwiftUI
 
 struct GeneralSettingsSection: View {
     @Environment(SettingsManager.self) private var settings
-    @EnvironmentObject private var permissionsManager: PermissionsManager
 
     // Prevent disabling both dock and menu bar
     private var showInDockBinding: Binding<Bool> {
@@ -61,11 +60,6 @@ struct GeneralSettingsSection: View {
 
             Section("Feedback") {
                 Toggle("Play sounds", isOn: $settings.playSounds)
-                Toggle("Show notifications", isOn: $settings.showNotifications)
-
-                if settings.showNotifications {
-                    notificationPermissionRow
-                }
             }
 
             Section("Setup") {
@@ -98,48 +92,6 @@ struct GeneralSettingsSection: View {
         .formStyle(.grouped)
 
         .navigationTitle("General")
-    }
-
-    // MARK: - Notification Permission
-
-    @ViewBuilder
-    private var notificationPermissionRow: some View {
-        switch permissionsManager.notificationPermission {
-        case .granted:
-            Label("Notifications enabled", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.callout)
-
-        case .denied:
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Notifications disabled in System Settings", systemImage: "xmark.circle.fill")
-                    .foregroundStyle(.red)
-                    .font(.callout)
-                Button("Open Notification Settings") {
-                    permissionsManager.openSystemPreferences(for: "notifications")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-
-        case .requesting:
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Requesting permission...")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
-        case .unknown, .restricted:
-            Button("Enable Notifications") {
-                Task {
-                    _ = await permissionsManager.requestNotificationPermission()
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
     }
 }
 
@@ -379,33 +331,6 @@ struct RecordingSettingsSection: View {
             Section("Web Access") {
                 Toggle("Enable Web Search", isOn: $settings.webAccessEnabled)
                 Text("Search queries are sent to DuckDuckGo. No conversation data leaves your device.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Background Agent") {
-                Toggle(
-                    "Pause All Scheduling",
-                    isOn: Binding(
-                        get: { container.schedulingService.isPaused },
-                        set: { if $0 { container.schedulingService.pauseAll() } else { container.schedulingService.resumeAll() } }
-                    )
-                )
-                
-                Toggle("Heartbeat", isOn: $settings.heartbeatEnabled)
-
-                if settings.heartbeatEnabled {
-                    Picker("Interval", selection: $settings.heartbeatIntervalMinutes) {
-                        Text("5 minutes").tag(5)
-                        Text("10 minutes").tag(10)
-                        Text("15 minutes").tag(15)
-                        Text("30 minutes").tag(30)
-                        Text("60 minutes").tag(60)
-                        Text("120 minutes").tag(120)
-                    }
-                }
-
-                Text("Periodically evaluates your checklist and takes action in the background.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

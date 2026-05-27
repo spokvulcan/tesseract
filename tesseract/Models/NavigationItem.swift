@@ -9,7 +9,6 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case dictation
     case speech
     case agent
-    case scheduled
     case general
     case serverDashboard
     case serverConfiguration
@@ -19,7 +18,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
 
     var id: String { rawValue }
 
-    static let mainPages: [NavigationItem] = [.agent, .scheduled, .dictation, .speech]
+    static let mainPages: [NavigationItem] = [.agent, .dictation, .speech]
     static let settingsPages: [NavigationItem] = [.general, .recording, .model]
     static let serverPages: [NavigationItem] = [.serverDashboard, .serverPromptCache, .serverConfiguration]
 
@@ -28,7 +27,6 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .dictation: "Dictation"
         case .speech: "Speech"
         case .agent: "Agent"
-        case .scheduled: "Scheduled"
         case .general: "General"
         case .serverDashboard: "Dashboard"
         case .serverConfiguration: "Configuration"
@@ -43,7 +41,6 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .dictation: "mic.fill"
         case .speech: "speaker.wave.3.fill"
         case .agent: "brain.head.profile"
-        case .scheduled: "calendar.badge.clock"
         case .general: "gear"
         case .serverDashboard: "gauge"
         case .serverConfiguration: "server.rack"
@@ -62,8 +59,6 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
             SpeechContentView()
         case .agent:
             AgentContentView()
-        case .scheduled:
-            ScheduledTasksView()
         case .general:
             GeneralSettingsSection()
         case .serverDashboard:

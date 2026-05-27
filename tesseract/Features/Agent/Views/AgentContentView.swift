@@ -4,7 +4,6 @@ struct AgentContentView: View {
     @Environment(AgentCoordinator.self) private var coordinator
     @EnvironmentObject private var conversationStore: AgentConversationStore
     @Environment(SpeechCoordinator.self) private var speechCoordinator
-    @Environment(SchedulingService.self) private var schedulingService
     @State private var inputText = ""
     @State private var showingHistory = false
     @State private var speakingMessageID: UUID?
@@ -19,10 +18,6 @@ struct AgentContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if coordinator.isViewingBackgroundSession {
-                backgroundSessionBanner
-            }
-
             AgentConversationListView(
                 speakingMessageID: $speakingMessageID,
                 isSpeechActive: isSpeechActive
@@ -34,49 +29,45 @@ struct AgentContentView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if !coordinator.isViewingBackgroundSession {
-                VStack(spacing: 0) {
-                    if isSpeechActive {
-                        AgentSpeechIndicatorBar(onStop: {
-                            coordinator.stopSpeaking()
-                            speakingMessageID = nil
-                        })
-                    }
-
-                    ZStack(alignment: .bottom) {
-                        if coordinator.showCommandPopup {
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    coordinator.dismissCommandPopup()
-                                }
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-
-                        VStack(spacing: 0) {
-                            if coordinator.showCommandPopup, !coordinator.commandFilteredResults.isEmpty {
-                                SlashCommandPopupView(
-                                    commands: coordinator.commandFilteredResults,
-                                    selectedIndex: coordinator.commandSelectedIndex,
-                                    onSelect: { command in
-                                        selectCommandFromPopup(command)
-                                    }
-                                )
-                                .padding(.horizontal, Theme.Spacing.md + 16)
-                                .padding(.bottom, 4)
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                            }
-
-                            AgentInputBarView(inputText: $inputText)
-                        }
-                    }
-                    .animation(.easeOut(duration: 0.15), value: coordinator.showCommandPopup)
+            VStack(spacing: 0) {
+                if isSpeechActive {
+                    AgentSpeechIndicatorBar(onStop: {
+                        coordinator.stopSpeaking()
+                        speakingMessageID = nil
+                    })
                 }
+
+                ZStack(alignment: .bottom) {
+                    if coordinator.showCommandPopup {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                coordinator.dismissCommandPopup()
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+
+                    VStack(spacing: 0) {
+                        if coordinator.showCommandPopup, !coordinator.commandFilteredResults.isEmpty {
+                            SlashCommandPopupView(
+                                commands: coordinator.commandFilteredResults,
+                                selectedIndex: coordinator.commandSelectedIndex,
+                                onSelect: { command in
+                                    selectCommandFromPopup(command)
+                                }
+                            )
+                            .padding(.horizontal, Theme.Spacing.md + 16)
+                            .padding(.bottom, 4)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+
+                        AgentInputBarView(inputText: $inputText)
+                    }
+                }
+                .animation(.easeOut(duration: 0.15), value: coordinator.showCommandPopup)
             }
         }
-        .navigationTitle(coordinator.isViewingBackgroundSession
-            ? (coordinator.viewingSessionName ?? "Background Session")
-            : "Agent")
+        .navigationTitle("Agent")
         .onChange(of: speechCoordinator.state) { _, newState in
             if case .idle = newState { speakingMessageID = nil }
         }
@@ -121,77 +112,12 @@ struct AgentContentView: View {
                 .help(useMarkdown ? "Disable Markdown formatting" : "Enable Markdown formatting")
             }
         }
-        .onAppear {
-            consumePendingBackgroundSession()
-        }
-        .onChange(of: schedulingService.pendingBackgroundSessionId) { _, sessionId in
-            guard sessionId != nil else { return }
-            consumePendingBackgroundSession()
-        }
     }
 
     // MARK: - Slash Command Popup
 
     private func selectCommandFromPopup(_ command: SlashCommand) {
         inputText = coordinator.autocompleteCommand(command)
-    }
-
-    // MARK: - Background Session
-
-    private func consumePendingBackgroundSession() {
-        guard let sessionId = schedulingService.pendingBackgroundSessionId else { return }
-        schedulingService.pendingBackgroundSessionId = nil
-        Task {
-            let opened = await coordinator.openBackgroundSession(id: sessionId)
-            if opened {
-                schedulingService.markSessionRead(sessionId)
-            }
-        }
-    }
-
-    private var backgroundSessionBanner: some View {
-        let task = coordinator.viewingSessionId.flatMap { id in
-            schedulingService.tasks.first(where: { $0.sessionId == id })
-        }
-        
-        return VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "calendar.badge.clock")
-                            .foregroundStyle(.secondary)
-                        Text(task?.name ?? coordinator.viewingSessionName ?? "Background Session")
-                            .font(.headline)
-                        
-                        if let count = task?.runCount {
-                            Text("\(count) run\(count == 1 ? "" : "s")")
-                                .font(.caption2.weight(.medium))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.secondary.opacity(0.15))
-                                .clipShape(Capsule())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    if let schedule = task?.humanReadableSchedule {
-                        Text(schedule)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                Button("Dismiss") {
-                    coordinator.dismissBackgroundSession()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(.bar)
-            
-            Divider()
-        }
     }
 
     // MARK: - Conversation History Popover
