@@ -6,7 +6,7 @@ before committing changes to server, caching, or agent engine code.
 ## Unit / integration suites
 
 ```bash
-# Server + agent suites (recommended — avoids flaky SchedulingActorTests crash):
+# Server + agent suites (recommended for fast, focused runs):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -only-testing:tesseractTests/HTTPPrefixCacheSpikeTests \
   -only-testing:tesseractTests/HTTPPrefixCacheSessionReplayTests \
@@ -27,14 +27,10 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/StablePrefixDetectorNonDeterminismTests \
   -only-testing:tesseractTests/JinjaNonDeterminismReproTests
 
-# Run all tests (may crash due to SchedulingActorTests.executesSequentially flaky OOB):
+# Run all tests:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -only-testing:tesseractTests
 ```
-
-> **Gotcha:** the full `-only-testing:tesseractTests` run can crash on the flaky
-> `SchedulingActorTests.executesSequentially` out-of-bounds. Prefer the scoped
-> server+agent command above for reliable runs.
 
 ## Loaded-model verification
 

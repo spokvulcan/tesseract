@@ -101,15 +101,13 @@ extension View {
             .environment(container.speechEngine)
     }
 
-    /// Agent feature: coordinator, engine, conversation store, scheduling.
+    /// Agent feature: coordinator, engine, conversation store.
     @MainActor
     func injectAgentDependencies(from container: DependencyContainer) -> some View {
         self
             .environment(container.agentCoordinator)
             .environment(container.agentEngine)
-            .environment(container.schedulingService)
             .environmentObject(container.agentConversationStore)
-            .environmentObject(container.scheduledTaskStore)
     }
 
     /// Model management and inference arbitration.

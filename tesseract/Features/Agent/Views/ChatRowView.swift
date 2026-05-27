@@ -15,30 +15,10 @@ struct ChatRowView: View {
         #endif
         switch row.kind {
         case .user(let data):
-            if coordinator.isViewingBackgroundSession {
-                VStack(spacing: 12) {
-                    HStack {
-                        VStack { Divider() }
-                        Text(data.timestamp)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.tertiary)
-                            .textCase(.uppercase)
-                        VStack { Divider() }
-                    }
-                    .padding(.vertical, 8)
-                    
-                    HStack {
-                        Spacer(minLength: 60)
-                        UserBubble(data: data)
-                            .equatable()
-                    }
-                }
-            } else {
-                HStack {
-                    Spacer(minLength: 60)
-                    UserBubble(data: data)
-                        .equatable()
-                }
+            HStack {
+                Spacer(minLength: 60)
+                UserBubble(data: data)
+                    .equatable()
             }
 
         case .assistantText(let data):

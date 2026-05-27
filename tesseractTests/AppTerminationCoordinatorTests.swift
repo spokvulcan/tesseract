@@ -10,12 +10,7 @@ struct AppTerminationCoordinatorTests {
         var order: [String] = []
 
         let coordinator = AppTerminationCoordinator(steps: .init(
-            cancelSchedulingSubscriptions: { order.append("cancelSchedulingSubscriptions") },
             stopHotkeys: { order.append("stopHotkeys") },
-            stopSchedulingPolling: { order.append("stopSchedulingPolling") },
-            stopSchedulingHeartbeat: { order.append("stopSchedulingHeartbeat") },
-            persistInterruptedTask: { order.append("persistInterruptedTask") },
-            abortInFlightBackgroundAgent: { order.append("abortInFlightBackgroundAgent") },
             cancelForegroundGenerationAndWait: { order.append("cancelForegroundGenerationAndWait") },
             stopHTTPServerAndDrain: { order.append("stopHTTPServerAndDrain") },
             cancelLLMGenerationAndWait: { order.append("cancelLLMGenerationAndWait") },
@@ -32,12 +27,7 @@ struct AppTerminationCoordinatorTests {
         await coordinator.prepareForTermination()
 
         #expect(order == [
-            "cancelSchedulingSubscriptions",
             "stopHotkeys",
-            "stopSchedulingPolling",
-            "stopSchedulingHeartbeat",
-            "persistInterruptedTask",
-            "abortInFlightBackgroundAgent",
             "cancelForegroundGenerationAndWait",
             "stopHTTPServerAndDrain",
             "cancelLLMGenerationAndWait",

@@ -81,7 +81,6 @@ struct TesseractApp: App {
                 WindowOpenerView(appDelegate: appDelegate)
             }
             .injectCoreDependencies(from: container)
-            .environment(container.schedulingService)
             .focusedSceneValue(\.dictationActions, DictationActions(
                 toggleRecording: { [weak container] in
                     container?.dictationCoordinator.toggleRecording()
@@ -100,12 +99,6 @@ struct TesseractApp: App {
             .task {
                 await container.setup()
                 appDelegate.setupWithContainer(container, navigationSelection: $selectedNavigation)
-
-                // Forward any pending notification deep-link from cold launch
-                if let sessionId = appDelegate.pendingBackgroundSessionId {
-                    appDelegate.pendingBackgroundSessionId = nil
-                    container.schedulingService.pendingBackgroundSessionId = sessionId
-                }
 
                 // Show onboarding if needed
                 if !container.settingsManager.hasCompletedOnboarding {
