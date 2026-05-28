@@ -86,7 +86,7 @@ struct PrefixCacheDiagnosticsTests {
             normalizedRecency: 0.25,
             normalizedFlopEfficiency: 0.75,
             utility: 1.0,
-            bodyDroppedStorageRefID: nil
+            bodyDroppedSnapshotRefID: nil
         ))
         let fallback = PrefixCacheDiagnostics.EvictionEvent(.init(
             strategy: .fallback,
@@ -98,7 +98,7 @@ struct PrefixCacheDiagnosticsTests {
             normalizedRecency: nil,
             normalizedFlopEfficiency: nil,
             utility: nil,
-            bodyDroppedStorageRefID: nil
+            bodyDroppedSnapshotRefID: nil
         ))
 
         let utilityLine = context.render(utility)
@@ -205,14 +205,14 @@ struct PrefixCacheDiagnosticsTests {
             "event=ssdBodyDrop id=snap-5")
     }
 
-    @Test func leafSupersessionCarriesOffsetAndOptionalStorageRefID() {
+    @Test func leafSupersessionKeepsRefIDWireField() {
         let withRef = PrefixCacheDiagnostics.LeafSupersessionEvent(
             offset: 512,
-            storageRefID: "snap-old"
+            snapshotRefID: "snap-old"
         )
         let withoutRef = PrefixCacheDiagnostics.LeafSupersessionEvent(
             offset: 256,
-            storageRefID: nil
+            snapshotRefID: nil
         )
 
         #expect(context.render(withRef) ==
@@ -228,14 +228,14 @@ struct PrefixCacheDiagnosticsTests {
             "event=ssdRecordHit id=snap-6")
     }
 
-    @Test func storageRefCommitCarriesIDOnly() {
-        let event = PrefixCacheDiagnostics.StorageRefCommitEvent(id: "snap-7")
+    @Test func snapshotRefCommitEventKeepsWireName() {
+        let event = PrefixCacheDiagnostics.SnapshotRefCommitEvent(id: "snap-7")
 
         #expect(PrefixCacheDiagnostics.renderSystem(event) ==
             "event=storageRefCommit id=snap-7")
     }
 
-    @Test func storageRefDropCallbackCarriesReason() {
+    @Test func snapshotRefDropCallbackEventKeepsWireName() {
         for reason: SSDDropReason in [
             .backpressureOldest,
             .evictedByLRU,
@@ -245,7 +245,7 @@ struct PrefixCacheDiagnosticsTests {
             .writerIOError,
             .hydrationFailure,
         ] {
-            let event = PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+            let event = PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                 id: "snap-8",
                 reason: reason
             )
@@ -288,7 +288,7 @@ struct PrefixCacheDiagnosticsTests {
 
         context.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: "diag-snap-9"))
         PrefixCacheDiagnostics.logSystem(
-            PrefixCacheDiagnostics.StorageRefCommitEvent(id: "diag-snap-10")
+            PrefixCacheDiagnostics.SnapshotRefCommitEvent(id: "diag-snap-10")
         )
 
         let mine = sink.drain().filter {

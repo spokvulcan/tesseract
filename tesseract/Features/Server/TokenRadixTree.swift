@@ -65,16 +65,16 @@ final class TokenRadixTree {
     /// Walks the tree matching tokens. Tracks the deepest snapshot-bearing node.
     /// On lookup hit, updates `lastAccessTime` on the returned node only (not ancestors).
     ///
-    /// When `includeStorageRefs` is true, nodes in state 5 (committed
-    /// `storageRef` without a resident body) are also treated as
+    /// When `includeSnapshotRefs` is true, nodes in state 5 (committed
+    /// `SnapshotRef` without a resident body) are also treated as
     /// hittable: an SSD-resident snapshot can hydrate on demand, so
-    /// it counts as a hit target during lookup. Pending refs (state
-    /// 3, `committed == false`) are never hittable — returning one
-    /// would race the writer and surface a half-written file.
+    /// it counts as a hit target during lookup. Pending refs are never
+    /// hittable — returning one would race the writer and surface a
+    /// half-written file.
     func findBestSnapshot(
         tokens: [Int],
         updateAccess: Bool = true,
-        includeStorageRefs: Bool = false
+        includeSnapshotRefs: Bool = false
     ) -> (node: RadixTreeNode, sharedPrefixLength: Int)? {
         var current = root
         var pos = 0
@@ -86,7 +86,7 @@ final class TokenRadixTree {
         // opts in, since it hydrates on demand. Pending refs are never
         // hittable. Both predicates live on `SnapshotState`.
         func isHittable(_ node: RadixTreeNode) -> Bool {
-            includeStorageRefs ? node.state.isHittable : node.state.hasResidentBody
+            includeSnapshotRefs ? node.state.isHittable : node.state.hasResidentBody
         }
 
         // Root can have a snapshot (e.g. empty-prefix checkpoint)
@@ -278,7 +278,8 @@ final class TokenRadixTree {
         return effect
     }
 
-    /// Drop a node's RAM body (RAM-budget eviction). Returns the
+    /// Drop a node's RAM body (RAM-budget eviction). Strict: an ignored
+    /// result means the node had no resident body. Returns the
     /// `DropBodyResult` carrying the eviction telemetry inputs
     /// (checkpoint type, freed bytes, surviving ref ID). Self-heals when
     /// the drop empties the node (state 1 → removed); a ref-bearing node
@@ -287,33 +288,64 @@ final class TokenRadixTree {
     func dropBody(node: RadixTreeNode) -> DropBodyResult {
         let old = node.state
         let (next, result) = old.droppingBody()
+        if case .ignored = result.effect {
+            preconditionFailure("dropBody requires a resident body; node was \(old.label)")
+        }
         commit(next, on: node, from: old)
         if result.effect == .becameEmpty { selfHeal(node) }
         return result
     }
 
     /// Hydrate a committed-ref node with a freshly loaded body (state 5 →
-    /// state 4). Strict: an `.ignored` result means the node was not
-    /// `ssdOnly`, a programmer error on the SSD-hit hot path.
-    func hydrate(node: RadixTreeNode, body: HybridCacheSnapshot) {
+    /// state 4). **Forgiving:** like the SSD-writer commit/drop edges, this
+    /// completes a lookup that captured the node *before* an off-main
+    /// `loadSync`. If the node left `ssdOnly` in that window (a concurrent
+    /// transition today, or a future off-lease prefetch), the hydration is
+    /// a logged no-op — the newer state wins — rather than a `precondition`
+    /// that would abort the whole inference server on a benign lost race.
+    /// Returns the `StateEffect` so the caller can log the `.ignored` case.
+    @discardableResult
+    func hydrate(node: RadixTreeNode, body: HybridCacheSnapshot) -> StateEffect {
         let old = node.state
         let (next, effect) = old.hydrating(body)
-        precondition(
-            effect != .ignored(.notResident),
-            "hydrate requires an ssdOnly node (state 5); node was \(old.label)"
-        )
+        if case .ignored = effect { return effect }
         commit(next, on: node, from: old)
         node.lastAccessTime = .now
+        return effect
     }
 
-    /// Clear an SSD ref after a hydration failure (state 5 → removed, or
-    /// a still-bodied node keeps its body). The load-bearing committed-ref
-    /// clearing path: the failing lookup supplies the node, so no pending
-    /// map is needed. Self-heals when clearing empties the node.
+    /// Clear a committed Snapshot Ref after a hydration failure (state 5
+    /// → removed, or a still-bodied committed node keeps its body).
+    /// **Forgiving** (same rationale as `hydrate`): the failing lookup
+    /// captured the node before an off-main `loadSync`, so if it left the
+    /// committed/`ssdOnly` states in that window the clear is a logged
+    /// no-op rather than a process abort. The SSD file is already deleted
+    /// by `loadSync`'s failure path, so clearing never orphans a backing.
+    /// Self-heals when clearing empties the node.
     @discardableResult
-    func clearStorageRef(node: RadixTreeNode) -> StateEffect {
+    func clearCommittedSnapshotRefAfterHydrationFailure(node: RadixTreeNode) -> StateEffect {
         let old = node.state
-        let (next, effect) = old.clearingRef()
+        let (next, effect) = old.clearingCommittedRefAfterHydrationFailure()
+        if case .ignored = effect { return effect }
+        commit(next, on: node, from: old)
+        if effect == .becameEmpty { selfHeal(node) }
+        return effect
+    }
+
+    /// Discard a Snapshot Ref after the SSD backing has already been
+    /// explicitly deleted or cancelled by the caller. Strict: the node
+    /// must currently be ref-bearing. Self-heals when the discard empties
+    /// the node.
+    @discardableResult
+    func discardSnapshotRefAfterExplicitDelete(node: RadixTreeNode) -> StateEffect {
+        let old = node.state
+        let (next, effect) = old.discardingRefAfterExplicitDelete()
+        if case .ignored = effect {
+            preconditionFailure(
+                "discardSnapshotRefAfterExplicitDelete requires a ref-bearing node; "
+                + "node was \(old.label)"
+            )
+        }
         commit(next, on: node, from: old)
         if effect == .becameEmpty { selfHeal(node) }
         return effect
@@ -370,23 +402,32 @@ final class TokenRadixTree {
         while let target = current, target !== root {
             guard let parent = target.parent else { break }
 
+            // Orphan invariant, enforced rather than asserted-by-comment: a
+            // node that still owns a live SSD ref (`!canEvictNode`) must
+            // never be unlinked, or its on-disk file is orphaned. `selfHeal`
+            // only reaches here on `.becameEmpty`, so this holds today — the
+            // guard makes `canEvictNode` the load-bearing barrier for any
+            // future removal caller instead of a convention.
+            guard target.state.canEvictNode else {
+                Log.agent.fault(
+                    "TokenRadixTree.detachEmptyLeaf refused to unlink a node that still "
+                    + "owns an SSD ref (state \(target.state.label)); leaving it in the tree"
+                )
+                break
+            }
+
             let key = target.edgeTokens.first!
             parent.children.removeValue(forKey: key)
             nodeCount -= 1
             target.parent = nil
 
             // Continue only through empty leaf ancestors.
-            if parent.isLeaf, isEmptyState(parent.state), parent !== root {
+            if parent.isLeaf, parent.state.isEmpty, parent !== root {
                 current = parent
             } else {
                 break
             }
         }
-    }
-
-    private func isEmptyState(_ state: SnapshotState) -> Bool {
-        if case .empty = state { return true }
-        return false
     }
 
     /// Snapshot-bearing nodes eligible for Marconi utility scoring:
@@ -506,7 +547,7 @@ final class TokenRadixTree {
     /// construction — collapsing here cannot orphan an SSD ref.
     private func collapseEmptySingleChild(_ node: RadixTreeNode) {
         guard node !== root,
-              isEmptyState(node.state),
+              node.state.isEmpty,
               node.childCount == 1,
               let parent = node.parent,
               let onlyChild = node.children.values.first
@@ -583,8 +624,7 @@ final class TokenRadixTree {
         let storageState = Self.telemetryStorageState(node)
         let state = node.state
         let snapshot = state.body
-        let checkpointType = snapshot?.checkpointType.wireString
-            ?? state.ref?.checkpointType.wireString
+        let checkpointType = state.checkpointType?.wireString
         let scores = snapshot.map { _ in telemetryEvictionScore(for: node, now: now) } ?? nil
 
         nodes.append(PromptCacheTreeNodeSnapshot(
@@ -600,7 +640,7 @@ final class TokenRadixTree {
             checkpointType: checkpointType,
             snapshotBytes: state.residentBodyBytes,
             storageState: storageState,
-            storageRefID: state.refID,
+            snapshotRefID: state.refID,
             storageBytes: state.storageBytes,
             lastAccessAgeSeconds: max((now - node.lastAccessTime).seconds, 0),
             normalizedRecency: scores?.normalizedRecency,

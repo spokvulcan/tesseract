@@ -40,12 +40,37 @@ rides on `DropBodyResult` instead, because the common body drops (states 2/4) ar
 on the two forgiving SSD-writer callback edges (`commit`, `dropRef`).
 _Avoid_: transition result, mutation outcome.
 
+**dropRef**:
+The forgiving SSD-writer callback edge for a pending **Snapshot Ref**. It is distinct
+from committed-ref cleanup after a hydration failure; pending refs are dropped by the
+writer callback, committed refs are cleared only after a failed SSD hydration.
+_Avoid_: clear ref, remove ref.
+
+**Committed Ref Cleanup**:
+The strict cleanup edge after a failed SSD hydration of a committed **Snapshot Ref**.
+It applies only to committed-ref states; pending refs are handled by `dropRef`, not
+by hydration cleanup.
+_Avoid_: generic ref clear, storage-ref cleanup.
+
+**Explicit Ref Discard**:
+The strict cleanup edge after the SSD backing has already been explicitly deleted or
+cancelled, such as during leaf supersession. It may discard any ref-bearing
+**Snapshot State** because the caller has already removed the backing snapshot.
+_Avoid_: hydration cleanup, generic ref clear.
+
 **canEvictNode**:
 The load-bearing invariant query on **Snapshot State**: true iff the node holds no
 live **Snapshot Ref**, i.e. removing the node structure cannot orphan an
 SSD-resident snapshot. Distinct from `hasResidentBody` (the RAM-budget concept) —
 a node may be node-removable yet still hold a useful RAM body.
 _Avoid_: canRemove, isOrphanable.
+
+**hasResidentBody**:
+The RAM-budget query on **Snapshot State**: true iff the node holds a RAM body
+that can be dropped to free memory. Distinct from `canEvictNode` — body eviction
+may leave a node in place when a **Snapshot Ref** still pins an SSD-resident
+snapshot.
+_Avoid_: body-removable, resident snapshot.
 
 > **Flagged ambiguity — "State".** `SnapshotState` is the prefix-cache lifecycle
 > enum. It is unrelated to `HybridCacheSnapshot.LayerState` (MLX layer tensors) and
@@ -60,9 +85,11 @@ _Avoid_: canRemove, isOrphanable.
 > body, the state settles to `ramOnly` — node stays. If there's nothing left, the
 > transition returns `becameEmpty` and the tree self-heals: it removes the node.
 > **Dev:** So the eviction loop also checks `becameEmpty`?
-> **Expert:** No — that loop is proactive, it asks `canEvictNode` before picking an
-> LRU victim. `becameEmpty` is reactive cleanup after a drop. Different predicates:
-> a `ramOnly` node is `canEvictNode` but not `becameEmpty`.
+> **Expert:** No — that loop is proactive, it picks LRU victims with
+> `hasResidentBody`, then drops the RAM body. `becameEmpty` is reactive cleanup
+> after a drop, and `canEvictNode` is the structural-removal invariant. Different
+> predicates: a `ramOnly` node has both `hasResidentBody` and `canEvictNode`, while
+> a committed node with RAM has `hasResidentBody` but not `canEvictNode`.
 
 ## Why
 

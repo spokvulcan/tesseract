@@ -182,13 +182,13 @@ final class PrefixCacheManager {
         let normalizedFlopEfficiency: Double?
         let utility: Double?
         /// Non-nil when the victim node was kept in the radix tree
-        /// because it carried a live `storageRef` (Task 4.1.8 body-drop
-        /// guard) — the RAM body was freed but the SSD-backed node
-        /// remains reachable for future lookups. Consumers
+        /// because it carried a live Snapshot Ref — the RAM body was
+        /// freed but the SSD-backed node remains reachable for future
+        /// lookups. Consumers
         /// (`LLMActor.makeHTTPPrefixCacheGeneration`) emit a
         /// `ssdBodyDrop(id:)` diagnostic event for each non-nil
         /// entry. `nil` for plain RAM-only evictions.
-        let bodyDroppedStorageRefID: String?
+        let bodyDroppedSnapshotRefID: String?
 
         nonisolated init(
             strategy: Strategy,
@@ -200,7 +200,7 @@ final class PrefixCacheManager {
             normalizedRecency: Double?,
             normalizedFlopEfficiency: Double?,
             utility: Double?,
-            bodyDroppedStorageRefID: String? = nil
+            bodyDroppedSnapshotRefID: String? = nil
         ) {
             self.strategy = strategy
             self.offset = offset
@@ -211,7 +211,7 @@ final class PrefixCacheManager {
             self.normalizedRecency = normalizedRecency
             self.normalizedFlopEfficiency = normalizedFlopEfficiency
             self.utility = utility
-            self.bodyDroppedStorageRefID = bodyDroppedStorageRefID
+            self.bodyDroppedSnapshotRefID = bodyDroppedSnapshotRefID
         }
     }
 
@@ -223,7 +223,7 @@ final class PrefixCacheManager {
 
     struct LeafSupersession: Sendable {
         let offset: Int
-        let bodyDroppedStorageRefID: String?
+        let bodyDroppedSnapshotRefID: String?
     }
 
     private struct EvictionCandidate {
@@ -246,7 +246,7 @@ final class PrefixCacheManager {
         let reason: LookupReason
         /// Snapshot ID whose `lastAccessAt` was just bumped by the
         /// SSD LRU bookkeeping (`ssdStore.recordHit(id:)`). Non-nil
-        /// only when the hit landed on a committed storage ref —
+        /// only when the hit landed on a committed Snapshot Ref —
         /// state 4 (RAM body present + SSD ref committed). Consumers
         /// emit a `ssdRecordHit(id:)` diagnostic event whenever this
         /// is non-nil so the SSD LRU age progression is visible
@@ -286,11 +286,11 @@ final class PrefixCacheManager {
     /// Handles the `MainActor`-owned `RadixTreeNode` and the
     /// `nonisolated` `SSDSnapshotStore` that LLMActor needs to
     /// hydrate a state-5 node. `@unchecked Sendable` because the
-    /// node is MainActor-owned — LLMActor only reads the storage
-    /// ref off-main and hops back to MainActor before touching the
+    /// node is MainActor-owned — LLMActor only reads the Snapshot Ref
+    /// off-main and hops back to MainActor before touching the
     /// node via `PrefixCacheManager.promote(node:snapshot:partitionKey:)`.
     struct SSDHitContext: @unchecked Sendable {
-        let storageRef: SnapshotRef
+        let snapshotRef: SnapshotRef
         let ssdStore: SSDSnapshotStore
         let node: RadixTreeNode
     }
@@ -310,7 +310,7 @@ final class PrefixCacheManager {
             case .hit(let offset, let total, let type):
                 "hit(\(type) at \(offset)/\(total))"
             case .ssdHit(let ctx):
-                "ssdHit(\(ctx.storageRef.checkpointType) at \(ctx.storageRef.tokenOffset), id=\(ctx.storageRef.snapshotID.prefix(8)))"
+                "ssdHit(\(ctx.snapshotRef.checkpointType) at \(ctx.snapshotRef.tokenOffset), id=\(ctx.snapshotRef.snapshotID.prefix(8)))"
             case .missNoEntries:
                 "miss(no entries)"
             case .missNoSnapshotInPrefix:
@@ -330,10 +330,9 @@ final class PrefixCacheManager {
 
         // Consider state-5 (committed ref, no body) as hittable —
         // LLMActor will hydrate from SSD. Pending refs (state 3) are
-        // filtered out inside `findBestSnapshot` because their
-        // `committed` flag is false.
+        // filtered out inside `findBestSnapshot`.
         guard let (node, _) = tree.findBestSnapshot(
-            tokens: tokens, includeStorageRefs: true
+            tokens: tokens, includeSnapshotRefs: true
         ) else {
             let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
             return LookupResult(
@@ -351,7 +350,7 @@ final class PrefixCacheManager {
             // hit does not look stale to the SSD LRU when the body
             // is eventually dropped to state 5.
             var recordedHitID: String?
-            if node.state.committed, let ref = node.state.ref {
+            if case .committed(_, let ref) = node.state {
                 store.ssdStore?.recordHit(id: ref.snapshotID)
                 recordedHitID = ref.snapshotID
             }
@@ -369,11 +368,13 @@ final class PrefixCacheManager {
             )
         }
 
-        // State 5 — body absent, committed ref present. The filter on
-        // `findBestSnapshot` guarantees a committed ref (state 5) when we
-        // reach this branch. SSD store must also be non-nil because the
-        // ref could only have been assigned through the admission path.
-        guard let ref = node.state.ref, node.state.committed,
+        // State 5 — body absent, committed ref present. We reach here only
+        // after the body branch returned, so the node is body-less; the
+        // only body-less *hittable* state `findBestSnapshot` returns is
+        // `.ssdOnly` (pending refs are filtered out), so the pattern match
+        // is total for this branch. SSD store must also be non-nil because
+        // the ref could only have been assigned through the admission path.
+        guard case .ssdOnly(let ref) = node.state,
               let ssdStore = store.ssdStore else {
             return LookupResult(
                 snapshot: nil, partitionKey: partitionKey,
@@ -382,7 +383,7 @@ final class PrefixCacheManager {
             )
         }
         let context = SSDHitContext(
-            storageRef: ref,
+            snapshotRef: ref,
             ssdStore: ssdStore,
             node: node
         )
@@ -485,11 +486,20 @@ final class PrefixCacheManager {
         /// at the stable prefix offset) does NOT count — we still want to
         /// capture a proper system snapshot there.
         func alreadyStored(offset: Int, type: HybridCacheSnapshot.CheckpointType) -> Bool {
+            // `includeSnapshotRefs: true` + the body-then-ref `checkpointType`
+            // accessor so a checkpoint already persisted to SSD whose RAM
+            // body was evicted (`ssdOnly`/committed, body-less) still counts
+            // as stored. Without this, every same-prefix request after a warm
+            // start (or a RAM-body drop) re-plans, re-extracts, and re-admits
+            // the identical snapshot — `admitSnapshot` then supersedes the
+            // resident ref, deleting and rewriting byte-identical content.
             guard let tree,
                   let (node, _) = tree.findBestSnapshot(
-                      tokens: Array(tokens[0..<offset]), updateAccess: false)
+                      tokens: Array(tokens[0..<offset]),
+                      updateAccess: false,
+                      includeSnapshotRefs: true)
             else { return false }
-            return node.tokenOffset == offset && node.state.body?.checkpointType == type
+            return node.tokenOffset == offset && node.state.checkpointType == type
         }
 
         if let offset = stablePrefixOffset, offset > 0, offset < tokens.count,
@@ -644,30 +654,30 @@ final class PrefixCacheManager {
         while let ancestor = current {
             let nextAncestor = ancestor.parent
             let state = ancestor.state
-            let checkpointType = state.body?.checkpointType ?? state.ref?.checkpointType
-            guard checkpointType == .leaf else {
+            guard state.checkpointType == .leaf else {
                 current = nextAncestor
                 continue
             }
 
-            let offset = state.body?.tokenOffset ?? state.ref?.tokenOffset ?? 0
-            let storageRefID = state.refID
+            let offset = state.tokenOffset ?? 0
+            let snapshotRefID = state.refID
 
             // Fully remove the superseded leaf through the tree (sole
-            // mutator). Delete the SSD backing first so clearing the ref
-            // cannot orphan a file + manifest entry, then drop the ref and
-            // any RAM body — the tree self-heals (collapses a single-child
-            // ancestor, keeps a multi-child junction). `dropBody` is total
-            // and no-ops on a body-less ancestor, so no body-guard needed.
-            if let storageRefID {
-                store.deleteSnapshot(snapshotID: storageRefID)
-                tree.clearStorageRef(node: ancestor)
+            // mutator). Delete the SSD backing first so discarding the ref
+            // cannot orphan a file + manifest entry, then drop any RAM
+            // body. Both tree wrappers are strict, so call each only when
+            // the captured state says the transition is applicable.
+            if let snapshotRefID {
+                store.deleteSnapshot(snapshotID: snapshotRefID)
+                tree.discardSnapshotRefAfterExplicitDelete(node: ancestor)
             }
-            tree.dropBody(node: ancestor)
+            if state.hasResidentBody {
+                tree.dropBody(node: ancestor)
+            }
 
             superseded.append(LeafSupersession(
                 offset: offset,
-                bodyDroppedStorageRefID: storageRefID
+                bodyDroppedSnapshotRefID: snapshotRefID
             ))
             current = nextAncestor
         }
@@ -702,13 +712,17 @@ final class PrefixCacheManager {
     /// or a pre-refactor on-disk state can produce two descriptors that
     /// resolve to the same `pathFromRoot` after `insertPath` compresses
     /// edges. The first descriptor wins (last-wins would orphan the SSD
-    /// file the second descriptor was meant to point at, since it would
-    /// be unreachable from the live tree); the second is dropped with a
-    /// debug log so warm-start completes instead of aborting on the
-    /// tree's strict precondition.
-    func restoreStorageRef(
+    /// file the first descriptor points at, since it would be unreachable
+    /// from the live tree); the second is dropped so warm-start completes
+    /// instead of aborting. The dropped descriptor's SSD backing is
+    /// **reclaimed** here (`store.deleteSnapshot`) rather than leaked —
+    /// `commitRestoredManifest` already seeded both descriptors into the
+    /// manifest + `currentSSDBytes`, so without this the loser's file and
+    /// manifest entry would linger, never hittable, inflating the SSD
+    /// budget until an unrelated LRU cut happened to evict it.
+    func restoreSnapshotRef(
         path: [Int],
-        storageRef: SnapshotRef,
+        snapshotRef: SnapshotRef,
         partitionKey: CachePartitionKey,
         lastAccessTime: ContinuousClock.Instant
     ) {
@@ -716,13 +730,15 @@ final class PrefixCacheManager {
         let node = tree.insertPath(tokens: path)
         guard case .empty = node.state else {
             Log.agent.debug(
-                "PrefixCacheManager.restoreStorageRef: path collision at "
-                + "tokenOffset=\(storageRef.tokenOffset) "
-                + "id=\(storageRef.snapshotID); node already \(node.state.label)"
+                "PrefixCacheManager.restoreSnapshotRef: path collision at "
+                + "tokenOffset=\(snapshotRef.tokenOffset) "
+                + "id=\(snapshotRef.snapshotID); node already \(node.state.label) — "
+                + "reclaiming the dropped descriptor's SSD backing"
             )
+            store.deleteSnapshot(snapshotID: snapshotRef.snapshotID)
             return
         }
-        tree.restoreCommittedRef(node: node, ref: storageRef)
+        tree.restoreCommittedRef(node: node, ref: snapshotRef)
         node.lastAccessTime = lastAccessTime
     }
 
@@ -747,7 +763,16 @@ final class PrefixCacheManager {
         partitionKey: CachePartitionKey
     ) {
         guard let tree = store.tree(for: partitionKey) else { return }
-        tree.hydrate(node: node, body: snapshot)
+        // Forgiving edge: the node was captured before the off-main
+        // `loadSync`. If it left `ssdOnly` in that window, the hydration is
+        // a logged no-op (the newer state wins) rather than a crash.
+        let effect = tree.hydrate(node: node, body: snapshot)
+        if case .ignored(let reason) = effect {
+            Log.agent.debug(
+                "PrefixCacheManager.promote: hydrate ignored — node left ssdOnly before "
+                + "the promote hop (reason=\(String(describing: reason)))"
+            )
+        }
     }
 
     /// Clear a state-5 node's ref after a hydration failure (file missing
@@ -757,12 +782,23 @@ final class PrefixCacheManager {
     /// re-attempting hydration on a broken file. The tree self-heals
     /// (removes the node) when clearing empties it. Pending refs (state
     /// 3) never reach this path — only state-5 hydrations can fail.
-    func clearStorageRef(
+    func clearCommittedSnapshotRefAfterHydrationFailure(
         node: RadixTreeNode,
         partitionKey: CachePartitionKey
     ) {
         guard let tree = store.tree(for: partitionKey) else { return }
-        tree.clearStorageRef(node: node)
+        // Forgiving edge (same boundary as `promote`): if the node left the
+        // committed/ssdOnly states before this hop, clearing is a logged
+        // no-op. `loadSync` already deleted the on-disk backing, so a still
+        // -committed node downgrading to `ramOnly` orphans nothing.
+        let effect = tree.clearCommittedSnapshotRefAfterHydrationFailure(node: node)
+        if case .ignored(let reason) = effect {
+            Log.agent.debug(
+                "PrefixCacheManager.clearCommittedSnapshotRefAfterHydrationFailure: ignored — "
+                + "node left committed/ssdOnly before the failure hop "
+                + "(reason=\(String(describing: reason)))"
+            )
+        }
     }
 
     // MARK: - Warm start
@@ -831,9 +867,9 @@ final class PrefixCacheManager {
                     checkpointType: checkpointType,
                     bytesOnDisk: descriptor.bytes
                 )
-                restoreStorageRef(
+                restoreSnapshotRef(
                     path: descriptor.pathFromRoot,
-                    storageRef: ref,
+                    snapshotRef: ref,
                     partitionKey: partitionKey,
                     lastAccessTime: now
                 )
@@ -1032,11 +1068,12 @@ final class PrefixCacheManager {
             //
             // `findEvictionCandidate` filters body-less nodes, so
             // `dropBody` is guaranteed non-ignored and returns the
-            // dropped checkpoint type; treat a nil here as a contract
-            // violation we cannot recover from (break the drain).
+            // dropped checkpoint type.
             let offset = candidate.node.tokenOffset
             let result = candidate.tree.dropBody(node: candidate.node)
-            guard let droppedType = result.droppedCheckpointType else { break }
+            guard let droppedType = result.droppedCheckpointType else {
+                preconditionFailure("dropBody returned no checkpoint type for a body-bearing node")
+            }
             events.append(EvictionEvent(
                 strategy: candidate.strategy,
                 offset: offset,
@@ -1047,7 +1084,7 @@ final class PrefixCacheManager {
                 normalizedRecency: candidate.score?.normalizedRecency,
                 normalizedFlopEfficiency: candidate.score?.normalizedFlopEfficiency,
                 utility: candidate.score?.utility,
-                bodyDroppedStorageRefID: result.refID
+                bodyDroppedSnapshotRefID: result.refID
             ))
         }
         // Mark the first request that ever triggered eviction. The

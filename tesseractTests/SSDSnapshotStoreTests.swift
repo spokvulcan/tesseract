@@ -521,7 +521,7 @@ struct SSDSnapshotStoreTests {
     func admissionEvictionFiresEvictedByLRUDropCallback() async {
         // Committed residents that are displaced by a later
         // admission's LRU cut must fire `onDrop(.evictedByLRU)`.
-        // Downstream consumers attach committed `storageRef`s to
+        // Downstream consumers attach committed Snapshot Refs to
         // radix nodes; without this callback, those refs would
         // keep pointing at a deleted file and surface stale SSD
         // hits on subsequent lookups.
@@ -928,8 +928,7 @@ struct SSDSnapshotStoreTests {
         }
         #expect(committed)
 
-        let snapshot = store.loadSync(
-            storageRef: committedRef(from: pending),
+        let snapshot = store.loadSync(snapshotRef: committedRef(from: pending),
             expectedFingerprint: fingerprint
         )
         #expect(snapshot != nil)
@@ -975,8 +974,7 @@ struct SSDSnapshotStoreTests {
         }
         _ = await waitUntil { tracker.committed.contains(pending.snapshotID) }
 
-        let snapshot = store.loadSync(
-            storageRef: committedRef(from: pending),
+        let snapshot = store.loadSync(snapshotRef: committedRef(from: pending),
             expectedFingerprint: String(repeating: "z", count: 64)
         )
         #expect(snapshot == nil)
@@ -1028,8 +1026,7 @@ struct SSDSnapshotStoreTests {
         try FileManager.default.removeItem(at: fileURL)
 
         let fingerprint = makePartitionMeta().modelFingerprint
-        let snapshot = store.loadSync(
-            storageRef: committedRef(from: pending),
+        let snapshot = store.loadSync(snapshotRef: committedRef(from: pending),
             expectedFingerprint: fingerprint
         )
         #expect(snapshot == nil)
@@ -1340,7 +1337,7 @@ struct SSDSnapshotStoreTests {
     }
 
     @Test
-    func storageRefDropCallbackFiresOnBackpressureBumpedItems() async throws {
+    func snapshotRefDropCallbackEventFiresOnBackpressureBumpedItems() async throws {
         // Tight pending byte cap — first payload occupies it
         // entirely, second payload bumps the first via
         // drop-oldest-pending. The bumped item must surface as
@@ -1427,7 +1424,7 @@ struct SSDSnapshotStoreTests {
         )
         store.seedDescriptorForTesting(descriptor)
 
-        let storageRef = SnapshotRef(
+        let snapshotRef = SnapshotRef(
             snapshotID: descriptor.snapshotID,
             partitionDigest: descriptor.partitionDigest,
             tokenOffset: descriptor.tokenOffset,
@@ -1435,8 +1432,7 @@ struct SSDSnapshotStoreTests {
             bytesOnDisk: descriptor.bytes
         )
 
-        let result = store.loadSync(
-            storageRef: storageRef,
+        let result = store.loadSync(snapshotRef: snapshotRef,
             expectedFingerprint: String(repeating: "b", count: 64)
         )
         #expect(result == nil)

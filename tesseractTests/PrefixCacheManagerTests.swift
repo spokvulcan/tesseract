@@ -276,7 +276,7 @@ struct PrefixCacheManagerTests {
     }
 
     /// Supersession must also clear state-5 ancestor leaves whose RAM body was
-    /// already dropped but whose committed SSD storageRef still pins the path.
+    /// already dropped but whose committed SSD Snapshot Ref still pins the path.
     @Test func descendantLeafSupersedesSSDBackedAncestorLeaf() {
         let tieredStore = TieredSnapshotStore(ssdConfig: nil)
         let mgr = PrefixCacheManager(
@@ -315,7 +315,7 @@ struct PrefixCacheManagerTests {
 
         #expect(diagnostics.supersededLeaves.count == 1)
         #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
-        #expect(diagnostics.supersededLeaves[0].bodyDroppedStorageRefID == ancestorRef.snapshotID)
+        #expect(diagnostics.supersededLeaves[0].bodyDroppedSnapshotRefID == ancestorRef.snapshotID)
         #expect(ancestorNode.state.ref == nil)
         #expect(mgr.stats.snapshotCount == 1)
 
@@ -1369,9 +1369,9 @@ struct PrefixCacheManagerTests {
     }
 
     /// `.system` type protection still applies even when the system
-    /// node carries a committed storage ref. The `.leaf` victim is
+    /// node carries a committed Snapshot Ref. The `.leaf` victim is
     /// hard-deleted; the `.system` body + ref are preserved.
-    @Test func systemTypeProtectionHoldsWithStorageRef() {
+    @Test func systemTypeProtectionHoldsWithSnapshotRef() {
         let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
         let tieredStore = TieredSnapshotStore(ssdConfig: nil)
         let mgr = PrefixCacheManager(
@@ -1410,7 +1410,7 @@ struct PrefixCacheManagerTests {
         #expect(leafResult.snapshot == nil)
     }
 
-    // MARK: - SSD hydration: lookup / promote / clearStorageRef
+    // MARK: - SSD hydration: lookup / promote / clearCommittedSnapshotRefAfterHydrationFailure
 
     /// Build a tiered-store-backed manager whose SSD tier points at a
     /// fresh scratch directory. The partition is preregistered so
@@ -1457,7 +1457,7 @@ struct PrefixCacheManagerTests {
             #expect(Bool(false), "Expected .ssdHit, got \(result.reason)")
             return
         }
-        #expect(ctx.storageRef.snapshotID == ref.snapshotID)
+        #expect(ctx.snapshotRef.snapshotID == ref.snapshotID)
         #expect(ctx.node === node)
         #expect(result.snapshot == nil)
         #expect(result.snapshotTokenOffset == tokens.count)
@@ -1514,10 +1514,10 @@ struct PrefixCacheManagerTests {
         }
     }
 
-    /// `clearStorageRef` on a state-5 leaf with no body removes the
+    /// `clearCommittedSnapshotRefAfterHydrationFailure` on a state-5 leaf with no body removes the
     /// node from the tree entirely. Subsequent lookups miss via the
     /// normal `missNoSnapshotInPrefix` path.
-    @Test func clearStorageRefRemovesLeafWithNoBody() {
+    @Test func clearCommittedSnapshotRefAfterHydrationFailureRemovesLeafWithNoBody() {
         let (mgr, tieredStore, root) = makeSSDManager()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -1530,13 +1530,132 @@ struct PrefixCacheManagerTests {
         )
         let nodeCountBefore = tree.nodeCount
 
-        mgr.clearStorageRef(node: node, partitionKey: defaultKey)
+        mgr.clearCommittedSnapshotRefAfterHydrationFailure(node: node, partitionKey: defaultKey)
 
         #expect(node.state.ref == nil)
         #expect(node.parent == nil)  // detached
         #expect(tree.nodeCount < nodeCountBefore)
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         #expect(result.snapshot == nil)
+    }
+
+    /// `hydrate` is a forgiving edge: it completes a lookup that captured
+    /// the node before an off-main `loadSync`. If the node is no longer
+    /// `ssdOnly` at the promote hop, hydration is a logged no-op (newer
+    /// state wins) instead of a `precondition` that would abort the whole
+    /// server. Pre-fix this trapped.
+    @Test func hydrateOnNonSSDOnlyNodeIsForgivingNoOp() {
+        let (_, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let tokens = Array(1...10)
+        let tree = tieredStore.getOrCreateTree(for: defaultKey)
+        let node = tree.insertPath(tokens: tokens)  // state empty, not ssdOnly
+
+        let effect = tree.hydrate(
+            node: node,
+            body: makeUniformSnapshot(offset: tokens.count, type: .leaf)
+        )
+
+        #expect(effect == .ignored(.notResident))
+        #expect(node.state.isEmpty)  // unchanged — body not attached
+    }
+
+    /// `clearCommittedSnapshotRefAfterHydrationFailure` is forgiving for
+    /// the same reason: a node that left the committed/`ssdOnly` states
+    /// before the failure hop is a logged no-op, not a process abort.
+    @Test func clearCommittedSnapshotRefOnNonCommittedNodeIsForgivingNoOp() {
+        let (_, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let tokens = Array(1...10)
+        let tree = tieredStore.getOrCreateTree(for: defaultKey)
+        let node = tree.insertPath(tokens: tokens)
+        // ramOnly (state 1): a RAM body, no ref — not committed/ssdOnly.
+        tree.storeSnapshot(makeUniformSnapshot(offset: tokens.count, type: .leaf), on: node)
+
+        let effect = tree.clearCommittedSnapshotRefAfterHydrationFailure(node: node)
+
+        #expect(effect == .ignored(.notResident))
+        #expect(node.state.body != nil)  // body untouched
+    }
+
+    /// `planCheckpoints` must treat a checkpoint already persisted to SSD
+    /// whose RAM body was dropped (`ssdOnly`, body-less) as already-stored.
+    /// Otherwise every same-prefix request after a warm start (or a body
+    /// eviction) re-plans, re-extracts, and re-admits the identical system
+    /// snapshot — `admitSnapshot` then supersedes the resident ref,
+    /// deleting and rewriting byte-identical content.
+    @Test func planCheckpointsSkipsSystemAlreadyPersistedAsSSDOnly() {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let tokens = Array(1...20)
+        let stableOffset = 10
+        let tree = tieredStore.getOrCreateTree(for: defaultKey)
+
+        // Drive the stable-prefix node to `ssdOnly`: store a system body,
+        // admit + commit a ref, then drop the body — exactly the state a
+        // warm-restored or RAM-evicted system checkpoint sits in.
+        let node = tree.insertPath(tokens: Array(tokens[0..<stableOffset]))
+        tree.storeSnapshot(
+            makeUniformSnapshot(offset: stableOffset, type: .system), on: node
+        )
+        let ref = PrefixCacheTestFixtures.makeRef(type: .system, tokenOffset: stableOffset)
+        tree.admit(node: node, ref: ref)
+        tree.commitRef(node: node, expectedID: ref.snapshotID)
+        tree.dropBody(node: node)  // committed → ssdOnly (body-less)
+        #expect(node.state.body == nil)
+        #expect(node.state.label == "ssdOnly")
+
+        let plan = mgr.planCheckpoints(
+            tokens: tokens,
+            stablePrefixOffset: stableOffset,
+            partitionKey: defaultKey
+        )
+
+        // The system checkpoint at `stableOffset` is already on SSD; it
+        // must NOT be re-planned.
+        #expect(
+            !plan.contains { $0.offset == stableOffset && $0.type == .system }
+        )
+    }
+
+    /// The invariant the LLMActor hydration-failure replan relies on: an
+    /// `ssdOnly` system checkpoint suppresses re-planning while present,
+    /// but once a failed hydration clears the node from the tree,
+    /// `planCheckpoints` re-plans the (now-absent) checkpoint. Without
+    /// LLMActor's post-failure replan, the suppressed-then-cleared
+    /// checkpoint would go un-recaptured for a full request cycle.
+    @Test func planReplansSystemAfterSSDOnlyNodeClearedOnHydrationFailure() {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let tokens = Array(1...20)
+        let stableOffset = 10
+        let tree = tieredStore.getOrCreateTree(for: defaultKey)
+        let node = tree.insertPath(tokens: Array(tokens[0..<stableOffset]))
+        tree.restoreCommittedRef(
+            node: node,
+            ref: PrefixCacheTestFixtures.makeRef(type: .system, tokenOffset: stableOffset)
+        )
+
+        // While the ssdOnly node is present, the system checkpoint is
+        // treated as already stored and suppressed.
+        let planBefore = mgr.planCheckpoints(
+            tokens: tokens, stablePrefixOffset: stableOffset, partitionKey: defaultKey
+        )
+        #expect(!planBefore.contains { $0.offset == stableOffset && $0.type == .system })
+
+        // A failed hydration clears the node (forgiving clear removes the
+        // now-bodyless leaf).
+        mgr.clearCommittedSnapshotRefAfterHydrationFailure(node: node, partitionKey: defaultKey)
+
+        // The lost checkpoint is now re-planned.
+        let planAfter = mgr.planCheckpoints(
+            tokens: tokens, stablePrefixOffset: stableOffset, partitionKey: defaultKey
+        )
+        #expect(planAfter.contains { $0.offset == stableOffset && $0.type == .system })
     }
 
     /// State-4 lookups (body + committed ref) must bump the SSD
@@ -1666,63 +1785,94 @@ struct PrefixCacheManagerTests {
             Issue.record("Expected .ssdHit after warm start, got \(lookup.reason)")
             return
         }
-        #expect(ctx.storageRef.tokenOffset == snapshot.tokenOffset)
+        #expect(ctx.snapshotRef.tokenOffset == snapshot.tokenOffset)
         #expect(restoredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
     }
 
     /// Warm-start tolerates two persisted descriptors that resolve to the
     /// same `pathFromRoot` (corrupted-manifest rebuild, a stale entry left
     /// after a crash before debounced persist, etc.). The first descriptor
-    /// wins and the second is dropped with a debug log — last-wins would
-    /// leak the first SSD file because it would be unreachable from the
-    /// live tree. Regression for the strict precondition in
-    /// `tree.restoreCommittedRef` that aborts on a non-empty target.
-    @Test func restoreStorageRefIsIdempotentOnPathCollision() {
+    /// wins; the second is dropped — last-wins would leak the first SSD
+    /// file because it would be unreachable from the live tree. The
+    /// dropped descriptor's SSD backing is reclaimed (not leaked): without
+    /// the reclaim, its bytes + manifest entry linger, never hittable,
+    /// inflating the SSD budget.
+    @Test func restoreSnapshotRefIsIdempotentOnPathCollisionAndReclaimsLoser() {
         let (mgr, tieredStore, root) = makeSSDManager()
         defer { try? FileManager.default.removeItem(at: root) }
 
         let path = Array(1...8)
         let digest = defaultKey.partitionDigest
-        let first = SnapshotRef(
-            snapshotID: UUID().uuidString,
-            partitionDigest: digest,
-            tokenOffset: path.count,
-            checkpointType: .leaf,
-            bytesOnDisk: 1024
-        )
-        let second = SnapshotRef(
-            snapshotID: UUID().uuidString,
-            partitionDigest: digest,
-            tokenOffset: path.count,
-            checkpointType: .leaf,
-            bytesOnDisk: 2048
-        )
-        let now: ContinuousClock.Instant = .now
+        let ssdStore = tieredStore.ssdStore!
 
-        mgr.restoreStorageRef(
-            path: path,
-            storageRef: first,
-            partitionKey: defaultKey,
-            lastAccessTime: now
+        // Register the partition and seed BOTH descriptors into the
+        // manifest + SSD byte budget, mirroring `commitRestoredManifest`
+        // for two on-disk files that compress to one `pathFromRoot`.
+        let meta = PartitionMeta(
+            modelID: "test-model",
+            modelFingerprint: String(repeating: "a", count: 64),
+            kvBits: nil,
+            kvGroupSize: 64,
+            createdAt: 0,
+            schemaVersion: SnapshotManifestSchema.currentVersion
+        )
+        ssdStore.registerPartition(meta, digest: digest)
+
+        func seed(bytes: Int) -> SnapshotRef {
+            let id = UUID().uuidString
+            ssdStore.seedDescriptorForTesting(PersistedSnapshotDescriptor(
+                snapshotID: id,
+                partitionDigest: digest,
+                pathFromRoot: path,
+                tokenOffset: path.count,
+                checkpointType: HybridCacheSnapshot.CheckpointType.leaf.wireString,
+                bytes: bytes,
+                createdAt: 0,
+                lastAccessAt: 0,
+                fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+                    snapshotID: id, partitionDigest: digest
+                ),
+                schemaVersion: SnapshotManifestSchema.currentVersion
+            ))
+            return SnapshotRef(
+                snapshotID: id,
+                partitionDigest: digest,
+                tokenOffset: path.count,
+                checkpointType: .leaf,
+                bytesOnDisk: bytes
+            )
+        }
+
+        let first = seed(bytes: 1024)
+        let second = seed(bytes: 2048)
+        #expect(ssdStore.currentSSDBytesForTesting() == 1024 + 2048)
+
+        let now: ContinuousClock.Instant = .now
+        mgr.restoreSnapshotRef(
+            path: path, snapshotRef: first,
+            partitionKey: defaultKey, lastAccessTime: now
         )
         // Second call resolves to the same node via `insertPath`'s edge
-        // walk. Before the fix this crashed the process via the tree's
-        // strict precondition; the fix lets warm-start continue.
-        mgr.restoreStorageRef(
-            path: path,
-            storageRef: second,
-            partitionKey: defaultKey,
-            lastAccessTime: now
+        // walk: first-wins, and the loser's backing is reclaimed.
+        mgr.restoreSnapshotRef(
+            path: path, snapshotRef: second,
+            partitionKey: defaultKey, lastAccessTime: now
         )
 
         // First-wins: the surviving node still points at `first`.
         let tree = tieredStore.tree(for: defaultKey)!
         let (node, _) = tree.findBestSnapshot(
-            tokens: path,
-            updateAccess: false,
-            includeStorageRefs: true
+            tokens: path, updateAccess: false, includeSnapshotRefs: true
         )!
         #expect(node.state.refID == first.snapshotID)
+
+        // The dropped (second) descriptor's backing is reclaimed: its
+        // bytes are gone from the SSD budget and its manifest entry
+        // removed — only `first` remains.
+        #expect(ssdStore.currentSSDBytesForTesting() == first.bytesOnDisk)
+        #expect(
+            !ssdStore.residentIDsByRecencyForTesting().contains(second.snapshotID)
+        )
     }
 
     // MARK: - TriAttention SSD admission (v6)

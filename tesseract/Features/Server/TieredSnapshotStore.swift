@@ -20,7 +20,7 @@
 //  **MainActor-isolated by construction.** All routing (pending map
 //  writes, callback forwarding) happens on MainActor. The writer's commit
 //  / drop callbacks fire from off-main context and hop back via
-//  `Task { @MainActor in self?.markStorageRefCommitted(...) }` —
+//  `Task { @MainActor in self?.markSnapshotRefCommitted(...) }` —
 //  see `init(ssdConfig:)`.
 //
 //  **Node removal is the tree's self-heal.** When a drop empties a node
@@ -86,12 +86,12 @@ final class TieredSnapshotStore: SnapshotStore {
             config: ssdConfig,
             onCommit: { [weak self] id in
                 Task { @MainActor [weak self] in
-                    self?.markStorageRefCommitted(id: id)
+                    self?.markSnapshotRefCommitted(id: id)
                 }
             },
             onDrop: { [weak self] id, reason in
                 Task { @MainActor [weak self] in
-                    self?.markStorageRefDropped(id: id, reason: reason)
+                    self?.markSnapshotRefDropped(id: id, reason: reason)
                 }
             }
         )
@@ -148,7 +148,7 @@ final class TieredSnapshotStore: SnapshotStore {
     ///   mutator of node state. Re-admission over a still-live ref returns
     ///   the superseded ID; its SSD backing is deleted *before* the new
     ///   pending entry is seeded, closing the SSD-side orphan that the old
-    ///   raw `node.storageRef = ref` overwrite leaked.
+    ///   raw node ref overwrite leaked.
     /// - `pendingRefsByID[ref.snapshotID]` is seeded with the
     ///   `(node, tree)` pair so the writer's commit / drop callback can
     ///   always find the node, even after RAM eviction drops the body.
@@ -212,10 +212,10 @@ final class TieredSnapshotStore: SnapshotStore {
     /// otherwise ignored — the node was already evicted via the
     /// drop-on-back-pressure path or the writer fired a duplicate
     /// commit for an ID that never actually landed.
-    func markStorageRefCommitted(id: String) {
+    func markSnapshotRefCommitted(id: String) {
         guard let pending = pendingRefsByID.removeValue(forKey: id) else {
             Log.agent.debug(
-                "TieredSnapshotStore.markStorageRefCommitted: id=\(id) not in pending map"
+                "TieredSnapshotStore.markSnapshotRefCommitted: id=\(id) not in pending map"
             )
             return
         }
@@ -227,7 +227,7 @@ final class TieredSnapshotStore: SnapshotStore {
         let effect = pending.tree.commitRef(node: pending.node, expectedID: id)
         if case .ignored(let reason) = effect {
             Log.agent.debug(
-                "TieredSnapshotStore.markStorageRefCommitted: id=\(id) ignored "
+                "TieredSnapshotStore.markSnapshotRefCommitted: id=\(id) ignored "
                 + "(reason=\(String(describing: reason)))"
             )
         }
@@ -256,18 +256,18 @@ final class TieredSnapshotStore: SnapshotStore {
     /// committed resident whose node is no longer tracked here. The
     /// stale ref on such a node self-cleans on the next lookup when
     /// `loadSync` reports file-missing and the MainActor calls
-    /// `tree.clearStorageRef`.
-    func markStorageRefDropped(id: String, reason: SSDDropReason) {
+    /// `tree.clearCommittedSnapshotRefAfterHydrationFailure`.
+    func markSnapshotRefDropped(id: String, reason: SSDDropReason) {
         guard let pending = pendingRefsByID.removeValue(forKey: id) else {
             // Not in the pending map: this is a committed-resident drop
             // (`.evictedByLRU` / `.hydrationFailure` for an ID that commit
             // already removed). A logged no-op — the stale committed ref
             // is cleared lazily on the next lookup, when `loadSync`
             // reports file-missing and the MainActor calls
-            // `tree.clearStorageRef` with the node already in hand. Do not
+            // `tree.clearCommittedSnapshotRefAfterHydrationFailure` with the node already in hand. Do not
             // search the tree per drop callback.
             Log.agent.debug(
-                "TieredSnapshotStore.markStorageRefDropped: id=\(id) not in pending map "
+                "TieredSnapshotStore.markSnapshotRefDropped: id=\(id) not in pending map "
                 + "(reason=\(String(describing: reason)))"
             )
             return
@@ -281,7 +281,7 @@ final class TieredSnapshotStore: SnapshotStore {
         let effect = pending.tree.dropRef(node: pending.node, expectedID: id)
         if case .ignored(let dropReason) = effect {
             Log.agent.debug(
-                "TieredSnapshotStore.markStorageRefDropped: id=\(id) ignored "
+                "TieredSnapshotStore.markSnapshotRefDropped: id=\(id) ignored "
                 + "(reason=\(String(describing: dropReason)))"
             )
         }

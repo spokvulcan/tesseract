@@ -4,8 +4,8 @@
 //
 //  The prefix-cache snapshot lifecycle as a single value-type deep
 //  module. Each `RadixTreeNode` owns one `SnapshotState`, replacing the
-//  old pair of raw fields (`snapshot` RAM body + `storageRef` SSD ref +
-//  `committed` bool) that spread a five-state condition across the tree,
+//  old pair of raw fields (`snapshot` RAM body + Snapshot Ref plus
+//  commit flag) that spread lifecycle knowledge across the tree,
 //  the tiered store, and the cache manager.
 //
 //  The load-bearing invariant — *never remove a node that still owns a
@@ -131,13 +131,25 @@ nonisolated enum SnapshotState {
 
     // MARK: Queries
 
+    /// True iff state 0 (no body, no ref). The single home for the
+    /// emptiness predicate the tree's self-heal gates structural removal
+    /// on; sits alongside the other state predicates rather than as a
+    /// free function in the tree.
+    var isEmpty: Bool {
+        if case .empty = self { return true }
+        return false
+    }
+
     /// The orphan invariant: true iff removing the node structure cannot
     /// orphan an SSD-resident snapshot — i.e. the node holds no live ref.
     /// True for `empty`/`ramOnly` only.
     ///
     /// Necessary but *not* sufficient for node removal: actual structural
     /// removal additionally requires topology (the tree's self-heal).
-    /// Distinct from `hasResidentBody`.
+    /// Distinct from `hasResidentBody`. Load-bearing: the tree's removal
+    /// primitive (`detachEmptyLeaf`) refuses to unlink a node for which
+    /// this is false, so the orphan invariant is enforced here rather than
+    /// by every caller remembering to only remove on `.becameEmpty`.
     var canEvictNode: Bool { ref == nil }
 
     /// RAM-budget concept: true iff a RAM body is resident (states
@@ -159,6 +171,21 @@ nonisolated enum SnapshotState {
 
     /// The ref's snapshot ID, if any.
     var refID: String? { ref?.snapshotID }
+
+    /// The checkpoint type of whatever this node holds: the resident
+    /// body's type, or — when body-less (states 3/5) — the ref's. The
+    /// single source for the body-then-ref precedence that supersession,
+    /// telemetry, and checkpoint planning all read; `nil` only for `empty`.
+    var checkpointType: HybridCacheSnapshot.CheckpointType? {
+        body?.checkpointType ?? ref?.checkpointType
+    }
+
+    /// The captured token offset of whatever this node holds: the body's,
+    /// or — when body-less — the ref's. `nil` only for `empty`. Equals the
+    /// owning node's `tokenOffset` by construction.
+    var tokenOffset: Int? {
+        body?.tokenOffset ?? ref?.tokenOffset
+    }
 
     /// RAM-resident body bytes (feeds the **RAM** budget). `0` when no
     /// body — an `ssdOnly` node must never count against the RAM budget.
@@ -305,14 +332,30 @@ nonisolated enum SnapshotState {
 
     /// Clear a committed ref after a hydration failure (file missing /
     /// fingerprint mismatch / decode error). `ssdOnly` → `empty`
-    /// (`.becameEmpty`); a still-bodied committed/pending node keeps its
-    /// body (→ `ramOnly`). No-ref states return `.ignored(.notResident)`.
-    func clearingRef() -> (SnapshotState, StateEffect) {
+    /// (`.becameEmpty`); a still-bodied committed node keeps its body
+    /// (→ `ramOnly`). Pending refs are not hydration targets and return
+    /// `.ignored(.notResident)` so strict wrappers can fail loudly.
+    func clearingCommittedRefAfterHydrationFailure() -> (SnapshotState, StateEffect) {
         switch self {
-        case .ssdOnly, .pendingDropped:
+        case .ssdOnly:
             (.empty, .becameEmpty)
-        case .committed(let b, _), .pendingWrite(let b, _):
+        case .committed(let b, _):
             (.ramOnly(b), .settled)
+        case .empty, .ramOnly, .pendingWrite, .pendingDropped:
+            (self, .ignored(.notResident))
+        }
+    }
+
+    /// Discard any ref after its SSD backing has already been explicitly
+    /// deleted or cancelled by the caller (for example, leaf
+    /// supersession). Body-bearing states keep the body as `ramOnly`;
+    /// body-less ref states become `empty`.
+    func discardingRefAfterExplicitDelete() -> (SnapshotState, StateEffect) {
+        switch self {
+        case .pendingWrite(let b, _), .committed(let b, _):
+            (.ramOnly(b), .settled)
+        case .pendingDropped, .ssdOnly:
+            (.empty, .becameEmpty)
         case .empty, .ramOnly:
             (self, .ignored(.notResident))
         }

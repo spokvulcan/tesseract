@@ -254,9 +254,27 @@ struct SnapshotStateTests {
         }
     }
 
-    // MARK: - clearingRef
+    // MARK: - clearingCommittedRefAfterHydrationFailure
 
-    @Test func clearingRefMatrix() {
+    @Test func clearingCommittedRefAfterHydrationFailureMatrix() {
+        let cases: [(label: String, state: SnapshotState, result: String, effect: StateEffect)] = [
+            ("empty", .empty, "empty", .ignored(.notResident)),
+            ("ramOnly", .ramOnly(body()), "ramOnly", .ignored(.notResident)),
+            ("pendingWrite", .pendingWrite(body(), ref()), "pendingWrite", .ignored(.notResident)),
+            ("pendingDropped", .pendingDropped(ref()), "pendingDropped", .ignored(.notResident)),
+            ("committed", .committed(body(), ref()), "ramOnly", .settled),
+            ("ssdOnly", .ssdOnly(ref()), "empty", .becameEmpty),
+        ]
+        for c in cases {
+            let (next, effect) = c.state.clearingCommittedRefAfterHydrationFailure()
+            #expect(next.label == c.result, "clear committed ref from \(c.label)")
+            #expect(effect == c.effect, "clear committed ref effect from \(c.label)")
+        }
+    }
+
+    // MARK: - discardingRefAfterExplicitDelete
+
+    @Test func discardingRefAfterExplicitDeleteMatrix() {
         let cases: [(label: String, state: SnapshotState, result: String, effect: StateEffect)] = [
             ("empty", .empty, "empty", .ignored(.notResident)),
             ("ramOnly", .ramOnly(body()), "ramOnly", .ignored(.notResident)),
@@ -266,9 +284,9 @@ struct SnapshotStateTests {
             ("ssdOnly", .ssdOnly(ref()), "empty", .becameEmpty),
         ]
         for c in cases {
-            let (next, effect) = c.state.clearingRef()
-            #expect(next.label == c.result, "clearRef from \(c.label)")
-            #expect(effect == c.effect, "clearRef effect from \(c.label)")
+            let (next, effect) = c.state.discardingRefAfterExplicitDelete()
+            #expect(next.label == c.result, "discard ref from \(c.label)")
+            #expect(effect == c.effect, "discard ref effect from \(c.label)")
         }
     }
 
@@ -310,7 +328,8 @@ struct SnapshotStateTests {
             let drop = state.droppingRef(expectedID: state.refID ?? id); record(drop.1, drop.0)
             let dropBody = state.droppingBody(); record(dropBody.1.effect, dropBody.0)
             let hydrate = state.hydrating(body()); record(hydrate.1, hydrate.0)
-            let clear = state.clearingRef(); record(clear.1, clear.0)
+            let clear = state.clearingCommittedRefAfterHydrationFailure(); record(clear.1, clear.0)
+            let discard = state.discardingRefAfterExplicitDelete(); record(discard.1, discard.0)
             let restore = state.restoringCommittedRef(ref()); record(restore.1, restore.0)
         }
 

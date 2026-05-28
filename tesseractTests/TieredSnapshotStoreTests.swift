@@ -327,7 +327,7 @@ struct TieredSnapshotStoreTests {
         // Drop the body → state 3, then simulate a writer-side drop
         // (e.g. diskFull after retry) before commit runs.
         tree.dropBody(node: node)
-        store.markStorageRefDropped(id: ref.snapshotID, reason: .diskFull)
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .diskFull)
 
         #expect(store.pendingRefCountForTesting == 0)
         #expect(node.state.ref == nil)
@@ -363,7 +363,7 @@ struct TieredSnapshotStoreTests {
 
         // Simulate writer failure while the RAM body is still live —
         // state 2 → state 1.
-        store.markStorageRefDropped(id: ref.snapshotID, reason: .writerIOError)
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .writerIOError)
 
         #expect(store.pendingRefCountForTesting == 0)
         #expect(node.state.ref == nil)
@@ -670,8 +670,8 @@ struct TieredSnapshotStoreTests {
         }
 
         // Drop the pending ref (state 2 → 1), then a late commit arrives.
-        store.markStorageRefDropped(id: ref.snapshotID, reason: .writerIOError)
-        store.markStorageRefCommitted(id: ref.snapshotID)
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .writerIOError)
+        store.markSnapshotRefCommitted(id: ref.snapshotID)
 
         #expect(node.state.ref == nil)       // not resurrected
         #expect(node.state.body != nil)
@@ -699,7 +699,7 @@ struct TieredSnapshotStoreTests {
         #expect(committed)
 
         // Fire commit again — already committed, not in pending map.
-        store.markStorageRefCommitted(id: ref.snapshotID)
+        store.markSnapshotRefCommitted(id: ref.snapshotID)
         #expect(node.state.committed)
         #expect(store.pendingRefCountForTesting == 0)
     }
@@ -707,7 +707,7 @@ struct TieredSnapshotStoreTests {
     /// A drop callback for a committed resident whose id is no longer in
     /// the pending map (`.evictedByLRU` / `.hydrationFailure`) is a logged
     /// no-op: it leaves the tree untouched. The stale committed ref is
-    /// cleared lazily through `tree.clearStorageRef`.
+    /// cleared lazily through `tree.clearCommittedSnapshotRefAfterHydrationFailure`.
     @Test
     func committedResidentDropIsLoggedNoOpThenClearedLazily() async {
         let (root, store, tree, key) = makeFixture()
@@ -729,13 +729,13 @@ struct TieredSnapshotStoreTests {
         #expect(store.pendingRefCountForTesting == 0)
 
         // Committed-resident drop: id is not in the pending map → no-op.
-        store.markStorageRefDropped(id: ref.snapshotID, reason: .hydrationFailure)
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .hydrationFailure)
         #expect(node.state.ref != nil)       // tree untouched
         #expect(node.state.committed)
 
         // Lazy clear on the next lookup (node supplied by the failing
         // hydration) removes the stale ref and self-heals the leaf.
-        tree.clearStorageRef(node: node)
+        tree.clearCommittedSnapshotRefAfterHydrationFailure(node: node)
         #expect(node.state.ref == nil)
         #expect(node.parent == nil)
     }

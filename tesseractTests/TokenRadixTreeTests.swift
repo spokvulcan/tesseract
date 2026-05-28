@@ -554,7 +554,7 @@ struct TokenRadixTreeTests {
 
     /// A single-child node that still owns a ref is not collapsed: dropping
     /// its body settles it to a ref-bearing state (`canEvictNode == false`),
-    /// so self-heal never fires. The old explicit `storageRef == nil` guard
+    /// so self-heal never fires. The old explicit Snapshot Ref guard
     /// is gone — the invariant is now structural (the ref-bearing state is
     /// not `empty`, so `becameEmpty` is never produced).
     @Test func selfHealKeepsSingleChildNodeWithCommittedRef() {
@@ -592,6 +592,23 @@ struct TokenRadixTreeTests {
         #expect(midNode.parent != nil)
         #expect(midNode.state.ref != nil)
         #expect(!midNode.state.committed)
+    }
+
+    @Test func staleCommitAfterReadmissionReturnsIDMismatch() {
+        let tree = TokenRadixTree()
+        insertAndStore(tree, tokens: [1, 2, 3])
+        let node = tree.findBestSnapshot(tokens: [1, 2, 3])!.node
+
+        let oldRef = PrefixCacheTestFixtures.makeRef(tokenOffset: node.tokenOffset)
+        let newRef = PrefixCacheTestFixtures.makeRef(tokenOffset: node.tokenOffset)
+        tree.admit(node: node, ref: oldRef)
+        tree.admit(node: node, ref: newRef)
+
+        let staleEffect = tree.commitRef(node: node, expectedID: oldRef.snapshotID)
+
+        #expect(staleEffect == .ignored(.idMismatch))
+        #expect(node.state.refID == newRef.snapshotID)
+        #expect(!node.state.committed)
     }
 
     /// Self-heal's ancestor walk stops at a ref-bearing ancestor: removing a
@@ -676,7 +693,7 @@ struct TokenRadixTreeTests {
             )
         )
         let branchNode = snapshot.nodes.first { $0.tokenOffset == 2 }
-        let pendingNode = snapshot.nodes.first { $0.storageRefID == pendingRef.snapshotID }
+        let pendingNode = snapshot.nodes.first { $0.snapshotRefID == pendingRef.snapshotID }
 
         #expect(snapshot.partitionSummary.contains("telemetry-model"))
         #expect(snapshot.partitionSummary.contains("denseKV"))
@@ -684,7 +701,7 @@ struct TokenRadixTreeTests {
         #expect(branchNode?.checkpointType == "branchPoint")
         #expect(branchNode?.storageState == .ramAndSSD)
         #expect(branchNode?.storageBytes == 1024)
-        #expect(branchNode?.storageRefID == branchRef.snapshotID)
+        #expect(branchNode?.snapshotRefID == branchRef.snapshotID)
         #expect(pendingNode?.checkpointType == "leaf")
         #expect(pendingNode?.storageState == .pendingWriteBodyDropped)
         #expect(pendingNode?.hasSnapshot == false)

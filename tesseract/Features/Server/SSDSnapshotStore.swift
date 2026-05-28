@@ -73,8 +73,8 @@ nonisolated enum TryEnqueueResult: Sendable, Equatable {
 }
 
 /// Why a pending or resident item was dropped. Fed into the
-/// `onDrop` callback so downstream composition code can clear the
-/// radix node's `storageRef` and log diagnostics.
+/// `onDrop` callback so downstream composition code can update the
+/// radix node's Snapshot Ref state and log diagnostics.
 nonisolated enum SSDDropReason: Sendable, Equatable {
     /// Front door dropped an older pending entry to fit the new
     /// enqueue under `maxPendingBytes`.
@@ -83,10 +83,9 @@ nonisolated enum SSDDropReason: Sendable, Equatable {
     /// Previously committed resident was evicted by a later
     /// admission's type-protected LRU cut (or by a disk-full
     /// retry) to make room for an incoming entry. The file and
-    /// the manifest entry are already gone by the time this fires
-    /// — consumers must clear their `storageRef` so subsequent
-    /// lookups don't return a stale SSD hit pointing at a deleted
-    /// file.
+    /// the manifest entry are already gone by the time this fires.
+    /// Tree-side consumers may clear the stale committed Snapshot Ref
+    /// lazily when a subsequent hydration attempt supplies the node.
     case evictedByLRU
 
     /// Admission LRU cut could not free enough SSD budget without
@@ -304,15 +303,15 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             // Both events fire per bumped item: the admission outcome
             // (`droppedByteBudget` is the terminal verdict for that
             // earlier `tryEnqueue` call), and the lifecycle callback
-            // (`storageRefDropCallback` so the radix node sees its
-            // pending ref cleared).
+            // (`storageRefDropCallback`, the stable telemetry name, so
+            // the radix node sees its pending ref cleared).
             PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
                 id: item.id,
                 bytes: item.bytes,
                 outcome: .droppedByteBudget
             ))
             PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+                PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                     id: item.id,
                     reason: .backpressureOldest
                 )
@@ -664,7 +663,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             outcome: .accepted
         ))
         PrefixCacheDiagnostics.logSystem(
-            PrefixCacheDiagnostics.StorageRefCommitEvent(id: item.descriptor.snapshotID)
+            PrefixCacheDiagnostics.SnapshotRefCommitEvent(id: item.descriptor.snapshotID)
         )
         onCommit(item.descriptor.snapshotID)
     }
@@ -676,7 +675,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     }
 
     /// Centralized writer-drop emission: terminal `ssdAdmit` outcome
-    /// for the failed item, then the `storageRefDropCallback`
+    /// for the failed item, then the `storageRefDropCallback` telemetry
     /// lifecycle event, then the actual `onDrop` invocation.
     /// `processPendingItem`'s drop branches all funnel through here
     /// so the event ordering stays in lockstep with the callback
@@ -709,7 +708,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             outcome: outcome
         ))
         PrefixCacheDiagnostics.logSystem(
-            PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+            PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                 id: id,
                 reason: reason
             )
@@ -725,7 +724,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         for resident in evicted {
             deleteResidentFile(resident.fileURL)
             PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+                PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                     id: resident.snapshotID,
                     reason: .evictedByLRU
                 )
@@ -1191,7 +1190,7 @@ extension SSDSnapshotStore {
     ///
     /// Returns the partitioned view of the loaded manifest so the
     /// manager can iterate valid descriptors and call
-    /// `restoreStorageRef` without re-reading the store's private
+    /// `restoreSnapshotRef` without re-reading the store's private
     /// state.
     nonisolated func warmStartLoad(
         expectedFingerprint: String
@@ -1537,7 +1536,7 @@ extension SSDSnapshotStore {
     ///
     /// Returns `nil` on any failure; `HybridCacheSnapshot` on success.
     nonisolated func loadSync(
-        storageRef: SnapshotRef,
+        snapshotRef: SnapshotRef,
         expectedFingerprint: String
     ) -> HybridCacheSnapshot? {
         // Fingerprint gate: compare the partition's persisted
@@ -1545,20 +1544,20 @@ extension SSDSnapshotStore {
         // or missing partition is terminal — drop and miss.
         lock.lock()
         let partitionFingerprint = manifest
-            .partitions[storageRef.partitionDigest]?
+            .partitions[snapshotRef.partitionDigest]?
             .modelFingerprint
         lock.unlock()
 
         guard let partitionFingerprint else {
             return failLoad(
-                storageRef,
+                snapshotRef,
                 reason: .partitionNotInManifest,
-                "partition not in manifest digest=\(storageRef.partitionDigest)"
+                "partition not in manifest digest=\(snapshotRef.partitionDigest)"
             )
         }
         guard partitionFingerprint == expectedFingerprint else {
             return failLoad(
-                storageRef,
+                snapshotRef,
                 reason: .fingerprintMismatch,
                 "fingerprint mismatch partition=\(partitionFingerprint.prefix(8)) "
                 + "expected=\(expectedFingerprint.prefix(8))"
@@ -1569,13 +1568,13 @@ extension SSDSnapshotStore {
         // missing / permission / IO errors via one catch site.
         // `.mappedIfSafe` lets the kernel page in on demand so
         // ~200 MiB snapshots do not spike peak RSS during hydration.
-        let url = fileURL(forStorageRef: storageRef)
+        let url = fileURL(forSnapshotRef: snapshotRef)
         let fileData: Data
         do {
             fileData = try Data(contentsOf: url, options: .mappedIfSafe)
         } catch {
             return failLoad(
-                storageRef,
+                snapshotRef,
                 reason: .readFailed,
                 "read failed error=\(error)"
             )
@@ -1587,12 +1586,12 @@ extension SSDSnapshotStore {
         do {
             return try decodePlaceholderContainer(
                 fileData,
-                tokenOffset: storageRef.tokenOffset,
-                checkpointType: storageRef.checkpointType
+                tokenOffset: snapshotRef.tokenOffset,
+                checkpointType: snapshotRef.checkpointType
             )
         } catch {
             return failLoad(
-                storageRef,
+                snapshotRef,
                 reason: .decodeFailed,
                 "decode failed error=\(error)"
             )
@@ -1623,7 +1622,7 @@ extension SSDSnapshotStore {
     }
 
     private nonisolated func fileURL(
-        forStorageRef ref: SnapshotRef
+        forSnapshotRef ref: SnapshotRef
     ) -> URL {
         fileURL(
             snapshotID: ref.snapshotID,
@@ -1633,7 +1632,7 @@ extension SSDSnapshotStore {
 
     /// Remove the descriptor from the manifest, delete the on-disk
     /// file, and fire `onDrop` with `.hydrationFailure`. Called from
-    /// every `loadSync` error path so the node's storageRef gets
+    /// every `loadSync` error path so the node's Snapshot Ref gets
     /// cleared and subsequent lookups miss cleanly.
     private nonisolated func dropHydrationFailure(id: String) {
         lock.lock()
@@ -1644,7 +1643,7 @@ extension SSDSnapshotStore {
             try? FileManager.default.removeItem(at: evicted.fileURL)
         }
         PrefixCacheDiagnostics.logSystem(
-            PrefixCacheDiagnostics.StorageRefDropCallbackEvent(
+            PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                 id: id,
                 reason: .hydrationFailure
             )

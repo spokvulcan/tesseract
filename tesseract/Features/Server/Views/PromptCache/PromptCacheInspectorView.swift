@@ -55,8 +55,8 @@ struct PromptCacheInspectorView: View {
             detailRow("RAM bytes", PromptCacheFormatting.bytes(node.snapshotBytes))
             detailRow("SSD bytes", PromptCacheFormatting.bytes(node.storageBytes))
             detailRow("Age", PromptCacheFormatting.age(node.lastAccessAgeSeconds))
-            if let storageRefID = node.storageRefID {
-                detailRow("Storage ref", storageRefID)
+            if let snapshotRefID = node.snapshotRefID {
+                detailRow("Snapshot Ref", snapshotRefID)
             }
             if let utility = node.utility {
                 Divider()
