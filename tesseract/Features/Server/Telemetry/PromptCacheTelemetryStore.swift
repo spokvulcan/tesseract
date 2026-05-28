@@ -295,7 +295,7 @@ final class PromptCacheTelemetryStore {
             || String(node.tokenOffset).contains(query)
             || node.checkpointType?.localizedCaseInsensitiveContains(query) == true
             || node.storageState.displayName.localizedCaseInsensitiveContains(query)
-            || node.storageRefID?.localizedCaseInsensitiveContains(query) == true
+            || node.snapshotRefID?.localizedCaseInsensitiveContains(query) == true
     }
 }
 

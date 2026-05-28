@@ -2,14 +2,20 @@
 //  TieredSnapshotStoreTests.swift
 //  tesseractTests
 //
-//  Task 4.1.6 coverage — tiered store composition + five-state
-//  storage-ref lifecycle + admission-time LRU cut forwarding.
+//  Coverage for the tiered store as an SSD **router**: admission routes
+//  through `tree.admit`, the writer's commit / drop callbacks route
+//  through `tree.commitRef` / `tree.dropRef`, and node removal is the
+//  tree's self-heal. The store never mutates node state itself.
 //
-//  Each test constructs a `TieredSnapshotStore` over a temp
-//  directory, drives a storage-ref lifecycle transition via the
-//  public API, and asserts the post-state via `node.storageRef`,
-//  the testing-hook `pendingRefCountForTesting`, and (where
-//  applicable) the underlying `SSDSnapshotStore` accessors.
+//  Each test constructs a `TieredSnapshotStore` over a temp directory,
+//  drives a lifecycle transition via the public API, and asserts the
+//  post-state via `node.state` queries, the `pendingRefCountForTesting`
+//  hook, and (where applicable) the underlying `SSDSnapshotStore`.
+//
+//  Note: `admit` requires a resident RAM body (states 1/2/4) — in
+//  production every admission follows a `storeSnapshot`. Tests therefore
+//  seed a body via `insertWithBody` before admitting, and reach the
+//  body-less states (3/5) through `dropBody`.
 //
 
 import Foundation
@@ -112,6 +118,22 @@ struct TieredSnapshotStoreTests {
         )
     }
 
+    /// Insert a path and attach a RAM body so the node is in state 1
+    /// (`ramOnly`) — the precondition `admit` requires.
+    @discardableResult
+    private func insertWithBody(
+        _ tree: TokenRadixTree,
+        tokens: [Int],
+        type: HybridCacheSnapshot.CheckpointType = .leaf
+    ) -> RadixTreeNode {
+        let node = tree.insertPath(tokens: tokens)
+        tree.storeSnapshot(
+            PrefixCacheTestFixtures.makeUniformSnapshot(offset: node.tokenOffset, type: type),
+            on: node
+        )
+        return node
+    }
+
     /// Poll `condition` on MainActor every 10 ms until it returns
     /// true or `timeout` elapses. Needed because the writer's
     /// commit / drop callbacks fire from a background task and hop
@@ -128,8 +150,6 @@ struct TieredSnapshotStoreTests {
         return condition()
     }
 
-    /// Bundle of (root, store, tree, key) used by every happy-path
-    /// test. Tests unpack the tuple and add a `defer { cleanup(root) }`.
     private typealias Fixture = (
         root: URL,
         store: TieredSnapshotStore,
@@ -137,10 +157,6 @@ struct TieredSnapshotStoreTests {
         key: CachePartitionKey
     )
 
-    /// Build a fresh scratch-backed store, register the default
-    /// partition, and return a tree for it. Every happy-path test
-    /// in this file calls this; keep signatures additive (extra
-    /// knobs via optional parameters) so callers stay terse.
     private func makeFixture(
         budgetBytes: Int = 1_000_000,
         maxPendingBytes: Int = 10_000_000
@@ -167,7 +183,7 @@ struct TieredSnapshotStoreTests {
         let store = TieredSnapshotStore(ssdConfig: nil)
         let key = makePartitionKey()
         let tree = store.getOrCreateTree(for: key)
-        let node = tree.insertPath(tokens: [1, 2, 3])
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024)
         let descriptor = makeDescriptor(
@@ -182,13 +198,12 @@ struct TieredSnapshotStoreTests {
             descriptor: descriptor
         )
         #expect(result == nil)
-        #expect(node.storageRef == nil)
+        #expect(node.state.ref == nil)
         #expect(store.pendingRefCountForTesting == 0)
     }
 
     @Test
     func disabledConfigCollapsesToRAMOnlyMode() async {
-        // Explicitly disabled config → same as nil.
         let root = makeScratchDir()
         defer { cleanup(root) }
         let config = SSDPrefixCacheConfig(
@@ -207,10 +222,10 @@ struct TieredSnapshotStoreTests {
     func admitAndCommitTransitionsStateOneToFour() async {
         let (root, store, tree, key) = makeFixture()
         defer { cleanup(root) }
-        let node = tree.insertPath(tokens: [1, 2, 3])
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        // Pre-condition: state 1 (RAM only).
-        #expect(node.storageRef == nil)
+        // Pre-condition: state 1 (RAM only, no ref).
+        #expect(node.state.ref == nil)
 
         let payload = makePayload(bytes: 1_024)
         let descriptor = makeDescriptor(
@@ -229,15 +244,13 @@ struct TieredSnapshotStoreTests {
         }
 
         // State 2: pending ref attached, not yet committed.
-        #expect(node.storageRef?.snapshotID == ref.snapshotID)
-        #expect(node.storageRef?.committed == false)
+        #expect(node.state.refID == ref.snapshotID)
+        #expect(!node.state.committed)
         #expect(store.pendingRefCountForTesting == 1)
         #expect(store.isPendingForTesting(id: ref.snapshotID))
 
         // Writer commit drains → state 4.
-        let committed = await waitUntil {
-            node.storageRef?.committed == true
-        }
+        let committed = await waitUntil { node.state.committed }
         #expect(committed)
         #expect(store.pendingRefCountForTesting == 0)
         #expect(store.isPendingForTesting(id: ref.snapshotID) == false)
@@ -247,21 +260,9 @@ struct TieredSnapshotStoreTests {
 
     @Test
     func bodyDropThenCommitTransitionsStateTwoToFive() async {
-        // The synchronous pendingRefsByID assignment always races
-        // ahead of commit, so body-dropping the node via
-        // `evictSnapshot` reliably lands before the `waitUntil`
-        // below can observe `committed == true`.
         let (root, store, tree, key) = makeFixture()
         defer { cleanup(root) }
-        let node = tree.insertPath(tokens: [1, 2, 3])
-
-        // Store a dummy snapshot so `node.snapshot` is non-nil (we
-        // need a body to drop). The tree reference counts update.
-        let dummy = PrefixCacheTestFixtures.makeUniformSnapshot(
-            offset: 3,
-            type: .leaf
-        )
-        tree.storeSnapshot(dummy, on: node)
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024, checkpointType: .leaf)
         let descriptor = makeDescriptor(
@@ -279,18 +280,16 @@ struct TieredSnapshotStoreTests {
             return
         }
 
-        // Body-drop before commit lands → state 3.
-        tree.evictSnapshot(node: node)
-        #expect(node.snapshot == nil)
-        #expect(node.storageRef?.committed == false)
+        // Body-drop before commit lands → state 3 (pendingDropped).
+        tree.dropBody(node: node)
+        #expect(node.state.body == nil)
+        #expect(!node.state.committed)
         #expect(store.isPendingForTesting(id: ref.snapshotID))
 
         // Commit callback fires → state 5 (body absent, committed ref).
-        let committed = await waitUntil {
-            node.storageRef?.committed == true
-        }
+        let committed = await waitUntil { node.state.committed }
         #expect(committed)
-        #expect(node.snapshot == nil)
+        #expect(node.state.body == nil)
         #expect(store.pendingRefCountForTesting == 0)
         // Node stays in the tree as a structural path for future lookups.
         #expect(tree.findSharedPrefixLength(tokens: [1, 2, 3]) == 3)
@@ -302,13 +301,10 @@ struct TieredSnapshotStoreTests {
     func bodyDropThenDropCallbackHardDeletesLeafNode() async {
         let (root, store, tree, key) = makeFixture()
         defer { cleanup(root) }
-        let node = tree.insertPath(tokens: [1, 2, 3])
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        // Sibling path so the shared intermediate retains a child
-        // after the state-3 hard delete. Without this, evictNode
-        // would walk all the way up to root (each ancestor becomes
-        // a leaf once the sole child is gone), and the assertion
-        // that the intermediate survives would be meaningless.
+        // Sibling path so the shared intermediate retains a child after
+        // the state-3 hard delete.
         let siblingNode = tree.insertPath(tokens: [1, 2, 5])
         #expect(siblingNode !== node)
 
@@ -328,17 +324,15 @@ struct TieredSnapshotStoreTests {
             return
         }
 
-        // Body is already nil (insertPath does not set snapshot) —
-        // the node is in state 3 by construction. Directly invoke
-        // the drop callback to simulate a writer-side failure
-        // (e.g. diskFull after retry) before the commit path runs.
-        store.markStorageRefDropped(id: ref.snapshotID, reason: .diskFull)
+        // Drop the body → state 3, then simulate a writer-side drop
+        // (e.g. diskFull after retry) before commit runs.
+        tree.dropBody(node: node)
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .diskFull)
 
         #expect(store.pendingRefCountForTesting == 0)
-        #expect(node.storageRef == nil)
-        // Target node is hard-deleted — the [1,2,3] path no
-        // longer reaches a terminal, but the shared [1,2] prefix
-        // survives on the sibling path.
+        #expect(node.state.ref == nil)
+        // Target node is hard-deleted via self-heal — the [1,2,3] path no
+        // longer reaches a terminal, but the shared [1,2] prefix survives.
         #expect(tree.findSharedPrefixLength(tokens: [1, 2, 3]) == 2)
         #expect(tree.findSharedPrefixLength(tokens: [1, 2, 5]) == 3)
     }
@@ -349,12 +343,7 @@ struct TieredSnapshotStoreTests {
     func dropCallbackOnStateTwoClearsRefButKeepsBody() async {
         let (root, store, tree, key) = makeFixture()
         defer { cleanup(root) }
-        let node = tree.insertPath(tokens: [1, 2, 3])
-        let dummy = PrefixCacheTestFixtures.makeUniformSnapshot(
-            offset: 3,
-            type: .leaf
-        )
-        tree.storeSnapshot(dummy, on: node)
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024)
         let descriptor = makeDescriptor(
@@ -372,30 +361,25 @@ struct TieredSnapshotStoreTests {
             return
         }
 
-        // Simulate writer failure while the RAM body is still
-        // live — state 2 → state 1.
-        store.markStorageRefDropped(id: ref.snapshotID, reason: .writerIOError)
+        // Simulate writer failure while the RAM body is still live —
+        // state 2 → state 1.
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .writerIOError)
 
         #expect(store.pendingRefCountForTesting == 0)
-        #expect(node.storageRef == nil)
-        #expect(node.snapshot != nil)
+        #expect(node.state.ref == nil)
+        #expect(node.state.body != nil)
         // Node remains in the tree; lookup can still hit via the body.
         let lookup = tree.findBestSnapshot(tokens: [1, 2, 3])
         #expect(lookup?.node === node)
     }
 
-    // MARK: - State 4 → 5 (natural body-drop via evictSnapshot)
+    // MARK: - State 4 → 5 (natural body-drop via dropBody)
 
     @Test
     func bodyDropAfterCommitTransitionsStateFourToFive() async {
         let (root, store, tree, key) = makeFixture()
         defer { cleanup(root) }
-        let node = tree.insertPath(tokens: [1, 2, 3])
-        let dummy = PrefixCacheTestFixtures.makeUniformSnapshot(
-            offset: 3,
-            type: .leaf
-        )
-        tree.storeSnapshot(dummy, on: node)
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024)
         let descriptor = makeDescriptor(
@@ -411,21 +395,16 @@ struct TieredSnapshotStoreTests {
         )
 
         // Wait for commit (state 2 → state 4).
-        let committed = await waitUntil {
-            node.storageRef?.committed == true
-        }
+        let committed = await waitUntil { node.state.committed }
         #expect(committed)
-        #expect(node.snapshot != nil)
+        #expect(node.state.body != nil)
 
-        // Body-drop: 4 → 5. The node stays in the tree with its
-        // committed ref still attached. Lookup via snapshot-bearing
-        // search misses (body is gone), but the tree path is intact.
-        tree.evictSnapshot(node: node)
-        #expect(node.snapshot == nil)
-        #expect(node.storageRef?.committed == true)
+        // Body-drop: 4 → 5. The node stays with its committed ref
+        // attached. A RAM-only lookup misses (body gone); the path stays.
+        tree.dropBody(node: node)
+        #expect(node.state.body == nil)
+        #expect(node.state.committed)
         #expect(tree.findSharedPrefixLength(tokens: [1, 2, 3]) == 3)
-        // The snapshot-bearing lookup must miss because the RAM body
-        // is gone — the upgrade to a state-5 hit is Task 4.1.9.
         #expect(tree.findBestSnapshot(tokens: [1, 2, 3]) == nil)
     }
 
@@ -433,19 +412,15 @@ struct TieredSnapshotStoreTests {
 
     @Test
     func systemAdmissionEvictsOldestNonSystemUnderBudgetPressure() async {
-        // Tight budget: 3.5 KiB total, each payload ~1 KiB, so the
-        // third admit forces an eviction.
         let (root, store, tree, key) = makeFixture(budgetBytes: 3_500)
         defer { cleanup(root) }
 
-        // Three distinct token paths → three radix nodes.
         let nodes = [
-            tree.insertPath(tokens: [10, 20]),
-            tree.insertPath(tokens: [30, 40]),
-            tree.insertPath(tokens: [50, 60]),
+            insertWithBody(tree, tokens: [10, 20]),
+            insertWithBody(tree, tokens: [30, 40]),
+            insertWithBody(tree, tokens: [50, 60], type: .system),
         ]
 
-        // Admit two non-system residents first.
         let leafA = makeDescriptor(
             partitionDigest: key.partitionDigest,
             checkpointType: "leaf",
@@ -471,16 +446,13 @@ struct TieredSnapshotStoreTests {
             descriptor: leafB
         )
 
-        // Wait for both commits to land.
         let bothCommitted = await waitUntil {
-            nodes[0].storageRef?.committed == true
-            && nodes[1].storageRef?.committed == true
+            nodes[0].state.committed && nodes[1].state.committed
         }
         #expect(bothCommitted)
 
-        // Third admit is a `.system` incoming that forces the
-        // writer's admission-time LRU cut to evict the oldest
-        // non-system resident (leafA).
+        // Third admit is `.system` and forces the writer's admission-time
+        // LRU cut to evict the oldest non-system resident (leafA).
         let systemDesc = makeDescriptor(
             partitionDigest: key.partitionDigest,
             checkpointType: "system",
@@ -494,13 +466,9 @@ struct TieredSnapshotStoreTests {
             descriptor: systemDesc
         )
 
-        // System incoming is committed.
-        let systemCommitted = await waitUntil {
-            nodes[2].storageRef?.committed == true
-        }
+        let systemCommitted = await waitUntil { nodes[2].state.committed }
         #expect(systemCommitted)
 
-        // Oldest non-system (leafA) is gone; leafB survives.
         let residents = store.ssdStore!.residentIDsByRecencyForTesting()
         #expect(residents.contains(leafA.snapshotID) == false)
         #expect(residents.contains(leafB.snapshotID))
@@ -509,14 +477,11 @@ struct TieredSnapshotStoreTests {
 
     @Test
     func nonSystemAdmissionIsDroppedWhenSystemProtectionWins() async {
-        // Very tight budget: a single `.system` resident fills the
-        // whole budget, so the second non-system admit has nowhere
-        // to go without violating type protection.
         let (root, store, tree, key) = makeFixture(budgetBytes: 2_200)
         defer { cleanup(root) }
 
-        let systemNode = tree.insertPath(tokens: [10, 20])
-        let leafNode = tree.insertPath(tokens: [30, 40])
+        let systemNode = insertWithBody(tree, tokens: [10, 20], type: .system)
+        let leafNode = insertWithBody(tree, tokens: [30, 40])
 
         let systemDesc = makeDescriptor(
             partitionDigest: key.partitionDigest,
@@ -531,13 +496,11 @@ struct TieredSnapshotStoreTests {
             descriptor: systemDesc
         )
 
-        let systemCommitted = await waitUntil {
-            systemNode.storageRef?.committed == true
-        }
+        let systemCommitted = await waitUntil { systemNode.state.committed }
         #expect(systemCommitted)
 
-        // Now try to admit a non-system entry that doesn't fit
-        // without evicting the protected `.system` resident.
+        // Admit a non-system entry that does not fit without evicting the
+        // protected `.system` resident.
         let leafDesc = makeDescriptor(
             partitionDigest: key.partitionDigest,
             checkpointType: "leaf",
@@ -551,23 +514,18 @@ struct TieredSnapshotStoreTests {
             descriptor: leafDesc
         )
 
-        // The writer drops the incoming non-system entry with
-        // `.systemProtectionWins`. The drop callback fires via
-        // MainActor hop → `markStorageRefDropped` → clears the
-        // leaf node's ref.
-        let dropped = await waitUntil {
-            leafNode.storageRef == nil
-        }
+        // The writer drops the incoming with `.systemProtectionWins`. The
+        // drop callback routes through `tree.dropRef`: the leaf had a RAM
+        // body, so it settles to state 1 (ref cleared, body kept).
+        let dropped = await waitUntil { leafNode.state.ref == nil }
         #expect(dropped)
+        #expect(leafNode.state.body != nil)
 
         // System resident is still intact.
-        #expect(systemNode.storageRef?.committed == true)
+        #expect(systemNode.state.committed)
         let residents = store.ssdStore!.residentIDsByRecencyForTesting()
         #expect(residents.contains(systemDesc.snapshotID))
         #expect(residents.contains(leafDesc.snapshotID) == false)
-
-        // The leaf node is in state 3 → drop callback hard-deleted
-        // it from the tree (leafNode was a leaf).
         #expect(store.pendingRefCountForTesting == 0)
     }
 
@@ -575,10 +533,6 @@ struct TieredSnapshotStoreTests {
 
     @Test
     func backpressureDropsOldestPendingAndClearsRef() async {
-        // 1 MiB payloads + 2.5 MiB front-door cap: the writer's
-        // fsync+rename (~ms) dominates three synchronous MainActor
-        // admits (~µs), so admit 3 reliably hits back-pressure
-        // before the writer drains the first entry.
         let payloadBytes = 1 * 1024 * 1024
         let (root, store, tree, key) = makeFixture(
             budgetBytes: 64 * 1024 * 1024,
@@ -586,10 +540,9 @@ struct TieredSnapshotStoreTests {
         )
         defer { cleanup(root) }
 
-        // Distinct radix paths so each admit has its own node.
-        let nodeA = tree.insertPath(tokens: [1, 2, 10])
-        let nodeB = tree.insertPath(tokens: [1, 2, 20])
-        let nodeC = tree.insertPath(tokens: [1, 2, 30])
+        let nodeA = insertWithBody(tree, tokens: [1, 2, 10])
+        let nodeB = insertWithBody(tree, tokens: [1, 2, 20])
+        let nodeC = insertWithBody(tree, tokens: [1, 2, 30])
 
         func admit(_ node: RadixTreeNode) {
             _ = store.admitSnapshot(
@@ -607,29 +560,23 @@ struct TieredSnapshotStoreTests {
         admit(nodeB)
         admit(nodeC)
 
-        // Each node settles into committed-ref or cleared-ref and
-        // the pending map drains. Both race outcomes are accepted
-        // (back-pressure fired vs. writer drained fast enough) —
-        // the test's job is verifying the wiring, not pinning NVMe
-        // timing.
+        // Each node settles into committed-ref or cleared-ref and the
+        // pending map drains. Both race outcomes are accepted.
         let settled = await waitUntil {
             [nodeA, nodeB, nodeC].allSatisfy { node in
-                node.storageRef == nil || node.storageRef?.committed == true
+                node.state.ref == nil || node.state.committed
             } && store.pendingRefCountForTesting == 0
         }
         #expect(settled)
 
-        // Most recent admission must always survive — the
-        // front-door drops OLDEST pending, and the writer's LRU
-        // has ample SSD budget here so its own cut never touches
-        // the incoming.
-        #expect(nodeC.storageRef != nil)
+        // Most recent admission must survive — the front-door drops
+        // OLDEST pending and SSD budget is ample.
+        #expect(nodeC.state.ref != nil)
 
-        // Every surviving ref must match a committed manifest
-        // entry — the pending state doesn't count.
+        // Every surviving committed ref must match a manifest entry.
         let residentIDs = Set(store.ssdStore!.residentIDsByRecencyForTesting())
         let committedIDs = [nodeA, nodeB, nodeC]
-            .compactMap { $0.storageRef?.snapshotID }
+            .compactMap { $0.state.committed ? $0.state.refID : nil }
         #expect(Set(committedIDs).isSubset(of: residentIDs))
     }
 
@@ -640,11 +587,6 @@ struct TieredSnapshotStoreTests {
         let (root, store, tree, key) = makeFixture()
         defer { cleanup(root) }
 
-        // 100 synchronous admits from a MainActor scope — nothing
-        // awaits inside `admitSnapshot`, so the whole batch must
-        // finish on a single runloop tick. The time bound is a
-        // soft smoke signal; the real guarantee is structural (no
-        // `await` in the call chain).
         let count = 100
         let payload = makePayload(bytes: 16)
         let descriptors = (0..<count).map { i in
@@ -655,8 +597,9 @@ struct TieredSnapshotStoreTests {
                 bytes: 16
             )
         }
+        // Bodies are seeded before the timed loop, so they do not count.
         let nodes = (0..<count).map { i in
-            tree.insertPath(tokens: [1, 2, 1_000 + i])
+            insertWithBody(tree, tokens: [1, 2, 1_000 + i])
         }
 
         let start = ContinuousClock.now
@@ -681,19 +624,9 @@ struct TieredSnapshotStoreTests {
 
     @Test
     func stateThreeNodeReturnsMissOnRadixLookup() async {
-        // A node that transitioned state 2 → 3 (body dropped while
-        // write still pending) must NOT surface as a hit on
-        // `findBestSnapshot` — pending refs are not hit targets.
-        // `findBestSnapshot` already filters on `snapshot != nil`,
-        // so state-3 nodes naturally return miss.
         let (root, store, tree, key) = makeFixture()
         defer { cleanup(root) }
-        let node = tree.insertPath(tokens: [1, 2, 3])
-        let dummy = PrefixCacheTestFixtures.makeUniformSnapshot(
-            offset: 3,
-            type: .leaf
-        )
-        tree.storeSnapshot(dummy, on: node)
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024)
         let descriptor = makeDescriptor(
@@ -707,16 +640,152 @@ struct TieredSnapshotStoreTests {
             descriptor: descriptor
         )
 
-        // Body-drop while the pending ref is still uncommitted.
-        tree.evictSnapshot(node: node)
-        // Sanity: the node is in state 3 (pending + body absent).
-        #expect(node.snapshot == nil)
-        #expect(node.storageRef != nil)
-        #expect(node.storageRef?.committed == false)
+        // Body-drop while the pending ref is still uncommitted → state 3.
+        tree.dropBody(node: node)
+        #expect(node.state.body == nil)
+        #expect(node.state.ref != nil)
+        #expect(!node.state.committed)
 
-        // Radix lookup must return miss — state-3 nodes are not
-        // hit targets.
+        // Radix lookup must miss — state-3 nodes are not hit targets.
         #expect(tree.findBestSnapshot(tokens: [1, 2, 3]) == nil)
+    }
+
+    // MARK: - Forgiving callbacks (stale / duplicate / committed-resident)
+
+    /// A commit callback that arrives after the ref was dropped is a
+    /// logged no-op — it must not resurrect the cleared ref.
+    @Test
+    func commitAfterDropIsLoggedNoOp() async {
+        let (root, store, tree, key) = makeFixture()
+        defer { cleanup(root) }
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
+
+        guard case .accepted(let ref) = store.admitSnapshot(
+            node: node, tree: tree,
+            payload: makePayload(bytes: 1_024),
+            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+        ) else {
+            Issue.record("admitSnapshot did not accept")
+            return
+        }
+
+        // Drop the pending ref (state 2 → 1), then a late commit arrives.
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .writerIOError)
+        store.markSnapshotRefCommitted(id: ref.snapshotID)
+
+        #expect(node.state.ref == nil)       // not resurrected
+        #expect(node.state.body != nil)
+        #expect(store.pendingRefCountForTesting == 0)
+    }
+
+    /// A duplicate commit callback for an already-committed id is a
+    /// logged no-op.
+    @Test
+    func duplicateCommitIsLoggedNoOp() async {
+        let (root, store, tree, key) = makeFixture()
+        defer { cleanup(root) }
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
+
+        guard case .accepted(let ref) = store.admitSnapshot(
+            node: node, tree: tree,
+            payload: makePayload(bytes: 1_024),
+            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+        ) else {
+            Issue.record("admitSnapshot did not accept")
+            return
+        }
+
+        let committed = await waitUntil { node.state.committed }
+        #expect(committed)
+
+        // Fire commit again — already committed, not in pending map.
+        store.markSnapshotRefCommitted(id: ref.snapshotID)
+        #expect(node.state.committed)
+        #expect(store.pendingRefCountForTesting == 0)
+    }
+
+    /// A drop callback for a committed resident whose id is no longer in
+    /// the pending map (`.evictedByLRU` / `.hydrationFailure`) is a logged
+    /// no-op: it leaves the tree untouched. The stale committed ref is
+    /// cleared lazily through `tree.clearCommittedSnapshotRefAfterHydrationFailure`.
+    @Test
+    func committedResidentDropIsLoggedNoOpThenClearedLazily() async {
+        let (root, store, tree, key) = makeFixture()
+        defer { cleanup(root) }
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
+
+        guard case .accepted(let ref) = store.admitSnapshot(
+            node: node, tree: tree,
+            payload: makePayload(bytes: 1_024),
+            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+        ) else {
+            Issue.record("admitSnapshot did not accept")
+            return
+        }
+
+        let committed = await waitUntil { node.state.committed }
+        #expect(committed)
+        tree.dropBody(node: node)            // state 4 → 5 (ssdOnly)
+        #expect(store.pendingRefCountForTesting == 0)
+
+        // Committed-resident drop: id is not in the pending map → no-op.
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .hydrationFailure)
+        #expect(node.state.ref != nil)       // tree untouched
+        #expect(node.state.committed)
+
+        // Lazy clear on the next lookup (node supplied by the failing
+        // hydration) removes the stale ref and self-heals the leaf.
+        tree.clearCommittedSnapshotRefAfterHydrationFailure(node: node)
+        #expect(node.state.ref == nil)
+        #expect(node.parent == nil)
+    }
+
+    // MARK: - Re-admission supersession (SSD-orphan bug fix)
+
+    /// Admitting a second snapshot onto a node that already holds a
+    /// committed ref must delete the superseded SSD backing before
+    /// installing the new pending ref — otherwise the old write orphans a
+    /// file + manifest entry.
+    @Test
+    func reAdmissionDeletesSupersededSSDBacking() async {
+        let (root, store, tree, key) = makeFixture()
+        defer { cleanup(root) }
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
+
+        guard case .accepted(let firstRef) = store.admitSnapshot(
+            node: node, tree: tree,
+            payload: makePayload(bytes: 1_024),
+            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+        ) else {
+            Issue.record("first admitSnapshot did not accept")
+            return
+        }
+        let firstCommitted = await waitUntil { node.state.committed }
+        #expect(firstCommitted)
+        #expect(store.ssdStore!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID))
+
+        // Re-admit over the committed node (state 4). The node still has a
+        // RAM body, so admit applies and supersedes firstRef.
+        guard case .accepted(let secondRef) = store.admitSnapshot(
+            node: node, tree: tree,
+            payload: makePayload(bytes: 1_024),
+            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+        ) else {
+            Issue.record("second admitSnapshot did not accept")
+            return
+        }
+
+        #expect(node.state.refID == secondRef.snapshotID)
+        #expect(store.isPendingForTesting(id: secondRef.snapshotID))
+        #expect(store.isPendingForTesting(id: firstRef.snapshotID) == false)
+        // The superseded backing is gone — no orphan.
+        #expect(store.ssdStore!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID) == false)
+
+        let secondCommitted = await waitUntil { node.state.committed }
+        #expect(secondCommitted)
+        let residents = Set(store.ssdStore!.residentIDsByRecencyForTesting())
+        #expect(residents.contains(secondRef.snapshotID))
+        #expect(residents.contains(firstRef.snapshotID) == false)
     }
 
     // MARK: - Protocol conformance smoke test
@@ -726,7 +795,6 @@ struct TieredSnapshotStoreTests {
         let store = TieredSnapshotStore(ssdConfig: nil)
         let key = makePartitionKey()
 
-        // First-touch creates a fresh tree.
         #expect(store.tree(for: key) == nil)
         #expect(store.partitionCount == 0)
         #expect(store.totalSnapshotBytes == 0)
@@ -735,8 +803,6 @@ struct TieredSnapshotStoreTests {
         #expect(store.partitionCount == 1)
         #expect(store.tree(for: key) === tree)
 
-        // Store a snapshot and verify `totalSnapshotBytes`
-        // aggregates through the forwarding property.
         let node = tree.insertPath(tokens: [1, 2, 3])
         let snapshot = PrefixCacheTestFixtures.makeUniformSnapshot(
             offset: 3,
@@ -745,7 +811,6 @@ struct TieredSnapshotStoreTests {
         tree.storeSnapshot(snapshot, on: node)
         #expect(store.totalSnapshotBytes == snapshot.memoryBytes)
 
-        // Ordered partition iteration yields exactly the one key.
         let partitions = store.orderedPartitions()
         #expect(partitions.count == 1)
         #expect(partitions.first?.key == key)

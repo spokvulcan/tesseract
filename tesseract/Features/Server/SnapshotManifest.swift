@@ -18,11 +18,11 @@
 //  - `SnapshotManifest` — top-level manifest, keyed by partition
 //    digest and snapshot ID; authoritative tree-structure index at
 //    warm start.
-//  - `SnapshotStorageRef` — in-memory reference attached to a radix
-//    node while an SSD write is in flight (`committed == false`) or
-//    landed (`committed == true`). Non-Codable: `ContinuousClock.Instant`
-//    is the writer's recency input for the LRU cut and has no stable
-//    wire format across process restarts.
+//  - `SnapshotRef` — immutable in-memory identity of an SSD-resident
+//    snapshot, carried as the payload of the ref-bearing `SnapshotState`
+//    cases. Models *what and where on disk* only — never the write
+//    phase (encoded by the `SnapshotState` case) and never recency.
+//    Non-Codable: the persisted analogue is `PersistedSnapshotDescriptor`.
 //  - `SnapshotPayload` — raw bytes extracted from a
 //    `HybridCacheSnapshot` inside `container.perform`; the only shape
 //    that crosses the LLMActor → `SSDSnapshotStore` writer boundary.
@@ -117,7 +117,7 @@ nonisolated struct PersistedSnapshotDescriptor: Codable, Sendable, Equatable {
     let checkpointType: String
 
     /// On-disk file size in bytes. Matches
-    /// `SnapshotStorageRef.bytesOnDisk` and is the sole byte-budget
+    /// `SnapshotRef.bytesOnDisk` and is the sole byte-budget
     /// input for the writer's admission-time LRU cut.
     let bytes: Int
 
@@ -288,26 +288,27 @@ nonisolated struct SnapshotManifest: Codable, Sendable, Equatable {
     }
 }
 
-// MARK: - In-memory storage ref (non-Codable)
+// MARK: - In-memory snapshot ref (non-Codable identity value)
 
-/// In-memory reference attached to a `RadixTreeNode` while an SSD
-/// write is pending or after it has committed. Lives alongside
-/// `node.snapshot` (the RAM body), not instead of it — the
-/// combination drives the five-state lifecycle:
+/// Immutable on-disk identity of an SSD-resident snapshot, carried as
+/// the payload of the ref-bearing `SnapshotState` cases (`pendingWrite`,
+/// `pendingDropped`, `committed`, `ssdOnly`). Models *what and where on
+/// disk* only.
 ///
-/// | State | Body   | Ref     | Committed | Semantics                |
-/// |-------|--------|---------|-----------|--------------------------|
-/// | 1     | yes    | none    | —         | RAM-only                 |
-/// | 2     | yes    | present | false     | Pending write            |
-/// | 3     | no     | present | false     | Pending, body dropped    |
-/// | 4     | yes    | present | true      | Committed + RAM          |
-/// | 5     | no     | present | true      | SSD-only (hydratable)    |
+/// **Deliberately phase-free and recency-free.** The write phase
+/// (pending vs committed) is encoded by the owning `SnapshotState`
+/// case, not by a `committed` flag on the ref — that is exactly the
+/// drift this consolidation removes (a committed-without-an-ID combo is
+/// now unrepresentable). Recency is *not* carried here either: the
+/// writer's LRU cut ranks by `PersistedSnapshotDescriptor.lastAccessAt`
+/// and the in-RAM fallback ranks by `RadixTreeNode.lastAccessTime`, so
+/// the old `lastAccessTime` field on the ref had zero readers and is
+/// dropped.
 ///
-/// Not `Codable`: `lastAccessTime` uses `ContinuousClock.Instant`,
-/// which has no stable wire format across process restarts. The
-/// persisted analogue is `PersistedSnapshotDescriptor`, which stores
-/// `lastAccessAt` as seconds since the reference date.
-nonisolated struct SnapshotStorageRef: Sendable, Equatable {
+/// Not `Codable`: the persisted analogue is
+/// `PersistedSnapshotDescriptor`, which stores `lastAccessAt` as
+/// seconds since the reference date.
+nonisolated struct SnapshotRef: Sendable, Equatable {
     /// Mirrors `PersistedSnapshotDescriptor.snapshotID`. Stable for
     /// the lifetime of the file on disk.
     let snapshotID: String
@@ -329,24 +330,11 @@ nonisolated struct SnapshotStorageRef: Sendable, Equatable {
     let checkpointType: HybridCacheSnapshot.CheckpointType
 
     /// Mirrors `PersistedSnapshotDescriptor.bytes`. Present so the
-    /// eviction path can reach the SSD byte count via
-    /// `node.storageRef` alone, without maintaining a separate
+    /// eviction path can reach the SSD byte count via the node's
+    /// `SnapshotState` alone, without maintaining a separate
     /// `snapshotID → descriptor` map just to look up a size. The RAM
     /// lookup path does not touch this value.
     let bytesOnDisk: Int
-
-    /// In-process recency input. Updated on every hit so the writer's
-    /// LRU cut can rank SSD-resident entries without touching the
-    /// descriptor map. Not persisted — on warm start the rebuilt refs
-    /// start at `.now` by construction.
-    var lastAccessTime: ContinuousClock.Instant
-
-    /// Write commit gate. `false` while the write is enqueued or
-    /// in-flight; `true` after `SSDSnapshotStore.writerLoop` has
-    /// fsync'd and atomically renamed the file. Lookups landing on
-    /// a ref with `committed == false` treat the node as a miss so
-    /// no race can surface a half-written file.
-    var committed: Bool
 }
 
 // MARK: - In-memory transport payload (Sendable, not Codable)
@@ -442,7 +430,7 @@ extension CachePartitionKey {
     /// string form of the key fields. Used by the SSD prefix-cache
     /// tier as both the partition directory name
     /// (`partitions/{digest}/...`) and the join key between
-    /// in-memory `SnapshotStorageRef`s and their on-disk partitions.
+    /// in-memory `SnapshotRef`s and their on-disk partitions.
     ///
     /// **Load-bearing stability contract.** Once a snapshot has
     /// been written to disk, the digest of its partition key must

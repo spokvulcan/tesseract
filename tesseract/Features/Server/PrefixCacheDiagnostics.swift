@@ -90,8 +90,8 @@ nonisolated enum PrefixCacheDiagnostics {
                 self.checkpointType = type
             case .ssdHit(let ctx):
                 self.reason = "ssdHit"
-                self.snapshotOffset = ctx.storageRef.tokenOffset
-                self.checkpointType = ctx.storageRef.checkpointType
+                self.snapshotOffset = ctx.snapshotRef.tokenOffset
+                self.checkpointType = ctx.snapshotRef.checkpointType
             case .missNoEntries:
                 self.reason = "missNoEntries"
                 self.snapshotOffset = nil
@@ -392,14 +392,14 @@ nonisolated enum PrefixCacheDiagnostics {
 
     struct LeafSupersessionEvent: Payload {
         let offset: Int
-        let storageRefID: String?
+        let snapshotRefID: String?
 
         let eventName = "leafSupersession"
 
         var fields: [(String, String)] {
             [
                 ("offset", "\(offset)"),
-                ("storageRefID", storageRefID ?? "nil"),
+                ("storageRefID", snapshotRefID ?? "nil"),
             ]
         }
     }
@@ -414,7 +414,7 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
-    struct StorageRefCommitEvent: Payload {
+    struct SnapshotRefCommitEvent: Payload {
         let id: String
 
         let eventName = "storageRefCommit"
@@ -424,7 +424,7 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
-    struct StorageRefDropCallbackEvent: Payload {
+    struct SnapshotRefDropCallbackEvent: Payload {
         let id: String
         let reason: SSDDropReason
 

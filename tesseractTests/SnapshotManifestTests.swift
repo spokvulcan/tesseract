@@ -5,7 +5,7 @@
 //  Round-trip tests for the SSD prefix-cache data model. The types
 //  under test are pure value types — no store, no writer, no I/O.
 //  These tests pin the Codable wire format, the non-Codable
-//  transport shapes (`SnapshotStorageRef`, `SnapshotPayload`), and
+//  transport shapes (`SnapshotRef`, `SnapshotPayload`), and
 //  the `CheckpointType` wire-string mapping. Downstream code
 //  (`SSDSnapshotStore`, `TieredSnapshotStore`, warm start) builds
 //  on these guarantees.
@@ -334,62 +334,25 @@ struct SnapshotManifestTests {
         #expect(manifest.schemaVersion == SnapshotManifestSchema.currentVersion + 1)
     }
 
-    // MARK: - SnapshotStorageRef (non-Codable value type)
+    // MARK: - SnapshotRef (non-Codable identity value)
 
     @Test
-    func snapshotStorageRefConstructsAllFields() {
-        let ref = SnapshotStorageRef(
+    func snapshotRefConstructsAllFields() {
+        // The ref is now a phase-free, recency-free identity value: no
+        // `committed` flag (that is the owning `SnapshotState` case) and
+        // no `lastAccessTime` (a dead field with zero readers).
+        let ref = SnapshotRef(
             snapshotID: "ref-id-123",
             partitionDigest: "abcd1234",
             tokenOffset: 4_096,
             checkpointType: .system,
-            bytesOnDisk: 200_000_000,
-            lastAccessTime: .now,
-            committed: false
+            bytesOnDisk: 200_000_000
         )
         #expect(ref.snapshotID == "ref-id-123")
         #expect(ref.partitionDigest == "abcd1234")
         #expect(ref.tokenOffset == 4_096)
         #expect(ref.checkpointType == .system)
         #expect(ref.bytesOnDisk == 200_000_000)
-        #expect(ref.committed == false)
-    }
-
-    @Test
-    func snapshotStorageRefCommittedIsMutable() {
-        // `committed` flips from false → true when the writer loop
-        // fsyncs the file. Make sure the in-place mutation compiles
-        // and behaves.
-        var ref = SnapshotStorageRef(
-            snapshotID: "flip-test",
-            partitionDigest: "abcd1234",
-            tokenOffset: 0,
-            checkpointType: .leaf,
-            bytesOnDisk: 1,
-            lastAccessTime: .now,
-            committed: false
-        )
-        #expect(ref.committed == false)
-        ref.committed = true
-        #expect(ref.committed == true)
-    }
-
-    @Test
-    func snapshotStorageRefLastAccessTimeIsMutable() {
-        // `lastAccessTime` moves forward on every hit. Confirm the
-        // field is a `var` in practice by mutating it.
-        var ref = SnapshotStorageRef(
-            snapshotID: "bump-test",
-            partitionDigest: "abcd1234",
-            tokenOffset: 0,
-            checkpointType: .leaf,
-            bytesOnDisk: 1,
-            lastAccessTime: .now,
-            committed: true
-        )
-        let before = ref.lastAccessTime
-        ref.lastAccessTime = before.advanced(by: .milliseconds(50))
-        #expect(ref.lastAccessTime > before)
     }
 
     // MARK: - SnapshotPayload aggregation
@@ -919,39 +882,30 @@ struct SnapshotManifestTests {
     }
 
     @Test
-    func storageRefEqualityIgnoresNothing() {
-        // All fields participate in `==` because `SnapshotStorageRef`
-        // gets synthesized Equatable. Confirm by flipping `committed`
-        // on two otherwise-identical values.
-        let instant: ContinuousClock.Instant = .now
-        let a = SnapshotStorageRef(
+    func snapshotRefEqualityCoversEveryField() {
+        // All five fields participate in synthesized `==`.
+        let a = SnapshotRef(
             snapshotID: "x",
             partitionDigest: "y",
             tokenOffset: 0,
             checkpointType: .leaf,
-            bytesOnDisk: 1,
-            lastAccessTime: instant,
-            committed: false
+            bytesOnDisk: 1
         )
-        let b = SnapshotStorageRef(
+        let b = SnapshotRef(
             snapshotID: "x",
             partitionDigest: "y",
             tokenOffset: 0,
             checkpointType: .leaf,
-            bytesOnDisk: 1,
-            lastAccessTime: instant,
-            committed: false
+            bytesOnDisk: 1
         )
         #expect(a == b)
 
-        let c = SnapshotStorageRef(
+        let c = SnapshotRef(
             snapshotID: "x",
             partitionDigest: "y",
             tokenOffset: 0,
             checkpointType: .leaf,
-            bytesOnDisk: 1,
-            lastAccessTime: instant,
-            committed: true  // differs
+            bytesOnDisk: 2  // differs
         )
         #expect(a != c)
     }

@@ -190,7 +190,7 @@ enum PromptCachePreviewFixtures {
                 checkpointType: hasSnapshot ? checkpoint : nil,
                 bytes: hasSnapshot ? 8 * 1024 * 1024 : 0,
                 state: branchState,
-                storageRefID: branchState == .empty ? nil : "preview-ref-\(branch)"
+                snapshotRefID: branchState == .empty ? nil : "preview-ref-\(branch)"
             ))
             nodes.append(node(
                 id: leafID,
@@ -202,7 +202,7 @@ enum PromptCachePreviewFixtures {
                 checkpointType: "leaf",
                 bytes: 12 * 1024 * 1024,
                 state: storageState,
-                storageRefID: "preview-leaf-\(branch)"
+                snapshotRefID: "preview-leaf-\(branch)"
             ))
             edges.append(PromptCacheTreeEdgeSnapshot(
                 id: "\(rootID)->\(midID)",
@@ -246,7 +246,7 @@ enum PromptCachePreviewFixtures {
         checkpointType: String? = nil,
         bytes: Int = 0,
         state: PromptCacheStorageState,
-        storageRefID: String? = nil
+        snapshotRefID: String? = nil
     ) -> PromptCacheTreeNodeSnapshot {
         PromptCacheTreeNodeSnapshot(
             id: id,
@@ -261,8 +261,8 @@ enum PromptCachePreviewFixtures {
             checkpointType: checkpointType,
             snapshotBytes: bytes,
             storageState: state,
-            storageRefID: storageRefID,
-            storageBytes: storageRefID == nil ? 0 : max(bytes, 4 * 1024 * 1024),
+            snapshotRefID: snapshotRefID,
+            storageBytes: snapshotRefID == nil ? 0 : max(bytes, 4 * 1024 * 1024),
             lastAccessAgeSeconds: Double(depth * 12 + offset % 37),
             normalizedRecency: checkpointType == "system" ? nil : 0.42,
             normalizedFlopEfficiency: checkpointType == "system" ? nil : 0.68,

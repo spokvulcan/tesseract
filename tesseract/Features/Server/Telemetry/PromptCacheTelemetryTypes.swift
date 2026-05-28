@@ -290,12 +290,33 @@ nonisolated struct PromptCacheTreeNodeSnapshot: Identifiable, Codable, Equatable
     let checkpointType: String?
     let snapshotBytes: Int
     let storageState: PromptCacheStorageState
-    let storageRefID: String?
+    let snapshotRefID: String?
     let storageBytes: Int
     let lastAccessAgeSeconds: Double
     let normalizedRecency: Double?
     let normalizedFlopEfficiency: Double?
     let utility: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case parentID
+        case pathHash
+        case tokenOffset
+        case pathTokenCount
+        case edgeTokenCount
+        case childCount
+        case depth
+        case hasSnapshot
+        case checkpointType
+        case snapshotBytes
+        case storageState
+        case snapshotRefID = "storageRefID"
+        case storageBytes
+        case lastAccessAgeSeconds
+        case normalizedRecency
+        case normalizedFlopEfficiency
+        case utility
+    }
 }
 
 nonisolated struct PromptCacheTreeEdgeSnapshot: Identifiable, Codable, Equatable, Sendable {

@@ -681,13 +681,13 @@ actor LLMActor {
                 func logEvictions(_ evictions: [PrefixCacheManager.EvictionEvent]) {
                     for event in evictions {
                         diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
-                        // Body-drop with live storage ref → state 2→3
+                        // Body-drop with live Snapshot Ref → pending body-dropped
                         // or state 4→5 transition. Surface a separate
                         // `ssdBodyDrop` event so an operator scanning
                         // the eviction log can correlate the RAM
                         // freeing with the SSD-tier survival of the
                         // same node.
-                        if let id = event.bodyDroppedStorageRefID {
+                        if let id = event.bodyDroppedSnapshotRefID {
                             diagnosticsContext.log(
                                 PrefixCacheDiagnostics.SSDBodyDropEvent(id: id)
                             )
@@ -701,7 +701,7 @@ actor LLMActor {
                     for supersession in supersededLeaves {
                         diagnosticsContext.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
                             offset: supersession.offset,
-                            storageRefID: supersession.bodyDroppedStorageRefID
+                            snapshotRefID: supersession.bodyDroppedSnapshotRefID
                         ))
                     }
                 }
@@ -1960,29 +1960,33 @@ actor LLMActor {
                 )
             }
             // Lazy SSD hydration: `.ssdHit` signals that the deepest
-            // reachable node carries only a committed storage ref.
+            // reachable node carries only a committed Snapshot Ref.
             // Materialize the body from disk inside this existing
             // `container.perform` (Metal-affine), then hop to
             // MainActor to promote the node back to state 4. On
             // hydration failure, clear the ref and downgrade to a
             // miss so the prefill runs cold.
             let lookupResult: PrefixCacheManager.LookupResult
+            // Set only when SSD hydration fails: the forgiving clear removes
+            // the body-less node the pre-hydration plan was built against, so
+            // the plan must be recomputed (see the failure branch below).
+            var replannedAfterHydrationFailure:
+                [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]?
             if case .ssdHit(let ctx) = initialLookupResult.reason,
                let fingerprint = modelFingerprint
             {
                 let (hydrated, hydrateSeconds) = measure {
-                    ctx.ssdStore.loadSync(
-                        storageRef: ctx.storageRef,
+                    ctx.ssdStore.loadSync(snapshotRef: ctx.snapshotRef,
                         expectedFingerprint: fingerprint
                     )
                 }
                 if let hydrated {
                     diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
-                        id: ctx.storageRef.snapshotID,
+                        id: ctx.snapshotRef.snapshotID,
                         hydrateMs: hydrateSeconds
                     ))
                     await MainActor.run {
-                        ctx.ssdStore.recordHit(id: ctx.storageRef.snapshotID)
+                        ctx.ssdStore.recordHit(id: ctx.snapshotRef.snapshotID)
                         prefixCache.promote(
                             node: ctx.node,
                             snapshot: hydrated,
@@ -1990,7 +1994,7 @@ actor LLMActor {
                         )
                     }
                     diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(
-                        id: ctx.storageRef.snapshotID
+                        id: ctx.snapshotRef.snapshotID
                     ))
                     lookupResult = PrefixCacheManager.LookupResult(
                         snapshot: hydrated,
@@ -2004,9 +2008,21 @@ actor LLMActor {
                         )
                     )
                 } else {
-                    await MainActor.run {
-                        prefixCache.clearStorageRef(
+                    // Hydration failed: `loadSync` already deleted the on-disk
+                    // file and the forgiving clear removes the now-bodyless node
+                    // from the tree. The checkpoint plan was computed
+                    // pre-hydration against that node, so `alreadyStored`
+                    // suppressed re-capturing its checkpoint — recompute against
+                    // the post-clear tree so this cold request re-captures the
+                    // lost checkpoint instead of deferring it a full request cycle.
+                    replannedAfterHydrationFailure = await MainActor.run {
+                        prefixCache.clearCommittedSnapshotRefAfterHydrationFailure(
                             node: ctx.node,
+                            partitionKey: partitionKey
+                        )
+                        return prefixCache.planCheckpoints(
+                            tokens: fullTokens,
+                            stablePrefixOffset: stablePrefixOffset,
                             partitionKey: partitionKey
                         )
                     }
@@ -2025,7 +2041,7 @@ actor LLMActor {
                 }
             }
             let lookupMs = Date.timeIntervalSinceReferenceDate - lookupStarted
-            var checkpointPlan = initialCheckpointPlan
+            var checkpointPlan = replannedAfterHydrationFailure ?? initialCheckpointPlan
 
             // 7. Determine input for generation and cache to restore.
             let inputForGeneration: LMInput
@@ -2481,7 +2497,7 @@ actor LLMActor {
                     }
                 for event in diagnostics.evictions {
                     diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
-                    if let id = event.bodyDroppedStorageRefID {
+                    if let id = event.bodyDroppedSnapshotRefID {
                         diagnosticsContext.log(
                             PrefixCacheDiagnostics.SSDBodyDropEvent(id: id)
                         )
@@ -2490,7 +2506,7 @@ actor LLMActor {
                 for supersession in diagnostics.supersededLeaves {
                     diagnosticsContext.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
                         offset: supersession.offset,
-                        storageRefID: supersession.bodyDroppedStorageRefID
+                        snapshotRefID: supersession.bodyDroppedSnapshotRefID
                     ))
                 }
                 let admissionEvicted = diagnostics.evictions.contains { event in
@@ -2618,8 +2634,7 @@ actor LLMActor {
 
         let (hydrated, hydrateSeconds) = await container.perform { _ in
             let hydrateStarted = Date.timeIntervalSinceReferenceDate
-            let hydrated = ctx.ssdStore.loadSync(
-                storageRef: ctx.storageRef,
+            let hydrated = ctx.ssdStore.loadSync(snapshotRef: ctx.snapshotRef,
                 expectedFingerprint: fingerprint
             )
             return (hydrated, Date.timeIntervalSinceReferenceDate - hydrateStarted)
@@ -2627,11 +2642,11 @@ actor LLMActor {
 
         if let hydrated {
             diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
-                id: ctx.storageRef.snapshotID,
+                id: ctx.snapshotRef.snapshotID,
                 hydrateMs: hydrateSeconds
             ))
             await MainActor.run {
-                ctx.ssdStore.recordHit(id: ctx.storageRef.snapshotID)
+                ctx.ssdStore.recordHit(id: ctx.snapshotRef.snapshotID)
                 prefixCache.promote(
                     node: ctx.node,
                     snapshot: hydrated,
@@ -2639,7 +2654,7 @@ actor LLMActor {
                 )
             }
             diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(
-                id: ctx.storageRef.snapshotID
+                id: ctx.snapshotRef.snapshotID
             ))
             return PrefixCacheManager.LookupResult(
                 snapshot: hydrated,
@@ -2655,7 +2670,7 @@ actor LLMActor {
         }
 
         await MainActor.run {
-            prefixCache.clearStorageRef(
+            prefixCache.clearCommittedSnapshotRefAfterHydrationFailure(
                 node: ctx.node,
                 partitionKey: partitionKey
             )

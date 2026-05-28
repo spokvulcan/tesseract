@@ -122,17 +122,25 @@ struct TokenRadixTreeTests {
         #expect(tree.findBestSnapshot(tokens: [1, 2, 5, 6])?.node.tokenOffset == 2)
     }
 
-    // MARK: - 8. evictSnapshotKeepsNode
+    // MARK: - 8. dropBodyKeepsRefBearingNode
 
-    @Test func evictSnapshotKeepsNode() {
+    /// Dropping the body of a node that still owns a committed ref leaves
+    /// the node in the tree (state 4 → state 5): `canEvictNode` is false,
+    /// so self-heal does not fire.
+    @Test func dropBodyKeepsRefBearingNode() {
         let tree = TokenRadixTree()
         insertAndStore(tree, tokens: Array(1...10))
 
         let node = tree.findBestSnapshot(tokens: Array(1...10))!.node
-        #expect(node.snapshot != nil)
+        #expect(node.state.body != nil)
 
-        tree.evictSnapshot(node: node)
-        #expect(node.snapshot == nil)
+        let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: node.tokenOffset)
+        tree.admit(node: node, ref: ref)
+        tree.commitRef(node: node, expectedID: ref.snapshotID)
+        tree.dropBody(node: node)
+
+        #expect(node.state.body == nil)
+        #expect(node.state.ref != nil)  // ssdOnly — node retained
         #expect(tree.nodeCount == 2)
     }
 
@@ -147,9 +155,10 @@ struct TokenRadixTreeTests {
         // Store on [5,6] leaf so we can find it, then evict
         insertAndStore(tree, tokens: [1, 2, 5, 6])
         let result = tree.findBestSnapshot(tokens: [1, 2, 5, 6])!
-        tree.evictSnapshot(node: result.node)
-        tree.evictNode(node: result.node)
-        // [5,6] removed. Intermediate [1,2] still has child [3,4].
+        // Dropping the ref-less leaf's body empties it; the tree self-heals
+        // (detaches the leaf, then stops the walk at [1,2] which keeps its
+        // [3,4] child).
+        tree.dropBody(node: result.node)
         #expect(tree.nodeCount == 3)
     }
 
@@ -162,8 +171,7 @@ struct TokenRadixTreeTests {
 
         let toEvict = tree.findBestSnapshot(tokens: [1, 2, 3, 4, 5])!
         #expect(toEvict.node.tokenOffset == 5)
-        tree.evictSnapshot(node: toEvict.node)
-        tree.evictNode(node: toEvict.node)
+        tree.dropBody(node: toEvict.node)
 
         let sibling = tree.findBestSnapshot(tokens: [1, 2, 6, 7])
         #expect(sibling?.node.tokenOffset == 4)
@@ -186,7 +194,7 @@ struct TokenRadixTreeTests {
         #expect(bytes2 > bytes1)
 
         let node1 = tree.findBestSnapshot(tokens: Array(1...10))!.node
-        tree.evictSnapshot(node: node1)
+        tree.dropBody(node: node1)
         #expect(tree.totalSnapshotBytes == bytes2 - bytes1)
     }
 
@@ -293,9 +301,12 @@ struct TokenRadixTreeTests {
         #expect(offsets.contains(12))
     }
 
-    // MARK: - 15. collapseSingleChildNodeMergesEdges
+    // MARK: - 15. selfHealCollapsesEmptiedSingleChildNode
 
-    @Test func collapseSingleChildNodeMergesEdges() {
+    /// Emptying a single-child node via `dropBody` triggers the tree's
+    /// self-heal, which collapses it (merging edges) to preserve radix
+    /// compression.
+    @Test func selfHealCollapsesEmptiedSingleChildNode() {
         let tree = TokenRadixTree()
 
         tree.insertPath(tokens: [1, 2, 3, 4, 5])
@@ -306,15 +317,15 @@ struct TokenRadixTreeTests {
         tree.storeSnapshot(makeSnapshot(offset: 5), on: leafNode)
         #expect(tree.nodeCount == 4)
 
-        // Remove [6,7] leaf
-        if let leaf67 = midNode.children[6] {
-            tree.evictNode(node: leaf67)
-        }
+        // Remove the [6,7] leaf by giving it a body and dropping it
+        // (self-heal detaches the now-empty leaf).
+        let leaf67 = midNode.children[6]!
+        tree.storeSnapshot(makeSnapshot(offset: 4), on: leaf67)
+        tree.dropBody(node: leaf67)
         #expect(tree.nodeCount == 3)
 
-        // Evict snapshot from intermediate, then collapse
-        tree.evictSnapshot(node: midNode)
-        tree.collapseSingleChildNode(midNode)
+        // Drop midNode's body: now a single-child empty node → collapse.
+        tree.dropBody(node: midNode)
 
         #expect(tree.nodeCount == 2)
         let final = tree.findBestSnapshot(tokens: [1, 2, 3, 4, 5])
@@ -348,14 +359,17 @@ struct TokenRadixTreeTests {
         #expect(tree.nodeCount == 3)
     }
 
-    @Test func evictNodeOnlyRemovesLeaves() {
+    /// Emptying a multi-child node retains it as a structural junction —
+    /// self-heal removes only leaves and single-child nodes.
+    @Test func selfHealRetainsMultiChildJunction() {
         let tree = TokenRadixTree()
         tree.insertPath(tokens: [1, 2, 3, 4])
         tree.insertPath(tokens: [1, 2, 5, 6])
         let mid = tree.insertPath(tokens: [1, 2])
         tree.storeSnapshot(makeSnapshot(offset: 2), on: mid)
-        tree.evictNode(node: mid) // no-op: not a leaf
+        tree.dropBody(node: mid) // empties a 2-child node → retained
         #expect(tree.nodeCount == 4)
+        #expect(mid.parent != nil)
     }
 
     @Test func emptyTokensInsertIsNoOp() {
@@ -536,78 +550,89 @@ struct TokenRadixTreeTests {
         #expect(tree.findIntermediateSplitOffsetForInsertion(tokens: [1, 2, 3]) == 3)
     }
 
-    // MARK: - Task 4.1.8: Cleanup-suppression guards
+    // MARK: - Self-heal respects live refs (the orphan invariant)
 
-    /// `collapseSingleChildNode` refuses to collapse a snapshot-less
-    /// node that still carries a storageRef. Such a node pins a radix
-    /// path to a pending or committed SSD copy and must stay intact.
-    @Test func collapseSingleChildNodeSkipsNodeWithStorageRef() {
+    /// A single-child node that still owns a ref is not collapsed: dropping
+    /// its body settles it to a ref-bearing state (`canEvictNode == false`),
+    /// so self-heal never fires. The old explicit Snapshot Ref guard
+    /// is gone — the invariant is now structural (the ref-bearing state is
+    /// not `empty`, so `becameEmpty` is never produced).
+    @Test func selfHealKeepsSingleChildNodeWithCommittedRef() {
         let tree = TokenRadixTree()
         tree.insertPath(tokens: [1, 2, 3, 4, 5])
         let midNode = tree.insertPath(tokens: [1, 2])
-        midNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(committed: true)
+        tree.storeSnapshot(makeSnapshot(offset: 2), on: midNode)
+        let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: 2)
+        tree.admit(node: midNode, ref: ref)
+        tree.commitRef(node: midNode, expectedID: ref.snapshotID)
         let preNodeCount = tree.nodeCount
-        let preChild = midNode.children.values.first
         let preEdge = midNode.edgeTokens
 
-        tree.collapseSingleChildNode(midNode)
+        tree.dropBody(node: midNode)  // committed → ssdOnly (settled)
 
         #expect(tree.nodeCount == preNodeCount)
         #expect(midNode.parent != nil)
-        #expect(midNode.storageRef != nil)
+        #expect(midNode.state.ref != nil)
+        #expect(midNode.state.committed)
         #expect(midNode.edgeTokens == preEdge)
         #expect(midNode.childCount == 1)
-        #expect(midNode.children.values.first === preChild)
     }
 
-    @Test func collapseSingleChildNodeSkipsNodeWithPendingStorageRef() {
+    @Test func selfHealKeepsSingleChildNodeWithPendingRef() {
         let tree = TokenRadixTree()
         tree.insertPath(tokens: [1, 2, 3, 4, 5])
         let midNode = tree.insertPath(tokens: [1, 2])
-        midNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(committed: false)
+        tree.storeSnapshot(makeSnapshot(offset: 2), on: midNode)
+        tree.admit(node: midNode, ref: PrefixCacheTestFixtures.makeRef(tokenOffset: 2))
         let preNodeCount = tree.nodeCount
 
-        tree.collapseSingleChildNode(midNode)
+        tree.dropBody(node: midNode)  // pendingWrite → pendingDropped (settled)
 
         #expect(tree.nodeCount == preNodeCount)
         #expect(midNode.parent != nil)
-        #expect(midNode.storageRef?.committed == false)
+        #expect(midNode.state.ref != nil)
+        #expect(!midNode.state.committed)
     }
 
-    /// The `evictNode` ancestor-walk must not sweep up snapshot-less
-    /// ancestors that hold a storageRef. Before the fix the walk
-    /// treated such a parent as an "empty leaf with no snapshot" and
-    /// removed it, silently orphaning the SSD file.
-    @Test func evictNodeAncestorWalkStopsAtStorageRef() {
+    @Test func staleCommitAfterReadmissionReturnsIDMismatch() {
+        let tree = TokenRadixTree()
+        insertAndStore(tree, tokens: [1, 2, 3])
+        let node = tree.findBestSnapshot(tokens: [1, 2, 3])!.node
+
+        let oldRef = PrefixCacheTestFixtures.makeRef(tokenOffset: node.tokenOffset)
+        let newRef = PrefixCacheTestFixtures.makeRef(tokenOffset: node.tokenOffset)
+        tree.admit(node: node, ref: oldRef)
+        tree.admit(node: node, ref: newRef)
+
+        let staleEffect = tree.commitRef(node: node, expectedID: oldRef.snapshotID)
+
+        #expect(staleEffect == .ignored(.idMismatch))
+        #expect(node.state.refID == newRef.snapshotID)
+        #expect(!node.state.committed)
+    }
+
+    /// Self-heal's ancestor walk stops at a ref-bearing ancestor: removing a
+    /// leaf cannot sweep up a parent that still owns a ref, so the SSD file
+    /// is never orphaned. The walk only continues through `empty` ancestors.
+    @Test func selfHealAncestorWalkStopsAtCommittedRef() {
         let tree = TokenRadixTree()
         tree.insertPath(tokens: [1, 2, 3, 4])
         let midNode = tree.insertPath(tokens: [1, 2, 3])
-        midNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(committed: true)
+        // Put midNode in state 5 (committed ref, no body) so it has a live
+        // ref but is body-less, the exact orphan hazard.
+        tree.restoreCommittedRef(node: midNode, ref: PrefixCacheTestFixtures.makeRef(tokenOffset: 3))
         #expect(tree.nodeCount == 3)
 
+        // Empty the [4] leaf and let self-heal try to walk upward.
         let leaf = midNode.children[4]!
-        tree.evictNode(node: leaf)
+        tree.storeSnapshot(makeSnapshot(offset: 4), on: leaf)
+        tree.dropBody(node: leaf)
 
-        #expect(tree.nodeCount == 2)
+        #expect(tree.nodeCount == 2)       // leaf removed, midNode retained
         #expect(midNode.parent != nil)
-        #expect(midNode.storageRef != nil)
-        #expect(midNode.storageRef?.committed == true)
+        #expect(midNode.state.ref != nil)
+        #expect(midNode.state.committed)
         #expect(midNode.isLeaf)
-    }
-
-    @Test func evictNodeAncestorWalkStopsAtPendingStorageRef() {
-        let tree = TokenRadixTree()
-        tree.insertPath(tokens: [1, 2, 3, 4])
-        let midNode = tree.insertPath(tokens: [1, 2, 3])
-        midNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(committed: false)
-        #expect(tree.nodeCount == 3)
-
-        let leaf = midNode.children[4]!
-        tree.evictNode(node: leaf)
-
-        #expect(tree.nodeCount == 2)
-        #expect(midNode.parent != nil)
-        #expect(midNode.storageRef?.committed == false)
     }
 
     // MARK: - Prompt-cache telemetry topology
@@ -647,17 +672,17 @@ struct TokenRadixTreeTests {
         tree.insertPath(tokens: [1, 2, 3, 4])
         let pendingLeaf = tree.insertPath(tokens: [1, 2, 9, 10])
         let branch = tree.insertPath(tokens: [1, 2])
+        // branch → state 4 (body + committed ref); reported as `ramAndSSD`.
         tree.storeSnapshot(makeSnapshot(offset: 2, type: .branchPoint), on: branch)
-        branch.storageRef = PrefixCacheTestFixtures.makeStorageRef(
-            committed: true,
-            type: .branchPoint,
-            tokenOffset: 2
-        )
-        pendingLeaf.storageRef = PrefixCacheTestFixtures.makeStorageRef(
-            committed: false,
-            type: .leaf,
-            tokenOffset: 4
-        )
+        let branchRef = PrefixCacheTestFixtures.makeRef(type: .branchPoint, tokenOffset: 2)
+        tree.admit(node: branch, ref: branchRef)
+        tree.commitRef(node: branch, expectedID: branchRef.snapshotID)
+        // pendingLeaf → state 3 (pending ref, body dropped); reported as
+        // `pendingWriteBodyDropped`.
+        let pendingRef = PrefixCacheTestFixtures.makeRef(type: .leaf, tokenOffset: 4)
+        tree.storeSnapshot(makeSnapshot(offset: 4, type: .leaf), on: pendingLeaf)
+        tree.admit(node: pendingLeaf, ref: pendingRef)
+        tree.dropBody(node: pendingLeaf)
 
         let snapshot = tree.makeTopologySnapshot(
             partition: CachePartitionKey(
@@ -668,7 +693,7 @@ struct TokenRadixTreeTests {
             )
         )
         let branchNode = snapshot.nodes.first { $0.tokenOffset == 2 }
-        let pendingNode = snapshot.nodes.first { $0.storageRefID == pendingLeaf.storageRef?.snapshotID }
+        let pendingNode = snapshot.nodes.first { $0.snapshotRefID == pendingRef.snapshotID }
 
         #expect(snapshot.partitionSummary.contains("telemetry-model"))
         #expect(snapshot.partitionSummary.contains("denseKV"))
@@ -676,7 +701,7 @@ struct TokenRadixTreeTests {
         #expect(branchNode?.checkpointType == "branchPoint")
         #expect(branchNode?.storageState == .ramAndSSD)
         #expect(branchNode?.storageBytes == 1024)
-        #expect(branchNode?.storageRefID == branch.storageRef?.snapshotID)
+        #expect(branchNode?.snapshotRefID == branchRef.snapshotID)
         #expect(pendingNode?.checkpointType == "leaf")
         #expect(pendingNode?.storageState == .pendingWriteBodyDropped)
         #expect(pendingNode?.hasSnapshot == false)

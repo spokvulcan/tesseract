@@ -4,7 +4,7 @@
 //
 //  PrefixCacheManager.warmStart + SSDSnapshotStore.warmStartLoad.
 //  Verifies manifest-only restart: a fresh store + manager pair reads
-//  `manifest.json` from disk, reattaches `storageRef`-only nodes to
+//  `manifest.json` from disk, reattaches `SnapshotRef`-only nodes to
 //  the radix tree, and seeds `currentSSDBytes` from the valid
 //  descriptor set. Fingerprint mismatch partitions are excluded from
 //  both the tree and the byte count.
@@ -191,8 +191,8 @@ struct WarmStartTests {
                 #expect(Bool(false), "Expected .ssdHit for \(descriptor.pathFromRoot.count) tokens, got \(result.reason)")
                 continue
             }
-            #expect(ctx.storageRef.snapshotID == descriptor.snapshotID)
-            #expect(ctx.storageRef.tokenOffset == descriptor.tokenOffset)
+            #expect(ctx.snapshotRef.snapshotID == descriptor.snapshotID)
+            #expect(ctx.snapshotRef.tokenOffset == descriptor.tokenOffset)
         }
     }
 
@@ -440,8 +440,8 @@ struct WarmStartTests {
             #expect(Bool(false), "Expected .ssdHit after rebuild, got \(lookup.reason)")
             return
         }
-        #expect(ctx.storageRef.snapshotID == descriptor.snapshotID)
-        #expect(ctx.storageRef.tokenOffset == descriptor.tokenOffset)
+        #expect(ctx.snapshotRef.snapshotID == descriptor.snapshotID)
+        #expect(ctx.snapshotRef.tokenOffset == descriptor.tokenOffset)
     }
 
     /// Descriptors whose wire-format `checkpointType` no longer
@@ -626,7 +626,7 @@ struct WarmStartTests {
             #expect(Bool(false), "Expected .ssdHit for TriAttention key, got \(triLookup.reason)")
             return
         }
-        #expect(ctx.storageRef.snapshotID == descriptor.snapshotID)
+        #expect(ctx.snapshotRef.snapshotID == descriptor.snapshotID)
 
         // …while a dense lookup at the same path remains a miss because
         // the partition is isolated by digest.

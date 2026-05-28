@@ -195,7 +195,6 @@ struct SSDSnapshotStoreTests {
             return
         }
         #expect(ref.snapshotID == descriptor.snapshotID)
-        #expect(ref.committed == false)
         #expect(ref.bytesOnDisk == payload.totalBytes)
 
         let committed = await waitUntil {
@@ -522,7 +521,7 @@ struct SSDSnapshotStoreTests {
     func admissionEvictionFiresEvictedByLRUDropCallback() async {
         // Committed residents that are displaced by a later
         // admission's LRU cut must fire `onDrop(.evictedByLRU)`.
-        // Downstream consumers attach committed `storageRef`s to
+        // Downstream consumers attach committed Snapshot Refs to
         // radix nodes; without this callback, those refs would
         // keep pointing at a deleted file and surface stale SSD
         // hits on subsequent lookups.
@@ -855,24 +854,15 @@ struct SSDSnapshotStoreTests {
 
     // MARK: - loadSync round trip + hydration failures
 
-    /// Build a committed `SnapshotStorageRef` from the pending ref
-    /// returned by `tryEnqueue`. The writer's commit callback flips
-    /// the ref's `committed` bit in production via
-    /// `TieredSnapshotStore.markStorageRefCommitted` — here we
-    /// reconstruct the committed shape directly because the test
-    /// talks to the store without an intermediate tier.
+    /// The `SnapshotRef` returned by `tryEnqueue` is the snapshot's
+    /// on-disk identity; the commit phase is now encoded by the owning
+    /// `SnapshotState` case, not by a field on the ref, and `loadSync`
+    /// only needs the identity. Kept as a passthrough so the call sites
+    /// still read as "load the committed resident".
     private func committedRef(
-        from ref: SnapshotStorageRef
-    ) -> SnapshotStorageRef {
-        SnapshotStorageRef(
-            snapshotID: ref.snapshotID,
-            partitionDigest: ref.partitionDigest,
-            tokenOffset: ref.tokenOffset,
-            checkpointType: ref.checkpointType,
-            bytesOnDisk: ref.bytesOnDisk,
-            lastAccessTime: ref.lastAccessTime,
-            committed: true
-        )
+        from ref: SnapshotRef
+    ) -> SnapshotRef {
+        ref
     }
 
     /// Build a payload whose shape / dtype / byte count are
@@ -938,8 +928,7 @@ struct SSDSnapshotStoreTests {
         }
         #expect(committed)
 
-        let snapshot = store.loadSync(
-            storageRef: committedRef(from: pending),
+        let snapshot = store.loadSync(snapshotRef: committedRef(from: pending),
             expectedFingerprint: fingerprint
         )
         #expect(snapshot != nil)
@@ -985,8 +974,7 @@ struct SSDSnapshotStoreTests {
         }
         _ = await waitUntil { tracker.committed.contains(pending.snapshotID) }
 
-        let snapshot = store.loadSync(
-            storageRef: committedRef(from: pending),
+        let snapshot = store.loadSync(snapshotRef: committedRef(from: pending),
             expectedFingerprint: String(repeating: "z", count: 64)
         )
         #expect(snapshot == nil)
@@ -1038,8 +1026,7 @@ struct SSDSnapshotStoreTests {
         try FileManager.default.removeItem(at: fileURL)
 
         let fingerprint = makePartitionMeta().modelFingerprint
-        let snapshot = store.loadSync(
-            storageRef: committedRef(from: pending),
+        let snapshot = store.loadSync(snapshotRef: committedRef(from: pending),
             expectedFingerprint: fingerprint
         )
         #expect(snapshot == nil)
@@ -1350,7 +1337,7 @@ struct SSDSnapshotStoreTests {
     }
 
     @Test
-    func storageRefDropCallbackFiresOnBackpressureBumpedItems() async throws {
+    func snapshotRefDropCallbackEventFiresOnBackpressureBumpedItems() async throws {
         // Tight pending byte cap — first payload occupies it
         // entirely, second payload bumps the first via
         // drop-oldest-pending. The bumped item must surface as
@@ -1437,18 +1424,15 @@ struct SSDSnapshotStoreTests {
         )
         store.seedDescriptorForTesting(descriptor)
 
-        let storageRef = SnapshotStorageRef(
+        let snapshotRef = SnapshotRef(
             snapshotID: descriptor.snapshotID,
             partitionDigest: descriptor.partitionDigest,
             tokenOffset: descriptor.tokenOffset,
             checkpointType: .leaf,
-            bytesOnDisk: descriptor.bytes,
-            lastAccessTime: .now,
-            committed: true
+            bytesOnDisk: descriptor.bytes
         )
 
-        let result = store.loadSync(
-            storageRef: storageRef,
+        let result = store.loadSync(snapshotRef: snapshotRef,
             expectedFingerprint: String(repeating: "b", count: 64)
         )
         #expect(result == nil)
