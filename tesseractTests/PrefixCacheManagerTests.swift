@@ -296,14 +296,16 @@ struct PrefixCacheManagerTests {
             tokens: ancestorTokens,
             updateAccess: false
         )!
-        let ancestorRef = PrefixCacheTestFixtures.makeStorageRef(
-            committed: true,
+        // Drive the ancestor to state 5 (committed ref, body dropped)
+        // through the tree's sole-mutator seam.
+        let ancestorRef = PrefixCacheTestFixtures.makeRef(
             tokenOffset: ancestorTokens.count
         )
-        ancestorNode.storageRef = ancestorRef
-        tree.evictSnapshot(node: ancestorNode)
-        #expect(ancestorNode.snapshot == nil)
-        #expect(ancestorNode.storageRef?.snapshotID == ancestorRef.snapshotID)
+        tree.admit(node: ancestorNode, ref: ancestorRef)
+        tree.commitRef(node: ancestorNode, expectedID: ancestorRef.snapshotID)
+        tree.dropBody(node: ancestorNode)
+        #expect(ancestorNode.state.body == nil)
+        #expect(ancestorNode.state.refID == ancestorRef.snapshotID)
 
         let diagnostics = mgr.storeLeaf(
             storedTokens: descendantTokens,
@@ -314,7 +316,7 @@ struct PrefixCacheManagerTests {
         #expect(diagnostics.supersededLeaves.count == 1)
         #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
         #expect(diagnostics.supersededLeaves[0].bodyDroppedStorageRefID == ancestorRef.snapshotID)
-        #expect(ancestorNode.storageRef == nil)
+        #expect(ancestorNode.state.ref == nil)
         #expect(mgr.stats.snapshotCount == 1)
 
         let ancestorResult = mgr.lookup(tokens: ancestorTokens, partitionKey: defaultKey)
@@ -1241,9 +1243,9 @@ struct PrefixCacheManagerTests {
     // MARK: - Task 4.1.8: Eviction body-drop + cleanup-suppression guards
 
     /// State 4 (body + committed ref) body-drops to state 5 (body
-    /// absent + committed ref). The eviction loop must call
-    /// `evictSnapshot` but skip `evictNode`, leaving the node
-    /// attached to the tree as an SSD-backed lookup target.
+    /// absent + committed ref). `tree.dropBody` settles in place (the
+    /// surviving ref makes `canEvictNode` false), leaving the node
+    /// attached as an SSD-backed lookup target.
     /// Regression check for the orphan-leak bug flagged on 2026-04-14.
     @Test func evictionBodyDropsStateFourNodeToStateFive() {
         let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
@@ -1263,10 +1265,9 @@ struct PrefixCacheManagerTests {
         let (firstNode, _) = tree.findBestSnapshot(
             tokens: firstTokens, updateAccess: false
         )!
-        firstNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(
-            committed: true,
-            tokenOffset: firstTokens.count
-        )
+        let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: firstTokens.count)
+        tree.admit(node: firstNode, ref: ref)
+        tree.commitRef(node: firstNode, expectedID: ref.snapshotID)
 
         let secondTokens = Array(20...29)
         let diag = mgr.storeLeaf(
@@ -1277,9 +1278,9 @@ struct PrefixCacheManagerTests {
 
         #expect(diag.evictions.count == 1)
         #expect(diag.evictions[0].checkpointType == .leaf)
-        #expect(firstNode.snapshot == nil)
-        #expect(firstNode.storageRef != nil)
-        #expect(firstNode.storageRef?.committed == true)
+        #expect(firstNode.state.body == nil)
+        #expect(firstNode.state.ref != nil)
+        #expect(firstNode.state.committed)
         #expect(firstNode.parent != nil)
         let secondResult = mgr.lookup(tokens: secondTokens, partitionKey: defaultKey)
         #expect(secondResult.snapshotTokenOffset == secondTokens.count)
@@ -1308,10 +1309,9 @@ struct PrefixCacheManagerTests {
         let (firstNode, _) = tree.findBestSnapshot(
             tokens: firstTokens, updateAccess: false
         )!
-        firstNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(
-            committed: false,
-            tokenOffset: firstTokens.count
-        )
+        // State 2 (body + pending ref): admit a ref but do not commit it.
+        let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: firstTokens.count)
+        tree.admit(node: firstNode, ref: ref)
 
         let secondTokens = Array(20...29)
         mgr.storeLeaf(
@@ -1320,9 +1320,9 @@ struct PrefixCacheManagerTests {
             partitionKey: defaultKey
         )
 
-        #expect(firstNode.snapshot == nil)
-        #expect(firstNode.storageRef != nil)
-        #expect(firstNode.storageRef?.committed == false)
+        #expect(firstNode.state.body == nil)
+        #expect(firstNode.state.ref != nil)
+        #expect(!firstNode.state.committed)
         #expect(firstNode.parent != nil)
         // State 3 is not a hit target — returning one would race the
         // writer and surface an absent or half-written file.
@@ -1351,7 +1351,7 @@ struct PrefixCacheManagerTests {
         let (firstNode, _) = tree.findBestSnapshot(
             tokens: firstTokens, updateAccess: false
         )!
-        #expect(firstNode.storageRef == nil)
+        #expect(firstNode.state.ref == nil)
         let initialNodeCount = tree.nodeCount
 
         let secondTokens = Array(20...29)
@@ -1361,7 +1361,7 @@ struct PrefixCacheManagerTests {
             partitionKey: defaultKey
         )
 
-        #expect(firstNode.snapshot == nil)
+        #expect(firstNode.state.body == nil)
         #expect(firstNode.parent == nil)
         #expect(tree.nodeCount == initialNodeCount)
         let firstResult = mgr.lookup(tokens: firstTokens, partitionKey: defaultKey)
@@ -1389,11 +1389,12 @@ struct PrefixCacheManagerTests {
         let (sysNode, _) = tree.findBestSnapshot(
             tokens: sysTokens, updateAccess: false
         )!
-        sysNode.storageRef = PrefixCacheTestFixtures.makeStorageRef(
-            committed: true,
+        let ref = PrefixCacheTestFixtures.makeRef(
             type: .system,
             tokenOffset: sysTokens.count
         )
+        tree.admit(node: sysNode, ref: ref)
+        tree.commitRef(node: sysNode, expectedID: ref.snapshotID)
 
         let leafTokens = Array(20...29)
         mgr.storeLeaf(
@@ -1402,9 +1403,9 @@ struct PrefixCacheManagerTests {
             partitionKey: defaultKey
         )
 
-        #expect(sysNode.snapshot != nil)
-        #expect(sysNode.storageRef != nil)
-        #expect(sysNode.storageRef?.committed == true)
+        #expect(sysNode.state.body != nil)
+        #expect(sysNode.state.ref != nil)
+        #expect(sysNode.state.committed)
         let leafResult = mgr.lookup(tokens: leafTokens, partitionKey: defaultKey)
         #expect(leafResult.snapshot == nil)
     }
@@ -1443,14 +1444,13 @@ struct PrefixCacheManagerTests {
         let tokens = Array(1...10)
         let tree = tieredStore.getOrCreateTree(for: defaultKey)
         let node = tree.insertPath(tokens: tokens)
-        let ref = PrefixCacheTestFixtures.makeStorageRef(
-            committed: true,
+        let ref = PrefixCacheTestFixtures.makeRef(
             type: .leaf,
             tokenOffset: tokens.count
         )
-        node.storageRef = ref
         // Node has a committed ref but no body — state 5.
-        #expect(node.snapshot == nil)
+        tree.restoreCommittedRef(node: node, ref: ref)
+        #expect(node.state.body == nil)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         guard case .ssdHit(let ctx) = result.reason else {
@@ -1472,11 +1472,12 @@ struct PrefixCacheManagerTests {
 
         let tokens = Array(1...10)
         let tree = tieredStore.getOrCreateTree(for: defaultKey)
+        // State 3 (pending ref, body dropped): store a body, admit a
+        // pending ref, then drop the body.
         let node = tree.insertPath(tokens: tokens)
-        node.storageRef = PrefixCacheTestFixtures.makeStorageRef(
-            committed: false,
-            tokenOffset: tokens.count
-        )
+        tree.storeSnapshot(makeUniformSnapshot(offset: tokens.count, type: .leaf), on: node)
+        tree.admit(node: node, ref: PrefixCacheTestFixtures.makeRef(tokenOffset: tokens.count))
+        tree.dropBody(node: node)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         if case .missNoSnapshotInPrefix = result.reason {
@@ -1495,16 +1496,16 @@ struct PrefixCacheManagerTests {
         let tokens = Array(1...10)
         let tree = tieredStore.getOrCreateTree(for: defaultKey)
         let node = tree.insertPath(tokens: tokens)
-        node.storageRef = PrefixCacheTestFixtures.makeStorageRef(
-            committed: true,
-            tokenOffset: tokens.count
+        tree.restoreCommittedRef(
+            node: node,
+            ref: PrefixCacheTestFixtures.makeRef(tokenOffset: tokens.count)
         )
 
         let hydrated = makeUniformSnapshot(offset: tokens.count, type: .leaf)
         mgr.promote(node: node, snapshot: hydrated, partitionKey: defaultKey)
 
-        #expect(node.snapshot != nil)
-        #expect(node.storageRef != nil)  // ref preserved
+        #expect(node.state.body != nil)
+        #expect(node.state.ref != nil)  // ref preserved
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         if case .hit = result.reason {
             // expected
@@ -1523,15 +1524,15 @@ struct PrefixCacheManagerTests {
         let tokens = Array(1...10)
         let tree = tieredStore.getOrCreateTree(for: defaultKey)
         let node = tree.insertPath(tokens: tokens)
-        node.storageRef = PrefixCacheTestFixtures.makeStorageRef(
-            committed: true,
-            tokenOffset: tokens.count
+        tree.restoreCommittedRef(
+            node: node,
+            ref: PrefixCacheTestFixtures.makeRef(tokenOffset: tokens.count)
         )
         let nodeCountBefore = tree.nodeCount
 
         mgr.clearStorageRef(node: node, partitionKey: defaultKey)
 
-        #expect(node.storageRef == nil)
+        #expect(node.state.ref == nil)
         #expect(node.parent == nil)  // detached
         #expect(tree.nodeCount < nodeCountBefore)
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
@@ -1572,16 +1573,17 @@ struct PrefixCacheManagerTests {
         let digest = defaultKey.partitionDigest
         ssdStore.registerPartition(meta, digest: digest)
 
-        let ref = SnapshotStorageRef(
+        let ref = SnapshotRef(
             snapshotID: UUID().uuidString,
             partitionDigest: digest,
             tokenOffset: tokens.count,
             checkpointType: .leaf,
-            bytesOnDisk: 1024,
-            lastAccessTime: .now,
-            committed: true
+            bytesOnDisk: 1024
         )
-        node.storageRef = ref
+        // Drive the node to state 4 (body + committed ref) through the
+        // tree's sole-mutator seam: admit a pending ref, then commit it.
+        tree.admit(node: node, ref: ref)
+        tree.commitRef(node: node, expectedID: ref.snapshotID)
 
         // Manually insert a descriptor with an older lastAccessAt so
         // the recordHit bump is observable on the next read.
@@ -1666,6 +1668,61 @@ struct PrefixCacheManagerTests {
         }
         #expect(ctx.storageRef.tokenOffset == snapshot.tokenOffset)
         #expect(restoredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
+    }
+
+    /// Warm-start tolerates two persisted descriptors that resolve to the
+    /// same `pathFromRoot` (corrupted-manifest rebuild, a stale entry left
+    /// after a crash before debounced persist, etc.). The first descriptor
+    /// wins and the second is dropped with a debug log — last-wins would
+    /// leak the first SSD file because it would be unreachable from the
+    /// live tree. Regression for the strict precondition in
+    /// `tree.restoreCommittedRef` that aborts on a non-empty target.
+    @Test func restoreStorageRefIsIdempotentOnPathCollision() {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let path = Array(1...8)
+        let digest = defaultKey.partitionDigest
+        let first = SnapshotRef(
+            snapshotID: UUID().uuidString,
+            partitionDigest: digest,
+            tokenOffset: path.count,
+            checkpointType: .leaf,
+            bytesOnDisk: 1024
+        )
+        let second = SnapshotRef(
+            snapshotID: UUID().uuidString,
+            partitionDigest: digest,
+            tokenOffset: path.count,
+            checkpointType: .leaf,
+            bytesOnDisk: 2048
+        )
+        let now: ContinuousClock.Instant = .now
+
+        mgr.restoreStorageRef(
+            path: path,
+            storageRef: first,
+            partitionKey: defaultKey,
+            lastAccessTime: now
+        )
+        // Second call resolves to the same node via `insertPath`'s edge
+        // walk. Before the fix this crashed the process via the tree's
+        // strict precondition; the fix lets warm-start continue.
+        mgr.restoreStorageRef(
+            path: path,
+            storageRef: second,
+            partitionKey: defaultKey,
+            lastAccessTime: now
+        )
+
+        // First-wins: the surviving node still points at `first`.
+        let tree = tieredStore.tree(for: defaultKey)!
+        let (node, _) = tree.findBestSnapshot(
+            tokens: path,
+            updateAccess: false,
+            includeStorageRefs: true
+        )!
+        #expect(node.state.refID == first.snapshotID)
     }
 
     // MARK: - TriAttention SSD admission (v6)

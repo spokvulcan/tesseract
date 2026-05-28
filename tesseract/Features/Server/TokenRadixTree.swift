@@ -6,14 +6,11 @@ import MLXLMCommon
 final class RadixTreeNode {
     var edgeTokens: [Int]
     var children: [Int: RadixTreeNode]
-    var snapshot: HybridCacheSnapshot?
-    /// SSD persistence tier back-reference. Non-nil while an SSD
-    /// write is pending (`committed == false`) or has landed
-    /// (`committed == true`); `nil` for RAM-only nodes and after a
-    /// writer drop callback fires. Drives the five-state lifecycle
-    /// in `TieredSnapshotStore` — see the plan's
-    /// "Storage ref lifecycle" section.
-    var storageRef: SnapshotStorageRef?
+    /// The node's snapshot lifecycle — owns both the RAM body and the
+    /// SSD `SnapshotRef`. Mutated **only** by `TokenRadixTree`'s
+    /// transition methods (the sole mutator), never assigned from
+    /// outside the tree. See `SnapshotState`.
+    var state: SnapshotState
     /// Cumulative token count from root to the end of this node's edge.
     var tokenOffset: Int
     var lastAccessTime: ContinuousClock.Instant
@@ -26,8 +23,7 @@ final class RadixTreeNode {
     ) {
         self.edgeTokens = edgeTokens
         self.children = [:]
-        self.snapshot = nil
-        self.storageRef = nil
+        self.state = .empty
         self.tokenOffset = tokenOffset
         self.lastAccessTime = .now
         self.parent = parent
@@ -45,9 +41,11 @@ final class TokenRadixTree {
     private let root: RadixTreeNode
     private(set) var nodeCount: Int = 1
     private(set) var totalSnapshotBytes: Int = 0
-    /// Per-checkpoint-type snapshot counts. Maintained incrementally on
-    /// every `storeSnapshot` / `evictSnapshot` / `evictNode` so callers
-    /// don't have to walk the tree to bucket snapshots by type.
+    /// Per-checkpoint-type RAM-body counts. Reconciled incrementally at
+    /// the single mutation chokepoint (every transition method) from each
+    /// state's resident body, so callers don't have to walk the tree to
+    /// bucket snapshots by type. An `ssdOnly` node has no resident body
+    /// and is not counted.
     private(set) var snapshotCountByType: [HybridCacheSnapshot.CheckpointType: Int] = [
         .system: 0, .leaf: 0, .branchPoint: 0,
     ]
@@ -83,10 +81,12 @@ final class TokenRadixTree {
         var bestNode: RadixTreeNode?
         var bestPrefixLength = 0
 
+        // RAM body → always hittable (`hasResidentBody`). A committed SSD
+        // ref (`isHittable` adds state 5) is hittable only when the caller
+        // opts in, since it hydrates on demand. Pending refs are never
+        // hittable. Both predicates live on `SnapshotState`.
         func isHittable(_ node: RadixTreeNode) -> Bool {
-            if node.snapshot != nil { return true }
-            if includeStorageRefs, node.storageRef?.committed == true { return true }
-            return false
+            includeStorageRefs ? node.state.isHittable : node.state.hasResidentBody
         }
 
         // Root can have a snapshot (e.g. empty-prefix checkpoint)
@@ -198,15 +198,13 @@ final class TokenRadixTree {
         return current
     }
 
-    /// Attach a snapshot to a node. Use the node returned by `insertPath`.
+    /// Attach (or replace) a RAM body on a node. Use the node returned by
+    /// `insertPath`. Routes through the `storingBody` transition so the
+    /// byte/count budgets reconcile at the single chokepoint.
     func storeSnapshot(_ snapshot: HybridCacheSnapshot, on node: RadixTreeNode) {
-        if let old = node.snapshot {
-            totalSnapshotBytes -= old.memoryBytes
-            snapshotCountByType[old.checkpointType, default: 0] -= 1
-        }
-        node.snapshot = snapshot
-        totalSnapshotBytes += snapshot.memoryBytes
-        snapshotCountByType[snapshot.checkpointType, default: 0] += 1
+        let old = node.state
+        let (next, _) = old.storingBody(snapshot)
+        commit(next, on: node, from: old)
         node.lastAccessTime = .now
     }
 
@@ -230,66 +228,165 @@ final class TokenRadixTree {
         return true
     }
 
-    // MARK: - Eviction
+    // MARK: - Snapshot-state transitions (the sole mutator)
+    //
+    // Every node-state change goes through one of these chokepoints. Each
+    // applies the pure `SnapshotState` transition, reconciles the
+    // byte/count budgets from state residency, and — when a transition
+    // leaves the node `empty` (`.becameEmpty`) — self-heals by removing
+    // the node if topology allows. No code outside this type mutates
+    // `node.state`.
 
-    /// Remove a node's snapshot. Node structure stays intact.
-    func evictSnapshot(node: RadixTreeNode) {
-        guard let snap = node.snapshot else { return }
-        totalSnapshotBytes -= snap.memoryBytes
-        snapshotCountByType[snap.checkpointType, default: 0] -= 1
-        node.snapshot = nil
+    /// Attach a freshly enqueued pending ref to a node that already holds
+    /// a RAM body (the SSD-admission edge). Strict: an `.ignored` result
+    /// here is a programmer error (the caller is admitting onto a
+    /// body-less node). Returns the superseded ref's ID when this
+    /// re-admission replaced a still-live ref, so the SSD router can
+    /// delete its backing before it orphans a file + manifest entry.
+    @discardableResult
+    func admit(node: RadixTreeNode, ref: SnapshotRef) -> String? {
+        let old = node.state
+        let (next, effect, supersededID) = old.admitting(ref)
+        precondition(
+            effect != .ignored(.notResident),
+            "admit requires a resident body (state 1/2/4); node was \(old.label)"
+        )
+        commit(next, on: node, from: old)
+        return supersededID
     }
 
-    /// Remove a leaf node and clean up empty snapshot-less ancestors.
-    /// Does not remove nodes that have snapshots or other children.
-    ///
-    /// Task 4.1.8 — regression trap. `evictNode` must not be called
-    /// on a node with a live `storageRef`: removing such a node
-    /// orphans the SSD-resident copy (the persisted file lives on
-    /// disk but nothing in the tree can reach it). The actual
-    /// suppression lives at the call site in
-    /// `PrefixCacheManager.evictToFitBudget`; this assertion catches
-    /// future refactors that route around the guard.
-    func evictNode(node: RadixTreeNode) {
-        assert(
-            node.storageRef == nil,
-            "evictNode must not be called on an SSD-backed leaf — "
-            + "the storageRef would be orphaned. "
-            + "See Task 4.1.8 in docs/marconi-hybrid-prefix-cache-implementation-plan.md."
-        )
-        guard node.isLeaf else { return }
+    /// Commit a pending ref (SSD-writer callback, **forgiving**). Returns
+    /// the `StateEffect` so the router can log an `.ignored(reason)`
+    /// without recovering — newer ref wins.
+    @discardableResult
+    func commitRef(node: RadixTreeNode, expectedID: String) -> StateEffect {
+        let old = node.state
+        let (next, effect) = old.committing(expectedID: expectedID)
+        commit(next, on: node, from: old)
+        return effect
+    }
 
+    /// Drop a pending ref (SSD-writer callback, **forgiving**). Returns
+    /// the `StateEffect`; self-heals when the drop empties the node
+    /// (state 3 → removed).
+    @discardableResult
+    func dropRef(node: RadixTreeNode, expectedID: String) -> StateEffect {
+        let old = node.state
+        let (next, effect) = old.droppingRef(expectedID: expectedID)
+        commit(next, on: node, from: old)
+        if effect == .becameEmpty { selfHeal(node) }
+        return effect
+    }
+
+    /// Drop a node's RAM body (RAM-budget eviction). Returns the
+    /// `DropBodyResult` carrying the eviction telemetry inputs
+    /// (checkpoint type, freed bytes, surviving ref ID). Self-heals when
+    /// the drop empties the node (state 1 → removed); a ref-bearing node
+    /// (state 2/4) settles in place.
+    @discardableResult
+    func dropBody(node: RadixTreeNode) -> DropBodyResult {
+        let old = node.state
+        let (next, result) = old.droppingBody()
+        commit(next, on: node, from: old)
+        if result.effect == .becameEmpty { selfHeal(node) }
+        return result
+    }
+
+    /// Hydrate a committed-ref node with a freshly loaded body (state 5 →
+    /// state 4). Strict: an `.ignored` result means the node was not
+    /// `ssdOnly`, a programmer error on the SSD-hit hot path.
+    func hydrate(node: RadixTreeNode, body: HybridCacheSnapshot) {
+        let old = node.state
+        let (next, effect) = old.hydrating(body)
+        precondition(
+            effect != .ignored(.notResident),
+            "hydrate requires an ssdOnly node (state 5); node was \(old.label)"
+        )
+        commit(next, on: node, from: old)
+        node.lastAccessTime = .now
+    }
+
+    /// Clear an SSD ref after a hydration failure (state 5 → removed, or
+    /// a still-bodied node keeps its body). The load-bearing committed-ref
+    /// clearing path: the failing lookup supplies the node, so no pending
+    /// map is needed. Self-heals when clearing empties the node.
+    @discardableResult
+    func clearStorageRef(node: RadixTreeNode) -> StateEffect {
+        let old = node.state
+        let (next, effect) = old.clearingRef()
+        commit(next, on: node, from: old)
+        if effect == .becameEmpty { selfHeal(node) }
+        return effect
+    }
+
+    /// Warm-start restore: place a node directly in the `ssdOnly` state
+    /// (committed ref, no body) through the same sole-mutator seam.
+    func restoreCommittedRef(node: RadixTreeNode, ref: SnapshotRef) {
+        let old = node.state
+        let (next, effect) = old.restoringCommittedRef(ref)
+        precondition(
+            effect != .ignored(.notResident),
+            "restoreCommittedRef requires an empty node; node was \(old.label)"
+        )
+        commit(next, on: node, from: old)
+    }
+
+    // MARK: - Mutation chokepoint internals
+
+    /// Install `next` on `node` and reconcile the RAM byte/count budgets
+    /// from the difference in resident body between `old` and `next`.
+    /// Every transition method funnels through here.
+    private func commit(_ next: SnapshotState, on node: RadixTreeNode, from old: SnapshotState) {
+        if let oldType = old.body?.checkpointType {
+            snapshotCountByType[oldType, default: 0] -= 1
+        }
+        if let newType = next.body?.checkpointType {
+            snapshotCountByType[newType, default: 0] += 1
+        }
+        totalSnapshotBytes += next.residentBodyBytes - old.residentBodyBytes
+        node.state = next
+    }
+
+    /// Topology-respecting removal, triggered only on `.becameEmpty`
+    /// (`node.state == .empty`, so `canEvictNode` holds and removing the
+    /// node cannot orphan an SSD ref). Leaf → detach + sweep empty
+    /// ancestors; single-child → collapse; multi-child empty node → stays
+    /// as a structural junction.
+    private func selfHeal(_ node: RadixTreeNode) {
+        if node.isLeaf {
+            detachEmptyLeaf(node)
+        } else if node.childCount == 1 {
+            collapseEmptySingleChild(node)
+        }
+    }
+
+    /// Detach an empty leaf and sweep empty leaf ancestors. Precondition:
+    /// `node` is a leaf in the `empty` state. The ancestor walk stops at
+    /// any node that still owns a body or ref (`!canEvictNode` or a body),
+    /// which can no longer orphan an SSD ref because the walk only
+    /// continues through `empty` ancestors.
+    private func detachEmptyLeaf(_ node: RadixTreeNode) {
         var current: RadixTreeNode? = node
         while let target = current, target !== root {
             guard let parent = target.parent else { break }
 
-            // Remove from parent's children
             let key = target.edgeTokens.first!
             parent.children.removeValue(forKey: key)
             nodeCount -= 1
-
-            if let snap = target.snapshot {
-                totalSnapshotBytes -= snap.memoryBytes
-                snapshotCountByType[snap.checkpointType, default: 0] -= 1
-                target.snapshot = nil
-            }
             target.parent = nil
 
-            // Continue cleaning if parent is now an empty leaf with no
-            // snapshot AND no storageRef. Task 4.1.8: an ancestor with
-            // a pending or committed SSD ref must not be swept by the
-            // walk — doing so would orphan the persisted file the same
-            // way a direct `evictNode` on a state-3/5 victim would.
-            if parent.isLeaf
-               && parent.snapshot == nil
-               && parent.storageRef == nil
-               && parent !== root
-            {
+            // Continue only through empty leaf ancestors.
+            if parent.isLeaf, isEmptyState(parent.state), parent !== root {
                 current = parent
             } else {
                 break
             }
         }
+    }
+
+    private func isEmptyState(_ state: SnapshotState) -> Bool {
+        if case .empty = state { return true }
+        return false
     }
 
     /// Snapshot-bearing nodes eligible for Marconi utility scoring:
@@ -402,23 +499,14 @@ final class TokenRadixTree {
         return nil
     }
 
-    /// Collapse a snapshot-less node with exactly one child.
-    /// Concatenates the node's edgeTokens into the child edge and re-links parent→child.
-    /// Preserves radix compression after snapshot eviction.
-    ///
-    /// Task 4.1.8 — defense-in-depth against SSD-ref orphaning.
-    /// A node with a `storageRef` pins a radix path to a pending or
-    /// committed SSD copy, even while its RAM body is absent. Collapsing
-    /// such a node would silently drop the ref and orphan the persisted
-    /// file. The eviction loop at
-    /// `PrefixCacheManager.evictToFitBudget` already suppresses this
-    /// call from the primary path; this guard protects against
-    /// external callers (tests, future refactors) that reach the
-    /// function without that context.
-    func collapseSingleChildNode(_ node: RadixTreeNode) {
+    /// Collapse an `empty` node with exactly one child after a transition
+    /// emptied it. Concatenates the node's edgeTokens into the child edge
+    /// and re-links parent→child, preserving radix compression. Called
+    /// only by `selfHeal`, so the `empty` guard (no body, no ref) holds by
+    /// construction — collapsing here cannot orphan an SSD ref.
+    private func collapseEmptySingleChild(_ node: RadixTreeNode) {
         guard node !== root,
-              node.snapshot == nil,
-              node.storageRef == nil,
+              isEmptyState(node.state),
               node.childCount == 1,
               let parent = node.parent,
               let onlyChild = node.children.values.first
@@ -460,7 +548,7 @@ final class TokenRadixTree {
     }
 
     private func collectAllSnapshots(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
-        if node.snapshot != nil {
+        if node.state.body != nil {
             result.append(node)
         }
         for child in node.children.values {
@@ -469,7 +557,7 @@ final class TokenRadixTree {
     }
 
     private func collectEligible(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
-        if let snapshot = node.snapshot,
+        if let snapshot = node.state.body,
            node.childCount <= 1,
            snapshot.checkpointType != .system
         {
@@ -493,11 +581,10 @@ final class TokenRadixTree {
         let pathHash = Self.telemetryPathHash(path)
         let nodeID = "\(partitionDigest):\(pathHash)"
         let storageState = Self.telemetryStorageState(node)
-        let snapshot = node.snapshot
-        let storageRef = node.storageRef
-        let checkpointType = snapshot?.checkpointType.wireString ?? storageRef?.checkpointType.wireString
-        let snapshotBytes = snapshot?.memoryBytes ?? 0
-        let storageBytes = storageRef?.bytesOnDisk ?? 0
+        let state = node.state
+        let snapshot = state.body
+        let checkpointType = snapshot?.checkpointType.wireString
+            ?? state.ref?.checkpointType.wireString
         let scores = snapshot.map { _ in telemetryEvictionScore(for: node, now: now) } ?? nil
 
         nodes.append(PromptCacheTreeNodeSnapshot(
@@ -509,12 +596,12 @@ final class TokenRadixTree {
             edgeTokenCount: node.edgeTokens.count,
             childCount: node.childCount,
             depth: depth,
-            hasSnapshot: snapshot != nil,
+            hasSnapshot: state.hasResidentBody,
             checkpointType: checkpointType,
-            snapshotBytes: snapshotBytes,
+            snapshotBytes: state.residentBodyBytes,
             storageState: storageState,
-            storageRefID: storageRef?.snapshotID,
-            storageBytes: storageBytes,
+            storageRefID: state.refID,
+            storageBytes: state.storageBytes,
             lastAccessAgeSeconds: max((now - node.lastAccessTime).seconds, 0),
             normalizedRecency: scores?.normalizedRecency,
             normalizedFlopEfficiency: scores?.normalizedFlopEfficiency,
@@ -548,23 +635,21 @@ final class TokenRadixTree {
         for node: RadixTreeNode,
         now: ContinuousClock.Instant
     ) -> EvictionScore? {
-        guard node.snapshot != nil,
+        guard let body = node.state.body,
               node.childCount <= 1,
-              node.snapshot?.checkpointType != .system
+              body.checkpointType != .system
         else { return nil }
         return EvictionPolicy.computeScores(candidates: [node], now: now).first
     }
 
     private static func telemetryStorageState(_ node: RadixTreeNode) -> PromptCacheStorageState {
-        let hasSnapshot = node.snapshot != nil
-        guard let ref = node.storageRef else {
-            return hasSnapshot ? .ramOnly : .empty
-        }
-        switch (hasSnapshot, ref.committed) {
-        case (true, false): return .pendingWrite
-        case (false, false): return .pendingWriteBodyDropped
-        case (true, true): return .ramAndSSD
-        case (false, true): return .ssdOnly
+        switch node.state {
+        case .empty: return .empty
+        case .ramOnly: return .ramOnly
+        case .pendingWrite: return .pendingWrite
+        case .pendingDropped: return .pendingWriteBodyDropped
+        case .committed: return .ramAndSSD
+        case .ssdOnly: return .ssdOnly
         }
     }
 

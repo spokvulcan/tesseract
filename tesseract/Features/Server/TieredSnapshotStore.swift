@@ -2,35 +2,32 @@
 //  TieredSnapshotStore.swift
 //  tesseract
 //
-//  Task 4.1.6 — compose the existing RAM tier (`InMemorySnapshotTier`)
-//  with the new `SSDSnapshotStore` behind a single `SnapshotStore`
-//  conformance. Owns the five-state storage-ref lifecycle that
-//  `PrefixCacheManager` will eventually drive in Task 4.1.7:
-//  pending refs are tracked in a `[snapshotID: PendingRef]` map so
-//  the writer's commit / drop callbacks can find their node even
-//  after a mid-flight RAM eviction has body-dropped the snapshot.
+//  Composes the RAM tier (`InMemorySnapshotTier`) with `SSDSnapshotStore`
+//  behind a single `SnapshotStore` conformance, and acts as the SSD
+//  **router**: it resolves the writer's global `snapshotID` callbacks to
+//  the owning `(node, tree)` and forwards them to the tree's transition
+//  methods. It is **not** a mutator of node state — that is the tree's
+//  job alone. The cross-partition `pendingRefsByID` map lives here
+//  because the writer's callback carries only a global ID and the tree is
+//  per-partition, so the index cannot live in any single tree.
 //
 //  **No selective write-through.** Every admission enqueues to SSD
 //  unconditionally; the writer runs the admission-time type-protected
-//  LRU cut inside `SSDSnapshotStore` (Task 4.1.2 already implements
-//  it) when the budget is tight. This store merely forwards
-//  payloads + descriptors to the writer and attaches the returned
-//  `SnapshotStorageRef` to the matching radix node.
+//  LRU cut inside `SSDSnapshotStore` when the budget is tight. This store
+//  forwards payloads + descriptors to the writer and routes the returned
+//  `SnapshotRef` into `tree.admit`.
 //
-//  **MainActor-isolated by construction.** All lifecycle mutations
-//  (pending map writes, ref `committed` flips, hard-delete cleanups)
-//  happen on MainActor. The writer's commit / drop callbacks fire
-//  from off-main context and hop back via
+//  **MainActor-isolated by construction.** All routing (pending map
+//  writes, callback forwarding) happens on MainActor. The writer's commit
+//  / drop callbacks fire from off-main context and hop back via
 //  `Task { @MainActor in self?.markStorageRefCommitted(...) }` —
 //  see `init(ssdConfig:)`.
 //
-//  **Hard-delete on state-3 drop.** When the drop callback finds a
-//  node in state 3 (body absent + ref pending), clearing the ref
-//  leaves an orphaned structural path node. This store then replays
-//  the normal cleanup that `PrefixCacheManager.evictToFitBudget`
-//  runs on eviction victims (`evictNode` for leaves, `collapseSingleChildNode`
-//  for single-child pass-through nodes), but with the SSD ref
-//  already cleared so Task 4.1.8's body-drop guards do not fire.
+//  **Node removal is the tree's self-heal.** When a drop empties a node
+//  (state 3 → removed), `tree.dropRef` removes it respecting topology.
+//  This store no longer reaches into node fields or runs radix cleanup
+//  itself — the inverted dependency (SSD tier mutating tree-owned state)
+//  is gone.
 //
 
 import Foundation
@@ -138,8 +135,8 @@ final class TieredSnapshotStore: SnapshotStore {
     // MARK: - SSD admission (state 1 → state 2)
 
     /// Enqueue a freshly captured payload into the SSD writer's
-    /// pending queue and attach the resulting pending
-    /// `SnapshotStorageRef` to `node`. Returns the raw writer result
+    /// pending queue and route the resulting pending `SnapshotRef`
+    /// into `tree.admit`. Returns the raw writer result
     /// so the caller can branch on rejection outcomes
     /// (`rejectedTooLargeForBudget`, `rejectedInvalidCheckpointType`,
     /// `rejectedUnregisteredPartition`). Returns `nil` when the SSD
@@ -147,19 +144,21 @@ final class TieredSnapshotStore: SnapshotStore {
     /// admission, no ref to track".
     ///
     /// **Side effects on `.accepted`:**
-    /// - `node.storageRef` is set to the returned pending ref
-    ///   (`committed: false`).
+    /// - The tree applies `admit` (state 1/2/4 → pending write), the sole
+    ///   mutator of node state. Re-admission over a still-live ref returns
+    ///   the superseded ID; its SSD backing is deleted *before* the new
+    ///   pending entry is seeded, closing the SSD-side orphan that the old
+    ///   raw `node.storageRef = ref` overwrite leaked.
     /// - `pendingRefsByID[ref.snapshotID]` is seeded with the
-    ///   `(node, tree)` pair so the writer's commit / drop callback
-    ///   can always find the node, even after RAM eviction drops
-    ///   the body and `evictNode` would normally prune a leaf.
+    ///   `(node, tree)` pair so the writer's commit / drop callback can
+    ///   always find the node, even after RAM eviction drops the body.
     ///
     /// Non-suspending by construction: the underlying
     /// `SSDSnapshotStore.tryEnqueue` is `nonisolated` and acquires
     /// a plain `NSLock` for cross-thread safety, so calling this
     /// from a synchronous MainActor closure (the
-    /// `PrefixCacheManager.storeSnapshots` / `storeLeaf` call sites
-    /// in Task 4.1.7) never forces an `await` on the caller.
+    /// `PrefixCacheManager.storeSnapshots` / `storeLeaf` call sites)
+    /// never forces an `await` on the caller.
     @discardableResult
     func admitSnapshot(
         node: RadixTreeNode,
@@ -175,7 +174,14 @@ final class TieredSnapshotStore: SnapshotStore {
         )
 
         if case .accepted(let ref) = result {
-            node.storageRef = ref
+            let supersededID = tree.admit(node: node, ref: ref)
+            if let supersededID {
+                // The old write may have already committed to the manifest
+                // with its file on disk; deleting it (SSD backing + stale
+                // pending entry) before seeding the new entry prevents an
+                // orphaned file + manifest entry.
+                deleteSnapshot(snapshotID: supersededID)
+            }
             pendingRefsByID[ref.snapshotID] = PendingRef(
                 node: node,
                 tree: tree
@@ -214,21 +220,17 @@ final class TieredSnapshotStore: SnapshotStore {
             return
         }
 
-        let node = pending.node
-
-        // Defensive: the node's ref should still carry the same ID.
-        // A mismatch means a later admission replaced the ref under
-        // the same node — we surface the inconsistency via debug
-        // logging but do not attempt recovery. The newer ref wins.
-        guard var ref = node.storageRef, ref.snapshotID == id else {
+        // The tree is the sole mutator and owns the stale-ID guard: an
+        // `.ignored(reason)` here (a later admission superseded the ref,
+        // or the node already committed) is logged and not recovered —
+        // the newer ref wins.
+        let effect = pending.tree.commitRef(node: pending.node, expectedID: id)
+        if case .ignored(let reason) = effect {
             Log.agent.debug(
-                "TieredSnapshotStore.markStorageRefCommitted: id=\(id) node.storageRef mismatch"
+                "TieredSnapshotStore.markStorageRefCommitted: id=\(id) ignored "
+                + "(reason=\(String(describing: reason)))"
             )
-            return
         }
-
-        ref.committed = true
-        node.storageRef = ref
     }
 
     /// Writer drop callback. Three legitimate call paths reach here:
@@ -241,26 +243,29 @@ final class TieredSnapshotStore: SnapshotStore {
     ///    recovered after a single eviction-retry pass
     ///    (`.diskFull`, `.writerIOError`).
     ///
-    /// Transitions:
+    /// Routes through `tree.dropRef`, which decides the transition:
     /// - State 2 (body present, pending ref) → state 1 (body present,
-    ///   no ref). The RAM body stays live; subsequent RAM hits
-    ///   continue to work; the SSD copy never materialized.
-    /// - State 3 (body absent, pending ref) → removed-from-tree. The
-    ///   node has nothing: no RAM body, no committed SSD copy. We
-    ///   replay the normal eviction cleanup (`evictNode` for leaves,
-    ///   `collapseSingleChildNode` for single-child pass-throughs)
-    ///   with the ref already cleared so the Task 4.1.8 guards
-    ///   don't fire.
+    ///   no ref). The RAM body stays live; the SSD copy never materialized.
+    /// - State 3 (body absent, pending ref) → removed-from-tree. The node
+    ///   has nothing left, so the tree self-heals (leaf → evict,
+    ///   single-child → collapse, multi-child empty → retained junction).
     ///
     /// Calls with an `id` that is not in the pending map are
     /// legitimate and are ignored at debug level — the evicted-by-LRU
     /// reason from the SSD-tier cut can land against a previously
     /// committed resident whose node is no longer tracked here. The
-    /// stale `storageRef` on such a node self-cleans on the next
-    /// lookup when `loadSync` reports file-missing and fires its own
-    /// `markStorageRefDropped` callback.
+    /// stale ref on such a node self-cleans on the next lookup when
+    /// `loadSync` reports file-missing and the MainActor calls
+    /// `tree.clearStorageRef`.
     func markStorageRefDropped(id: String, reason: SSDDropReason) {
         guard let pending = pendingRefsByID.removeValue(forKey: id) else {
+            // Not in the pending map: this is a committed-resident drop
+            // (`.evictedByLRU` / `.hydrationFailure` for an ID that commit
+            // already removed). A logged no-op — the stale committed ref
+            // is cleared lazily on the next lookup, when `loadSync`
+            // reports file-missing and the MainActor calls
+            // `tree.clearStorageRef` with the node already in hand. Do not
+            // search the tree per drop callback.
             Log.agent.debug(
                 "TieredSnapshotStore.markStorageRefDropped: id=\(id) not in pending map "
                 + "(reason=\(String(describing: reason)))"
@@ -268,27 +273,17 @@ final class TieredSnapshotStore: SnapshotStore {
             return
         }
 
-        let node = pending.node
-        let tree = pending.tree
-
-        // Only clear the ref if it still matches — a later
-        // admission could have replaced it and the newer ref wins.
-        if let ref = node.storageRef, ref.snapshotID == id {
-            node.storageRef = nil
-        }
-
-        // State 2 (body present) stays in the tree as RAM-only.
-        guard node.snapshot == nil else { return }
-
-        // State 3 → removed-from-tree. Replay the normal radix
-        // cleanup `PrefixCacheManager.evictToFitBudget` runs on
-        // ref-less, body-less victims. Task 4.1.8 adds a storageRef
-        // guard to the eviction loop; that guard is a no-op here
-        // because the ref was already cleared above.
-        if node.isLeaf {
-            tree.evictNode(node: node)
-        } else if node.childCount == 1 {
-            tree.collapseSingleChildNode(node)
+        // The tree is the sole mutator and owns the stale-ID guard. State
+        // 2 (body present) settles to RAM-only and stays; state 3 (body
+        // absent) empties and the tree self-heals (removes the node). An
+        // `.ignored(.idMismatch)` means a later admission superseded the
+        // ref — newer ref wins, logged and not recovered.
+        let effect = pending.tree.dropRef(node: pending.node, expectedID: id)
+        if case .ignored(let dropReason) = effect {
+            Log.agent.debug(
+                "TieredSnapshotStore.markStorageRefDropped: id=\(id) ignored "
+                + "(reason=\(String(describing: dropReason)))"
+            )
         }
     }
 

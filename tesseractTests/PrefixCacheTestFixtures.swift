@@ -30,24 +30,22 @@ enum PrefixCacheTestFixtures {
         return HybridCacheSnapshot.capture(cache: [kv], offset: offset, type: type)!
     }
 
-    /// Fabricate a `SnapshotStorageRef` for tests that exercise the
-    /// storageRef-aware radix / eviction guards without plumbing
-    /// through the full `SSDSnapshotStore` write pipeline. The
-    /// `bytesOnDisk` value is arbitrary — the guard logic only
-    /// branches on `storageRef != nil` and `committed`.
-    static func makeStorageRef(
-        committed: Bool = true,
+    /// Fabricate a `SnapshotRef` for tests that exercise the
+    /// state-aware radix / eviction logic without plumbing through the
+    /// full `SSDSnapshotStore` write pipeline. The `bytesOnDisk` value
+    /// is arbitrary. The write phase (pending vs committed) is no longer
+    /// a field on the ref — it is the owning `SnapshotState` case, so
+    /// callers attach the ref via `node.state = .ssdOnly(ref)` etc.
+    static func makeRef(
         type: HybridCacheSnapshot.CheckpointType = .leaf,
         tokenOffset: Int = 0
-    ) -> SnapshotStorageRef {
-        SnapshotStorageRef(
+    ) -> SnapshotRef {
+        SnapshotRef(
             snapshotID: UUID().uuidString,
             partitionDigest: "deadbeef",
             tokenOffset: tokenOffset,
             checkpointType: type,
-            bytesOnDisk: 1024,
-            lastAccessTime: .now,
-            committed: committed
+            bytesOnDisk: 1024
         )
     }
 

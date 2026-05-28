@@ -45,10 +45,10 @@ import MLXLMCommon
 /// pending queue. Synchronous so the MainActor call sites can branch
 /// without `await`.
 nonisolated enum TryEnqueueResult: Sendable, Equatable {
-    /// Item accepted into the pending queue. The returned
-    /// `SnapshotStorageRef` carries `committed: false`; downstream
-    /// composition code attaches it to the radix node.
-    case accepted(SnapshotStorageRef)
+    /// Item accepted into the pending queue. The returned `SnapshotRef`
+    /// is the snapshot's on-disk identity; the composition layer attaches
+    /// it to the radix node as a pending-write `SnapshotState`.
+    case accepted(SnapshotRef)
 
     /// Single payload exceeds the front door's `maxPendingBytes`
     /// cap. Never enqueued. Expected to be vanishingly rare — the
@@ -323,14 +323,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         wakeupContinuation.yield()
 
         return .accepted(
-            SnapshotStorageRef(
+            SnapshotRef(
                 snapshotID: descriptor.snapshotID,
                 partitionDigest: descriptor.partitionDigest,
                 tokenOffset: descriptor.tokenOffset,
                 checkpointType: checkpointType,
-                bytesOnDisk: descriptor.bytes,
-                lastAccessTime: .now,
-                committed: false
+                bytesOnDisk: descriptor.bytes
             )
         )
     }
@@ -1141,7 +1139,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     // MARK: - File path derivation
 
     /// Canonical on-disk URL for a snapshot file. Both the writer's
-    /// descriptor-based path and the reader's `SnapshotStorageRef`
+    /// descriptor-based path and the reader's `SnapshotRef`
     /// path must go through this single helper so the sharding rule
     /// cannot drift between write and read.
     private nonisolated func fileURL(
@@ -1539,7 +1537,7 @@ extension SSDSnapshotStore {
     ///
     /// Returns `nil` on any failure; `HybridCacheSnapshot` on success.
     nonisolated func loadSync(
-        storageRef: SnapshotStorageRef,
+        storageRef: SnapshotRef,
         expectedFingerprint: String
     ) -> HybridCacheSnapshot? {
         // Fingerprint gate: compare the partition's persisted
@@ -1608,7 +1606,7 @@ extension SSDSnapshotStore {
     /// file + fires `onDrop(.hydrationFailure)`, and returns `nil`
     /// so the caller can `return` the result directly.
     private nonisolated func failLoad(
-        _ ref: SnapshotStorageRef,
+        _ ref: SnapshotRef,
         reason: PrefixCacheDiagnostics.SSDMissReason,
         _ message: @autoclosure () -> String
     ) -> HybridCacheSnapshot? {
@@ -1625,7 +1623,7 @@ extension SSDSnapshotStore {
     }
 
     private nonisolated func fileURL(
-        forStorageRef ref: SnapshotStorageRef
+        forStorageRef ref: SnapshotRef
     ) -> URL {
         fileURL(
             snapshotID: ref.snapshotID,

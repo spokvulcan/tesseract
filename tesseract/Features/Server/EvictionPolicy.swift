@@ -171,7 +171,7 @@ enum EvictionPolicy {
         }
 
         let rawFlopEffs: [Double] = candidates.map { node in
-            guard let snapshot = node.snapshot, snapshot.memoryBytes > 0 else {
+            guard let snapshot = node.state.body, snapshot.memoryBytes > 0 else {
                 return 0.0
             }
             let parentOffset = node.parent?.tokenOffset ?? 0

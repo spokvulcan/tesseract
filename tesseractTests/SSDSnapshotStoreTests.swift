@@ -195,7 +195,6 @@ struct SSDSnapshotStoreTests {
             return
         }
         #expect(ref.snapshotID == descriptor.snapshotID)
-        #expect(ref.committed == false)
         #expect(ref.bytesOnDisk == payload.totalBytes)
 
         let committed = await waitUntil {
@@ -855,24 +854,15 @@ struct SSDSnapshotStoreTests {
 
     // MARK: - loadSync round trip + hydration failures
 
-    /// Build a committed `SnapshotStorageRef` from the pending ref
-    /// returned by `tryEnqueue`. The writer's commit callback flips
-    /// the ref's `committed` bit in production via
-    /// `TieredSnapshotStore.markStorageRefCommitted` — here we
-    /// reconstruct the committed shape directly because the test
-    /// talks to the store without an intermediate tier.
+    /// The `SnapshotRef` returned by `tryEnqueue` is the snapshot's
+    /// on-disk identity; the commit phase is now encoded by the owning
+    /// `SnapshotState` case, not by a field on the ref, and `loadSync`
+    /// only needs the identity. Kept as a passthrough so the call sites
+    /// still read as "load the committed resident".
     private func committedRef(
-        from ref: SnapshotStorageRef
-    ) -> SnapshotStorageRef {
-        SnapshotStorageRef(
-            snapshotID: ref.snapshotID,
-            partitionDigest: ref.partitionDigest,
-            tokenOffset: ref.tokenOffset,
-            checkpointType: ref.checkpointType,
-            bytesOnDisk: ref.bytesOnDisk,
-            lastAccessTime: ref.lastAccessTime,
-            committed: true
-        )
+        from ref: SnapshotRef
+    ) -> SnapshotRef {
+        ref
     }
 
     /// Build a payload whose shape / dtype / byte count are
@@ -1437,14 +1427,12 @@ struct SSDSnapshotStoreTests {
         )
         store.seedDescriptorForTesting(descriptor)
 
-        let storageRef = SnapshotStorageRef(
+        let storageRef = SnapshotRef(
             snapshotID: descriptor.snapshotID,
             partitionDigest: descriptor.partitionDigest,
             tokenOffset: descriptor.tokenOffset,
             checkpointType: .leaf,
-            bytesOnDisk: descriptor.bytes,
-            lastAccessTime: .now,
-            committed: true
+            bytesOnDisk: descriptor.bytes
         )
 
         let result = store.loadSync(

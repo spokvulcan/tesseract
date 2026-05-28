@@ -57,7 +57,7 @@ struct EvictionPolicyTests {
             MLXArray.zeros([1, 1, length, 64]),
             MLXArray.zeros([1, 1, length, 64]),
         ]
-        node.snapshot = HybridCacheSnapshot.capture(cache: [kv], offset: tokenOffset, type: type)
+        node.state = .ramOnly(HybridCacheSnapshot.capture(cache: [kv], offset: tokenOffset, type: type)!)
         if accessAge != .zero {
             node.lastAccessTime = .now - accessAge
         }
