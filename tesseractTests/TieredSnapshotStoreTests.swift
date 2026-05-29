@@ -213,7 +213,7 @@ struct TieredSnapshotStoreTests {
             maxPendingBytes: 10_000_000
         )
         let store = TieredSnapshotStore(ssdConfig: config)
-        #expect(store.ssdStore == nil)
+        #expect(store.ssdStoreForTesting == nil)
     }
 
     // MARK: - State 1 → 2 → 4 (happy path commit)
@@ -469,7 +469,7 @@ struct TieredSnapshotStoreTests {
         let systemCommitted = await waitUntil { nodes[2].state.committed }
         #expect(systemCommitted)
 
-        let residents = store.ssdStore!.residentIDsByRecencyForTesting()
+        let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
         #expect(residents.contains(leafA.snapshotID) == false)
         #expect(residents.contains(leafB.snapshotID))
         #expect(residents.contains(systemDesc.snapshotID))
@@ -523,7 +523,7 @@ struct TieredSnapshotStoreTests {
 
         // System resident is still intact.
         #expect(systemNode.state.committed)
-        let residents = store.ssdStore!.residentIDsByRecencyForTesting()
+        let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
         #expect(residents.contains(systemDesc.snapshotID))
         #expect(residents.contains(leafDesc.snapshotID) == false)
         #expect(store.pendingRefCountForTesting == 0)
@@ -574,7 +574,7 @@ struct TieredSnapshotStoreTests {
         #expect(nodeC.state.ref != nil)
 
         // Every surviving committed ref must match a manifest entry.
-        let residentIDs = Set(store.ssdStore!.residentIDsByRecencyForTesting())
+        let residentIDs = Set(store.ssdStoreForTesting!.residentIDsByRecencyForTesting())
         let committedIDs = [nodeA, nodeB, nodeC]
             .compactMap { $0.state.committed ? $0.state.refID : nil }
         #expect(Set(committedIDs).isSubset(of: residentIDs))
@@ -762,7 +762,7 @@ struct TieredSnapshotStoreTests {
         }
         let firstCommitted = await waitUntil { node.state.committed }
         #expect(firstCommitted)
-        #expect(store.ssdStore!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID))
+        #expect(store.ssdStoreForTesting!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID))
 
         // Re-admit over the committed node (state 4). The node still has a
         // RAM body, so admit applies and supersedes firstRef.
@@ -779,11 +779,11 @@ struct TieredSnapshotStoreTests {
         #expect(store.isPendingForTesting(id: secondRef.snapshotID))
         #expect(store.isPendingForTesting(id: firstRef.snapshotID) == false)
         // The superseded backing is gone — no orphan.
-        #expect(store.ssdStore!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID) == false)
+        #expect(store.ssdStoreForTesting!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID) == false)
 
         let secondCommitted = await waitUntil { node.state.committed }
         #expect(secondCommitted)
-        let residents = Set(store.ssdStore!.residentIDsByRecencyForTesting())
+        let residents = Set(store.ssdStoreForTesting!.residentIDsByRecencyForTesting())
         #expect(residents.contains(secondRef.snapshotID))
         #expect(residents.contains(firstRef.snapshotID) == false)
     }

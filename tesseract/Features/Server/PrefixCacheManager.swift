@@ -283,18 +283,6 @@ final class PrefixCacheManager {
         }
     }
 
-    /// Handles the `MainActor`-owned `RadixTreeNode` and the
-    /// `nonisolated` `SSDSnapshotStore` that LLMActor needs to
-    /// hydrate a state-5 node. `@unchecked Sendable` because the
-    /// node is MainActor-owned — LLMActor only reads the Snapshot Ref
-    /// off-main and hops back to MainActor before touching the
-    /// node via `PrefixCacheManager.promote(node:snapshot:partitionKey:)`.
-    struct SSDHitContext: @unchecked Sendable {
-        let snapshotRef: SnapshotRef
-        let ssdStore: SSDSnapshotStore
-        let node: RadixTreeNode
-    }
-
     enum LookupReason: CustomStringConvertible, Sendable {
         case hit(snapshotOffset: Int, totalTokens: Int, type: HybridCacheSnapshot.CheckpointType)
         /// State 5 — body absent, committed SSD ref present. LLMActor
@@ -345,15 +333,12 @@ final class PrefixCacheManager {
         let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
 
         if let snapshot = node.state.body {
-            // States 1, 2, or 4. On state 4 (committed ref + body)
-            // bump the SSD descriptor's `lastAccessAt` so a hot RAM
-            // hit does not look stale to the SSD LRU when the body
-            // is eventually dropped to state 5.
-            var recordedHitID: String?
-            if case .committed(_, let ref) = node.state {
-                store.ssdStore?.recordHit(id: ref.snapshotID)
-                recordedHitID = ref.snapshotID
-            }
+            // States 1, 2, or 4. On state 4 (committed ref + body) the
+            // store bumps the SSD descriptor's `lastAccessAt` so a hot
+            // RAM hit does not look stale to the SSD LRU when the body
+            // is eventually dropped to state 5. `noteLookupHit` returns
+            // the bumped snapshot ID, or nil for non-committed states.
+            let recordedHitID = store.noteLookupHit(on: node)
             return LookupResult(
                 snapshot: snapshot,
                 partitionKey: partitionKey,
@@ -372,21 +357,17 @@ final class PrefixCacheManager {
         // after the body branch returned, so the node is body-less; the
         // only body-less *hittable* state `findBestSnapshot` returns is
         // `.ssdOnly` (pending refs are filtered out), so the pattern match
-        // is total for this branch. SSD store must also be non-nil because
-        // the ref could only have been assigned through the admission path.
+        // is total for this branch. `makeSSDHitContext` returns non-nil
+        // because the ref could only have been assigned through the
+        // admission path, which requires the SSD tier to be enabled.
         guard case .ssdOnly(let ref) = node.state,
-              let ssdStore = store.ssdStore else {
+              let context = store.makeSSDHitContext(ref: ref, node: node) else {
             return LookupResult(
                 snapshot: nil, partitionKey: partitionKey,
                 snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
                 reason: .missNoSnapshotInPrefix
             )
         }
-        let context = SSDHitContext(
-            snapshotRef: ref,
-            ssdStore: ssdStore,
-            node: node
-        )
         return LookupResult(
             snapshot: nil,
             partitionKey: partitionKey,
@@ -823,14 +804,14 @@ final class PrefixCacheManager {
     /// benchmark restart scenarios before an unload so in-flight
     /// writes survive the teardown. No-op when SSD is disabled.
     func flushSSDWrites() async {
-        await store.ssdStore?.flushAsync()
+        await store.flush()
     }
 
     func warmStart(modelFingerprint: String) async throws {
-        guard let ssdStore = store.ssdStore else { return }
+        guard store.isSSDEnabled else { return }
 
         let started = Date.timeIntervalSinceReferenceDate
-        let outcome = ssdStore.warmStartLoad(expectedFingerprint: modelFingerprint)
+        let outcome = store.warmStartLoad(expectedFingerprint: modelFingerprint)
 
         let now: ContinuousClock.Instant = .now
         var digestMismatchPartitions: [String] = []
@@ -932,7 +913,7 @@ final class PrefixCacheManager {
     }
 
     private func registerSSDPartitionIfNeeded(for partitionKey: CachePartitionKey) {
-        guard store.ssdStore != nil else { return }
+        guard store.isSSDEnabled else { return }
         guard let fingerprint = partitionKey.modelFingerprint else {
             assertionFailure(
                 "SSD admission requires a model fingerprint on CachePartitionKey"

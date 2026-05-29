@@ -1680,7 +1680,7 @@ struct PrefixCacheManagerTests {
         // a target. Partition must be registered first; the manager's
         // warmStart normally drives this, but we mint the config
         // directly here.
-        let ssdStore = tieredStore.ssdStore!
+        let ssdStore = tieredStore.ssdStoreForTesting!
         let meta = PartitionMeta(
             modelID: "test-model",
             modelFingerprint: String(repeating: "a", count: 64),
@@ -1756,7 +1756,7 @@ struct PrefixCacheManagerTests {
             snapshotPayloads: [payload],
             partitionKey: key
         )
-        await tieredStore.ssdStore!.flushAsync()
+        await tieredStore.ssdStoreForTesting!.flushAsync()
 
         let manifestURL = root.appendingPathComponent("manifest.json")
         #expect(FileManager.default.fileExists(atPath: manifestURL.path))
@@ -1786,7 +1786,7 @@ struct PrefixCacheManagerTests {
             return
         }
         #expect(ctx.snapshotRef.tokenOffset == snapshot.tokenOffset)
-        #expect(restoredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
+        #expect(restoredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
     }
 
     /// Warm-start tolerates two persisted descriptors that resolve to the
@@ -1803,7 +1803,7 @@ struct PrefixCacheManagerTests {
 
         let path = Array(1...8)
         let digest = defaultKey.partitionDigest
-        let ssdStore = tieredStore.ssdStore!
+        let ssdStore = tieredStore.ssdStoreForTesting!
 
         // Register the partition and seed BOTH descriptors into the
         // manifest + SSD byte budget, mirroring `commitRestoredManifest`
@@ -1906,11 +1906,11 @@ struct PrefixCacheManagerTests {
             snapshotPayloads: [payload],
             partitionKey: key
         )
-        await tieredStore.ssdStore!.flushAsync()
+        await tieredStore.ssdStoreForTesting!.flushAsync()
 
         #expect(mgr.stats.partitionCount == 1)
         #expect(mgr.stats.snapshotCount == 1)
-        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
+        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
 
         let partitionDir = root
             .appendingPathComponent("partitions")
@@ -1933,10 +1933,10 @@ struct PrefixCacheManagerTests {
             leafPayload: leafPayload,
             partitionKey: key
         )
-        await tieredStore.ssdStore!.flushAsync()
+        await tieredStore.ssdStoreForTesting!.flushAsync()
 
         #expect(mgr.stats.snapshotCount == 1)
-        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == leafPayload.totalBytes)
+        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == leafPayload.totalBytes)
     }
 
     @Test func storeSnapshotsStillAdmitsSSDForDensePartition() async throws {
@@ -1954,8 +1954,8 @@ struct PrefixCacheManagerTests {
             snapshotPayloads: [payload],
             partitionKey: key
         )
-        await tieredStore.ssdStore!.flushAsync()
+        await tieredStore.ssdStoreForTesting!.flushAsync()
 
-        #expect(tieredStore.ssdStore?.currentSSDBytesForTesting() == payload.totalBytes)
+        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
     }
 }
