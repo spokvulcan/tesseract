@@ -417,10 +417,18 @@ final class SettingsManager {
             .appendingPathComponent("prefix-cache", isDirectory: true)
     }
 
-    /// Restore every setting to its single-sourced catalogue default. Runs
+    /// Restore every *preference* to its single-sourced catalogue default. Runs
     /// *after* `init`, so each assignment fires `didSet` — the value persists
     /// through the store and side effects (launch-at-login, dock visibility)
-    /// re-apply, exactly as reset does today.
+    /// re-apply, exactly as reset did before the seam.
+    ///
+    /// Deliberate exception: `hasCompletedOnboarding` is *not* reset. "Reset to
+    /// Defaults" is a Settings action and must never resurface the onboarding
+    /// flow for an existing user — onboarding completion is app-lifecycle state,
+    /// not a preference. It stays catalogued (still hydrated and persisted), just
+    /// outside the reset contract. (Matches the pre-seam behaviour, which also
+    /// omitted it.) Pinned by
+    /// `SettingsManagerTests.resetToDefaultsLeavesOnboardingCompletionIntact`.
     func resetToDefaults() {
         launchAtLogin = SettingsCatalogue.launchAtLogin.default
         showInDock = SettingsCatalogue.showInDock.default
@@ -458,6 +466,7 @@ final class SettingsManager {
         prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.default
         prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.default
         prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.default
+        // hasCompletedOnboarding is intentionally omitted — see the doc comment.
     }
 
     // MARK: - Private

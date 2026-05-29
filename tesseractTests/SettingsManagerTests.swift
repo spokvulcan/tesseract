@@ -106,6 +106,24 @@ struct SettingsManagerTests {
         #expect(store.writes.contains("serverPort"))
     }
 
+    @Test
+    func resetToDefaultsLeavesOnboardingCompletionIntact() {
+        // The deliberate exception to the catalogue-reset contract: "Reset to
+        // Defaults" must not resurface onboarding for an existing user.
+        // `hasCompletedOnboarding` is catalogued (hydrated + persisted) but not
+        // reset — onboarding completion is app-lifecycle state, not a preference.
+        let store = InMemorySettingsStore()
+        let settings = SettingsManager(store: store)
+        settings.hasCompletedOnboarding = true
+
+        settings.resetToDefaults()
+        #expect(settings.hasCompletedOnboarding == true)
+
+        // And it survives the next relaunch — never silently re-onboards.
+        let relaunched = SettingsManager(store: store)
+        #expect(relaunched.hasCompletedOnboarding == true)
+    }
+
     // MARK: - Stale-value migration (the deliberate exception)
 
     @Test
