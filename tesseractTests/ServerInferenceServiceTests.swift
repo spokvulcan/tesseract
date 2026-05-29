@@ -420,10 +420,7 @@ struct ServerInferenceServiceTests {
     /// time is what made /compact and auto-compaction miss the user toggling
     /// TriAttention or switching model mid-session.
     @Test func agentFactoryStyleProviderLiveReadsModelAndTriAttentionFromSettings() async throws {
-        clearAgentSelectionDefaults()
-        defer { clearAgentSelectionDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.selectedAgentModelID = "qwen3.5-4b-paro"
         settings.triattentionEnabled = false
 
@@ -468,10 +465,7 @@ struct ServerInferenceServiceTests {
     /// not the public HTTP listener is enabled — the listener is a transport
     /// concern, not a dependency of the canonical inference path.
     @Test func serverEnabledFlagDoesNotAffectInternalRouting() async throws {
-        clearInferenceRoutingDefaults()
-        defer { clearInferenceRoutingDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.isServerEnabled = false
 
         let engine = StubServerInferenceEngine()
@@ -669,15 +663,6 @@ private func collectText(
         }
     }
     return chunks.joined()
-}
-
-private func clearInferenceRoutingDefaults() {
-    UserDefaults.standard.removeObject(forKey: "isServerEnabled")
-}
-
-private func clearAgentSelectionDefaults() {
-    UserDefaults.standard.removeObject(forKey: "selectedAgentModelID")
-    UserDefaults.standard.removeObject(forKey: "triattentionEnabled")
 }
 
 private actor AsyncFlag {

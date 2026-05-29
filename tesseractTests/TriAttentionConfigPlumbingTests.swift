@@ -7,10 +7,6 @@ import Testing
 @MainActor
 struct TriAttentionConfigPlumbingTests {
 
-    private func clearTriAttentionDefaults() {
-        UserDefaults.standard.removeObject(forKey: "triattentionEnabled")
-    }
-
     private func makeFakeModelDirectory(paro: Bool = false) throws -> URL {
         try TriAttentionTestFixtures.makeFakeModelDirectory(
             prefix: "triattention-plumbing-model",
@@ -20,10 +16,7 @@ struct TriAttentionConfigPlumbingTests {
 
     @Test
     func settingsDefaultToDisabledV1Configuration() {
-        clearTriAttentionDefaults()
-        defer { clearTriAttentionDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         #expect(settings.triattentionEnabled == false)
 
         let config = settings.makeTriAttentionConfig()
@@ -36,13 +29,11 @@ struct TriAttentionConfigPlumbingTests {
 
     @Test
     func settingsValueRoundTripsAcrossInstances() {
-        clearTriAttentionDefaults()
-        defer { clearTriAttentionDefaults() }
-
-        let first = SettingsManager()
+        let store = InMemorySettingsStore()
+        let first = SettingsManager(store: store)
         first.triattentionEnabled = true
 
-        let second = SettingsManager()
+        let second = SettingsManager(store: store)
         #expect(second.triattentionEnabled == true)
         #expect(second.makeTriAttentionConfig().enabled == true)
     }
@@ -71,21 +62,20 @@ struct TriAttentionConfigPlumbingTests {
     }
 
     /// `resetToDefaults()` must bring `triattentionEnabled` back to `false` and
-    /// persist that value — otherwise a fresh `SettingsManager()` would rehydrate
-    /// the stale `true` from UserDefaults and re-enable the feature silently.
+    /// persist that value through the store — otherwise a fresh `SettingsManager`
+    /// built on the same store would rehydrate the stale `true` and re-enable the
+    /// feature silently.
     @Test
     func resetToDefaultsRestoresDisabledAndPersists() {
-        clearTriAttentionDefaults()
-        defer { clearTriAttentionDefaults() }
-
-        let settings = SettingsManager()
+        let store = InMemorySettingsStore()
+        let settings = SettingsManager(store: store)
         settings.triattentionEnabled = true
         #expect(settings.triattentionEnabled == true)
 
         settings.resetToDefaults()
         #expect(settings.triattentionEnabled == false)
 
-        let rehydrated = SettingsManager()
+        let rehydrated = SettingsManager(store: store)
         #expect(rehydrated.triattentionEnabled == false)
         #expect(rehydrated.makeTriAttentionConfig().enabled == false)
     }
@@ -100,10 +90,7 @@ struct TriAttentionConfigPlumbingTests {
 
     @Test
     func settingsBackedEngineResolvesHiddenTriAttentionSetting() {
-        clearTriAttentionDefaults()
-        defer { clearTriAttentionDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         let engine = AgentEngine(settingsManager: settings)
 
         let disabled = engine.resolveTriAttentionConfig()
@@ -131,10 +118,7 @@ struct TriAttentionConfigPlumbingTests {
 
     @Test
     func agentEngineLoadForwardsExplicitTriAttentionOverrideToActor() async throws {
-        clearTriAttentionDefaults()
-        defer { clearTriAttentionDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.triattentionEnabled = false
         let engine = AgentEngine(settingsManager: settings)
         let fakeDir = try makeFakeModelDirectory(paro: true)
@@ -158,10 +142,7 @@ struct TriAttentionConfigPlumbingTests {
 
     @Test
     func agentEngineLoadFallsBackToSettingsWhenNoExplicitTriAttention() async throws {
-        clearTriAttentionDefaults()
-        defer { clearTriAttentionDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.triattentionEnabled = true
         let engine = AgentEngine(settingsManager: settings)
         let fakeDir = try makeFakeModelDirectory(paro: true)
@@ -180,10 +161,7 @@ struct TriAttentionConfigPlumbingTests {
 
     @Test
     func agentEngineLoadRecordsDenseFallbackReasonWhenUnsupported() async throws {
-        clearTriAttentionDefaults()
-        defer { clearTriAttentionDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.triattentionEnabled = true
         let engine = AgentEngine(settingsManager: settings)
         let fakeDir = try makeFakeModelDirectory(paro: true)

@@ -69,12 +69,7 @@ struct AgentCoordinatorCompactLeaseTests {
     }
 
     @Test func compactCommandRunsUnderArbiterLeaseAndSkipsSummarizeWhenModelUnavailable() async throws {
-        // `SettingsManager` persists via UserDefaults — clean up our override so
-        // sibling tests see the production default on subsequent runs.
-        UserDefaults.standard.removeObject(forKey: "selectedAgentModelID")
-        defer { UserDefaults.standard.removeObject(forKey: "selectedAgentModelID") }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         // Force the arbiter's `ensureLoaded` to throw deterministically —
         // an ID the download manager has never seen.
         settings.selectedAgentModelID = "tesseract-compact-lease-test-model"

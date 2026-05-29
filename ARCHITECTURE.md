@@ -157,23 +157,57 @@ Task { [weak self] in
 
 ### Settings Persistence
 
-`SettingsManager` is `@Observable @MainActor` with 29 settings backed by manual `UserDefaults` read/write:
+`SettingsManager` is the `@Observable @MainActor` **Settings Facade**: it keeps one
+bindable stored property per setting (so SwiftUI `$settings.foo` bindings and
+per-property Observation work), but persistence lives behind a **Settings Store**
+seam injected *below* the facade. Each `didSet` forwards to the store via the
+property's `Setting` in the **Settings Catalogue**; the catalogue is the single
+source of truth for every default (no more `register(defaults:)`). See ADR-0002 and
+`CONTEXT.md` → Language → Settings persistence.
 
 ```swift
+protocol SettingsStore {                       // typed, default-on-read; no register(defaults:)
+    func bool(for key: String, default: Bool) -> Bool
+    func set<V>(_ value: V, for key: String)
+    func setOptional(_ value: String?, for key: String)   // nil ⇒ remove the key
+    // … int/double/string/optionalString …
+}
+
+enum SettingsCatalogue {                       // one Setting per persisted primitive; the only home for a default
+    static let playSounds = Setting.bool("playSounds", default: true)
+    // … ~37 settings …
+}
+
 @Observable @MainActor
 final class SettingsManager {
-    var playSounds = true {
-        didSet { UserDefaults.standard.set(playSounds, forKey: Key.playSounds) }
+    private let store: any SettingsStore
+    var playSounds: Bool {                      // declared WITHOUT a default (see below)
+        didSet { SettingsCatalogue.playSounds.write(playSounds, to: store) }
     }
-    init() {
-        UserDefaults.standard.register(defaults: [...])
-        playSounds = UserDefaults.standard.bool(forKey: Key.playSounds)
-        // ...
+    init(store: any SettingsStore = UserDefaultsSettingsStore()) {
+        self.store = store
+        self.playSounds = SettingsCatalogue.playSounds.load(from: store)   // direct first assignment skips didSet
+        // … one per property … then normalizePersistedSelectionsIfNeeded()
     }
 }
 ```
 
-`@AppStorage` is NOT compatible with `@Observable` (compiler error). All settings use explicit `UserDefaults` with `didSet`.
+Two adapters make the seam real: `UserDefaultsSettingsStore` (the only production
+Swift that calls `UserDefaults`; owns default-on-read via `object(forKey:) == nil`)
+and `InMemorySettingsStore` (tests — hermetic, parallel-safe). The two genuine side
+effects (launch-at-login via `SMAppService`, dock visibility via `NSApp`) stay in
+the facade's `didSet`, above the store.
+
+**`@Observable` + `didSet` in `init`:** under `@Observable` a property re-assignment
+in `init` *fires* `didSet`; only a *direct, property-named first* assignment skips it
+(via the storage-restrictions init accessor), and only when the property has no
+declaration default. So properties are declared `var foo: Bool` (not `= false`) and
+hydrated by `self.foo = Catalogue.foo.load(...)` — construction performs zero store
+writes and runs no side effects. The lone exception is stale-value migration, which
+runs after hydration and so persists through the store.
+
+`@AppStorage` is NOT compatible with `@Observable` (compiler error), which is why
+the facade keeps explicit stored properties rather than property wrappers.
 
 ### Dependency Injection
 

@@ -13,12 +13,6 @@ import Testing
 @MainActor
 struct InferenceArbiterTriAttentionReloadTests {
 
-    private func clearDefaults() {
-        UserDefaults.standard.removeObject(forKey: "triattentionEnabled")
-        UserDefaults.standard.removeObject(forKey: "selectedAgentModelID")
-        UserDefaults.standard.removeObject(forKey: "isServerEnabled")
-    }
-
     private func makeArbiter(_ settings: SettingsManager) -> InferenceArbiter {
         InferenceArbiter(
             agentEngine: AgentEngine(),
@@ -33,10 +27,7 @@ struct InferenceArbiterTriAttentionReloadTests {
     /// ID forces `loadSlot` to throw `modelNotDownloaded` — observable proof
     /// the lease body reached the download check before returning.
     @Test func reloadLLMIfNeededSurfacesModelNotDownloadedWhenModelMissing() async throws {
-        clearDefaults()
-        defer { clearDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         let missingModelID = "tesseract-reload-test-missing-model"
         settings.selectedAgentModelID = missingModelID
         let arbiter = makeArbiter(settings)
@@ -56,10 +47,7 @@ struct InferenceArbiterTriAttentionReloadTests {
     /// listener. Combine with `triattentionEnabled = true` so the test also
     /// exercises the TriAttention seam under "server off" conditions.
     @Test func reloadLLMIfNeededRunsWhenPublicListenerDisabled() async throws {
-        clearDefaults()
-        defer { clearDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.isServerEnabled = false
         settings.triattentionEnabled = true
         let missingModelID = "tesseract-reload-test-missing-model"
@@ -88,10 +76,7 @@ struct InferenceArbiterTriAttentionReloadTests {
     /// Uses a recorder stand-in for the arbiter; the primitive itself is
     /// covered by the two tests above.
     @Test func settingsObservationsSkipInitialEmitAndFireOnChangeWhenLLMLoaded() async throws {
-        clearDefaults()
-        defer { clearDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
 
         // `iterations` counts every observation emit; `records` counts only
         // emits that pass the "loaded" guard. Waiting on `iterations` instead

@@ -3,24 +3,22 @@ import Testing
 
 @testable import Tesseract_Agent
 
+/// Focused regression for the stale-agent-model migration, pinned against a
+/// realistic removed model id. Runs through the in-memory adapter — hermetic,
+/// no `UserDefaults.standard` pollution. The general normalize-on-launch
+/// behaviour and its write boundary are also pinned in `SettingsManagerTests`.
 @MainActor
 struct SettingsManagerModelSelectionTests {
 
-    private func clearModelSelectionDefaults() {
-        UserDefaults.standard.removeObject(forKey: "selectedAgentModelID")
-    }
-
     @Test
     func removedPersistedAgentModelFallsBackToDefaultAndPersists() {
-        clearModelSelectionDefaults()
-        defer { clearModelSelectionDefaults() }
+        let store = InMemorySettingsStore()
+        store.set("qwen3.6-35b-a3b-ud-3bit", for: "selectedAgentModelID")
 
-        UserDefaults.standard.set("qwen3.6-35b-a3b-ud-3bit", forKey: "selectedAgentModelID")
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: store)
         #expect(settings.selectedAgentModelID == ModelDefinition.defaultAgentModelID)
         #expect(
-            UserDefaults.standard.string(forKey: "selectedAgentModelID")
+            store.string(for: "selectedAgentModelID", default: "")
             == ModelDefinition.defaultAgentModelID
         )
     }
