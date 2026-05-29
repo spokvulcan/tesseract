@@ -9,81 +9,62 @@ import ServiceManagement
 import AppKit
 import MLXLMCommon
 
+/// The Settings Facade: an `@Observable` `@MainActor` class that keeps one
+/// bindable stored property per setting (so SwiftUI `$settings.foo` bindings and
+/// per-property Observation are preserved) and forwards each `didSet` to an
+/// injected `SettingsStore` via the property's `Setting` in the
+/// `SettingsCatalogue`. Persistence plumbing lives below the facade in the store;
+/// only the two genuine side effects (launch-at-login via `SMAppService`, dock
+/// visibility via `NSApp`) stay here, above the store.
+///
+/// **Construction is hydration, not mutation.** Stored properties are declared
+/// *without* a default value, so the direct, property-named assignment in `init`
+/// is the genuine first write that routes through the synthesized
+/// storage-restrictions init accessor and **skips `didSet`** — no write back to
+/// the store, no side effects, during a clean load. (Under `@Observable` a
+/// *re-assignment* in `init` would fire `didSet`; keeping a declaration default
+/// would make the `init` line a re-assignment. See ADR-0002 and CONTEXT.md.)
+/// The one deliberate exception is stale-value migration
+/// (`normalizePersistedSelectionsIfNeeded`), which runs *after* hydration and so
+/// fires `didSet` to persist the normalized value.
 @Observable @MainActor
 final class SettingsManager {
 
-    // MARK: - UserDefaults Keys
-
-    private enum Key {
-        static let launchAtLogin = "launchAtLogin"
-        static let showInDock = "showInDock"
-        static let showInMenuBar = "showInMenuBar"
-        static let autoInsertText = "autoInsertText"
-        static let restoreClipboard = "restoreClipboard"
-        static let overlayStyle = "overlayStyle"
-        static let glowTheme = "glowTheme"
-        static let selectedMicrophoneUID = "selectedMicrophoneUID"
-        static let language = "language"
-        static let hotkeyKeyCode = "hotkeyKeyCode"
-        static let hotkeyModifiers = "hotkeyModifiers"
-        static let ttsHotkeyKeyCode = "ttsHotkeyKeyCode"
-        static let ttsHotkeyModifiers = "ttsHotkeyModifiers"
-        static let agentHotkeyKeyCode = "agentHotkeyKeyCode"
-        static let agentHotkeyModifiers = "agentHotkeyModifiers"
-        static let ttsTemperature = "ttsTemperature"
-        static let ttsTopP = "ttsTopP"
-        static let ttsRepetitionPenalty = "ttsRepetitionPenalty"
-        static let ttsMaxTokens = "ttsMaxTokens"
-        static let ttsSeed = "ttsSeed"
-        static let ttsVoiceDescription = "ttsVoiceDescription"
-        static let ttsLanguage = "ttsLanguage"
-        static let ttsStreamingEnabled = "ttsStreamingEnabled"
-        static let agentAutoSpeak = "agentAutoSpeak"
-        static let selectedAgentModelID = "selectedAgentModelID"
-        static let maxRecordingDuration = "maxRecordingDuration"
-        static let playSounds = "playSounds"
-        static let hasCompletedOnboarding = "hasCompletedOnboarding"
-        static let webAccessEnabled = "webAccessEnabled"
-        static let visionModeEnabled = "visionModeEnabled"
-        static let triattentionEnabled = "triattentionEnabled"
-        static let samplingPreset = "samplingPreset"
-        static let isServerEnabled = "isServerEnabled"
-        static let serverPort = "serverPort"
-        static let prefixCacheSSDEnabled = "prefixCacheSSDEnabled"
-        static let prefixCacheSSDBudgetBytes = "prefixCacheSSDBudgetBytes"
-        static let prefixCacheSSDDirectoryOverride = "prefixCacheSSDDirectoryOverride"
-    }
+    /// The persistence seam. `UserDefaultsSettingsStore` in the app, an
+    /// in-memory adapter in tests. The default keeps existing call sites
+    /// (`SettingsManager()`) unchanged.
+    @ObservationIgnored private let store: any SettingsStore
 
     // MARK: - General Settings
 
-    var launchAtLogin = false {
+    var launchAtLogin: Bool {
         didSet {
-            UserDefaults.standard.set(launchAtLogin, forKey: Key.launchAtLogin)
+            SettingsCatalogue.launchAtLogin.write(launchAtLogin, to: store)
             updateLaunchAtLogin()
         }
     }
 
-    var showInDock = true {
+    var showInDock: Bool {
         didSet {
-            UserDefaults.standard.set(showInDock, forKey: Key.showInDock)
+            SettingsCatalogue.showInDock.write(showInDock, to: store)
             applyDockVisibility()
         }
     }
 
-    var showInMenuBar = true {
-        didSet { UserDefaults.standard.set(showInMenuBar, forKey: Key.showInMenuBar) }
+    var showInMenuBar: Bool {
+        didSet { SettingsCatalogue.showInMenuBar.write(showInMenuBar, to: store) }
     }
 
-    var autoInsertText = true {
-        didSet { UserDefaults.standard.set(autoInsertText, forKey: Key.autoInsertText) }
+    var autoInsertText: Bool {
+        didSet { SettingsCatalogue.autoInsertText.write(autoInsertText, to: store) }
     }
 
-    var restoreClipboard = true {
-        didSet { UserDefaults.standard.set(restoreClipboard, forKey: Key.restoreClipboard) }
+    var restoreClipboard: Bool {
+        didSet { SettingsCatalogue.restoreClipboard.write(restoreClipboard, to: store) }
     }
 
-    var overlayStyleRaw: String = OverlayStyle.pill.rawValue {
-        didSet { UserDefaults.standard.set(overlayStyleRaw, forKey: Key.overlayStyle) }
+    var overlayStyleRaw: String {
+        didSet { SettingsCatalogue.overlayStyleRaw.write(overlayStyleRaw, to: store) }
     }
 
     var overlayStyle: OverlayStyle {
@@ -91,8 +72,8 @@ final class SettingsManager {
         set { overlayStyleRaw = newValue.rawValue }
     }
 
-    var samplingPresetRaw: String = SamplingPreset.automatic.rawValue {
-        didSet { UserDefaults.standard.set(samplingPresetRaw, forKey: Key.samplingPreset) }
+    var samplingPresetRaw: String {
+        didSet { SettingsCatalogue.samplingPresetRaw.write(samplingPresetRaw, to: store) }
     }
 
     var samplingPreset: SamplingPreset {
@@ -100,8 +81,8 @@ final class SettingsManager {
         set { samplingPresetRaw = newValue.rawValue }
     }
 
-    var glowThemeRaw: String = GlowTheme.appleIntelligence.rawValue {
-        didSet { UserDefaults.standard.set(glowThemeRaw, forKey: Key.glowTheme) }
+    var glowThemeRaw: String {
+        didSet { SettingsCatalogue.glowThemeRaw.write(glowThemeRaw, to: store) }
     }
 
     var glowTheme: GlowTheme {
@@ -111,14 +92,14 @@ final class SettingsManager {
 
     // MARK: - Audio Settings
 
-    var selectedMicrophoneUID: String = "" {
-        didSet { UserDefaults.standard.set(selectedMicrophoneUID, forKey: Key.selectedMicrophoneUID) }
+    var selectedMicrophoneUID: String {
+        didSet { SettingsCatalogue.selectedMicrophoneUID.write(selectedMicrophoneUID, to: store) }
     }
 
     // MARK: - Language Settings
 
-    var language: String = "en" {
-        didSet { UserDefaults.standard.set(language, forKey: Key.language) }
+    var language: String {
+        didSet { SettingsCatalogue.language.write(language, to: store) }
     }
 
     var selectedLanguage: SupportedLanguage {
@@ -127,12 +108,12 @@ final class SettingsManager {
 
     // MARK: - Hotkey Settings
 
-    var hotkeyKeyCode: Int = Int(KeyCombo.optionSpace.keyCode) {
-        didSet { UserDefaults.standard.set(hotkeyKeyCode, forKey: Key.hotkeyKeyCode) }
+    var hotkeyKeyCode: Int {
+        didSet { SettingsCatalogue.hotkeyKeyCode.write(hotkeyKeyCode, to: store) }
     }
 
-    var hotkeyModifiers: Int = Int(KeyCombo.optionSpace.modifiers) {
-        didSet { UserDefaults.standard.set(hotkeyModifiers, forKey: Key.hotkeyModifiers) }
+    var hotkeyModifiers: Int {
+        didSet { SettingsCatalogue.hotkeyModifiers.write(hotkeyModifiers, to: store) }
     }
 
     var hotkey: KeyCombo {
@@ -150,12 +131,12 @@ final class SettingsManager {
 
     // MARK: - TTS Hotkey
 
-    var ttsHotkeyKeyCode: Int = Int(KeyCombo.functionSpace.keyCode) {
-        didSet { UserDefaults.standard.set(ttsHotkeyKeyCode, forKey: Key.ttsHotkeyKeyCode) }
+    var ttsHotkeyKeyCode: Int {
+        didSet { SettingsCatalogue.ttsHotkeyKeyCode.write(ttsHotkeyKeyCode, to: store) }
     }
 
-    var ttsHotkeyModifiers: Int = Int(KeyCombo.functionSpace.modifiers) {
-        didSet { UserDefaults.standard.set(ttsHotkeyModifiers, forKey: Key.ttsHotkeyModifiers) }
+    var ttsHotkeyModifiers: Int {
+        didSet { SettingsCatalogue.ttsHotkeyModifiers.write(ttsHotkeyModifiers, to: store) }
     }
 
     var ttsHotkey: KeyCombo {
@@ -173,12 +154,12 @@ final class SettingsManager {
 
     // MARK: - Agent Hotkey
 
-    var agentHotkeyKeyCode: Int = Int(KeyCombo.controlSpace.keyCode) {
-        didSet { UserDefaults.standard.set(agentHotkeyKeyCode, forKey: Key.agentHotkeyKeyCode) }
+    var agentHotkeyKeyCode: Int {
+        didSet { SettingsCatalogue.agentHotkeyKeyCode.write(agentHotkeyKeyCode, to: store) }
     }
 
-    var agentHotkeyModifiers: Int = Int(KeyCombo.controlSpace.modifiers) {
-        didSet { UserDefaults.standard.set(agentHotkeyModifiers, forKey: Key.agentHotkeyModifiers) }
+    var agentHotkeyModifiers: Int {
+        didSet { SettingsCatalogue.agentHotkeyModifiers.write(agentHotkeyModifiers, to: store) }
     }
 
     var agentHotkey: KeyCombo {
@@ -196,44 +177,44 @@ final class SettingsManager {
 
     // MARK: - TTS Settings
 
-    var ttsTemperature: Double = 0.6 {
-        didSet { UserDefaults.standard.set(ttsTemperature, forKey: Key.ttsTemperature) }
+    var ttsTemperature: Double {
+        didSet { SettingsCatalogue.ttsTemperature.write(ttsTemperature, to: store) }
     }
 
-    var ttsTopP: Double = 0.8 {
-        didSet { UserDefaults.standard.set(ttsTopP, forKey: Key.ttsTopP) }
+    var ttsTopP: Double {
+        didSet { SettingsCatalogue.ttsTopP.write(ttsTopP, to: store) }
     }
 
-    var ttsRepetitionPenalty: Double = 1.3 {
-        didSet { UserDefaults.standard.set(ttsRepetitionPenalty, forKey: Key.ttsRepetitionPenalty) }
+    var ttsRepetitionPenalty: Double {
+        didSet { SettingsCatalogue.ttsRepetitionPenalty.write(ttsRepetitionPenalty, to: store) }
     }
 
-    var ttsMaxTokens: Int = 4096 {
-        didSet { UserDefaults.standard.set(ttsMaxTokens, forKey: Key.ttsMaxTokens) }
+    var ttsMaxTokens: Int {
+        didSet { SettingsCatalogue.ttsMaxTokens.write(ttsMaxTokens, to: store) }
     }
 
-    var ttsSeed: Int = 0 {
-        didSet { UserDefaults.standard.set(ttsSeed, forKey: Key.ttsSeed) }
+    var ttsSeed: Int {
+        didSet { SettingsCatalogue.ttsSeed.write(ttsSeed, to: store) }
     }
 
-    var ttsVoiceDescription: String = "" {
-        didSet { UserDefaults.standard.set(ttsVoiceDescription, forKey: Key.ttsVoiceDescription) }
+    var ttsVoiceDescription: String {
+        didSet { SettingsCatalogue.ttsVoiceDescription.write(ttsVoiceDescription, to: store) }
     }
 
-    var ttsLanguage: String = "English" {
-        didSet { UserDefaults.standard.set(ttsLanguage, forKey: Key.ttsLanguage) }
+    var ttsLanguage: String {
+        didSet { SettingsCatalogue.ttsLanguage.write(ttsLanguage, to: store) }
     }
 
-    var ttsStreamingEnabled = true {
-        didSet { UserDefaults.standard.set(ttsStreamingEnabled, forKey: Key.ttsStreamingEnabled) }
+    var ttsStreamingEnabled: Bool {
+        didSet { SettingsCatalogue.ttsStreamingEnabled.write(ttsStreamingEnabled, to: store) }
     }
 
-    var agentAutoSpeak = false {
-        didSet { UserDefaults.standard.set(agentAutoSpeak, forKey: Key.agentAutoSpeak) }
+    var agentAutoSpeak: Bool {
+        didSet { SettingsCatalogue.agentAutoSpeak.write(agentAutoSpeak, to: store) }
     }
 
-    var selectedAgentModelID: String = ModelDefinition.defaultAgentModelID {
-        didSet { UserDefaults.standard.set(selectedAgentModelID, forKey: Key.selectedAgentModelID) }
+    var selectedAgentModelID: String {
+        didSet { SettingsCatalogue.selectedAgentModelID.write(selectedAgentModelID, to: store) }
     }
 
     var ttsParameters: TTSParameters {
@@ -257,18 +238,18 @@ final class SettingsManager {
 
     // MARK: - Advanced Settings
 
-    var maxRecordingDuration: Double = 300.0 {
-        didSet { UserDefaults.standard.set(maxRecordingDuration, forKey: Key.maxRecordingDuration) }
+    var maxRecordingDuration: Double {
+        didSet { SettingsCatalogue.maxRecordingDuration.write(maxRecordingDuration, to: store) }
     }
 
-    var playSounds = true {
-        didSet { UserDefaults.standard.set(playSounds, forKey: Key.playSounds) }
+    var playSounds: Bool {
+        didSet { SettingsCatalogue.playSounds.write(playSounds, to: store) }
     }
 
     // MARK: - Agent Web Access
 
-    var webAccessEnabled = true {
-        didSet { UserDefaults.standard.set(webAccessEnabled, forKey: Key.webAccessEnabled) }
+    var webAccessEnabled: Bool {
+        didSet { SettingsCatalogue.webAccessEnabled.write(webAccessEnabled, to: store) }
     }
 
     // MARK: - Agent Vision Mode
@@ -277,8 +258,8 @@ final class SettingsManager {
     /// attachments but has ~3.4× slower prefill on long text prompts. Default false
     /// — users opt-in via the composer toggle when they need to attach an image.
     /// Changing this triggers a model reload via `InferenceArbiter.ensureLoaded(.llm)`.
-    var visionModeEnabled = false {
-        didSet { UserDefaults.standard.set(visionModeEnabled, forKey: Key.visionModeEnabled) }
+    var visionModeEnabled: Bool {
+        didSet { SettingsCatalogue.visionModeEnabled.write(visionModeEnabled, to: store) }
     }
 
     /// Runtime gate for TriAttention sparse attention on Qwen3.5 PARO text
@@ -290,18 +271,18 @@ final class SettingsManager {
     /// is picked up at the next lazy-load `ensureLoaded(.llm)` call. The view
     /// reads `arbiter.loadedLLMState.triAttentionFallbackReason` to surface
     /// dense fallback reasons (non-PARO model, vision mode, missing artifact).
-    var triattentionEnabled = false {
-        didSet { UserDefaults.standard.set(triattentionEnabled, forKey: Key.triattentionEnabled) }
+    var triattentionEnabled: Bool {
+        didSet { SettingsCatalogue.triattentionEnabled.write(triattentionEnabled, to: store) }
     }
 
     // MARK: - Server Settings
 
-    var isServerEnabled = false {
-        didSet { UserDefaults.standard.set(isServerEnabled, forKey: Key.isServerEnabled) }
+    var isServerEnabled: Bool {
+        didSet { SettingsCatalogue.isServerEnabled.write(isServerEnabled, to: store) }
     }
 
-    var serverPort: Int = 8321 {
-        didSet { UserDefaults.standard.set(serverPort, forKey: Key.serverPort) }
+    var serverPort: Int {
+        didSet { SettingsCatalogue.serverPort.write(serverPort, to: store) }
     }
 
     // MARK: - SSD Prefix Cache
@@ -310,118 +291,76 @@ final class SettingsManager {
     // `LLMActor` snapshots the effective config at load time — the hot path
     // inside `container.perform` cannot await MainActor mid-inference.
 
-    var prefixCacheSSDEnabled: Bool = true {
-        didSet { UserDefaults.standard.set(prefixCacheSSDEnabled, forKey: Key.prefixCacheSSDEnabled) }
+    var prefixCacheSSDEnabled: Bool {
+        didSet { SettingsCatalogue.prefixCacheSSDEnabled.write(prefixCacheSSDEnabled, to: store) }
     }
 
-    /// Hard top-level byte budget for the SSD tier. Default 50 GiB.
-    var prefixCacheSSDBudgetBytes: Int = 50 * 1024 * 1024 * 1024 {
-        didSet { UserDefaults.standard.set(prefixCacheSSDBudgetBytes, forKey: Key.prefixCacheSSDBudgetBytes) }
+    /// Hard top-level byte budget for the SSD tier. Default single-sourced in
+    /// `SettingsCatalogue.prefixCacheSSDBudgetBytes` (20 GiB).
+    var prefixCacheSSDBudgetBytes: Int {
+        didSet { SettingsCatalogue.prefixCacheSSDBudgetBytes.write(prefixCacheSSDBudgetBytes, to: store) }
     }
 
     /// Optional override for the SSD root directory. When `nil`, the config
     /// falls back to the sandbox Caches directory. Accepts either a file
-    /// URL string or a plain filesystem path.
-    var prefixCacheSSDDirectoryOverride: String? = nil {
-        didSet {
-            if let override = prefixCacheSSDDirectoryOverride {
-                UserDefaults.standard.set(override, forKey: Key.prefixCacheSSDDirectoryOverride)
-            } else {
-                UserDefaults.standard.removeObject(forKey: Key.prefixCacheSSDDirectoryOverride)
-            }
-        }
+    /// URL string or a plain filesystem path. Writing `nil` removes the key.
+    var prefixCacheSSDDirectoryOverride: String? {
+        didSet { SettingsCatalogue.prefixCacheSSDDirectoryOverride.write(prefixCacheSSDDirectoryOverride, to: store) }
     }
 
     // MARK: - Onboarding
 
-    var hasCompletedOnboarding = false {
-        didSet { UserDefaults.standard.set(hasCompletedOnboarding, forKey: Key.hasCompletedOnboarding) }
+    var hasCompletedOnboarding: Bool {
+        didSet { SettingsCatalogue.hasCompletedOnboarding.write(hasCompletedOnboarding, to: store) }
     }
 
     // MARK: - Init
 
-    init() {
-        let ud = UserDefaults.standard
+    /// Hydrate every property from the injected store via a direct, property-named
+    /// first assignment fed by the catalogue — `self.foo = Catalogue.foo.load(...)`
+    /// — which skips `didSet`, so construction performs no store writes and runs
+    /// no side effects. `normalizePersistedSelectionsIfNeeded()` runs last, after
+    /// the clean load, so its (rare) re-assignment fires `didSet` and persists.
+    init(store: any SettingsStore = UserDefaultsSettingsStore()) {
+        self.store = store
 
-        // Register defaults so reads return correct values before first explicit write.
-        ud.register(defaults: [
-            Key.launchAtLogin: false,
-            Key.showInDock: true,
-            Key.showInMenuBar: true,
-            Key.autoInsertText: true,
-            Key.restoreClipboard: true,
-            Key.overlayStyle: OverlayStyle.pill.rawValue,
-            Key.glowTheme: GlowTheme.appleIntelligence.rawValue,
-            Key.selectedMicrophoneUID: "",
-            Key.language: "en",
-            Key.hotkeyKeyCode: Int(KeyCombo.optionSpace.keyCode),
-            Key.hotkeyModifiers: Int(KeyCombo.optionSpace.modifiers),
-            Key.ttsHotkeyKeyCode: Int(KeyCombo.functionSpace.keyCode),
-            Key.ttsHotkeyModifiers: Int(KeyCombo.functionSpace.modifiers),
-            Key.agentHotkeyKeyCode: Int(KeyCombo.controlSpace.keyCode),
-            Key.agentHotkeyModifiers: Int(KeyCombo.controlSpace.modifiers),
-            Key.ttsTemperature: 0.6,
-            Key.ttsTopP: 0.8,
-            Key.ttsRepetitionPenalty: 1.3,
-            Key.ttsMaxTokens: 4096,
-            Key.ttsSeed: 0,
-            Key.ttsVoiceDescription: "",
-            Key.ttsLanguage: "English",
-            Key.ttsStreamingEnabled: true,
-            Key.agentAutoSpeak: false,
-            Key.selectedAgentModelID: ModelDefinition.defaultAgentModelID,
-            Key.maxRecordingDuration: 300.0,
-            Key.playSounds: true,
-            Key.hasCompletedOnboarding: false,
-            Key.webAccessEnabled: true,
-            Key.visionModeEnabled: false,
-            Key.triattentionEnabled: false,
-            Key.samplingPreset: SamplingPreset.automatic.rawValue,
-            Key.isServerEnabled: false,
-            Key.serverPort: 8321,
-            Key.prefixCacheSSDEnabled: true,
-            Key.prefixCacheSSDBudgetBytes: 20 * 1024 * 1024 * 1024,
-            // prefixCacheSSDDirectoryOverride: unset key → sandbox Caches fallback.
-        ])
-
-        // Load persisted values (didSet does NOT fire during init).
-        launchAtLogin = ud.bool(forKey: Key.launchAtLogin)
-        showInDock = ud.bool(forKey: Key.showInDock)
-        showInMenuBar = ud.bool(forKey: Key.showInMenuBar)
-        autoInsertText = ud.bool(forKey: Key.autoInsertText)
-        restoreClipboard = ud.bool(forKey: Key.restoreClipboard)
-        overlayStyleRaw = ud.string(forKey: Key.overlayStyle) ?? OverlayStyle.pill.rawValue
-        glowThemeRaw = ud.string(forKey: Key.glowTheme) ?? GlowTheme.appleIntelligence.rawValue
-        selectedMicrophoneUID = ud.string(forKey: Key.selectedMicrophoneUID) ?? ""
-        language = ud.string(forKey: Key.language) ?? "en"
-        hotkeyKeyCode = ud.integer(forKey: Key.hotkeyKeyCode)
-        hotkeyModifiers = ud.integer(forKey: Key.hotkeyModifiers)
-        ttsHotkeyKeyCode = ud.integer(forKey: Key.ttsHotkeyKeyCode)
-        ttsHotkeyModifiers = ud.integer(forKey: Key.ttsHotkeyModifiers)
-        agentHotkeyKeyCode = ud.integer(forKey: Key.agentHotkeyKeyCode)
-        agentHotkeyModifiers = ud.integer(forKey: Key.agentHotkeyModifiers)
-        ttsTemperature = ud.double(forKey: Key.ttsTemperature)
-        ttsTopP = ud.double(forKey: Key.ttsTopP)
-        ttsRepetitionPenalty = ud.double(forKey: Key.ttsRepetitionPenalty)
-        ttsMaxTokens = ud.integer(forKey: Key.ttsMaxTokens)
-        ttsSeed = ud.integer(forKey: Key.ttsSeed)
-        ttsVoiceDescription = ud.string(forKey: Key.ttsVoiceDescription) ?? ""
-        ttsLanguage = ud.string(forKey: Key.ttsLanguage) ?? "English"
-        ttsStreamingEnabled = ud.bool(forKey: Key.ttsStreamingEnabled)
-        agentAutoSpeak = ud.bool(forKey: Key.agentAutoSpeak)
-        selectedAgentModelID = ud.string(forKey: Key.selectedAgentModelID) ?? ModelDefinition.defaultAgentModelID
-        maxRecordingDuration = ud.double(forKey: Key.maxRecordingDuration)
-        playSounds = ud.bool(forKey: Key.playSounds)
-        hasCompletedOnboarding = ud.bool(forKey: Key.hasCompletedOnboarding)
-        webAccessEnabled = ud.bool(forKey: Key.webAccessEnabled)
-        visionModeEnabled = ud.bool(forKey: Key.visionModeEnabled)
-        triattentionEnabled = ud.bool(forKey: Key.triattentionEnabled)
-        samplingPresetRaw = ud.string(forKey: Key.samplingPreset) ?? SamplingPreset.automatic.rawValue
-        isServerEnabled = ud.bool(forKey: Key.isServerEnabled)
-        serverPort = ud.integer(forKey: Key.serverPort)
-        prefixCacheSSDEnabled = ud.bool(forKey: Key.prefixCacheSSDEnabled)
-        prefixCacheSSDBudgetBytes = ud.integer(forKey: Key.prefixCacheSSDBudgetBytes)
-        prefixCacheSSDDirectoryOverride = ud.string(forKey: Key.prefixCacheSSDDirectoryOverride)
+        self.launchAtLogin = SettingsCatalogue.launchAtLogin.load(from: store)
+        self.showInDock = SettingsCatalogue.showInDock.load(from: store)
+        self.showInMenuBar = SettingsCatalogue.showInMenuBar.load(from: store)
+        self.autoInsertText = SettingsCatalogue.autoInsertText.load(from: store)
+        self.restoreClipboard = SettingsCatalogue.restoreClipboard.load(from: store)
+        self.overlayStyleRaw = SettingsCatalogue.overlayStyleRaw.load(from: store)
+        self.glowThemeRaw = SettingsCatalogue.glowThemeRaw.load(from: store)
+        self.samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.load(from: store)
+        self.selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.load(from: store)
+        self.language = SettingsCatalogue.language.load(from: store)
+        self.hotkeyKeyCode = SettingsCatalogue.hotkeyKeyCode.load(from: store)
+        self.hotkeyModifiers = SettingsCatalogue.hotkeyModifiers.load(from: store)
+        self.ttsHotkeyKeyCode = SettingsCatalogue.ttsHotkeyKeyCode.load(from: store)
+        self.ttsHotkeyModifiers = SettingsCatalogue.ttsHotkeyModifiers.load(from: store)
+        self.agentHotkeyKeyCode = SettingsCatalogue.agentHotkeyKeyCode.load(from: store)
+        self.agentHotkeyModifiers = SettingsCatalogue.agentHotkeyModifiers.load(from: store)
+        self.ttsTemperature = SettingsCatalogue.ttsTemperature.load(from: store)
+        self.ttsTopP = SettingsCatalogue.ttsTopP.load(from: store)
+        self.ttsRepetitionPenalty = SettingsCatalogue.ttsRepetitionPenalty.load(from: store)
+        self.ttsMaxTokens = SettingsCatalogue.ttsMaxTokens.load(from: store)
+        self.ttsSeed = SettingsCatalogue.ttsSeed.load(from: store)
+        self.ttsVoiceDescription = SettingsCatalogue.ttsVoiceDescription.load(from: store)
+        self.ttsLanguage = SettingsCatalogue.ttsLanguage.load(from: store)
+        self.ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.load(from: store)
+        self.agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.load(from: store)
+        self.selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.load(from: store)
+        self.maxRecordingDuration = SettingsCatalogue.maxRecordingDuration.load(from: store)
+        self.playSounds = SettingsCatalogue.playSounds.load(from: store)
+        self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
+        self.visionModeEnabled = SettingsCatalogue.visionModeEnabled.load(from: store)
+        self.triattentionEnabled = SettingsCatalogue.triattentionEnabled.load(from: store)
+        self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
+        self.serverPort = SettingsCatalogue.serverPort.load(from: store)
+        self.prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.load(from: store)
+        self.prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.load(from: store)
+        self.prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.load(from: store)
+        self.hasCompletedOnboarding = SettingsCatalogue.hasCompletedOnboarding.load(from: store)
 
         normalizePersistedSelectionsIfNeeded()
     }
@@ -478,43 +417,47 @@ final class SettingsManager {
             .appendingPathComponent("prefix-cache", isDirectory: true)
     }
 
+    /// Restore every setting to its single-sourced catalogue default. Runs
+    /// *after* `init`, so each assignment fires `didSet` — the value persists
+    /// through the store and side effects (launch-at-login, dock visibility)
+    /// re-apply, exactly as reset does today.
     func resetToDefaults() {
-        launchAtLogin = false
-        showInDock = true
-        showInMenuBar = true
-        autoInsertText = true
-        restoreClipboard = true
-        overlayStyleRaw = OverlayStyle.pill.rawValue
-        glowThemeRaw = GlowTheme.appleIntelligence.rawValue
-        selectedMicrophoneUID = ""
-        language = "en"
-        hotkeyKeyCode = Int(KeyCombo.optionSpace.keyCode)
-        hotkeyModifiers = Int(KeyCombo.optionSpace.modifiers)
-        maxRecordingDuration = 300.0
-        playSounds = true
-        ttsHotkeyKeyCode = Int(KeyCombo.functionSpace.keyCode)
-        ttsHotkeyModifiers = Int(KeyCombo.functionSpace.modifiers)
-        agentHotkeyKeyCode = Int(KeyCombo.controlSpace.keyCode)
-        agentHotkeyModifiers = Int(KeyCombo.controlSpace.modifiers)
-        ttsTemperature = 0.6
-        ttsTopP = 0.8
-        ttsRepetitionPenalty = 1.3
-        ttsMaxTokens = 4096
-        ttsSeed = 0
-        ttsVoiceDescription = ""
-        ttsLanguage = "English"
-        ttsStreamingEnabled = true
-        agentAutoSpeak = false
-        selectedAgentModelID = ModelDefinition.defaultAgentModelID
-        webAccessEnabled = true
-        visionModeEnabled = false
-        triattentionEnabled = false
-        samplingPresetRaw = SamplingPreset.automatic.rawValue
-        isServerEnabled = false
-        serverPort = 8321
-        prefixCacheSSDEnabled = true
-        prefixCacheSSDBudgetBytes = 20 * 1024 * 1024 * 1024
-        prefixCacheSSDDirectoryOverride = nil
+        launchAtLogin = SettingsCatalogue.launchAtLogin.default
+        showInDock = SettingsCatalogue.showInDock.default
+        showInMenuBar = SettingsCatalogue.showInMenuBar.default
+        autoInsertText = SettingsCatalogue.autoInsertText.default
+        restoreClipboard = SettingsCatalogue.restoreClipboard.default
+        overlayStyleRaw = SettingsCatalogue.overlayStyleRaw.default
+        glowThemeRaw = SettingsCatalogue.glowThemeRaw.default
+        selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.default
+        language = SettingsCatalogue.language.default
+        hotkeyKeyCode = SettingsCatalogue.hotkeyKeyCode.default
+        hotkeyModifiers = SettingsCatalogue.hotkeyModifiers.default
+        maxRecordingDuration = SettingsCatalogue.maxRecordingDuration.default
+        playSounds = SettingsCatalogue.playSounds.default
+        ttsHotkeyKeyCode = SettingsCatalogue.ttsHotkeyKeyCode.default
+        ttsHotkeyModifiers = SettingsCatalogue.ttsHotkeyModifiers.default
+        agentHotkeyKeyCode = SettingsCatalogue.agentHotkeyKeyCode.default
+        agentHotkeyModifiers = SettingsCatalogue.agentHotkeyModifiers.default
+        ttsTemperature = SettingsCatalogue.ttsTemperature.default
+        ttsTopP = SettingsCatalogue.ttsTopP.default
+        ttsRepetitionPenalty = SettingsCatalogue.ttsRepetitionPenalty.default
+        ttsMaxTokens = SettingsCatalogue.ttsMaxTokens.default
+        ttsSeed = SettingsCatalogue.ttsSeed.default
+        ttsVoiceDescription = SettingsCatalogue.ttsVoiceDescription.default
+        ttsLanguage = SettingsCatalogue.ttsLanguage.default
+        ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.default
+        agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
+        selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.default
+        webAccessEnabled = SettingsCatalogue.webAccessEnabled.default
+        visionModeEnabled = SettingsCatalogue.visionModeEnabled.default
+        triattentionEnabled = SettingsCatalogue.triattentionEnabled.default
+        samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
+        isServerEnabled = SettingsCatalogue.isServerEnabled.default
+        serverPort = SettingsCatalogue.serverPort.default
+        prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.default
+        prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.default
+        prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.default
     }
 
     // MARK: - Private
@@ -531,11 +474,14 @@ final class SettingsManager {
         }
     }
 
+    /// Stale-value migration (the one deliberate non-hydration step). When the
+    /// persisted agent model id no longer maps to a known agent model, normalise
+    /// it to the default. Runs after hydration, so the re-assignment fires
+    /// `didSet` and persists through the store for free.
     private func normalizePersistedSelectionsIfNeeded() {
         let normalizedModelID = Self.normalizedAgentModelID(selectedAgentModelID)
         guard normalizedModelID != selectedAgentModelID else { return }
         selectedAgentModelID = normalizedModelID
-        UserDefaults.standard.set(normalizedModelID, forKey: Key.selectedAgentModelID)
     }
 
     private static func normalizedAgentModelID(_ candidate: String) -> String {

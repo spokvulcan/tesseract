@@ -13,6 +13,9 @@
 //  load/unload cycle is validated by the restart benchmark
 //  (`PrefixCacheE2ERunner`) gated by `--prefix-cache-e2e`.
 //
+//  Settings are exercised through an injected `InMemorySettingsStore`, so the
+//  suite shares no global state and never touches `UserDefaults.standard`.
+//
 
 import Foundation
 import Testing
@@ -22,29 +25,11 @@ import Testing
 @MainActor
 struct SSDConfigPlumbingTests {
 
-    // MARK: - Helpers
-
-    /// Remove any UserDefaults state our tests might have left behind.
-    /// Called before and after every test so global state stays clean.
-    private func clearSSDDefaults() {
-        let keys = [
-            "prefixCacheSSDEnabled",
-            "prefixCacheSSDBudgetBytes",
-            "prefixCacheSSDDirectoryOverride",
-        ]
-        for key in keys {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
-    }
-
     // MARK: - Factory method
 
     @Test
     func factoryReturnsNilWhenDisabled() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = false
 
         #expect(settings.makeSSDPrefixCacheConfig() == nil)
@@ -52,10 +37,7 @@ struct SSDConfigPlumbingTests {
 
     @Test
     func factoryReturnsPopulatedConfigWhenEnabled() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
 
         let config = settings.makeSSDPrefixCacheConfig()
@@ -67,12 +49,9 @@ struct SSDConfigPlumbingTests {
 
     @Test
     func defaultBudgetIsTwentyGiB() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        // A fresh SettingsManager with cleared UserDefaults must pick up the
-        // registered defaults (20 GiB, enabled, no override).
-        let settings = SettingsManager()
+        // A fresh SettingsManager on an empty store must read the single-sourced
+        // catalogue defaults (20 GiB, enabled, no override) via default-on-read.
+        let settings = SettingsManager(store: InMemorySettingsStore())
         #expect(settings.prefixCacheSSDBudgetBytes == 20 * 1024 * 1024 * 1024)
         #expect(settings.prefixCacheSSDEnabled == true)
         #expect(settings.prefixCacheSSDDirectoryOverride == nil)
@@ -80,10 +59,7 @@ struct SSDConfigPlumbingTests {
 
     @Test
     func maxPendingBytesIsBoundedBy4GiBAndPhysicalMemoryOver16() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
 
         let config = try! #require(settings.makeSSDPrefixCacheConfig())
@@ -99,10 +75,7 @@ struct SSDConfigPlumbingTests {
 
     @Test
     func directoryOverrideReplacesDefaultRootURL() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         let customPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("ssd-override-\(UUID().uuidString)", isDirectory: true)
@@ -115,10 +88,7 @@ struct SSDConfigPlumbingTests {
 
     @Test
     func directoryOverrideAcceptsFileURLStringForm() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         let customURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ssd-override-urlform-\(UUID().uuidString)", isDirectory: true)
@@ -129,18 +99,16 @@ struct SSDConfigPlumbingTests {
     }
 
     @Test
-    func settingsValuesRoundTripViaUserDefaults() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        // First manager: write non-default values.
-        let first = SettingsManager()
+    func settingsValuesRoundTripViaSharedStore() {
+        // The "survives a relaunch" pattern: a second manager built on the same
+        // injected store reads what the first one wrote.
+        let store = InMemorySettingsStore()
+        let first = SettingsManager(store: store)
         first.prefixCacheSSDEnabled = true
         first.prefixCacheSSDBudgetBytes = 12 * 1024 * 1024 * 1024
         first.prefixCacheSSDDirectoryOverride = "/tmp/roundtrip-test"
 
-        // Second manager reads from UserDefaults — values must match.
-        let second = SettingsManager()
+        let second = SettingsManager(store: store)
         #expect(second.prefixCacheSSDEnabled == true)
         #expect(second.prefixCacheSSDBudgetBytes == 12 * 1024 * 1024 * 1024)
         #expect(second.prefixCacheSSDDirectoryOverride == "/tmp/roundtrip-test")
@@ -148,12 +116,10 @@ struct SSDConfigPlumbingTests {
 
     @Test
     func disablingPersistsAcrossInstances() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let first = SettingsManager()
+        let store = InMemorySettingsStore()
+        let first = SettingsManager(store: store)
         first.prefixCacheSSDEnabled = false
-        let second = SettingsManager()
+        let second = SettingsManager(store: store)
         #expect(second.prefixCacheSSDEnabled == false)
         #expect(second.makeSSDPrefixCacheConfig() == nil)
     }
@@ -162,19 +128,13 @@ struct SSDConfigPlumbingTests {
 
     @Test
     func resolveReturnsNilForZeroArgInit() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
         let engine = AgentEngine()
         #expect(engine.resolveSSDConfig() == nil)
     }
 
     @Test
     func resolveReturnsSettingsDerivedConfig() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         settings.prefixCacheSSDBudgetBytes = 8 * 1024 * 1024 * 1024
 
@@ -186,10 +146,7 @@ struct SSDConfigPlumbingTests {
 
     @Test
     func resolveReturnsNilWhenSettingsDisabled() {
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = false
 
         let engine = AgentEngine(settingsManager: settings)
@@ -215,10 +172,7 @@ struct SSDConfigPlumbingTests {
         // When both sources are provided, explicit wins — documented
         // precedence rule. Any future refactor that reverses this must
         // trip this test.
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         settings.prefixCacheSSDBudgetBytes = 8 * 1024 * 1024 * 1024
 
@@ -243,10 +197,7 @@ struct SSDConfigPlumbingTests {
         // consecutive calls with a mutation between them produce two
         // different configs. This is the no-real-model proxy for the
         // restart benchmark's cross-load refresh check.
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         let engine = AgentEngine(settingsManager: settings)
 
@@ -270,10 +221,7 @@ struct SSDConfigPlumbingTests {
     @Test
     func llmActorStartsWithNilConfigAndFingerprint() async {
         // Fresh engine → the inner LLMActor holds no load-time state.
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         let engine = AgentEngine(settingsManager: settings)
         let config = await engine.llmActor.currentSSDConfigForTesting
         let fingerprint = await engine.llmActor.currentModelFingerprintForTesting
@@ -304,10 +252,7 @@ struct SSDConfigPlumbingTests {
         // but by then the install has already run. Any refactor that
         // forgets to call `installLoadTimeSSDState` or that stops
         // passing the resolved config down the chain is caught here.
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         settings.prefixCacheSSDBudgetBytes = 7 * 1024 * 1024 * 1024
         let engine = AgentEngine(settingsManager: settings)
@@ -335,10 +280,7 @@ struct SSDConfigPlumbingTests {
         // Disabled-SSD branch: the chain still installs the fingerprint
         // (the partition key needs it to guard against weight swaps) but
         // `ssdConfig` stays nil on the actor.
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = false
         let engine = AgentEngine(settingsManager: settings)
         let fakeDir = try makeFakeModelDirectory()
@@ -365,10 +307,7 @@ struct SSDConfigPlumbingTests {
         // Seeds state via the real `loadModel` path so both halves use
         // production code. Any refactor that stops reaching the actor
         // clear path is caught here.
-        clearSSDDefaults()
-        defer { clearSSDDefaults() }
-
-        let settings = SettingsManager()
+        let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         let engine = AgentEngine(settingsManager: settings)
         let fakeDir = try makeFakeModelDirectory()
