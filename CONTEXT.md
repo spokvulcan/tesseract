@@ -91,6 +91,73 @@ _Avoid_: body-removable, resident snapshot.
 > predicates: a `ramOnly` node has both `hasResidentBody` and `canEvictNode`, while
 > a committed node with RAM has `hasResidentBody` but not `canEvictNode`.
 
+### Settings persistence
+
+**Settings Store**:
+The seam between *what a setting means* and *where its bytes live* — a typed
+key-value persistence port with default-on-read semantics. Exposes typed getters
+that carry the default (`bool(for:default:)`, `int(for:default:)`, …), typed
+setters, and `setOptional` (writing `nil` removes the key). Has no
+`register(defaults:)` step: the default travels with every read. Satisfied by two
+**Settings Store Adapters**.
+_Avoid_: SettingsManager (that is the **Settings Facade** above it), UserDefaults
+(that is one adapter), preferences store.
+
+**Settings Store Adapter**:
+A concrete **Settings Store**. Exactly two exist: `UserDefaultsSettingsStore` (the
+app — the only production Swift code that calls `UserDefaults`; the privacy
+manifest still declares the API) and `InMemorySettingsStore` (tests — a
+dictionary; hermetic and parallel-safe). Two adapters are what make the seam
+real rather than indirection. The UserDefaults adapter owns **default-on-read**
+(there is no `register(defaults:)`): a missing key returns the passed default, so
+it must check `object(forKey:) == nil` rather than trust `bool`/`integer`, which
+coerce a missing key to `false`/`0`.
+_Avoid_: backend, provider, mock (the in-memory one is a peer implementation, not
+a mock).
+
+**Setting**:
+The single immutable declaration of one persisted setting — its key, its one
+canonical default, and its codec to a stored primitive. The sole source of truth
+for that setting's default, consumed by both initial load and reset.
+_Avoid_: preference, key, default (a **Setting** *has* a key and a default; it is
+neither).
+
+**Settings Catalogue**:
+The table of all **Setting** declarations. Replaces the former triplication
+(stored-property literal + `register(defaults:)` + `resetToDefaults`) so each
+default has exactly one home — the drift that left `prefixCacheSSDBudgetBytes` at
+50 GiB in one place and 20 GiB in two others becomes unrepresentable.
+_Avoid_: defaults dictionary, schema, registry.
+
+**Settings Facade**:
+The `@Observable @MainActor SettingsManager`. Keeps one stored property per
+setting — so SwiftUI `$settings.foo` bindings and per-property Observation survive
+— and forwards each `didSet` to the **Settings Store**. Non-persistence side
+effects (launch-at-login via `SMAppService`, dock visibility via `NSApp`) live in
+the facade's `didSet`, *above* the store; the store moves bytes and never learns
+what a setting means.
+_Avoid_: settings service, settings model.
+
+> **Flagged ambiguity — "store".** The **Settings Store** is the settings
+> persistence seam. It is unrelated to `SnapshotStore`/`SSDSnapshotStore` (the
+> prefix-cache tiers). When unqualified, say "settings store".
+
+**Example dialogue:**
+
+> **Dev:** Where does the SSD-budget default live now?
+> **Expert:** In its **Setting** in the **Settings Catalogue** — once. Both the
+> initial load and `resetToDefaults` read it from there, so the 50-vs-20 GiB drift
+> can't recur.
+> **Dev:** And when a view flips `$settings.playSounds`?
+> **Expert:** That writes the facade's stored property — Observation invalidates
+> only the views that read it, exactly as before — and the `didSet` forwards the
+> value to the **Settings Store**. In the app that's the UserDefaults adapter; in a
+> test it's the in-memory adapter, so you assert persistence without touching
+> `UserDefaults.standard`.
+> **Dev:** Is launch-at-login in the store?
+> **Expert:** No. That side effect stays in the facade's `didSet`, above the store.
+> The store only persists; the **Settings Facade** owns the side effect.
+
 ## Why
 
 _TODO: the constraints that shape the system (fully offline, on-device MLX,
