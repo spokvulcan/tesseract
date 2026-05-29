@@ -62,7 +62,12 @@ final class TieredSnapshotStore: SnapshotStore {
     // MARK: - Stored state
 
     private let ramTier: InMemorySnapshotTier
-    private(set) var ssdStore: SSDSnapshotStore?
+    /// The SSD tier. Fully private: callers drive SSD behaviour through
+    /// this store's own interface (`noteLookupHit`, `flush`,
+    /// `warmStartLoad`, `makeSSDHitContext`, `isSSDEnabled`) and never
+    /// name `SSDSnapshotStore` themselves. Assigned once in `init` and
+    /// never reassigned thereafter.
+    private var ssdStore: SSDSnapshotStore?
     private var pendingRefsByID: [String: PendingRef] = [:]
 
     // MARK: - Init
@@ -117,6 +122,54 @@ final class TieredSnapshotStore: SnapshotStore {
 
     func ssdDiagnosticsSnapshot() -> PromptCacheSSDSnapshot {
         ssdStore?.diagnosticsSnapshot() ?? .disabled
+    }
+
+    /// True when an SSD tier is configured. Lets callers gate
+    /// SSD-only setup work (warm start, partition registration) without
+    /// reaching for the SSD store itself.
+    var isSSDEnabled: Bool { ssdStore != nil }
+
+    // MARK: - Lookup support
+
+    /// On a RAM-resident lookup hit, bump the SSD LRU recency for the
+    /// node's committed **Snapshot Ref** so a hot RAM hit does not look
+    /// stale to the SSD LRU when the body is later dropped to `ssdOnly`.
+    /// Returns the snapshot ID whose recency was bumped, or `nil` when
+    /// the node holds no committed ref (any **Snapshot State** other
+    /// than `committed`) or the SSD tier is disabled. Callers need not
+    /// know the node's state shape or that an SSD LRU exists.
+    func noteLookupHit(on node: RadixTreeNode) -> String? {
+        guard case .committed(_, let ref) = node.state else { return nil }
+        ssdStore?.recordHit(id: ref.snapshotID)
+        return ref.snapshotID
+    }
+
+    /// Build the off-main hydration context for a body-absent
+    /// `ssdOnly` node, or `nil` when the SSD tier is disabled. The
+    /// returned `SSDHitContext` carries the `nonisolated`
+    /// `SSDSnapshotStore` so `LLMActor` can `loadSync` off the
+    /// MainActor — see the type's note. Constructing it here is what
+    /// keeps the concrete SSD store private to this seam.
+    func makeSSDHitContext(ref: SnapshotRef, node: RadixTreeNode) -> SSDHitContext? {
+        guard let ssdStore else { return nil }
+        return SSDHitContext(snapshotRef: ref, ssdStore: ssdStore, node: node)
+    }
+
+    // MARK: - SSD lifecycle
+
+    /// Drain the SSD writer's pending queue and persist the manifest.
+    /// Awaited by model-unload / restart paths so in-flight writes
+    /// survive teardown. No-op when the SSD tier is disabled.
+    func flush() async {
+        await ssdStore?.flushAsync()
+    }
+
+    /// Load the SSD manifest and return the partitions that survive
+    /// fingerprint validation against `expectedFingerprint`. Returns
+    /// `.empty` when the SSD tier is disabled, so the caller needs no
+    /// SSD-presence branch.
+    func warmStartLoad(expectedFingerprint: String) -> WarmStartOutcome {
+        ssdStore?.warmStartLoad(expectedFingerprint: expectedFingerprint) ?? .empty
     }
 
     // MARK: - SSD partition registration
@@ -300,4 +353,29 @@ final class TieredSnapshotStore: SnapshotStore {
     func isPendingForTesting(id: String) -> Bool {
         pendingRefsByID[id] != nil
     }
+
+    /// Test-only white-box door onto the SSD tier. Production code
+    /// drives the SSD through this store's sealed interface and must
+    /// never reach the `SSDSnapshotStore` directly — tests use this to
+    /// assert resident-set / byte-accounting internals.
+    var ssdStoreForTesting: SSDSnapshotStore? { ssdStore }
+}
+
+// MARK: - SSDHitContext
+
+/// Handle that lets `LLMActor` hydrate a body-absent `ssdOnly` node
+/// from the SSD tier off the MainActor. Carries the `MainActor`-owned
+/// `RadixTreeNode` and the `nonisolated` `SSDSnapshotStore` LLMActor
+/// needs to hydrate a state-5 node. `@unchecked Sendable` because the
+/// node is MainActor-owned — LLMActor only reads the **Snapshot Ref**
+/// off-main and hops back to MainActor before touching the node via
+/// `PrefixCacheManager.promote(node:snapshot:partitionKey:)`.
+///
+/// It deliberately carries the concrete `SSDSnapshotStore` rather than
+/// a narrow hydration interface so the read stays off the MainActor;
+/// see `docs/adr/0001-ssd-hydration-handle-stays-off-main.md`.
+struct SSDHitContext: @unchecked Sendable {
+    let snapshotRef: SnapshotRef
+    let ssdStore: SSDSnapshotStore
+    let node: RadixTreeNode
 }

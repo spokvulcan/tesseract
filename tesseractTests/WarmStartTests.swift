@@ -114,7 +114,7 @@ struct WarmStartTests {
             memoryBudgetBytes: 100_000_000,
             tieredStore: tieredStore
         )
-        return (mgr, tieredStore.ssdStore!)
+        return (mgr, tieredStore.ssdStoreForTesting!)
     }
 
     // MARK: - Tests
