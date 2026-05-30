@@ -11,7 +11,7 @@ import os
 // MARK: - AudioPlaybackManager
 
 @MainActor
-final class AudioPlaybackManager: ObservableObject {
+final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     @Published private(set) var isPlaying = false
 
     // Audio engine (shared between one-shot and streaming)
@@ -28,12 +28,13 @@ final class AudioPlaybackManager: ObservableObject {
     private(set) var totalScheduledSamples: Int = 0
     private var streamingSampleRate: Int = 0
 
-    var onPlaybackFinished: (() -> Void)?
+    var onPlaybackFinished: (@MainActor @Sendable () -> Void)?
 
     // MARK: - Debug dump
 
-    var debugDumpDisabled = false
-    private var debugDumpEnabled: Bool { !debugDumpDisabled }
+    // Set per streaming session by `startStreaming(sampleRate:diagnostics:)`.
+    private var diagnostics: PlaybackDiagnosticsPolicy = .default
+    private var debugDumpEnabled: Bool { diagnostics == .default }
     private var debugRawChunks: [[Float]] = []
     private var debugScheduledSamples: [Float] = []
     private var debugChunkTimestamps: [CFAbsoluteTime] = []
@@ -114,8 +115,9 @@ final class AudioPlaybackManager: ObservableObject {
 
     // MARK: - Streaming playback (push-based AVAudioPlayerNode)
 
-    func startStreaming(sampleRate: Int) {
+    func startStreaming(sampleRate: Int, diagnostics: PlaybackDiagnosticsPolicy) {
         stop()
+        self.diagnostics = diagnostics
 
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,

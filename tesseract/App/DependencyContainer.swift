@@ -111,7 +111,7 @@ final class DependencyContainer: ObservableObject {
         SpeechCoordinator(
             textExtractor: textExtractor,
             speechEngine: speechEngine,
-            playbackManager: audioPlaybackManager,
+            playback: audioPlaybackManager,
             settings: settingsManager,
             notchOverlay: ttsNotchPanelController,
             arbiter: inferenceArbiter
