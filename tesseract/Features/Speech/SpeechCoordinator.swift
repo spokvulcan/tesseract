@@ -16,7 +16,7 @@ final class SpeechCoordinator {
 
     private let textExtractor: any TextExtracting
     private let speechEngine: SpeechEngine
-    private let playbackManager: AudioPlaybackManager
+    private let playback: any AudioPlayback
     private let settings: SettingsManager
     private let notchOverlay: TTSNotchPanelController?
     private let arbiter: InferenceArbiter?
@@ -34,19 +34,19 @@ final class SpeechCoordinator {
     init(
         textExtractor: any TextExtracting,
         speechEngine: SpeechEngine,
-        playbackManager: AudioPlaybackManager,
+        playback: any AudioPlayback = AudioPlaybackManager(),
         settings: SettingsManager,
         notchOverlay: TTSNotchPanelController? = nil,
         arbiter: InferenceArbiter? = nil
     ) {
         self.textExtractor = textExtractor
         self.speechEngine = speechEngine
-        self.playbackManager = playbackManager
+        self.playback = playback
         self.settings = settings
         self.notchOverlay = notchOverlay
         self.arbiter = arbiter
 
-        playbackManager.onPlaybackFinished = { [weak self] in
+        playback.onPlaybackFinished = { [weak self] in
             guard let self, !self.isLongFormActive else { return }
             self.state = .idle
             let callback = self.speechCompletionCallback
@@ -90,8 +90,7 @@ final class SpeechCoordinator {
         speechCompletionCallback = nil
         activeTask?.cancel()
         activeTask = nil
-        playbackManager.stop()
-        playbackManager.debugDumpDisabled = false
+        playback.stop()
         isLongFormActive = false
         pausedSegmentIndex = nil
         segments = []
@@ -189,7 +188,7 @@ final class SpeechCoordinator {
                 // finishStreaming() may fire onPlaybackFinished synchronously
                 // when all buffers have already drained.
                 isLongFormActive = false
-                playbackManager.finishStreaming()
+                playback.finishStreaming()
                 notchOverlay?.markGenerationComplete()
                 // onPlaybackFinished callback will set state = .idle
             }
@@ -213,7 +212,6 @@ final class SpeechCoordinator {
         let language = settings.ttsLanguage
 
         isLongFormActive = true
-        playbackManager.debugDumpDisabled = true
 
         // First segment in this session — discover sample rate and start streaming
         state = .generating(progress: "Segment \(startIndex + 1) of \(segmentCount)")
@@ -225,14 +223,14 @@ final class SpeechCoordinator {
             parameters: settings.ttsParameters
         )
 
-        playbackManager.startStreaming(sampleRate: sampleRate)
+        playback.startStreaming(sampleRate: sampleRate, diagnostics: .disabled)
         currentSegmentIndex = startIndex
         state = .streamingLongForm(segment: startIndex + 1, of: segmentCount)
 
         // Show notch overlay with the first segment's text
         let firstOffsets = await speechEngine.computeTokenCharOffsets(text: localSegments[startIndex].text)
         notchOverlay?.show(text: localSegments[startIndex].text, tokenCharOffsets: firstOffsets, playbackTimeProvider: { [weak self] in
-            self?.playbackManager.currentPlaybackTime() ?? 0
+            self?.playback.currentPlaybackTime() ?? 0
         })
 
         for try await chunk in firstStream {
@@ -240,8 +238,8 @@ final class SpeechCoordinator {
                 cleanupLongForm()
                 return false
             }
-            playbackManager.appendChunk(samples: chunk)
-            notchOverlay?.updateTotalDuration(playbackManager.totalScheduledDuration)
+            playback.appendChunk(samples: chunk)
+            notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
         }
 
         // Align duration estimate so segment 1 highlighting converges to 100%
@@ -276,7 +274,7 @@ final class SpeechCoordinator {
 
             // Record where previous segment's audio ends in cumulative playback time.
             // The overlay stays on the previous segment's text until playback reaches this point.
-            let prevSegEndDuration = playbackManager.totalScheduledDuration
+            let prevSegEndDuration = playback.totalScheduledDuration
 
             // Start generation immediately for throughput (don't wait for playback)
             let segOffsets = await speechEngine.computeTokenCharOffsets(text: localSegments[i].text)
@@ -296,10 +294,10 @@ final class SpeechCoordinator {
                     cleanupLongForm()
                     return false
                 }
-                playbackManager.appendChunk(samples: chunk)
+                playback.appendChunk(samples: chunk)
 
                 // Switch overlay text when playback reaches the previous segment boundary
-                if !overlayUpdated && playbackManager.currentPlaybackTime() >= prevSegEndDuration - 0.1 {
+                if !overlayUpdated && playback.currentPlaybackTime() >= prevSegEndDuration - 0.1 {
                     notchOverlay?.updateText(
                         localSegments[i].text,
                         tokenCharOffsets: segOffsets,
@@ -312,14 +310,14 @@ final class SpeechCoordinator {
                 // Only update duration tracking after overlay has switched to this segment
                 // (otherwise cumulative duration would corrupt the previous segment's pacing)
                 if overlayUpdated {
-                    notchOverlay?.updateTotalDuration(playbackManager.totalScheduledDuration)
+                    notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
                 }
             }
 
             // If generation finished before playback caught up, wait for the boundary
             if !overlayUpdated {
-                Log.speech.info("Segment \(i + 1) generated, waiting for playback (prevEnd=\(String(format: "%.1f", prevSegEndDuration))s, playback=\(String(format: "%.1f", self.playbackManager.currentPlaybackTime()))s)")
-                while playbackManager.currentPlaybackTime() < prevSegEndDuration - 0.1 {
+                Log.speech.info("Segment \(i + 1) generated, waiting for playback (prevEnd=\(String(format: "%.1f", prevSegEndDuration))s, playback=\(String(format: "%.1f", self.playback.currentPlaybackTime()))s)")
+                while playback.currentPlaybackTime() < prevSegEndDuration - 0.1 {
                     guard !Task.isCancelled else {
                         cleanupLongForm()
                         return false
@@ -336,7 +334,7 @@ final class SpeechCoordinator {
             }
 
             // Final duration update and mark segment generation complete
-            notchOverlay?.updateTotalDuration(playbackManager.totalScheduledDuration)
+            notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
             notchOverlay?.markSegmentComplete()
 
             Log.speech.info("Segment \(i + 1)/\(segmentCount) complete")
@@ -348,8 +346,7 @@ final class SpeechCoordinator {
     }
 
     private func cleanupLongForm() {
-        playbackManager.stop()
-        playbackManager.debugDumpDisabled = false
+        playback.stop()
         isLongFormActive = false
         notchOverlay?.dismiss()
         state = .idle
@@ -381,21 +378,21 @@ final class SpeechCoordinator {
             }
 
             state = .playing
-            playbackManager.play(samples: samples, sampleRate: sampleRate)
+            playback.play(samples: samples, sampleRate: sampleRate)
 
             let duration = Double(samples.count) / Double(sampleRate)
             let tokenOffsets = await speechEngine.computeTokenCharOffsets(text: text)
             notchOverlay?.show(text: text, tokenCharOffsets: tokenOffsets, playbackTimeProvider: { [weak self] in
-                self?.playbackManager.currentPlaybackTime() ?? 0
+                self?.playback.currentPlaybackTime() ?? 0
             })
             notchOverlay?.updateTotalDuration(duration)
             notchOverlay?.markGenerationComplete()
         } catch is CancellationError {
-            playbackManager.stop()
+            playback.stop()
             state = .idle
         } catch {
             Log.speech.error("Speech generation failed: \(error)")
-            playbackManager.stop()
+            playback.stop()
             state = .error(error.localizedDescription)
             try? await Task.sleep(for: .seconds(3))
             if !Task.isCancelled { state = .idle }
@@ -414,16 +411,16 @@ final class SpeechCoordinator {
             }
 
             // GPU no longer needed — finish playback
-            playbackManager.finishStreaming()
-            notchOverlay?.updateTotalDuration(playbackManager.totalScheduledDuration)
+            playback.finishStreaming()
+            notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
             notchOverlay?.markGenerationComplete()
             // onPlaybackFinished callback will set state = .idle
         } catch is CancellationError {
-            playbackManager.stop()
+            playback.stop()
             state = .idle
         } catch {
             Log.speech.error("Streaming speech generation failed: \(error)")
-            playbackManager.stop()
+            playback.stop()
             state = .error(error.localizedDescription)
             try? await Task.sleep(for: .seconds(3))
             if !Task.isCancelled { state = .idle }
@@ -442,22 +439,22 @@ final class SpeechCoordinator {
             parameters: settings.ttsParameters
         )
 
-        playbackManager.startStreaming(sampleRate: sampleRate)
+        playback.startStreaming(sampleRate: sampleRate, diagnostics: .default)
         let tokenOffsets = await speechEngine.computeTokenCharOffsets(text: text)
         notchOverlay?.show(text: text, tokenCharOffsets: tokenOffsets, playbackTimeProvider: { [weak self] in
-            self?.playbackManager.currentPlaybackTime() ?? 0
+            self?.playback.currentPlaybackTime() ?? 0
         })
 
         for try await chunk in stream {
             guard !Task.isCancelled else {
-                playbackManager.stop()
+                playback.stop()
                 notchOverlay?.dismiss()
                 state = .idle
                 return
             }
 
-            playbackManager.appendChunk(samples: chunk)
-            notchOverlay?.updateTotalDuration(playbackManager.totalScheduledDuration)
+            playback.appendChunk(samples: chunk)
+            notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
 
             // Transition to streaming on first chunk
             if state != .streaming {

@@ -105,13 +105,16 @@ final class DependencyContainer: ObservableObject {
     // Speech (TTS)
     lazy var textExtractor = TextExtractor()
     lazy var speechEngine = SpeechEngine()
-    lazy var audioPlaybackManager = AudioPlaybackManager()
     lazy var ttsNotchPanelController = TTSNotchPanelController()
     lazy var speechCoordinator: SpeechCoordinator = {
+        // `playback` is left to the coordinator's production default
+        // (`AudioPlaybackManager()`) — the AVFoundation adapter is needed by
+        // nothing else in the graph, so there is no shared handle to wire here.
+        // Mirrors `SettingsManager()` above, which relies on its
+        // `UserDefaultsSettingsStore()` default. Tests inject `InMemoryAudioPlayback`.
         SpeechCoordinator(
             textExtractor: textExtractor,
             speechEngine: speechEngine,
-            playbackManager: audioPlaybackManager,
             settings: settingsManager,
             notchOverlay: ttsNotchPanelController,
             arbiter: inferenceArbiter

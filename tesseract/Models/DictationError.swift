@@ -16,6 +16,7 @@ enum DictationError: LocalizedError, Sendable {
     case noSpeechDetected
     case recordingTooShort
     case recordingTimeout
+    case transcriptionInProgress
 
     var errorDescription: String? {
         switch self {
@@ -39,6 +40,8 @@ enum DictationError: LocalizedError, Sendable {
             return "Recording was too short."
         case .recordingTimeout:
             return "Recording exceeded maximum duration."
+        case .transcriptionInProgress:
+            return "A transcription is already in progress."
         }
     }
 
@@ -62,6 +65,8 @@ enum DictationError: LocalizedError, Sendable {
             return "Hold the record button longer or speak more."
         case .recordingTimeout:
             return "Break up longer dictations into smaller segments."
+        case .transcriptionInProgress:
+            return "Wait for the current transcription to finish, or cancel it first."
         }
     }
 }

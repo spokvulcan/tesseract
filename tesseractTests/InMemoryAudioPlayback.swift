@@ -1,0 +1,83 @@
+//
+//  InMemoryAudioPlayback.swift
+//  tesseractTests
+//
+//  A hermetic, in-memory `AudioPlayback` for tests — a *peer implementation* of
+//  `AudioPlaybackManager`, not a mock. It records what the coordinator scheduled
+//  (one-shot plays, the streaming session + its diagnostics policy, appended
+//  chunks, finish/stop) and computes `totalScheduledDuration` the same way the
+//  real manager does. Its playback clock is a *pure virtual clock*: it reads 0
+//  until a test calls `advance(by:)`, never tracks wall-clock, and is untouched by
+//  the lifecycle methods — so long-form pacing logic can be driven deterministically.
+//  `firePlaybackFinished()` stands in for the audio layer reporting that scheduled
+//  audio has drained. No AVAudioEngine, no real audio.
+//
+
+import Foundation
+
+@testable import Tesseract_Agent
+
+@MainActor
+final class InMemoryAudioPlayback: AudioPlayback {
+    // MARK: Installed by the coordinator
+    var onPlaybackFinished: (@MainActor @Sendable () -> Void)?
+
+    // MARK: Pure virtual clock (test-controlled, never wall-clock)
+    private var virtualPlaybackTime: TimeInterval = 0
+    func advance(by seconds: TimeInterval) { virtualPlaybackTime += seconds }
+
+    // MARK: Recorded state
+    private(set) var playCount = 0
+    private(set) var playedSamples: [[Float]] = []
+    private(set) var playedSampleRates: [Int] = []
+    private(set) var startStreamingCount = 0
+    private(set) var startedSampleRates: [Int] = []
+    private(set) var recordedDiagnostics: [PlaybackDiagnosticsPolicy] = []
+    private(set) var appendedChunks: [[Float]] = []
+    private(set) var finishStreamingCount = 0
+    private(set) var stopCount = 0
+
+    private var totalScheduledSamples = 0
+    private var streamingSampleRate = 0
+    var totalScheduledDuration: TimeInterval {
+        guard streamingSampleRate > 0 else { return 0 }
+        return Double(totalScheduledSamples) / Double(streamingSampleRate)
+    }
+
+    func currentPlaybackTime() -> TimeInterval { virtualPlaybackTime }
+
+    func play(samples: [Float], sampleRate: Int) {
+        playCount += 1
+        playedSamples.append(samples)
+        playedSampleRates.append(sampleRate)
+    }
+
+    func startStreaming(sampleRate: Int, diagnostics: PlaybackDiagnosticsPolicy) {
+        startStreamingCount += 1
+        startedSampleRates.append(sampleRate)
+        recordedDiagnostics.append(diagnostics)
+        totalScheduledSamples = 0
+        streamingSampleRate = sampleRate
+    }
+
+    func appendChunk(samples: [Float]) {
+        appendedChunks.append(samples)
+        totalScheduledSamples += samples.count
+    }
+
+    func finishStreaming() {
+        finishStreamingCount += 1
+    }
+
+    func stop() {
+        stopCount += 1
+        totalScheduledSamples = 0
+        streamingSampleRate = 0
+    }
+
+    /// Stands in for the audio layer reporting that scheduled audio has drained —
+    /// fires the callback the coordinator installed on `onPlaybackFinished`.
+    func firePlaybackFinished() {
+        onPlaybackFinished?()
+    }
+}

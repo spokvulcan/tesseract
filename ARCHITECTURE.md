@@ -43,11 +43,11 @@ Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation 
 │  │ Engine         │ │ Engine         │ │  Engine                  │  │
 │  └────────────────┘ └────────────────┘ └──────────────────────────┘  │
 ├──────────────────────────────────────────────────────────────────────┤
-│  Actors (inference isolation)                                        │
-│  ┌────────────────┐ ┌────────────────┐ ┌──────────────┐             │
-│  │ WhisperActor   │ │ TTSActor       │ │ LLMActor     │             │
-│  │ (CoreML ASR)   │ │ (MLX TTS)      │ │ (MLX LLM)    │             │
-│  └────────────────┘ └────────────────┘ └──────────────┘             │
+│  Model adapters behind ports (actor-isolated inference)              │
+│  ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────┐  │
+│  │ SpeechRecognizer     │ │ SpeechSynthesizer    │ │ LLMActor     │  │
+│  │ WhisperKit (ASR)     │ │ Qwen3 TTS (MLX)      │ │ MLX LLM      │  │
+│  └──────────────────────┘ └──────────────────────┘ └──────────────┘  │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Platform Adapters (AppKit)                                          │
 │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐  │
@@ -95,10 +95,16 @@ tesseract/
 │   │   └── Views/                     # Recording UI components
 │   ├── Speech/
 │   │   ├── SpeechCoordinator.swift    # @Observable TTS orchestrator
-│   │   ├── SpeechEngine.swift         # @Observable, wraps TTSActor
+│   │   ├── SpeechEngine.swift         # @Observable facade over SpeechSynthesizer
+│   │   ├── SpeechSynthesizer.swift    # Model port (seam) for TTS
+│   │   ├── Qwen3SpeechSynthesizer.swift   # MLX adapter (formerly TTSActor)
+│   │   ├── AudioPlayback.swift        # @MainActor playback port (seam)
+│   │   ├── AudioPlaybackManager.swift # AVFoundation adapter
 │   │   └── Views/ + NotchOverlay/     # TTS UI
 │   ├── Transcription/
-│   │   ├── TranscriptionEngine.swift  # @Observable, wraps WhisperActor
+│   │   ├── TranscriptionEngine.swift  # @Observable facade over SpeechRecognizer
+│   │   ├── SpeechRecognizer.swift     # Model port (seam) for ASR
+│   │   ├── WhisperKitSpeechRecognizer.swift  # CoreML adapter (formerly WhisperActor)
 │   │   ├── TranscriptionHistory.swift # @Observable, JSON persistence
 │   │   └── TranscriptionPostProcessor.swift
 │   ├── Agent/
@@ -209,6 +215,43 @@ runs after hydration and so persists through the store.
 `@AppStorage` is NOT compatible with `@Observable` (compiler error), which is why
 the facade keeps explicit stored properties rather than property wrappers.
 
+### Speech Seams (model ports + playback)
+
+The speech features use the same **facade-above / port-below** shape as the Settings
+Store, so the engines' and coordinator's orchestration is testable without models, a
+microphone, or `AVAudioEngine`. Three seams sit *below* the `@Observable @MainActor`
+facades (ADR-0003; vocabulary in `CONTEXT.md` → **Language → Speech model ports and
+playback**):
+
+- **`SpeechRecognizer`** — the ASR model port below `TranscriptionEngine`. The engine
+  keeps the timeout race, lazy load, `.mlmodelc` verification, lifecycle state, and
+  `DictationError` mapping *above* the port; the port is model-only.
+- **`SpeechSynthesizer`** — the TTS model port below `SpeechEngine`, faithful to the
+  model surface (`generate`/`generateStreaming`, voice anchoring, token offsets).
+- **`AudioPlayback`** — a `@MainActor` *sibling* seam (not a model port) below
+  `SpeechCoordinator`, turning generated samples into sound. It is
+  `@MainActor protocol AudioPlayback: AnyObject` (the coordinator calls it
+  *synchronously* inside the long-form loop), unlike the two model ports which are
+  `Sendable nonisolated protocol` actor-backed ports `await`-ed off-main.
+
+```
+DictationCoordinator ─(Transcribing)→ TranscriptionEngine ─(SpeechRecognizer)→ adapter
+SpeechCoordinator   ───────────────→  SpeechEngine        ─(SpeechSynthesizer)→ adapter
+SpeechCoordinator   ──(AudioPlayback)────────────────────────────────────────→ adapter
+                       engine/coordinator-facing            facade            model-facing port
+```
+
+Each seam has two adapters — a framework-backed one in the app target
+(`WhisperKitSpeechRecognizer`, `Qwen3SpeechSynthesizer`, `AudioPlaybackManager`; the
+only production code touching WhisperKit / MLX / AVFoundation for these features) and
+an in-memory peer in `tesseractTests` (`InMemorySpeechRecognizer`,
+`InMemorySpeechSynthesizer`, `InMemoryAudioPlayback`). The model ports are **actors**
+(so `Sendable` is free); the playback adapters are `@MainActor final class`es. Two
+behavior-neutral refinements ride on the playback seam: diagnostics is a value
+(`PlaybackDiagnosticsPolicy`) passed at `startStreaming` rather than a mutable toggle,
+and the in-memory adapter exposes a **non-wall-clock virtual clock** (`advance(by:)`)
+so the long-form segment-boundary wait loop is deterministic.
+
 ### Dependency Injection
 
 `DependencyContainer` creates all services lazily and injects them into the SwiftUI hierarchy via scoped modifiers:
@@ -246,7 +289,7 @@ Coordinators manage user-facing flows as state machines:
 Thread safety uses Swift concurrency:
 
 - **@MainActor**: All coordinators, engines, managers, views
-- **Actors**: `WhisperActor` (CoreML), `TTSActor` (MLX TTS), `LLMActor` (MLX LLM), `ContextManager` (compaction)
+- **Actors**: `WhisperKitSpeechRecognizer` (CoreML ASR adapter), `Qwen3SpeechSynthesizer` (MLX TTS adapter), `LLMActor` (MLX LLM), `ContextManager` (compaction)
 - **@unchecked Sendable**: `SampleBuffer`, `AudioLevelRelay` (manual NSLock for real-time audio thread)
 
 ### 4. Agent Architecture
@@ -289,7 +332,7 @@ Panel controllers receive state via push methods (`handleStateChange`, `handleAu
    └─► DictationCoordinator.stopRecordingAndProcess()
        ├─► AudioCaptureEngine.stopCapture() → AudioData
        └─► TranscriptionEngine.transcribe(audioData)
-           └─► WhisperActor → WhisperKit inference → TranscriptionResult
+           └─► SpeechRecognizer port → WhisperKit inference → TranscriptionResult
 
 3. Post-processing
    └─► TranscriptionPostProcessor → TextInjector.inject()
@@ -314,6 +357,7 @@ Key architectural decisions documented in `docs/macos26-swiftui-architecture-rev
 - **`@Observable` not `ObservableObject`**: Observation framework tracks property access precisely (no coarse object-wide invalidation). Better SwiftUI performance.
 - **No `@AppStorage` in `@Observable`**: Compiler incompatibility. All settings use manual `UserDefaults` with `didSet`.
 - **No `SettingsManager.shared` singleton**: Injected via `DependencyContainer`. AppKit consumers get it via constructor injection.
+- **Speech model ports below the engines/coordinator**: `SpeechRecognizer`, `SpeechSynthesizer`, and the `@MainActor` `AudioPlayback` sibling seam make the speech engines' and coordinator's orchestration testable without models, a mic, or `AVAudioEngine` — same facade-above / port-below shape as the Settings Store. See ADR-0003 and `CONTEXT.md` → Speech model ports and playback.
 - **`Observations` async sequence for non-view code**: Replaces Combine `$property.sink` for observing `@Observable` types outside SwiftUI views.
 - **`AgentFactory` separate from container**: Container wires dependencies; factory orchestrates multi-step bootstrap.
 - **Panel controllers are publisher-agnostic**: Accept values via `handleStateChange`/`handleAudioLevelChange` methods. The subscription mechanism lives in DependencyContainer and can change independently.

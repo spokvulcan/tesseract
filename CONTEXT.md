@@ -158,6 +158,116 @@ _Avoid_: settings service, settings model.
 > **Expert:** No. That side effect stays in the facade's `didSet`, above the store.
 > The store only persists; the **Settings Facade** owns the side effect.
 
+### Speech model ports and playback
+
+**Speech Recognizer**:
+The model port (seam) for ASR, sitting *below* the `TranscriptionEngine` facade.
+Surface: `load(modelPath:)` (a local `.mlmodelc` folder URL),
+`transcribe(_:language:)`, `cancel()`. The port is itself `Sendable`: the engine
+races `transcribe` against the timeout inside a `withThrowingTaskGroup`, so the
+recognizer crosses a `@Sendable` boundary. Above the seam: the engine owns the
+timeout race, lazy `ensureModelLoaded`, model-file (`.mlmodelc`) verification, the
+`@Observable` lifecycle state (`isModelLoaded`/`isTranscribing`) read by views and
+`InferenceArbiter`, and the mapping of model failures onto `DictationError`. Below
+the seam: the model only. What crosses: `AudioData` in, `TranscriptionResult` out
+(both `Sendable`). The engine holds an injected `@Sendable` factory; on load it
+builds a *fresh* adapter and on unload it drops it to `nil` to release model
+memory. **Cancellation must reach the adapter**: the engine retains its in-flight
+work so `cancelTranscription()` actually cancels it and calls the port's `cancel()`
+(today `cancelTranscription` clears a `transcriptionTask` that is never assigned —
+a latent no-op the seam fixes). Satisfied by two **Speech Model Adapters**.
+_Avoid_: WhisperActor (that is one adapter), Transcribing (that is the
+**engine-facing port** the coordinator depends on), transcriber, ASR backend.
+
+**Speech Synthesizer**:
+The model port (seam) for TTS, below the `SpeechEngine` facade. `Sendable`, and
+deliberately *faithful* to the model surface — `load(modelRepo:)` (a model-repo
+identifier string), `generate`, `generateStreaming` (yields an
+`AsyncThrowingStream<[Float]>` plus the model `sampleRate`), `buildVoiceAnchor` /
+`clearVoiceAnchor`, `cancelGeneration`, `computeTokenCharOffsets`. The
+synthesizer's lifecycle state (`isModelLoaded`/`isLoading`/`loadingStatus`) stays
+on the `SpeechEngine` facade. It stays one wide port rather than splitting
+voice-anchoring or alignment into their own ports, because each of those has only
+one real adapter today (one adapter ⇒ hypothetical seam). Satisfied by two
+**Speech Model Adapters**.
+_Avoid_: TTSActor (one adapter), SpeechEngine (the facade above it), TTS backend.
+
+**Speech Model Adapter**:
+A concrete **Speech Recognizer** or **Speech Synthesizer**. Exactly two of each:
+the framework-backed adapter (`WhisperKitSpeechRecognizer`,
+`Qwen3SpeechSynthesizer` — today's `WhisperActor`/`TTSActor`, the only production
+code that touches WhisperKit/MLX for these features) and the in-memory adapter
+(`InMemorySpeechRecognizer`, `InMemorySpeechSynthesizer` — hermetic, no model
+files). The in-memory adapters live in `tesseractTests` (like
+`InMemorySettingsStore`), not the app target, unless previews or dev tooling later
+need them. They are **actors** (like the production `WhisperActor`/`TTSActor`), so
+`Sendable` is free and the call-recording / cancellation / latency / canned-output
+state is actor-isolated — tests `await` it; no `@unchecked Sendable`. Two adapters
+are what make the seam real rather than indirection; the in-memory one is a peer
+implementation, not a mock — it returns canned results and trivial defaults for the
+surface a given test does not drive.
+_Avoid_: mock, stub, fake-only (it is a real peer adapter); model wrapper.
+
+**Audio Playback**:
+A `@MainActor` *sibling* seam to the model ports — not a model port — that
+`SpeechCoordinator` depends on for turning generated samples into sound. It is
+`@MainActor protocol AudioPlayback: AnyObject` because it wraps `AVAudioEngine` on
+the main actor and the `@MainActor` coordinator calls it *synchronously* (e.g.
+`appendChunk`, `currentPlaybackTime()` inside the long-form loop) — unlike the
+model ports, which are actor-backed and `await`-ed off-main. Surface:
+`play(samples:sampleRate:)`, `startStreaming(sampleRate:diagnostics:)`,
+`appendChunk(samples:)`, `finishStreaming()`, `stop()`, `currentPlaybackTime()`,
+`totalScheduledDuration`, and `onPlaybackFinished` (a `@MainActor @Sendable`
+callback). It carries **no
+mutable debug toggle**: instead of the coordinator flipping `debugDumpDisabled`
+across `stop()`/long-form, diagnostics intent is a *value passed at*
+`startStreaming` — a domain-neutral `PlaybackDiagnosticsPolicy` (`.default` /
+`.disabled`). Long-form passes `.disabled`; the adapter owns the actual dump
+behavior; the in-memory adapter ignores it. Two adapters: the AVFoundation adapter
+(today's `AudioPlaybackManager`, which news-up a real `AVAudioEngine`; a
+`@MainActor final class`) and an in-memory adapter (in `tesseractTests`, also a
+`@MainActor final class` — `Sendable` via main-actor isolation, no
+`@unchecked`) that records scheduled samples and advances a *virtual playback
+clock* — without it, the long-form loop's `currentPlaybackTime()` polling never
+terminates. The clock is **non-wall-clock and test-driven**: it advances only when
+the test calls `advance(by:)` (and `currentPlaybackTime()` reports that scheduled
+position), so the long-form segment-boundary wait loop is deterministic and fast,
+never gated on real elapsed time. Introduced because the model seam alone does not make
+`SpeechCoordinator`'s long-form loop hermetic: playback is the other concrete
+dependency. The coordinator gains this as a constructor seam; its logic stays
+behavior-neutral.
+_Avoid_: AudioPlaybackManager (that is one adapter), AVAudioEngine (inside it),
+CoreAudio, audio output, player.
+
+> **Flagged ambiguity — "Transcribing" vs "Speech Recognizer".** `Transcribing`
+> is the *engine-facing* gerund port that `DictationCoordinator` depends on — it
+> lets a test swap the whole engine. **Speech Recognizer** is the *model-facing*
+> noun port *below* the engine — it lets a test swap the model under the **real**
+> engine, so the engine's own orchestration (timeout, lazy load, file check) is
+> finally on a test surface. Different seams, different layers. The same split
+> holds for `SpeechEngine` (facade) vs **Speech Synthesizer** (model port). GPU
+> arbitration (`InferenceArbiter`) and model-file verification stay *above* the
+> port; the port is model-only and never learns about leases or timeouts. This is
+> the same facade-above / port-below shape as the **Settings Store** (ADR-0002),
+> the direct precedent. (ADR-0001 is about a *different* seam — SSD hydration —
+> but supplies the supporting rule that a second adapter is what makes a seam real
+> rather than hypothetical.)
+
+**Example dialogue:**
+
+> **Dev:** Where does the transcription timeout live now?
+> **Expert:** In the `TranscriptionEngine` — the facade. It still races the call
+> against the budget; the **Speech Recognizer** below it just transcribes. That's
+> the point: inject an `InMemorySpeechRecognizer` that sleeps and you can assert
+> the timeout fires without a gigabyte of WhisperKit on disk.
+> **Dev:** And unloading to free memory?
+> **Expert:** The engine drops the adapter to `nil` — its `@Sendable` factory
+> builds a fresh one on the next load. Same memory behavior as today's
+> `whisperActor = nil`, now behind the seam.
+> **Dev:** Does the **Speech Recognizer** know about the GPU lease?
+> **Expert:** No. The `InferenceArbiter` drives `loadModel`/`unloadModel` on the
+> engine, above the port. The port is model-only.
+
 ## Why
 
 _TODO: the constraints that shape the system (fully offline, on-device MLX,

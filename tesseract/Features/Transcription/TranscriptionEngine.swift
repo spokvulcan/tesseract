@@ -5,9 +5,7 @@
 
 import Foundation
 import Observation
-import CoreML
 import os
-@preconcurrency import WhisperKit
 
 @MainActor
 protocol Transcribing: AnyObject {
@@ -17,32 +15,53 @@ protocol Transcribing: AnyObject {
 
 @Observable @MainActor
 final class TranscriptionEngine: Transcribing {
-    private enum Defaults {
-        static let minimumTranscriptionTimeout: TimeInterval = 30
-        static let maximumTranscriptionTimeout: TimeInterval = 240
-        static let transcriptionTimeoutMultiplier: Double = 3.0
-        static let transcriptionTimeoutOverhead: TimeInterval = 10
+    /// Production timeout budget: `duration * 3 + 10s` overhead, clamped to
+    /// `[30, 240]`s. Injectable so tests can shrink the budget and assert the
+    /// race fires without a 30-second floor; the race itself stays on the facade.
+    /// Literals are inlined rather than named constants because this `@Sendable`
+    /// closure runs outside the engine's MainActor isolation.
+    static let defaultTimeout: @Sendable (_ audioDuration: TimeInterval) -> Duration = { audioDuration in
+        let estimated = (audioDuration * 3.0) + 10
+        let clamped = min(240, max(30, estimated))
+        return .seconds(clamped)
     }
 
     private(set) var isModelLoaded = false
     private(set) var isTranscribing = false
 
-    private var whisperActor: WhisperActor?
-    private var transcriptionTask: Task<TranscriptionResult, Error>?
+    private let makeRecognizer: @Sendable () -> any SpeechRecognizer
+    private let timeout: @Sendable (TimeInterval) -> Duration
+    private var recognizer: (any SpeechRecognizer)?
     private var configuredModelPath: URL?
 
-    init() {}
+    /// The single in-flight transcription. Occupied synchronously at the start of
+    /// `transcribe` (MainActor-atomic), retained so `cancelTranscription` can
+    /// cancel it, and cleared by the task's own identity-guarded `defer`.
+    private var currentTranscription: Task<TranscriptionResult, Error>?
+
+    /// The tracked task bridging the synchronous `cancelTranscription()` to the
+    /// recognizer's `async cancel()`.
+    private var recognizerCancelTask: Task<Void, Never>?
+
+    init(
+        makeRecognizer: @escaping @Sendable () -> any SpeechRecognizer = { WhisperKitSpeechRecognizer() },
+        timeout: @escaping @Sendable (TimeInterval) -> Duration = TranscriptionEngine.defaultTimeout
+    ) {
+        self.makeRecognizer = makeRecognizer
+        self.timeout = timeout
+    }
 
     /// Loads the bundled Whisper model from the specified path.
     func loadModel(from modelPath: URL) async throws {
         configuredModelPath = modelPath
 
         // Unload existing model first
-        if whisperActor != nil {
+        if recognizer != nil {
             unloadModel()
         }
 
-        // Verify model files exist before loading
+        // Verify model files exist before loading — stays on the facade so the
+        // model port never needs real files.
         let fileManager = FileManager.default
         let encoderPath = modelPath.appendingPathComponent("AudioEncoder.mlmodelc")
         let decoderPath = modelPath.appendingPathComponent("TextDecoder.mlmodelc")
@@ -55,31 +74,57 @@ final class TranscriptionEngine: Transcribing {
             throw DictationError.modelNotLoaded
         }
 
-        // Create the actor and load model
-        let actor = WhisperActor()
-        try await actor.loadModel(from: modelPath)
+        // Build a fresh adapter via the factory and load it.
+        let recognizer = makeRecognizer()
+        try await recognizer.load(modelPath: modelPath)
 
-        whisperActor = actor
+        self.recognizer = recognizer
         isModelLoaded = true
     }
 
     func unloadModel() {
-        whisperActor = nil
+        recognizer = nil
         isModelLoaded = false
     }
 
     /// Release Whisper model memory when prioritizing TTS performance.
     func releaseModelForTTSIfIdle() {
         guard !isTranscribing else { return }
-        guard whisperActor != nil else { return }
+        guard recognizer != nil else { return }
         unloadModel()
         Log.transcription.info("Unloaded Whisper model to prioritize TTS performance")
     }
 
     func transcribe(_ audioData: AudioData, language: String = "auto") async throws -> TranscriptionResult {
+        // Single-in-flight: synchronously occupy the slot before the first
+        // `await` (MainActor-atomic). A `transcribe` issued while one is in
+        // flight is rejected — it does not overlap, queue, or supersede.
+        // `isTranscribing` is *not* the lock (it is observable UI state set only
+        // after `ensureModelLoaded`'s suspension); the retained `Task` is.
+        guard currentTranscription == nil else {
+            throw DictationError.transcriptionInProgress
+        }
+
+        let task = Task { [weak self] () throws -> TranscriptionResult in
+            guard let self else { throw DictationError.modelNotLoaded }
+            return try await self.performTranscription(audioData, language: language)
+        }
+        currentTranscription = task
+        defer {
+            // Identity-guarded: clear only if the slot still holds *this* task,
+            // so a synchronous cancel can't free occupancy early and a stale exit
+            // can't clobber a successor.
+            if currentTranscription == task { currentTranscription = nil }
+        }
+        return try await task.value
+    }
+
+    private func performTranscription(
+        _ audioData: AudioData, language: String
+    ) async throws -> TranscriptionResult {
         try await ensureModelLoaded()
 
-        guard let whisperActor else {
+        guard let recognizer else {
             throw DictationError.modelNotLoaded
         }
 
@@ -92,25 +137,36 @@ final class TranscriptionEngine: Transcribing {
 
         // Pass nil for auto-detect, otherwise pass the language code
         let languageCode = language == "auto" ? nil : language
-        let timeout = transcriptionTimeout(for: audioData.duration)
+        let timeoutDuration = timeout(audioData.duration)
 
         // Race transcription against a timeout to prevent stuck processing state
         return try await withThrowingTaskGroup(of: TranscriptionResult.self) { group in
+            defer { group.cancelAll() }
+
             group.addTask {
-                try await whisperActor.transcribe(audioData, language: languageCode)
+                do {
+                    return try await recognizer.transcribe(audioData, language: languageCode)
+                } catch let error as DictationError {
+                    throw error
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Map model-layer failures onto the facade's error vocabulary.
+                    throw DictationError.transcriptionFailed(error.localizedDescription)
+                }
             }
             group.addTask {
-                try await Task.sleep(for: timeout)
+                try await Task.sleep(for: timeoutDuration)
                 throw DictationError.transcriptionFailed("Transcription timed out")
             }
             let result = try await group.next()!
-            group.cancelAll()
+            try Task.checkCancellation()
             return result
         }
     }
 
     private func ensureModelLoaded() async throws {
-        guard whisperActor == nil else { return }
+        guard recognizer == nil else { return }
         guard let modelPath = configuredModelPath else {
             throw DictationError.modelNotLoaded
         }
@@ -119,105 +175,18 @@ final class TranscriptionEngine: Transcribing {
         try await loadModel(from: modelPath)
     }
 
+    /// Synchronous (its call sites in `DictationCoordinator`/`AgentCoordinator`
+    /// invoke it fire-and-forget). Cancels the retained in-flight task — which
+    /// propagates `CancellationError` into the task group and the adapter's
+    /// `transcribe` — and fires a tracked task to call the recognizer's `async
+    /// cancel()` for cooperative model teardown. It does **not** null the
+    /// in-flight slot; the task's identity-guarded `defer` does, so occupancy
+    /// stays accurate until the task actually exits.
     func cancelTranscription() {
-        transcriptionTask?.cancel()
-        transcriptionTask = nil
+        currentTranscription?.cancel()
+        if let recognizer {
+            recognizerCancelTask = Task { await recognizer.cancel() }
+        }
         isTranscribing = false
-    }
-
-    private func transcriptionTimeout(for audioDuration: TimeInterval) -> Duration {
-        let estimatedTimeout = (audioDuration * Defaults.transcriptionTimeoutMultiplier)
-            + Defaults.transcriptionTimeoutOverhead
-        let clampedTimeout = min(
-            Defaults.maximumTranscriptionTimeout,
-            max(Defaults.minimumTranscriptionTimeout, estimatedTimeout)
-        )
-        return .seconds(clampedTimeout)
-    }
-}
-
-// Actor to isolate WhisperKit usage
-actor WhisperActor {
-    enum Defaults {
-        static let noSpeechThreshold: Float = 0.6
-    }
-    private var whisperKit: WhisperKit?
-
-    func loadModel(from modelPath: URL) async throws {
-        let logger = Logger(subsystem: "app.tesseract.agent", category: "transcription")
-        logger.info("Loading model from path: \(modelPath.path)")
-
-        // List contents of model folder for debugging
-        if let contents = try? FileManager.default.contentsOfDirectory(atPath: modelPath.path) {
-            logger.debug("Model folder contents: \(contents)")
-        }
-
-        // Configure compute units for each model component
-        // GPU is faster for encoding, Neural Engine for decoding
-        let computeOptions = ModelComputeOptions(
-            melCompute: .cpuAndGPU,
-            audioEncoderCompute: .cpuAndGPU,
-            textDecoderCompute: .cpuAndNeuralEngine,
-            prefillCompute: .cpuAndGPU
-        )
-
-        // Load from bundled model path - use the exact folder containing model files
-        let config = WhisperKitConfig(
-            modelFolder: modelPath.path,
-            computeOptions: computeOptions,
-            verbose: true,
-            prewarm: true,
-            load: true,
-            download: false
-        )
-
-        whisperKit = try await WhisperKit(config)
-    }
-
-    func transcribe(_ audioData: AudioData, language: String? = nil) async throws -> TranscriptionResult {
-        guard let whisperKit else {
-            throw DictationError.modelNotLoaded
-        }
-
-        let startTime = Date()
-
-        let options = DecodingOptions(
-            task: .transcribe,
-            language: language,
-            temperature: 0.0,                    // Greedy decoding for deterministic output
-            usePrefillPrompt: language != nil,   // Use prefill prompt when language is specified
-            skipSpecialTokens: true,
-            withoutTimestamps: false,
-            clipTimestamps: [],
-            noSpeechThreshold: Defaults.noSpeechThreshold
-        )
-
-        // Capture whisperKit in a local constant to satisfy concurrency checking
-        let kit = whisperKit
-        let results = try await kit.transcribe(
-            audioArray: audioData.samples,
-            decodeOptions: options
-        )
-
-        let processingTime = Date().timeIntervalSince(startTime)
-
-        guard let firstResult = results.first else {
-            throw DictationError.noSpeechDetected
-        }
-
-        let segments = firstResult.segments.map { segment in
-            TranscriptionSegment(
-                text: segment.text,
-                startTime: TimeInterval(segment.start),
-                endTime: TimeInterval(segment.end)
-            )
-        }
-
-        return TranscriptionResult(
-            text: firstResult.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
-            segments: segments,
-            language: firstResult.language,
-            processingTime: processingTime
-        )
     }
 }
