@@ -141,6 +141,8 @@ final class TranscriptionEngine: Transcribing {
 
         // Race transcription against a timeout to prevent stuck processing state
         return try await withThrowingTaskGroup(of: TranscriptionResult.self) { group in
+            defer { group.cancelAll() }
+
             group.addTask {
                 do {
                     return try await recognizer.transcribe(audioData, language: languageCode)
@@ -158,7 +160,7 @@ final class TranscriptionEngine: Transcribing {
                 throw DictationError.transcriptionFailed("Transcription timed out")
             }
             let result = try await group.next()!
-            group.cancelAll()
+            try Task.checkCancellation()
             return result
         }
     }

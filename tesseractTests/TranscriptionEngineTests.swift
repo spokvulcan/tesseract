@@ -45,6 +45,49 @@ final class RecognizerFactorySpy: Sendable {
     var recognizers: [InMemorySpeechRecognizer] { state.withLock { $0.recognizers } }
 }
 
+/// A recognizer that deliberately ignores task cancellation. It suspends until
+/// the test releases it, then returns success even if `cancelTranscription()`
+/// already cancelled the engine's retained task.
+actor CancellationIgnoringSpeechRecognizer: SpeechRecognizer {
+    private let result: TranscriptionResult
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var loadCount = 0
+    private(set) var transcribeCount = 0
+    private(set) var cancelCount = 0
+
+    init(
+        result: TranscriptionResult = TranscriptionResult(
+            text: "late success",
+            segments: [],
+            language: "en",
+            processingTime: 0
+        )
+    ) {
+        self.result = result
+    }
+
+    var isAwaitingRelease: Bool { continuation != nil }
+
+    func load(modelPath: URL) async throws {
+        loadCount += 1
+    }
+
+    func transcribe(_ audioData: AudioData, language: String?) async throws -> TranscriptionResult {
+        transcribeCount += 1
+        await withCheckedContinuation { continuation = $0 }
+        return result
+    }
+
+    func cancel() {
+        cancelCount += 1
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 @MainActor
 struct TranscriptionEngineTests {
 
@@ -209,6 +252,30 @@ struct TranscriptionEngineTests {
         // And the adapter's cooperative `cancel()` is reached too.
         while await recognizer.cancelCount == 0 { await Task.yield() }
         #expect(await recognizer.cancelCount >= 1)
+        #expect(!engine.isTranscribing)
+    }
+
+    @Test
+    func cancelTranscriptionRejectsLateSuccessFromCancellationIgnoringRecognizer() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = CancellationIgnoringSpeechRecognizer()
+        let engine = TranscriptionEngine(makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
+        try await engine.loadModel(from: bundle)
+
+        let task = Task { try await engine.transcribe(sampleAudio(), language: "auto") }
+        while true {
+            let transcribeCount = await recognizer.transcribeCount
+            let isAwaitingRelease = await recognizer.isAwaitingRelease
+            if transcribeCount > 0 && isAwaitingRelease { break }
+            await Task.yield()
+        }
+
+        engine.cancelTranscription()
+        await recognizer.release()
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+        while await recognizer.cancelCount == 0 { await Task.yield() }
         #expect(!engine.isTranscribing)
     }
 
