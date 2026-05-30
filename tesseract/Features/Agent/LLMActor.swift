@@ -100,7 +100,7 @@ nonisolated enum HTTPLeafStoreMode: String, Sendable {
 
 /// Actor-isolated wrapper that owns the LLM model and runs inference off the MainActor.
 ///
-/// Follows the same pattern as `WhisperActor` in `TranscriptionEngine`:
+/// Follows the same pattern as `WhisperKitSpeechRecognizer` below `TranscriptionEngine`:
 /// the `@MainActor` ``AgentEngine`` publishes UI state while delegating
 /// heavy model operations to this actor.
 actor LLMActor {

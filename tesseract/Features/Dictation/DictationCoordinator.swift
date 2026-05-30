@@ -28,6 +28,19 @@ final class DictationCoordinator {
     private var recordingTask: Task<Void, Never>?
     private var recordingStartTime: Date?
 
+    /// The in-flight transcribe→inject processing task. Tracked so `cancel()` can
+    /// cancel it: the success path's `await textInjector.inject(...)` is itself the
+    /// side effect, and is cancellation-aware (the real injector aborts before the
+    /// paste). The post-await token guard alone can't stop an injection already
+    /// suspended in flight — cancelling the task does.
+    private var processingTask: Task<Void, Never>?
+
+    /// Monotonic token identifying the current dictation operation (a record →
+    /// process attempt). Bumped when a new operation begins so a background
+    /// transcription task that finishes *after* a cancel-and-restart recognizes
+    /// it is stale and leaves the newer operation's state untouched.
+    private var currentOperationID = 0
+
     init(
         audioCapture: any AudioCapturing,
         transcriptionEngine: any Transcribing,
@@ -75,6 +88,18 @@ final class DictationCoordinator {
         recordingTask?.cancel()
         recordingTask = nil
 
+        // Invalidate any in-flight processing so a transcription that completes
+        // (or races cancellation to *success*) after this point is recognized as
+        // stale and commits nothing — no history, no injection, no state change.
+        currentOperationID += 1
+
+        // Cancel the processing task itself so a cancellation-aware side effect
+        // suspended mid-flight (text injection) aborts rather than completing
+        // after the user has cancelled. The token guard handles the complementary
+        // case where the recognizer ignores cancellation and returns success.
+        processingTask?.cancel()
+        processingTask = nil
+
         if audioCapture.isCapturing {
             _ = audioCapture.stopCapture()
         }
@@ -87,6 +112,7 @@ final class DictationCoordinator {
 
     private func startRecording() {
         lastError = nil
+        currentOperationID += 1
 
         do {
             try audioCapture.startCapture()
@@ -133,11 +159,17 @@ final class DictationCoordinator {
 
     private func processAudio(_ audioData: AudioData) {
         state = .processing
+        let operationID = currentOperationID
 
-        Task {
+        processingTask = Task {
             do {
                 // Transcribe with selected language
                 let result = try await transcriptionEngine.transcribe(audioData, language: settings.language)
+
+                // Stale-task guard: a cancel-and-restart since this operation
+                // began means a newer operation owns the coordinator state — drop
+                // this result instead of clobbering it (or injecting stale text).
+                guard operationID == currentOperationID else { return }
 
                 // Post-process
                 let processedText = postProcessor.process(result.text)
@@ -160,6 +192,11 @@ final class DictationCoordinator {
                 if settings.autoInsertText {
                     textInjector.restoreClipboard = settings.restoreClipboard
                     try await textInjector.inject(processedText + " ")
+
+                    // Injection suspends; a cancel-and-restart during it means a
+                    // newer operation owns the state — don't play success or
+                    // overwrite it.
+                    guard operationID == currentOperationID else { return }
                 }
 
                 if settings.playSounds {
@@ -168,9 +205,17 @@ final class DictationCoordinator {
 
                 state = .idle
 
+            } catch is CancellationError {
+                // Cancelled (e.g. `cancel()` while processing) — not a failure.
+                // Only return to idle if this is still the current operation; a
+                // newer recording must not be clobbered by this stale task.
+                guard operationID == currentOperationID else { return }
+                state = .idle
             } catch let error as DictationError {
+                guard operationID == currentOperationID else { return }
                 handleError(error)
             } catch {
+                guard operationID == currentOperationID else { return }
                 handleError(.transcriptionFailed(error.localizedDescription))
             }
         }
