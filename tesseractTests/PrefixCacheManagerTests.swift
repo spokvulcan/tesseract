@@ -899,11 +899,11 @@ struct PrefixCacheManagerTests {
 
     // MARK: - Leaf Snapshot Admission validation
 
-    @Test func leafSnapshotAdmissionRejectsMismatchedOffset() {
+    @Test func leafSnapshotAdmissionRejectsMismatchedOffsetAndAdmitsValidPath() throws {
         let tokens = Array(1...100)
         let snap = makeSnapshot(offset: 50, type: .leaf)
 
-        let admission = SnapshotAdmission.leaf(
+        let invalidAdmission = SnapshotAdmission.leaf(
             storedTokens: tokens,
             snapshot: snap,
             storage: .ramOnly,
@@ -911,22 +911,18 @@ struct PrefixCacheManagerTests {
             requestID: nil
         )
 
-        #expect(admission == nil)
-    }
-
-    @Test func leafSnapshotAdmissionAdmitsAtValidatedOffset() throws {
+        #expect(invalidAdmission == nil)
         let mgr = makeManager()
-        let tokens = Array(1...100)
-        let snap = makeSnapshot(offset: tokens.count, type: .leaf)
-        let admission = try #require(SnapshotAdmission.leaf(
+        let validSnap = makeSnapshot(offset: tokens.count, type: .leaf)
+        let validAdmission = try #require(SnapshotAdmission.leaf(
             storedTokens: tokens,
-            snapshot: snap,
+            snapshot: validSnap,
             storage: .ramOnly,
             partitionKey: defaultKey,
             requestID: nil
         ))
 
-        mgr.admit(admission)
+        mgr.admit(validAdmission)
 
         let exact = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         #expect(exact.snapshotTokenOffset == tokens.count)
