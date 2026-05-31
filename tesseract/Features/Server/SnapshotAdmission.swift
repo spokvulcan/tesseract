@@ -35,11 +35,24 @@ nonisolated struct SnapshotAdmissionPath: Equatable, Sendable {
         guard offset > 0, offset <= fullPromptTokenCount else { return nil }
         return SnapshotAdmissionPath(offset: offset)
     }
+
+    nonisolated static func validatingLeaf(
+        offset: Int,
+        storedTokenCount: Int
+    ) -> SnapshotAdmissionPath? {
+        guard offset == storedTokenCount else { return nil }
+        return SnapshotAdmissionPath(offset: offset)
+    }
 }
 
 /// Already-valid write-side admission into Prefix Cache. Carries the shared
 /// prompt token sequence once plus per-entry validated paths and storage intent.
 nonisolated struct SnapshotAdmission: Sendable {
+    enum Kind: Equatable, Sendable {
+        case checkpoints
+        case leaf
+    }
+
     enum Storage: Sendable {
         case ramOnly
         case ramAndSSD(SnapshotPayload)
@@ -63,6 +76,7 @@ nonisolated struct SnapshotAdmission: Sendable {
 
     let fullPromptTokens: [Int]
     let entries: NonEmpty<Entry>
+    let kind: Kind
     let partitionKey: CachePartitionKey
     let requestID: UUID?
 
@@ -78,11 +92,13 @@ nonisolated struct SnapshotAdmission: Sendable {
     private init(
         fullPromptTokens: [Int],
         entries: NonEmpty<Entry>,
+        kind: Kind,
         partitionKey: CachePartitionKey,
         requestID: UUID?
     ) {
         self.fullPromptTokens = fullPromptTokens
         self.entries = entries
+        self.kind = kind
         self.partitionKey = partitionKey
         self.requestID = requestID
     }
@@ -112,6 +128,33 @@ nonisolated struct SnapshotAdmission: Sendable {
         return SnapshotAdmission(
             fullPromptTokens: fullPromptTokens,
             entries: NonEmpty(first: first, rest: Array(entries.dropFirst())),
+            kind: .checkpoints,
+            partitionKey: partitionKey,
+            requestID: requestID
+        )
+    }
+
+    nonisolated static func leaf(
+        storedTokens: [Int],
+        snapshot: HybridCacheSnapshot,
+        storage: Storage,
+        partitionKey: CachePartitionKey,
+        requestID: UUID?
+    ) -> SnapshotAdmission? {
+        guard let path = SnapshotAdmissionPath.validatingLeaf(
+            offset: snapshot.tokenOffset,
+            storedTokenCount: storedTokens.count
+        ) else { return nil }
+
+        let entry = Entry(
+            path: path,
+            snapshot: snapshot,
+            storage: storage
+        )
+        return SnapshotAdmission(
+            fullPromptTokens: storedTokens,
+            entries: NonEmpty(first: entry),
+            kind: .leaf,
             partitionKey: partitionKey,
             requestID: requestID
         )

@@ -90,6 +90,21 @@ struct PrefixCacheManagerTests {
         )
     }
 
+    @Test func snapshotAdmissionPathValidatesLeafStoredTokenCount() {
+        let path = SnapshotAdmissionPath.validatingLeaf(
+            offset: 5,
+            storedTokenCount: 5
+        )
+
+        #expect(path?.offset == 5)
+        #expect(
+            SnapshotAdmissionPath.validatingLeaf(
+                offset: 4,
+                storedTokenCount: 5
+            ) == nil
+        )
+    }
+
     @Test func checkpointSnapshotAdmissionFiltersInvalidPathsAndKeepsMixedStorage() throws {
         let fullPromptTokens = [10, 20, 30, 40]
         let requestID = UUID()
@@ -149,6 +164,63 @@ struct PrefixCacheManagerTests {
             partitionKey: defaultKey,
             requestID: requestID
         ) == nil)
+    }
+
+    @Test func admitLeafSnapshotAdmissionStoresRAMEntryThroughUnifiedInterface() throws {
+        let manager = makeManager()
+        let storedTokens = Array(1...5)
+        let snapshot = makeSnapshot(offset: storedTokens.count, type: .leaf)
+        let admission = try #require(SnapshotAdmission.leaf(
+            storedTokens: storedTokens,
+            snapshot: snapshot,
+            storage: .ramOnly,
+            partitionKey: defaultKey,
+            requestID: UUID()
+        ))
+
+        let diagnostics = manager.admit(admission)
+
+        #expect(diagnostics.evictions.isEmpty)
+        #expect(diagnostics.supersededLeaves.isEmpty)
+        #expect(diagnostics.stats.snapshotCount == 1)
+        let lookup = manager.lookup(tokens: storedTokens, partitionKey: defaultKey)
+        #expect(lookup.snapshotTokenOffset == storedTokens.count)
+        #expect(SnapshotAdmission.leaf(
+            storedTokens: storedTokens,
+            snapshot: makeSnapshot(offset: storedTokens.count - 1, type: .leaf),
+            storage: .ramOnly,
+            partitionKey: defaultKey,
+            requestID: UUID()
+        ) == nil)
+    }
+
+    @Test func admitLeafSnapshotAdmissionSupersedesAncestorLeafThroughUnifiedInterface() throws {
+        let manager = makeManager()
+        let ancestorTokens = Array(1...5)
+        let descendantTokens = Array(1...8)
+        let ancestor = try #require(SnapshotAdmission.leaf(
+            storedTokens: ancestorTokens,
+            snapshot: makeSnapshot(offset: ancestorTokens.count, type: .leaf),
+            storage: .ramOnly,
+            partitionKey: defaultKey,
+            requestID: nil
+        ))
+        let descendant = try #require(SnapshotAdmission.leaf(
+            storedTokens: descendantTokens,
+            snapshot: makeSnapshot(offset: descendantTokens.count, type: .leaf),
+            storage: .ramOnly,
+            partitionKey: defaultKey,
+            requestID: nil
+        ))
+
+        manager.admit(ancestor)
+        let diagnostics = manager.admit(descendant)
+
+        #expect(diagnostics.supersededLeaves.count == 1)
+        #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
+        #expect(diagnostics.stats.snapshotCount == 1)
+        #expect(manager.lookup(tokens: descendantTokens, partitionKey: defaultKey).snapshotTokenOffset == descendantTokens.count)
+        #expect(manager.lookup(tokens: ancestorTokens, partitionKey: defaultKey).snapshotTokenOffset == 0)
     }
 
     @Test func admitCheckpointSnapshotAdmissionStoresRAMEntriesThroughUnifiedInterface() throws {
@@ -2084,6 +2156,31 @@ struct PrefixCacheManagerTests {
                     storage: .ramAndSSD(payload)
                 )
             ],
+            partitionKey: key,
+            requestID: UUID()
+        ))
+
+        let diagnostics = mgr.admit(admission)
+        await tieredStore.ssdStoreForTesting!.flushAsync()
+
+        #expect(diagnostics.evictions.isEmpty)
+        #expect(diagnostics.supersededLeaves.isEmpty)
+        #expect(diagnostics.stats.snapshotCount == 1)
+        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
+    }
+
+    @Test func admitLeafSnapshotAdmissionStoresSSDEntryThroughUnifiedInterface() async throws {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let key = makeSSDKey()
+        let storedTokens = Array(1...10)
+        let snapshot = makeUniformSnapshot(offset: storedTokens.count, type: .leaf)
+        let payload = makeSSDPayload(bytes: 256, checkpointType: .leaf)
+        let admission = try #require(SnapshotAdmission.leaf(
+            storedTokens: storedTokens,
+            snapshot: snapshot,
+            storage: .ramAndSSD(payload),
             partitionKey: key,
             requestID: UUID()
         ))

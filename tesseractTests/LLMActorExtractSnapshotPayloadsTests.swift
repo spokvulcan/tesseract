@@ -325,8 +325,8 @@ struct LLMActorExtractSnapshotPayloadsTests {
     // The leaf LLMActor call sites cannot be exercised by unit tests
     // without a loaded MLX model — the full wiring is gated behind
     // `container.perform` on a real `ModelContainer`. These source
-    // checks pin the leaf payload wiring and the synchronous cache
-    // admission invariant.
+    // checks pin the leaf Snapshot Admission wiring and the synchronous
+    // cache admission invariant.
     // Mirrors the `threadAffinityContractDocCommentIsPinned` pattern
     // at `HybridCacheSnapshotTests.swift:539`.
 
@@ -344,26 +344,27 @@ struct LLMActorExtractSnapshotPayloadsTests {
     }
 
     @Test
-    func unstrippedLeafCallSiteForwardsLeafPayloadToStoreLeaf() throws {
-        // The unstripped leaf `storeLeaf(...)` call must pass
-        // `leafPayload: leafPayload`, where `leafPayload` is the
-        // locally-bound optional produced alongside the leaf capture
-        // inside the `container.perform(nonSendable: finalCache)`
-        // block. Regression guard against accidentally dropping the
-        // arg or inlining `nil`.
+    func unstrippedLeafCallSiteBuildsLeafAdmissionBeforeAdmit() throws {
+        // The unstripped leaf path must pair the locally extracted
+        // payload with its snapshot in `SnapshotAdmission.leaf(...)`
+        // before the MainActor cache hop.
         let source = try readLLMActorSource()
         #expect(
-            source.contains("leafPayload: leafPayload"),
-            "Unstripped leaf storeLeaf call must forward the locally-bound leafPayload"
+            source.contains("let leafAdmission = SnapshotAdmission.leaf("),
+            "Unstripped leaf path must construct a leaf Snapshot Admission before cache mutation"
+        )
+        #expect(
+            source.contains("prefixCache.admit(leafAdmission)"),
+            "Unstripped leaf path must mutate the cache through admit"
         )
     }
 
     @Test
-    func structuredLeafHelperForwardsSharedLeafPayloadToStoreLeaf() throws {
+    func structuredLeafHelperBuildsSharedLeafAdmissionBeforeAdmit() throws {
         // The tool-loop direct leaf and canonical user leaf now share
         // one `captureStructuredLeafFromBoundary(...)` helper. That
-        // helper must still extract a local `leafPayload` and forward
-        // it into `prefixCache.storeLeaf(...)`; the older dedicated
+        // helper must still extract a local `leafPayload` and pair it
+        // with the leaf snapshot in one admission value; the older dedicated
         // `strippedLeafPayload` path no longer exists under the
         // single-leaf policy.
         let source = try readLLMActorSource()
@@ -372,19 +373,27 @@ struct LLMActorExtractSnapshotPayloadsTests {
             "Structured leaf helper must exist so direct-tool and canonical-user modes share one leaf admission path"
         )
         #expect(
-            source.contains("leafPayload: leafPayload"),
-            "Structured leaf helper storeLeaf call must forward the extracted leafPayload"
+            source.components(separatedBy: "let leafAdmission = SnapshotAdmission.leaf(").count - 1 == 2,
+            "Both production leaf paths must construct leaf Snapshot Admission values"
+        )
+        #expect(
+            source.components(separatedBy: "prefixCache.admit(leafAdmission)").count - 1 == 2,
+            "Both production leaf paths must mutate the cache through admit"
         )
         #expect(
             !source.contains("leafPayload: strippedLeafPayload"),
             "Single-leaf policy should not retain the removed strippedLeafPayload store path"
+        )
+        #expect(
+            !source.contains("prefixCache.storeLeaf("),
+            "Production leaf paths should not call the old storeLeaf compatibility wrapper"
         )
     }
 
     @Test
     func mainActorRunClosuresAroundPrefixCacheStoresAreNonSuspending() throws {
         // The three `MainActor.run` closures wrapping
-        // `prefixCache.admit` / `storeLeaf` must stay
+        // `prefixCache.admit` must stay
         // synchronous. `SSDSnapshotStore.tryEnqueue` is nonisolated
         // under an `NSLock`; an `await` inside the closure would
         // force the HTTP hot path to suspend mid-admission and break
@@ -392,7 +401,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
         let source = try readLLMActorSource()
         let bodies = extractMainActorRunBodies(
             source: source,
-            containing: ["prefixCache.admit", "prefixCache.storeLeaf"]
+            containing: ["prefixCache.admit"]
         )
         #expect(
             bodies.count == 3,

@@ -1122,7 +1122,7 @@ actor LLMActor {
                     //    guard above ensures no per-layer trimming is
                     //    needed before capture.
                     let ssdEnabled = mlxStart.ssdEnabled
-                    let (maybeLeaf, leafPayload): (HybridCacheSnapshot?, SnapshotPayload?) =
+                    let (maybeLeaf, maybeLeafAdmission): (HybridCacheSnapshot?, SnapshotAdmission?) =
                         try await container.perform(
                             nonSendable: finalCache
                         ) { _, cache in
@@ -1137,13 +1137,33 @@ actor LLMActor {
                                 [snap],
                                 ssdEnabled: ssdEnabled
                             ).first
-                            return (snap, payload)
+                            let storage: SnapshotAdmission.Storage =
+                                payload.map(SnapshotAdmission.Storage.ramAndSSD) ?? .ramOnly
+                            let leafAdmission = SnapshotAdmission.leaf(
+                                storedTokens: storedTokens,
+                                snapshot: snap,
+                                storage: storage,
+                                partitionKey: mlxStart.partitionKey,
+                                requestID: requestID
+                            )
+                            return (snap, leafAdmission)
                         }
                     guard let leafSnapshot = maybeLeaf else {
                         diagnosticsContext.logSkip(
                             stage: "leafCapture",
                             reason: "unsupported-cache-type",
                             extraFields: [("cacheOffsets", "\(cacheOffsets)")]
+                        )
+                        break leafBlock
+                    }
+                    guard let leafAdmission = maybeLeafAdmission else {
+                        diagnosticsContext.logSkip(
+                            stage: "leafAdmission",
+                            reason: "invalid-path",
+                            extraFields: [
+                                ("offset", "\(leafSnapshot.tokenOffset)"),
+                                ("storedLen", "\(storedTokens.count)"),
+                            ]
                         )
                         break leafBlock
                     }
@@ -1155,20 +1175,14 @@ actor LLMActor {
                         source: "leaf"
                     ))
 
-                    // Coalesce storeLeaf + stats read in one MainActor
+                    // Coalesce admit + stats read in one MainActor
                     // hop — saves one cross-actor switch on the success
                     // path (the request hot path). Includes the post-store
                     // budget/total snapshot so the admission diagnostic can
                     // be logged from this actor without another hop.
                     let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
                         await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
-                            let d = prefixCache.storeLeaf(
-                                storedTokens: storedTokens,
-                                leafSnapshot: leafSnapshot,
-                                leafPayload: leafPayload,
-                                partitionKey: mlxStart.partitionKey,
-                                requestID: requestID
-                            )
+                            let d = prefixCache.admit(leafAdmission)
                             return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
                         }
                     logEvictions(diagnostics.evictions)
@@ -2470,6 +2484,26 @@ actor LLMActor {
                     [leaf],
                     ssdEnabled: ssdEnabled
                 ).first
+                let storage: SnapshotAdmission.Storage =
+                    leafPayload.map(SnapshotAdmission.Storage.ramAndSSD) ?? .ramOnly
+                let leafAdmission = SnapshotAdmission.leaf(
+                    storedTokens: storedTokens,
+                    snapshot: leaf,
+                    storage: storage,
+                    partitionKey: partitionKey,
+                    requestID: requestID
+                )
+                guard let leafAdmission else {
+                    diagnosticsContext.logSkip(
+                        stage: admissionStage,
+                        reason: "invalid-path",
+                        extraFields: [
+                            ("offset", "\(leaf.tokenOffset)"),
+                            ("storedLen", "\(storedTokens.count)"),
+                        ]
+                    )
+                    return nil
+                }
 
                 diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
                     offset: leaf.tokenOffset,
@@ -2487,13 +2521,7 @@ actor LLMActor {
 
                 let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
                     await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
-                        let d = prefixCache.storeLeaf(
-                            storedTokens: storedTokens,
-                            leafSnapshot: leaf,
-                            leafPayload: leafPayload,
-                            partitionKey: partitionKey,
-                            requestID: requestID
-                        )
+                        let d = prefixCache.admit(leafAdmission)
                         return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
                     }
                 for event in diagnostics.evictions {

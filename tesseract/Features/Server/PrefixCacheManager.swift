@@ -452,7 +452,8 @@ final class PrefixCacheManager {
     ///   because it's the cross-conversation hot prefix that an entire
     ///   tree is built on.
     ///
-    /// Leaf checkpoint is NOT planned — captured post-generation via storeLeaf().
+        /// Leaf checkpoint is NOT planned; leaf Snapshot Admission is captured
+        /// post-generation by the extraction edge.
     /// Existing snapshots at the same offset are skipped.
     func planCheckpoints(
         tokens: [Int],
@@ -507,12 +508,20 @@ final class PrefixCacheManager {
     func admit(_ admission: SnapshotAdmission) -> StoreDiagnostics {
         let tree = store.getOrCreateTree(for: admission.partitionKey)
         tree.insertPath(tokens: admission.fullPromptTokens)
+        var supersededLeaves: [LeafSupersession] = []
 
         for index in 0..<admission.entries.count {
             let entry = admission.entries[index]
             let path = Array(admission.fullPromptTokens.prefix(entry.path.offset))
             let node = tree.insertPath(tokens: path)
             tree.storeSnapshot(entry.snapshot, on: node)
+
+            if admission.kind == .leaf {
+                supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
+                    for: node,
+                    in: tree
+                ))
+            }
 
             guard case .ramAndSSD(let payload) = entry.storage else {
                 continue
@@ -538,7 +547,7 @@ final class PrefixCacheManager {
         )
         return StoreDiagnostics(
             evictions: evictions,
-            supersededLeaves: [],
+            supersededLeaves: supersededLeaves,
             stats: stats
         )
     }
@@ -605,44 +614,19 @@ final class PrefixCacheManager {
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
     ) -> StoreDiagnostics {
-        guard leafSnapshot.tokenOffset == storedTokens.count else {
+        let storage: SnapshotAdmission.Storage =
+            leafPayload.map(SnapshotAdmission.Storage.ramAndSSD) ?? .ramOnly
+        guard let admission = SnapshotAdmission.leaf(
+            storedTokens: storedTokens,
+            snapshot: leafSnapshot,
+            storage: storage,
+            partitionKey: partitionKey,
+            requestID: requestID
+        ) else {
             return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
         }
 
-        let tree = store.getOrCreateTree(for: partitionKey)
-        let node = tree.insertPath(tokens: storedTokens)
-        tree.storeSnapshot(leafSnapshot, on: node)
-
-        let supersededLeaves = supersedeAncestorLeaves(
-            for: node,
-            in: tree
-        )
-
-        if let leafPayload {
-            registerSSDPartitionIfNeeded(for: partitionKey)
-            let descriptor = makePersistedDescriptor(
-                partitionKey: partitionKey,
-                pathFromRoot: storedTokens,
-                snapshot: leafSnapshot,
-                payloadBytes: leafPayload.totalBytes
-            )
-            store.admitSnapshot(
-                node: node,
-                tree: tree,
-                payload: leafPayload,
-                descriptor: descriptor
-            )
-        }
-
-        let evictions = evictToFitBudget(
-            requestID: requestID,
-            preferredPartitionKey: partitionKey
-        )
-        return StoreDiagnostics(
-            evictions: evictions,
-            supersededLeaves: supersededLeaves,
-            stats: stats
-        )
+        return admit(admission)
     }
 
     private func supersedeAncestorLeaves(
