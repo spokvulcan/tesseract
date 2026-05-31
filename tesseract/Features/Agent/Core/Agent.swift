@@ -253,7 +253,12 @@ final class Agent {
         runTask = Task { [weak self] in
             var ctx = snapshot
             let result = await body(&ctx, token)
-            self?.finishRun(result)
+            // `body` is @Sendable and runs off-MainActor, so this continuation
+            // resumes off-MainActor too. `finishRun` is @MainActor (it mutates
+            // observable `state`), so hop back explicitly — matching the
+            // `forceCompact` / steering-queue closures below. Calling it
+            // directly here traps under Swift's dynamic isolation check.
+            await MainActor.run { self?.finishRun(result) }
         }
     }
 
