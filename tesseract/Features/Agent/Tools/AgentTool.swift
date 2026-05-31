@@ -134,7 +134,7 @@ nonisolated enum ToolArgumentNormalizer: Sendable {
 
 extension ToolCallInfo {
     /// Parses `argumentsJSON` into normalized `[String: JSONValue]`. Returns `[:]` on failure.
-    var parsedArguments: [String: JSONValue] {
+    nonisolated var parsedArguments: [String: JSONValue] {
         guard !argumentsJSON.isEmpty,
               let parsed = ToolArgumentNormalizer.decode(argumentsJSON) else { return [:] }
         return parsed
@@ -142,7 +142,7 @@ extension ToolCallInfo {
 }
 
 extension [String: JSONValue] {
-    func string(for key: String) -> String? {
+    nonisolated func string(for key: String) -> String? {
         guard let value = self[key] else { return nil }
         switch ToolArgumentNormalizer.normalize(value) {
         case .string(let s): return s

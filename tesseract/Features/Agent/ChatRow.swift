@@ -2,7 +2,10 @@ import Foundation
 
 /// Flat, pre-computed row model for the agent chat list.
 /// All strings are ready for display — no JSON, no Date formatting, no protocol conversion in the render path.
-struct ChatRow: Identifiable, Equatable, Sendable {
+///
+/// `nonisolated` value type: built by the `nonisolated` Chat Transcript
+/// projection and consumed by the MainActor coordinator and SwiftUI views alike.
+nonisolated struct ChatRow: Identifiable, Equatable, Sendable {
     let id: String
     let kind: Kind
 
@@ -37,26 +40,26 @@ struct ChatRow: Identifiable, Equatable, Sendable {
     }
 }
 
-struct UserRow: Equatable, Sendable {
+nonisolated struct UserRow: Equatable, Sendable {
     let content: String
     let images: [ImageAttachment]
     let timestamp: String
     let messageID: UUID
 }
 
-struct AssistantTextRow: Equatable, Sendable {
+nonisolated struct AssistantTextRow: Equatable, Sendable {
     let content: String
     let timestamp: String
     let messageID: UUID
     let hasStepsAbove: Bool
 }
 
-struct ThinkingRow: Equatable, Sendable {
+nonisolated struct ThinkingRow: Equatable, Sendable {
     let content: String
     let isLast: Bool
 }
 
-struct ToolCallRow: Equatable, Sendable {
+nonisolated struct ToolCallRow: Equatable, Sendable {
     let displayTitle: String
     let iconName: String
     let argumentsFormatted: String
@@ -74,22 +77,22 @@ struct ToolCallRow: Equatable, Sendable {
     }
 }
 
-struct ToolTextRow: Equatable, Sendable {
+nonisolated struct ToolTextRow: Equatable, Sendable {
     let content: String
     let isLast: Bool
 }
 
-struct SystemRow: Equatable, Sendable {
+nonisolated struct SystemRow: Equatable, Sendable {
     let content: String
 }
 
-struct TurnHeaderRow: Equatable, Sendable {
+nonisolated struct TurnHeaderRow: Equatable, Sendable {
     let stepCount: Int
     let isGenerating: Bool
     let turnID: UUID
     let isExpanded: Bool
 }
 
-struct StreamingTextRow: Equatable, Sendable {
+nonisolated struct StreamingTextRow: Equatable, Sendable {
     let content: String
 }

@@ -1,8 +1,10 @@
 import Foundation
 import MLXLMCommon
 
-/// Shared helpers for displaying tool calls across agent views.
-enum ToolDisplayHelpers {
+/// Shared helpers for rendering tool calls — pure value logic in the model layer
+/// (no SwiftUI), so the `nonisolated` Chat Transcript projection can call it
+/// without inverting layering up into `Views`.
+nonisolated enum ToolDisplayHelpers {
 
     /// Maps a tool name to an SF Symbol icon name.
     static func iconForTool(_ name: String) -> String {
@@ -60,10 +62,13 @@ enum ToolDisplayHelpers {
         }
     }
 
+    /// A single shared encoder, reused across tool-call rows instead of
+    /// allocating one per call on every rebuild / streaming tick. `JSONEncoder`
+    /// is `Sendable` with its configuration set once here, so sharing is safe.
     private static let argumentEncoder: JSONEncoder = {
-        let e = JSONEncoder()
-        e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return e
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
     }()
 
     /// Pretty-prints tool call arguments as JSON.
