@@ -265,16 +265,22 @@ final class AlphaTuner {
             // first (under the prompt path), then the leaf if any
             // (under the post-response path).
             if !record.midPrefillSnapshots.isEmpty {
-                let captures = record.midPrefillSnapshots.map { meta in
-                    Self.makeReplaySnapshot(
-                        tokenOffset: meta.offset, bytes: meta.bytes, type: meta.type
+                let candidates = record.midPrefillSnapshots.map { meta in
+                    SnapshotAdmission.CheckpointCandidate(
+                        snapshot: Self.makeReplaySnapshot(
+                            tokenOffset: meta.offset, bytes: meta.bytes, type: meta.type
+                        ),
+                        storage: .ramOnly
                     )
                 }
-                simCache.storeSnapshots(
-                    promptTokens: record.promptTokens,
-                    capturedSnapshots: captures,
-                    partitionKey: record.partitionKey
-                )
+                if let admission = SnapshotAdmission.checkpoints(
+                    fullPromptTokens: record.promptTokens,
+                    candidates: candidates,
+                    partitionKey: record.partitionKey,
+                    requestID: nil
+                ) {
+                    simCache.admit(admission)
+                }
             }
             if let leafStore = record.leafStore {
                 let leafSnap = Self.makeReplaySnapshot(
@@ -282,11 +288,15 @@ final class AlphaTuner {
                     bytes: leafStore.bytes,
                     type: .leaf
                 )
-                simCache.storeLeaf(
+                if let admission = SnapshotAdmission.leaf(
                     storedTokens: leafStore.storedTokens,
-                    leafSnapshot: leafSnap,
-                    partitionKey: record.partitionKey
-                )
+                    snapshot: leafSnap,
+                    storage: .ramOnly,
+                    partitionKey: record.partitionKey,
+                    requestID: nil
+                ) {
+                    simCache.admit(admission)
+                }
             }
         }
 

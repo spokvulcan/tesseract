@@ -452,7 +452,8 @@ final class PrefixCacheManager {
     ///   because it's the cross-conversation hot prefix that an entire
     ///   tree is built on.
     ///
-    /// Leaf checkpoint is NOT planned — captured post-generation via storeLeaf().
+    /// Leaf checkpoint is NOT planned; leaf Snapshot Admission is captured
+    /// post-generation by the extraction edge.
     /// Existing snapshots at the same offset are skipped.
     func planCheckpoints(
         tokens: [Int],
@@ -503,53 +504,45 @@ final class PrefixCacheManager {
 
     // MARK: - Store
 
-    /// Store mid-prefill snapshots captured during prepareWithCheckpoints().
-    ///
-    /// `snapshotPayloads` carries the pre-extracted CPU-owned bytes for
-    /// each entry in `capturedSnapshots`, positionally aligned (same
-    /// count, same order), produced by
-    /// `LLMActor.extractSnapshotPayloads(_:ssdEnabled:)` inside the
-    /// same `container.perform` scope that captured the snapshots.
-    /// An empty array (the default) signals SSD disabled and skips
-    /// the admission path; the radix-tree insertion always runs.
     @discardableResult
-    func storeSnapshots(
-        promptTokens: [Int],
-        capturedSnapshots: [HybridCacheSnapshot],
-        snapshotPayloads: [SnapshotPayload] = [],
-        partitionKey: CachePartitionKey,
-        requestID: UUID? = nil
-    ) -> StoreDiagnostics {
-        guard !capturedSnapshots.isEmpty else {
-            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
+    func admit(_ admission: SnapshotAdmission) -> StoreDiagnostics {
+        let tree = store.getOrCreateTree(for: admission.partitionKey)
+        var supersededLeaves: [LeafSupersession] = []
+        let hasSSDEntry = admission.entries.contains { entry in
+            if case .ramAndSSD = entry.storage { return true }
+            return false
+        }
+        if hasSSDEntry {
+            registerSSDPartitionIfNeeded(for: admission.partitionKey)
         }
 
-        let tree = store.getOrCreateTree(for: partitionKey)
-        tree.insertPath(tokens: promptTokens)
-
-        // SSD admission is dense + TriAttention: `PartitionMeta` (v5)
-        // carries the TriAttention identity, so warm-start reconstructs
-        // the partition's full `CachePartitionKey` and the on-disk
-        // digest stays unique. RAM admission above runs unconditionally.
-        let payloadsAligned =
-            snapshotPayloads.count == capturedSnapshots.count
-        if payloadsAligned {
-            registerSSDPartitionIfNeeded(for: partitionKey)
+        func path(for entry: SnapshotAdmission.Entry) -> [Int] {
+            guard entry.path.offset < admission.fullPromptTokens.count else {
+                return admission.fullPromptTokens
+            }
+            return Array(admission.fullPromptTokens.prefix(entry.path.offset))
         }
-        for (index, snapshot) in capturedSnapshots.enumerated() {
-            let offset = snapshot.tokenOffset
-            guard offset > 0, offset <= promptTokens.count else { continue }
-            let path = Array(promptTokens[0..<offset])
+
+        func storeRAMEntry(_ entry: SnapshotAdmission.Entry) -> (node: RadixTreeNode, path: [Int]) {
+            let path = path(for: entry)
             let node = tree.insertPath(tokens: path)
-            guard node.tokenOffset == offset else { continue }
-            tree.storeSnapshot(snapshot, on: node)
+            tree.storeSnapshot(entry.snapshot, on: node)
 
-            guard payloadsAligned else { continue }
-            let payload = snapshotPayloads[index]
+            return (node, path)
+        }
+
+        func admitSSDEntry(
+            _ entry: SnapshotAdmission.Entry,
+            node: RadixTreeNode,
+            path: [Int]
+        ) {
+            guard case .ramAndSSD(let payload) = entry.storage else {
+                return
+            }
             let descriptor = makePersistedDescriptor(
-                partitionKey: partitionKey,
+                partitionKey: admission.partitionKey,
                 pathFromRoot: path,
-                snapshot: snapshot,
+                snapshot: entry.snapshot,
                 payloadBytes: payload.totalBytes
             )
             store.admitSnapshot(
@@ -560,63 +553,26 @@ final class PrefixCacheManager {
             )
         }
 
-        let evictions = evictToFitBudget(
-            requestID: requestID,
-            preferredPartitionKey: partitionKey
-        )
-        return StoreDiagnostics(evictions: evictions, supersededLeaves: [], stats: stats)
-    }
-
-    /// Store the leaf snapshot under post-response tokens.
-    /// `storedTokens` = re-tokenized (prompt + generated response).
-    ///
-    /// `leafPayload` is the pre-extracted CPU-owned bytes matching
-    /// `leafSnapshot`, produced by
-    /// `LLMActor.extractSnapshotPayloads(_:ssdEnabled:)` inside a
-    /// `container.perform` scope. When non-nil, the pair is forwarded
-    /// to the tiered store's `admitSnapshot` for SSD write-through.
-    /// `nil` (the default) is the "SSD disabled" signal and leaves
-    /// the radix-tree insertion as the only side effect.
-    @discardableResult
-    func storeLeaf(
-        storedTokens: [Int],
-        leafSnapshot: HybridCacheSnapshot,
-        leafPayload: SnapshotPayload? = nil,
-        partitionKey: CachePartitionKey,
-        requestID: UUID? = nil
-    ) -> StoreDiagnostics {
-        guard leafSnapshot.tokenOffset == storedTokens.count else {
-            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
-        }
-
-        let tree = store.getOrCreateTree(for: partitionKey)
-        let node = tree.insertPath(tokens: storedTokens)
-        tree.storeSnapshot(leafSnapshot, on: node)
-
-        let supersededLeaves = supersedeAncestorLeaves(
-            for: node,
-            in: tree
-        )
-
-        if let leafPayload {
-            registerSSDPartitionIfNeeded(for: partitionKey)
-            let descriptor = makePersistedDescriptor(
-                partitionKey: partitionKey,
-                pathFromRoot: storedTokens,
-                snapshot: leafSnapshot,
-                payloadBytes: leafPayload.totalBytes
-            )
-            store.admitSnapshot(
-                node: node,
-                tree: tree,
-                payload: leafPayload,
-                descriptor: descriptor
-            )
+        switch admission.kind {
+        case .checkpoints:
+            tree.insertPath(tokens: admission.fullPromptTokens)
+            for entry in admission.entries {
+                let stored = storeRAMEntry(entry)
+                admitSSDEntry(entry, node: stored.node, path: stored.path)
+            }
+        case .leaf:
+            let entry = admission.entries.first
+            let stored = storeRAMEntry(entry)
+            supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
+                for: stored.node,
+                in: tree
+            ))
+            admitSSDEntry(entry, node: stored.node, path: stored.path)
         }
 
         let evictions = evictToFitBudget(
-            requestID: requestID,
-            preferredPartitionKey: partitionKey
+            requestID: admission.requestID,
+            preferredPartitionKey: admission.partitionKey
         )
         return StoreDiagnostics(
             evictions: evictions,
@@ -731,8 +687,8 @@ final class PrefixCacheManager {
     /// `await MainActor.run { ... }` alongside the `recordHit` bump.
     ///
     /// Budget reconciliation is deferred to the next natural
-    /// eviction call (every request path runs `storeSnapshots` +
-    /// `storeLeaf`, which both drain the budget). Running
+    /// eviction call (request write paths route through `admit`,
+    /// which drains the budget). Running
     /// `evictToFitBudget` inline here would add latency to the
     /// SSD-hit hot path without any benefit — the just-promoted
     /// node has `lastAccessTime = .now` and is the least likely

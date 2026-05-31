@@ -30,6 +30,67 @@ ref-bearing **Snapshot State** cases. Knows *what and where on disk*, never the
 write phase (that is the enum case).
 _Avoid_: SnapshotStorageRef, storage ref, descriptor.
 
+**Snapshot Admission**:
+The write-side decision to place already-captured KV-cache snapshots into the
+Prefix Cache. It pairs each `HybridCacheSnapshot` with the optional
+`SnapshotPayload` extracted inside the Metal-affine `ModelContainer.perform`
+scope, makes RAM-only versus RAM+SSD admission explicit, and carries the
+partition/token context needed by the cache. It is the unified write shape for both
+mid-prefill checkpoints and leaf snapshots; leaf supersession is a cache-manager
+effect of applying a leaf admission, not a separate caller-facing write path. The
+cache manager still owns radix-tree insertion, **Snapshot Ref** creation, SSD
+partition registration, eviction, and leaf supersession; **Snapshot Admission**
+owns the caller-facing shape so positional payload alignment and "empty array means
+SSD disabled" do not leak to call sites. Invalid write shapes should be
+unrepresentable: a caller should not be able to express "payload missing for this
+SSD admission", "payload count differs from snapshot count", or "leaf tokens do not
+match the leaf snapshot offset" and rely on the cache manager to recover after
+partial mutation. Public Snapshot Admission construction should be total once the
+caller has valid inputs; the only throwing/failable factory belongs at the MLX
+extraction edge where `SnapshotPayload` bytes are produced inside
+`ModelContainer.perform`; that factory also performs **Snapshot Admission Path**
+validation and absorbs unsupported-cache `nil` capture results. The cache manager
+should receive already-valid admissions, not validate caller mistakes. The cache-facing
+interface is one synchronous `admit` operation returning store diagnostics over
+**Snapshot Admission**; checkpoint versus leaf behaviour is encoded in the admission
+value and handled inside the cache manager, where leaf supersession already belongs.
+For mid-prefill checkpoints, build the admission at this extraction edge during
+prefill and carry it as one optional value on the generation handle until the
+post-stream `admit`; do not carry parallel snapshots/payloads or reconstruct the
+admission late. Sandbox replay writers such as **Alpha Tuner** should also use
+RAM-only **Snapshot Admission** rather than keeping old write entry points, while
+their scoring behaviour remains out of scope.
+The request ID used for diagnostics and eviction correlation is part of the admission
+value, not a side-channel argument to `admit`. Token-path and offset validation belong
+in a small **Snapshot Admission Path** value so "this snapshot can be stored at this
+token path" has a name and a focused test surface. RAM-only versus RAM+SSD is encoded
+per admitted snapshot, not as an admission-wide mode; mid-prefill admission may mix
+storage cases if needed, and leaf admission remains the same single-entry shape. To
+preserve current edge behavior, the single extraction-edge factory validates checkpoint
+entries, drops invalid entries internally, builds from the surviving non-empty set, and
+returns no admission when none survive; an invalid leaf path produces no leaf admission
+at all. Snapshot Admission values cross from the
+model execution scope to the MainActor cache manager, so they must be `Sendable` and
+nonisolated under the app's default MainActor isolation.
+_Avoid_: capturedPayloads plumbing, payload alignment, storeSnapshots payloads,
+empty payload array, SSD write call-site wiring.
+
+**Snapshot Admission Path**:
+The token path carried by a **Snapshot Admission**, validated against the
+snapshot offset before cache mutation begins. For mid-prefill checkpoints it names
+one shared full prompt token sequence plus per-checkpoint validated prefix views; for
+leaf snapshots it names the full stored token sequence and proves the leaf snapshot
+offset equals the token count. Checkpoint admission should not duplicate token
+arrays per entry: store full prompt tokens once, then give each admitted checkpoint
+its own **Snapshot Admission Path** into that shared sequence. It exists to keep
+offset checks out of cache-manager mutation code and out of call sites. Empty
+checkpoint admissions are not representable; callers skip `admit` when no snapshots
+were captured. Prefer a small non-empty collection value for checkpoint entries if
+the Swift ergonomics stay simple; otherwise a precondition at the public constructor
+is acceptable, but the cache manager should never receive an empty checkpoint
+admission.
+_Avoid_: promptTokens, storedTokens, path prefix slicing, offset guard.
+
 **State Effect**:
 The topology-only outcome a **Snapshot State** transition reports to its caller:
 `settled`, `becameEmpty`, or `ignored(reason)`. `becameEmpty` carries **no payload**

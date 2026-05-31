@@ -2,11 +2,10 @@
 //  LLMActorExtractSnapshotPayloadsTests.swift
 //  tesseractTests
 //
-//  Unit tests for `LLMActor.extractSnapshotPayloads` — the helper that
-//  converts a set of live Metal-resident `HybridCacheSnapshot`
-//  instances into pure `Sendable` `SnapshotPayload` value types via
-//  `MLXArray.asData()`. Also covers the downstream plumbing contract
-//  on `PrefixCacheManager.storeSnapshots` / `storeLeaf`.
+//  Unit tests for the LLMActor snapshot extraction edge: attaching
+//  RAM-only or SSD-backed storage to Snapshot Admission entries while
+//  converting live Metal-resident `HybridCacheSnapshot` instances into
+//  pure `Sendable` `SnapshotPayload` values via `MLXArray.asData()`.
 //
 //  The helper itself is `nonisolated static` and operates on pure
 //  fixture snapshots, so none of these tests require a loaded MLX
@@ -66,38 +65,110 @@ struct LLMActorExtractSnapshotPayloadsTests {
         )!
     }
 
+    private func checkpointCandidates(
+        for snapshots: [HybridCacheSnapshot],
+        ssdEnabled: Bool = true
+    ) -> [SnapshotAdmission.CheckpointCandidate] {
+        LLMActor.extractCheckpointAdmissionCandidates(
+            snapshots,
+            ssdEnabled: ssdEnabled
+        )
+    }
+
+    private func checkpointPayload(
+        for snapshot: HybridCacheSnapshot
+    ) throws -> SnapshotPayload {
+        let payloads = checkpointPayloads(for: [snapshot])
+        try #require(payloads.count == 1)
+        return payloads[0]
+    }
+
+    private func checkpointPayloads(
+        for snapshots: [HybridCacheSnapshot],
+        ssdEnabled: Bool = true
+    ) -> [SnapshotPayload] {
+        checkpointCandidates(
+            for: snapshots,
+            ssdEnabled: ssdEnabled
+        ).compactMap { candidate in
+            if case .ramAndSSD(let payload) = candidate.storage {
+                return payload
+            }
+            return nil
+        }
+    }
+
+    private func expectRAMOnly(
+        _ candidates: [SnapshotAdmission.CheckpointCandidate]
+    ) {
+        for candidate in candidates {
+            if case .ramOnly = candidate.storage {
+                // expected
+            } else {
+                #expect(Bool(false), "Expected candidate to be RAM-only")
+            }
+        }
+    }
+
     // MARK: - SSD gate
 
     @Test
-    func returnsEmptyWhenSSDDisabled() {
+    func candidatesAreRAMOnlyWhenSSDDisabled() {
         let snapshot = makeSimpleKVSnapshot()
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: false
-        )
-        #expect(payloads.isEmpty)
+        let candidates = checkpointCandidates(for: [snapshot], ssdEnabled: false)
+
+        #expect(candidates.count == 1)
+        #expect(candidates.first?.snapshot.tokenOffset == snapshot.tokenOffset)
+        expectRAMOnly(candidates)
     }
 
     @Test
-    func returnsEmptyWhenSSDDisabledForMultipleSnapshots() {
-        // The gate must short-circuit regardless of input size — a
-        // non-empty input array with SSD disabled still yields [].
+    func candidatesAreRAMOnlyWhenSSDDisabledForMultipleSnapshots() {
+        // The gate must preserve every snapshot while marking each
+        // candidate RAM-only. SSD-disabled is no longer represented as
+        // an empty payload array.
         let snapshots = [
             makeSimpleKVSnapshot(tokenOffset: 5),
             makeSimpleKVSnapshot(tokenOffset: 9),
             makeMixedSnapshot(tokenOffset: 40),
         ]
-        let payloads = LLMActor.extractSnapshotPayloads(
-            snapshots, ssdEnabled: false
-        )
-        #expect(payloads.isEmpty)
+        let candidates = checkpointCandidates(for: snapshots, ssdEnabled: false)
+
+        #expect(candidates.map(\.snapshot.tokenOffset) == snapshots.map(\.tokenOffset))
+        expectRAMOnly(candidates)
     }
 
     @Test
-    func returnsEmptyForEmptyInputEvenWhenEnabled() {
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [], ssdEnabled: true
-        )
-        #expect(payloads.isEmpty)
+    func returnsNoCandidatesForEmptyInputEvenWhenEnabled() {
+        let candidates = checkpointCandidates(for: [], ssdEnabled: true)
+
+        #expect(candidates.isEmpty)
+    }
+
+    @Test
+    func checkpointCandidatesCarryPerEntryStorageAtExtractionEdge() throws {
+        let snapshots = [
+            makeSimpleKVSnapshot(tokenOffset: 5),
+            makeSimpleKVSnapshot(tokenOffset: 9, type: .branchPoint),
+        ]
+
+        let ssdCandidates = checkpointCandidates(for: snapshots)
+
+        #expect(ssdCandidates.count == snapshots.count)
+        for index in snapshots.indices {
+            #expect(ssdCandidates[index].snapshot.tokenOffset == snapshots[index].tokenOffset)
+            if case .ramAndSSD(let payload) = ssdCandidates[index].storage {
+                #expect(payload.tokenOffset == snapshots[index].tokenOffset)
+                #expect(payload.checkpointType == snapshots[index].checkpointType)
+            } else {
+                #expect(Bool(false), "Expected SSD-enabled candidate to carry its payload")
+            }
+        }
+
+        let ramOnlyCandidates = checkpointCandidates(for: snapshots, ssdEnabled: false)
+
+        #expect(ramOnlyCandidates.count == snapshots.count)
+        expectRAMOnly(ramOnlyCandidates)
     }
 
     // MARK: - Structural equivalence
@@ -105,11 +176,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @Test
     func preservesTokenOffsetAndCheckpointType() throws {
         let snapshot = makeSimpleKVSnapshot(tokenOffset: 17, type: .branchPoint)
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
-        try #require(payloads.count == 1)
-        let payload = payloads[0]
+        let payload = try checkpointPayload(for: snapshot)
         #expect(payload.tokenOffset == 17)
         #expect(payload.checkpointType == .branchPoint)
     }
@@ -117,11 +184,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @Test
     func preservesPerLayerMetadata() throws {
         let snapshot = makeMixedSnapshot(tokenOffset: 64)
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
-        try #require(payloads.count == 1)
-        let payload = payloads[0]
+        let payload = try checkpointPayload(for: snapshot)
 
         #expect(payload.layers.count == snapshot.layers.count)
         for (layerIdx, layer) in payload.layers.enumerated() {
@@ -140,9 +203,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
             makeSimpleKVSnapshot(tokenOffset: 9),
             makeSimpleKVSnapshot(tokenOffset: 13),
         ]
-        let payloads = LLMActor.extractSnapshotPayloads(
-            snapshots, ssdEnabled: true
-        )
+        let payloads = checkpointPayloads(for: snapshots)
         try #require(payloads.count == snapshots.count)
         for (i, payload) in payloads.enumerated() {
             #expect(payload.tokenOffset == snapshots[i].tokenOffset)
@@ -155,11 +216,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @Test
     func byteRoundTripMatchesSourceArrays() throws {
         let snapshot = makeSimpleKVSnapshot()
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
-        try #require(payloads.count == 1)
-        let payload = payloads[0]
+        let payload = try checkpointPayload(for: snapshot)
 
         // The per-layer state arrays must serialize to the same bytes
         // as the snapshot's own MLX-resident deep copies. This is the
@@ -214,11 +271,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @Test
     func totalBytesMatchesSumOfArrayNbytes() throws {
         let snapshot = makeMixedSnapshot()
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
-        try #require(payloads.count == 1)
-        let payload = payloads[0]
+        let payload = try checkpointPayload(for: snapshot)
 
         // `SnapshotPayload.totalBytes` is the SSD front-door's byte
         // accounting. For arrays materialized via `asData(access: .copy)`
@@ -231,67 +284,44 @@ struct LLMActorExtractSnapshotPayloadsTests {
         #expect(payload.totalBytes == expected)
     }
 
-    // MARK: - PrefixCacheManager signature plumbing
+    // MARK: - PrefixCacheManager admission plumbing
 
     @MainActor
     @Test
-    func storeSnapshotsAcceptsNewPayloadsParameter() {
-        // Accepting the new `snapshotPayloads` arg must not break the
-        // RAM-only behavior — the manager still stores the snapshot,
-        // returns `StoreDiagnostics`, and applies eviction pressure.
+    func admitAcceptsSnapshotAdmissionPayloads() throws {
+        // Snapshot Admission must carry extracted payloads into the
+        // cache manager without breaking RAM insertion or diagnostics.
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 16 * 1024 * 1024
         )
         let snapshot = makeSimpleKVSnapshot(tokenOffset: 4)
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
+        let payload = try checkpointPayload(for: snapshot)
         let partitionKey = CachePartitionKey(
             modelID: "test-model", kvBits: nil, kvGroupSize: 64
         )
-        let diagnostics = manager.storeSnapshots(
-            promptTokens: [1, 2, 3, 4],
-            capturedSnapshots: [snapshot],
-            snapshotPayloads: payloads,
+        let admission = try #require(SnapshotAdmission.checkpoints(
+            fullPromptTokens: [1, 2, 3, 4],
+            candidates: [
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: snapshot,
+                    storage: .ramAndSSD(payload)
+                )
+            ],
             partitionKey: partitionKey,
             requestID: UUID()
-        )
+        ))
+        let diagnostics = manager.admit(admission)
+
         #expect(diagnostics.evictions.isEmpty)
         #expect(manager.stats.snapshotCount == 1)
     }
 
     @MainActor
     @Test
-    func storeLeafAcceptsNewPayloadParameter() {
-        let manager = PrefixCacheManager(
-            memoryBudgetBytes: 16 * 1024 * 1024
-        )
-        let snapshot = makeSimpleKVSnapshot(tokenOffset: 6)
-        let payload = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        ).first
-        let partitionKey = CachePartitionKey(
-            modelID: "test-model", kvBits: nil, kvGroupSize: 64
-        )
-        let diagnostics = manager.storeLeaf(
-            storedTokens: [10, 20, 30, 40, 50, 60],
-            leafSnapshot: snapshot,
-            leafPayload: payload,
-            partitionKey: partitionKey,
-            requestID: UUID()
-        )
-        #expect(diagnostics.evictions.isEmpty)
-        #expect(manager.stats.snapshotCount == 1)
-    }
-
-    @MainActor
-    @Test
-    func storeSnapshotsToleratesEmptyPayloadsForRAMOnlyPath() {
+    func snapshotAdmissionSupportsRAMOnlyCheckpointEntries() throws {
         // When `ssdConfig?.enabled` is off, the LLMActor helper returns
-        // `[]` for `snapshotPayloads`. The manager must accept that
-        // zero-length array without mis-attributing it as a "no
-        // snapshots to store" signal — the snapshots still need to
-        // land in the radix tree.
+        // `[]` for payload extraction. The extraction edge represents
+        // that as a RAM-only admission entry, not as "no snapshots".
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 16 * 1024 * 1024
         )
@@ -299,26 +329,30 @@ struct LLMActorExtractSnapshotPayloadsTests {
         let partitionKey = CachePartitionKey(
             modelID: "test-model", kvBits: nil, kvGroupSize: 64
         )
-        let diagnostics = manager.storeSnapshots(
-            promptTokens: [7, 8, 9, 10, 11],
-            capturedSnapshots: [snapshot],
-            snapshotPayloads: [],
+        let admission = try #require(SnapshotAdmission.checkpoints(
+            fullPromptTokens: [7, 8, 9, 10, 11],
+            candidates: [
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: snapshot,
+                    storage: .ramOnly
+                )
+            ],
             partitionKey: partitionKey,
             requestID: UUID()
-        )
+        ))
+        let diagnostics = manager.admit(admission)
+
         #expect(diagnostics.evictions.isEmpty)
         #expect(manager.stats.snapshotCount == 1)
     }
 
     // MARK: - Call-site wiring regression coverage
     //
-    // The three asymmetric LLMActor call sites (mid-prefill,
-    // unstripped leaf, stripped leaf) cannot be exercised by unit
-    // tests without a loaded MLX model — the full wiring is gated
-    // behind `container.perform` on a real `ModelContainer`. These
-    // source-grep tests compensate by pinning the literal wiring
-    // strings, so a refactor that drops any of the four load-bearing
-    // lines fails here with a clear pointer at the missing site.
+    // The leaf LLMActor call sites cannot be exercised by unit tests
+    // without a loaded MLX model — the full wiring is gated behind
+    // `container.perform` on a real `ModelContainer`. These source
+    // checks pin shared structured leaf capture and the synchronous
+    // cache admission invariant.
     // Mirrors the `threadAffinityContractDocCommentIsPinned` pattern
     // at `HybridCacheSnapshotTests.swift:539`.
 
@@ -336,65 +370,11 @@ struct LLMActorExtractSnapshotPayloadsTests {
     }
 
     @Test
-    func makeHTTPPrefixCacheGenerationPopulatesCapturedPayloads() throws {
-        // `HTTPPrefixCacheGeneration` is constructed at the tail of
-        // `makeHTTPPrefixCacheGeneration` with `capturedPayloads:
-        // capturedPayloads` — where the local `capturedPayloads` was
-        // produced by `Self.extractSnapshotPayloads(capturedSnapshots,
-        // ssdEnabled: ssdEnabled)` inside the enclosing
-        // `container.perform`. Dropping either of those two lines
-        // would leave the field silently empty while the build and
-        // the helper's own unit tests still pass.
-        let source = try readLLMActorSource()
-
-        let extractCall = "Self.extractSnapshotPayloads(\n                capturedSnapshots,\n                ssdEnabled: ssdEnabled\n            )"
-        let structInit = "capturedPayloads: capturedPayloads,"
-
-        #expect(
-            source.contains(extractCall),
-            "makeHTTPPrefixCacheGeneration must call Self.extractSnapshotPayloads(capturedSnapshots, ssdEnabled:) inside its container.perform block"
-        )
-        #expect(
-            source.contains(structInit),
-            "HTTPPrefixCacheGeneration must be constructed with capturedPayloads: capturedPayloads"
-        )
-    }
-
-    @Test
-    func midPrefillCallSiteForwardsCapturedPayloadsToStoreSnapshots() throws {
-        // The `prefixCache.storeSnapshots(...)` call inside the post-
-        // generation MainActor hop must pass `snapshotPayloads:
-        // mlxStart.capturedPayloads`. A refactor that drops this arg
-        // falls back to the `= []` default and silently disables SSD
-        // persistence for every mid-prefill snapshot.
-        let source = try readLLMActorSource()
-        #expect(
-            source.contains("snapshotPayloads: mlxStart.capturedPayloads"),
-            "Mid-prefill storeSnapshots call must forward mlxStart.capturedPayloads"
-        )
-    }
-
-    @Test
-    func unstrippedLeafCallSiteForwardsLeafPayloadToStoreLeaf() throws {
-        // The unstripped leaf `storeLeaf(...)` call must pass
-        // `leafPayload: leafPayload`, where `leafPayload` is the
-        // locally-bound optional produced alongside the leaf capture
-        // inside the `container.perform(nonSendable: finalCache)`
-        // block. Regression guard against accidentally dropping the
-        // arg or inlining `nil`.
-        let source = try readLLMActorSource()
-        #expect(
-            source.contains("leafPayload: leafPayload"),
-            "Unstripped leaf storeLeaf call must forward the locally-bound leafPayload"
-        )
-    }
-
-    @Test
-    func structuredLeafHelperForwardsSharedLeafPayloadToStoreLeaf() throws {
+    func structuredLeafHelperKeepsLeafPayloadCaptureShared() throws {
         // The tool-loop direct leaf and canonical user leaf now share
         // one `captureStructuredLeafFromBoundary(...)` helper. That
-        // helper must still extract a local `leafPayload` and forward
-        // it into `prefixCache.storeLeaf(...)`; the older dedicated
+        // helper must still extract a local `leafPayload` and pair it
+        // with the leaf snapshot in one admission value; the older dedicated
         // `strippedLeafPayload` path no longer exists under the
         // single-leaf policy.
         let source = try readLLMActorSource()
@@ -403,8 +383,12 @@ struct LLMActorExtractSnapshotPayloadsTests {
             "Structured leaf helper must exist so direct-tool and canonical-user modes share one leaf admission path"
         )
         #expect(
-            source.contains("leafPayload: leafPayload"),
-            "Structured leaf helper storeLeaf call must forward the extracted leafPayload"
+            source.components(separatedBy: "let leafAdmission = SnapshotAdmission.leaf(").count - 1 == 2,
+            "Both production leaf paths must construct leaf Snapshot Admission values"
+        )
+        #expect(
+            source.components(separatedBy: "prefixCache.admit(leafAdmission)").count - 1 == 2,
+            "Both production leaf paths must mutate the cache through admit"
         )
         #expect(
             !source.contains("leafPayload: strippedLeafPayload"),
@@ -413,9 +397,9 @@ struct LLMActorExtractSnapshotPayloadsTests {
     }
 
     @Test
-    func mainActorRunClosuresAroundPrefixCacheStoresAreNonSuspending() throws {
+    func mainActorRunClosuresAroundPrefixCacheAdmissionsAreNonSuspending() throws {
         // The three `MainActor.run` closures wrapping
-        // `prefixCache.storeSnapshots` / `storeLeaf` must stay
+        // `prefixCache.admit` must stay
         // synchronous. `SSDSnapshotStore.tryEnqueue` is nonisolated
         // under an `NSLock`; an `await` inside the closure would
         // force the HTTP hot path to suspend mid-admission and break
@@ -423,16 +407,16 @@ struct LLMActorExtractSnapshotPayloadsTests {
         let source = try readLLMActorSource()
         let bodies = extractMainActorRunBodies(
             source: source,
-            containing: ["prefixCache.storeSnapshots", "prefixCache.storeLeaf"]
+            containing: ["prefixCache.admit"]
         )
         #expect(
             bodies.count == 3,
-            "Expected exactly 3 MainActor.run closures calling prefixCache.store*; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / direct-leaf / structured-leaf-helper sites — review before updating this assertion."
+            "Expected exactly 3 MainActor.run closures calling prefixCache admission APIs; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / direct-leaf / structured-leaf-helper sites — review before updating this assertion."
         )
         for (index, body) in bodies.enumerated() {
             #expect(
                 !body.contains("await"),
-                "MainActor.run closure #\(index) calling prefixCache.store* contains an `await` — non-suspending admission is broken. Body:\n\(body)"
+                "MainActor.run closure #\(index) calling prefixCache admission APIs contains an `await` — non-suspending admission is broken. Body:\n\(body)"
             )
         }
     }

@@ -40,16 +40,9 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
 
     /// Flat token sequence for the full prompt (1D extraction from potentially 2D VLM tensor).
     let fullTokens: [Int]
-    /// Snapshots captured during prefill at checkpoint offsets (e.g. stable-prefix boundary).
-    let capturedSnapshots: [HybridCacheSnapshot]
-    /// Pre-extracted `SnapshotPayload` values for each entry in
-    /// ``capturedSnapshots``, produced inside the
-    /// ``ModelContainer/perform(_:)`` block that captured the snapshots
-    /// so that `MLXArray.asData()` runs on the Metal-affine inference
-    /// thread. Positionally aligned with ``capturedSnapshots``. Empty
-    /// when ``ssdEnabled`` is false; callers must tolerate the
-    /// zero-length case without crashing.
-    let capturedPayloads: [SnapshotPayload]
+    /// Validated mid-prefill checkpoint admission, if any checkpoints survived
+    /// extraction-edge path validation.
+    let snapshotAdmission: SnapshotAdmission?
     /// SSD persistence tier gate, sampled once on `LLMActor`'s own
     /// isolation at `makeHTTPPrefixCacheGeneration` entry. Downstream
     /// post-generation sites (unstripped leaf + stripped leaf) read
@@ -941,18 +934,12 @@ actor LLMActor {
                 // final-cache recovery or leaf capture fails, the stable-prefix checkpoint
                 // still saves future requests from a full re-prefill.
                 var storedSnapshotsForTuner: [HybridCacheSnapshot] = []
-                if !Task.isCancelled, !mlxStart.capturedSnapshots.isEmpty {
+                if !Task.isCancelled, let admission = mlxStart.snapshotAdmission {
                     let diagnostics = await MainActor.run {
-                        prefixCache.storeSnapshots(
-                            promptTokens: mlxStart.fullTokens,
-                            capturedSnapshots: mlxStart.capturedSnapshots,
-                            snapshotPayloads: mlxStart.capturedPayloads,
-                            partitionKey: mlxStart.partitionKey,
-                            requestID: requestID
-                        )
+                        prefixCache.admit(admission)
                     }
                     logEvictions(diagnostics.evictions)
-                    storedSnapshotsForTuner = mlxStart.capturedSnapshots
+                    storedSnapshotsForTuner = admission.snapshots
                 }
 
                 if Task.isCancelled {
@@ -1126,16 +1113,16 @@ actor LLMActor {
                         break leafBlock
                     }
 
-                    // 4. Capture leaf snapshot AND extract its payload
-                    //    inside a Metal-affine `container.perform` so
-                    //    the per-array `asData()` calls run on the
+                    // 4. Capture leaf snapshot and derive its admission
+                    //    storage inside a Metal-affine `container.perform`
+                    //    so any per-array `asData()` calls run on the
                     //    inference thread. `finalCache` is non-`Sendable`
                     //    `[any KVCache]` — routed through the vendor's
                     //    `nonSendable` perform overload. The offset
                     //    guard above ensures no per-layer trimming is
                     //    needed before capture.
                     let ssdEnabled = mlxStart.ssdEnabled
-                    let (maybeLeaf, leafPayload): (HybridCacheSnapshot?, SnapshotPayload?) =
+                    let (maybeLeaf, maybeLeafAdmission): (HybridCacheSnapshot?, SnapshotAdmission?) =
                         try await container.perform(
                             nonSendable: finalCache
                         ) { _, cache in
@@ -1146,17 +1133,35 @@ actor LLMActor {
                             ) else {
                                 return (nil, nil)
                             }
-                            let payload = Self.extractSnapshotPayloads(
-                                [snap],
+                            let storage = Self.snapshotAdmissionStorage(
+                                for: snap,
                                 ssdEnabled: ssdEnabled
-                            ).first
-                            return (snap, payload)
+                            )
+                            let leafAdmission = SnapshotAdmission.leaf(
+                                storedTokens: storedTokens,
+                                snapshot: snap,
+                                storage: storage,
+                                partitionKey: mlxStart.partitionKey,
+                                requestID: requestID
+                            )
+                            return (snap, leafAdmission)
                         }
                     guard let leafSnapshot = maybeLeaf else {
                         diagnosticsContext.logSkip(
                             stage: "leafCapture",
                             reason: "unsupported-cache-type",
                             extraFields: [("cacheOffsets", "\(cacheOffsets)")]
+                        )
+                        break leafBlock
+                    }
+                    guard let leafAdmission = maybeLeafAdmission else {
+                        diagnosticsContext.logSkip(
+                            stage: "leafAdmission",
+                            reason: "invalid-path",
+                            extraFields: [
+                                ("offset", "\(leafSnapshot.tokenOffset)"),
+                                ("storedLen", "\(storedTokens.count)"),
+                            ]
                         )
                         break leafBlock
                     }
@@ -1168,20 +1173,14 @@ actor LLMActor {
                         source: "leaf"
                     ))
 
-                    // Coalesce storeLeaf + stats read in one MainActor
+                    // Coalesce admit + stats read in one MainActor
                     // hop — saves one cross-actor switch on the success
                     // path (the request hot path). Includes the post-store
                     // budget/total snapshot so the admission diagnostic can
                     // be logged from this actor without another hop.
                     let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
                         await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
-                            let d = prefixCache.storeLeaf(
-                                storedTokens: storedTokens,
-                                leafSnapshot: leafSnapshot,
-                                leafPayload: leafPayload,
-                                partitionKey: mlxStart.partitionKey,
-                                requestID: requestID
-                            )
+                            let d = prefixCache.admit(leafAdmission)
                             return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
                         }
                     logEvictions(diagnostics.evictions)
@@ -1425,10 +1424,9 @@ actor LLMActor {
         }
     }
 
-    /// Pre-extract `HybridCacheSnapshot` instances into pure `Sendable`
-    /// ``SnapshotPayload`` value types, calling `MLXArray.asData` on
-    /// every per-layer state array. Result is positionally aligned
-    /// with the input; empty when `ssdEnabled` is false.
+    /// Pre-extract checkpoint snapshots into Snapshot Admission
+    /// candidates, attaching storage intent to each entry at the
+    /// Metal-affine extraction edge.
     ///
     /// **Metal-affinity contract.** Must be called from inside
     /// ``ModelContainer/perform(_:)`` on `LLMActor` — calling it
@@ -1436,50 +1434,60 @@ actor LLMActor {
     /// work on a non-inference thread. The method is `nonisolated
     /// static` so callers can invoke it synchronously from inside a
     /// `container.perform` closure without an `await`; the Metal
-    /// affinity is enforced by convention, not the type system. See
-    /// `docs/marconi-hybrid-prefix-cache-implementation-plan.md`
-    /// "Write path" for the three call sites and their per-site
-    /// scoping requirements.
-    nonisolated static func extractSnapshotPayloads(
+    /// affinity is enforced by convention, not the type system.
+    nonisolated static func extractCheckpointAdmissionCandidates(
         _ snapshots: [HybridCacheSnapshot],
         ssdEnabled: Bool
-    ) -> [SnapshotPayload] {
-        guard ssdEnabled, !snapshots.isEmpty else { return [] }
+    ) -> [SnapshotAdmission.CheckpointCandidate] {
+        snapshots.map { snapshot in
+            return SnapshotAdmission.CheckpointCandidate(
+                snapshot: snapshot,
+                storage: snapshotAdmissionStorage(
+                    for: snapshot,
+                    ssdEnabled: ssdEnabled
+                )
+            )
+        }
+    }
 
-        var result: [SnapshotPayload] = []
-        result.reserveCapacity(snapshots.count)
+    private nonisolated static func snapshotAdmissionStorage(
+        for snapshot: HybridCacheSnapshot,
+        ssdEnabled: Bool
+    ) -> SnapshotAdmission.Storage {
+        guard ssdEnabled else { return .ramOnly }
+        return .ramAndSSD(extractSnapshotPayload(snapshot))
+    }
 
-        for snapshot in snapshots {
-            var layers: [SnapshotPayload.LayerPayload] = []
-            layers.reserveCapacity(snapshot.layers.count)
+    private nonisolated static func extractSnapshotPayload(
+        _ snapshot: HybridCacheSnapshot
+    ) -> SnapshotPayload {
+        var layers: [SnapshotPayload.LayerPayload] = []
+        layers.reserveCapacity(snapshot.layers.count)
 
-            for layer in snapshot.layers {
-                var arrays: [SnapshotPayload.ArrayPayload] = []
-                arrays.reserveCapacity(layer.state.count)
-                for array in layer.state {
-                    let extracted = array.asData(access: .copy)
-                    arrays.append(SnapshotPayload.ArrayPayload(
-                        data: extracted.data,
-                        dtype: dtypeWireString(extracted.dType),
-                        shape: extracted.shape
-                    ))
-                }
-                layers.append(SnapshotPayload.LayerPayload(
-                    className: layer.className,
-                    state: arrays,
-                    metaState: layer.metaState,
-                    offset: layer.offset
+        for layer in snapshot.layers {
+            var arrays: [SnapshotPayload.ArrayPayload] = []
+            arrays.reserveCapacity(layer.state.count)
+            for array in layer.state {
+                let extracted = array.asData(access: .copy)
+                arrays.append(SnapshotPayload.ArrayPayload(
+                    data: extracted.data,
+                    dtype: dtypeWireString(extracted.dType),
+                    shape: extracted.shape
                 ))
             }
-
-            result.append(SnapshotPayload(
-                tokenOffset: snapshot.tokenOffset,
-                checkpointType: snapshot.checkpointType,
-                layers: layers
+            layers.append(SnapshotPayload.LayerPayload(
+                className: layer.className,
+                state: arrays,
+                metaState: layer.metaState,
+                offset: layer.offset
             ))
         }
 
-        return result
+        return SnapshotPayload(
+            tokenOffset: snapshot.tokenOffset,
+            checkpointType: snapshot.checkpointType,
+            layers: layers
+        )
     }
 
     /// Stable wire-format name for an MLX `DType`. Load-bearing: the
@@ -2163,9 +2171,15 @@ actor LLMActor {
                 iterator.transientSnapshots[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
-            let capturedPayloads = Self.extractSnapshotPayloads(
+            let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
                 capturedSnapshots,
                 ssdEnabled: ssdEnabled
+            )
+            let snapshotAdmission = SnapshotAdmission.checkpoints(
+                fullPromptTokens: fullTokens,
+                candidates: checkpointCandidates,
+                partitionKey: partitionKey,
+                requestID: requestID
             )
             for snapshot in capturedSnapshots {
                 diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
@@ -2199,8 +2213,7 @@ actor LLMActor {
                 lookupReason: lookupResult.reason,
                 sharedPrefixLength: lookupResult.sharedPrefixLength,
                 fullTokens: fullTokens,
-                capturedSnapshots: capturedSnapshots,
-                capturedPayloads: capturedPayloads,
+                snapshotAdmission: snapshotAdmission,
                 ssdEnabled: ssdEnabled,
                 partitionKey: partitionKey,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
@@ -2465,10 +2478,28 @@ actor LLMActor {
                     return nil
                 }
 
-                let leafPayload = Self.extractSnapshotPayloads(
-                    [leaf],
+                let storage = Self.snapshotAdmissionStorage(
+                    for: leaf,
                     ssdEnabled: ssdEnabled
-                ).first
+                )
+                let leafAdmission = SnapshotAdmission.leaf(
+                    storedTokens: storedTokens,
+                    snapshot: leaf,
+                    storage: storage,
+                    partitionKey: partitionKey,
+                    requestID: requestID
+                )
+                guard let leafAdmission else {
+                    diagnosticsContext.logSkip(
+                        stage: admissionStage,
+                        reason: "invalid-path",
+                        extraFields: [
+                            ("offset", "\(leaf.tokenOffset)"),
+                            ("storedLen", "\(storedTokens.count)"),
+                        ]
+                    )
+                    return nil
+                }
 
                 diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
                     offset: leaf.tokenOffset,
@@ -2486,13 +2517,7 @@ actor LLMActor {
 
                 let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
                     await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
-                        let d = prefixCache.storeLeaf(
-                            storedTokens: storedTokens,
-                            leafSnapshot: leaf,
-                            leafPayload: leafPayload,
-                            partitionKey: partitionKey,
-                            requestID: requestID
-                        )
+                        let d = prefixCache.admit(leafAdmission)
                         return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
                     }
                 for event in diagnostics.evictions {

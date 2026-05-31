@@ -78,3 +78,24 @@ enum PrefixCacheTestFixtures {
         )
     }
 }
+
+extension SnapshotAdmission.CheckpointCandidate {
+    static func ramOnly(
+        _ snapshot: HybridCacheSnapshot
+    ) -> SnapshotAdmission.CheckpointCandidate {
+        SnapshotAdmission.CheckpointCandidate(
+            snapshot: snapshot,
+            storage: .ramOnly
+        )
+    }
+
+    static func ramAndSSD(
+        _ snapshot: HybridCacheSnapshot,
+        payload: SnapshotPayload
+    ) -> SnapshotAdmission.CheckpointCandidate {
+        SnapshotAdmission.CheckpointCandidate(
+            snapshot: snapshot,
+            storage: .ramAndSSD(payload)
+        )
+    }
+}
