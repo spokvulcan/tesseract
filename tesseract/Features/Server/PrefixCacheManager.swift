@@ -523,14 +523,21 @@ final class PrefixCacheManager {
             return Array(admission.fullPromptTokens.prefix(entry.path.offset))
         }
 
-        @discardableResult
-        func admitEntry(_ entry: SnapshotAdmission.Entry) -> RadixTreeNode {
+        func storeRAMEntry(_ entry: SnapshotAdmission.Entry) -> (node: RadixTreeNode, path: [Int]) {
             let path = path(for: entry)
             let node = tree.insertPath(tokens: path)
             tree.storeSnapshot(entry.snapshot, on: node)
 
+            return (node, path)
+        }
+
+        func admitSSDEntry(
+            _ entry: SnapshotAdmission.Entry,
+            node: RadixTreeNode,
+            path: [Int]
+        ) {
             guard case .ramAndSSD(let payload) = entry.storage else {
-                return node
+                return
             }
             let descriptor = makePersistedDescriptor(
                 partitionKey: admission.partitionKey,
@@ -544,21 +551,23 @@ final class PrefixCacheManager {
                 payload: payload,
                 descriptor: descriptor
             )
-            return node
         }
 
         switch admission.kind {
         case .checkpoints:
             tree.insertPath(tokens: admission.fullPromptTokens)
             for entry in admission.entries {
-                admitEntry(entry)
+                let stored = storeRAMEntry(entry)
+                admitSSDEntry(entry, node: stored.node, path: stored.path)
             }
         case .leaf:
-            let node = admitEntry(admission.entries.first)
+            let entry = admission.entries.first
+            let stored = storeRAMEntry(entry)
             supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
-                for: node,
+                for: stored.node,
                 in: tree
             ))
+            admitSSDEntry(entry, node: stored.node, path: stored.path)
         }
 
         let evictions = evictToFitBudget(

@@ -2245,4 +2245,64 @@ struct PrefixCacheManagerTests {
         #expect(diagnostics.stats.snapshotCount == 1)
         #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
     }
+
+    @Test func leafSSDAdmissionFreesSupersededAncestorBeforeBudgetCut() async throws {
+        let payloadBytes = 256
+        let (mgr, tieredStore, root) = makeSSDManager(budgetBytes: payloadBytes * 2)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let key = makeSSDKey()
+        let unrelatedTokens = Array(100...109)
+        let ancestorTokens = Array(1...10)
+        let descendantTokens = Array(1...15)
+
+        mgr.admit(SnapshotAdmission.leaf(
+            storedTokens: unrelatedTokens,
+            snapshot: makeUniformSnapshot(offset: unrelatedTokens.count, type: .leaf),
+            storage: .ramAndSSD(makeSSDPayload(bytes: payloadBytes, checkpointType: .leaf)),
+            partitionKey: key
+        )!)
+        await tieredStore.ssdStoreForTesting!.flushAsync()
+
+        mgr.admit(SnapshotAdmission.leaf(
+            storedTokens: ancestorTokens,
+            snapshot: makeUniformSnapshot(offset: ancestorTokens.count, type: .leaf),
+            storage: .ramAndSSD(makeSSDPayload(bytes: payloadBytes, checkpointType: .leaf)),
+            partitionKey: key
+        )!)
+        await tieredStore.ssdStoreForTesting!.flushAsync()
+
+        let tree = try #require(tieredStore.tree(for: key))
+        let unrelatedID = try #require(tree.findBestSnapshot(
+            tokens: unrelatedTokens,
+            updateAccess: false,
+            includeSnapshotRefs: true
+        )?.0.state.refID)
+        let ancestorID = try #require(tree.findBestSnapshot(
+            tokens: ancestorTokens,
+            updateAccess: false,
+            includeSnapshotRefs: true
+        )?.0.state.refID)
+        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payloadBytes * 2)
+
+        let diagnostics = mgr.admit(SnapshotAdmission.leaf(
+            storedTokens: descendantTokens,
+            snapshot: makeUniformSnapshot(offset: descendantTokens.count, type: .leaf),
+            storage: .ramAndSSD(makeSSDPayload(bytes: payloadBytes, checkpointType: .leaf)),
+            partitionKey: key
+        )!)
+        await tieredStore.ssdStoreForTesting!.flushAsync()
+
+        let descendantID = try #require(tree.findBestSnapshot(
+            tokens: descendantTokens,
+            updateAccess: false,
+            includeSnapshotRefs: true
+        )?.0.state.refID)
+        let residentIDs = tieredStore.ssdStoreForTesting!.residentIDsByRecencyForTesting()
+        #expect(diagnostics.supersededLeaves.map(\.bodyDroppedSnapshotRefID) == [ancestorID])
+        #expect(residentIDs.contains(unrelatedID))
+        #expect(residentIDs.contains(descendantID))
+        #expect(!residentIDs.contains(ancestorID))
+        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payloadBytes * 2)
+    }
 }
