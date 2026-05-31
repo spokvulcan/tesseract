@@ -409,40 +409,15 @@ struct CompletionHandler: Sendable {
 
         await recordCacheLookup(start: start, logHandle: logHandle)
 
-        var textContent = ""
-        var thinkingContent = ""
-        var toolCalls: [ToolCall] = []
+        var accumulator = GenerationAccumulator()
         var info: AgentGeneration.Info?
-        var safeguardReport: OpenAI.ThinkingSafeguardReport?
-        var malformedToolCallRaw = ""
 
         do {
             for try await event in start.stream {
                 await activityLog.ingest(handle: logHandle, event: event)
+                accumulator.ingest(event)
                 switch event {
-                case .text(let chunk):
-                    textContent += chunk
-                case .thinkStart:
-                    break
-                case .thinking(let chunk):
-                    thinkingContent += chunk
-                case .thinkEnd:
-                    break
-                case .thinkReclassify:
-                    textContent += thinkingContent
-                    thinkingContent = ""
-                case .thinkTruncate(let safePrefix):
-                    // Safeguard fired. Replace polluted reasoning with the clean
-                    // prefix so the client (and the session replay store) never
-                    // sees the garbage we buffered up to the trigger.
-                    thinkingContent = safePrefix
-                    safeguardReport = OpenAI.ThinkingSafeguardReport(
-                        safePrefixChars: safePrefix.count
-                    )
-                case .toolCall(let call):
-                    toolCalls.append(call)
                 case .malformedToolCall(let raw):
-                    malformedToolCallRaw += raw
                     Log.server.warning(
                         "Malformed tool call in HTTP response — "
                         + "completionID=\(start.completionID) "
@@ -450,14 +425,13 @@ struct CompletionHandler: Sendable {
                         + "head=\(String(raw.prefix(120)).debugDescription) "
                         + "tail=\(String(raw.suffix(80)).debugDescription)"
                     )
-                case .toolCallDelta:
-                    // Non-streaming path accumulates the final `.toolCall` event
-                    // only; in-flight deltas are consumed by the activity log
-                    // above (live Requests-log rendering) and not by this
-                    // accumulator, which has no progressive output channel.
-                    break
                 case .info(let i):
                     info = i
+                default:
+                    // text / thinking / tool-call accumulation is folded by the
+                    // accumulator above; in-flight `.toolCallDelta`s are consumed
+                    // only by the activity log (live Requests-log rendering).
+                    break
                 }
             }
         } catch {
@@ -467,17 +441,26 @@ struct CompletionHandler: Sendable {
             return
         }
 
+        // Project accumulator state into this path's output. `thinking ?? ""`
+        // collapses the nil-vs-empty distinction the non-streaming response does
+        // not carry; the safeguard sidecar reads the recorded safe-prefix length.
+        let toolCalls = accumulator.toolCalls
+        let thinkingContent = accumulator.thinking ?? ""
+        let safeguardReport = accumulator.safeguardSafePrefixChars.map {
+            OpenAI.ThinkingSafeguardReport(safePrefixChars: $0)
+        }
+
         // Surface a dropped tool-call buffer as text so the caller sees the
-        // attempted tool call instead of an empty-stop response. See the
-        // parallel block in the streaming path for the rationale.
-        if toolCalls.isEmpty,
-           textContent.isEmpty,
-           !malformedToolCallRaw.isEmpty {
-            textContent = malformedToolCallRaw
-            Log.server.info(
-                "Surfaced dropped tool-call buffer as text content — "
-                + "completionID=\(start.completionID) rawLen=\(malformedToolCallRaw.count)"
-            )
+        // attempted tool call instead of an empty-stop response (shared with the
+        // streaming path).
+        var textContent = accumulator.text
+        if let surfaced = Self.malformedFallbackText(
+            text: textContent,
+            toolCallCount: toolCalls.count,
+            malformedRaw: accumulator.malformedToolCallRaw,
+            completionID: start.completionID
+        ) {
+            textContent = surfaced
         }
 
         await Self.sessionReplayStore.record(
@@ -677,10 +660,12 @@ struct CompletionHandler: Sendable {
             // caller detect the pattern (e.g. content contains `<tool_call>`)
             // and decide how to recover.
             var streamResult = streamResult
-            if streamResult.toolCalls.isEmpty,
-               streamResult.textContent.isEmpty,
-               !streamResult.malformedToolCallRaw.isEmpty {
-                let raw = streamResult.malformedToolCallRaw
+            if let raw = Self.malformedFallbackText(
+                text: streamResult.textContent,
+                toolCallCount: streamResult.toolCalls.count,
+                malformedRaw: streamResult.malformedToolCallRaw,
+                completionID: start.completionID
+            ) {
                 streamResult.textContent = raw
                 _ = await sse.send(makeChunk(
                     id: start.completionID,
@@ -691,10 +676,6 @@ struct CompletionHandler: Sendable {
                     created: created,
                     delta: OpenAI.ChunkDelta(content: raw)
                 ))
-                Log.server.info(
-                    "Surfaced dropped tool-call buffer as text content — "
-                    + "completionID=\(start.completionID) rawLen=\(raw.count)"
-                )
             }
 
             let finalChunk = Self.makeFinalStreamingChunk(
@@ -1039,15 +1020,18 @@ struct CompletionHandler: Sendable {
         cancel: @escaping @Sendable () -> Void,
         logHandle: TraceHandle
     ) async -> StreamingOutcome {
-        var result = StreamResult()
+        var accumulator = GenerationAccumulator()
+        var info: AgentGeneration.Info?
         var toolCallIndex = 0
 
         do {
             generation: for try await event in stream {
                 await activityLog.ingest(handle: logHandle, event: event)
+                // Fold accumulated turn state in one place; the switch below
+                // keeps only this path's SSE side effects (per-event deltas).
+                accumulator.ingest(event)
                 switch event {
                 case .text(let chunk):
-                    result.textContent += chunk
                     guard await sse.send(makeChunk(
                         id: completionID, model: model, created: created,
                         delta: OpenAI.ChunkDelta(content: chunk)
@@ -1056,11 +1040,7 @@ struct CompletionHandler: Sendable {
                         return .disconnected(.chunkWrite)
                     }
 
-                case .thinkStart:
-                    break
-
                 case .thinking(let chunk):
-                    result.thinkingContent += chunk
                     guard await sse.send(makeChunk(
                         id: completionID, model: model, created: created,
                         delta: OpenAI.ChunkDelta(reasoning_content: chunk)
@@ -1069,29 +1049,9 @@ struct CompletionHandler: Sendable {
                         return .disconnected(.chunkWrite)
                     }
 
-                case .thinkEnd:
-                    break
-
-                case .thinkReclassify:
-                    result.textContent += result.thinkingContent
-                    result.thinkingContent = ""
-                    break
-
-                case .thinkTruncate(let safePrefix):
-                    // Safeguard fired. Reset reasoning accumulator so the final
-                    // replay / non-streaming response has a clean prefix even
-                    // though streaming clients have already received the garbage
-                    // chunks. The full intervention flow also emits a subsequent
-                    // `.thinking(injectionMessage)` + `.thinkEnd`.
-                    result.thinkingContent = safePrefix
-                    result.thinkingSafeguardTriggered = true
-                    result.thinkingSafeguardSafePrefixChars = safePrefix.count
-
                 case .toolCall(let call):
                     let index = toolCallIndex
                     toolCallIndex += 1
-                    result.hasToolCalls = true
-                    result.toolCalls.append(call)
                     let openAICalls = ToolCallConverter.convertToOpenAI([call])
                     guard let oaiCall = openAICalls.first else { continue }
 
@@ -1119,7 +1079,6 @@ struct CompletionHandler: Sendable {
                     }
 
                 case .malformedToolCall(let raw):
-                    result.malformedToolCallRaw += raw
                     Log.server.warning(
                         "Malformed tool call in stream — "
                         + "completionID=\(completionID) "
@@ -1128,17 +1087,16 @@ struct CompletionHandler: Sendable {
                         + "tail=\(String(raw.suffix(80)).debugDescription)"
                     )
 
-                case .toolCallDelta:
-                    // SSE forwarding of tool-call argument deltas is deferred
-                    // (OpenAI protocol supports it via
-                    // `choices[].delta.tool_calls[].function.arguments`, but
-                    // the current ask is in-app UI streaming only — see the
-                    // plan's Part B7). The activity log above already receives
-                    // `.toolCallDelta` and drives live UI rendering.
-                    break
-
                 case .info(let i):
-                    result.info = i
+                    info = i
+
+                case .thinkStart, .thinkEnd, .thinkReclassify, .thinkTruncate, .toolCallDelta:
+                    // No SSE side effect. text/thinking/tool-call state is folded
+                    // by the accumulator above; reclassify/truncate only adjust
+                    // the final accumulated content — deltas already sent to the
+                    // client stand. `.toolCallDelta` drives only the activity log
+                    // / in-app UI (SSE forwarding is deferred — see Part B7).
+                    break
                 }
             }
         } catch is CancellationError {
@@ -1147,7 +1105,38 @@ struct CompletionHandler: Sendable {
             return .failed(error.localizedDescription)
         }
 
+        // Project the fold into StreamResult. `thinking ?? ""` matches the prior
+        // non-optional accumulator; the safeguard fields mirror the accumulator.
+        var result = StreamResult()
+        result.textContent = accumulator.text
+        result.thinkingContent = accumulator.thinking ?? ""
+        result.toolCalls = accumulator.toolCalls
+        result.hasToolCalls = !accumulator.toolCalls.isEmpty
+        result.malformedToolCallRaw = accumulator.malformedToolCallRaw
+        result.thinkingSafeguardTriggered = accumulator.safeguardTriggered
+        result.thinkingSafeguardSafePrefixChars = accumulator.safeguardSafePrefixChars
+        result.info = info
         return .completed(result)
+    }
+
+    /// Shared Generation Projection for both completion paths: when a turn
+    /// produced no text and no tool calls but a malformed tool-call buffer was
+    /// captured, surface that raw buffer as the text content so the client sees
+    /// the attempted call instead of an empty stop. Returns the text to surface,
+    /// or `nil` when the fallback does not apply. Callers apply their own side
+    /// effects (the streaming path additionally emits an SSE content chunk).
+    private static func malformedFallbackText(
+        text: String,
+        toolCallCount: Int,
+        malformedRaw: String,
+        completionID: String
+    ) -> String? {
+        guard toolCallCount == 0, text.isEmpty, !malformedRaw.isEmpty else { return nil }
+        Log.server.info(
+            "Surfaced dropped tool-call buffer as text content — "
+            + "completionID=\(completionID) rawLen=\(malformedRaw.count)"
+        )
+        return malformedRaw
     }
 
     private func makeReplayAssistantMessage(

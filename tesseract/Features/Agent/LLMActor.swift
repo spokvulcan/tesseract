@@ -572,8 +572,7 @@ actor LLMActor {
             [conversation, container, canonicalTools, requestID, loadedModelWeightBytes, genParams] in
             let mlxStart = mlxStartBox.value
             let diagnosticsContext = mlxStart.diagnosticsContext
-            var textContent = ""
-            var thinkingContent = ""
+            var accumulator = GenerationAccumulator()
             var toolCalls: [HTTPPrefixCacheToolCall] = []
             var parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
             var rawChunkParts: [String] = []
@@ -592,37 +591,18 @@ actor LLMActor {
 
             do {
                 func handle(_ event: AgentGeneration) {
-                    switch event {
-                    case .text(let text):
-                        textContent += text
-                    case .thinking(let chunk):
-                        thinkingContent += chunk
-                    case .thinkReclassify:
-                        textContent += thinkingContent
-                        thinkingContent = ""
-                    case .thinkTruncate(let safePrefix):
-                        // Safeguard fired. Canonical reasoning becomes `safePrefix`
-                        // — drop everything we've buffered so far so the leaf
-                        // store and replay store never see the degen garbage.
-                        thinkingContent = safePrefix
-                    case .toolCall(let call):
+                    // Fold shared accumulation (text/thinking/safeguard prefix)
+                    // in one place. The leaf-store tool-call projection
+                    // (raw `ToolCall` → `HTTPPrefixCacheToolCall`) stays here, as
+                    // does the continuation yield that drives downstream
+                    // consumers (the Requests-log UI).
+                    accumulator.ingest(event)
+                    if case .toolCall(let call) = event {
                         toolCalls.append(HTTPPrefixCacheToolCall(
                             name: call.function.name,
                             arguments: call.function.arguments
                         ))
-                    case .malformedToolCall:
-                        break
-                    case .toolCallDelta:
-                        // In-flight tool-call body deltas are surfaced to
-                        // consumers (the Requests log UI) via the continuation
-                        // yield below. The textContent / toolCalls accumulators
-                        // are populated only on the final `.toolCall` event, so
-                        // there's nothing to mutate here.
-                        break
-                    case .thinkStart, .thinkEnd, .info:
-                        break
                     }
-
                     continuation.yield(event)
                 }
 
@@ -984,8 +964,8 @@ actor LLMActor {
 
                     // 1. Build stored conversation (prompt + generated assistant turn).
                     let storedConversation = conversation.appendingAssistant(.assistant(
-                        content: textContent,
-                        reasoning: thinkingContent,
+                        content: accumulator.text,
+                        reasoning: accumulator.thinking ?? "",
                         toolCalls: toolCalls
                     ))
 
