@@ -452,8 +452,8 @@ final class PrefixCacheManager {
     ///   because it's the cross-conversation hot prefix that an entire
     ///   tree is built on.
     ///
-        /// Leaf checkpoint is NOT planned; leaf Snapshot Admission is captured
-        /// post-generation by the extraction edge.
+    /// Leaf checkpoint is NOT planned; leaf Snapshot Admission is captured
+    /// post-generation by the extraction edge.
     /// Existing snapshots at the same offset are skipped.
     func planCheckpoints(
         tokens: [Int],
@@ -507,26 +507,31 @@ final class PrefixCacheManager {
     @discardableResult
     func admit(_ admission: SnapshotAdmission) -> StoreDiagnostics {
         let tree = store.getOrCreateTree(for: admission.partitionKey)
-        tree.insertPath(tokens: admission.fullPromptTokens)
         var supersededLeaves: [LeafSupersession] = []
+        let hasSSDEntry = admission.entries.contains { entry in
+            if case .ramAndSSD = entry.storage { return true }
+            return false
+        }
+        if hasSSDEntry {
+            registerSSDPartitionIfNeeded(for: admission.partitionKey)
+        }
 
-        for index in 0..<admission.entries.count {
-            let entry = admission.entries[index]
-            let path = Array(admission.fullPromptTokens.prefix(entry.path.offset))
+        func path(for entry: SnapshotAdmission.Entry) -> [Int] {
+            guard entry.path.offset < admission.fullPromptTokens.count else {
+                return admission.fullPromptTokens
+            }
+            return Array(admission.fullPromptTokens.prefix(entry.path.offset))
+        }
+
+        @discardableResult
+        func admitEntry(_ entry: SnapshotAdmission.Entry) -> RadixTreeNode {
+            let path = path(for: entry)
             let node = tree.insertPath(tokens: path)
             tree.storeSnapshot(entry.snapshot, on: node)
 
-            if admission.kind == .leaf {
-                supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
-                    for: node,
-                    in: tree
-                ))
-            }
-
             guard case .ramAndSSD(let payload) = entry.storage else {
-                continue
+                return node
             }
-            registerSSDPartitionIfNeeded(for: admission.partitionKey)
             let descriptor = makePersistedDescriptor(
                 partitionKey: admission.partitionKey,
                 pathFromRoot: path,
@@ -539,6 +544,21 @@ final class PrefixCacheManager {
                 payload: payload,
                 descriptor: descriptor
             )
+            return node
+        }
+
+        switch admission.kind {
+        case .checkpoints:
+            tree.insertPath(tokens: admission.fullPromptTokens)
+            for entry in admission.entries {
+                admitEntry(entry)
+            }
+        case .leaf:
+            let node = admitEntry(admission.entries.first)
+            supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
+                for: node,
+                in: tree
+            ))
         }
 
         let evictions = evictToFitBudget(

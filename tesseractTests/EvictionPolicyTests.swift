@@ -94,23 +94,23 @@ struct EvictionPolicyTests {
         let pathC = Array(1...10) + Array(31...35)
 
         mgr.admitCheckpoints(
-            promptTokens: pathA,
-            capturedSnapshots: [makeUniformSnapshot(offset: 10, type: .system)],
+            fullPromptTokens: pathA,
+            candidates: [.ramOnly(makeUniformSnapshot(offset: 10, type: .system))],
             partitionKey: defaultKey
         )
-        mgr.admitLeaf(
+        mgr.admitLeafAdmission(
             storedTokens: pathA,
-            leafSnapshot: makeUniformSnapshot(offset: pathA.count, type: .leaf),
+            snapshot: makeUniformSnapshot(offset: pathA.count, type: .leaf),
             partitionKey: defaultKey
         )
-        mgr.admitLeaf(
+        mgr.admitLeafAdmission(
             storedTokens: pathB,
-            leafSnapshot: makeUniformSnapshot(offset: pathB.count, type: .leaf),
+            snapshot: makeUniformSnapshot(offset: pathB.count, type: .leaf),
             partitionKey: defaultKey
         )
-        mgr.admitLeaf(
+        mgr.admitLeafAdmission(
             storedTokens: pathC,
-            leafSnapshot: makeUniformSnapshot(offset: pathC.count, type: .leaf),
+            snapshot: makeUniformSnapshot(offset: pathC.count, type: .leaf),
             partitionKey: defaultKey
         )
         #expect(mgr.stats.snapshotCount == 4)
@@ -209,14 +209,14 @@ struct EvictionPolicyTests {
         let keyA = CachePartitionKey(modelID: "a", kvBits: nil, kvGroupSize: 64)
         let keyB = CachePartitionKey(modelID: "b", kvBits: nil, kvGroupSize: 64)
 
-        mgr.admitLeaf(
+        mgr.admitLeafAdmission(
             storedTokens: Array(1...100),
-            leafSnapshot: makeUniformSnapshot(offset: 100, type: .leaf),
+            snapshot: makeUniformSnapshot(offset: 100, type: .leaf),
             partitionKey: keyA
         )
-        mgr.admitLeaf(
+        mgr.admitLeafAdmission(
             storedTokens: Array(200...299),
-            leafSnapshot: makeUniformSnapshot(offset: 100, type: .leaf),
+            snapshot: makeUniformSnapshot(offset: 100, type: .leaf),
             partitionKey: keyB
         )
         #expect(mgr.stats.snapshotCount == 2)
@@ -246,14 +246,14 @@ struct EvictionPolicyTests {
         // root → node1 (branchPoint, offset 10) → node2 (leaf, offset 20)
         // Storage order: branchPoint first → older. Leaf second → newer.
         mgr.admitCheckpoints(
-            promptTokens: Array(1...10),
-            capturedSnapshots: [makeUniformSnapshot(offset: 10, type: .branchPoint)],
+            fullPromptTokens: Array(1...10),
+            candidates: [.ramOnly(makeUniformSnapshot(offset: 10, type: .branchPoint))],
             partitionKey: defaultKey
         )
         let leafTokens = Array(1...20)
-        mgr.admitLeaf(
+        mgr.admitLeafAdmission(
             storedTokens: leafTokens,
-            leafSnapshot: makeUniformSnapshot(offset: 20, type: .leaf),
+            snapshot: makeUniformSnapshot(offset: 20, type: .leaf),
             partitionKey: defaultKey
         )
         let nodeCountBefore = mgr.stats.totalNodeCount
@@ -274,9 +274,9 @@ struct EvictionPolicyTests {
 
         for i in 0..<10 {
             let tokens = Array((i * 100 + 1)...((i + 1) * 100))
-            mgr.admitLeaf(
+            mgr.admitLeafAdmission(
                 storedTokens: tokens,
-                leafSnapshot: makeUniformSnapshot(offset: 100, type: .leaf),
+                snapshot: makeUniformSnapshot(offset: 100, type: .leaf),
                 partitionKey: defaultKey
             )
         }

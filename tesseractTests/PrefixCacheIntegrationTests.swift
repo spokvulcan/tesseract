@@ -145,7 +145,7 @@ struct PrefixCacheIntegrationTests {
         // Simulate: first request produces tokens [1..100], store leaf
         let tokens1 = Array(1...100)
         let leaf = makeKVSnapshot(offset: 100, type: .leaf)
-        mgr.admitLeaf(storedTokens: tokens1, leafSnapshot: leaf, partitionKey: defaultKey)
+        mgr.admitLeafAdmission(storedTokens: tokens1, snapshot: leaf, partitionKey: defaultKey)
 
         // Second request produces same tokens (normalization stable) → hit
         let result = mgr.lookup(tokens: tokens1, partitionKey: defaultKey)
@@ -165,7 +165,7 @@ struct PrefixCacheIntegrationTests {
         let stored = Array(1...50)
         let fullRequest = Array(1...80)
         let snap = makeKVSnapshot(offset: 50, type: .leaf)
-        mgr.admitLeaf(storedTokens: stored, leafSnapshot: snap, partitionKey: defaultKey)
+        mgr.admitLeafAdmission(storedTokens: stored, snapshot: snap, partitionKey: defaultKey)
 
         let result = mgr.lookup(tokens: fullRequest, partitionKey: defaultKey)
         #expect(result.snapshot != nil)
@@ -206,7 +206,7 @@ struct PrefixCacheIntegrationTests {
         let mgr = makeManager()
         let tokens = Array(1...100)
         let snap = makeHybridSnapshot(offset: 100, type: .leaf)
-        mgr.admitLeaf(storedTokens: tokens, leafSnapshot: snap, partitionKey: defaultKey)
+        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: defaultKey)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         let restored = result.restoreCache()
@@ -230,7 +230,7 @@ struct PrefixCacheIntegrationTests {
         let mgr = makeManager()
         let tokens = Array(1...200)
         let snap = makeHybridSnapshot(offset: 200, type: .leaf)
-        mgr.admitLeaf(storedTokens: tokens, leafSnapshot: snap, partitionKey: defaultKey)
+        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: defaultKey)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         let restored = result.restoreCache()!
@@ -269,13 +269,13 @@ struct PrefixCacheIntegrationTests {
         let kvCache = KVCacheSimple()
         kvCache.state = [MLXArray.zeros([1, 1, 200, 64]), MLXArray.zeros([1, 1, 200, 64])]
         let sysSnap = HybridCacheSnapshot.capture(cache: [kvCache], offset: 200, type: .system)!
-        mgr.admitCheckpoints(promptTokens: sysTokens + Array(300...400), capturedSnapshots: [sysSnap], partitionKey: defaultKey)
+        mgr.admitCheckpoints(fullPromptTokens: sysTokens + Array(300...400), candidates: [.ramOnly(sysSnap)], partitionKey: defaultKey)
 
         // Leaf uses QuantizedKVCache (after quantization transition)
         let fullTokens = Array(1...400)
         let qkv = QuantizedKVCache(groupSize: 64, bits: 8)
         let leafSnap = HybridCacheSnapshot.capture(cache: [qkv], offset: 400, type: .leaf)!
-        mgr.admitLeaf(storedTokens: fullTokens, leafSnapshot: leafSnap, partitionKey: defaultKey)
+        mgr.admitLeafAdmission(storedTokens: fullTokens, snapshot: leafSnap, partitionKey: defaultKey)
 
         // Lookup full → hits leaf (QuantizedKVCache)
         let fullResult = mgr.lookup(tokens: fullTokens, partitionKey: defaultKey)
@@ -315,7 +315,7 @@ struct PrefixCacheIntegrationTests {
         let midSnap = makeKVSnapshot(offset: 300, type: .system)
         #expect(midSnap.tokenOffset == 300)
 
-        mgr.admitCheckpoints(promptTokens: tokens, capturedSnapshots: [midSnap], partitionKey: defaultKey)
+        mgr.admitCheckpoints(fullPromptTokens: tokens, candidates: [.ramOnly(midSnap)], partitionKey: defaultKey)
 
         // Verify: system snapshot stored at correct offset
         let result = mgr.lookup(tokens: Array(1...500), partitionKey: defaultKey)
@@ -354,7 +354,7 @@ struct PrefixCacheIntegrationTests {
         let key8 = CachePartitionKey(modelID: "model", kvBits: 8, kvGroupSize: 64)
         let keyNil = CachePartitionKey(modelID: "model", kvBits: nil, kvGroupSize: 64)
 
-        mgr.admitLeaf(storedTokens: tokens, leafSnapshot: snap, partitionKey: key8)
+        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: key8)
 
         // Same tokens, different kvBits → miss
         let result = mgr.lookup(tokens: tokens, partitionKey: keyNil)
@@ -399,7 +399,7 @@ struct PrefixCacheIntegrationTests {
 
         // Store a snapshot at offset 3000
         let snap = makeKVSnapshot(offset: 3000, type: .leaf)
-        mgr.admitLeaf(storedTokens: Array(1...3000), leafSnapshot: snap, partitionKey: defaultKey)
+        mgr.admitLeafAdmission(storedTokens: Array(1...3000), snapshot: snap, partitionKey: defaultKey)
 
         // Lookup with extended tokens → hit at 3000
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
@@ -436,8 +436,8 @@ struct PrefixCacheIntegrationTests {
         let seedPath = Array(1...600)
 
         mgr.admitCheckpoints(
-            promptTokens: seedPath,
-            capturedSnapshots: [makeKVSnapshot(offset: 200, type: .system)],
+            fullPromptTokens: seedPath,
+            candidates: [.ramOnly(makeKVSnapshot(offset: 200, type: .system))],
             partitionKey: defaultKey
         )
 
@@ -461,8 +461,8 @@ struct PrefixCacheIntegrationTests {
         #expect(alignmentOffset == 600)
 
         mgr.admitCheckpoints(
-            promptTokens: firstRequest,
-            capturedSnapshots: [makeKVSnapshot(offset: 600, type: .branchPoint)],
+            fullPromptTokens: firstRequest,
+            candidates: [.ramOnly(makeKVSnapshot(offset: 600, type: .branchPoint))],
             partitionKey: defaultKey
         )
 
@@ -481,7 +481,7 @@ struct PrefixCacheIntegrationTests {
         // After generation, stored tokens: [1..100, 101..150] (prompt + response)
         let storedTokens = Array(1...150)
         let leaf = makeKVSnapshot(offset: 150, type: .leaf)
-        mgr.admitLeaf(storedTokens: storedTokens, leafSnapshot: leaf, partitionKey: defaultKey)
+        mgr.admitLeafAdmission(storedTokens: storedTokens, snapshot: leaf, partitionKey: defaultKey)
 
         // Next request extending the conversation: [1..150, 151..200]
         let nextRequest = Array(1...200)
@@ -499,7 +499,7 @@ struct PrefixCacheIntegrationTests {
         // Turn 1: system + user + assistant → stored as leaf
         let turn1Tokens = Array(1...300)
         let turn1Leaf = makeKVSnapshot(offset: 300, type: .leaf)
-        mgr.admitLeaf(storedTokens: turn1Tokens, leafSnapshot: turn1Leaf, partitionKey: defaultKey)
+        mgr.admitLeafAdmission(storedTokens: turn1Tokens, snapshot: turn1Leaf, partitionKey: defaultKey)
 
         // Turn 2: extends with user2 + (pending generation)
         let turn2Tokens = Array(1...300) + Array(400...500)
@@ -911,14 +911,14 @@ struct PrefixCacheIntegrationTests {
         // Insert a leaf, then evict its snapshot to leave a bare path.
         let tokens = Array(1...200)
         let leaf = makeKVSnapshot(offset: 200, type: .leaf)
-        mgr.admitLeaf(storedTokens: tokens, leafSnapshot: leaf, partitionKey: defaultKey)
+        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: leaf, partitionKey: defaultKey)
 
         // Now store a system snapshot at offset 100 so we have a snapshot-bearing
         // node at 100, but nothing beyond that for a different suffix.
         let sysSnap = makeKVSnapshot(offset: 100, type: .system)
         mgr.admitCheckpoints(
-            promptTokens: tokens,
-            capturedSnapshots: [sysSnap],
+            fullPromptTokens: tokens,
+            candidates: [.ramOnly(sysSnap)],
             partitionKey: defaultKey
         )
 
@@ -957,9 +957,9 @@ struct PrefixCacheIntegrationTests {
         let mgr = makeManager(budgetMB: 500)
 
         let toolCallTurnTokens = Array(1...95)
-        mgr.admitLeaf(
+        mgr.admitLeafAdmission(
             storedTokens: toolCallTurnTokens,
-            leafSnapshot: makeKVSnapshot(offset: toolCallTurnTokens.count, type: .leaf),
+            snapshot: makeKVSnapshot(offset: toolCallTurnTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
         #expect(mgr.stats.snapshotCount == 1)
@@ -982,9 +982,9 @@ struct PrefixCacheIntegrationTests {
         let mgr = makeManager(budgetMB: 500)
 
         let strippedTokens = Array(1...85)
-        mgr.admitLeaf(
+        mgr.admitLeafAdmission(
             storedTokens: strippedTokens,
-            leafSnapshot: makeKVSnapshot(offset: strippedTokens.count, type: .leaf),
+            snapshot: makeKVSnapshot(offset: strippedTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
         #expect(mgr.stats.snapshotCount == 1)
@@ -1008,14 +1008,14 @@ struct PrefixCacheIntegrationTests {
         let shallowTokens = Array(1...80)
         let deeperTokens = Array(1...100)
 
-        mgr.admitLeaf(
+        mgr.admitLeafAdmission(
             storedTokens: shallowTokens,
-            leafSnapshot: makeKVSnapshot(offset: shallowTokens.count, type: .leaf),
+            snapshot: makeKVSnapshot(offset: shallowTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
-        let diagnostics = mgr.admitLeaf(
+        let diagnostics = mgr.admitLeafAdmission(
             storedTokens: deeperTokens,
-            leafSnapshot: makeKVSnapshot(offset: deeperTokens.count, type: .leaf),
+            snapshot: makeKVSnapshot(offset: deeperTokens.count, type: .leaf),
             partitionKey: defaultKey
         )
         #expect(diagnostics.supersededLeaves.count == 1)

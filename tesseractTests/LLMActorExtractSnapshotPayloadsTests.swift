@@ -2,10 +2,10 @@
 //  LLMActorExtractSnapshotPayloadsTests.swift
 //  tesseractTests
 //
-//  Unit tests for the LLMActor snapshot extraction edge: converting
-//  live Metal-resident `HybridCacheSnapshot` instances into pure
-//  `Sendable` `SnapshotPayload` values via `MLXArray.asData()`, and
-//  attaching those payloads to Snapshot Admission entries.
+//  Unit tests for the LLMActor snapshot extraction edge: attaching
+//  RAM-only or SSD-backed storage to Snapshot Admission entries while
+//  converting live Metal-resident `HybridCacheSnapshot` instances into
+//  pure `Sendable` `SnapshotPayload` values via `MLXArray.asData()`.
 //
 //  The helper itself is `nonisolated static` and operates on pure
 //  fixture snapshots, so none of these tests require a loaded MLX
@@ -65,38 +65,84 @@ struct LLMActorExtractSnapshotPayloadsTests {
         )!
     }
 
+    private func checkpointCandidates(
+        for snapshots: [HybridCacheSnapshot],
+        ssdEnabled: Bool = true
+    ) -> [SnapshotAdmission.CheckpointCandidate] {
+        LLMActor.extractCheckpointAdmissionCandidates(
+            snapshots,
+            ssdEnabled: ssdEnabled
+        )
+    }
+
+    private func checkpointPayload(
+        for snapshot: HybridCacheSnapshot
+    ) throws -> SnapshotPayload {
+        let payloads = checkpointPayloads(for: [snapshot])
+        try #require(payloads.count == 1)
+        return payloads[0]
+    }
+
+    private func checkpointPayloads(
+        for snapshots: [HybridCacheSnapshot],
+        ssdEnabled: Bool = true
+    ) -> [SnapshotPayload] {
+        checkpointCandidates(
+            for: snapshots,
+            ssdEnabled: ssdEnabled
+        ).compactMap { candidate in
+            if case .ramAndSSD(let payload) = candidate.storage {
+                return payload
+            }
+            return nil
+        }
+    }
+
+    private func expectRAMOnly(
+        _ candidates: [SnapshotAdmission.CheckpointCandidate]
+    ) {
+        for candidate in candidates {
+            if case .ramOnly = candidate.storage {
+                // expected
+            } else {
+                #expect(Bool(false), "Expected candidate to be RAM-only")
+            }
+        }
+    }
+
     // MARK: - SSD gate
 
     @Test
-    func returnsEmptyWhenSSDDisabled() {
+    func candidatesAreRAMOnlyWhenSSDDisabled() {
         let snapshot = makeSimpleKVSnapshot()
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: false
-        )
-        #expect(payloads.isEmpty)
+        let candidates = checkpointCandidates(for: [snapshot], ssdEnabled: false)
+
+        #expect(candidates.count == 1)
+        #expect(candidates.first?.snapshot.tokenOffset == snapshot.tokenOffset)
+        expectRAMOnly(candidates)
     }
 
     @Test
-    func returnsEmptyWhenSSDDisabledForMultipleSnapshots() {
-        // The gate must short-circuit regardless of input size — a
-        // non-empty input array with SSD disabled still yields [].
+    func candidatesAreRAMOnlyWhenSSDDisabledForMultipleSnapshots() {
+        // The gate must preserve every snapshot while marking each
+        // candidate RAM-only. SSD-disabled is no longer represented as
+        // an empty payload array.
         let snapshots = [
             makeSimpleKVSnapshot(tokenOffset: 5),
             makeSimpleKVSnapshot(tokenOffset: 9),
             makeMixedSnapshot(tokenOffset: 40),
         ]
-        let payloads = LLMActor.extractSnapshotPayloads(
-            snapshots, ssdEnabled: false
-        )
-        #expect(payloads.isEmpty)
+        let candidates = checkpointCandidates(for: snapshots, ssdEnabled: false)
+
+        #expect(candidates.map(\.snapshot.tokenOffset) == snapshots.map(\.tokenOffset))
+        expectRAMOnly(candidates)
     }
 
     @Test
-    func returnsEmptyForEmptyInputEvenWhenEnabled() {
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [], ssdEnabled: true
-        )
-        #expect(payloads.isEmpty)
+    func returnsNoCandidatesForEmptyInputEvenWhenEnabled() {
+        let candidates = checkpointCandidates(for: [], ssdEnabled: true)
+
+        #expect(candidates.isEmpty)
     }
 
     @Test
@@ -106,10 +152,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
             makeSimpleKVSnapshot(tokenOffset: 9, type: .branchPoint),
         ]
 
-        let ssdCandidates = LLMActor.extractCheckpointAdmissionCandidates(
-            snapshots,
-            ssdEnabled: true
-        )
+        let ssdCandidates = checkpointCandidates(for: snapshots)
 
         #expect(ssdCandidates.count == snapshots.count)
         for index in snapshots.indices {
@@ -122,19 +165,10 @@ struct LLMActorExtractSnapshotPayloadsTests {
             }
         }
 
-        let ramOnlyCandidates = LLMActor.extractCheckpointAdmissionCandidates(
-            snapshots,
-            ssdEnabled: false
-        )
+        let ramOnlyCandidates = checkpointCandidates(for: snapshots, ssdEnabled: false)
 
         #expect(ramOnlyCandidates.count == snapshots.count)
-        for candidate in ramOnlyCandidates {
-            if case .ramOnly = candidate.storage {
-                // expected
-            } else {
-                #expect(Bool(false), "Expected SSD-disabled candidate to be RAM-only")
-            }
-        }
+        expectRAMOnly(ramOnlyCandidates)
     }
 
     // MARK: - Structural equivalence
@@ -142,11 +176,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @Test
     func preservesTokenOffsetAndCheckpointType() throws {
         let snapshot = makeSimpleKVSnapshot(tokenOffset: 17, type: .branchPoint)
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
-        try #require(payloads.count == 1)
-        let payload = payloads[0]
+        let payload = try checkpointPayload(for: snapshot)
         #expect(payload.tokenOffset == 17)
         #expect(payload.checkpointType == .branchPoint)
     }
@@ -154,11 +184,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @Test
     func preservesPerLayerMetadata() throws {
         let snapshot = makeMixedSnapshot(tokenOffset: 64)
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
-        try #require(payloads.count == 1)
-        let payload = payloads[0]
+        let payload = try checkpointPayload(for: snapshot)
 
         #expect(payload.layers.count == snapshot.layers.count)
         for (layerIdx, layer) in payload.layers.enumerated() {
@@ -177,9 +203,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
             makeSimpleKVSnapshot(tokenOffset: 9),
             makeSimpleKVSnapshot(tokenOffset: 13),
         ]
-        let payloads = LLMActor.extractSnapshotPayloads(
-            snapshots, ssdEnabled: true
-        )
+        let payloads = checkpointPayloads(for: snapshots)
         try #require(payloads.count == snapshots.count)
         for (i, payload) in payloads.enumerated() {
             #expect(payload.tokenOffset == snapshots[i].tokenOffset)
@@ -192,11 +216,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @Test
     func byteRoundTripMatchesSourceArrays() throws {
         let snapshot = makeSimpleKVSnapshot()
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
-        try #require(payloads.count == 1)
-        let payload = payloads[0]
+        let payload = try checkpointPayload(for: snapshot)
 
         // The per-layer state arrays must serialize to the same bytes
         // as the snapshot's own MLX-resident deep copies. This is the
@@ -251,11 +271,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @Test
     func totalBytesMatchesSumOfArrayNbytes() throws {
         let snapshot = makeMixedSnapshot()
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
-        try #require(payloads.count == 1)
-        let payload = payloads[0]
+        let payload = try checkpointPayload(for: snapshot)
 
         // `SnapshotPayload.totalBytes` is the SSD front-door's byte
         // accounting. For arrays materialized via `asData(access: .copy)`
@@ -279,13 +295,10 @@ struct LLMActorExtractSnapshotPayloadsTests {
             memoryBudgetBytes: 16 * 1024 * 1024
         )
         let snapshot = makeSimpleKVSnapshot(tokenOffset: 4)
-        let payloads = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        )
+        let payload = try checkpointPayload(for: snapshot)
         let partitionKey = CachePartitionKey(
             modelID: "test-model", kvBits: nil, kvGroupSize: 64
         )
-        let payload = try #require(payloads.first)
         let admission = try #require(SnapshotAdmission.checkpoints(
             fullPromptTokens: [1, 2, 3, 4],
             candidates: [

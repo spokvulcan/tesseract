@@ -1458,33 +1458,6 @@ actor LLMActor {
         return .ramAndSSD(extractSnapshotPayload(snapshot))
     }
 
-    /// Pre-extract `HybridCacheSnapshot` instances into pure `Sendable`
-    /// ``SnapshotPayload`` value types, calling `MLXArray.asData` on
-    /// every per-layer state array. Empty when `ssdEnabled` is false.
-    ///
-    /// **Metal-affinity contract.** Must be called from inside
-    /// ``ModelContainer/perform(_:)`` on `LLMActor` — calling it
-    /// outside a live Metal-affine scope risks re-issuing command-queue
-    /// work on a non-inference thread. The method is `nonisolated
-    /// static` so callers can invoke it synchronously from inside a
-    /// `container.perform` closure without an `await`; the Metal
-    /// affinity is enforced by convention, not the type system.
-    nonisolated static func extractSnapshotPayloads(
-        _ snapshots: [HybridCacheSnapshot],
-        ssdEnabled: Bool
-    ) -> [SnapshotPayload] {
-        guard ssdEnabled, !snapshots.isEmpty else { return [] }
-
-        var result: [SnapshotPayload] = []
-        result.reserveCapacity(snapshots.count)
-
-        for snapshot in snapshots {
-            result.append(extractSnapshotPayload(snapshot))
-        }
-
-        return result
-    }
-
     private nonisolated static func extractSnapshotPayload(
         _ snapshot: HybridCacheSnapshot
     ) -> SnapshotPayload {

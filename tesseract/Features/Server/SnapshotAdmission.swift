@@ -1,7 +1,7 @@
 import Foundation
 import MLXLMCommon
 
-nonisolated struct NonEmpty<Element: Sendable>: Sendable {
+nonisolated struct NonEmpty<Element: Sendable>: Sendable, Sequence {
     let first: Element
     let rest: [Element]
 
@@ -12,9 +12,26 @@ nonisolated struct NonEmpty<Element: Sendable>: Sendable {
 
     nonisolated var count: Int { 1 + rest.count }
 
-    nonisolated subscript(index: Int) -> Element {
-        precondition(index >= 0 && index < count, "NonEmpty index out of bounds")
-        return index == 0 ? first : rest[index - 1]
+    struct Iterator: IteratorProtocol {
+        private var first: Element?
+        private var restIterator: IndexingIterator<[Element]>
+
+        fileprivate init(first: Element, rest: [Element]) {
+            self.first = first
+            self.restIterator = rest.makeIterator()
+        }
+
+        mutating func next() -> Element? {
+            if let first {
+                self.first = nil
+                return first
+            }
+            return restIterator.next()
+        }
+    }
+
+    nonisolated func makeIterator() -> Iterator {
+        Iterator(first: first, rest: rest)
     }
 }
 
@@ -72,6 +89,16 @@ nonisolated struct SnapshotAdmission: Sendable {
         let path: SnapshotAdmissionPath
         let snapshot: HybridCacheSnapshot
         let storage: Storage
+
+        fileprivate nonisolated init(
+            path: SnapshotAdmissionPath,
+            snapshot: HybridCacheSnapshot,
+            storage: Storage
+        ) {
+            self.path = path
+            self.snapshot = snapshot
+            self.storage = storage
+        }
     }
 
     let fullPromptTokens: [Int]
@@ -81,12 +108,7 @@ nonisolated struct SnapshotAdmission: Sendable {
     let requestID: UUID?
 
     nonisolated var snapshots: [HybridCacheSnapshot] {
-        var result: [HybridCacheSnapshot] = []
-        result.reserveCapacity(entries.count)
-        for index in 0..<entries.count {
-            result.append(entries[index].snapshot)
-        }
-        return result
+        entries.map(\.snapshot)
     }
 
     private init(

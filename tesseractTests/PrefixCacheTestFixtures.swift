@@ -1,6 +1,7 @@
 import Foundation
 import MLX
 import MLXLMCommon
+import Testing
 
 @testable import Tesseract_Agent
 
@@ -79,57 +80,70 @@ enum PrefixCacheTestFixtures {
     }
 }
 
+extension SnapshotAdmission.CheckpointCandidate {
+    static func ramOnly(
+        _ snapshot: HybridCacheSnapshot
+    ) -> SnapshotAdmission.CheckpointCandidate {
+        SnapshotAdmission.CheckpointCandidate(
+            snapshot: snapshot,
+            storage: .ramOnly
+        )
+    }
+
+    static func ramAndSSD(
+        _ snapshot: HybridCacheSnapshot,
+        payload: SnapshotPayload
+    ) -> SnapshotAdmission.CheckpointCandidate {
+        SnapshotAdmission.CheckpointCandidate(
+            snapshot: snapshot,
+            storage: .ramAndSSD(payload)
+        )
+    }
+}
+
 @MainActor
 extension PrefixCacheManager {
     @discardableResult
     func admitCheckpoints(
-        promptTokens: [Int],
-        capturedSnapshots: [HybridCacheSnapshot],
-        storage: SnapshotAdmission.Storage = .ramOnly,
+        fullPromptTokens: [Int],
+        candidates: [SnapshotAdmission.CheckpointCandidate],
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
     ) -> StoreDiagnostics {
-        guard !capturedSnapshots.isEmpty else {
+        guard !candidates.isEmpty else {
             return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
         }
 
-        let candidates = capturedSnapshots.map { snapshot in
-            return SnapshotAdmission.CheckpointCandidate(
-                snapshot: snapshot,
-                storage: storage
-            )
-        }
-
         guard let admission = SnapshotAdmission.checkpoints(
-            fullPromptTokens: promptTokens,
+            fullPromptTokens: fullPromptTokens,
             candidates: candidates,
             partitionKey: partitionKey,
             requestID: requestID
         ) else {
-            preconditionFailure("Invalid checkpoint Snapshot Admission in test fixture")
+            #expect(Bool(false), "Invalid checkpoint Snapshot Admission in test fixture")
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
         }
 
         return admit(admission)
     }
 
     @discardableResult
-    func admitLeaf(
+    func admitLeafAdmission(
         storedTokens: [Int],
-        leafSnapshot: HybridCacheSnapshot,
-        leafPayload: SnapshotPayload? = nil,
+        snapshot: HybridCacheSnapshot,
+        storage: SnapshotAdmission.Storage = .ramOnly,
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil
     ) -> StoreDiagnostics {
-        let storage: SnapshotAdmission.Storage =
-            leafPayload.map(SnapshotAdmission.Storage.ramAndSSD) ?? .ramOnly
         guard let admission = SnapshotAdmission.leaf(
             storedTokens: storedTokens,
-            snapshot: leafSnapshot,
+            snapshot: snapshot,
             storage: storage,
             partitionKey: partitionKey,
             requestID: requestID
         ) else {
-            preconditionFailure("Invalid leaf Snapshot Admission in test fixture")
+            #expect(Bool(false), "Invalid leaf Snapshot Admission in test fixture")
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
         }
 
         return admit(admission)
