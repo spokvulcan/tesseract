@@ -200,7 +200,7 @@ typealias AgentMessage = any AgentMessageProtocol
 
 extension AgentMessageProtocol {
     /// Extracts UUID from any Identifiable message. All core types conform.
-    var messageUUID: UUID {
+    nonisolated var messageUUID: UUID {
         if let identifiable = self as? any Identifiable,
            let uuid = identifiable.id as? UUID {
             return uuid
@@ -209,21 +209,21 @@ extension AgentMessageProtocol {
     }
 
     /// Unwraps to `UserMessage`, handling both bare struct and `CoreMessage.user`.
-    var asUser: UserMessage? {
+    nonisolated var asUser: UserMessage? {
         if let u = self as? UserMessage { return u }
         if let core = self as? CoreMessage, case .user(let u) = core { return u }
         return nil
     }
 
     /// Unwraps to `AssistantMessage`, handling both bare struct and `CoreMessage.assistant`.
-    var asAssistant: AssistantMessage? {
+    nonisolated var asAssistant: AssistantMessage? {
         if let a = self as? AssistantMessage { return a }
         if let core = self as? CoreMessage, case .assistant(let a) = core { return a }
         return nil
     }
 
     /// Unwraps to `ToolResultMessage`, handling both bare struct and `CoreMessage.toolResult`.
-    var asToolResult: ToolResultMessage? {
+    nonisolated var asToolResult: ToolResultMessage? {
         if let t = self as? ToolResultMessage { return t }
         if let core = self as? CoreMessage, case .toolResult(let t) = core { return t }
         return nil

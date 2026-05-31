@@ -24,7 +24,7 @@ private struct ConversationFile: Codable {
 /// └── ...
 /// ```
 @MainActor
-final class AgentConversationStore: ObservableObject {
+final class AgentConversationStore: ObservableObject, AgentConversationStoring {
 
     @Published private(set) var conversations: [AgentConversationSummary] = []
     @Published private(set) var currentConversation: AgentConversation?

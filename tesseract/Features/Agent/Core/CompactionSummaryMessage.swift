@@ -24,4 +24,11 @@ nonisolated struct CompactionSummaryMessage: CustomAgentMessage, PersistableMess
     func toLLMMessage() -> LLMMessage? {
         .user(content: "<summary>\n\(summary)\n</summary>")
     }
+
+    /// The one-line system-row text shown for this compaction marker. The single
+    /// source for the wording, reused by the Chat Transcript projection and the
+    /// `AgentChatMessage` conversion so the two render paths can't drift.
+    var displayText: String {
+        "[Context compacted — \(tokensBefore) tokens summarized]"
+    }
 }
