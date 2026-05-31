@@ -52,17 +52,25 @@ nonisolated struct GenerationStreamLoop {
     }
 
     struct Diagnostics: Sendable {
-        let rawChunksJoined: String
+        /// Raw chunks kept unjoined. `rawChunksJoined` materializes the
+        /// concatenation lazily so neither the cancel path (where no caller reads
+        /// it) nor a library-parsed agent turn (where `hasUnparsedToolCallMarkers`
+        /// short-circuits on `libraryParsedToolCalls` before any scan) pays for an
+        /// O(total tokens) join it immediately discards.
+        let rawChunkParts: [String]
         let finalizeState: ToolCallParser.FinalizeState
         let libraryParsedToolCalls: Bool
 
+        var rawChunksJoined: String { rawChunkParts.joined() }
+
         /// Raw output carries `<tool_call>` / `<function` markers the vendor
         /// library never turned into a `.toolCall` event — the "library missed a
-        /// tool call" signal both callers warn on.
+        /// tool call" signal both callers warn on. Joins only when the vendor
+        /// emitted no tool call (otherwise the marker scan is moot).
         var hasUnparsedToolCallMarkers: Bool {
-            !libraryParsedToolCalls
-                && (rawChunksJoined.contains("tool_call")
-                    || rawChunksJoined.contains("<function"))
+            guard !libraryParsedToolCalls else { return false }
+            let joined = rawChunksJoined
+            return joined.contains("tool_call") || joined.contains("<function")
         }
     }
 
@@ -79,14 +87,25 @@ nonisolated struct GenerationStreamLoop {
     private let startsInsideThinkBlock: Bool
     private let safeguardConfig: ThinkingRepetitionDetector.Config
 
+    /// Pre-formatted `key=value` correlation token (e.g. `request_id=…` /
+    /// `generation_id=…`) appended to the loop's own diagnostic warnings. The
+    /// loop is request-agnostic, so the caller supplies the id; logging stays in
+    /// one place instead of being re-duplicated into each caller.
+    private let logContext: String
+
+    /// `" \(logContext)"` when set, else empty — appended to warning lines.
+    private var logSuffix: String { logContext.isEmpty ? "" : " " + logContext }
+
     init(
         initial: RawGenerationHandle,
         startsInsideThinkBlock: Bool,
-        safeguard: ThinkingRepetitionDetector.Config
+        safeguard: ThinkingRepetitionDetector.Config,
+        logContext: String = ""
     ) {
         self.box = OSAllocatedUnfairLock(initialState: HandleBox(handle: initial))
         self.startsInsideThinkBlock = startsInsideThinkBlock
         self.safeguardConfig = safeguard
+        self.logContext = logContext
     }
 
     /// Cancels whichever raw handle is currently live (across swaps); idempotent.
@@ -118,6 +137,12 @@ nonisolated struct GenerationStreamLoop {
         var libraryToolCallEventCount = 0
         var completionInfo: AgentGeneration.Info?
         var cancelled = false
+        // Set when an intervention closed the think block but no continuation
+        // swapped in (no starter, or the starter threw). The truncation triple is
+        // already emitted and the parser was NOT re-init, so it still holds the
+        // degenerate post-trigger thinking — finalize must be skipped or it would
+        // forward that text AFTER `.thinkEnd`, re-polluting the truncated reasoning.
+        var interventionClosedWithoutSwap = false
 
         typealias Intervention = (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)
 
@@ -139,10 +164,12 @@ nonisolated struct GenerationStreamLoop {
 
         // Snapshot the loop's silent-close surface. Call AFTER `finalize()` on the
         // natural path so `finalizeState` reflects the flushed parser; on the
-        // cancel path finalize is skipped, so it snapshots the un-finalized parser.
+        // cancel and intervention-without-swap paths finalize is skipped, so it
+        // snapshots the un-finalized parser. The raw chunks are kept unjoined and
+        // concatenated lazily by `Diagnostics.rawChunksJoined`.
         func makeDiagnostics() -> Diagnostics {
             Diagnostics(
-                rawChunksJoined: rawChunkParts.joined(),
+                rawChunkParts: rawChunkParts,
                 finalizeState: parser.snapshotFinalizeState(),
                 libraryParsedToolCalls: libraryParsedToolCalls
             )
@@ -178,6 +205,7 @@ nonisolated struct GenerationStreamLoop {
                 Log.agent.warning(
                     "Thinking-loop intervention — reason=\(reason.rawValue) "
                     + "safe_prefix_chars=\(safe.count)"
+                    + logSuffix
                 )
                 return (safe, reason)
             }
@@ -251,7 +279,10 @@ nonisolated struct GenerationStreamLoop {
 
                 // Intervention fired; the truncation triple is already emitted.
                 guard let continuation else {
-                    break streamLoop  // no starter ⇒ emit the truncation and stop
+                    // No starter ⇒ emit the truncation and stop. Don't flush the
+                    // parser afterward (it still holds the truncated thinking).
+                    interventionClosedWithoutSwap = true
+                    break streamLoop
                 }
 
                 // Cancel + drain the current (old) handle before swapping.
@@ -289,6 +320,9 @@ nonisolated struct GenerationStreamLoop {
                         "Thinking-safeguard continuation failed: "
                         + "\(error.localizedDescription) — finishing with truncated response"
                     )
+                    // Same as the no-starter case: the think block is closed and the
+                    // parser was never re-init, so skip the post-loop finalize flush.
+                    interventionClosedWithoutSwap = true
                     break streamLoop
                 }
             }
@@ -318,8 +352,14 @@ nonisolated struct GenerationStreamLoop {
 
         // Flush any remaining buffered text. A finalize-triggered safeguard event
         // cannot swap (the loop is over), matching the server path's discipline.
-        for event in parser.finalize() {
-            _ = emitParserEvent(event, allowToolEvents: !libraryParsedToolCalls)
+        // Skipped when an intervention closed the think block without a swap: the
+        // un-reinit parser still holds the degenerate post-trigger thinking, and
+        // flushing it would forward text AFTER the `.thinkEnd` already emitted —
+        // re-polluting the reasoning the safeguard just truncated.
+        if !interventionClosedWithoutSwap {
+            for event in parser.finalize() {
+                _ = emitParserEvent(event, allowToolEvents: !libraryParsedToolCalls)
+            }
         }
 
         // Surface the vendor's dropped in-flight buffer: when the model emitted
@@ -333,7 +373,9 @@ nonisolated struct GenerationStreamLoop {
             Log.agent.warning(
                 "Vendor ToolCallProcessor dropped unparseable buffer at EOS — "
                 + "bufferLen=\(droppedBuffer.count) wrappedLen=\(wrappedBuffer.count) "
-                + "head=\(String(wrappedBuffer.prefix(120)).debugDescription)"
+                + "head=\(String(wrappedBuffer.prefix(120)).debugDescription) "
+                + "tail=\(String(wrappedBuffer.suffix(80)).debugDescription)"
+                + logSuffix
             )
             sink(.malformedToolCall(wrappedBuffer))
         }
@@ -389,5 +431,32 @@ extension GenerationStreamLoop.RawGenerationHandle {
     /// the prefill/cache metadata stays with the server and never crosses the seam.
     nonisolated init(_ generation: HTTPPrefixCacheGeneration) {
         self.init(stream: generation.stream, completion: generation.completion)
+    }
+}
+
+// MARK: - Late-bound cancel bridge
+
+/// A cancel hook handed to a caller *before* the `GenerationStreamLoop` that
+/// backs it exists. Both generation callers must return their `start.cancel`
+/// synchronously, yet the loop's `cancelCurrent` isn't available until the
+/// driving `Task` has launched and built the loop. This box bridges that gap:
+/// the task `fill`s it once the loop exists; every external cancel site reads
+/// through it. Calling it before `fill` is a no-op (the loop hasn't begun
+/// consuming, so there is nothing to cancel yet).
+///
+/// Extracted so the "deferred-cancel-before-the-loop" dance lives in one place
+/// instead of being hand-copied as an `OSAllocatedUnfairLock<…?>` into each
+/// caller.
+nonisolated struct LateBoundCancel: Sendable {
+    private let box = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
+
+    /// Install the real cancel once the loop exists. Called once, from the task.
+    func fill(_ cancel: @escaping @Sendable () -> Void) {
+        box.withLock { $0 = cancel }
+    }
+
+    /// Invoke the installed cancel if present; idempotent before `fill`.
+    func callAsFunction() {
+        (box.withLock { $0 })?()
     }
 }

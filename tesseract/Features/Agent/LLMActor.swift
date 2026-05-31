@@ -558,8 +558,8 @@ actor LLMActor {
         // The loop owns the cross-swap cancel invariant (which raw handle is live
         // after an intervention swap). Its `cancelCurrent` must be wired into
         // `start.cancel` synchronously, but the loop isn't built until the task
-        // starts — bridge through a box the task fills.
-        let loopCancel = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
+        // starts — bridge through a late-bound cancel the task fills.
+        let loopCancel = LateBoundCancel()
 
         let task = Task {
             [conversation, container, canonicalTools, requestID, loadedModelWeightBytes, genParams] in
@@ -638,9 +638,10 @@ actor LLMActor {
                 let loop = GenerationStreamLoop(
                     initial: .init(mlxStart),
                     startsInsideThinkBlock: startsInsideThinkBlock,
-                    safeguard: safeguardConfig
+                    safeguard: safeguardConfig,
+                    logContext: "request_id=\(requestID.uuidString)"
                 )
-                loopCancel.withLock { $0 = loop.cancelCurrent }
+                loopCancel.fill(loop.cancelCurrent)
 
                 let outcome = try await loop.run(
                     continuation: { safePrefix in
@@ -1038,7 +1039,7 @@ actor LLMActor {
                 // Cancel the live raw handle (whichever is current after an
                 // intervention swap) to unpark a mid-generation `for await`, then
                 // the driving task.
-                loopCancel.withLock { $0 }?()
+                loopCancel()
                 task.cancel()
             },
             waitForCompletion: {

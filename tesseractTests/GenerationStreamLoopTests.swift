@@ -271,6 +271,38 @@ nonisolated struct GenerationStreamLoopTests {
     }
 
     @Test
+    func noContinuationInterventionDoesNotFlushBufferedThinkingAfterThinkEnd() async throws {
+        let recorder = SinkRecorder()
+        let trailingReasoning = "and some trailing reasoning the safeguard truncated"
+        let loop = GenerationStreamLoop(
+            initial: cannedHandle([
+                .chunk(interventionPrelude),
+                .chunk(interventionRepeated),
+                // The third identical line trips the safeguard; the un-terminated
+                // tail after it stays buffered in the (un-reinit) parser at the
+                // moment of intervention.
+                .chunk(interventionRepeated + trailingReasoning),
+            ]),
+            startsInsideThinkBlock: true,
+            safeguard: trippingSafeguard
+        )
+
+        _ = try await loop.run(continuation: nil, sink: recorder.sink)
+
+        // The truncation triple's `.thinkEnd` closes the think block. A finalize()
+        // flush would forward the still-buffered `trailingReasoning` as
+        // `.thinkReclassify` + `.text` AFTER that `.thinkEnd`, re-polluting the
+        // reasoning the safeguard just truncated. Nothing text-bearing may follow.
+        guard let endIdx = recorder.events.firstIndex(where: { $0.isThinkEnd }) else {
+            Issue.record("expected a .thinkEnd from the truncation triple")
+            return
+        }
+        let afterThinkEnd = recorder.events[(endIdx + 1)...]
+        #expect(!afterThinkEnd.contains { $0.asText != nil || $0.asThinking != nil })
+        #expect(!recorder.events.contains { $0.asText == trailingReasoning })
+    }
+
+    @Test
     func interventionSwapsToContinuationWithSafePrefixAndClassifiesPostThinkAsText() async throws {
         let recorder = SinkRecorder()
         let recordedPrefix = OSAllocatedUnfairLock<String?>(initialState: nil)

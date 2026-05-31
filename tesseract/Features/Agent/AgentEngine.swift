@@ -505,9 +505,9 @@ final class AgentEngine {
 
         // The loop owns the cross-swap cancel invariant. Its `cancelCurrent` must
         // be wired into `start.cancel` synchronously, but the loop can't be built
-        // until `launch` yields the initial handle — bridge through a box the task
-        // fills once the loop exists.
-        let loopCancel = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
+        // until `launch` yields the initial handle — bridge through a late-bound
+        // cancel the task fills once the loop exists.
+        let loopCancel = LateBoundCancel()
 
         let task = Task { @MainActor [weak self] in
             defer {
@@ -522,9 +522,10 @@ final class AgentEngine {
                 let loop = GenerationStreamLoop(
                     initial: .init(initialStart),
                     startsInsideThinkBlock: startsThinking,
-                    safeguard: safeguardConfig
+                    safeguard: safeguardConfig,
+                    logContext: "generation_id=\(generationID.uuidString)"
                 )
-                loopCancel.withLock { $0 = loop.cancelCurrent }
+                loopCancel.fill(loop.cancelCurrent)
 
                 // The agent supplies a continuation starter only when it has an
                 // `originalInput` to re-prefill from; otherwise `nil` ⇒ the loop
@@ -572,7 +573,7 @@ final class AgentEngine {
                 }
                 continuation.finish()
             } catch is CancellationError {
-                loopCancel.withLock { $0 }?()
+                loopCancel()
                 continuation.finish()
             } catch {
                 continuation.finish(throwing: AgentEngineError.generationFailed(
@@ -587,7 +588,7 @@ final class AgentEngine {
             cancel: {
                 // Cancel the live raw handle (unparks a mid-generation `for await`)
                 // and the driving task.
-                loopCancel.withLock { $0 }?()
+                loopCancel()
                 task.cancel()
             },
             waitForCompletion: {
