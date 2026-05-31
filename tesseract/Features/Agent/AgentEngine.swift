@@ -498,19 +498,16 @@ final class AgentEngine {
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
         let startsThinking = promptStartsThinking
         let generationID = UUID()
-        struct RawGenerationHandle: Sendable {
-            let cancel: @Sendable () -> Void
-            let waitForCompletion: @Sendable () async -> Void
-        }
-        struct RawGenerationState {
-            var handle: RawGenerationHandle?
-            var cancelIssued = false
-        }
-        let rawState = OSAllocatedUnfairLock<RawGenerationState>(initialState: .init())
 
         let actor = llmActor
         let safeguardConfig = parameters.thinkingSafeguard
         parameters.warnIfThinkingLoopRiskElevated(startsThinking: startsThinking)
+
+        // The loop owns the cross-swap cancel invariant. Its `cancelCurrent` must
+        // be wired into `start.cancel` synchronously, but the loop can't be built
+        // until `launch` yields the initial handle — bridge through a box the task
+        // fills once the loop exists.
+        let loopCancel = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
 
         let task = Task { @MainActor [weak self] in
             defer {
@@ -521,211 +518,63 @@ final class AgentEngine {
             do {
                 try Task.checkCancellation()
 
-                var currentStart = try await launch()
-                let initialCancel = currentStart.cancel
-                let initialWait = currentStart.waitForCompletion
-                rawState.withLock {
-                    $0.handle = .init(
-                        cancel: initialCancel,
-                        waitForCompletion: initialWait
+                let initialStart = try await launch()
+                let loop = GenerationStreamLoop(
+                    initial: .init(initialStart),
+                    startsInsideThinkBlock: startsThinking,
+                    safeguard: safeguardConfig
+                )
+                loopCancel.withLock { $0 = loop.cancelCurrent }
+
+                // The agent supplies a continuation starter only when it has an
+                // `originalInput` to re-prefill from; otherwise `nil` ⇒ the loop
+                // emits the truncation triple and stops.
+                let continuationStarter: GenerationStreamLoop.ContinuationStarter?
+                if let originalInput = input {
+                    continuationStarter = { safePrefix in
+                        let newStart = try await actor.startThinkingContinuationRaw(
+                            originalInput: originalInput,
+                            safeThinkingPrefix: safePrefix,
+                            injection: safeguardConfig.continuationHandOff,
+                            toolSpecs: toolSpecs,
+                            parameters: parameters
+                        )
+                        return .init(newStart)
+                    }
+                } else {
+                    continuationStarter = nil
+                }
+
+                // The sink only yields — the agent keeps no per-event side effects.
+                let outcome = try await loop.run(continuation: continuationStarter) { event in
+                    continuation.yield(event)
+                }
+
+                if outcome.cancelled {
+                    continuation.finish()
+                    return
+                }
+
+                // Re-yield the terminal `.info` the loop captured (downstream reads
+                // completion metrics from the stream, not a return value).
+                if let info = outcome.completionInfo {
+                    continuation.yield(.info(info))
+                    Log.agent.info(
+                        "Generation complete — \(info.generationTokenCount) tokens, "
+                        + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s, "
+                        + "stopReason=\(describeStopReason(info.stopReason))"
                     )
                 }
-                try Task.checkCancellation()
-
-                var parser = ToolCallParser(startsInsideThinkBlock: startsThinking)
-                var rawChunkParts: [String] = []
-                var libraryParsedToolCalls = false
-                let safeguard = ThinkingSafeguardObserver(config: safeguardConfig)
-
-                // Forward a parser event, honoring the safeguard. Returns an
-                // intervention payload when the safeguard fired, otherwise nil.
-                func yieldOrIntervene(
-                    _ event: ToolCallParser.Event
-                ) -> (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)? {
-                    switch safeguard.observe(parserEvent: event) {
-                    case .forward:
-                        continuation.yield(AgentGeneration(parserEvent: event))
-                        return nil
-                    case .intervene(let safe, let reason):
-                        // Replace the degen thinking with the clean prefix, emit the
-                        // hand-off phrase, close `</think>`. Downstream consumers
-                        // reset their thinking accumulators on `.thinkTruncate`.
-                        continuation.yield(.thinkTruncate(safePrefix: safe))
-                        continuation.yield(.thinking(safeguardConfig.injectionMessage))
-                        continuation.yield(.thinkEnd)
-                        Log.agent.warning(
-                            "Thinking-loop intervention — reason=\(reason.rawValue) "
-                            + "safe_prefix_chars=\(safe.count) generation_id=\(generationID.uuidString)"
-                        )
-                        return (safe, reason)
-                    }
+                if outcome.diagnostics.hasUnparsedToolCallMarkers {
+                    Log.agent.warning(
+                        "Raw output contains tool call markers but no .toolCall events were emitted by library"
+                    )
                 }
-
-                generationLoop: while true {
-                    var intervention: (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)? = nil
-
-                    for await generation in currentStart.stream {
-                        try Task.checkCancellation()
-
-                        switch generation {
-                        case .chunk(let text):
-                            rawChunkParts.append(text)
-                            // When the library's ToolCallProcessor handles tool calls
-                            // (xmlFunction format), it leaks wrapper tags as chunks.
-                            // Skip app-level parsing to avoid false "malformed tool
-                            // call" warnings.
-                            if !libraryParsedToolCalls {
-                                for parserEvent in parser.processChunk(text) {
-                                    if let fired = yieldOrIntervene(parserEvent) {
-                                        intervention = fired
-                                        break
-                                    }
-                                }
-                                if intervention != nil { break }
-                            }
-
-                        case .info(let completionInfo):
-                            // Flush any buffered text before emitting info
-                            if !libraryParsedToolCalls {
-                                for event in parser.finalize() {
-                                    if let fired = yieldOrIntervene(event) {
-                                        intervention = fired
-                                        break
-                                    }
-                                }
-                            }
-                            if intervention != nil { break }
-                            let info = AgentGeneration.Info(
-                                promptTokenCount: completionInfo.promptTokenCount,
-                                generationTokenCount: completionInfo.generationTokenCount,
-                                promptTime: completionInfo.promptTime,
-                                generateTime: completionInfo.generateTime,
-                                stopReason: completionInfo.stopReason
-                            )
-                            continuation.yield(.info(info))
-                            Log.agent.info(
-                                "Generation complete — \(completionInfo.generationTokenCount) tokens, "
-                                + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s, "
-                                + "stopReason=\(describeStopReason(completionInfo.stopReason))"
-                            )
-                            let rawChunks = rawChunkParts.joined()
-                            Log.agent.debug("Raw library chunks (after ToolCallProcessor):\n\(rawChunks)")
-
-                        case .toolCall(let call):
-                            // Vendor library parsed this tool call — yield directly
-                            libraryParsedToolCalls = true
-                            Log.agent.info("Library parsed tool call: \(call.function.name)(\(call.function.arguments))")
-                            continuation.yield(.toolCall(call))
-
-                        case .toolCallBufferDelta(let delta):
-                            // Vendor is buffering `<tool_call>…</tool_call>` and
-                            // just appended `delta` characters. Forward as a
-                            // progressive UI event; the final `.toolCall` still
-                            // fires atomically once the close tag parses.
-                            libraryParsedToolCalls = true
-                            continuation.yield(.toolCallDelta(
-                                name: nil,
-                                argumentsDelta: delta
-                            ))
-                        }
-                    }
-
-                    if let fired = intervention, let originalInput = input {
-                        // Cancel the current raw handle and wait for it to stop.
-                        let handleToCancel = rawState.withLock {
-                            (state: inout RawGenerationState) -> RawGenerationHandle? in
-                            let h = state.handle
-                            state.cancelIssued = true
-                            return h
-                        }
-                        handleToCancel?.cancel()
-                        await handleToCancel?.waitForCompletion()
-
-                        // Kick off the continuation from the clean safe prefix.
-                        do {
-                            let newStart = try await actor.startThinkingContinuationRaw(
-                                originalInput: originalInput,
-                                safeThinkingPrefix: fired.safePrefix,
-                                injection: safeguardConfig.continuationHandOff,
-                                toolSpecs: toolSpecs,
-                                parameters: parameters
-                            )
-                            rawState.withLock {
-                                $0.handle = .init(
-                                    cancel: newStart.cancel,
-                                    waitForCompletion: newStart.waitForCompletion
-                                )
-                                $0.cancelIssued = false
-                            }
-                            currentStart = newStart
-                            // Continuation starts OUTSIDE `<think>` — reset
-                            // the parser so its output is classified as text.
-                            // Do NOT reset the safeguard: `interventionsIssued
-                            // >= limit` already blocks re-triggering, and
-                            // resetting would erase the "we intervened" flag
-                            // that any downstream consumer relies on.
-                            parser = ToolCallParser(startsInsideThinkBlock: false)
-                            continue generationLoop
-                        } catch {
-                            Log.agent.error(
-                                "Thinking-safeguard continuation failed: \(error.localizedDescription) — finishing with truncated response"
-                            )
-                            break generationLoop
-                        }
-                    }
-
-                    // Natural end (no intervention on this round).
-                    break generationLoop
-                }
-
-                // Only warn if raw output has tool call markers AND the library didn't parse any
-                if !libraryParsedToolCalls {
-                    let rawChunks = rawChunkParts.joined()
-                    if rawChunks.contains("tool_call") || rawChunks.contains("<function") {
-                        Log.agent.warning("Raw output contains tool call markers but no .toolCall events were emitted by library")
-                    }
-                }
-
-                // Flush any remaining buffered text
-                if !libraryParsedToolCalls {
-                    for event in parser.finalize() {
-                        _ = yieldOrIntervene(event)
-                    }
-                }
-
-                await currentStart.waitForCompletion()
                 continuation.finish()
             } catch is CancellationError {
-                let cancellation = rawState.withLock { state -> (handle: RawGenerationHandle?, shouldCancel: Bool) in
-                    guard let handle = state.handle else {
-                        return (nil, false)
-                    }
-                    if state.cancelIssued {
-                        return (handle, false)
-                    }
-                    state.cancelIssued = true
-                    return (handle, true)
-                }
-                if cancellation.shouldCancel {
-                    cancellation.handle?.cancel()
-                }
-                await cancellation.handle?.waitForCompletion()
+                loopCancel.withLock { $0 }?()
                 continuation.finish()
             } catch {
-                let cancellation = rawState.withLock { state -> (handle: RawGenerationHandle?, shouldCancel: Bool) in
-                    guard let handle = state.handle else {
-                        return (nil, false)
-                    }
-                    if state.cancelIssued {
-                        return (handle, false)
-                    }
-                    state.cancelIssued = true
-                    return (handle, true)
-                }
-                if cancellation.shouldCancel {
-                    cancellation.handle?.cancel()
-                }
-                await cancellation.handle?.waitForCompletion()
                 continuation.finish(throwing: AgentEngineError.generationFailed(
                     error.localizedDescription
                 ))
@@ -736,19 +585,9 @@ final class AgentEngine {
             stream: stream,
             cachedTokenCount: cachedTokenCount,
             cancel: {
-                let cancellation = rawState.withLock { state -> (handle: RawGenerationHandle?, shouldCancel: Bool) in
-                    guard let handle = state.handle else {
-                        return (nil, false)
-                    }
-                    if state.cancelIssued {
-                        return (handle, false)
-                    }
-                    state.cancelIssued = true
-                    return (handle, true)
-                }
-                if cancellation.shouldCancel {
-                    cancellation.handle?.cancel()
-                }
+                // Cancel the live raw handle (unparks a mid-generation `for await`)
+                // and the driving task.
+                loopCancel.withLock { $0 }?()
                 task.cancel()
             },
             waitForCompletion: {

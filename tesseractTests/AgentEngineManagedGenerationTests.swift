@@ -35,6 +35,39 @@ struct AgentEngineManagedGenerationTests {
         #expect(await probe.cancelCount() == 1)
         #expect(engine.isGenerating == false)
     }
+
+    @Test
+    func managedGenerationForwardsTextThenReyieldsTerminalInfoAndFinishes() async throws {
+        let engine = AgentEngine()
+        let (rawStream, rawContinuation) = AsyncStream<Generation>.makeStream()
+        rawContinuation.yield(.chunk("hello"))
+        rawContinuation.yield(.info(GenerateCompletionInfo(
+            promptTokenCount: 4,
+            generationTokenCount: 2,
+            promptTime: 0.1,
+            generationTime: 0.2,
+            stopReason: .stop
+        )))
+        rawContinuation.finish()
+
+        let start = engine.wrapManagedGeneration {
+            HTTPServerRawGenerationStart(stream: rawStream)
+        }
+
+        var events: [AgentGeneration] = []
+        for try await event in start.stream { events.append(event) }
+
+        // Text is forwarded; the terminal `.info` is re-yielded as the last event.
+        let texts = events.compactMap { event -> String? in
+            if case .text(let t) = event { return t } else { return nil }
+        }
+        #expect(texts == ["hello"])
+        guard case .info = events.last else {
+            Issue.record("expected `.info` to be the terminal event, got \(String(describing: events.last))")
+            return
+        }
+        #expect(engine.isGenerating == false)
+    }
 }
 
 private actor RawGenerationProbe {
