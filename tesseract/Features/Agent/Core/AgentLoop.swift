@@ -261,9 +261,10 @@ private func streamAssistantResponse(
     // c. Start streaming generation
     let stream = generate(context.systemPrompt, llmMessages, context.tools, signal)
 
-    // d-g. Process stream chunks and build assistant message
-    var textContent = ""
-    var thinkingContent: String?
+    // d-g. Process stream chunks and build the assistant message. Shared
+    // accumulation (text/thinking/…) is folded in one place by the Generation
+    // Accumulator; tool-call identity is this caller's own projection.
+    var accumulator = GenerationAccumulator()
     var toolCalls: [ToolCallInfo] = []
 
     // Emit messageStart with a placeholder
@@ -274,35 +275,37 @@ private func streamAssistantResponse(
         for try await generation in stream {
             if signal?.isCancelled == true {
                 let msg = AssistantMessage.fromStream(
-                    content: textContent, thinking: thinkingContent, toolCalls: toolCalls
+                    content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
                 )
                 emit(.messageEnd(message: msg))
                 return .success(msg, .cancelled)
             }
 
+            // Fold the shared accumulation transitions in one place.
+            accumulator.ingest(generation)
+
+            // The switch now drives only this caller's side effects: a
+            // `messageUpdate` snapshot per event (projected from accumulator
+            // state) plus stable tool-call identity assignment.
             switch generation {
             case .text(let text):
-                textContent += text
-                let current = AssistantMessage.fromStream(
-                    content: textContent, thinking: thinkingContent, toolCalls: toolCalls
-                )
                 emit(.messageUpdate(
-                    message: current,
+                    message: AssistantMessage.fromStream(
+                        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
+                    ),
                     streamDelta: AssistantStreamDelta(
                         textDelta: text, thinkingDelta: nil, toolCallDelta: nil
                     )
                 ))
 
             case .thinkStart:
-                if thinkingContent == nil { thinkingContent = "" }
+                break
 
             case .thinking(let text):
-                thinkingContent = (thinkingContent ?? "") + text
-                let current = AssistantMessage.fromStream(
-                    content: textContent, thinking: thinkingContent, toolCalls: toolCalls
-                )
                 emit(.messageUpdate(
-                    message: current,
+                    message: AssistantMessage.fromStream(
+                        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
+                    ),
                     streamDelta: AssistantStreamDelta(
                         textDelta: nil, thinkingDelta: text, toolCallDelta: nil
                     )
@@ -311,26 +314,14 @@ private func streamAssistantResponse(
             case .thinkEnd:
                 break
 
-            case .thinkReclassify:
-                textContent = (thinkingContent ?? "") + textContent
-                thinkingContent = nil
-                let current = AssistantMessage.fromStream(
-                    content: textContent, thinking: thinkingContent, toolCalls: toolCalls
-                )
+            case .thinkReclassify, .thinkTruncate:
+                // Reclassify now APPENDS buffered thinking after any pre-think
+                // text (the canonical rule, owned by the accumulator); truncate
+                // resets thinking to the safe prefix. Both just re-snapshot.
                 emit(.messageUpdate(
-                    message: current,
-                    streamDelta: AssistantStreamDelta(
-                        textDelta: nil, thinkingDelta: nil, toolCallDelta: nil
-                    )
-                ))
-
-            case .thinkTruncate(let safePrefix):
-                thinkingContent = safePrefix
-                let current = AssistantMessage.fromStream(
-                    content: textContent, thinking: thinkingContent, toolCalls: toolCalls
-                )
-                emit(.messageUpdate(
-                    message: current,
+                    message: AssistantMessage.fromStream(
+                        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
+                    ),
                     streamDelta: AssistantStreamDelta(
                         textDelta: nil, thinkingDelta: nil, toolCallDelta: nil
                     )
@@ -343,11 +334,10 @@ private func streamAssistantResponse(
                     argumentsJSON: encodeArguments(call.function.arguments)
                 )
                 toolCalls.append(info)
-                let current = AssistantMessage.fromStream(
-                    content: textContent, thinking: thinkingContent, toolCalls: toolCalls
-                )
                 emit(.messageUpdate(
-                    message: current,
+                    message: AssistantMessage.fromStream(
+                        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
+                    ),
                     streamDelta: AssistantStreamDelta(
                         textDelta: nil, thinkingDelta: nil,
                         toolCallDelta: ToolCallDelta(
@@ -374,7 +364,7 @@ private func streamAssistantResponse(
         }
     } catch {
         let msg = AssistantMessage.fromStream(
-            content: textContent, thinking: thinkingContent, toolCalls: toolCalls
+            content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
         )
         emit(.messageEnd(message: msg))
         if signal?.isCancelled == true {
@@ -385,7 +375,7 @@ private func streamAssistantResponse(
     }
 
     let finalMessage = AssistantMessage.fromStream(
-        content: textContent, thinking: thinkingContent, toolCalls: toolCalls
+        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
     )
     emit(.messageEnd(message: finalMessage))
     return .success(finalMessage, .endOfTurn)

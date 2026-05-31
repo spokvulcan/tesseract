@@ -90,27 +90,15 @@ nonisolated func makeSummarizeClosure(
                 )
             }
         )
-        var textContent = ""
-        var thinkingContent: String?
+        // Fold the stream in one place; the summarizer's Generation Projection
+        // is just the accumulated text (thinking and tool calls are
+        // intentionally ignored). This drops the old `.thinkEnd`-nulls-thinking
+        // step — the summarizer was the only consumer to discard closed-block
+        // reasoning; it now folds like every other consumer.
+        var accumulator = GenerationAccumulator()
         for try await gen in stream {
-            switch gen {
-            case .text(let chunk):
-                textContent += chunk
-            case .thinkStart:
-                if thinkingContent == nil { thinkingContent = "" }
-            case .thinking(let chunk):
-                thinkingContent = (thinkingContent ?? "") + chunk
-            case .thinkEnd:
-                thinkingContent = nil
-            case .thinkReclassify:
-                textContent += thinkingContent ?? ""
-                thinkingContent = nil
-            case .thinkTruncate(let safePrefix):
-                thinkingContent = safePrefix
-            case .toolCall, .malformedToolCall, .toolCallDelta, .info:
-                break
-            }
+            accumulator.ingest(gen)
         }
-        return textContent
+        return accumulator.text
     }
 }

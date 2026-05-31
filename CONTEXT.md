@@ -329,6 +329,68 @@ CoreAudio, audio output, player.
 > **Expert:** No. The `InferenceArbiter` drives `loadModel`/`unloadModel` on the
 > engine, above the port. The port is model-only.
 
+### Generation accumulation
+
+**Generation Accumulator**:
+The single home for folding an `AgentGeneration` event stream into the accumulated
+content of one assistant turn — `text`, optional `thinking`, `[ToolCall]`, the raw
+malformed-tool-call buffer, and the safeguard safe-prefix length. A
+`nonisolated Sendable` value type with one `mutating func ingest(_:)`; it owns the
+subtle transitions that were previously hand-copied into five consumers
+(`LLMActor.handle`, both `CompletionHandler` paths, `InternalInferenceRouting`, the
+agent double-loop) and had already drifted into a bug: `.thinkReclassify` **appends**
+buffered thinking onto text, `.thinkTruncate` resets thinking to the safe prefix,
+`.thinkStart`/`.thinking` lazily open the optional thinking buffer, `.thinkEnd` is a
+no-op, `.malformedToolCall` accumulates raw, `.toolCall` appends the event's raw
+`ToolCall`. It holds **no** side effects, control flow, or output type: each caller
+keeps its own `for await` loop, its per-event side effects (SSE chunking,
+`emit(.messageUpdate)`, `continuation.yield`), its control flow (the safeguard
+`break` + continuation swap; cancellation emits), and its **Generation Projection**.
+The deletion test passes: remove it and the reclassify/truncate/thinkStart rules
+reappear across five call sites.
+_Avoid_: StreamResult (one caller's output type, not the accumulator), event handler,
+GenerationFold (names the operation; we name the value), parser/`ToolCallParser` (that
+is *upstream* — it produces the events the accumulator folds).
+
+**Generation Projection**:
+The per-caller mapping from a **Generation Accumulator**'s state to that caller's
+output shape — `AssistantMessage` (agent loop), `StreamResult` plus the HTTP replay
+message (server), the leaf-store `HTTPPrefixCacheMessage` (`LLMActor`), or just `text`
+(the summarizer). The projection is where a caller's *intent* lives: the summarizer
+ignores `thinking`/`toolCalls`; the server's malformed→text fallback fires only when
+the turn is otherwise empty; the agent loop assigns stable tool-call identities.
+Projections stay out of the accumulator so adding a consumer never edits the shared
+fold.
+_Avoid_: conversion, adapter (it is not a seam adapter), output builder.
+
+> **Flagged ambiguity — `thinking` nil vs "".** `thinking == nil` means no `<think>`
+> block was ever opened (so no thinking row renders); `thinking == ""` means a block
+> opened but has produced no content yet. Consumers that do not need the distinction
+> read `thinking ?? ""`. Do not collapse the optionality.
+
+> **Flagged invariant — reclassify appends.** On `.thinkReclassify` (generation ended
+> inside an unclosed `<think>`), the one rule is `text += (thinking ?? "")` — buffered
+> thinking goes *after* any text the model emitted before opening the block. The agent
+> double-loop previously prepended (`thinking + text`), reversing output whenever text
+> preceded the block; the **Generation Accumulator** makes append canonical.
+
+**Example dialogue:**
+
+> **Dev:** The server streams SSE while the agent loop builds an `AssistantMessage`.
+> Do they share the accumulator?
+> **Expert:** They share the *fold*, not the loop. Each keeps its own `for await`: the
+> server sends an SSE chunk per event, the loop emits a `messageUpdate`. Both call
+> `accumulator.ingest(event)`, so the text/thinking/tool-call state — and the reclassify
+> and truncate rules — come from one place.
+> **Dev:** Where does the summarizer's "text only, drop the reasoning" go?
+> **Expert:** That is a **Generation Projection**, not an accumulation rule. The
+> accumulator faithfully keeps `thinking`; the summarizer returns `accumulator.text` and
+> ignores it. Nothing about "I don't want reasoning" leaks into the fold.
+> **Dev:** And if a `<think>` block never closes?
+> **Expert:** `.thinkReclassify` fires and the accumulator appends the buffered thinking
+> onto the text — append, never prepend. That used to be wrong in the agent loop; now
+> there is one rule and one regression test.
+
 ## Why
 
 _TODO: the constraints that shape the system (fully offline, on-device MLX,
