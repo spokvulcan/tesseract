@@ -391,6 +391,74 @@ _Avoid_: conversion, adapter (it is not a seam adapter), output builder.
 > onto the text — append, never prepend. That used to be wrong in the agent loop; now
 > there is one rule and one regression test.
 
+### Chat transcript projection
+
+**Chat Transcript**:
+The pure projection of the agent **message log** (`agent.state.messages`, the single
+source of truth) into the flat `[ChatRow]` the chat list renders, grouped into
+**Turn**s. A stateless namespace of two pure functions: `turns(from:)` applies the
+grouping rule (a **Turn** boundary is a user message or a compaction marker), and
+`rows(for:_:)` folds one **Turn** plus a `Context` of inputs into that Turn's rows.
+It reads **no** coordinator state and has **no** side effects: expansion state, the
+live `streamMessage`, and a timestamp formatter are passed *in* as `Context`. The
+coordinator maps `rows(for:_:)` over every **Turn** for a full rebuild and over just
+the last **Turn** for the streaming tail-patch, then splices onto the stable prefix —
+so the fast path projects only the active Turn (avoiding `ToolDisplayHelpers.displayProps`
+for all history) while sharing one fold. Pruning stale expansion entries and the
+"auto-expand the streaming header unless the user collapsed it" decision are explicit
+coordinator steps computed *before* the call, never side effects of projecting (they
+used to mutate `expandedTurns` from inside a row emitter). Distinct from **Generation
+Projection**: that maps one turn's **Generation Accumulator** state to a caller's
+output (e.g. `AssistantMessage`); the **Chat Transcript** projects the *whole* committed
+log plus the live stream into the rendered row sequence — a different layer.
+_Avoid_: rebuildRows / patchStreamingTail (the two duplicated method bodies it
+replaces), row builder, ChatRowBuilder, view model, render model.
+
+**Turn**:
+The **Chat Transcript**'s grouping unit — a contiguous run of messages from one user
+message (or compaction marker) through the assistant's complete response, up to the
+next user/compaction message. A single **Turn** may contain several assistant messages
+— one per agent-loop `turnEnd` — when a tool-calling loop runs; the Turn projects them
+into thinking / tool-call / intermediate-text rows plus one final answer row.
+_Avoid_: round, exchange, conversation turn, message group.
+
+**Chat Row**:
+The flat, pre-computed, `Equatable & Sendable` atom of the **Chat Transcript** — one
+displayable line (`user`, `assistantText`, `thinking`, `toolCall`, `toolText`,
+`system`, `turnHeader`, `streamingText`, `streamingIndicator`). Every string is
+render-ready: no JSON, no `Date` formatting, no protocol conversion in the render path.
+It is the unit SwiftUI diffs, so its `id` is stable across rebuilds.
+_Avoid_: cell, item, list element, view model.
+
+> **Flagged ambiguity — "Transcript" vs ASR transcription.** The **Chat Transcript**
+> is the rendered chat conversation (message log → rows). It is unrelated to
+> `TranscriptionEngine` / `Transcribing` / `TranscriptionResult`, which are
+> speech-to-text. When unqualified, say "chat transcript".
+
+> **Flagged ambiguity — "Turn": transcript turn vs loop turn.** A **Chat Transcript**
+> **Turn** spans a user prompt through the assistant's full response and can contain
+> several agent-loop turns. The agent loop's `turnEnd` event marks one finer-grained
+> turn (a single assistant message plus its tool results). When ambiguous, say
+> "transcript turn" vs "loop turn".
+
+**Example dialogue:**
+
+> **Dev:** Streaming updates the rows ~20×/second. Does it re-group the whole
+> conversation every tick?
+> **Expert:** No. `turns(from:)` is cheap, but `rows(for:_:)` runs `displayProps` per
+> tool call. So the coordinator projects every **Turn** only on a full rebuild; for the
+> streaming tail it projects just the last **Turn** and splices it onto the stable
+> prefix. One fold, two call shapes.
+> **Dev:** Where did "expand the streaming header unless the user collapsed it" go?
+> **Expert:** Out of the projection. It used to mutate `expandedTurns` from inside a row
+> emitter. Now the coordinator decides it and passes `isExpanded` in the `Context`; the
+> **Chat Transcript** is pure — same inputs, same rows, no coordinator state touched.
+> That purity is what put the grouping rules on a test surface.
+> **Dev:** A tool-calling loop — one **Turn** or many?
+> **Expert:** One transcript **Turn**, many loop turns. The Turn runs from the user
+> message through every assistant message and tool result until the next user message;
+> each assistant message inside it was its own `turnEnd`.
+
 ## Why
 
 _TODO: the constraints that shape the system (fully offline, on-device MLX,
