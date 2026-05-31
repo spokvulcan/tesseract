@@ -24,19 +24,7 @@ struct AgentCoordinatorVoiceCancellationTests {
     }
 
     private func makeAgent() -> Agent {
-        let config = AgentLoopConfig(
-            model: AgentModelRef(id: "voice-cancel-test-model"),
-            convertToLlm: { _ in [] },
-            contextTransform: nil,
-            getSteeringMessages: nil,
-            getFollowUpMessages: nil
-        )
-        return Agent(
-            config: config,
-            systemPrompt: "test",
-            tools: [],
-            generate: { _, _, _, _ in AsyncThrowingStream { $0.finish() } }
-        )
+        makeNoOpAgent(modelID: "voice-cancel-test-model")
     }
 
     @Test

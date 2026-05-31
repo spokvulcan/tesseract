@@ -34,6 +34,14 @@ nonisolated enum ChatTranscript {
     // MARK: - Context
 
     /// Everything the projection needs beyond the messages — all read-only.
+    ///
+    /// Deliberately **not** `Sendable`: it carries a `formatTimestamp` closure,
+    /// and the app's instance closes over a `DateFormatter`. A `Context` is built
+    /// and consumed within a single isolation domain — the coordinator builds one
+    /// on the main actor per rebuild / tail-patch, and the pure-value tests build
+    /// one synchronously off-actor — and is never shared across concurrent tasks.
+    /// The projection being `nonisolated` lets either caller run it *in place*; it
+    /// does not promise that one `Context` is safe to hand to `Task.detached`.
     struct Context {
         /// Whole-transcript generating flag (drives the active turn + the
         /// zero/empty-Turn fallback).
@@ -91,6 +99,14 @@ nonisolated enum ChatTranscript {
 
     // MARK: - Grouping
 
+    /// A Turn boundary: a user message or a compaction marker. The single source
+    /// of the grouping rule, shared by ``turns(from:)`` (forward) and
+    /// ``activeTurn(from:)`` (the bounded backward scan), so the full rebuild and
+    /// the streaming fast path cannot drift on where a Turn begins.
+    static func isTurnBoundary(_ msg: any AgentMessageProtocol) -> Bool {
+        msg.asUser != nil || msg is CompactionSummaryMessage
+    }
+
     /// Groups the message log into Turns. A Turn boundary is a user message or a
     /// compaction marker. Leading non-boundary messages (malformed input — the
     /// first message is always a user message in practice) are grouped into a
@@ -99,7 +115,7 @@ nonisolated enum ChatTranscript {
         var result: [Turn] = []
         var current: Turn?
         for msg in messages {
-            let isBoundary = msg.asUser != nil || msg is CompactionSummaryMessage
+            let isBoundary = isTurnBoundary(msg)
             if isBoundary {
                 if let current { result.append(current) }
                 current = Turn(id: msg.messageUUID, messages: [msg])
@@ -164,7 +180,7 @@ nonisolated enum ChatTranscript {
         var id = messages[0].messageUUID
         for index in stride(from: messages.count - 1, through: 0, by: -1) {
             let msg = messages[index]
-            if msg.asUser != nil || msg is CompactionSummaryMessage {
+            if isTurnBoundary(msg) {
                 start = index
                 id = msg.messageUUID
                 break
@@ -213,7 +229,7 @@ nonisolated enum ChatTranscript {
             rows.append(ChatRow(
                 id: turn.id.uuidString + "-system",
                 kind: .system(SystemRow(
-                    content: "[Context compacted — \(compaction.tokensBefore) tokens summarized]"
+                    content: compaction.displayText
                 ))
             ))
         }
@@ -274,12 +290,16 @@ nonisolated enum ChatTranscript {
             }
         }
 
-        let turnHasAssistant = turn.messages.contains { $0.asAssistant != nil }
-
-        // An active turn with no committed assistant message yet: the streaming
-        // overlay / indicator is the whole body. Unified — emitted once (the
-        // old full rebuild + tail-patch had a latent duplicate-emit here).
-        if isActive && !turnHasAssistant {
+        // An active turn whose committed assistant body renders nothing yet: the
+        // streaming overlay / indicator is the whole body. Unified — emitted once
+        // (the old full rebuild + tail-patch had a latent duplicate-emit here).
+        //
+        // Gated on "no committed rows produced" (`steps.isEmpty && answer == nil`),
+        // not "no assistant message present" — an assistant message whose content
+        // is whitespace-only commits anyway (the commit guard uses a raw
+        // `isEmpty`) yet yields no steps and no answer, so the "thinking…"
+        // indicator must still show while generation is running.
+        if isActive && steps.isEmpty && answer == nil {
             rows += generatingFallback(ctx)
             return (rows, toolRowIDs)
         }
@@ -326,7 +346,13 @@ nonisolated enum ChatTranscript {
             rows += streamingStepRows(ctx)
         }
 
-        // Final answer row.
+        // Final answer row, appended after any live streaming rows above. Safe
+        // only because a committed final answer and an active stream never
+        // coexist within one Turn today: `messageEnd` nils the stream before the
+        // answer commits, and follow-up turns aren't wired (`getFollowUpMessages`
+        // drains empty; `prompt` guards on `.idle`). If a second loop turn in the
+        // same transcript Turn is ever enabled, revisit this ordering — the older
+        // committed answer would otherwise render below the newer live stream.
         if let answer {
             rows.append(ChatRow(
                 id: answer.id.uuidString + "-answer",
@@ -372,7 +398,12 @@ nonisolated enum ChatTranscript {
         return rows
     }
 
-    /// Counts live streaming steps from the current stream.
+    /// Counts live streaming steps from the current stream — the "(n steps)"
+    /// header badge. Encodes the same step-emission rule as ``streamingStepRows``
+    /// (thinking + each tool call + trailing text when tools are present; a
+    /// trailing text with no tools is the answer, not a step). The two are pinned
+    /// in lockstep by `streamingHeaderCountMatchesRenderedStepRows` — keep them in
+    /// step when changing what counts as a streaming step.
     private static func streamingStepCount(_ stream: AssistantMessage?) -> Int {
         guard let stream else { return 0 }
         var count = 0
@@ -431,9 +462,10 @@ nonisolated enum ChatTranscript {
 
         // Streaming tool calls.
         for (index, info) in stream.toolCalls.enumerated() {
+            let rowID = "streaming-tool-\(index)"
             let props = ToolDisplayHelpers.displayProps(for: info)
             rows.append(ChatRow(
-                id: "streaming-tool-\(index)",
+                id: rowID,
                 kind: .toolCall(ToolCallRow(
                     displayTitle: props.title,
                     iconName: props.icon,
@@ -441,7 +473,7 @@ nonisolated enum ChatTranscript {
                     resultContent: nil,
                     isError: false,
                     isLast: index == stream.toolCalls.count - 1 && trimmed.isEmpty,
-                    isDetailExpanded: false,
+                    isDetailExpanded: ctx.expandedDetails.contains(rowID),
                     filePath: props.filePath
                 ))
             ))

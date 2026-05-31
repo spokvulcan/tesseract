@@ -108,6 +108,25 @@ struct ChatTranscriptTests {
         }
     }
 
+    /// A leading `OpaqueMessage` (the unknown-persistence-tag fallback, the one
+    /// message type whose identity comes from a stored id rather than a core
+    /// `Identifiable`) must yield the *same* Turn id from the full rebuild
+    /// (`turns(from:)`) and the streaming tail-patch (`activeTurn(from:)`), and a
+    /// *stable* one across calls. Otherwise `messageUUID`'s random fallback would
+    /// re-randomize the active Turn's id every streaming tick, churning its
+    /// `ForEach` identity and desyncing its expansion toggle across the splice.
+    @Test func opaqueMessageTurnIDIsStableAndAgreesAcrossPaths() {
+        let opaque = OpaqueMessage(tag: "future_unknown_tag", rawPayload: [:])
+        let messages: [any AgentMessageProtocol] = [opaque]
+
+        #expect(opaque.messageUUID == opaque.messageUUID)   // stable, not re-randomized
+
+        let fromTurns = ChatTranscript.turns(from: messages).last?.id
+        let fromActive = ChatTranscript.activeTurn(from: messages)?.id
+        #expect(fromTurns == fromActive)
+        #expect(fromTurns == opaque.messageUUID)
+    }
+
     // MARK: - Committed projection
 
     @Test func userThenAnswerProjectsTwoRows() {
@@ -287,6 +306,75 @@ struct ChatTranscriptTests {
         #expect(rows.map(\.id) == [user.id.uuidString, "streaming-answer"])
         guard case .streamingText(let streaming) = rows[1].kind else { Issue.record("no streaming text"); return }
         #expect(streaming.content == "partial answer")
+    }
+
+    /// The generating indicator must survive a committed assistant that renders
+    /// *zero* rows. An assistant whose content is whitespace-only commits anyway
+    /// (the commit guard uses a raw `isEmpty`, so `"   "` is admitted) yet yields
+    /// no steps and no answer. The fallback is gated on "no committed rows
+    /// produced", not "no assistant message present", so the indicator still
+    /// shows while generation runs.
+    @Test func activeTurnWithBlankCommittedAssistantStillShowsIndicator() {
+        let user = UserMessage(content: "hi")
+        let blank = AssistantMessage(content: "   ")   // whitespace-only -> no rows
+        let turn = ChatTranscript.Turn(id: user.id, messages: [user, blank])
+        let rows = ChatTranscript.rows(for: turn, ctx(generating: true, stream: nil))
+        #expect(rows.map(\.id) == [user.id.uuidString, "streaming-indicator"])
+    }
+
+    /// A streaming tool row honors `expandedDetails` (keyed `streaming-tool-<i>`)
+    /// rather than hard-coding collapsed, so a detail the user opened stays open
+    /// across the ~20×/sec tail-patch reprojections instead of snapping shut.
+    @Test func streamingToolRowDetailHonorsExpandedDetails() {
+        let user = UserMessage(content: "hi")
+        let turn = ChatTranscript.Turn(id: user.id, messages: [user])
+        let stream = AssistantMessage(content: "", toolCalls: [toolCall(id: "tc1", name: "read_file", path: "/tmp/a.txt")])
+        let rows = ChatTranscript.rows(
+            for: turn,
+            ctx(
+                generating: true,
+                expandedTurns: [ChatTranscript.streamingTurnID],
+                expandedDetails: ["streaming-tool-0"],
+                stream: stream
+            )
+        )
+        guard let row = rows.first(where: { $0.id == "streaming-tool-0" }),
+              case .toolCall(let tool) = row.kind else { Issue.record("no streaming tool row"); return }
+        #expect(tool.isDetailExpanded == true)
+    }
+
+    /// The header's "(n steps)" badge (`streamingStepCount`) and the rendered
+    /// step rows (`streamingStepRows`) encode the same step-emission rule; pin
+    /// them in lockstep so adding or reordering a streaming step kind in one but
+    /// not the other fails here. For a streaming-only active turn the header
+    /// count must equal the number of rendered streaming *step* rows — everything
+    /// the overlay emits except the header and the final `streaming-answer` row
+    /// (which is the answer, not a step).
+    @Test func streamingHeaderCountMatchesRenderedStepRows() {
+        let user = UserMessage(content: "hi")
+        let turn = ChatTranscript.Turn(id: user.id, messages: [user])
+        let streams: [AssistantMessage] = [
+            AssistantMessage(content: "", thinking: "t"),
+            AssistantMessage(content: "", toolCalls: [toolCall(id: "a", name: "ls", path: "/x")]),
+            AssistantMessage(content: "interim", toolCalls: [toolCall(id: "a", name: "ls", path: "/x")]),
+            AssistantMessage(content: "", thinking: "t", toolCalls: [
+                toolCall(id: "a", name: "ls", path: "/x"),
+                toolCall(id: "b", name: "read_file", path: "/y"),
+            ]),
+        ]
+        for stream in streams {
+            let rows = ChatTranscript.rows(
+                for: turn,
+                ctx(generating: true, expandedTurns: [ChatTranscript.streamingTurnID], stream: stream)
+            )
+            guard case .turnHeader(let header) = rows[1].kind else {
+                Issue.record("no streaming header"); return
+            }
+            let stepRows = rows.filter {
+                $0.id != "streaming-header" && $0.id != "streaming-answer" && $0.id != user.id.uuidString
+            }
+            #expect(header.stepCount == stepRows.count)
+        }
     }
 
     // MARK: - Zero-Turn

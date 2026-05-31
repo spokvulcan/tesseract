@@ -34,21 +34,7 @@ struct AgentCoordinatorCompactLeaseTests {
     )
 
     private func makeAgent() -> Agent {
-        let config = AgentLoopConfig(
-            model: AgentModelRef(id: "nonexistent-test-model"),
-            convertToLlm: { _ in [] },
-            contextTransform: nil,
-            getSteeringMessages: nil,
-            getFollowUpMessages: nil
-        )
-        return Agent(
-            config: config,
-            systemPrompt: "test",
-            tools: [],
-            generate: { _, _, _, _ in
-                AsyncThrowingStream { $0.finish() }
-            }
-        )
+        makeNoOpAgent(modelID: "nonexistent-test-model")
     }
 
     /// Waits until `isGenerating` flips back to `false`, polling the MainActor

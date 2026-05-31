@@ -86,7 +86,7 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
             self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId, isError: tr.isError)
         case let compaction as CompactionSummaryMessage:
             self.init(id: UUID(), timestamp: compaction.timestamp, role: .system,
-                      content: "[Context compacted — \(compaction.tokensBefore) tokens summarized]", thinking: nil)
+                      content: compaction.displayText, thinking: nil)
         case let chat as AgentChatMessage:
             self = chat
         default:

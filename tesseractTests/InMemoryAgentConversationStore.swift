@@ -62,6 +62,16 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
         currentConversation?.messages = messages
     }
 
+    /// Fidelity boundary — where this fixture intentionally diverges from the
+    /// real `AgentConversationStore.saveSync`, kept simple because no current
+    /// characterization asserts against any of it:
+    ///   - persists unconditionally (the real store guards on `hasUserMessages`),
+    ///   - does not stamp `updatedAt` (the real store sets `updatedAt = Date()`),
+    ///   - does not round-trip messages through `SyncMessageCodec`, and
+    ///   - `loadMostRecent()` tie-breaks off unordered `stored.values` rather than
+    ///     a maintained, recency-ordered conversation index.
+    /// A future multi-conversation, recency-ordered, or codec-sensitive test must
+    /// not lean on these — extend the fixture to match the real store first.
     func saveCurrent() {
         guard let current = currentConversation else { return }
         stored[current.id] = current

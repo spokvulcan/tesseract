@@ -2,14 +2,21 @@
 //  AgentCoordinatorChatTranscriptCharacterizationTests.swift
 //  tesseractTests
 //
-//  Golden-master tests pinning the CURRENT [ChatRow] output of AgentCoordinator
-//  before the Chat Transcript extraction (#28). Committed-state row building is
+//  Characterization tests for AgentCoordinator's committed [ChatRow] output,
 //  driven through the public `loadConversation` path against a hermetic
-//  InMemoryAgentConversationStore — no SwiftUI, no live agent, no disk. These
-//  lock the subtle grouping / per-Turn / answer-discrimination rules so the
-//  extraction is provably behaviour-preserving (except the documented
-//  image-only-user-message convergence, which gets its own before/after
-//  assertion once the module lands).
+//  InMemoryAgentConversationStore — no SwiftUI, no live agent, no disk. They
+//  lock the subtle grouping / per-Turn / answer-discrimination rules as a
+//  forward regression guard on the Chat Transcript projection (#28).
+//
+//  Provenance: these were authored alongside the extraction, not committed green
+//  against the pre-extraction AgentCoordinator first — so they pin the EXTRACTED
+//  behaviour (coordinator -> ChatTranscript), not an independently established
+//  pre-refactor baseline. They guard against future drift; they do not by
+//  themselves prove the extraction changed nothing. In particular they exercise
+//  only committed state via loadConversation, so a streaming-only change would
+//  not surface here (the streaming overlay is covered in ChatTranscriptTests).
+//  The one intended behaviour change — image-only user rows on the tail-patch
+//  path — is pinned separately in ChatTranscriptTests.
 //
 
 import Foundation
@@ -23,19 +30,7 @@ struct AgentCoordinatorChatTranscriptCharacterizationTests {
     // MARK: - Harness
 
     private func makeAgent() -> Agent {
-        let config = AgentLoopConfig(
-            model: AgentModelRef(id: "chat-transcript-characterization-model"),
-            convertToLlm: { _ in [] },
-            contextTransform: nil,
-            getSteeringMessages: nil,
-            getFollowUpMessages: nil
-        )
-        return Agent(
-            config: config,
-            systemPrompt: "test",
-            tools: [],
-            generate: { _, _, _, _ in AsyncThrowingStream { $0.finish() } }
-        )
+        makeNoOpAgent(modelID: "chat-transcript-characterization-model")
     }
 
     /// Seeds the conversation store with `messages` and loads it through the
@@ -89,6 +84,36 @@ struct AgentCoordinatorChatTranscriptCharacterizationTests {
         #expect(answerRow.content == "Hi there")
         #expect(answerRow.messageID == assistant.id)
         #expect(answerRow.hasStepsAbove == false)
+    }
+
+    /// Production turns arrive wrapped as `CoreMessage.user` / `.assistant` (see
+    /// `AgentCoordinator.sendMessage`), not the bare structs the other tests seed.
+    /// The `CoreMessage` branches of `asUser` / `asAssistant` / `messageUUID` —
+    /// the shape the live coordinator actually projects — must yield the same
+    /// rows and ids, or a regression in those branches would pass the rest of the
+    /// suite unnoticed.
+    @Test func coreMessageWrappedTurnProjectsLikeBareStructs() {
+        let user = UserMessage(content: "Hello")
+        let assistant = AssistantMessage(content: "Hi there")
+        let rows = coordinatorRows(for: [
+            CoreMessage.user(user), CoreMessage.assistant(assistant),
+        ])
+
+        #expect(rows.count == 2)
+
+        #expect(rows.first?.id == user.id.uuidString)
+        guard case .user(let userRow) = rows.first?.kind else {
+            Issue.record("row 0 not a user row: \(String(describing: rows.first?.kind))"); return
+        }
+        #expect(userRow.content == "Hello")
+        #expect(userRow.messageID == user.id)
+
+        #expect(rows.last?.id == "\(assistant.id.uuidString)-answer")
+        guard case .assistantText(let answerRow) = rows.last?.kind else {
+            Issue.record("row 1 not an answer row: \(String(describing: rows.last?.kind))"); return
+        }
+        #expect(answerRow.content == "Hi there")
+        #expect(answerRow.messageID == assistant.id)
     }
 
     /// A lone user message with no assistant response renders as a single user row.

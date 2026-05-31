@@ -35,7 +35,15 @@ nonisolated struct TaggedMessage: Codable, Sendable {
 
 /// Fallback for messages with an unrecognized persistence tag.
 /// Preserves the raw payload so re-encoding produces identical JSON.
-nonisolated struct OpaqueMessage: AgentMessageProtocol, Sendable {
+nonisolated struct OpaqueMessage: AgentMessageProtocol, Sendable, Identifiable {
+    /// Stable per-instance identity. Not part of the round-trip — re-encoding
+    /// still emits only `tag` + `rawPayload`, so the persisted JSON is identical.
+    /// It exists so `messageUUID` returns a *stable* id for an `OpaqueMessage`
+    /// instead of a fresh random `UUID()` on every call: an `OpaqueMessage` at a
+    /// Turn boundary would otherwise give the full rebuild and the streaming
+    /// tail-patch different active-turn ids, churning the turn's `ForEach`
+    /// identity and desyncing its expansion toggle each tick.
+    let id = UUID()
     let tag: String
     let rawPayload: [String: AnyCodableValue]
 
