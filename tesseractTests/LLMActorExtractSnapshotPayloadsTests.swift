@@ -2,11 +2,10 @@
 //  LLMActorExtractSnapshotPayloadsTests.swift
 //  tesseractTests
 //
-//  Unit tests for `LLMActor.extractSnapshotPayloads` — the helper that
-//  converts a set of live Metal-resident `HybridCacheSnapshot`
-//  instances into pure `Sendable` `SnapshotPayload` value types via
-//  `MLXArray.asData()`. Also covers the downstream plumbing contract
-//  on `PrefixCacheManager.storeSnapshots` / `storeLeaf`.
+//  Unit tests for the LLMActor snapshot extraction edge: converting
+//  live Metal-resident `HybridCacheSnapshot` instances into pure
+//  `Sendable` `SnapshotPayload` values via `MLXArray.asData()`, and
+//  attaching those payloads to Snapshot Admission entries.
 //
 //  The helper itself is `nonisolated static` and operates on pure
 //  fixture snapshots, so none of these tests require a loaded MLX
@@ -98,6 +97,44 @@ struct LLMActorExtractSnapshotPayloadsTests {
             [], ssdEnabled: true
         )
         #expect(payloads.isEmpty)
+    }
+
+    @Test
+    func checkpointCandidatesCarryPerEntryStorageAtExtractionEdge() throws {
+        let snapshots = [
+            makeSimpleKVSnapshot(tokenOffset: 5),
+            makeSimpleKVSnapshot(tokenOffset: 9, type: .branchPoint),
+        ]
+
+        let ssdCandidates = LLMActor.extractCheckpointAdmissionCandidates(
+            snapshots,
+            ssdEnabled: true
+        )
+
+        #expect(ssdCandidates.count == snapshots.count)
+        for index in snapshots.indices {
+            #expect(ssdCandidates[index].snapshot.tokenOffset == snapshots[index].tokenOffset)
+            if case .ramAndSSD(let payload) = ssdCandidates[index].storage {
+                #expect(payload.tokenOffset == snapshots[index].tokenOffset)
+                #expect(payload.checkpointType == snapshots[index].checkpointType)
+            } else {
+                #expect(Bool(false), "Expected SSD-enabled candidate to carry its payload")
+            }
+        }
+
+        let ramOnlyCandidates = LLMActor.extractCheckpointAdmissionCandidates(
+            snapshots,
+            ssdEnabled: false
+        )
+
+        #expect(ramOnlyCandidates.count == snapshots.count)
+        for candidate in ramOnlyCandidates {
+            if case .ramOnly = candidate.storage {
+                // expected
+            } else {
+                #expect(Bool(false), "Expected SSD-disabled candidate to be RAM-only")
+            }
+        }
     }
 
     // MARK: - Structural equivalence
@@ -268,30 +305,6 @@ struct LLMActorExtractSnapshotPayloadsTests {
 
     @MainActor
     @Test
-    func storeLeafAcceptsNewPayloadParameter() {
-        let manager = PrefixCacheManager(
-            memoryBudgetBytes: 16 * 1024 * 1024
-        )
-        let snapshot = makeSimpleKVSnapshot(tokenOffset: 6)
-        let payload = LLMActor.extractSnapshotPayloads(
-            [snapshot], ssdEnabled: true
-        ).first
-        let partitionKey = CachePartitionKey(
-            modelID: "test-model", kvBits: nil, kvGroupSize: 64
-        )
-        let diagnostics = manager.storeLeaf(
-            storedTokens: [10, 20, 30, 40, 50, 60],
-            leafSnapshot: snapshot,
-            leafPayload: payload,
-            partitionKey: partitionKey,
-            requestID: UUID()
-        )
-        #expect(diagnostics.evictions.isEmpty)
-        #expect(manager.stats.snapshotCount == 1)
-    }
-
-    @MainActor
-    @Test
     func snapshotAdmissionSupportsRAMOnlyCheckpointEntries() throws {
         // When `ssdConfig?.enabled` is off, the LLMActor helper returns
         // `[]` for payload extraction. The extraction edge represents
@@ -325,7 +338,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     // The leaf LLMActor call sites cannot be exercised by unit tests
     // without a loaded MLX model — the full wiring is gated behind
     // `container.perform` on a real `ModelContainer`. These source
-    // checks pin the leaf Snapshot Admission wiring and the synchronous
+    // checks pin shared structured leaf capture and the synchronous
     // cache admission invariant.
     // Mirrors the `threadAffinityContractDocCommentIsPinned` pattern
     // at `HybridCacheSnapshotTests.swift:539`.
@@ -344,23 +357,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     }
 
     @Test
-    func unstrippedLeafCallSiteBuildsLeafAdmissionBeforeAdmit() throws {
-        // The unstripped leaf path must pair the locally extracted
-        // payload with its snapshot in `SnapshotAdmission.leaf(...)`
-        // before the MainActor cache hop.
-        let source = try readLLMActorSource()
-        #expect(
-            source.contains("let leafAdmission = SnapshotAdmission.leaf("),
-            "Unstripped leaf path must construct a leaf Snapshot Admission before cache mutation"
-        )
-        #expect(
-            source.contains("prefixCache.admit(leafAdmission)"),
-            "Unstripped leaf path must mutate the cache through admit"
-        )
-    }
-
-    @Test
-    func structuredLeafHelperBuildsSharedLeafAdmissionBeforeAdmit() throws {
+    func structuredLeafHelperKeepsLeafPayloadCaptureShared() throws {
         // The tool-loop direct leaf and canonical user leaf now share
         // one `captureStructuredLeafFromBoundary(...)` helper. That
         // helper must still extract a local `leafPayload` and pair it
@@ -384,14 +381,10 @@ struct LLMActorExtractSnapshotPayloadsTests {
             !source.contains("leafPayload: strippedLeafPayload"),
             "Single-leaf policy should not retain the removed strippedLeafPayload store path"
         )
-        #expect(
-            !source.contains("prefixCache.storeLeaf("),
-            "Production leaf paths should not call the old storeLeaf compatibility wrapper"
-        )
     }
 
     @Test
-    func mainActorRunClosuresAroundPrefixCacheStoresAreNonSuspending() throws {
+    func mainActorRunClosuresAroundPrefixCacheAdmissionsAreNonSuspending() throws {
         // The three `MainActor.run` closures wrapping
         // `prefixCache.admit` must stay
         // synchronous. `SSDSnapshotStore.tryEnqueue` is nonisolated
@@ -405,12 +398,12 @@ struct LLMActorExtractSnapshotPayloadsTests {
         )
         #expect(
             bodies.count == 3,
-            "Expected exactly 3 MainActor.run closures calling prefixCache admission/store APIs; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / direct-leaf / structured-leaf-helper sites — review before updating this assertion."
+            "Expected exactly 3 MainActor.run closures calling prefixCache admission APIs; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / direct-leaf / structured-leaf-helper sites — review before updating this assertion."
         )
         for (index, body) in bodies.enumerated() {
             #expect(
                 !body.contains("await"),
-                "MainActor.run closure #\(index) calling prefixCache admission/store APIs contains an `await` — non-suspending admission is broken. Body:\n\(body)"
+                "MainActor.run closure #\(index) calling prefixCache admission APIs contains an `await` — non-suspending admission is broken. Body:\n\(body)"
             )
         }
     }

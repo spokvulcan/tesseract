@@ -78,3 +78,60 @@ enum PrefixCacheTestFixtures {
         )
     }
 }
+
+@MainActor
+extension PrefixCacheManager {
+    @discardableResult
+    func admitCheckpoints(
+        promptTokens: [Int],
+        capturedSnapshots: [HybridCacheSnapshot],
+        storage: SnapshotAdmission.Storage = .ramOnly,
+        partitionKey: CachePartitionKey,
+        requestID: UUID? = nil
+    ) -> StoreDiagnostics {
+        guard !capturedSnapshots.isEmpty else {
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
+        }
+
+        let candidates = capturedSnapshots.map { snapshot in
+            return SnapshotAdmission.CheckpointCandidate(
+                snapshot: snapshot,
+                storage: storage
+            )
+        }
+
+        guard let admission = SnapshotAdmission.checkpoints(
+            fullPromptTokens: promptTokens,
+            candidates: candidates,
+            partitionKey: partitionKey,
+            requestID: requestID
+        ) else {
+            preconditionFailure("Invalid checkpoint Snapshot Admission in test fixture")
+        }
+
+        return admit(admission)
+    }
+
+    @discardableResult
+    func admitLeaf(
+        storedTokens: [Int],
+        leafSnapshot: HybridCacheSnapshot,
+        leafPayload: SnapshotPayload? = nil,
+        partitionKey: CachePartitionKey,
+        requestID: UUID? = nil
+    ) -> StoreDiagnostics {
+        let storage: SnapshotAdmission.Storage =
+            leafPayload.map(SnapshotAdmission.Storage.ramAndSSD) ?? .ramOnly
+        guard let admission = SnapshotAdmission.leaf(
+            storedTokens: storedTokens,
+            snapshot: leafSnapshot,
+            storage: storage,
+            partitionKey: partitionKey,
+            requestID: requestID
+        ) else {
+            preconditionFailure("Invalid leaf Snapshot Admission in test fixture")
+        }
+
+        return admit(admission)
+    }
+}

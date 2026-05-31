@@ -1113,9 +1113,9 @@ actor LLMActor {
                         break leafBlock
                     }
 
-                    // 4. Capture leaf snapshot AND extract its payload
-                    //    inside a Metal-affine `container.perform` so
-                    //    the per-array `asData()` calls run on the
+                    // 4. Capture leaf snapshot and derive its admission
+                    //    storage inside a Metal-affine `container.perform`
+                    //    so any per-array `asData()` calls run on the
                     //    inference thread. `finalCache` is non-`Sendable`
                     //    `[any KVCache]` — routed through the vendor's
                     //    `nonSendable` perform overload. The offset
@@ -1133,12 +1133,10 @@ actor LLMActor {
                             ) else {
                                 return (nil, nil)
                             }
-                            let payload = Self.extractSnapshotPayloads(
-                                [snap],
+                            let storage = Self.snapshotAdmissionStorage(
+                                for: snap,
                                 ssdEnabled: ssdEnabled
-                            ).first
-                            let storage: SnapshotAdmission.Storage =
-                                payload.map(SnapshotAdmission.Storage.ramAndSSD) ?? .ramOnly
+                            )
                             let leafAdmission = SnapshotAdmission.leaf(
                                 storedTokens: storedTokens,
                                 snapshot: snap,
@@ -1426,10 +1424,9 @@ actor LLMActor {
         }
     }
 
-    /// Pre-extract `HybridCacheSnapshot` instances into pure `Sendable`
-    /// ``SnapshotPayload`` value types, calling `MLXArray.asData` on
-    /// every per-layer state array. Result is positionally aligned
-    /// with the input; empty when `ssdEnabled` is false.
+    /// Pre-extract checkpoint snapshots into Snapshot Admission
+    /// candidates, attaching storage intent to each entry at the
+    /// Metal-affine extraction edge.
     ///
     /// **Metal-affinity contract.** Must be called from inside
     /// ``ModelContainer/perform(_:)`` on `LLMActor` — calling it
@@ -1437,10 +1434,41 @@ actor LLMActor {
     /// work on a non-inference thread. The method is `nonisolated
     /// static` so callers can invoke it synchronously from inside a
     /// `container.perform` closure without an `await`; the Metal
-    /// affinity is enforced by convention, not the type system. See
-    /// `docs/marconi-hybrid-prefix-cache-implementation-plan.md`
-    /// "Write path" for the three call sites and their per-site
-    /// scoping requirements.
+    /// affinity is enforced by convention, not the type system.
+    nonisolated static func extractCheckpointAdmissionCandidates(
+        _ snapshots: [HybridCacheSnapshot],
+        ssdEnabled: Bool
+    ) -> [SnapshotAdmission.CheckpointCandidate] {
+        snapshots.map { snapshot in
+            return SnapshotAdmission.CheckpointCandidate(
+                snapshot: snapshot,
+                storage: snapshotAdmissionStorage(
+                    for: snapshot,
+                    ssdEnabled: ssdEnabled
+                )
+            )
+        }
+    }
+
+    private nonisolated static func snapshotAdmissionStorage(
+        for snapshot: HybridCacheSnapshot,
+        ssdEnabled: Bool
+    ) -> SnapshotAdmission.Storage {
+        guard ssdEnabled else { return .ramOnly }
+        return .ramAndSSD(extractSnapshotPayload(snapshot))
+    }
+
+    /// Pre-extract `HybridCacheSnapshot` instances into pure `Sendable`
+    /// ``SnapshotPayload`` value types, calling `MLXArray.asData` on
+    /// every per-layer state array. Empty when `ssdEnabled` is false.
+    ///
+    /// **Metal-affinity contract.** Must be called from inside
+    /// ``ModelContainer/perform(_:)`` on `LLMActor` — calling it
+    /// outside a live Metal-affine scope risks re-issuing command-queue
+    /// work on a non-inference thread. The method is `nonisolated
+    /// static` so callers can invoke it synchronously from inside a
+    /// `container.perform` closure without an `await`; the Metal
+    /// affinity is enforced by convention, not the type system.
     nonisolated static func extractSnapshotPayloads(
         _ snapshots: [HybridCacheSnapshot],
         ssdEnabled: Bool
@@ -1451,36 +1479,42 @@ actor LLMActor {
         result.reserveCapacity(snapshots.count)
 
         for snapshot in snapshots {
-            var layers: [SnapshotPayload.LayerPayload] = []
-            layers.reserveCapacity(snapshot.layers.count)
-
-            for layer in snapshot.layers {
-                var arrays: [SnapshotPayload.ArrayPayload] = []
-                arrays.reserveCapacity(layer.state.count)
-                for array in layer.state {
-                    let extracted = array.asData(access: .copy)
-                    arrays.append(SnapshotPayload.ArrayPayload(
-                        data: extracted.data,
-                        dtype: dtypeWireString(extracted.dType),
-                        shape: extracted.shape
-                    ))
-                }
-                layers.append(SnapshotPayload.LayerPayload(
-                    className: layer.className,
-                    state: arrays,
-                    metaState: layer.metaState,
-                    offset: layer.offset
-                ))
-            }
-
-            result.append(SnapshotPayload(
-                tokenOffset: snapshot.tokenOffset,
-                checkpointType: snapshot.checkpointType,
-                layers: layers
-            ))
+            result.append(extractSnapshotPayload(snapshot))
         }
 
         return result
+    }
+
+    private nonisolated static func extractSnapshotPayload(
+        _ snapshot: HybridCacheSnapshot
+    ) -> SnapshotPayload {
+        var layers: [SnapshotPayload.LayerPayload] = []
+        layers.reserveCapacity(snapshot.layers.count)
+
+        for layer in snapshot.layers {
+            var arrays: [SnapshotPayload.ArrayPayload] = []
+            arrays.reserveCapacity(layer.state.count)
+            for array in layer.state {
+                let extracted = array.asData(access: .copy)
+                arrays.append(SnapshotPayload.ArrayPayload(
+                    data: extracted.data,
+                    dtype: dtypeWireString(extracted.dType),
+                    shape: extracted.shape
+                ))
+            }
+            layers.append(SnapshotPayload.LayerPayload(
+                className: layer.className,
+                state: arrays,
+                metaState: layer.metaState,
+                offset: layer.offset
+            ))
+        }
+
+        return SnapshotPayload(
+            tokenOffset: snapshot.tokenOffset,
+            checkpointType: snapshot.checkpointType,
+            layers: layers
+        )
     }
 
     /// Stable wire-format name for an MLX `DType`. Load-bearing: the
@@ -2164,19 +2198,10 @@ actor LLMActor {
                 iterator.transientSnapshots[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
-            let capturedPayloads = Self.extractSnapshotPayloads(
+            let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
                 capturedSnapshots,
                 ssdEnabled: ssdEnabled
             )
-            let payloadsAligned = capturedPayloads.count == capturedSnapshots.count
-            let checkpointCandidates = capturedSnapshots.enumerated().map { index, snapshot in
-                let storage: SnapshotAdmission.Storage =
-                    payloadsAligned ? .ramAndSSD(capturedPayloads[index]) : .ramOnly
-                return SnapshotAdmission.CheckpointCandidate(
-                    snapshot: snapshot,
-                    storage: storage
-                )
-            }
             let snapshotAdmission = SnapshotAdmission.checkpoints(
                 fullPromptTokens: fullTokens,
                 candidates: checkpointCandidates,
@@ -2480,12 +2505,10 @@ actor LLMActor {
                     return nil
                 }
 
-                let leafPayload = Self.extractSnapshotPayloads(
-                    [leaf],
+                let storage = Self.snapshotAdmissionStorage(
+                    for: leaf,
                     ssdEnabled: ssdEnabled
-                ).first
-                let storage: SnapshotAdmission.Storage =
-                    leafPayload.map(SnapshotAdmission.Storage.ramAndSSD) ?? .ramOnly
+                )
                 let leafAdmission = SnapshotAdmission.leaf(
                     storedTokens: storedTokens,
                     snapshot: leaf,

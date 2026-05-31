@@ -552,83 +552,6 @@ final class PrefixCacheManager {
         )
     }
 
-    /// Store mid-prefill snapshots captured during prepareWithCheckpoints().
-    ///
-    /// `snapshotPayloads` carries the pre-extracted CPU-owned bytes for
-    /// each entry in `capturedSnapshots`, positionally aligned (same
-    /// count, same order), produced by
-    /// `LLMActor.extractSnapshotPayloads(_:ssdEnabled:)` inside the
-    /// same `container.perform` scope that captured the snapshots.
-    /// An empty array (the default) signals SSD disabled; RAM insertion
-    /// still routes through Snapshot Admission.
-    @discardableResult
-    func storeSnapshots(
-        promptTokens: [Int],
-        capturedSnapshots: [HybridCacheSnapshot],
-        snapshotPayloads: [SnapshotPayload] = [],
-        partitionKey: CachePartitionKey,
-        requestID: UUID? = nil
-    ) -> StoreDiagnostics {
-        guard !capturedSnapshots.isEmpty else {
-            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
-        }
-
-        let payloadsAligned =
-            snapshotPayloads.count == capturedSnapshots.count
-        let candidates = capturedSnapshots.enumerated().map { index, snapshot in
-            let storage: SnapshotAdmission.Storage =
-                payloadsAligned ? .ramAndSSD(snapshotPayloads[index]) : .ramOnly
-            return SnapshotAdmission.CheckpointCandidate(
-                snapshot: snapshot,
-                storage: storage
-            )
-        }
-
-        guard let admission = SnapshotAdmission.checkpoints(
-            fullPromptTokens: promptTokens,
-            candidates: candidates,
-            partitionKey: partitionKey,
-            requestID: requestID,
-        ) else {
-            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
-        }
-
-        return admit(admission)
-    }
-
-    /// Store the leaf snapshot under post-response tokens.
-    /// `storedTokens` = re-tokenized (prompt + generated response).
-    ///
-    /// `leafPayload` is the pre-extracted CPU-owned bytes matching
-    /// `leafSnapshot`, produced by
-    /// `LLMActor.extractSnapshotPayloads(_:ssdEnabled:)` inside a
-    /// `container.perform` scope. When non-nil, the pair is forwarded
-    /// to the tiered store's `admitSnapshot` for SSD write-through.
-    /// `nil` (the default) is the "SSD disabled" signal and leaves
-    /// the radix-tree insertion as the only side effect.
-    @discardableResult
-    func storeLeaf(
-        storedTokens: [Int],
-        leafSnapshot: HybridCacheSnapshot,
-        leafPayload: SnapshotPayload? = nil,
-        partitionKey: CachePartitionKey,
-        requestID: UUID? = nil
-    ) -> StoreDiagnostics {
-        let storage: SnapshotAdmission.Storage =
-            leafPayload.map(SnapshotAdmission.Storage.ramAndSSD) ?? .ramOnly
-        guard let admission = SnapshotAdmission.leaf(
-            storedTokens: storedTokens,
-            snapshot: leafSnapshot,
-            storage: storage,
-            partitionKey: partitionKey,
-            requestID: requestID
-        ) else {
-            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
-        }
-
-        return admit(admission)
-    }
-
     private func supersedeAncestorLeaves(
         for node: RadixTreeNode,
         in tree: TokenRadixTree
@@ -735,8 +658,8 @@ final class PrefixCacheManager {
     /// `await MainActor.run { ... }` alongside the `recordHit` bump.
     ///
     /// Budget reconciliation is deferred to the next natural
-    /// eviction call (every request path runs `storeSnapshots` +
-    /// `storeLeaf`, which both drain the budget). Running
+    /// eviction call (request write paths route through `admit`,
+    /// which drains the budget). Running
     /// `evictToFitBudget` inline here would add latency to the
     /// SSD-hit hot path without any benefit — the just-promoted
     /// node has `lastAccessTime = .now` and is the least likely

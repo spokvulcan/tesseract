@@ -565,8 +565,8 @@ struct WarmStartTests {
     /// v6 round-trip: a TriAttention partition whose `PartitionMeta`
     /// carries the matching identity reattaches under the same key
     /// rather than being dropped as a digest mismatch. Pinned because
-    /// the dense-only gate that lived in `PrefixCacheManager.storeLeaf`
-    /// for v4 was removed when v5 added the `triAttention` field, and
+    /// the dense-only gate in the legacy leaf write path for v4 was
+    /// removed when v5 added the `triAttention` field, and
     /// v6 extended that identity with prefix protection mode —
     /// regressing this test would silently re-introduce the gate.
     @Test func warmStartReattachesTriAttentionPartitionWhenMetaCarriesIdentity() async throws {

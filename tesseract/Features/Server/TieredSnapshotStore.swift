@@ -209,9 +209,8 @@ final class TieredSnapshotStore: SnapshotStore {
     /// Non-suspending by construction: the underlying
     /// `SSDSnapshotStore.tryEnqueue` is `nonisolated` and acquires
     /// a plain `NSLock` for cross-thread safety, so calling this
-    /// from a synchronous MainActor closure (the
-    /// `PrefixCacheManager.storeSnapshots` / `storeLeaf` call sites)
-    /// never forces an `await` on the caller.
+    /// from a synchronous MainActor Snapshot Admission closure never
+    /// forces an `await` on the caller.
     @discardableResult
     func admitSnapshot(
         node: RadixTreeNode,
