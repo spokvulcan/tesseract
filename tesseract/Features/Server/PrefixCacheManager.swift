@@ -503,6 +503,46 @@ final class PrefixCacheManager {
 
     // MARK: - Store
 
+    @discardableResult
+    func admit(_ admission: SnapshotAdmission) -> StoreDiagnostics {
+        let tree = store.getOrCreateTree(for: admission.partitionKey)
+        tree.insertPath(tokens: admission.fullPromptTokens)
+
+        for index in 0..<admission.entries.count {
+            let entry = admission.entries[index]
+            let path = Array(admission.fullPromptTokens.prefix(entry.path.offset))
+            let node = tree.insertPath(tokens: path)
+            tree.storeSnapshot(entry.snapshot, on: node)
+
+            guard case .ramAndSSD(let payload) = entry.storage else {
+                continue
+            }
+            registerSSDPartitionIfNeeded(for: admission.partitionKey)
+            let descriptor = makePersistedDescriptor(
+                partitionKey: admission.partitionKey,
+                pathFromRoot: path,
+                snapshot: entry.snapshot,
+                payloadBytes: payload.totalBytes
+            )
+            store.admitSnapshot(
+                node: node,
+                tree: tree,
+                payload: payload,
+                descriptor: descriptor
+            )
+        }
+
+        let evictions = evictToFitBudget(
+            requestID: admission.requestID,
+            preferredPartitionKey: admission.partitionKey
+        )
+        return StoreDiagnostics(
+            evictions: evictions,
+            supersededLeaves: [],
+            stats: stats
+        )
+    }
+
     /// Store mid-prefill snapshots captured during prepareWithCheckpoints().
     ///
     /// `snapshotPayloads` carries the pre-extracted CPU-owned bytes for
@@ -510,8 +550,8 @@ final class PrefixCacheManager {
     /// count, same order), produced by
     /// `LLMActor.extractSnapshotPayloads(_:ssdEnabled:)` inside the
     /// same `container.perform` scope that captured the snapshots.
-    /// An empty array (the default) signals SSD disabled and skips
-    /// the admission path; the radix-tree insertion always runs.
+    /// An empty array (the default) signals SSD disabled; RAM insertion
+    /// still routes through Snapshot Admission.
     @discardableResult
     func storeSnapshots(
         promptTokens: [Int],
@@ -524,47 +564,27 @@ final class PrefixCacheManager {
             return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
         }
 
-        let tree = store.getOrCreateTree(for: partitionKey)
-        tree.insertPath(tokens: promptTokens)
-
-        // SSD admission is dense + TriAttention: `PartitionMeta` (v5)
-        // carries the TriAttention identity, so warm-start reconstructs
-        // the partition's full `CachePartitionKey` and the on-disk
-        // digest stays unique. RAM admission above runs unconditionally.
         let payloadsAligned =
             snapshotPayloads.count == capturedSnapshots.count
-        if payloadsAligned {
-            registerSSDPartitionIfNeeded(for: partitionKey)
-        }
-        for (index, snapshot) in capturedSnapshots.enumerated() {
-            let offset = snapshot.tokenOffset
-            guard offset > 0, offset <= promptTokens.count else { continue }
-            let path = Array(promptTokens[0..<offset])
-            let node = tree.insertPath(tokens: path)
-            guard node.tokenOffset == offset else { continue }
-            tree.storeSnapshot(snapshot, on: node)
-
-            guard payloadsAligned else { continue }
-            let payload = snapshotPayloads[index]
-            let descriptor = makePersistedDescriptor(
-                partitionKey: partitionKey,
-                pathFromRoot: path,
+        let candidates = capturedSnapshots.enumerated().map { index, snapshot in
+            let storage: SnapshotAdmission.Storage =
+                payloadsAligned ? .ramAndSSD(snapshotPayloads[index]) : .ramOnly
+            return SnapshotAdmission.CheckpointCandidate(
                 snapshot: snapshot,
-                payloadBytes: payload.totalBytes
-            )
-            store.admitSnapshot(
-                node: node,
-                tree: tree,
-                payload: payload,
-                descriptor: descriptor
+                storage: storage
             )
         }
 
-        let evictions = evictToFitBudget(
+        guard let admission = SnapshotAdmission.checkpoints(
+            fullPromptTokens: promptTokens,
+            candidates: candidates,
+            partitionKey: partitionKey,
             requestID: requestID,
-            preferredPartitionKey: partitionKey
-        )
-        return StoreDiagnostics(evictions: evictions, supersededLeaves: [], stats: stats)
+        ) else {
+            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
+        }
+
+        return admit(admission)
     }
 
     /// Store the leaf snapshot under post-response tokens.

@@ -231,14 +231,13 @@ struct LLMActorExtractSnapshotPayloadsTests {
         #expect(payload.totalBytes == expected)
     }
 
-    // MARK: - PrefixCacheManager signature plumbing
+    // MARK: - PrefixCacheManager admission plumbing
 
     @MainActor
     @Test
-    func storeSnapshotsAcceptsNewPayloadsParameter() {
-        // Accepting the new `snapshotPayloads` arg must not break the
-        // RAM-only behavior — the manager still stores the snapshot,
-        // returns `StoreDiagnostics`, and applies eviction pressure.
+    func admitAcceptsSnapshotAdmissionPayloads() throws {
+        // Snapshot Admission must carry extracted payloads into the
+        // cache manager without breaking RAM insertion or diagnostics.
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 16 * 1024 * 1024
         )
@@ -249,13 +248,20 @@ struct LLMActorExtractSnapshotPayloadsTests {
         let partitionKey = CachePartitionKey(
             modelID: "test-model", kvBits: nil, kvGroupSize: 64
         )
-        let diagnostics = manager.storeSnapshots(
-            promptTokens: [1, 2, 3, 4],
-            capturedSnapshots: [snapshot],
-            snapshotPayloads: payloads,
+        let payload = try #require(payloads.first)
+        let admission = try #require(SnapshotAdmission.checkpoints(
+            fullPromptTokens: [1, 2, 3, 4],
+            candidates: [
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: snapshot,
+                    storage: .ramAndSSD(payload)
+                )
+            ],
             partitionKey: partitionKey,
             requestID: UUID()
-        )
+        ))
+        let diagnostics = manager.admit(admission)
+
         #expect(diagnostics.evictions.isEmpty)
         #expect(manager.stats.snapshotCount == 1)
     }
@@ -286,12 +292,10 @@ struct LLMActorExtractSnapshotPayloadsTests {
 
     @MainActor
     @Test
-    func storeSnapshotsToleratesEmptyPayloadsForRAMOnlyPath() {
+    func snapshotAdmissionSupportsRAMOnlyCheckpointEntries() throws {
         // When `ssdConfig?.enabled` is off, the LLMActor helper returns
-        // `[]` for `snapshotPayloads`. The manager must accept that
-        // zero-length array without mis-attributing it as a "no
-        // snapshots to store" signal — the snapshots still need to
-        // land in the radix tree.
+        // `[]` for payload extraction. The extraction edge represents
+        // that as a RAM-only admission entry, not as "no snapshots".
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 16 * 1024 * 1024
         )
@@ -299,26 +303,30 @@ struct LLMActorExtractSnapshotPayloadsTests {
         let partitionKey = CachePartitionKey(
             modelID: "test-model", kvBits: nil, kvGroupSize: 64
         )
-        let diagnostics = manager.storeSnapshots(
-            promptTokens: [7, 8, 9, 10, 11],
-            capturedSnapshots: [snapshot],
-            snapshotPayloads: [],
+        let admission = try #require(SnapshotAdmission.checkpoints(
+            fullPromptTokens: [7, 8, 9, 10, 11],
+            candidates: [
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: snapshot,
+                    storage: .ramOnly
+                )
+            ],
             partitionKey: partitionKey,
             requestID: UUID()
-        )
+        ))
+        let diagnostics = manager.admit(admission)
+
         #expect(diagnostics.evictions.isEmpty)
         #expect(manager.stats.snapshotCount == 1)
     }
 
     // MARK: - Call-site wiring regression coverage
     //
-    // The three asymmetric LLMActor call sites (mid-prefill,
-    // unstripped leaf, stripped leaf) cannot be exercised by unit
-    // tests without a loaded MLX model — the full wiring is gated
-    // behind `container.perform` on a real `ModelContainer`. These
-    // source-grep tests compensate by pinning the literal wiring
-    // strings, so a refactor that drops any of the four load-bearing
-    // lines fails here with a clear pointer at the missing site.
+    // The leaf LLMActor call sites cannot be exercised by unit tests
+    // without a loaded MLX model — the full wiring is gated behind
+    // `container.perform` on a real `ModelContainer`. These source
+    // checks pin the leaf payload wiring and the synchronous cache
+    // admission invariant.
     // Mirrors the `threadAffinityContractDocCommentIsPinned` pattern
     // at `HybridCacheSnapshotTests.swift:539`.
 
@@ -333,45 +341,6 @@ struct LLMActorExtractSnapshotPayloadsTests {
             .appendingPathComponent("Agent")
             .appendingPathComponent("LLMActor.swift")
         return try String(contentsOf: sourceFile, encoding: .utf8)
-    }
-
-    @Test
-    func makeHTTPPrefixCacheGenerationPopulatesCapturedPayloads() throws {
-        // `HTTPPrefixCacheGeneration` is constructed at the tail of
-        // `makeHTTPPrefixCacheGeneration` with `capturedPayloads:
-        // capturedPayloads` — where the local `capturedPayloads` was
-        // produced by `Self.extractSnapshotPayloads(capturedSnapshots,
-        // ssdEnabled: ssdEnabled)` inside the enclosing
-        // `container.perform`. Dropping either of those two lines
-        // would leave the field silently empty while the build and
-        // the helper's own unit tests still pass.
-        let source = try readLLMActorSource()
-
-        let extractCall = "Self.extractSnapshotPayloads(\n                capturedSnapshots,\n                ssdEnabled: ssdEnabled\n            )"
-        let structInit = "capturedPayloads: capturedPayloads,"
-
-        #expect(
-            source.contains(extractCall),
-            "makeHTTPPrefixCacheGeneration must call Self.extractSnapshotPayloads(capturedSnapshots, ssdEnabled:) inside its container.perform block"
-        )
-        #expect(
-            source.contains(structInit),
-            "HTTPPrefixCacheGeneration must be constructed with capturedPayloads: capturedPayloads"
-        )
-    }
-
-    @Test
-    func midPrefillCallSiteForwardsCapturedPayloadsToStoreSnapshots() throws {
-        // The `prefixCache.storeSnapshots(...)` call inside the post-
-        // generation MainActor hop must pass `snapshotPayloads:
-        // mlxStart.capturedPayloads`. A refactor that drops this arg
-        // falls back to the `= []` default and silently disables SSD
-        // persistence for every mid-prefill snapshot.
-        let source = try readLLMActorSource()
-        #expect(
-            source.contains("snapshotPayloads: mlxStart.capturedPayloads"),
-            "Mid-prefill storeSnapshots call must forward mlxStart.capturedPayloads"
-        )
     }
 
     @Test
@@ -415,7 +384,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @Test
     func mainActorRunClosuresAroundPrefixCacheStoresAreNonSuspending() throws {
         // The three `MainActor.run` closures wrapping
-        // `prefixCache.storeSnapshots` / `storeLeaf` must stay
+        // `prefixCache.admit` / `storeLeaf` must stay
         // synchronous. `SSDSnapshotStore.tryEnqueue` is nonisolated
         // under an `NSLock`; an `await` inside the closure would
         // force the HTTP hot path to suspend mid-admission and break
@@ -423,16 +392,16 @@ struct LLMActorExtractSnapshotPayloadsTests {
         let source = try readLLMActorSource()
         let bodies = extractMainActorRunBodies(
             source: source,
-            containing: ["prefixCache.storeSnapshots", "prefixCache.storeLeaf"]
+            containing: ["prefixCache.admit", "prefixCache.storeLeaf"]
         )
         #expect(
             bodies.count == 3,
-            "Expected exactly 3 MainActor.run closures calling prefixCache.store*; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / direct-leaf / structured-leaf-helper sites — review before updating this assertion."
+            "Expected exactly 3 MainActor.run closures calling prefixCache admission/store APIs; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / direct-leaf / structured-leaf-helper sites — review before updating this assertion."
         )
         for (index, body) in bodies.enumerated() {
             #expect(
                 !body.contains("await"),
-                "MainActor.run closure #\(index) calling prefixCache.store* contains an `await` — non-suspending admission is broken. Body:\n\(body)"
+                "MainActor.run closure #\(index) calling prefixCache admission/store APIs contains an `await` — non-suspending admission is broken. Body:\n\(body)"
             )
         }
     }

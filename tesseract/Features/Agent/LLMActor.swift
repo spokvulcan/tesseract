@@ -40,16 +40,9 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
 
     /// Flat token sequence for the full prompt (1D extraction from potentially 2D VLM tensor).
     let fullTokens: [Int]
-    /// Snapshots captured during prefill at checkpoint offsets (e.g. stable-prefix boundary).
-    let capturedSnapshots: [HybridCacheSnapshot]
-    /// Pre-extracted `SnapshotPayload` values for each entry in
-    /// ``capturedSnapshots``, produced inside the
-    /// ``ModelContainer/perform(_:)`` block that captured the snapshots
-    /// so that `MLXArray.asData()` runs on the Metal-affine inference
-    /// thread. Positionally aligned with ``capturedSnapshots``. Empty
-    /// when ``ssdEnabled`` is false; callers must tolerate the
-    /// zero-length case without crashing.
-    let capturedPayloads: [SnapshotPayload]
+    /// Validated mid-prefill checkpoint admission, if any checkpoints survived
+    /// extraction-edge path validation.
+    let snapshotAdmission: SnapshotAdmission?
     /// SSD persistence tier gate, sampled once on `LLMActor`'s own
     /// isolation at `makeHTTPPrefixCacheGeneration` entry. Downstream
     /// post-generation sites (unstripped leaf + stripped leaf) read
@@ -941,18 +934,12 @@ actor LLMActor {
                 // final-cache recovery or leaf capture fails, the stable-prefix checkpoint
                 // still saves future requests from a full re-prefill.
                 var storedSnapshotsForTuner: [HybridCacheSnapshot] = []
-                if !Task.isCancelled, !mlxStart.capturedSnapshots.isEmpty {
+                if !Task.isCancelled, let admission = mlxStart.snapshotAdmission {
                     let diagnostics = await MainActor.run {
-                        prefixCache.storeSnapshots(
-                            promptTokens: mlxStart.fullTokens,
-                            capturedSnapshots: mlxStart.capturedSnapshots,
-                            snapshotPayloads: mlxStart.capturedPayloads,
-                            partitionKey: mlxStart.partitionKey,
-                            requestID: requestID
-                        )
+                        prefixCache.admit(admission)
                     }
                     logEvictions(diagnostics.evictions)
-                    storedSnapshotsForTuner = mlxStart.capturedSnapshots
+                    storedSnapshotsForTuner = admission.snapshots
                 }
 
                 if Task.isCancelled {
@@ -2167,6 +2154,21 @@ actor LLMActor {
                 capturedSnapshots,
                 ssdEnabled: ssdEnabled
             )
+            let payloadsAligned = capturedPayloads.count == capturedSnapshots.count
+            let checkpointCandidates = capturedSnapshots.enumerated().map { index, snapshot in
+                let storage: SnapshotAdmission.Storage =
+                    payloadsAligned ? .ramAndSSD(capturedPayloads[index]) : .ramOnly
+                return SnapshotAdmission.CheckpointCandidate(
+                    snapshot: snapshot,
+                    storage: storage
+                )
+            }
+            let snapshotAdmission = SnapshotAdmission.checkpoints(
+                fullPromptTokens: fullTokens,
+                candidates: checkpointCandidates,
+                partitionKey: partitionKey,
+                requestID: requestID
+            )
             for snapshot in capturedSnapshots {
                 diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
                     offset: snapshot.tokenOffset,
@@ -2199,8 +2201,7 @@ actor LLMActor {
                 lookupReason: lookupResult.reason,
                 sharedPrefixLength: lookupResult.sharedPrefixLength,
                 fullTokens: fullTokens,
-                capturedSnapshots: capturedSnapshots,
-                capturedPayloads: capturedPayloads,
+                snapshotAdmission: snapshotAdmission,
                 ssdEnabled: ssdEnabled,
                 partitionKey: partitionKey,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,

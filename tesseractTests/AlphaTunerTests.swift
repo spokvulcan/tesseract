@@ -403,7 +403,7 @@ struct AlphaTunerTests {
     /// `TokenRadixTree.collectEligible`. The test's intent is the
     /// boundary-capture timing, not the type-priority rule, so we use
     /// types that participate in normal recency-based eviction.
-    @Test func managerDefersBootstrapBoundaryUntilFullRequestCompletes() {
+    @Test func managerDefersBootstrapBoundaryUntilFullRequestCompletes() throws {
         defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
         let boundaryRequestID = UUID()
@@ -423,12 +423,22 @@ struct AlphaTunerTests {
         // First eviction happens during mid-prefill store, but the
         // tuner must stay in `.waitingForFirstEviction` until the
         // request-end record arrives.
-        mgr.storeSnapshots(
-            promptTokens: promptTokens,
-            capturedSnapshots: [snapshotA, snapshotB],
+        let admission = try #require(SnapshotAdmission.checkpoints(
+            fullPromptTokens: promptTokens,
+            candidates: [
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: snapshotA,
+                    storage: .ramOnly
+                ),
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: snapshotB,
+                    storage: .ramOnly
+                )
+            ],
             partitionKey: defaultKey,
             requestID: boundaryRequestID
-        )
+        ))
+        mgr.admit(admission)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         // The same request then stores a leaf. This must be part of

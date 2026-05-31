@@ -67,6 +67,115 @@ struct PrefixCacheManagerTests {
         PrefixCacheManager(memoryBudgetBytes: budgetMB * 1024 * 1024)
     }
 
+    // MARK: - Snapshot Admission Path
+
+    @Test func snapshotAdmissionPathValidatesOffsetsIntoFullPromptTokens() {
+        let path = SnapshotAdmissionPath.validating(
+            offset: 3,
+            fullPromptTokenCount: 5
+        )
+
+        #expect(path?.offset == 3)
+        #expect(
+            SnapshotAdmissionPath.validating(
+                offset: 0,
+                fullPromptTokenCount: 5
+            ) == nil
+        )
+        #expect(
+            SnapshotAdmissionPath.validating(
+                offset: 6,
+                fullPromptTokenCount: 5
+            ) == nil
+        )
+    }
+
+    @Test func checkpointSnapshotAdmissionFiltersInvalidPathsAndKeepsMixedStorage() throws {
+        let fullPromptTokens = [10, 20, 30, 40]
+        let requestID = UUID()
+        let ramOnlySnapshot = makeSnapshot(offset: 2, type: .system)
+        let invalidSnapshot = makeSnapshot(offset: 5, type: .branchPoint)
+        let ssdSnapshot = makeSnapshot(offset: 4, type: .branchPoint)
+        let ssdPayload = makeSSDPayload(
+            bytes: 256,
+            checkpointType: .branchPoint
+        )
+
+        let admission = try #require(SnapshotAdmission.checkpoints(
+            fullPromptTokens: fullPromptTokens,
+            candidates: [
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: ramOnlySnapshot,
+                    storage: .ramOnly
+                ),
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: invalidSnapshot,
+                    storage: .ramOnly
+                ),
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: ssdSnapshot,
+                    storage: .ramAndSSD(ssdPayload)
+                )
+            ],
+            partitionKey: defaultKey,
+            requestID: requestID
+        ))
+
+        #expect(admission.fullPromptTokens == fullPromptTokens)
+        #expect(admission.partitionKey == defaultKey)
+        #expect(admission.requestID == requestID)
+        #expect(admission.entries.count == 2)
+        #expect(admission.entries[0].path.offset == 2)
+        #expect(admission.entries[1].path.offset == 4)
+        if case .ramOnly = admission.entries[0].storage {
+            // expected
+        } else {
+            #expect(Bool(false), "Expected first admission entry to be RAM-only")
+        }
+        if case .ramAndSSD(let payload) = admission.entries[1].storage {
+            #expect(payload.totalBytes == ssdPayload.totalBytes)
+        } else {
+            #expect(Bool(false), "Expected second admission entry to include SSD payload")
+        }
+
+        #expect(SnapshotAdmission.checkpoints(
+            fullPromptTokens: fullPromptTokens,
+            candidates: [
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: invalidSnapshot,
+                    storage: .ramOnly
+                )
+            ],
+            partitionKey: defaultKey,
+            requestID: requestID
+        ) == nil)
+    }
+
+    @Test func admitCheckpointSnapshotAdmissionStoresRAMEntriesThroughUnifiedInterface() throws {
+        let manager = makeManager()
+        let fullPromptTokens = Array(1...8)
+        let snapshot = makeSnapshot(offset: 4, type: .system)
+        let admission = try #require(SnapshotAdmission.checkpoints(
+            fullPromptTokens: fullPromptTokens,
+            candidates: [
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: snapshot,
+                    storage: .ramOnly
+                )
+            ],
+            partitionKey: defaultKey,
+            requestID: UUID()
+        ))
+
+        let diagnostics = manager.admit(admission)
+
+        #expect(diagnostics.evictions.isEmpty)
+        #expect(diagnostics.supersededLeaves.isEmpty)
+        #expect(diagnostics.stats.snapshotCount == 1)
+        let lookup = manager.lookup(tokens: fullPromptTokens + [9], partitionKey: defaultKey)
+        #expect(lookup.snapshotTokenOffset == 4)
+    }
+
     // MARK: - 1. lookupEmptyCacheReturnsMiss
 
     @Test func lookupEmptyCacheReturnsMiss() {
@@ -1956,6 +2065,35 @@ struct PrefixCacheManagerTests {
         )
         await tieredStore.ssdStoreForTesting!.flushAsync()
 
+        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
+    }
+
+    @Test func admitCheckpointSnapshotAdmissionStoresSSDEntriesThroughUnifiedInterface() async throws {
+        let (mgr, tieredStore, root) = makeSSDManager()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let key = makeSSDKey()
+        let fullPromptTokens = Array(1...10)
+        let snapshot = makeUniformSnapshot(offset: 5, type: .system)
+        let payload = makeSSDPayload(bytes: 256, checkpointType: .system)
+        let admission = try #require(SnapshotAdmission.checkpoints(
+            fullPromptTokens: fullPromptTokens,
+            candidates: [
+                SnapshotAdmission.CheckpointCandidate(
+                    snapshot: snapshot,
+                    storage: .ramAndSSD(payload)
+                )
+            ],
+            partitionKey: key,
+            requestID: UUID()
+        ))
+
+        let diagnostics = mgr.admit(admission)
+        await tieredStore.ssdStoreForTesting!.flushAsync()
+
+        #expect(diagnostics.evictions.isEmpty)
+        #expect(diagnostics.supersededLeaves.isEmpty)
+        #expect(diagnostics.stats.snapshotCount == 1)
         #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
     }
 }
