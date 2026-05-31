@@ -129,7 +129,7 @@ nonisolated struct SnapshotAdmission: Sendable {
         fullPromptTokens: [Int],
         candidates: [CheckpointCandidate],
         partitionKey: CachePartitionKey,
-        requestID: UUID?
+        requestID: UUID? = nil
     ) -> SnapshotAdmission? {
         var entries: [Entry] = []
         entries.reserveCapacity(candidates.count)
@@ -161,7 +161,7 @@ nonisolated struct SnapshotAdmission: Sendable {
         snapshot: HybridCacheSnapshot,
         storage: Storage,
         partitionKey: CachePartitionKey,
-        requestID: UUID?
+        requestID: UUID? = nil
     ) -> SnapshotAdmission? {
         guard let path = SnapshotAdmissionPath.validatingLeaf(
             offset: snapshot.tokenOffset,

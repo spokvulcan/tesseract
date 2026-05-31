@@ -1,7 +1,6 @@
 import Foundation
 import MLX
 import MLXLMCommon
-import Testing
 
 @testable import Tesseract_Agent
 
@@ -98,54 +97,5 @@ extension SnapshotAdmission.CheckpointCandidate {
             snapshot: snapshot,
             storage: .ramAndSSD(payload)
         )
-    }
-}
-
-@MainActor
-extension PrefixCacheManager {
-    @discardableResult
-    func admitCheckpoints(
-        fullPromptTokens: [Int],
-        candidates: [SnapshotAdmission.CheckpointCandidate],
-        partitionKey: CachePartitionKey,
-        requestID: UUID? = nil
-    ) -> StoreDiagnostics {
-        guard !candidates.isEmpty else {
-            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
-        }
-
-        guard let admission = SnapshotAdmission.checkpoints(
-            fullPromptTokens: fullPromptTokens,
-            candidates: candidates,
-            partitionKey: partitionKey,
-            requestID: requestID
-        ) else {
-            #expect(Bool(false), "Invalid checkpoint Snapshot Admission in test fixture")
-            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
-        }
-
-        return admit(admission)
-    }
-
-    @discardableResult
-    func admitLeafAdmission(
-        storedTokens: [Int],
-        snapshot: HybridCacheSnapshot,
-        storage: SnapshotAdmission.Storage = .ramOnly,
-        partitionKey: CachePartitionKey,
-        requestID: UUID? = nil
-    ) -> StoreDiagnostics {
-        guard let admission = SnapshotAdmission.leaf(
-            storedTokens: storedTokens,
-            snapshot: snapshot,
-            storage: storage,
-            partitionKey: partitionKey,
-            requestID: requestID
-        ) else {
-            #expect(Bool(false), "Invalid leaf Snapshot Admission in test fixture")
-            return StoreDiagnostics(evictions: [], supersededLeaves: [], stats: stats)
-        }
-
-        return admit(admission)
     }
 }

@@ -267,7 +267,7 @@ struct PrefixCacheManagerTests {
         let mgr = makeManager()
         let tokens = Array(1...100)
         let snap = makeSnapshot(offset: 100, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         #expect(result.snapshot != nil)
@@ -288,7 +288,7 @@ struct PrefixCacheManagerTests {
 
         // Store system snapshot via Snapshot Admission (mid-prefill)
         let sysSnap = makeSnapshot(offset: 500, type: .system)
-        mgr.admitCheckpoints(fullPromptTokens: userATokens, candidates: [.ramOnly(sysSnap)], partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.checkpoints(fullPromptTokens: userATokens, candidates: [.ramOnly(sysSnap)], partitionKey: defaultKey)!)
 
         // Lookup with different user content — still hits system snapshot
         let result = mgr.lookup(tokens: userBTokens, partitionKey: defaultKey)
@@ -303,7 +303,7 @@ struct PrefixCacheManagerTests {
         // First turn: sys + user1 + asst1
         let turn1 = Array(1...300)
         let leafSnap = makeSnapshot(offset: 300, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: turn1, snapshot: leafSnap, partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: turn1, snapshot: leafSnap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         // Second turn extends: sys + user1 + asst1 + tool1
         let turn2 = turn1 + Array(400...450)
@@ -318,7 +318,7 @@ struct PrefixCacheManagerTests {
         let mgr = makeManager()
         let tokens = Array(1...50)
         let snap = makeSnapshot(offset: 50, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         let r1 = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         let r2 = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
@@ -334,7 +334,7 @@ struct PrefixCacheManagerTests {
         let mgr = makeManager()
         let tokens = Array(1...50)
         let snap = makeSnapshot(offset: 50, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         var restored = mgr.lookup(tokens: tokens, partitionKey: defaultKey).restoreCache()!
         // Mutate restored cache
@@ -357,22 +357,24 @@ struct PrefixCacheManagerTests {
 
         // Older leaf on its own path.
         let oldTokens = Array(1...10)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: oldTokens,
             snapshot: makeUniformSnapshot(offset: oldTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
         #expect(mgr.stats.snapshotCount == 1)
 
         // Newer leaf on an independent path. Same MLXArray shape → same
         // `memoryBytes` → exactly one eviction is needed to fit within
         // `snapBytes`.
         let newTokens = Array(20...29)
-        let diagnostics = mgr.admitLeafAdmission(
+        let diagnostics = mgr.admit(SnapshotAdmission.leaf(
             storedTokens: newTokens,
             snapshot: makeUniformSnapshot(offset: newTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(diagnostics.evictions.count == 1)
         let eviction = diagnostics.evictions[0]
@@ -401,21 +403,22 @@ struct PrefixCacheManagerTests {
         // Older `.system` snapshot — would be the LRU victim under pure
         // recency without the type-protection guard.
         let sysTokens = Array(1...10)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: sysTokens,
             candidates: [.ramOnly(makeUniformSnapshot(offset: 10, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
         #expect(mgr.stats.snapshotCount == 1)
 
         // Newer `.leaf` on an independent path. The leaf is the only
         // eligible candidate; the system snapshot is protected.
         let leafTokens = Array(20...29)
-        let diagnostics = mgr.admitLeafAdmission(
+        let diagnostics = mgr.admit(SnapshotAdmission.leaf(
             storedTokens: leafTokens,
             snapshot: makeUniformSnapshot(offset: leafTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(diagnostics.evictions.count == 1)
         #expect(diagnostics.evictions[0].strategy == .utility)
@@ -436,16 +439,18 @@ struct PrefixCacheManagerTests {
         let ancestorTokens = Array(1...10)
         let descendantTokens = Array(1...15)
 
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: ancestorTokens,
             snapshot: makeUniformSnapshot(offset: ancestorTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
-        let diagnostics = mgr.admitLeafAdmission(
+        )!)
+        let diagnostics = mgr.admit(SnapshotAdmission.leaf(
             storedTokens: descendantTokens,
             snapshot: makeUniformSnapshot(offset: descendantTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(diagnostics.supersededLeaves.count == 1)
         #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
@@ -468,11 +473,12 @@ struct PrefixCacheManagerTests {
         let ancestorTokens = Array(1...10)
         let descendantTokens = Array(1...15)
 
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: ancestorTokens,
             snapshot: makeUniformSnapshot(offset: ancestorTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
         let tree = tieredStore.tree(for: defaultKey)!
         let (ancestorNode, _) = tree.findBestSnapshot(
             tokens: ancestorTokens,
@@ -489,11 +495,12 @@ struct PrefixCacheManagerTests {
         #expect(ancestorNode.state.body == nil)
         #expect(ancestorNode.state.refID == ancestorRef.snapshotID)
 
-        let diagnostics = mgr.admitLeafAdmission(
+        let diagnostics = mgr.admit(SnapshotAdmission.leaf(
             storedTokens: descendantTokens,
             snapshot: makeUniformSnapshot(offset: descendantTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(diagnostics.supersededLeaves.count == 1)
         #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
@@ -528,11 +535,12 @@ struct PrefixCacheManagerTests {
             lastAccessTime: .now
         )
 
-        let diagnostics = mgr.admitLeafAdmission(
+        let diagnostics = mgr.admit(SnapshotAdmission.leaf(
             storedTokens: deepTokens,
             snapshot: makeUniformSnapshot(offset: deepTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(diagnostics.supersededLeaves.count == 2)
         #expect(Set(diagnostics.supersededLeaves.map(\.offset)) == Set([shallowTokens.count, midTokens.count]))
@@ -552,32 +560,35 @@ struct PrefixCacheManagerTests {
     @Test func leafSupersessionPreservesSiblingBranchAndSystemSnapshot() {
         let mgr = makeManager()
         let stableTokens = Array(1...5)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: stableTokens,
             candidates: [.ramOnly(makeUniformSnapshot(offset: stableTokens.count, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
 
         let ancestorTokens = Array(1...10)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: ancestorTokens,
             snapshot: makeUniformSnapshot(offset: ancestorTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         let siblingTokens = Array(1...5) + Array(20...25)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: siblingTokens,
             snapshot: makeUniformSnapshot(offset: siblingTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         let descendantTokens = Array(1...15)
-        let diagnostics = mgr.admitLeafAdmission(
+        let diagnostics = mgr.admit(SnapshotAdmission.leaf(
             storedTokens: descendantTokens,
             snapshot: makeUniformSnapshot(offset: descendantTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(diagnostics.supersededLeaves.count == 1)
         #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
@@ -598,7 +609,7 @@ struct PrefixCacheManagerTests {
         for i in 0..<10 {
             let tokens = Array((i * 100)..<((i + 1) * 100))
             let snap = makeSnapshot(offset: 100, type: .leaf)
-            mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: defaultKey)
+            mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: defaultKey)!)
         }
 
         // Budget enforced — not all snapshots survive
@@ -627,7 +638,7 @@ struct PrefixCacheManagerTests {
 
         // Store system snapshot at 500
         let sysSnap = makeSnapshot(offset: 500, type: .system)
-        mgr.admitCheckpoints(fullPromptTokens: tokens, candidates: [.ramOnly(sysSnap)], partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.checkpoints(fullPromptTokens: tokens, candidates: [.ramOnly(sysSnap)], partitionKey: defaultKey)!)
 
         // Planning with same stablePrefixOffset — should not re-plan
         let plan = mgr.planCheckpoints(
@@ -657,7 +668,7 @@ struct PrefixCacheManagerTests {
         let mgr = makeManager()
         let tokens = Array(1...100)
         let snap = makeSnapshot(offset: 100, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         // Query diverges at 80
         let query = Array(1...80) + [999, 998]
@@ -672,7 +683,7 @@ struct PrefixCacheManagerTests {
         let tokens = Array(1...8000)
 
         let snap4k = makeSnapshot(offset: 4000, type: .system)
-        mgr.admitCheckpoints(fullPromptTokens: tokens, candidates: [.ramOnly(snap4k)], partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.checkpoints(fullPromptTokens: tokens, candidates: [.ramOnly(snap4k)], partitionKey: defaultKey)!)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
         #expect(result.snapshotTokenOffset == 4000)
@@ -686,7 +697,7 @@ struct PrefixCacheManagerTests {
         let storedTokens = promptTokens + Array(600...800) // prompt + response
 
         let leafSnap = makeSnapshot(offset: storedTokens.count, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: storedTokens, snapshot: leafSnap, partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: storedTokens, snapshot: leafSnap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         // Lookup with storedTokens hits the leaf
         let result = mgr.lookup(tokens: storedTokens, partitionKey: defaultKey)
@@ -699,7 +710,7 @@ struct PrefixCacheManagerTests {
         let mgr = makeManager()
         let storedTokens = Array(1...300)
         let leafSnap = makeSnapshot(offset: storedTokens.count, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: storedTokens, snapshot: leafSnap, partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: storedTokens, snapshot: leafSnap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         let result = mgr.lookup(tokens: storedTokens, partitionKey: defaultKey)
         #expect(result.snapshot?.tokenOffset == storedTokens.count)
@@ -712,7 +723,7 @@ struct PrefixCacheManagerTests {
         // Store leaf for sys+user1+asst1
         let turn1Stored = Array(1...300)
         let leafSnap = makeSnapshot(offset: 300, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: turn1Stored, snapshot: leafSnap, partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: turn1Stored, snapshot: leafSnap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         // Next request: sys+user1+asst1+tool1+user2
         let nextRequest = turn1Stored + Array(400...500)
@@ -729,7 +740,7 @@ struct PrefixCacheManagerTests {
 
         let tokens = Array(1...100)
         let snap = makeSnapshot(offset: 100, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: defaultKey)!)
 
         let s = mgr.stats
         #expect(s.partitionCount == 1)
@@ -747,7 +758,7 @@ struct PrefixCacheManagerTests {
         let keyNil = CachePartitionKey(modelID: "m", kvBits: nil, kvGroupSize: 64)
 
         let snap = makeSnapshot(offset: 100, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: key8)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: key8)!)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: keyNil)
         #expect(result.snapshot == nil)
@@ -761,7 +772,7 @@ struct PrefixCacheManagerTests {
         let key8 = CachePartitionKey(modelID: "m", kvBits: 8, kvGroupSize: 64)
 
         let snap = makeSnapshot(offset: 100, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: key8)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: key8)!)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: key8)
         #expect(result.snapshotTokenOffset == 100)
@@ -799,13 +810,13 @@ struct PrefixCacheManagerTests {
         let triKey = makeKey(triAttention: triAttentionIdentity())
 
         let snap = makeSnapshot(offset: 100, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: denseKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: denseKey)!)
 
         #expect(mgr.stats.partitionCount == 1)
         let missFromTri = mgr.lookup(tokens: tokens, partitionKey: triKey)
         #expect(missFromTri.snapshot == nil)
 
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: triKey)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: triKey)!)
         #expect(mgr.stats.partitionCount == 2)
 
         let triHit = mgr.lookup(tokens: tokens, partitionKey: triKey)
@@ -823,11 +834,11 @@ struct PrefixCacheManagerTests {
         let mgr = makeManager()
         let triKey = makeKey(triAttention: triAttentionIdentity())
         let matchedPath = Array(1...500)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: matchedPath,
             candidates: [.ramOnly(makeSnapshot(offset: 100, type: .system))],
             partitionKey: triKey
-        )
+        )!)
 
         let lookup = mgr.lookup(tokens: matchedPath + [999], partitionKey: triKey)
         #expect(lookup.snapshotTokenOffset == 100)
@@ -848,7 +859,7 @@ struct PrefixCacheManagerTests {
         let keyLarge = makeKey(triAttention: triAttentionIdentity(budget: 12_000))
 
         let snap = makeSnapshot(offset: tokens.count, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: keySmall)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: keySmall)!)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: keyLarge)
         #expect(result.snapshot == nil)
@@ -863,7 +874,7 @@ struct PrefixCacheManagerTests {
         let keyB = CachePartitionKey(modelID: "modelB", kvBits: nil, kvGroupSize: 64)
 
         let snap = makeSnapshot(offset: 100, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: tokens, snapshot: snap, partitionKey: keyA)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: keyA)!)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: keyB)
         #expect(result.snapshot == nil)
@@ -878,9 +889,9 @@ struct PrefixCacheManagerTests {
 
         // Store in two partitions
         let snapA = makeSnapshot(offset: 50, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: Array(1...50), snapshot: snapA, partitionKey: keyA)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: Array(1...50), snapshot: snapA, storage: .ramOnly, partitionKey: keyA)!)
         let snapB = makeSnapshot(offset: 50, type: .leaf)
-        mgr.admitLeafAdmission(storedTokens: Array(100...149), snapshot: snapB, partitionKey: keyB)
+        mgr.admit(SnapshotAdmission.leaf(storedTokens: Array(100...149), snapshot: snapB, storage: .ramOnly, partitionKey: keyB)!)
 
         // Budget is 1 byte — eviction must cross partitions
         #expect(mgr.totalSnapshotBytes <= 1)
@@ -903,6 +914,26 @@ struct PrefixCacheManagerTests {
         #expect(admission == nil)
     }
 
+    @Test func leafSnapshotAdmissionAdmitsAtValidatedOffset() throws {
+        let mgr = makeManager()
+        let tokens = Array(1...100)
+        let snap = makeSnapshot(offset: tokens.count, type: .leaf)
+        let admission = try #require(SnapshotAdmission.leaf(
+            storedTokens: tokens,
+            snapshot: snap,
+            storage: .ramOnly,
+            partitionKey: defaultKey,
+            requestID: nil
+        ))
+
+        mgr.admit(admission)
+
+        let exact = mgr.lookup(tokens: tokens, partitionKey: defaultKey)
+        #expect(exact.snapshotTokenOffset == tokens.count)
+        let prefixOnly = mgr.lookup(tokens: Array(1...50), partitionKey: defaultKey)
+        #expect(prefixOnly.snapshot == nil)
+    }
+
     // MARK: - planCheckpoints doesn't update access time (through manager)
 
     @Test func planCheckpointsDoesNotUpdateAccessTime() {
@@ -918,19 +949,21 @@ struct PrefixCacheManagerTests {
 
         // Store snapshotA (older — stored first)
         let pathA = Array(1...10)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: pathA,
             snapshot: makeSnapshot(offset: pathA.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         // Store snapshotB (newer — stored second)
         let pathB = Array(20...29)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: pathB,
             snapshot: makeSnapshot(offset: pathB.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         // planCheckpoints walks pathA looking for an existing system
         // snapshot at offset 10 — must NOT refresh A's access time.
@@ -969,21 +1002,22 @@ struct PrefixCacheManagerTests {
         let pathA = Array(1...15)
         let pathB = Array(1...10) + Array(21...25)
         let pathC = Array(1...10) + Array(31...35)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: pathA,
             candidates: [.ramOnly(makeSnapshot(offset: 10, type: .system))],
             partitionKey: defaultKey
-        )
-        mgr.admitLeafAdmission(
+        )!)
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: pathB,
             snapshot: makeSnapshot(offset: pathB.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
-        mgr.admitCheckpoints(
+        )!)
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: pathC,
             candidates: [.ramOnly(makeSnapshot(offset: 10, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
 
         // Tighten to one snapshot — the eligible leaf is evicted by utility
         // scoring, leaving only the branch-node system snapshot.
@@ -1014,7 +1048,7 @@ struct PrefixCacheManagerTests {
 
         // Store a .leaf at offset 500 (not .system)
         let leafSnap = makeSnapshot(offset: 500, type: .leaf)
-        mgr.admitCheckpoints(fullPromptTokens: tokens, candidates: [.ramOnly(leafSnap)], partitionKey: defaultKey)
+        mgr.admit(SnapshotAdmission.checkpoints(fullPromptTokens: tokens, candidates: [.ramOnly(leafSnap)], partitionKey: defaultKey)!)
 
         // Planning should still request .system at 500 — the leaf doesn't count
         let plan = mgr.planCheckpoints(tokens: tokens, stablePrefixOffset: 500, partitionKey: defaultKey)
@@ -1027,11 +1061,12 @@ struct PrefixCacheManagerTests {
     @Test func divergenceInsideCompressedEdgeCreatesCandidate() {
         let mgr = makeManager()
         let stored = [1, 2, 3, 4]
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: stored,
             snapshot: makeSnapshot(offset: stored.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         let plan = mgr.planCheckpoints(
             tokens: [1, 2, 5, 6],
@@ -1048,11 +1083,12 @@ struct PrefixCacheManagerTests {
         // Pure extension is already covered by the leaf checkpoint, so no
         // speculative branch point is needed.
         let mgr = makeManager()
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: [1, 2, 3],
             snapshot: makeSnapshot(offset: 3, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         let plan = mgr.planCheckpoints(
             tokens: [1, 2, 3, 4, 5],
@@ -1069,16 +1105,17 @@ struct PrefixCacheManagerTests {
         // divergence on [1,2,9,10] at the node boundary, not mid-edge. Use a
         // `.system` snapshot here because descendant leaf stores supersede
         // ancestor leaves under the newest-per-branch policy.
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: [1, 2],
             candidates: [.ramOnly(makeSnapshot(offset: 2, type: .system))],
             partitionKey: defaultKey
-        )
-        mgr.admitLeafAdmission(
+        )!)
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: [1, 2, 3, 4],
             snapshot: makeSnapshot(offset: 4, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         let plan = mgr.planCheckpoints(
             tokens: [1, 2, 9, 10],
@@ -1104,11 +1141,11 @@ struct PrefixCacheManagerTests {
         // and carries a snapshot — re-running the planner on the same
         // divergent tokens must not re-add the branch point.
         let mgr = makeManager()
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: [1, 2, 3, 4],
             candidates: [.ramOnly(makeSnapshot(offset: 2, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
 
         let plan = mgr.planCheckpoints(
             tokens: [1, 2, 5, 6],
@@ -1124,16 +1161,18 @@ struct PrefixCacheManagerTests {
         // even with multiple plausible split sites along the path, only one
         // candidate is emitted.
         let mgr = makeManager()
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: [1, 2, 3, 4, 5],
             snapshot: makeSnapshot(offset: 5, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
-        mgr.admitLeafAdmission(
+        )!)
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: [1, 2, 8, 9, 10],
             snapshot: makeSnapshot(offset: 5, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         // Tree: root -> [1,2] -> {[3,4,5], [8,9,10]}. [1,2,3,7,11] descends
         // through [1,2] then diverges mid-edge of [3,4,5] at offset 3.
@@ -1150,11 +1189,12 @@ struct PrefixCacheManagerTests {
 
     @Test func branchPointCoexistsWithSystemCheckpoint() {
         let mgr = makeManager()
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: Array(1...50),
             snapshot: makeSnapshot(offset: 50, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         let request = Array(1...30) + [999, 1000]
         let plan = mgr.planCheckpoints(
@@ -1169,11 +1209,12 @@ struct PrefixCacheManagerTests {
 
     @Test func branchPointSkippedIfSameOffsetAsSystem() {
         let mgr = makeManager()
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: Array(1...50),
             snapshot: makeSnapshot(offset: 50, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         let request = Array(1...10) + [999, 1000]
         let plan = mgr.planCheckpoints(
@@ -1193,11 +1234,11 @@ struct PrefixCacheManagerTests {
         let mgr = makeManager()
 
         let exactPath = Array(1...200)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: exactPath,
             candidates: [.ramOnly(makeSnapshot(offset: 200, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
 
         let exactLookup = mgr.lookup(tokens: exactPath + [999], partitionKey: defaultKey)
         #expect(exactLookup.snapshotTokenOffset == 200)
@@ -1211,11 +1252,11 @@ struct PrefixCacheManagerTests {
         )
 
         let longPath = Array(1...500)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: longPath,
             candidates: [.ramOnly(makeSnapshot(offset: 200, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
 
         let plannedLookup = mgr.lookup(tokens: longPath + [1000], partitionKey: defaultKey)
         #expect(plannedLookup.snapshotTokenOffset == 200)
@@ -1232,11 +1273,11 @@ struct PrefixCacheManagerTests {
     @Test func largeGapTriggersTwoPass() {
         let mgr = makeManager()
         let matchedPath = Array(1...500)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: matchedPath,
             candidates: [.ramOnly(makeSnapshot(offset: 100, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
 
         let lookup = mgr.lookup(tokens: matchedPath + [999], partitionKey: defaultKey)
         #expect(lookup.snapshotTokenOffset == 100)
@@ -1253,11 +1294,11 @@ struct PrefixCacheManagerTests {
     @Test func smallGapSinglePass() {
         let mgr = makeManager()
         let matchedPath = Array(1...450)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: matchedPath,
             candidates: [.ramOnly(makeSnapshot(offset: 300, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
 
         let lookup = mgr.lookup(tokens: matchedPath + [999], partitionKey: defaultKey)
         #expect(lookup.snapshotTokenOffset == 300)
@@ -1274,11 +1315,11 @@ struct PrefixCacheManagerTests {
     @Test func lookupAndPlanCheckpointsIncludesAlignmentCheckpoint() {
         let mgr = makeManager()
         let matchedPath = Array(1...500)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: matchedPath,
             candidates: [.ramOnly(makeSnapshot(offset: 100, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
 
         let request = matchedPath + [999]
         let result = mgr.lookupAndPlanCheckpoints(
@@ -1306,11 +1347,12 @@ struct PrefixCacheManagerTests {
         let keyB = CachePartitionKey(modelID: "test-model", kvBits: nil, kvGroupSize: 64)
         let tokens = Array(1...100)
 
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: tokens,
             snapshot: makeSnapshot(offset: tokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: keyA
-        )
+        )!)
 
         #expect(mgr.stats.partitionCount == 1)
         #expect(mgr.stats.snapshotCount == 1)
@@ -1338,11 +1380,12 @@ struct PrefixCacheManagerTests {
         )
 
         let tokens = Array(1...50)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: tokens,
             snapshot: makeSnapshot(offset: tokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: keyA
-        )
+        )!)
 
         let result = mgr.lookup(tokens: tokens, partitionKey: keyB)
         #expect(result.snapshot == nil)
@@ -1359,11 +1402,11 @@ struct PrefixCacheManagerTests {
 
         let original = [1, 2, 3, 10, 11]
         let differentUser = [1, 2, 3, 20, 21]
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: original,
             candidates: [.ramOnly(makeSnapshot(offset: 3, type: .system))],
             partitionKey: keyA
-        )
+        )!)
 
         let result = mgr.lookup(tokens: differentUser, partitionKey: keyB)
         #expect(result.snapshotTokenOffset == 3)
@@ -1393,11 +1436,12 @@ struct PrefixCacheManagerTests {
 
         // Idle partition: one evictable leaf.
         let idleTokens = Array(1...10)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: idleTokens,
             snapshot: makeUniformSnapshot(offset: idleTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: idleKey
-        )
+        )!)
         #expect(mgr.stats.snapshotCount == 1)
 
         // Writing partition: two `.system` snapshots (type-protected,
@@ -1406,17 +1450,17 @@ struct PrefixCacheManagerTests {
         // partition has no eligible utility candidates, so eviction
         // spills over to the idle partition's leaf.
         let writingTokens1 = Array(2000...2009)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: writingTokens1,
             candidates: [.ramOnly(makeUniformSnapshot(offset: 10, type: .system))],
             partitionKey: writingKey
-        )
+        )!)
         let writingTokens2 = Array(3000...3009)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: writingTokens2,
             candidates: [.ramOnly(makeUniformSnapshot(offset: 10, type: .system))],
             partitionKey: writingKey
-        )
+        )!)
 
         // Budget must still be respected.
         #expect(mgr.totalSnapshotBytes <= snapBytes)
@@ -1444,11 +1488,12 @@ struct PrefixCacheManagerTests {
         )
 
         let firstTokens = Array(1...10)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: firstTokens,
             snapshot: makeUniformSnapshot(offset: firstTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
         let tree = tieredStore.tree(for: defaultKey)!
         let (firstNode, _) = tree.findBestSnapshot(
             tokens: firstTokens, updateAccess: false
@@ -1458,11 +1503,12 @@ struct PrefixCacheManagerTests {
         tree.commitRef(node: firstNode, expectedID: ref.snapshotID)
 
         let secondTokens = Array(20...29)
-        let diag = mgr.admitLeafAdmission(
+        let diag = mgr.admit(SnapshotAdmission.leaf(
             storedTokens: secondTokens,
             snapshot: makeUniformSnapshot(offset: secondTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(diag.evictions.count == 1)
         #expect(diag.evictions[0].checkpointType == .leaf)
@@ -1488,11 +1534,12 @@ struct PrefixCacheManagerTests {
         )
 
         let firstTokens = Array(1...10)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: firstTokens,
             snapshot: makeUniformSnapshot(offset: firstTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
         let tree = tieredStore.tree(for: defaultKey)!
         let (firstNode, _) = tree.findBestSnapshot(
             tokens: firstTokens, updateAccess: false
@@ -1502,11 +1549,12 @@ struct PrefixCacheManagerTests {
         tree.admit(node: firstNode, ref: ref)
 
         let secondTokens = Array(20...29)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: secondTokens,
             snapshot: makeUniformSnapshot(offset: secondTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(firstNode.state.body == nil)
         #expect(firstNode.state.ref != nil)
@@ -1530,11 +1578,12 @@ struct PrefixCacheManagerTests {
         )
 
         let firstTokens = Array(1...10)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: firstTokens,
             snapshot: makeUniformSnapshot(offset: firstTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
         let tree = tieredStore.tree(for: defaultKey)!
         let (firstNode, _) = tree.findBestSnapshot(
             tokens: firstTokens, updateAccess: false
@@ -1543,11 +1592,12 @@ struct PrefixCacheManagerTests {
         let initialNodeCount = tree.nodeCount
 
         let secondTokens = Array(20...29)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: secondTokens,
             snapshot: makeUniformSnapshot(offset: secondTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(firstNode.state.body == nil)
         #expect(firstNode.parent == nil)
@@ -1568,11 +1618,11 @@ struct PrefixCacheManagerTests {
         )
 
         let sysTokens = Array(1...10)
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: sysTokens,
             candidates: [.ramOnly(makeUniformSnapshot(offset: 10, type: .system))],
             partitionKey: defaultKey
-        )
+        )!)
         let tree = tieredStore.tree(for: defaultKey)!
         let (sysNode, _) = tree.findBestSnapshot(
             tokens: sysTokens, updateAccess: false
@@ -1585,11 +1635,12 @@ struct PrefixCacheManagerTests {
         tree.commitRef(node: sysNode, expectedID: ref.snapshotID)
 
         let leafTokens = Array(20...29)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: leafTokens,
             snapshot: makeUniformSnapshot(offset: leafTokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         #expect(sysNode.state.body != nil)
         #expect(sysNode.state.ref != nil)
@@ -1856,11 +1907,12 @@ struct PrefixCacheManagerTests {
         // Store a leaf (body) and register the partition so the SSD
         // store's manifest carries an entry for the ref ID.
         let tokens = Array(1...10)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: tokens,
             snapshot: makeUniformSnapshot(offset: tokens.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
         let tree = tieredStore.tree(for: defaultKey)!
         let (node, _) = tree.findBestSnapshot(tokens: tokens, updateAccess: false)!
 
@@ -1938,11 +1990,11 @@ struct PrefixCacheManagerTests {
         let snapshot = makeUniformSnapshot(offset: 5, type: .system)
         let payload = makeSSDPayload(bytes: 256, checkpointType: .system)
 
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: promptTokens,
             candidates: [.ramAndSSD(snapshot, payload: payload)],
             partitionKey: key
-        )
+        )!)
         await tieredStore.ssdStoreForTesting!.flushAsync()
 
         let manifestURL = root.appendingPathComponent("manifest.json")
@@ -2087,11 +2139,11 @@ struct PrefixCacheManagerTests {
         let snapshot = makeUniformSnapshot(offset: 5, type: .system)
         let payload = makeSSDPayload(bytes: 256, checkpointType: .system)
 
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: promptTokens,
             candidates: [.ramAndSSD(snapshot, payload: payload)],
             partitionKey: key
-        )
+        )!)
         await tieredStore.ssdStoreForTesting!.flushAsync()
 
         #expect(mgr.stats.partitionCount == 1)
@@ -2113,12 +2165,12 @@ struct PrefixCacheManagerTests {
         let leafSnapshot = makeUniformSnapshot(offset: tokens.count, type: .leaf)
         let leafPayload = makeSSDPayload(bytes: 256, checkpointType: .leaf)
 
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: tokens,
             snapshot: leafSnapshot,
             storage: .ramAndSSD(leafPayload),
             partitionKey: key
-        )
+        )!)
         await tieredStore.ssdStoreForTesting!.flushAsync()
 
         #expect(mgr.stats.snapshotCount == 1)
@@ -2134,11 +2186,11 @@ struct PrefixCacheManagerTests {
         let snapshot = makeUniformSnapshot(offset: 5, type: .system)
         let payload = makeSSDPayload(bytes: 256, checkpointType: .system)
 
-        mgr.admitCheckpoints(
+        mgr.admit(SnapshotAdmission.checkpoints(
             fullPromptTokens: promptTokens,
             candidates: [.ramAndSSD(snapshot, payload: payload)],
             partitionKey: key
-        )
+        )!)
         await tieredStore.ssdStoreForTesting!.flushAsync()
 
         #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)

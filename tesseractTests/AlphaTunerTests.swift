@@ -298,21 +298,23 @@ struct AlphaTunerTests {
         // path doesn't include the tuner notification — that's the
         // agent layer's responsibility — so requestsBeforeFirstEviction
         // stays at 0 here. The tuner only sees first-eviction notify.
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: Array(1...100),
             snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         // Second request: pushes over budget, triggers eviction →
         // tuner enters .bootstrapping with the post-drain inventory.
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: Array(200...299),
             snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey,
             requestID: boundaryRequestID
-        )
+        )!)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         mgr.recordRequest(
@@ -340,18 +342,20 @@ struct AlphaTunerTests {
 
         let pathA = Array(1...10)
         let pathB = Array(20...29)
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: pathA,
             snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
                 offset: pathA.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
-        mgr.admitLeafAdmission(
+        )!)
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: pathB,
             snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
                 offset: pathB.count, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
         let inventory = mgr.collectSnapshotInventory()
         #expect(inventory.count == 2)
@@ -443,12 +447,13 @@ struct AlphaTunerTests {
 
         // The same request then stores a leaf. This must be part of
         // the seeded inventory before bootstrap begins.
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: storedTokens,
             snapshot: leafSnapshot,
+            storage: .ramOnly,
             partitionKey: defaultKey,
             requestID: boundaryRequestID
-        )
+        )!)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         mgr.recordRequest(
@@ -497,18 +502,20 @@ struct AlphaTunerTests {
 
         // Seed one snapshot so the boundary request's store triggers the
         // first eviction.
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: Array(1...100),
             snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey
-        )
+        )!)
 
-        mgr.admitLeafAdmission(
+        mgr.admit(SnapshotAdmission.leaf(
             storedTokens: Array(200...299),
             snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
+            storage: .ramOnly,
             partitionKey: defaultKey,
             requestID: boundaryRequestID
-        )
+        )!)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         // Another request finishes first. It should be counted as pre-bootstrap
