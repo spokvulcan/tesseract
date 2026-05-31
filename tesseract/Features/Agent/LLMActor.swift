@@ -555,39 +555,21 @@ actor LLMActor {
             )
         }
 
-        // Mutable handle box so a client-initiated cancel after an intervention
-        // swap targets the CURRENT handle, not the original mlxStart.
-        struct PathAHandleBox: Sendable {
-            var cancel: @Sendable () -> Void
-            var waitForCompletion: @Sendable () async -> Void
-        }
-        let pathAHandle = OSAllocatedUnfairLock<PathAHandleBox>(
-            initialState: PathAHandleBox(
-                cancel: { mlxStartBox.value.completion.cancel() },
-                waitForCompletion: { await mlxStartBox.value.completion.value }
-            )
-        )
+        // The loop owns the cross-swap cancel invariant (which raw handle is live
+        // after an intervention swap). Its `cancelCurrent` must be wired into
+        // `start.cancel` synchronously, but the loop isn't built until the task
+        // starts — bridge through a late-bound cancel the task fills.
+        let loopCancel = LateBoundCancel()
 
         let task = Task {
             [conversation, container, canonicalTools, requestID, loadedModelWeightBytes, genParams] in
             let mlxStart = mlxStartBox.value
             let diagnosticsContext = mlxStart.diagnosticsContext
+            // The accumulator fold and the `.toolCall → HTTPPrefixCacheToolCall`
+            // projection are the server's per-event side effects (its sink); the
+            // streaming spine itself lives in `GenerationStreamLoop`.
             var accumulator = GenerationAccumulator()
             var toolCalls: [HTTPPrefixCacheToolCall] = []
-            var parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
-            var rawChunkParts: [String] = []
-            var libraryParsedToolCalls = false
-            // Vendor's ToolCallProcessor silently drops its in-flight buffer at
-            // EOS if `parseEOS` can't decode it (e.g. the model emitted
-            // `<tool_call>…malformed…` then hit EOS without `</tool_call>`).
-            // Accumulate every `.toolCallBufferDelta` so we can surface the
-            // lost content as `.malformedToolCall` to the caller; without this
-            // the client sees `finish_reason=stop` with empty tool_calls and
-            // has no way to detect that a tool call was attempted.
-            var libraryToolCallBufferAccum = ""
-            var libraryToolCallEventCount = 0
-            var completionInfo: AgentGeneration.Info?
-            let safeguard = ThinkingSafeguardObserver(config: safeguardConfig)
 
             do {
                 func handle(_ event: AgentGeneration) {
@@ -604,51 +586,6 @@ actor LLMActor {
                         ))
                     }
                     continuation.yield(event)
-                }
-
-                // Returns the intervention payload when the safeguard fired;
-                // caller must then break stream consumption and kick off the
-                // continuation flow.
-                func emitParserEvent(
-                    _ event: ToolCallParser.Event,
-                    allowToolEvents: Bool
-                ) -> (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)? {
-                    // Swift's `where` on a compound `case` pattern only
-                    // binds to the preceding pattern, so hoist the guard
-                    // explicitly to cover both tool-call event variants.
-                    if !allowToolEvents {
-                        switch event {
-                        case .toolCall, .malformedToolCall, .toolCallDelta:
-                            return nil
-                        default:
-                            break
-                        }
-                    }
-                    switch safeguard.observe(parserEvent: event) {
-                    case .forward:
-                        handle(AgentGeneration(parserEvent: event))
-                        return nil
-                    case .intervene(let safe, let reason):
-                        handle(.thinkTruncate(safePrefix: safe))
-                        handle(.thinking(safeguardConfig.injectionMessage))
-                        handle(.thinkEnd)
-                        Log.agent.warning(
-                            "Thinking-loop intervention (path-A) — reason=\(reason.rawValue) "
-                            + "safe_prefix_chars=\(safe.count) request_id=\(requestID.uuidString)"
-                        )
-                        return (safe, reason)
-                    }
-                }
-
-                func emitParserEvents(_ events: [ToolCallParser.Event], allowToolEvents: Bool)
-                    -> (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)?
-                {
-                    for event in events {
-                        if let fired = emitParserEvent(event, allowToolEvents: allowToolEvents) {
-                            return fired
-                        }
-                    }
-                    return nil
                 }
 
                 func logEvictions(_ evictions: [PrefixCacheManager.EvictionEvent]) {
@@ -679,10 +616,8 @@ actor LLMActor {
                     }
                 }
 
-                var currentStream: AsyncStream<Generation> = mlxStart.stream
-
                 // Restore-state snapshot: what cache state does this generation
-                // begin from? Pair this with A2's silent-close warning to
+                // begin from? Pair this with the silent-close warning to
                 // correlate model misbehavior with cache hits (e.g. the Qwen3.6
                 // hybrid-linear-attention stale-state bug, jundot/omlx#825).
                 Log.agent.info(
@@ -696,166 +631,38 @@ actor LLMActor {
                     + "prefillMs=\(String(format: "%.1f", mlxStart.prefillMs * 1000))"
                 )
 
-                streamLoop: while true {
-                    var intervention: (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)? = nil
+                // Drive the shared spine. `handle` is the sink (fold + project +
+                // yield); the loop captures the terminal `.info` and the
+                // silent-close diagnostics into its `Outcome` rather than sinking
+                // them. The server always supplies a continuation starter.
+                let loop = GenerationStreamLoop(
+                    initial: .init(mlxStart),
+                    startsInsideThinkBlock: startsInsideThinkBlock,
+                    safeguard: safeguardConfig,
+                    logContext: "request_id=\(requestID.uuidString)"
+                )
+                loopCancel.fill(loop.cancelCurrent)
 
-                    for await item in currentStream {
-                        if Task.isCancelled { break }
+                let outcome = try await loop.run(
+                    continuation: { safePrefix in
+                        GenerationStreamLoop.RawGenerationHandle(
+                            try await continuationStarter(safePrefix)
+                        )
+                    },
+                    sink: handle
+                )
 
-                        switch item {
-                        case .chunk(let text):
-                            rawChunkParts.append(text)
-                            Log.agent.debug(
-                                "MLX chunk — len=\(text.count) "
-                                + "head=\(String(text.prefix(48)).debugDescription) "
-                                + "tail=\(String(text.suffix(32)).debugDescription)"
-                            )
-                            if let fired = emitParserEvents(
-                                parser.processChunk(text),
-                                allowToolEvents: !libraryParsedToolCalls
-                            ) {
-                                intervention = fired
-                            }
-
-                        case .toolCall(let call):
-                            libraryParsedToolCalls = true
-                            libraryToolCallEventCount += 1
-                            // A successful close-tag parse consumed whatever
-                            // buffer the deltas were building toward — reset
-                            // the accumulator so a *subsequent* in-flight
-                            // tool call that fails to parse doesn't include
-                            // this already-parsed block's deltas in its
-                            // malformed surface.
-                            libraryToolCallBufferAccum = ""
-                            Log.agent.debug(
-                                "MLX library-parsed toolCall — name=\(call.function.name) "
-                                + "argKeys=\(Array(call.function.arguments.keys))"
-                            )
-                            handle(.toolCall(call))
-
-                        case .toolCallBufferDelta(let delta):
-                            // Vendor library is buffering a `<tool_call>` block
-                            // and just added `delta` characters to its internal
-                            // buffer. Forward as a progressive UI event so the
-                            // Requests log can render arguments live, then
-                            // suppress app-level parser events on the eventual
-                            // close (the vendor will surface the final
-                            // `.toolCall` atomically).
-                            libraryParsedToolCalls = true
-                            libraryToolCallBufferAccum += delta
-                            Log.agent.debug(
-                                "MLX toolCallBufferDelta — len=\(delta.count) "
-                                + "head=\(String(delta.prefix(48)).debugDescription) "
-                                + "tail=\(String(delta.suffix(32)).debugDescription) "
-                                + "accumLen=\(libraryToolCallBufferAccum.count)"
-                            )
-                            handle(.toolCallDelta(name: nil, argumentsDelta: delta))
-
-                        case .info(let info):
-                            completionInfo = .init(
-                                promptTokenCount: info.promptTokenCount,
-                                generationTokenCount: info.generationTokenCount,
-                                promptTime: info.promptTime,
-                                generateTime: info.generateTime,
-                                stopReason: info.stopReason
-                            )
-                            Log.agent.debug(
-                                "MLX generation info — gen=\(info.generationTokenCount) "
-                                + "prompt=\(info.promptTokenCount) "
-                                + "stopReason=\(describeStopReason(info.stopReason)) "
-                                + "tok/s=\(String(format: "%.1f", info.tokensPerSecond))"
-                            )
-                        }
-                        if intervention != nil { break }
-                    }
-
-                    if Task.isCancelled { break streamLoop }
-
-                    if let fired = intervention {
-                        // Cancel + drain the current upstream iterator.
-                        let currentHandle = pathAHandle.withLock { ($0.cancel, $0.waitForCompletion) }
-                        currentHandle.0()
-                        await currentHandle.1()
-
-                        do {
-                            let continuationStart = try await continuationStarter(fired.safePrefix)
-                            pathAHandle.withLock {
-                                $0.cancel = { continuationStart.cancel() }
-                                $0.waitForCompletion = { await continuationStart.waitForCompletion() }
-                            }
-                            // Continuation picks up AFTER `</think>` — re-init parser
-                            // in out-of-think mode so its output is classified as text.
-                            // Intentionally do NOT reset `safeguard`: its
-                            // `interventionsIssued >= limit` check already
-                            // suppresses further detection, and the
-                            // post-stream leaf-store block at line ~798
-                            // relies on `hasIntervened` surviving until
-                            // the request completes.
-                            parser = ToolCallParser(startsInsideThinkBlock: false)
-                            currentStream = continuationStart.stream
-                            continue streamLoop
-                        } catch {
-                            Log.agent.error(
-                                "Path-A thinking-safeguard continuation failed: \(error.localizedDescription)"
-                            )
-                            break streamLoop
-                        }
-                    }
-
-                    // Natural end of the current stream.
-                    break streamLoop
-                }
-
-                // Wait for the active iterator task to finish before extracting
-                // the cache (mirrors ChatSession's pattern at vendor line 440-441).
-                // `pathAHandle` points at either the original mlxStart completion
-                // or — after intervention — the continuation's completion.
-                let finalWait = pathAHandle.withLock { $0.waitForCompletion }
-                await finalWait()
-                if Task.isCancelled {
+                if outcome.cancelled {
                     Memory.clearCache()
                     continuation.finish()
                     return
                 }
 
-                _ = emitParserEvents(
-                    parser.finalize(),
-                    allowToolEvents: !libraryParsedToolCalls
-                )
-
-                // Surface the vendor's dropped in-flight buffer. When the
-                // model emits `<tool_call>…malformed…` and hits EOS before
-                // closing the tag, ToolCallProcessor.processEOS silently drops
-                // the buffer if parseEOS can't decode it — the call path then
-                // returns empty content with finish_reason=stop, and the
-                // client has no way to know a tool call was attempted. We
-                // raise the content back through the existing malformed
-                // channel so CompletionHandler's per-event warning log fires
-                // and the Requests log shows a red "malformed" span.
-                let droppedBuffer = libraryToolCallBufferAccum
-                libraryToolCallBufferAccum = ""
-                if libraryParsedToolCalls,
-                   libraryToolCallEventCount == 0,
-                   !droppedBuffer.isEmpty {
-                    // Wrap with `<tool_call>…</tool_call>` so clients (opencode,
-                    // etc.) can always detect a tool-call attempt was made
-                    // even when the model was interrupted before emitting the
-                    // close tag. The vendor buffer starts with `<tool_call>`
-                    // but frequently lacks the closing tag in Qwen3.5/3.6
-                    // interrupted-completion cases.
-                    let wrappedBuffer = Self.wrapMalformedToolCallBuffer(droppedBuffer)
-                    Log.agent.warning(
-                        "Vendor ToolCallProcessor dropped unparseable buffer at EOS — "
-                        + "request_id=\(requestID.uuidString) "
-                        + "bufferLen=\(droppedBuffer.count) "
-                        + "wrappedLen=\(wrappedBuffer.count) "
-                        + "head=\(String(wrappedBuffer.prefix(120)).debugDescription) "
-                        + "tail=\(String(wrappedBuffer.suffix(80)).debugDescription)"
-                    )
-                    handle(.malformedToolCall(wrappedBuffer))
-                }
-
-                if let completionInfo {
+                if let completionInfo = outcome.completionInfo {
+                    // Re-yield the terminal `.info` so CompletionHandler's
+                    // non-streaming and SSE paths still read final completion
+                    // metrics (token counts / finish reason) from the stream,
+                    // exactly as the previous EOS `handle(.info:)` did.
                     handle(.info(completionInfo))
                     diagnosticsContext.log(PrefixCacheDiagnostics.TTFTEvent(
                         lookupMs: mlxStart.lookupMs,
@@ -868,17 +675,10 @@ actor LLMActor {
                         + "\(String(format: "%.1f", completionInfo.tokensPerSecond)) tok/s, "
                         + "stopReason=\(describeStopReason(completionInfo.stopReason))"
                     )
-                    let rawChunks = rawChunkParts.joined()
-                    Log.agent.debug("Raw library chunks (after ToolCallProcessor):\n\(rawChunks)")
-                    if !droppedBuffer.isEmpty {
-                        Log.agent.debug(
-                            "Dropped in-flight toolCall buffer (vendor-buffered, "
-                            + "never surfaced as .toolCall):\n\(droppedBuffer)"
-                        )
-                    }
-                    if !libraryParsedToolCalls &&
-                        (rawChunks.contains("tool_call") || rawChunks.contains("<function"))
-                    {
+                    Log.agent.debug(
+                        "Raw library chunks (after ToolCallProcessor):\n\(outcome.diagnostics.rawChunksJoined)"
+                    )
+                    if outcome.diagnostics.hasUnparsedToolCallMarkers {
                         Log.agent.warning(
                             "Raw output contains tool call markers but no .toolCall events were emitted by library"
                         )
@@ -887,16 +687,15 @@ actor LLMActor {
                     // Stream closed without an `.info` event from MLX — the case we
                     // were previously blind to (jundot/omlx#825: Qwen3.6 hybrid
                     // linear attention losing tool-calling after prefix-cache hit).
-                    // Emit every diagnostic we have so the operator can correlate
-                    // model behavior with cache state in a single log line cluster.
-                    let rawChunks = rawChunkParts.joined()
-                    let parserState = parser.snapshotFinalizeState()
+                    // The loop-owned diagnostics plus server-local cache context
+                    // give the operator one correlatable log cluster.
+                    let rawChunks = outcome.diagnostics.rawChunksJoined
+                    let parserState = outcome.diagnostics.finalizeState
                     Log.agent.warning(
                         "Generation stream closed without .info event — "
                         + "request_id=\(requestID.uuidString) "
-                        + "chunks=\(rawChunkParts.count) "
                         + "rawLen=\(rawChunks.count) "
-                        + "libraryParsedToolCalls=\(libraryParsedToolCalls) "
+                        + "libraryParsedToolCalls=\(outcome.diagnostics.libraryParsedToolCalls) "
                         + "cachedTokens=\(mlxStart.skippedPrefillTokens)/"
                         + "\(mlxStart.promptTokenCount) "
                         + "lookupReason=\(mlxStart.lookupReason) "
@@ -954,7 +753,7 @@ actor LLMActor {
                     // unconditionally earlier in this task, so future requests
                     // still benefit from partial cache reuse; only the leaf
                     // is lost for this one turn.
-                    if safeguard.hasIntervened {
+                    if outcome.intervened {
                         diagnosticsContext.logSkip(
                             stage: "leafStore",
                             reason: "thinking-safeguard-intervention"
@@ -1237,16 +1036,16 @@ actor LLMActor {
             stream: stream,
             cachedTokenCount: mlxStart.skippedPrefillTokens,
             cancel: {
+                // Cancel the live raw handle (whichever is current after an
+                // intervention swap) to unpark a mid-generation `for await`, then
+                // the driving task.
+                loopCancel()
                 task.cancel()
-                // Dispatch to whichever upstream iterator is currently active
-                // — original mlxStart or a post-intervention continuation.
-                let currentCancel = pathAHandle.withLock { $0.cancel }
-                currentCancel()
             },
             waitForCompletion: {
+                // The loop awaits the live handle internally before returning, so
+                // waiting on the task is sufficient.
                 _ = await task.result
-                let currentWait = pathAHandle.withLock { $0.waitForCompletion }
-                await currentWait()
             },
             diagnostics: .fromSeconds(
                 lookup: mlxStart.lookupMs,
@@ -1543,17 +1342,6 @@ actor LLMActor {
     /// emitting it — in that case the HTTP client (e.g. opencode) otherwise
     /// sees only an opening tag and can't detect the tool-call attempt.
     /// Idempotent: if the buffer already has both tags, returns it unchanged.
-    nonisolated static func wrapMalformedToolCallBuffer(_ buffer: String) -> String {
-        var wrapped = buffer
-        if !wrapped.hasPrefix("<tool_call>") {
-            wrapped = "<tool_call>\n" + wrapped
-        }
-        if !wrapped.hasSuffix("</tool_call>") {
-            if !wrapped.hasSuffix("\n") { wrapped.append("\n") }
-            wrapped.append("</tool_call>")
-        }
-        return wrapped
-    }
 
     /// Canonicalize tool specs by round-tripping through `JSONSerialization` with
     /// `.sortedKeys`. Returns dicts with deterministic key ordering, so downstream

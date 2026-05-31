@@ -391,6 +391,67 @@ _Avoid_: conversion, adapter (it is not a seam adapter), output builder.
 > onto the text — append, never prepend. That used to be wrong in the agent loop; now
 > there is one rule and one regression test.
 
+### Generation stream loop
+
+**Generation Stream Loop**:
+The single home for consuming one raw model `AsyncStream<Generation>` and producing the
+agent's `AgentGeneration` event stream under the thinking-loop safeguard. A `nonisolated`
+value (`GenerationStreamLoop`) constructed from the initial handle and driven by one
+`run(continuation:sink:) async throws -> Outcome`; it consumes the vendor `Generation` stream
+directly (no mirror type). It owns the `while` loop over the four raw cases
+(`chunk`/`info`/`toolCall`/`toolCallBufferDelta`), the `ToolCallParser` lifecycle
+(`processChunk`/`finalize`, the `libraryParsedToolCalls` suppression, and the
+`toolCallBufferDelta` accumulation that surfaces a silently-dropped `<tool_call>` as
+`.malformedToolCall` — now for both callers, previously server-only), the `ThinkingSafeguardObserver` step with its intervention triple
+(`.thinkTruncate` → `.thinking(injection)` → `.thinkEnd`), and the **continuation swap**:
+cancel the current raw handle, await it, call `continuationStarter(safePrefix)`, swap in the
+new stream, and re-init the parser out-of-think so post-`</think>` output classifies as text.
+It owns **`cancelCurrent`** — the one place an external cancel reaches whichever raw handle is
+live *across* swaps, the invariant the two hand-copied loops kept re-deriving. It folds the
+terminal `.info` into `Outcome.completionInfo` and never pushes it through the `sink`; the
+`sink` sees content events only. It holds **no** per-caller side effects, output stream, or
+projection: each caller passes its own inline `sink` (the server path's `handle` folds a
+**Generation Accumulator**, projects `.toolCall → HTTPPrefixCacheToolCall`, then yields; the
+agent path just yields, folding later in `AgentLoop`) and does its post-loop work from the
+`Outcome` (`intervened`, `completionInfo`, `cancelled`, plus an `Outcome.diagnostics` group —
+joined raw chunks, the post-`finalize()` parser snapshot, and `libraryParsedToolCalls` — that
+feeds the server's silent-close warning and the agent ignores).
+It sits one layer *above* the
+**Generation Accumulator** (which a `sink` may call) and *below* each caller's **Generation
+Projection**. It is driven from both an actor (`LLMActor`) and the MainActor (`AgentEngine`),
+so it is `nonisolated`, the `sink` is called inline (not `@Sendable`), and only
+the continuation-starter port is `@Sendable` (it hops to the actor). The deletion test passes: remove
+it and the four-case switch, the parser-suppression rules, and the
+cancel→wait→continuation→swap→re-init protocol reappear in both
+`AgentEngine.wrapManagedGeneration` and `LLMActor.generateServerTextCompletion`.
+_Avoid_: managed generation (that is `AgentEngine`'s `@MainActor` cancellable wrapper), stream
+consumer / generation pump, GenerationFold (names the operation; the fold is the **Generation
+Accumulator**), ToolCallParser (that is *upstream* — it produces the parser events the loop
+drives).
+
+> **Flagged ambiguity — "loop": stream loop vs agent loop.** The **Generation Stream Loop**
+> consumes one raw model stream — with safeguard continuation swaps — for a single assistant
+> turn. The agent double-loop (`AgentLoop`) is the outer/inner orchestration across many turns
+> and tool calls. When unqualified, say "stream loop" vs "agent loop".
+
+**Example dialogue:**
+
+> **Dev:** The thinking-loop safeguard fires mid-stream. Who restarts generation?
+> **Expert:** The **Generation Stream Loop**. It emits the truncate / injection / `</think>`
+> triple to the `sink`, cancels the current handle and awaits it, then calls
+> `continuationStarter` with the safe prefix and swaps in the new stream — re-initialising the
+> parser out-of-think. The agent path and the server path each used to hand-write that dance;
+> now there is one.
+> **Dev:** And if the client cancels right after the swap?
+> **Expert:** `cancelCurrent` targets the post-swap handle, not the original `mlxStart`. That
+> cross-swap reachability is the invariant the two copies kept re-deriving; it lives in one
+> place now.
+> **Dev:** Does it fold the stream into an `AssistantMessage`?
+> **Expert:** No — it *produces* the `AgentGeneration` events; it folds nothing. The **Generation
+> Accumulator** the server `sink` calls does the fold, and the agent path folds later in
+> `AgentLoop`. The loop owns control flow and the safeguard; the fold and the **Generation
+> Projection** stay with the caller.
+
 ### Chat transcript projection
 
 **Chat Transcript**:

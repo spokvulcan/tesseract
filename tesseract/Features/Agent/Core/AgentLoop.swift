@@ -232,6 +232,26 @@ private enum StreamResult: Sendable {
     case success(AssistantMessage, StopReason)
 }
 
+/// When the only thing a turn produced was an interrupted / malformed
+/// `<tool_call>` at EOS, surface its raw text as the message content so the turn
+/// is persisted and the user can see a tool call was attempted. Otherwise the
+/// message is empty (no text, no tool calls) and `runLoop`'s `hasContent` check
+/// drops it as contentless — the model's attempt vanishes silently. Mirrors the
+/// server path's `CompletionHandler.malformedFallbackText` recovery so the
+/// agent path actually benefits from surfacing the dropped buffer rather than
+/// only recording it in a dead accumulator field.
+private func malformedFallbackContent(
+    text: String,
+    toolCallCount: Int,
+    malformedRaw: String
+) -> String {
+    guard text.isEmpty, toolCallCount == 0, !malformedRaw.isEmpty else { return text }
+    Log.agent.info(
+        "Surfaced dropped tool-call buffer as message content — rawLen=\(malformedRaw.count)"
+    )
+    return malformedRaw
+}
+
 /// Calls the LLM with the current context, streams chunks, and builds the final
 /// assistant message.
 private func streamAssistantResponse(
@@ -375,7 +395,13 @@ private func streamAssistantResponse(
     }
 
     let finalMessage = AssistantMessage.fromStream(
-        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
+        content: malformedFallbackContent(
+            text: accumulator.text,
+            toolCallCount: toolCalls.count,
+            malformedRaw: accumulator.malformedToolCallRaw
+        ),
+        thinking: accumulator.thinking,
+        toolCalls: toolCalls
     )
     emit(.messageEnd(message: finalMessage))
     return .success(finalMessage, .endOfTurn)
