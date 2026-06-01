@@ -98,11 +98,12 @@ deepest reachable radix node for the path under a `CachePartitionKey`, and when 
 node carries only a committed **Snapshot Ref** with no RAM body (the `.ssdHit` lookup
 reason), it hydrates the body from disk via the off-MainActor `loadSync` (ADR-0001),
 then either *promotes* the node back to a resident state on success or applies
-**Committed Ref Cleanup** on failure and downgrades to a miss. It is the single home
-for the lookup-then-hydrate-if-SSD composition previously hand-written twice — once on
-the main prefill path and once in the canonical-leaf fallback. Both the main prefill and
-the **LeafAdmissionBuilder** fallback acquire their snapshot through it, differing only
-in the token path they pass. `.ssdHit` is an internal intermediate the resolution
+**Committed Ref Cleanup** on failure and downgrades to a miss. On the main prefill path
+it is the home for the lookup-then-hydrate-if-SSD composition, replacing the dance that
+was previously hand-written there. The canonical-leaf fallback still hydrates inline
+through `LLMActor.hydrateSSDLookupIfNeeded` — a near-duplicate of the same composition,
+slated to converge onto resolution next (see **Leaf Admission Builder**) — so it does not
+yet acquire its snapshot through here. `.ssdHit` is an internal intermediate the resolution
 consumes and never surfaces: callers receive a resolved `LookupResult` whose reason is
 only `.hit` or a miss. Checkpoint planning is **not** part of resolution — planning runs
 *after* resolution against the settled tree, so a post-hydration-failure replan is the
@@ -210,25 +211,31 @@ _Avoid_: prefill config, generation params (that is `GenerateParameters`, which 
 configures), the planner owning lookup/hydration (resolution runs *before* the planner and
 feeds it a value), carrying the full token array on the plan (it lives on the handle).
 
-**Leaf Capture Plan**:
-The post-generation routing decision for storing one leaf snapshot, produced by the
-**Leaf Admission Builder** and executed by `LLMActor`. A three-case value:
-`.liveCache(storedTokens:)` (the *directLeaf* mode — snapshot the live final KV cache at
-`storedTokens.count`), `.fromBoundary(boundary:storedTokens:)` (the *directTool* and
-*canonical* modes — restore a boundary snapshot, reprefill the residual
-`storedTokens[boundary.tokenOffset...]`, capture a leaf), or `.skip(reason:)`. The
-**Leaf Admission Builder** owns only the routing it can decide without the GPU: mode
-selection, the token-path probes (canonical / tool-continuation reusable-prefix detection),
-and boundary acquisition — using the transient boundary snapshot when usable, else falling
-back through **Snapshot Resolution** on the canonical path. It depends on an injected
-`any Tokenizer` and a **Snapshot Resolution** peer, and emits `.skip(reason:)` only for
-tokenizer/resolver-decidable failures (tokenization failed, no common prefix, missing
-transient boundary, no usable resolved snapshot). Skips that need the live `finalCache` —
-`no-final-cache`, `no-reusable-cache-state`, `normalization-trim`, `unsupported-cache-type`,
-`invalid-path`, `capturedThenEvicted` — stay in the actor, which owns capture,
-**Snapshot Admission** construction at the Metal edge, and `admit`. The `intervention` skip
-is an actor guard *before* the builder runs. `storedTokens` is the full measured sequence
-for `.liveCache` and the probed reusable prefix for `.fromBoundary`.
+**Leaf Admission Builder**:
+The GPU-free routing core for storing one leaf snapshot. Today it owns the token-path
+**reusable-prefix probes**: given a stored conversation it renders the turn in isolation
+and again with one synthetic continuation appended — a user turn for the *canonical* mode
+(`.userTurn`), a tool result for the *directTool* mode (`.toolResult`) — and returns the
+shared token prefix the immediate continuation can hydrate, or `nil` when the probe
+diverges. It is tokenizer-affine (an injected `any Tokenizer`, no model), so it tests
+against a fake tokenizer with no model files. Every model-affine and live-cache step stays
+in `LLMActor`: leaf-mode selection (`selectHTTPLeafStoreMode`), boundary acquisition, the
+Metal capture, **Snapshot Admission** construction at the edge, and `admit`.
+
+_Planned (deferred from the prefill carve, not yet built):_ promoting the builder's output
+to a three-case **Leaf Capture Plan** value — `.liveCache(storedTokens:)` (the *directLeaf*
+mode — snapshot the live final KV cache at `storedTokens.count`), `.fromBoundary(boundary:storedTokens:)`
+(the *directTool* and *canonical* modes — restore a boundary snapshot, reprefill the
+residual `storedTokens[boundary.tokenOffset...]`, capture a leaf), or `.skip(reason:)` — so
+the builder also owns mode selection and boundary acquisition (the transient boundary
+snapshot when usable, else falling back through **Snapshot Resolution** on the canonical
+path). It would emit `.skip(reason:)` only for tokenizer/resolver-decidable failures
+(tokenization failed, no common prefix, missing transient boundary, no usable resolved
+snapshot); the live-`finalCache` skips (`no-final-cache`, `no-reusable-cache-state`,
+`normalization-trim`, `unsupported-cache-type`, `invalid-path`, `capturedThenEvicted`) and
+the `intervention` guard stay actor-side. Until that lands, the *canonical* fallback
+resolves its boundary through `LLMActor.hydrateSSDLookupIfNeeded`, not through the builder
+or **Snapshot Resolution**.
 _Avoid_: leaf store mode as the whole story (mode is one of its inputs), the builder owning
 capture or `admit` (model-affine, actor-side), a capture port (the builder returns a
 decision; the actor executes Metal — no behaviour-less fake seam).
@@ -248,11 +255,12 @@ decision; the actor executes Metal — no behaviour-less fake seam).
 > tokenizer drives it with no model files.
 > **Dev:** And the leaf builder — why not give it a capture port so `build()` returns the
 > finished admission?
-> **Expert:** Because that fake would exercise no behaviour — a mock, not a peer. The builder
-> returns a **Leaf Capture Plan**; the actor runs the Metal capture and builds the
-> **Snapshot Admission** at the edge, exactly where it does today. The routing — mode, probe,
-> boundary source, skip — is what's worth testing, and that needs only the tokenizer and a
-> **Snapshot Resolution** peer.
+> **Expert:** Because that fake would exercise no behaviour — a mock, not a peer. The design
+> has the builder return a **Leaf Capture Plan**; the actor runs the Metal capture and builds
+> the **Snapshot Admission** at the edge, exactly where it does today. The routing — mode,
+> probe, boundary source, skip — is what's worth testing, and that needs only the tokenizer
+> and a **Snapshot Resolution** peer. (Today only the probe half is carved out — see the
+> _Planned_ note above; the full plan value is the next step.)
 
 ### Settings persistence
 
