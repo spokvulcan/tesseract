@@ -116,7 +116,7 @@ private struct SystemPromptSection: View {
     @Environment(AgentCoordinator.self) private var coordinator
 
     var body: some View {
-        if !coordinator.assembledSystemPrompt.isEmpty {
+        if !coordinator.systemPromptInspector.assembledSystemPrompt.isEmpty {
             AgentSystemPromptView()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)

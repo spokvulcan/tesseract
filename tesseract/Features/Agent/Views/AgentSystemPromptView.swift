@@ -11,7 +11,7 @@ struct AgentSystemPromptView: View {
         case rawChatML = "Raw ChatML"
     }
 
-    private var hasRawPrompt: Bool { coordinator.rawChatMLPrompt != nil }
+    private var hasRawPrompt: Bool { coordinator.systemPromptInspector.rawChatMLPrompt != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -23,7 +23,7 @@ struct AgentSystemPromptView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
 
-                    if let count = coordinator.systemPromptTokenCount {
+                    if let count = coordinator.systemPromptInspector.systemPromptTokenCount {
                         Text("(\(count) tokens)")
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
@@ -63,13 +63,13 @@ struct AgentSystemPromptView: View {
         .task(id: hasRawPrompt) {
             Log.agent.info("SystemPromptView .task fired — hasRawPrompt=\(hasRawPrompt)")
             if !hasRawPrompt {
-                coordinator.fetchRawSystemPrompt()
+                coordinator.systemPromptInspector.fetchRawSystemPrompt()
             }
         }
         .onChange(of: coordinator.isGenerating) {
             Log.agent.info("SystemPromptView .onChange(isGenerating) — isGenerating=\(coordinator.isGenerating), hasRawPrompt=\(hasRawPrompt)")
             if !coordinator.isGenerating, !hasRawPrompt {
-                coordinator.fetchRawSystemPrompt()
+                coordinator.systemPromptInspector.fetchRawSystemPrompt()
             }
         }
     }
@@ -78,9 +78,9 @@ struct AgentSystemPromptView: View {
     private var promptContent: some View {
         switch selectedTab {
         case .assembled:
-            monoText(coordinator.assembledSystemPrompt)
+            monoText(coordinator.systemPromptInspector.assembledSystemPrompt)
         case .rawChatML:
-            if let raw = coordinator.rawChatMLPrompt {
+            if let raw = coordinator.systemPromptInspector.rawChatMLPrompt {
                 monoText(raw)
             } else {
                 Text("Load a model to view the raw ChatML prompt")
