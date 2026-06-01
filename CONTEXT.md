@@ -746,6 +746,55 @@ slash command registry (that is the pure `SlashCommandRegistry` the palette driv
 > `DictationCoordinator`, the global system-wide dictation overlay. When unqualified, say
 > "agent voice input".
 
+### Operation staleness
+
+**Operation Guard**:
+The single home for the monotonic-epoch *stale-result* protocol shared by the capture→
+transcribe→commit coordinators — today `DictationCoordinator` and **Voice Input**
+(`AgentVoiceInputController`). A `@MainActor final class OperationGuard` holding one
+private `epoch` counter behind a three-part interface: `invalidate()` advances the epoch;
+`capture() -> OperationTicket` snapshots the current epoch at the start of async work; and
+the vended **Operation Ticket** answers `isCurrent`. It exists because the underlying
+recognizer may *ignore cancellation and return success anyway*, so a `Task.cancel()` alone
+cannot stop a stale transcription from committing — only a post-`await` epoch comparison
+can. The load-bearing rule it concentrates: the epoch is advanced at **two** distinct
+moments — at `cancel()` (drop the in-flight op) **and** at *operation start*
+(`startRecording`/`start`, to supersede an *overlapping previous* op, since neither caller
+cancels the prior task on restart) — while the snapshot is taken at a **third** moment, the
+async-work entry (`processAudio`/`finishCapture`), and compared after **every** `await`
+resume. A naive `begin()` that bumped-and-snapshotted only at the async entry would drop the
+operation-start bump and silently reintroduce stale-result commits. It owns **only** the
+epoch protocol: `Task` cancellation, `audioCapture.stopCapture()`, and
+`transcriptionEngine.cancelTranscription()` stay caller-side (those are domain-specific and
+already served by Swift's `Task`). It needs no `Sendable`: the guard is a stored property of
+the `@MainActor` coordinator and every **Operation Ticket** is captured inside a
+coordinator-owned non-detached `Task`, so the guard outlives every ticket it vends (the
+ticket holds an `unowned` back-reference and reads the live epoch on the MainActor). The
+deletion test passes: remove it and the bump/capture/compare protocol reappears across both
+coordinators — eight hand-written `guard operationID == currentOperationID` sites today.
+_Avoid_: operation ID / `currentOperationID` (that is the bare counter it replaces),
+cancellation token (it does not own `Task` cancellation), debounce, sequence number.
+
+**Operation Ticket**:
+The value vended by `OperationGuard.capture()` — an `unowned` reference to its owning
+**Operation Guard** plus the snapshot epoch. Its sole interface is `isCurrent`
+(`owner.epoch == snapshot`), read on the MainActor after each `await` resume to decide
+whether the still-running async work may commit. Inert: it carries no behaviour beyond the
+comparison and is never persisted past the operation that captured it.
+_Avoid_: operation ID, token (unqualified — say "operation ticket"), snapshot (that is the
+prefix-cache concept).
+
+> **Flagged ambiguity — "Operation Guard" vs `Task` cancellation.** The **Operation Guard**
+> is the epoch protocol that catches a stale *success* (a recognizer that ignored
+> cancellation). `Task.cancel()` / `CancellationError` is the complementary mechanism for a
+> cancellation-*aware* side effect (text injection suspended mid-flight). Both coordinators
+> use both: cancel the task **and** advance the epoch. When unqualified, say "operation
+> guard" vs "task cancellation".
+
+> **Flagged ambiguity — "guard".** The **Operation Guard** is the staleness module. It is
+> unrelated to Swift's `guard` statement (which is, confusingly, how its `isCurrent` check is
+> written at call sites). When ambiguous, say "operation guard".
+
 ## Why
 
 _TODO: the constraints that shape the system (fully offline, on-device MLX,
