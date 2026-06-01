@@ -1666,176 +1666,75 @@ actor LLMActor {
                 triAttention: triAttentionIdentity
             )
 
-            // 4a. Detect stable prefix boundary (system + tools) via two-probe technique.
-            let stablePrefixOffset = try StablePrefixDetector.detect(
-                systemPrompt: conversation.systemPrompt,
+            // 4. Detect the prefill boundaries (stable prefix + last-message +
+            // last-user). The Prefill Planner owns this tokenizer-affine work —
+            // including the generation-prompt suffix subtraction and the
+            // last-user re-render — in one tested place.
+            let boundaries = try PrefillPlanner.detectBoundaries(
+                conversation: conversation,
                 toolSpecs: canonicalTools,
                 fullTokens: fullTokens,
+                promptStartsThinking: promptStartsThinking,
                 tokenizer: context.tokenizer
             )
 
-            // 4b. Detect the last-message boundary: the offset where the final
-            // history message ends, right before the assistant-generation
-            // prompt (e.g. `<|im_start|>assistant\n<think>\n` for Qwen3.5).
-            //
-            // WHY: templates like Qwen3.5 re-render non-latest assistant
-            // messages WITHOUT their `<think>...</think>` blocks (via the
-            // template's `last_query_index` logic). Turn N stored a leaf at
-            // the full post-generation offset, but turn N+1 tokenizes the
-            // same history with old assistants stripped of think blocks, so
-            // the leaf path is unreachable. A checkpoint at the last-message
-            // boundary (before the current-turn assistant prompt) IS stable
-            // across turns: turn N+1 has the same prefix up to its own last
-            // user message, regardless of think-block rewriting.
-            //
-            // HOW: the MLXLMCommon `Tokenizer` protocol doesn't expose
-            // `addGenerationPrompt`, so we can't re-tokenize without the
-            // suffix. Instead we compute the suffix length by encoding the
-            // known generation-prompt string and subtracting. The gen prompt
-            // is the fixed trailing string appended by the Jinja template.
-            let genPromptStr = promptStartsThinking
-                ? "<|im_start|>assistant\n<think>\n"
-                : "<|im_start|>assistant\n"
-            let genPromptTokens = context.tokenizer.encode(
-                text: genPromptStr, addSpecialTokens: false
-            )
-            let lastMessageBoundaryOffset: Int?
-            if genPromptTokens.count > 0,
-               fullTokens.count > genPromptTokens.count,
-               Array(fullTokens.suffix(genPromptTokens.count)).elementsEqual(genPromptTokens)
-            {
-                lastMessageBoundaryOffset = fullTokens.count - genPromptTokens.count
-            } else {
-                lastMessageBoundaryOffset = nil
-            }
-            let lastUserBoundaryOffset: Int?
-            if let lastUserIndex = conversation.messages.lastIndex(where: { $0.role == .user }) {
-                let userPrefixConversation = HTTPPrefixCacheConversation(
-                    systemPrompt: conversation.systemPrompt,
-                    messages: Array(conversation.messages[...lastUserIndex]),
-                    toolDefinitionsDigest: conversation.toolDefinitionsDigest,
-                    templateContextDigest: conversation.templateContextDigest
-                )
-                lastUserBoundaryOffset = try context.tokenizer.applyChatTemplate(
-                    messages: userPrefixConversation.promptMessages,
-                    tools: canonicalTools,
-                    additionalContext: ["add_generation_prompt": false]
-                ).count
-            } else {
-                lastUserBoundaryOffset = nil
-            }
-
-            // 5–6. Radix tree lookup + checkpoint planning (single MainActor hop).
+            // 5–6. Resolve the best cached prefix (lookup + lazy SSD hydration),
+            // then plan checkpoints against the settled tree.
             await progressHandler?(.cacheLookupStarted)
             let lookupStarted = Date.timeIntervalSinceReferenceDate
-            let (initialLookupResult, initialCheckpointPlan) = await MainActor.run {
-                prefixCache.lookupAndPlanCheckpoints(
+            // Resolve the best usable snapshot in one place: radix lookup plus
+            // lazy SSD hydration (consumed internally — only `.hit`/miss surface
+            // here). `loadSync` stays off-MainActor inside this scope per
+            // ADR-0001; promote/clear hop to MainActor inside `resolve`.
+            let resolved = await SnapshotResolution.resolve(
+                tokens: fullTokens,
+                promptTokenCount: fullTokenCount,
+                partitionKey: partitionKey,
+                modelFingerprint: modelFingerprint,
+                prefixCache: prefixCache,
+                diagnostics: diagnosticsContext
+            )
+            let lookupResult = resolved.lookup
+            // Plan AFTER resolution, against the settled tree: any promote or
+            // forgiving clear has already happened, so the post-hydration-failure
+            // replan becomes the ordinary single plan. `resolved.alignmentLookup`
+            // carries the SSD-hydrated-hit special case — it aligns against
+            // nothing, matching the pre-carve ordering against the unhydrated
+            // `.ssdHit`.
+            let checkpointPlan = await MainActor.run {
+                prefixCache.planCheckpoints(
                     tokens: fullTokens,
-                    stablePrefixOffset: stablePrefixOffset,
-                    partitionKey: partitionKey
+                    stablePrefixOffset: boundaries.stablePrefixOffset,
+                    partitionKey: partitionKey,
+                    alignTo: resolved.alignmentLookup
                 )
             }
-            // Lazy SSD hydration: `.ssdHit` signals that the deepest
-            // reachable node carries only a committed Snapshot Ref.
-            // Materialize the body from disk inside this existing
-            // `container.perform` (Metal-affine), then hop to
-            // MainActor to promote the node back to state 4. On
-            // hydration failure, clear the ref and downgrade to a
-            // miss so the prefill runs cold.
-            let lookupResult: PrefixCacheManager.LookupResult
-            // Set only when SSD hydration fails: the forgiving clear removes
-            // the body-less node the pre-hydration plan was built against, so
-            // the plan must be recomputed (see the failure branch below).
-            var replannedAfterHydrationFailure:
-                [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]?
-            if case .ssdHit(let ctx) = initialLookupResult.reason,
-               let fingerprint = modelFingerprint
-            {
-                let (hydrated, hydrateSeconds) = measure {
-                    ctx.ssdStore.loadSync(snapshotRef: ctx.snapshotRef,
-                        expectedFingerprint: fingerprint
-                    )
-                }
-                if let hydrated {
-                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
-                        id: ctx.snapshotRef.snapshotID,
-                        hydrateMs: hydrateSeconds
-                    ))
-                    await MainActor.run {
-                        ctx.ssdStore.recordHit(id: ctx.snapshotRef.snapshotID)
-                        prefixCache.promote(
-                            node: ctx.node,
-                            snapshot: hydrated,
-                            partitionKey: partitionKey
-                        )
-                    }
-                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(
-                        id: ctx.snapshotRef.snapshotID
-                    ))
-                    lookupResult = PrefixCacheManager.LookupResult(
-                        snapshot: hydrated,
-                        partitionKey: partitionKey,
-                        snapshotTokenOffset: hydrated.tokenOffset,
-                        sharedPrefixLength: initialLookupResult.sharedPrefixLength,
-                        reason: .hit(
-                            snapshotOffset: hydrated.tokenOffset,
-                            totalTokens: fullTokenCount,
-                            type: hydrated.checkpointType
-                        )
-                    )
-                } else {
-                    // Hydration failed: `loadSync` already deleted the on-disk
-                    // file and the forgiving clear removes the now-bodyless node
-                    // from the tree. The checkpoint plan was computed
-                    // pre-hydration against that node, so `alreadyStored`
-                    // suppressed re-capturing its checkpoint — recompute against
-                    // the post-clear tree so this cold request re-captures the
-                    // lost checkpoint instead of deferring it a full request cycle.
-                    replannedAfterHydrationFailure = await MainActor.run {
-                        prefixCache.clearCommittedSnapshotRefAfterHydrationFailure(
-                            node: ctx.node,
-                            partitionKey: partitionKey
-                        )
-                        return prefixCache.planCheckpoints(
-                            tokens: fullTokens,
-                            stablePrefixOffset: stablePrefixOffset,
-                            partitionKey: partitionKey
-                        )
-                    }
-                    lookupResult = PrefixCacheManager.LookupResult(
-                        snapshot: nil,
-                        partitionKey: partitionKey,
-                        snapshotTokenOffset: 0,
-                        sharedPrefixLength: initialLookupResult.sharedPrefixLength,
-                        reason: .missNoSnapshotInPrefix
-                    )
-                }
-            } else {
-                lookupResult = initialLookupResult
-                if let id = initialLookupResult.recordedHitSnapshotID {
-                    diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: id))
-                }
-            }
             let lookupMs = Date.timeIntervalSinceReferenceDate - lookupStarted
-            var checkpointPlan = replannedAfterHydrationFailure ?? initialCheckpointPlan
 
-            // 7. Determine input for generation and cache to restore.
+            // 7. Fold resolution + plan into the request's Prefill Plan:
+            // restore-vs-cold, the suffix checkpoint filter, the transient
+            // boundary offsets, and the single `prefillBaseOffset` (which
+            // collapses the old `skippedTokens` / `checkpointBaseOffset` pair).
+            let prefillPlan = PrefillPlanner.plan(
+                boundaries: boundaries,
+                lookupResult: lookupResult,
+                checkpointPlan: checkpointPlan,
+                promptTokenCount: fullTokenCount
+            )
+
+            // Execute the restore decision (Metal): on a hit, slice the suffix
+            // and restore the KV cache; otherwise run cold.
             let inputForGeneration: LMInput
             let cacheToUse: [any KVCache]?
-            let skippedTokens: Int
-            let checkpointBaseOffset: Int
             let restoreMs: TimeInterval
 
-            if let snapshot = lookupResult.snapshot, snapshot.tokenOffset > 0,
-               snapshot.tokenOffset < fullTokenCount
-            {
-                // HIT: restore cache, prefill only the suffix. Suffix-only
-                // prefill is safe for both dense and TriAttention partitions:
-                // TriAttention layers are restored via `HybridCacheSnapshot`
-                // with their absolute logical offset intact, and each layer's
-                // own `makeMask` recreates the right (causal or sparse) mask
-                // for the suffix tokens — no caller-side trim needed.
-                let cacheOffset = snapshot.tokenOffset
+            switch prefillPlan.restore {
+            case .restore(let cacheOffset):
+                // Suffix-only prefill is safe for both dense and TriAttention
+                // partitions: TriAttention layers are restored via
+                // `HybridCacheSnapshot` with their absolute logical offset
+                // intact, and each layer's own `makeMask` recreates the right
+                // (causal or sparse) mask for the suffix tokens.
                 let slicedTokens: MLXArray
                 if tokenNDim <= 1 {
                     slicedTokens = fullInput.text.tokens[cacheOffset...]
@@ -1852,18 +1751,12 @@ actor LLMActor {
                 }
                 cacheToUse = restoredCache
                 restoreMs = measuredRestoreMs
-                skippedTokens = cacheOffset
-                checkpointBaseOffset = cacheOffset
-                // Only capture checkpoints in the SUFFIX (ones before snapshot already stored).
-                checkpointPlan = checkpointPlan.filter { $0.offset > cacheOffset }
-            } else {
-                // MISS: full prefill.
+            case .cold:
                 inputForGeneration = fullInput
                 cacheToUse = nil
                 restoreMs = 0
-                skippedTokens = 0
-                checkpointBaseOffset = 0
             }
+            let skippedTokens = prefillPlan.prefillBaseOffset
             let newTokensToPrefill = fullTokenCount - skippedTokens
             await progressHandler?(.cacheLookupFinished(.init(
                 reason: String(describing: lookupResult.reason),
@@ -1882,7 +1775,7 @@ actor LLMActor {
                 newTokensToPrefill: newTokensToPrefill,
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
-                plannedCheckpoints: checkpointPlan
+                plannedCheckpoints: prefillPlan.checkpointsToCapture
             ))
 
             // 8. Set checkpoint offsets on parameters — flows into TokenIterator → prepare().
@@ -1890,18 +1783,11 @@ actor LLMActor {
             // on a planner-side invariant break instead of silently dropping a candidate.
             var genParams = parameters
             genParams.checkpoints = Dictionary(
-                uniqueKeysWithValues: checkpointPlan.map { ($0.offset, $0.type) }
+                uniqueKeysWithValues: prefillPlan.checkpointsToCapture.map { ($0.offset, $0.type) }
             )
-            genParams.triAttentionStablePrefixOffset = stablePrefixOffset
-            let transientOffsets = [lastMessageBoundaryOffset, lastUserBoundaryOffset]
-                .compactMap { $0 }
-                .filter { offset in
-                    offset > checkpointBaseOffset
-                        && offset < fullTokenCount
-                        && !checkpointPlan.contains(where: { $0.offset == offset })
-                }
-            genParams.transientCheckpointOffsets = Set(transientOffsets)
-            genParams.checkpointBaseOffset = checkpointBaseOffset
+            genParams.triAttentionStablePrefixOffset = prefillPlan.stablePrefixOffset
+            genParams.transientCheckpointOffsets = prefillPlan.transientCheckpointOffsets
+            genParams.checkpointBaseOffset = prefillPlan.prefillBaseOffset
 
             // 9. Create TokenIterator — this calls model.prepare() internally with checkpoints.
             // NO separate prepare() call. TokenIterator owns prefill.
@@ -1931,11 +1817,11 @@ actor LLMActor {
             // `MLXArray.asData()` runs on the Metal-affine thread before the
             // later MainActor store hop.
             let capturedSnapshots = iterator.capturedSnapshots
-            let transientLastMessageBoundarySnapshot = lastMessageBoundaryOffset.flatMap { offset in
+            let transientLastMessageBoundarySnapshot = prefillPlan.transientBoundaries.lastMessage.flatMap { offset in
                 iterator.transientSnapshots[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
-            let transientLastUserBoundarySnapshot = lastUserBoundaryOffset.flatMap { offset in
+            let transientLastUserBoundarySnapshot = prefillPlan.transientBoundaries.lastUser.flatMap { offset in
                 iterator.transientSnapshots[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
@@ -1987,7 +1873,7 @@ actor LLMActor {
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
                 prefillStepSize: parameters.prefillStepSize,
-                triAttentionStablePrefixOffset: stablePrefixOffset,
+                triAttentionStablePrefixOffset: boundaries.stablePrefixOffset,
                 tokenNDim: tokenNDim
             )
         }
@@ -2080,68 +1966,6 @@ actor LLMActor {
             )
             return nil
         }
-    }
-
-    /// Return the canonical stored-token sequence `[sys, ..., u_N, a_N_canonical]`
-    /// by comparing the isolated assistant-final render against the same
-    /// conversation with a dummy user turn appended. The shared token prefix is
-    /// exactly the reusable path a future user continuation can hydrate.
-    private static func computeCanonicalStoredTokens(
-        context: ModelContext,
-        storedConversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?
-    ) async throws -> [Int]? {
-        let baseMessages = storedConversation.promptMessages
-        let storedTokens = try context.tokenizer.applyChatTemplate(
-            messages: baseMessages,
-            tools: toolSpecs,
-            additionalContext: ["add_generation_prompt": false]
-        )
-        let continuationTokens = try context.tokenizer.applyChatTemplate(
-            messages: baseMessages + [[
-                "role": Chat.Message.Role.user.rawValue,
-                "content": "Aqkz_strip_probe",
-            ]],
-            tools: toolSpecs,
-            additionalContext: ["add_generation_prompt": false]
-        )
-
-        let common = zip(storedTokens, continuationTokens).prefix { $0 == $1 }.count
-        guard common > 0, common <= storedTokens.count, common < continuationTokens.count else {
-            return nil
-        }
-        return Array(continuationTokens[0..<common])
-    }
-
-    /// Return the reusable token prefix for a tool-call assistant turn by
-    /// comparing its isolated render against the render that appends a single
-    /// synthetic tool result. The shared prefix between the two is the exact
-    /// token path the immediate tool-result continuation can hydrate.
-    private static func computeToolContinuationStoredTokens(
-        context: ModelContext,
-        storedConversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?
-    ) async throws -> [Int]? {
-        let baseMessages = storedConversation.promptMessages
-        let storedTokens = try context.tokenizer.applyChatTemplate(
-            messages: baseMessages,
-            tools: toolSpecs,
-            additionalContext: ["add_generation_prompt": false]
-        )
-        let continuationTokens = try context.tokenizer.applyChatTemplate(
-            messages: baseMessages + [[
-                "role": Chat.Message.Role.tool.rawValue,
-                "content": "Aqkz_tool_probe",
-            ]],
-            tools: toolSpecs,
-            additionalContext: ["add_generation_prompt": false]
-        )
-
-        let common = zip(storedTokens, continuationTokens).prefix { $0 == $1 }.count
-        guard common > 0, common <= storedTokens.count, common < continuationTokens.count else {
-            return nil
-        }
-        return Array(continuationTokens[0..<common])
     }
 
     /// Restore the transient boundary snapshot, prefill the provided stored
@@ -2366,10 +2190,11 @@ actor LLMActor {
 
         do {
             guard let toolContinuationStoredTokens = try await container.perform({ context in
-                try await Self.computeToolContinuationStoredTokens(
-                    context: context,
+                try LeafAdmissionBuilder.reusablePrefix(
+                    continuation: .toolResult,
                     storedConversation: storedConversation,
-                    toolSpecs: toolSpecs
+                    toolSpecs: toolSpecs,
+                    tokenizer: context.tokenizer
                 )
             }) else {
                 diagnosticsContext.logSkip(
@@ -2506,10 +2331,11 @@ actor LLMActor {
     ) async -> AlphaTuner.LeafStore? {
         do {
             guard let canonicalStoredTokens = try await container.perform({ context in
-                try await Self.computeCanonicalStoredTokens(
-                    context: context,
+                try LeafAdmissionBuilder.reusablePrefix(
+                    continuation: .userTurn,
                     storedConversation: storedConversation,
-                    toolSpecs: toolSpecs
+                    toolSpecs: toolSpecs,
+                    tokenizer: context.tokenizer
                 )
             }) else {
                 diagnosticsContext.logSkip(
