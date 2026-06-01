@@ -35,10 +35,11 @@ final class AgentVoiceInputController {
     private let postProcessor = TranscriptionPostProcessor()
 
     @ObservationIgnored private var voiceErrorResetTask: Task<Void, Never>?
-    /// Monotonic token identifying the current voice-input operation, so a
+    /// The **Operation Guard** for this controller's voice-input operations, so a
     /// background transcription task that completes after a cancel-and-restart
-    /// recognizes it is stale and leaves the newer operation's state untouched.
-    @ObservationIgnored private var currentVoiceOperationID = 0
+    /// recognizes it is stale (via its `OperationTicket`) and leaves the newer
+    /// operation's state untouched. See CONTEXT.md → "Operation staleness".
+    @ObservationIgnored private let operations = OperationGuard()
 
     private enum Defaults {
         nonisolated static let minimumRecordingDuration: TimeInterval = 0.5
@@ -71,7 +72,7 @@ final class AgentVoiceInputController {
         }
 
         do {
-            currentVoiceOperationID += 1
+            operations.invalidate()
             try audioCapture.startCapture()
             voiceState = .recording
             Log.agent.info("Voice input started")
@@ -99,7 +100,7 @@ final class AgentVoiceInputController {
         voiceState = .transcribing
         Log.agent.info("Voice input stopped, transcribing \(String(format: "%.1f", audioData.duration))s audio")
 
-        let operationID = currentVoiceOperationID
+        let ticket = operations.capture()
         Task {
             do {
                 let language = settings?.language ?? "en"
@@ -107,7 +108,7 @@ final class AgentVoiceInputController {
 
                 // Stale-task guard: a cancel-and-restart since this operation began
                 // means a newer voice input owns the state — drop this result.
-                guard operationID == currentVoiceOperationID else { return }
+                guard ticket.isCurrent else { return }
 
                 let processedText = postProcessor.process(result.text)
 
@@ -124,11 +125,11 @@ final class AgentVoiceInputController {
                 // Cancelled (e.g. `cancel()` while transcribing) — not a failure.
                 // Only return to idle if still the current operation; a newer
                 // recording must not be clobbered by this stale task.
-                guard operationID == currentVoiceOperationID else { return }
+                guard ticket.isCurrent else { return }
                 voiceState = .idle
                 Log.agent.info("Voice transcription cancelled")
             } catch {
-                guard operationID == currentVoiceOperationID else { return }
+                guard ticket.isCurrent else { return }
                 setVoiceError("Transcription failed")
                 Log.agent.error("Voice transcription error: \(error)")
             }
@@ -138,7 +139,7 @@ final class AgentVoiceInputController {
     func cancel() {
         // Invalidate any in-flight transcription so a late success can't call
         // `onVoiceTranscription` (or overwrite state) after the user cancelled.
-        currentVoiceOperationID += 1
+        operations.invalidate()
         if let audioCapture, audioCapture.isCapturing {
             _ = audioCapture.stopCapture()
         }
