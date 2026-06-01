@@ -91,6 +91,39 @@ is acceptable, but the cache manager should never receive an empty checkpoint
 admission.
 _Avoid_: promptTokens, storedTokens, path prefix slicing, offset guard.
 
+**Snapshot Resolution**:
+The read-side counterpart to **Snapshot Admission**: the operation that resolves a
+token path to the best usable `HybridCacheSnapshot` for restore. It looks up the
+deepest reachable radix node for the path under a `CachePartitionKey`, and when that
+node carries only a committed **Snapshot Ref** with no RAM body (the `.ssdHit` lookup
+reason), it hydrates the body from disk via the off-MainActor `loadSync` (ADR-0001),
+then either *promotes* the node back to a resident state on success or applies
+**Committed Ref Cleanup** on failure and downgrades to a miss. It is the single home
+for the lookup-then-hydrate-if-SSD composition previously hand-written twice — once on
+the main prefill path and once in the canonical-leaf fallback. Both the main prefill and
+the **LeafAdmissionBuilder** fallback acquire their snapshot through it, differing only
+in the token path they pass. `.ssdHit` is an internal intermediate the resolution
+consumes and never surfaces: callers receive a resolved `LookupResult` whose reason is
+only `.hit` or a miss. Checkpoint planning is **not** part of resolution — planning runs
+*after* resolution against the settled tree, so a post-hydration-failure replan is the
+ordinary single plan, not a special "replan after clear" branch. Resolution crosses
+isolation the same way **Snapshot Admission** does: the lookup and the promote/clear
+tree mutations are MainActor, while the `loadSync` disk read stays off-MainActor inside
+`container.perform` per ADR-0001; it is therefore a `nonisolated` operation driven from
+inside the Metal-affine scope that hops to MainActor for the tree work.
+_Avoid_: hydrator / SSD hydration as a standalone unit (the dance is only half of it —
+resolution owns lookup *and* hydrate as one composition), lookupAndPlanCheckpoints
+(planning is a separate step now), restore / restoreCache (that is the model-affine step
+that loads the *resolved* snapshot — see the ambiguity note), boundary resolution (it
+resolves a snapshot for any read, not only leaf boundaries).
+
+> **Flagged ambiguity — "resolve" vs "restore".** **Snapshot Resolution** is the
+> read-side *find + hydrate* that produces a usable `HybridCacheSnapshot` from a token
+> path. `restoreCache` is the later model-affine step that loads that snapshot's layers
+> into a live `[any KVCache]` for suffix prefill. Resolution decides *which snapshot*;
+> restore *applies* it. When unqualified, say "resolve the snapshot" vs "restore the
+> cache".
+
 **State Effect**:
 The topology-only outcome a **Snapshot State** transition reports to its caller:
 `settled`, `becameEmpty`, or `ignored(reason)`. `becameEmpty` carries **no payload**
@@ -151,6 +184,75 @@ _Avoid_: body-removable, resident snapshot.
 > after a drop, and `canEvictNode` is the structural-removal invariant. Different
 > predicates: a `ramOnly` node has both `hasResidentBody` and `canEvictNode`, while
 > a committed node with RAM has `hasResidentBody` but not `canEvictNode`.
+
+### Prefill orchestration
+
+**Prefill Plan**:
+The set of pre-prefill decisions for one HTTP prefix-cache generation, produced by the
+**Prefill Planner** and read by `LLMActor` to drive the model-affine prefill. It names: the
+`CachePartitionKey`; a `Restore` decision (`.cold` for a miss → full prefill, or
+`.restore(snapshot:cacheOffset:)` for a hit → suffix prefill on a resolved snapshot); the
+checkpoint offsets to capture, already filtered to the suffix; the transient boundary
+*offsets* (last-message and last-user) to capture during this prefill; and the stable-prefix
+offset. It carries **offsets, not snapshots** — the boundary and checkpoint snapshots are
+post-prefill artifacts the actor lifts off the `TokenIterator` onto the generation handle;
+the plan is the pre-prefill intent computed *from* the flat token sequence, which it never
+re-carries. `skippedTokens` and `checkpointBaseOffset` are the same number (the restore
+offset, `0` on a miss) and exist as one derived `prefillBaseOffset`, not two stored fields.
+The **Prefill Planner** is tokenizer-affine, not model-affine: it runs the boundary probes
+(`StablePrefixDetector`, the generation-prompt suffix subtraction, the last-user re-render)
+through an injected `any Tokenizer`, and consumes an already-resolved `LookupResult` (see
+**Snapshot Resolution**) plus the checkpoint plan as input *values* — it never touches the
+GPU model, so it tests against a fake tokenizer with no model files. The actor keeps every
+model-affine step (processor `prepare`, the `LMInput` slice, `restoreCache`, the iterator,
+snapshot extraction).
+_Avoid_: prefill config, generation params (that is `GenerateParameters`, which the plan
+configures), the planner owning lookup/hydration (resolution runs *before* the planner and
+feeds it a value), carrying the full token array on the plan (it lives on the handle).
+
+**Leaf Capture Plan**:
+The post-generation routing decision for storing one leaf snapshot, produced by the
+**Leaf Admission Builder** and executed by `LLMActor`. A three-case value:
+`.liveCache(storedTokens:)` (the *directLeaf* mode — snapshot the live final KV cache at
+`storedTokens.count`), `.fromBoundary(boundary:storedTokens:)` (the *directTool* and
+*canonical* modes — restore a boundary snapshot, reprefill the residual
+`storedTokens[boundary.tokenOffset...]`, capture a leaf), or `.skip(reason:)`. The
+**Leaf Admission Builder** owns only the routing it can decide without the GPU: mode
+selection, the token-path probes (canonical / tool-continuation reusable-prefix detection),
+and boundary acquisition — using the transient boundary snapshot when usable, else falling
+back through **Snapshot Resolution** on the canonical path. It depends on an injected
+`any Tokenizer` and a **Snapshot Resolution** peer, and emits `.skip(reason:)` only for
+tokenizer/resolver-decidable failures (tokenization failed, no common prefix, missing
+transient boundary, no usable resolved snapshot). Skips that need the live `finalCache` —
+`no-final-cache`, `no-reusable-cache-state`, `normalization-trim`, `unsupported-cache-type`,
+`invalid-path`, `capturedThenEvicted` — stay in the actor, which owns capture,
+**Snapshot Admission** construction at the Metal edge, and `admit`. The `intervention` skip
+is an actor guard *before* the builder runs. `storedTokens` is the full measured sequence
+for `.liveCache` and the probed reusable prefix for `.fromBoundary`.
+_Avoid_: leaf store mode as the whole story (mode is one of its inputs), the builder owning
+capture or `admit` (model-affine, actor-side), a capture port (the builder returns a
+decision; the actor executes Metal — no behaviour-less fake seam).
+
+> **Flagged ambiguity — "plan": prefill plan vs checkpoint plan.** The **Prefill Plan** is
+> the whole pre-prefill decision value. The *checkpoint plan* is one field inside it — the
+> `[(offset, type)]` list from `PrefixCacheManager.planCheckpoints`, filtered to the suffix.
+> When unqualified, say "prefill plan" vs "checkpoint plan".
+
+**Example dialogue:**
+
+> **Dev:** The planner needs the tokenizer but not the model — how does it stay model-free
+> if tokenization happens inside `container.perform`?
+> **Expert:** It takes `any Tokenizer`, not the `ModelContext`. The actor still calls
+> `processor.prepare` and slices the `LMInput` — those build the MLX tensor the GPU eats.
+> The planner only runs the `[Int]`-returning probes and the boundary arithmetic, so a fake
+> tokenizer drives it with no model files.
+> **Dev:** And the leaf builder — why not give it a capture port so `build()` returns the
+> finished admission?
+> **Expert:** Because that fake would exercise no behaviour — a mock, not a peer. The builder
+> returns a **Leaf Capture Plan**; the actor runs the Metal capture and builds the
+> **Snapshot Admission** at the edge, exactly where it does today. The routing — mode, probe,
+> boundary source, skip — is what's worth testing, and that needs only the tokenizer and a
+> **Snapshot Resolution** peer.
 
 ### Settings persistence
 
