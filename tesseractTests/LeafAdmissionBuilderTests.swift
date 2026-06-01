@@ -8,46 +8,7 @@ import MLXLMCommon
 /// can hydrate. Driven by a byte-level fake tokenizer — no model.
 @Suite struct LeafAdmissionBuilderTests {
 
-    /// One UTF-8 byte ⇒ one token; `applyChatTemplate` renders the ChatML
-    /// envelope and never appends a generation prompt when told not to.
-    private struct FakeTokenizer: Tokenizer {
-        func encode(text: String, addSpecialTokens: Bool) -> [Int] {
-            Array(text.utf8).map(Int.init)
-        }
-        func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
-            String(decoding: tokenIds.compactMap { UInt8(exactly: $0) }, as: UTF8.self)
-        }
-        func tokenize(text: String) -> [String] { [] }
-        func convertTokenToId(_ token: String) -> Int? { nil }
-        func convertIdToToken(_ id: Int) -> String? { nil }
-
-        var bosToken: String? { nil }
-        var bosTokenId: Int? { nil }
-        var eosToken: String? { "<|im_end|>" }
-        var eosTokenId: Int? { nil }
-        var unknownToken: String? { nil }
-        var unknownTokenId: Int? { nil }
-
-        func applyChatTemplate(
-            messages: [[String: any Sendable]],
-            tools: [[String: any Sendable]]?,
-            additionalContext: [String: any Sendable]?
-        ) throws -> [Int] {
-            var rendered = ""
-            for message in messages {
-                let role = message["role"] as? String ?? ""
-                let content = message["content"] as? String ?? ""
-                rendered += "<|im_start|>\(role)\n\(content)<|im_end|>\n"
-            }
-            let addGenerationPrompt = (additionalContext?["add_generation_prompt"] as? Bool) ?? true
-            if addGenerationPrompt {
-                rendered += "<|im_start|>assistant\n"
-            }
-            return encode(text: rendered, addSpecialTokens: false)
-        }
-    }
-
-    private let tokenizer = FakeTokenizer()
+    private let tokenizer = FakeChatMLTokenizer()
 
     private func conversation(
         systemPrompt: String? = "You are helpful.",

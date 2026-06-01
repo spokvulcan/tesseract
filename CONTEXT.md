@@ -113,8 +113,8 @@ tree mutations are MainActor, while the `loadSync` disk read stays off-MainActor
 `container.perform` per ADR-0001; it is therefore a `nonisolated` operation driven from
 inside the Metal-affine scope that hops to MainActor for the tree work.
 _Avoid_: hydrator / SSD hydration as a standalone unit (the dance is only half of it —
-resolution owns lookup *and* hydrate as one composition), lookupAndPlanCheckpoints
-(planning is a separate step now), restore / restoreCache (that is the model-affine step
+resolution owns lookup *and* hydrate as one composition), folding planning into resolution
+(planning is a separate `planCheckpoints` step run *after* resolution now), restore / restoreCache (that is the model-affine step
 that loads the *resolved* snapshot — see the ambiguity note), boundary resolution (it
 resolves a snapshot for any read, not only leaf boundaries).
 
@@ -190,9 +190,9 @@ _Avoid_: body-removable, resident snapshot.
 
 **Prefill Plan**:
 The set of pre-prefill decisions for one HTTP prefix-cache generation, produced by the
-**Prefill Planner** and read by `LLMActor` to drive the model-affine prefill. It names: the
-`CachePartitionKey`; a `Restore` decision (`.cold` for a miss → full prefill, or
-`.restore(snapshot:cacheOffset:)` for a hit → suffix prefill on a resolved snapshot); the
+**Prefill Planner** and read by `LLMActor` to drive the model-affine prefill. It names: a
+`Restore` decision (`.cold` for a miss → full prefill, or `.restore(cacheOffset:)` for a hit
+→ suffix prefill from the offset the resolved snapshot covers); the
 checkpoint offsets to capture, already filtered to the suffix; the transient boundary
 *offsets* (last-message and last-user) to capture during this prefill; and the stable-prefix
 offset. It carries **offsets, not snapshots** — the boundary and checkpoint snapshots are

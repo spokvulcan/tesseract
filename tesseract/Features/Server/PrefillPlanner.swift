@@ -26,14 +26,13 @@ nonisolated struct PrefillBoundaries: Sendable, Equatable {
 /// orchestrator executes (slice + restore + iterate), where Snapshot Admission
 /// is the write-side value it commits afterward.
 nonisolated struct PrefillPlan: Sendable {
-    /// The restore-vs-cold decision. `.restore` carries the snapshot that was
-    /// matched and the offset its KV state covers (the prefill base).
+    /// The restore-vs-cold decision. `.restore` carries the offset its KV
+    /// state covers (the prefill base).
     enum Restore: Sendable {
         case cold
-        case restore(snapshot: HybridCacheSnapshot, cacheOffset: Int)
+        case restore(cacheOffset: Int)
     }
 
-    let partitionKey: CachePartitionKey
     let restore: Restore
     /// Checkpoints to capture during this prefill, already filtered to the
     /// suffix the restored snapshot does not already cover.
@@ -50,7 +49,7 @@ nonisolated struct PrefillPlan: Sendable {
     /// zero on a cold prefill. Single source for what were two values that
     /// could drift (`skippedTokens` and `checkpointBaseOffset`).
     var prefillBaseOffset: Int {
-        if case .restore(_, let cacheOffset) = restore { return cacheOffset }
+        if case .restore(let cacheOffset) = restore { return cacheOffset }
         return 0
     }
 
@@ -138,8 +137,7 @@ nonisolated enum PrefillPlanner {
         boundaries: PrefillBoundaries,
         lookupResult: PrefixCacheManager.LookupResult,
         checkpointPlan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)],
-        promptTokenCount: Int,
-        partitionKey: CachePartitionKey
+        promptTokenCount: Int
     ) -> PrefillPlan {
         let restore: PrefillPlan.Restore
         let checkpointsToCapture: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
@@ -147,7 +145,7 @@ nonisolated enum PrefillPlanner {
            snapshot.tokenOffset > 0,
            snapshot.tokenOffset < promptTokenCount {
             let cacheOffset = snapshot.tokenOffset
-            restore = .restore(snapshot: snapshot, cacheOffset: cacheOffset)
+            restore = .restore(cacheOffset: cacheOffset)
             // Only capture checkpoints in the SUFFIX the snapshot doesn't cover.
             checkpointsToCapture = checkpointPlan.filter { $0.offset > cacheOffset }
         } else {
@@ -156,7 +154,6 @@ nonisolated enum PrefillPlanner {
         }
 
         return PrefillPlan(
-            partitionKey: partitionKey,
             restore: restore,
             checkpointsToCapture: checkpointsToCapture,
             transientBoundaries: (boundaries.lastMessageOffset, boundaries.lastUserOffset),

@@ -417,29 +417,6 @@ final class PrefixCacheManager {
         return sharedPrefixLength
     }
 
-    /// Runs the production lookup + checkpoint planner flow, including the
-    /// Phase 3.1 alignment checkpoint merge used by `LLMActor`.
-    func lookupAndPlanCheckpoints(
-        tokens: [Int],
-        stablePrefixOffset: Int?,
-        partitionKey: CachePartitionKey
-    ) -> (lookup: LookupResult, plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]) {
-        let lookup = lookup(tokens: tokens, partitionKey: partitionKey)
-        let basePlan = planCheckpoints(
-            tokens: tokens,
-            stablePrefixOffset: stablePrefixOffset,
-            partitionKey: partitionKey
-        )
-        guard let alignmentOffset = alignmentCheckpointOffset(
-            lookupResult: lookup,
-            totalTokenCount: tokens.count,
-            plannedCheckpoints: basePlan
-        ) else {
-            return (lookup, basePlan)
-        }
-        return (lookup, basePlan + [(offset: alignmentOffset, type: .branchPoint)])
-    }
-
     // MARK: - Checkpoint Planning
 
     /// Determine checkpoint offsets for the upcoming prefill.
@@ -504,9 +481,9 @@ final class PrefixCacheManager {
 
     /// Plan checkpoints against the settled tree *after* **Snapshot Resolution**,
     /// merging the Phase 3.1 alignment branch-point for `alignTo` when present.
-    /// This is the decomposed half of `lookupAndPlanCheckpoints`: the actor
-    /// resolves first (which may promote or clear a node), then plans here, so
-    /// the post-hydration-failure replan becomes the ordinary single plan.
+    /// The actor resolves first via **Snapshot Resolution** (which may promote or
+    /// clear a node), then plans here, so the post-hydration-failure replan
+    /// becomes the ordinary single plan.
     ///
     /// Pass `alignTo: nil` to skip the alignment merge — the pre-resolution
     /// ordering planned against the unhydrated `.ssdHit`, which never aligned,

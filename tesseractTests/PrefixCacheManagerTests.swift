@@ -1308,7 +1308,7 @@ struct PrefixCacheManagerTests {
         #expect(alignmentOffset == nil)
     }
 
-    @Test func lookupAndPlanCheckpointsIncludesAlignmentCheckpoint() {
+    @Test func planCheckpointsWithAlignToIncludesAlignmentCheckpoint() {
         let mgr = makeManager()
         let matchedPath = Array(1...500)
         mgr.admit(SnapshotAdmission.checkpoints(
@@ -1318,17 +1318,22 @@ struct PrefixCacheManagerTests {
         )!)
 
         let request = matchedPath + [999]
-        let result = mgr.lookupAndPlanCheckpoints(
+        // Drive the live prefill path: resolve first (Snapshot Resolution does
+        // the lookup), then plan against the settled tree aligned to that hit.
+        let lookup = mgr.lookup(tokens: request, partitionKey: defaultKey)
+        #expect(lookup.snapshotTokenOffset == 100)
+        #expect(lookup.sharedPrefixLength == 500)
+
+        let plan = mgr.planCheckpoints(
             tokens: request,
             stablePrefixOffset: nil,
-            partitionKey: defaultKey
+            partitionKey: defaultKey,
+            alignTo: lookup
         )
 
-        #expect(result.lookup.snapshotTokenOffset == 100)
-        #expect(result.lookup.sharedPrefixLength == 500)
-        #expect(result.plan.contains { $0.offset == 500 && $0.type == .branchPoint })
+        #expect(plan.contains { $0.offset == 500 && $0.type == .branchPoint })
 
-        let suffixPlan = result.plan.filter { $0.offset > result.lookup.snapshotTokenOffset }
+        let suffixPlan = plan.filter { $0.offset > lookup.snapshotTokenOffset }
         #expect(suffixPlan.contains { $0.offset == 500 && $0.type == .branchPoint })
     }
 

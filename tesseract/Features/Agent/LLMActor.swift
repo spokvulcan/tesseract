@@ -1719,8 +1719,7 @@ actor LLMActor {
                 boundaries: boundaries,
                 lookupResult: lookupResult,
                 checkpointPlan: checkpointPlan,
-                promptTokenCount: fullTokenCount,
-                partitionKey: partitionKey
+                promptTokenCount: fullTokenCount
             )
 
             // Execute the restore decision (Metal): on a hit, slice the suffix
@@ -1730,7 +1729,7 @@ actor LLMActor {
             let restoreMs: TimeInterval
 
             switch prefillPlan.restore {
-            case .restore(_, let cacheOffset):
+            case .restore(let cacheOffset):
                 // Suffix-only prefill is safe for both dense and TriAttention
                 // partitions: TriAttention layers are restored via
                 // `HybridCacheSnapshot` with their absolute logical offset

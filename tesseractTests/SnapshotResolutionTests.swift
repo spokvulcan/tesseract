@@ -77,4 +77,35 @@ import MLXLMCommon
         }
         #expect(resolved.lookup.snapshot?.tokenOffset == tokens.count)
     }
+
+    // MARK: - alignmentLookup (the SSD-timing rule)
+
+    /// A `.hit` lookup for the alignment tests — `alignmentLookup` keys off
+    /// `hydratedFromSSD`, not the lookup's contents, so any hit will do.
+    private func ramHitLookup(offset: Int = 8) -> PrefixCacheManager.LookupResult {
+        let snapshot = makeSnapshot(offset: offset)
+        return PrefixCacheManager.LookupResult(
+            snapshot: snapshot,
+            partitionKey: key,
+            snapshotTokenOffset: snapshot.tokenOffset,
+            sharedPrefixLength: snapshot.tokenOffset,
+            reason: .hit(snapshotOffset: snapshot.tokenOffset, totalTokens: offset * 2, type: snapshot.checkpointType)
+        )
+    }
+
+    @Test func alignmentLookupIsTheLookupWhenNotHydratedFromSSD() {
+        let lookup = ramHitLookup()
+        let resolved = SnapshotResolution.Resolved(lookup: lookup, hydratedFromSSD: false)
+        // A RAM hit aligns checkpoint planning against itself.
+        #expect(resolved.alignmentLookup != nil)
+        #expect(resolved.alignmentLookup?.snapshotTokenOffset == lookup.snapshotTokenOffset)
+    }
+
+    @Test func alignmentLookupIsNilForAnSSDHydratedHit() {
+        let resolved = SnapshotResolution.Resolved(lookup: ramHitLookup(), hydratedFromSSD: true)
+        // An SSD-hydrated hit must align against nothing: it matches the pre-carve
+        // ordering that planned against the unhydrated `.ssdHit`, which never merged
+        // an alignment branch-point. Flipping this rule would silently resume it.
+        #expect(resolved.alignmentLookup == nil)
+    }
 }
