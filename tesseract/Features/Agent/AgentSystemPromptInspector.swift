@@ -15,7 +15,6 @@
 
 import Foundation
 import Observation
-import os
 
 @Observable @MainActor
 final class AgentSystemPromptInspector {

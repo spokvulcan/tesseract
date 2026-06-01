@@ -1,7 +1,5 @@
 import Foundation
 import Observation
-import os
-import MLXLMCommon
 
 /// Thin **dispatcher spine** over ``Agent`` and five publisher-agnostic
 /// sub-modules. The coordinator owns the single agent-event subscription and
@@ -471,12 +469,13 @@ final class AgentCoordinator {
             persistCurrentConversation()
 
         case .agentEnd(_):
-            // Ordering invariant: flip the busy flag *before* the rebuild.
+            // Terminal transition: flip the busy flag so the view passthroughs
+            // settle. `onAgentEnded` rebuilds as not-generating on its own, so the
+            // committed transcript no longer depends on `finish()` landing first.
             agentRun.finish()
             transcript.onAgentEnded(
                 messages: agent.state.messages,
-                stream: agent.state.streamMessage,
-                isGenerating: agentRun.isGenerating
+                stream: agent.state.streamMessage
             )
             autoSpeakIfEnabled()
 

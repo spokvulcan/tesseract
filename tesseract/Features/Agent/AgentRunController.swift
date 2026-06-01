@@ -94,6 +94,13 @@ final class AgentRunController {
 
         guard let arbiter else {
             sendTask = Task {
+                // A same-turn `cancel()` lands before this body runs; honor it so the
+                // arbiter-less path matches the lease path's pre-`body` cancellation
+                // check (`withExclusiveGPU` runs `Task.checkCancellation()` first).
+                guard !Task.isCancelled else {
+                    self.isGenerating = false
+                    return
+                }
                 await body()
                 self.sendTask = nil
             }

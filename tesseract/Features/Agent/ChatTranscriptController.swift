@@ -128,12 +128,14 @@ final class ChatTranscriptController {
     }
 
     /// `.agentEnd`: clear the streaming-header expansion bookkeeping, auto-collapse
-    /// the turn that generation auto-expanded, then rebuild.
-    func onAgentEnded(messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool) {
+    /// the turn that generation auto-expanded, then rebuild. The agent has ended,
+    /// so this rebuilds as **not generating** unconditionally — the terminal-state
+    /// contract is encoded here, not left to the caller to pass `isGenerating: false`.
+    func onAgentEnded(messages: [any AgentMessageProtocol], stream: AssistantMessage?) {
         streamingManuallyCollapsed = false
         expandedTurns.remove(ChatTranscript.streamingTurnID)
         autoCollapseIfNeeded()
-        rebuild(messages: messages, stream: stream, isGenerating: isGenerating)
+        rebuild(messages: messages, stream: stream, isGenerating: false)
     }
 
     // MARK: - Expand / Collapse
