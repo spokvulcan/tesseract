@@ -49,21 +49,21 @@ struct AgentInputBarView: View {
                         guard settings.visionModeEnabled else { return }
                         pendingImages.append(contentsOf: attachments)
                     },
-                    isEnabled: !(coordinator.voiceState == .recording || coordinator.voiceState == .transcribing),
+                    isEnabled: !(coordinator.voiceInput.voiceState == .recording || coordinator.voiceInput.voiceState == .transcribing),
                     onArrowUp: {
-                        guard coordinator.showCommandPopup else { return false }
-                        coordinator.commandSelectedIndex = max(0, coordinator.commandSelectedIndex - 1)
+                        guard coordinator.commandPalette.showCommandPopup else { return false }
+                        coordinator.commandPalette.commandSelectedIndex = max(0, coordinator.commandPalette.commandSelectedIndex - 1)
                         return true
                     },
                     onArrowDown: {
-                        guard coordinator.showCommandPopup else { return false }
-                        let count = coordinator.commandFilteredResults.count
-                        coordinator.commandSelectedIndex = min(count - 1, coordinator.commandSelectedIndex + 1)
+                        guard coordinator.commandPalette.showCommandPopup else { return false }
+                        let count = coordinator.commandPalette.commandFilteredResults.count
+                        coordinator.commandPalette.commandSelectedIndex = min(count - 1, coordinator.commandPalette.commandSelectedIndex + 1)
                         return true
                     },
                     onEscape: {
-                        guard coordinator.showCommandPopup else { return false }
-                        coordinator.dismissCommandPopup()
+                        guard coordinator.commandPalette.showCommandPopup else { return false }
+                        coordinator.commandPalette.dismissCommandPopup()
                         inputText = ""
                         return true
                     }
@@ -133,16 +133,16 @@ struct AgentInputBarView: View {
                     .help(settings.webAccessEnabled ? "Web search enabled — click to disable" : "Web search disabled — click to enable")
 
                     Button {
-                        if coordinator.showCommandPopup {
-                            coordinator.dismissCommandPopup()
+                        if coordinator.commandPalette.showCommandPopup {
+                            coordinator.commandPalette.dismissCommandPopup()
                         } else {
                             inputText = "/"
-                            coordinator.updateCommandPopup(for: "/")
+                            coordinator.commandPalette.updateCommandPopup(for: "/")
                         }
                     } label: {
                         Image(systemName: "slash.circle")
                             .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(coordinator.showCommandPopup ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(coordinator.commandPalette.showCommandPopup ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                     }
                     .buttonStyle(.plain)
                     .help("Commands")
@@ -188,7 +188,7 @@ struct AgentInputBarView: View {
                 .strokeBorder(.quaternary, lineWidth: 0.5)
         }
         .onChange(of: inputText) { _, newValue in
-            coordinator.updateCommandPopup(for: newValue)
+            coordinator.commandPalette.updateCommandPopup(for: newValue)
         }
         .onChange(of: settings.visionModeEnabled) { _, newValue in
             // Clear any queued images when the user disables vision — the
@@ -198,7 +198,7 @@ struct AgentInputBarView: View {
             }
         }
         .onAppear {
-            coordinator.onVoiceTranscription = { text in
+            coordinator.voiceInput.onVoiceTranscription = { text in
                 if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     inputText = text
                 } else {
@@ -218,7 +218,7 @@ struct AgentInputBarView: View {
     // MARK: - Mic Button
 
     private var micButton: some View {
-        let state = coordinator.voiceState
+        let state = coordinator.voiceInput.voiceState
 
         return micIcon(for: state)
             .font(.title2)
@@ -229,12 +229,12 @@ struct AgentInputBarView: View {
                     .onChanged { _ in
                         guard !isHoldingMic else { return }
                         isHoldingMic = true
-                        coordinator.startVoiceInput()
+                        coordinator.voiceInput.start()
                     }
                     .onEnded { _ in
                         isHoldingMic = false
-                        if coordinator.voiceState == .recording {
-                            coordinator.stopVoiceInputAndSend()
+                        if coordinator.voiceInput.voiceState == .recording {
+                            coordinator.voiceInput.finishCapture()
                         }
                     }
             )
@@ -272,7 +272,7 @@ struct AgentInputBarView: View {
 
     private var canUseVoice: Bool {
         !coordinator.isGenerating
-            && coordinator.voiceState != .transcribing
+            && coordinator.voiceInput.voiceState != .transcribing
             && isWhisperAvailable
     }
 
@@ -283,7 +283,7 @@ struct AgentInputBarView: View {
         if coordinator.isGenerating {
             return "Voice input unavailable during generation"
         }
-        switch coordinator.voiceState {
+        switch coordinator.voiceInput.voiceState {
         case .recording: return "Release to transcribe"
         case .transcribing: return "Transcribing…"
         case .error(let msg): return msg
@@ -299,15 +299,15 @@ struct AgentInputBarView: View {
     // MARK: - Slash Command Helpers
 
     private func selectCommand(_ command: SlashCommand) {
-        inputText = coordinator.autocompleteCommand(command)
+        inputText = coordinator.commandPalette.autocompleteCommand(command)
     }
 
     private func handleCommit() {
         // If popup is showing, Enter autocompletes the selected command
-        if coordinator.showCommandPopup {
-            let filtered = coordinator.commandFilteredResults
-            if filtered.indices.contains(coordinator.commandSelectedIndex) {
-                selectCommand(filtered[coordinator.commandSelectedIndex])
+        if coordinator.commandPalette.showCommandPopup {
+            let filtered = coordinator.commandPalette.commandFilteredResults
+            if filtered.indices.contains(coordinator.commandPalette.commandSelectedIndex) {
+                selectCommand(filtered[coordinator.commandPalette.commandSelectedIndex])
                 return
             }
         }

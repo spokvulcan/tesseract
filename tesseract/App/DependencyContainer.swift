@@ -208,8 +208,8 @@ final class DependencyContainer: ObservableObject {
         hotkeyManager.registerHotkey(
             id: "agent",
             combo: settingsManager.agentHotkey,
-            onDown: { [weak self] in self?.agentCoordinator.startVoiceInput() },
-            onUp: { [weak self] in self?.agentCoordinator.stopVoiceInputAndSend() }
+            onDown: { [weak self] in self?.agentCoordinator.voiceInput.start() },
+            onUp: { [weak self] in self?.agentCoordinator.voiceInput.finishCapture() }
         )
 
         // Register message codecs for the new persistence layer (Epic 2)

@@ -38,7 +38,7 @@ struct AgentInputStatusStrip: View {
         if let error = coordinator.error {
             return .error(error)
         }
-        if case .error(let message) = coordinator.voiceState {
+        if case .error(let message) = coordinator.voiceInput.voiceState {
             return .voiceError(message)
         }
         if agentEngine.isLoading {

@@ -601,6 +601,29 @@ render-ready: no JSON, no `Date` formatting, no protocol conversion in the rende
 It is the unit SwiftUI diffs, so its `id` is stable across rebuilds.
 _Avoid_: cell, item, list element, view model.
 
+**Chat Transcript Controller**:
+The `@Observable @MainActor` stateful driver of the pure **Chat Transcript** fold,
+`ChatTranscriptController` (carved out of `AgentCoordinator`). It owns the transcript's view-interaction state —
+`expandedTurns`, `expandedDetails`, the streaming-throttle clock,
+`autoExpandedTurnID`/`streamingManuallyCollapsed`, the `activeTurnRowIndex` splice
+point, the timestamp formatter — and publishes the `rows` and `streamingRowVersion`
+the chat list renders. It is **publisher-agnostic** (ARCHITECTURE.md's panel-controller
+rule): the coordinator's event dispatcher feeds it `messages`, the live `stream`, and
+`isGenerating` per call, so it holds no `Agent` reference. It owns the rebuild-vs-patch
+decision — a full `rebuild` over every **Turn** versus the throttled tail-patch that
+re-projects only the active **Turn** and splices onto the stable prefix — plus the
+explicit pre-projection steps (streaming-header auto-expand, stale-expansion pruning)
+that used to be hidden side effects in the coordinator. Its interface is deep: feed it a
+scripted `(messages, stream, isGenerating)` sequence and assert `rows` — no Agent,
+arbiter, or conversation store, the scaffolding the `AgentCoordinator*Tests` files stand
+up today. The `isGenerating`-before-rebuild ordering invariant lives in the dispatcher
+that drives it, not here. Distinct from **Chat Transcript** (the pure, stateless fold it
+calls) and **Generation Projection** (one turn's accumulator → a caller's output): the
+Chat Transcript Controller is the stateful orchestrator that decides *when* and *how much* to
+re-fold.
+_Avoid_: view model, render model, ChatViewModel (same Avoid as **Chat Transcript**), row
+store, rebuildRows/patchStreamingTail as the whole story (those are two of its methods).
+
 > **Flagged ambiguity — "Transcript" vs ASR transcription.** The **Chat Transcript**
 > is the rendered chat conversation (message log → rows). It is unrelated to
 > `TranscriptionEngine` / `Transcribing` / `TranscriptionResult`, which are
@@ -629,6 +652,99 @@ _Avoid_: cell, item, list element, view model.
 > **Expert:** One transcript **Turn**, many loop turns. The Turn runs from the user
 > message through every assistant message and tool result until the next user message;
 > each assistant message inside it was its own `turnEnd`.
+
+### Agent run lifecycle
+
+**Agent Run**:
+The lifecycle of one *foreground* LLM invocation — a `sendMessage` turn or a `/compact`
+— serialized behind the `InferenceArbiter`'s exclusive `.llm` lease. The
+`@Observable @MainActor` module that owns it, `AgentRunController` (carved out of `AgentCoordinator`), is the
+**single writer** of `isGenerating`, and also owns the lease-bearing `sendTask` and the
+cancellation contract (`cancel`, `cancelAndWait`). `isGenerating` is set *eagerly* at
+`send` — before `agent.prompt` runs — because the run may sit **queued** behind the lease
+while `agent.state.phase` is still `.idle`; the flag therefore means "a foreground run is
+queued **or** active," a fact only this module knows, which is why it lives here and not
+on the coordinator spine. The command side (`send`, `cancel`, `cancelAndWait`, and a
+shared `runUnderLease` entry that `/compact` reuses so the lease/flag/cancel contract is
+written once) is driven by the view and command execution; the event-side transitions
+(`markStarted`/`finish`) are *fed* by the coordinator's event dispatcher on
+`.agentStart`/`.agentEnd`. Failures inside the lease task are reported to the
+coordinator's shared `error` banner via an injected closure; the only view surface it
+owns is `isGenerating`, which the coordinator re-exposes as a computed passthrough so
+existing call sites are unchanged. Both `send` and `runUnderLease` preserve the
+arbiter-less fallback — with no arbiter wired they drive `agent.prompt`/`agent.forceCompact`
+directly (the back-compat branch locked by `compactCommandFallsBackToDirectPathWhenArbiterMissing`).
+The deletion test passes: remove it and the
+eager-flag-while-queued semantics plus the lease/cancel contract reappear in the
+coordinator. Distinct from the **Generation** family (Accumulator / Projection / Stream
+Loop), which folds the token stream *inside* a turn — an **Agent Run** is the outer
+lease+busy+cancel envelope around the whole invocation.
+_Avoid_: generation lifecycle (collides with the Generation* stream family), send
+coordinator, run as a transcript/loop turn, busy flag as standalone spine state (the run
+owns it).
+
+### Agent coordinator leaves
+
+The publisher-agnostic sub-controllers carved off `AgentCoordinator` that own their state
+and deps and touch the event dispatcher *not at all* — the *leaves*, as opposed to the
+spine (**Agent Run**, **Chat Transcript Controller**). Each becomes testable on its own; the
+coordinator re-exposes the hot view reads (`rows`, `isGenerating`, `streamingRowVersion`)
+as computed passthroughs, and the view reaches the rest via nested access
+(`coordinator.voiceInput.voiceState`).
+
+**Voice Input**:
+The `@Observable @MainActor` module (`AgentVoiceInputController`) owning the agent
+composer's push-to-talk capture→transcribe→emit flow. Interface: `voiceState`, `start()`,
+`finishCapture()`, `cancel()`, and the `onVoiceTranscription` output callback —
+`finishCapture()` stops recording, transcribes, and *emits the text to the composer via
+the callback; it does not send* (the pre-carve name `stopVoiceInputAndSend` is a
+misnomer). Behind that small interface: the **stale-task guard** (a monotonic
+`currentVoiceOperationID` so a transcription completing after a cancel-and-restart sees it
+is stale and leaves the newer operation untouched), the minimum-duration check,
+post-processing, and the auto-resetting `.error` display. Deps: `AudioCapturing`,
+`Transcribing`, `TranscriptionPostProcessor`, `settings.language` — no `Agent`, no arbiter.
+Zero event-spine coupling: transcribed text leaves via the callback, which the input bar
+feeds into **Agent Run**'s `send`; its errors live in `voiceState`, never the shared
+`error` banner. The deletion test passes: remove it and the stale-task guard reappears in
+the coordinator — exactly what `AgentCoordinatorVoiceCancellationTests` guards.
+_Avoid_: dictation (the separate global `DictationCoordinator`/overlay path), mic
+controller, voice state machine.
+
+**System Prompt Inspector**:
+The `@Observable @MainActor` module (`AgentSystemPromptInspector`) owning the
+system-prompt transparency panel.
+Interface: published `assembledSystemPrompt`, `rawChatMLPrompt`, `systemPromptTokenCount`,
+and `fetchRawSystemPrompt()`. Behind it: the cancellable async fetch that renders the
+assembled prompt through the injected `formatRawPrompt` closure into raw ChatML plus a
+token count, superseding any in-flight fetch. Deps: the `formatRawPrompt` closure and a
+read-only source of the current prompt + tools (an injected closure, so it tests with no
+`Agent`). View-triggered, never event-driven — zero event-spine coupling.
+_Avoid_: prompt builder (that assembles the prompt; this inspects it), token counter.
+
+**Command Palette**:
+The `@Observable @MainActor` module (`SlashCommandPaletteController`) owning the
+slash-command popup *presentation*.
+Interface: `commandRegistry`, `showCommandPopup`, `commandSelectedIndex`,
+`commandFilteredResults`, plus `updateCommandPopup(for:)`/`dismissCommandPopup()`/
+`autocompleteCommand(_:)`. It owns the registry rebuild (discovered skills + extensions)
+and the filter/selection/autocomplete interaction over the already-pure
+`SlashCommandParser`/`SlashCommandRegistry`. Deps: `extensionHost`, `packageRegistry` — no
+spine coupling; lifts clean.
+_Avoid_: command executor / command router as a module (execution stays on the spine),
+slash command registry (that is the pure `SlashCommandRegistry` the palette drives).
+
+> **Note — deliberately left on the spine.** Two coordinator concerns are *not* carved,
+> by the deletion test. **Command execution** (`executeCommand` routes `/compact` into
+> **Agent Run**'s lease, `/new`·`/clear` into conversation orchestration, and skills back
+> into `AgentRun.send`) is a router that only forwards into three spine concerns; a module
+> would be shallow. **Voice output** (`speakMessage`/`stopSpeaking`/auto-speak) is thin,
+> stateless calls already sitting over the seamed `SpeechCoordinator`. Both stay as
+> coordinator methods; carving them would move complexity, not concentrate it.
+
+> **Flagged ambiguity — "Voice Input" vs dictation.** **Voice Input** is the agent chat
+> composer's push-to-talk (mic → transcript → composer text). It is unrelated to
+> `DictationCoordinator`, the global system-wide dictation overlay. When unqualified, say
+> "agent voice input".
 
 ## Why
 

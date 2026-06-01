@@ -38,20 +38,20 @@ struct AgentContentView: View {
                 }
 
                 ZStack(alignment: .bottom) {
-                    if coordinator.showCommandPopup {
+                    if coordinator.commandPalette.showCommandPopup {
                         Color.clear
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                coordinator.dismissCommandPopup()
+                                coordinator.commandPalette.dismissCommandPopup()
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
 
                     VStack(spacing: 0) {
-                        if coordinator.showCommandPopup, !coordinator.commandFilteredResults.isEmpty {
+                        if coordinator.commandPalette.showCommandPopup, !coordinator.commandPalette.commandFilteredResults.isEmpty {
                             SlashCommandPopupView(
-                                commands: coordinator.commandFilteredResults,
-                                selectedIndex: coordinator.commandSelectedIndex,
+                                commands: coordinator.commandPalette.commandFilteredResults,
+                                selectedIndex: coordinator.commandPalette.commandSelectedIndex,
                                 onSelect: { command in
                                     selectCommandFromPopup(command)
                                 }
@@ -64,7 +64,7 @@ struct AgentContentView: View {
                         AgentInputBarView(inputText: $inputText)
                     }
                 }
-                .animation(.easeOut(duration: 0.15), value: coordinator.showCommandPopup)
+                .animation(.easeOut(duration: 0.15), value: coordinator.commandPalette.showCommandPopup)
             }
         }
         .navigationTitle("Agent")
@@ -73,8 +73,8 @@ struct AgentContentView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: isSpeechActive)
         .onExitCommand {
-            if coordinator.voiceState == .recording {
-                coordinator.cancelVoiceInput()
+            if coordinator.voiceInput.voiceState == .recording {
+                coordinator.voiceInput.cancel()
             }
         }
         .toolbar {
@@ -117,7 +117,7 @@ struct AgentContentView: View {
     // MARK: - Slash Command Popup
 
     private func selectCommandFromPopup(_ command: SlashCommand) {
-        inputText = coordinator.autocompleteCommand(command)
+        inputText = coordinator.commandPalette.autocompleteCommand(command)
     }
 
     // MARK: - Conversation History Popover
