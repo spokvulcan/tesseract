@@ -502,6 +502,36 @@ final class PrefixCacheManager {
         return plan
     }
 
+    /// Plan checkpoints against the settled tree *after* **Snapshot Resolution**,
+    /// merging the Phase 3.1 alignment branch-point for `alignTo` when present.
+    /// This is the decomposed half of `lookupAndPlanCheckpoints`: the actor
+    /// resolves first (which may promote or clear a node), then plans here, so
+    /// the post-hydration-failure replan becomes the ordinary single plan.
+    ///
+    /// Pass `alignTo: nil` to skip the alignment merge — the pre-resolution
+    /// ordering planned against the unhydrated `.ssdHit`, which never aligned,
+    /// so an SSD-hydrated hit passes `nil` to preserve that exact behavior.
+    func planCheckpoints(
+        tokens: [Int],
+        stablePrefixOffset: Int?,
+        partitionKey: CachePartitionKey,
+        alignTo lookupResult: LookupResult?
+    ) -> [(offset: Int, type: HybridCacheSnapshot.CheckpointType)] {
+        let basePlan = planCheckpoints(
+            tokens: tokens,
+            stablePrefixOffset: stablePrefixOffset,
+            partitionKey: partitionKey
+        )
+        guard let lookupResult,
+              let alignmentOffset = alignmentCheckpointOffset(
+                  lookupResult: lookupResult,
+                  totalTokenCount: tokens.count,
+                  plannedCheckpoints: basePlan
+              )
+        else { return basePlan }
+        return basePlan + [(offset: alignmentOffset, type: .branchPoint)]
+    }
+
     // MARK: - Store
 
     @discardableResult
