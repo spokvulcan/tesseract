@@ -793,74 +793,78 @@ actor LLMActor {
                             : HTTPLeafContinuationKind.toolResult.rawValue
                     ))
 
-                    // Resolve the GPU-free leaf-capture plan. The reusable-prefix
-                    // probe and the canonical Snapshot Resolution fallback are
-                    // tokenizer/resolver-decidable, so they live in the **Leaf
-                    // Admission Builder**; the live final-cache capture stays
-                    // actor-side under `.liveCache` below.
-                    let transientBoundary: HybridCacheSnapshot? = switch leafStoreMode {
-                    case .directToolLeaf: mlxStart.transientLastMessageBoundarySnapshot
-                    case .canonicalUserLeaf: mlxStart.transientLastUserBoundarySnapshot
+                    // directLeaf snapshots the live final KV cache (below) and
+                    // needs none of the builder's probe/boundary/tokenizer work;
+                    // only the boundary modes route through the GPU-free plan.
+                    // This mapping is the one place that knows directLeaf is the
+                    // live-cache path, so a future `HTTPLeafStoreMode` surfaces as
+                    // a compile error here rather than a silently missed branch.
+                    let boundaryMode: BoundaryLeafMode? = switch leafStoreMode {
+                    case .directToolLeaf: .directTool
+                    case .canonicalUserLeaf: .canonical
                     case .directLeaf: nil
                     }
-                    let leafTokenizer = await container.perform { $0.tokenizer }
-                    let leafPlan = await LeafAdmissionBuilder.plan(
-                        mode: leafStoreMode,
-                        storedConversation: storedConversation,
-                        storedTokens: storedTokens,
-                        toolSpecs: canonicalTools,
-                        transientBoundary: transientBoundary,
-                        tokenizer: leafTokenizer,
-                        resolveBoundary: { tokens in
-                            // Drive Snapshot Resolution inside `container.perform`
-                            // so the SSD `loadSync` stays off-MainActor (ADR-0001).
-                            await container.perform { _ in
-                                await SnapshotResolution.resolve(
-                                    tokens: tokens,
-                                    promptTokenCount: tokens.count,
-                                    partitionKey: mlxStart.partitionKey,
-                                    modelFingerprint: mlxStart.partitionKey.modelFingerprint,
-                                    prefixCache: prefixCache,
-                                    diagnostics: diagnosticsContext
-                                ).lookup.snapshot
-                            }
+                    if let boundaryMode {
+                        let transientBoundary: HybridCacheSnapshot? = switch boundaryMode {
+                        case .directTool: mlxStart.transientLastMessageBoundarySnapshot
+                        case .canonical: mlxStart.transientLastUserBoundarySnapshot
                         }
-                    )
+                        let leafTokenizer = await container.perform { $0.tokenizer }
+                        let leafPlan = await LeafAdmissionBuilder.plan(
+                            mode: boundaryMode,
+                            storedConversation: storedConversation,
+                            storedTokens: storedTokens,
+                            toolSpecs: canonicalTools,
+                            transientBoundary: transientBoundary,
+                            tokenizer: leafTokenizer,
+                            resolveBoundary: { tokens in
+                                // Drive Snapshot Resolution inside `container.perform`
+                                // so the SSD `loadSync` stays off-MainActor (ADR-0001).
+                                await container.perform { _ in
+                                    await SnapshotResolution.resolve(
+                                        tokens: tokens,
+                                        promptTokenCount: tokens.count,
+                                        partitionKey: mlxStart.partitionKey,
+                                        modelFingerprint: mlxStart.partitionKey.modelFingerprint,
+                                        prefixCache: prefixCache,
+                                        diagnostics: diagnosticsContext
+                                    ).lookup.snapshot
+                                }
+                            }
+                        )
 
-                    // The spine collapses to one exhaustive switch over the plan.
-                    // `.skip` logs the decidable reason; `.fromBoundary` runs the
-                    // shared restore→reprefill→capture executor; `.liveCache`
-                    // falls through to the directLeaf final-cache capture below.
-                    switch leafPlan {
-                    case .skip(let reason):
-                        Self.logLeafSkip(
-                            reason, mode: leafStoreMode, diagnosticsContext: diagnosticsContext
-                        )
-                        break leafBlock
-                    case .fromBoundary(let boundarySnapshot, let boundaryStoredTokens):
-                        let stages = Self.leafStages(for: leafStoreMode)
-                        leafStoreForTuner = await Self.captureStructuredLeafFromBoundary(
-                            container: container,
-                            storedTokens: boundaryStoredTokens,
-                            boundarySnapshot: boundarySnapshot,
-                            partitionKey: mlxStart.partitionKey,
-                            prefillStepSize: mlxStart.prefillStepSize,
-                            tokenNDim: mlxStart.tokenNDim,
-                            requestID: requestID,
-                            prefixCache: prefixCache,
-                            diagnosticsContext: diagnosticsContext,
-                            ssdEnabled: mlxStart.ssdEnabled,
-                            generateParameters: postGenerationParams,
-                            storeStage: stages.store,
-                            captureStage: stages.capture,
-                            admissionStage: stages.admission,
-                            captureSource: stages.source
-                        )
-                        break leafBlock
-                    case .liveCache:
-                        // directLeaf: the plan carries `storedTokens` unchanged;
-                        // capture from the live final cache below.
-                        break
+                        // One exhaustive switch over the boundary plan: `.skip`
+                        // logs the decidable reason; `.fromBoundary` runs the
+                        // shared restore→reprefill→capture executor. Both leave
+                        // the leaf block — only directLeaf reaches the live
+                        // final-cache capture below.
+                        switch leafPlan {
+                        case .skip(let reason):
+                            Self.logLeafSkip(
+                                reason, mode: boundaryMode, diagnosticsContext: diagnosticsContext
+                            )
+                            break leafBlock
+                        case .fromBoundary(let boundarySnapshot, let boundaryStoredTokens):
+                            let stages = Self.leafStages(for: boundaryMode)
+                            leafStoreForTuner = await Self.captureStructuredLeafFromBoundary(
+                                container: container,
+                                storedTokens: boundaryStoredTokens,
+                                boundarySnapshot: boundarySnapshot,
+                                partitionKey: mlxStart.partitionKey,
+                                prefillStepSize: mlxStart.prefillStepSize,
+                                tokenNDim: mlxStart.tokenNDim,
+                                requestID: requestID,
+                                prefixCache: prefixCache,
+                                diagnosticsContext: diagnosticsContext,
+                                ssdEnabled: mlxStart.ssdEnabled,
+                                generateParameters: postGenerationParams,
+                                storeStage: stages.store,
+                                captureStage: stages.capture,
+                                admissionStage: stages.admission,
+                                captureSource: stages.source
+                            )
+                            break leafBlock
+                        }
                     }
 
                     guard !Task.isCancelled,
@@ -1975,68 +1979,92 @@ actor LLMActor {
         return .directLeaf
     }
 
-    /// The diagnostics stage labels for a `.fromBoundary` capture, by leaf-store
-    /// mode — the exact strings the dissolved `captureDirectToolLeaf` /
+    /// The diagnostics stage labels for a `.fromBoundary` capture, by boundary
+    /// leaf mode — the exact strings the dissolved `captureDirectToolLeaf` /
     /// `captureCanonicalTemplateLeaf` helpers passed to the shared executor.
     private nonisolated static func leafStages(
-        for mode: HTTPLeafStoreMode
+        for mode: BoundaryLeafMode
     ) -> (store: String, capture: String, admission: String, source: String) {
         switch mode {
-        case .directToolLeaf:
+        case .directTool:
             ("directToolLeafStore", "directToolLeafCapture", "directToolLeafAdmission", "directToolLeaf")
-        case .canonicalUserLeaf:
+        case .canonical:
             ("canonicalLeafStore", "canonicalLeafCapture", "canonicalLeafAdmission", "canonicalLeaf")
-        case .directLeaf:
-            // directLeaf never yields a `.fromBoundary` plan (it captures from the
-            // live final cache); these labels exist only for switch totality.
-            ("store", "leafCapture", "leafAdmission", "leaf")
         }
     }
 
-    /// Reproduce today's `logSkip` call for a decidable `LeafSkipReason` the
-    /// **Leaf Admission Builder** returned. The builder concentrates the *decision*;
-    /// the wire-format stage/reason/fields stay byte-for-byte what the dissolved
-    /// capture helpers logged, so existing dashboards and the diagnostics net keep
-    /// working. The stage prefix follows the mode, exactly as those helpers did.
-    private nonisolated static func logLeafSkip(
-        _ reason: LeafSkipReason,
-        mode: HTTPLeafStoreMode,
-        diagnosticsContext: PrefixCacheDiagnostics.Context
-    ) {
+    /// The exact `logSkip` record a decidable `LeafSkipReason` reproduces — the
+    /// stage/reason/level/fields the dissolved capture helpers logged.
+    struct LeafSkipLog: Sendable {
+        let stage: String
+        let reason: String
+        let level: PrefixCacheDiagnostics.Level
+        let extraFields: [(String, String)]
+    }
+
+    /// Map a decidable skip to its wire record. The reason carries the payload
+    /// (offsets, lengths); the stage prefix follows the boundary mode, exactly as
+    /// the dissolved `captureDirectToolLeaf` / `captureCanonicalTemplateLeaf`
+    /// helpers did. `.info` is the `logSkip` default those untyped helpers relied
+    /// on, made explicit so the level is pinned too. A pure value (no `Context`,
+    /// no side effect) so `LLMActorLeafSkipLogTests` pins the byte-for-byte wire
+    /// format — mirroring `ssdDropReasonString` — and any future drift (a renamed
+    /// stage, a flipped level) fails a test rather than silently shifting
+    /// dashboards and the diagnostics net.
+    nonisolated static func leafSkipLog(
+        for reason: LeafSkipReason,
+        mode: BoundaryLeafMode
+    ) -> LeafSkipLog {
         let stage = leafStages(for: mode).store
         switch reason {
         case .tokenizationFailed(let error):
             // The probe's chat-template render threw — today's helpers catch this
             // in the same `do/catch` as the prefill, logged as `prefill-threw`.
-            diagnosticsContext.logSkip(
+            return LeafSkipLog(
                 stage: stage, reason: "prefill-threw", level: .warning,
                 extraFields: [("error", error)]
             )
         case .probeDivergence:
-            diagnosticsContext.logSkip(stage: stage, reason: "probe-divergence-failed")
+            return LeafSkipLog(
+                stage: stage, reason: "probe-divergence-failed", level: .info, extraFields: []
+            )
         case .noTransientBoundary:
-            diagnosticsContext.logSkip(stage: stage, reason: "no-transient-boundary-snapshot")
+            return LeafSkipLog(
+                stage: stage, reason: "no-transient-boundary-snapshot", level: .info, extraFields: []
+            )
         case .noResolvedBoundary(let canonicalLen):
-            diagnosticsContext.logSkip(
-                stage: stage, reason: "no-canonical-restore-boundary",
+            return LeafSkipLog(
+                stage: stage, reason: "no-canonical-restore-boundary", level: .info,
                 extraFields: [("canonicalLen", "\(canonicalLen)")]
             )
         case .storedAtOrBeforeBoundary(let storedLen, let boundaryOffset):
-            diagnosticsContext.logSkip(
-                stage: stage, reason: "stored-at-or-before-boundary",
+            return LeafSkipLog(
+                stage: stage, reason: "stored-at-or-before-boundary", level: .info,
                 extraFields: [("storedLen", "\(storedLen)"), ("boundaryOffset", "\(boundaryOffset)")]
             )
-        case .canonicalAtOrBeforeBoundary(let canonicalLen, let boundaryOffset):
-            diagnosticsContext.logSkip(
-                stage: stage, reason: "canonical-at-or-before-boundary",
-                extraFields: [("canonicalLen", "\(canonicalLen)"), ("boundaryOffset", "\(boundaryOffset)")]
-            )
         case .canonicalLongerThanStored(let canonicalLen, let storedLen):
-            diagnosticsContext.logSkip(
+            return LeafSkipLog(
                 stage: stage, reason: "canonical-longer-than-stored", level: .warning,
                 extraFields: [("canonicalLen", "\(canonicalLen)"), ("storedLen", "\(storedLen)")]
             )
         }
+    }
+
+    /// Emit the mapped wire record for a decidable `LeafSkipReason` the **Leaf
+    /// Admission Builder** returned, so existing dashboards and the diagnostics
+    /// net keep working byte-for-byte.
+    private nonisolated static func logLeafSkip(
+        _ reason: LeafSkipReason,
+        mode: BoundaryLeafMode,
+        diagnosticsContext: PrefixCacheDiagnostics.Context
+    ) {
+        let record = leafSkipLog(for: reason, mode: mode)
+        diagnosticsContext.logSkip(
+            stage: record.stage,
+            reason: record.reason,
+            level: record.level,
+            extraFields: record.extraFields
+        )
     }
 
     /// Re-tokenize the stored conversation (prompt + generated response) and return

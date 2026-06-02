@@ -4,9 +4,10 @@ import MLX
 import MLXLMCommon
 @testable import Tesseract_Agent
 
-/// Behavior of the **Leaf Admission Builder**'s reusable-prefix probe: the
-/// GPU-free routing core that finds the shared token path a future continuation
-/// can hydrate. Driven by a byte-level fake tokenizer — no model.
+/// Behavior of the **Leaf Admission Builder**: the GPU-free reusable-prefix
+/// probe and the `plan()` routing decision (`.fromBoundary` / `.skip`) that
+/// finds the shared token path a future continuation can hydrate. Driven by a
+/// byte-level fake tokenizer and a pure `resolveBoundary` closure — no model.
 @Suite struct LeafAdmissionBuilderTests {
 
     private let tokenizer = FakeChatMLTokenizer()
@@ -85,27 +86,6 @@ import MLXLMCommon
     /// A resolver that never yields a boundary — the canonical fallback misses.
     private let noResolvedBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot? = { _ in nil }
 
-    @Test func directLeafModePlansToLiveCacheAtTheStoredPath() async {
-        let stored = conversation(messages: [
-            HTTPPrefixCacheMessage(role: .user, content: "hi"),
-            HTTPPrefixCacheMessage(role: .assistant, content: "hello"),
-        ])
-        let plan = await LeafAdmissionBuilder.plan(
-            mode: .directLeaf,
-            storedConversation: stored,
-            storedTokens: [1, 2, 3, 4],
-            toolSpecs: nil,
-            transientBoundary: nil,
-            tokenizer: tokenizer,
-            resolveBoundary: noResolvedBoundary
-        )
-        guard case .liveCache(let tokens) = plan else {
-            Issue.record("expected .liveCache, got \(plan)")
-            return
-        }
-        #expect(tokens == [1, 2, 3, 4])
-    }
-
     // MARK: directTool routing
 
     private func toolTurn() -> HTTPPrefixCacheConversation {
@@ -121,7 +101,7 @@ import MLXLMCommon
             continuation: .toolResult, storedConversation: stored, toolSpecs: nil, tokenizer: tokenizer
         )!
         let plan = await LeafAdmissionBuilder.plan(
-            mode: .directToolLeaf,
+            mode: .directTool,
             storedConversation: stored,
             storedTokens: toolTokens,
             toolSpecs: nil,
@@ -139,7 +119,7 @@ import MLXLMCommon
 
     @Test func directToolWithoutTransientBoundarySkips() async {
         let plan = await LeafAdmissionBuilder.plan(
-            mode: .directToolLeaf,
+            mode: .directTool,
             storedConversation: toolTurn(),
             storedTokens: [1, 2, 3],
             toolSpecs: nil,
@@ -158,7 +138,7 @@ import MLXLMCommon
         // An empty conversation diverges; the transient boundary is present, so
         // the probe — not the boundary — is what rules out the capture.
         let plan = await LeafAdmissionBuilder.plan(
-            mode: .directToolLeaf,
+            mode: .directTool,
             storedConversation: HTTPPrefixCacheConversation(systemPrompt: nil, messages: []),
             storedTokens: [1, 2, 3],
             toolSpecs: nil,
@@ -180,7 +160,7 @@ import MLXLMCommon
         )!
         // Boundary sits at the end of the tool render: the residual is empty.
         let plan = await LeafAdmissionBuilder.plan(
-            mode: .directToolLeaf,
+            mode: .directTool,
             storedConversation: stored,
             storedTokens: toolTokens,
             toolSpecs: nil,
@@ -216,7 +196,7 @@ import MLXLMCommon
         let stored = canonicalTurn()
         let canonical = try canonicalPrefix(stored)
         let plan = await LeafAdmissionBuilder.plan(
-            mode: .canonicalUserLeaf,
+            mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
             toolSpecs: nil,
@@ -236,7 +216,7 @@ import MLXLMCommon
         let stored = canonicalTurn()
         let canonical = try canonicalPrefix(stored)
         let plan = await LeafAdmissionBuilder.plan(
-            mode: .canonicalUserLeaf,
+            mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
             toolSpecs: nil,
@@ -256,7 +236,7 @@ import MLXLMCommon
         let stored = canonicalTurn()
         let canonical = try canonicalPrefix(stored)
         let plan = await LeafAdmissionBuilder.plan(
-            mode: .canonicalUserLeaf,
+            mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
             toolSpecs: nil,
@@ -277,7 +257,7 @@ import MLXLMCommon
         // A resolved snapshot at the canonical length is not a usable restore
         // boundary — there is no residual to reprefill.
         let plan = await LeafAdmissionBuilder.plan(
-            mode: .canonicalUserLeaf,
+            mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
             toolSpecs: nil,
@@ -298,7 +278,7 @@ import MLXLMCommon
         // A usable boundary, but the stored path is shorter than the canonical
         // prefix — the render disagreement the canonical leaf exists to avoid.
         let plan = await LeafAdmissionBuilder.plan(
-            mode: .canonicalUserLeaf,
+            mode: .canonical,
             storedConversation: stored,
             storedTokens: [1, 2],
             toolSpecs: nil,

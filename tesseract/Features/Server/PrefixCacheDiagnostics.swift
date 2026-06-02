@@ -49,7 +49,7 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
-    enum Level: Sendable {
+    enum Level: Sendable, Equatable {
         case debug
         case info
         case warning
