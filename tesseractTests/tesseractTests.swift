@@ -112,15 +112,16 @@ struct ModelDefinitionCatalogTests {
             encoding: .utf8
         )
 
-        #expect(LLMActor.isQwen35Model(directory: root) == true)
-        #expect(LLMActor.detectToolCallFormat(directory: root) == .xmlFunction)
+        let identity = ModelIdentity(directory: root)
+        #expect(identity.isQwen35 == true)
+        #expect(identity.isMoE == true)
+        #expect(identity.toolCallFormat == .xmlFunction)
 
-        let profile = LLMActor.detectModelFlopProfile(directory: root)
-        #expect(profile != nil)
-        #expect(profile?.hiddenSize == 4096)
-        #expect(profile?.attentionLayers == 40 / 4)
-        #expect(profile?.ssmLayers == 40 - 40 / 4)
-        #expect(profile?.mlpLayers == 40)
+        let profile = identity.flopProfile
+        #expect(profile.hiddenSize == 4096)
+        #expect(profile.attentionLayers == 40 / 4)
+        #expect(profile.ssmLayers == 40 - 40 / 4)
+        #expect(profile.mlpLayers == 40)
     }
 }
 

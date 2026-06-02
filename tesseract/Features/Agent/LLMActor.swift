@@ -141,6 +141,12 @@ actor LLMActor {
     private var defaultPrefixCacheMemoryBudgetBytes =
         Defaults.fallbackPrefixCacheMemoryBudgetBytes
 
+    /// Load-time, directory-derived facts about the current model — tool-call
+    /// format, Qwen3.5 family/MoE, prompt-starts-thinking, and flop profile.
+    /// Installed by `installLoadTimeState`; `nil` before load and after
+    /// `unloadModel()`.
+    private var modelIdentity: ModelIdentity?
+
     /// Stable SHA-256 of the loaded model's weight files. Folded into every
     /// `CachePartitionKey` so a weight swap under the same `modelID`
     /// cannot surface stale persisted snapshots. `nil` before load and
@@ -173,6 +179,9 @@ actor LLMActor {
 
     /// Internal read-only accessor for the load-time model fingerprint.
     var currentModelFingerprintForTesting: String? { modelFingerprint }
+
+    /// Internal read-only accessor for the load-time model identity.
+    var currentModelIdentityForTesting: ModelIdentity? { modelIdentity }
 
     var currentTriAttentionRuntimeSelection: TriAttentionRuntimeSelection {
         triAttentionRuntimeSelection
@@ -213,7 +222,8 @@ actor LLMActor {
         ssdConfig: SSDPrefixCacheConfig? = nil,
         triAttention: TriAttentionConfiguration = .v1Disabled
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
-        let format = Self.detectToolCallFormat(directory: directory)
+        let identity = ModelIdentity(directory: directory)
+        let format = identity.toolCallFormat
         Log.agent.info(
             "Loading model — visionMode=\(visionMode) "
             + "format=\(format.map { "\($0)" } ?? "json (default)")"
@@ -239,7 +249,7 @@ actor LLMActor {
         // real-path unit test even when no MLX container can be loaded.
         let fingerprint = try ModelFingerprint.computeFingerprint(modelDir: directory)
         let isParoModel = isParoQuantModel(directory: directory)
-        let isTriAttentionEligible = Self.isTriAttentionEligibleModel(directory: directory)
+        let isTriAttentionEligible = identity.isTriAttentionEligible
         let triAttentionRuntimeSelection = resolveTriAttentionRuntimeSelection(
             requestedConfiguration: triAttention,
             isTriAttentionEligible: isTriAttentionEligible,
@@ -248,6 +258,7 @@ actor LLMActor {
         )
 
         installLoadTimeState(
+            modelIdentity: identity,
             fingerprint: fingerprint,
             ssdConfig: ssdConfig,
             triAttentionRuntimeSelection: triAttentionRuntimeSelection
@@ -265,7 +276,7 @@ actor LLMActor {
             let container: ModelContainer = visionMode
                 ? try await loadParoQuantVLMContainer(from: directory, toolCallFormat: format)
                 : try await loadParoQuantLLMContainer(from: directory, toolCallFormat: format)
-            return try await verifyAndStore(container: container, directory: directory)
+            return try await verifyAndStore(container: container, identity: identity)
         }
 
         // Non-PARO Qwen3.5 checkpoints (e.g. mlx-community/Qwen3.5-*-MLX) ship
@@ -279,7 +290,7 @@ actor LLMActor {
         // section 2), so in non-vision mode we force the text-only
         // `MLXLLM.Qwen35Model` by invoking the LLM factory directly.
         let container: ModelContainer
-        if !visionMode, Self.isQwen35Model(directory: directory) {
+        if !visionMode, identity.isQwen35 {
             Log.agent.info("Detected Qwen3.5 non-PARO model — forcing text-only LLM path")
             container = try await LLMModelFactory.shared.loadContainer(
                 from: directory,
@@ -296,7 +307,7 @@ actor LLMActor {
                 context.configuration.toolCallFormat = format
             }
         }
-        return try await verifyAndStore(container: container, directory: directory)
+        return try await verifyAndStore(container: container, identity: identity)
     }
 
     /// Start a raw text/tool generation and surface the underlying vendor task so
@@ -1137,6 +1148,7 @@ actor LLMActor {
         modelWeightBytes = 0
         _prefixCache = nil
         defaultPrefixCacheMemoryBudgetBytes = Defaults.fallbackPrefixCacheMemoryBudgetBytes
+        modelIdentity = nil
         modelFingerprint = nil
         ssdConfig = nil
         triAttentionRuntimeSelection = .disabledDefault
@@ -1452,7 +1464,7 @@ actor LLMActor {
     /// Verifies the model with a 1-token generation, stores it, and returns the tokenizer.
     private func verifyAndStore(
         container: ModelContainer,
-        directory: URL
+        identity: ModelIdentity
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         // Wrap in withError so C++ MLX errors (e.g. matmul shape mismatches) throw
         // instead of calling fatalError via the default error handler.
@@ -1465,8 +1477,8 @@ actor LLMActor {
         }
 
         let tokenizer = try await AgentTokenizer(container: container)
-        let startsThinking = Self.detectPromptStartsThinking(directory: directory)
-        let profile = Self.detectModelFlopProfile(directory: directory) ?? .qwen35_4B_PARO
+        let startsThinking = identity.promptStartsThinking
+        let profile = identity.flopProfile
         let modelWeightBytes = await container.perform { context in
             context.model.parameters().flattened().reduce(into: Int64.zero) { partial, item in
                 let nbytes = Int64(clamping: item.1.nbytes)
@@ -1510,10 +1522,12 @@ actor LLMActor {
     /// the full config-resolution chain via a fake directory that trips
     /// the container load. The unload path clears all of these fields.
     private func installLoadTimeState(
+        modelIdentity: ModelIdentity,
         fingerprint: String,
         ssdConfig: SSDPrefixCacheConfig?,
         triAttentionRuntimeSelection: TriAttentionRuntimeSelection
     ) {
+        self.modelIdentity = modelIdentity
         self.modelFingerprint = fingerprint
         self.ssdConfig = ssdConfig
         self.triAttentionRuntimeSelection = triAttentionRuntimeSelection
@@ -2278,118 +2292,5 @@ actor LLMActor {
             )
             return nil
         }
-    }
-
-    /// Returns `true` if the model's chat template appends `<think>` to the generation prompt.
-    ///
-    /// Detected models:
-    /// - Qwen3.5: `enable_thinking` defaults to true, template ends with `<think>\n`
-    /// - Qwen3 Thinking / Opus Distill: unconditionally append `<think>\n`
-    /// - Qwen3 Instruct: no thinking in prompt → returns false
-    private static func detectPromptStartsThinking(directory: URL) -> Bool {
-        let templateURL = directory.appendingPathComponent("chat_template.jinja")
-        guard let template = try? String(contentsOf: templateURL, encoding: .utf8) else {
-            return false
-        }
-
-        // Check if the add_generation_prompt section contains <think>
-        // All known thinking templates put <think> right after <|im_start|>assistant
-        // in the add_generation_prompt block at the end of the template.
-        guard let genPromptRange = template.range(of: "add_generation_prompt") else {
-            return false
-        }
-        return template[genPromptRange.upperBound...].contains("<think>")
-    }
-
-    /// Parse `config.json` from the model directory into a top-level dict.
-    /// Returns `nil` if the file is missing or unparseable.
-    private static func loadConfigJSON(directory: URL) -> [String: Any]? {
-        let configURL = directory.appendingPathComponent("config.json")
-        guard let data = try? Data(contentsOf: configURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return json
-    }
-
-    /// Returns `true` if the model directory holds a Qwen3.5 checkpoint,
-    /// identified by the top-level `model_type` field (`qwen3_5`,
-    /// `qwen3_5_moe`, `qwen3_5_text`, …). Both the pure-LLM and
-    /// conditional-generation VLM variants share this prefix.
-    static func isQwen35Model(directory: URL) -> Bool {
-        guard let json = loadConfigJSON(directory: directory),
-              let modelType = json["model_type"] as? String
-        else { return false }
-        return modelType.hasPrefix("qwen3_5")
-    }
-
-    /// Returns `true` if the model directory holds a Qwen3.5-family MoE
-    /// checkpoint (e.g. `unsloth/Qwen3.6-35B-A3B-UD-MLX-*`), identified by
-    /// the exact `model_type == qwen3_5_moe`. Distinct from the dense
-    /// Qwen3.5 variants (which match the `qwen3_5` / `qwen3_5_text` prefix
-    /// without `_moe`).
-    static func isQwen35MoEModel(directory: URL) -> Bool {
-        guard let json = loadConfigJSON(directory: directory),
-              let modelType = json["model_type"] as? String
-        else { return false }
-        return modelType == "qwen3_5_moe"
-    }
-
-    /// Returns `true` if a model is eligible for TriAttention, regardless of
-    /// which quant format it ships in. The runtime wiring
-    /// (`TriAttentionSparseKVCache` + `Qwen35Attention.q_norm` hook) is
-    /// architecture-coupled — any Qwen3.5-family checkpoint with a valid
-    /// calibration artifact will activate it. Quant-format routing (PARO vs
-    /// standard MLX) is a separate concern handled at container-load time.
-    ///
-    /// `isQwen35MoEModel(directory:)` remains available as a discriminator
-    /// for MoE-specific runtime specialization downstream of this gate.
-    static func isTriAttentionEligibleModel(directory: URL) -> Bool {
-        isQwen35Model(directory: directory)
-    }
-
-    /// Detects the chat-template tool-call format from the model's
-    /// `config.json`. Qwen3.5 uses XML function syntax
-    /// (`<function=name>...</function>`) inside `<tool_call>` tags, which
-    /// requires `.xmlFunction`.
-    static func detectToolCallFormat(directory: URL) -> ToolCallFormat? {
-        guard let json = loadConfigJSON(directory: directory),
-              let modelType = json["model_type"] as? String
-        else { return nil }
-
-        if modelType.hasPrefix("qwen3_5") {
-            return .xmlFunction
-        }
-        return ToolCallFormat.infer(from: modelType)
-    }
-
-    /// Build a `ModelFlopProfile` for a Qwen3.5 hybrid model by reading its
-    /// `config.json`. Both LLM and VLM Qwen3.5 variants nest architecture
-    /// fields under `text_config` (the top-level `model_type` is `qwen3_5`,
-    /// the nested one is `qwen3_5_text`). Returns `nil` for non-Qwen3.5
-    /// models, missing fields, or malformed configs — caller should fall
-    /// back to `.qwen35_4B_PARO`.
-    static func detectModelFlopProfile(directory: URL) -> ModelFlopProfile? {
-        guard let root = loadConfigJSON(directory: directory),
-              let topModelType = root["model_type"] as? String,
-              topModelType.hasPrefix("qwen3_5")
-        else { return nil }
-
-        // VLM nests architecture fields under `text_config`; LLM-only puts
-        // them at the top level.
-        let textConfig = (root["text_config"] as? [String: Any]) ?? root
-        guard let hiddenLayers = textConfig["num_hidden_layers"] as? Int,
-              let hiddenSize = textConfig["hidden_size"] as? Int,
-              let linearNumValueHeads = textConfig["linear_num_value_heads"] as? Int,
-              let linearKeyHeadDim = textConfig["linear_key_head_dim"] as? Int,
-              let fullAttentionInterval = textConfig["full_attention_interval"] as? Int
-        else { return nil }
-
-        return .qwen35(
-            hiddenLayers: hiddenLayers,
-            hiddenSize: hiddenSize,
-            linearNumValueHeads: linearNumValueHeads,
-            linearKeyHeadDim: linearKeyHeadDim,
-            fullAttentionInterval: fullAttentionInterval
-        )
     }
 }
