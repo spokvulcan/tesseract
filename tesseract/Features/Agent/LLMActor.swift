@@ -2232,76 +2232,6 @@ actor LLMActor {
         }
     }
 
-    /// Hydrate a state-5 lookup result back into a live snapshot when the
-    /// boundary exists only on SSD. Callers use this for both the main request
-    /// lookup path and canonical leaf fallback so warm-started / body-dropped
-    /// boundaries stay reusable.
-    private static func hydrateSSDLookupIfNeeded(
-        container: ModelContainer,
-        lookupResult: PrefixCacheManager.LookupResult,
-        partitionKey: CachePartitionKey,
-        totalTokens: Int,
-        prefixCache: PrefixCacheManager,
-        diagnosticsContext: PrefixCacheDiagnostics.Context
-    ) async -> PrefixCacheManager.LookupResult {
-        guard case .ssdHit(let ctx) = lookupResult.reason,
-              let fingerprint = partitionKey.modelFingerprint
-        else {
-            return lookupResult
-        }
-
-        let (hydrated, hydrateSeconds) = await container.perform { _ in
-            let hydrateStarted = Date.timeIntervalSinceReferenceDate
-            let hydrated = ctx.ssdStore.loadSync(snapshotRef: ctx.snapshotRef,
-                expectedFingerprint: fingerprint
-            )
-            return (hydrated, Date.timeIntervalSinceReferenceDate - hydrateStarted)
-        }
-
-        if let hydrated {
-            diagnosticsContext.log(PrefixCacheDiagnostics.SSDHitEvent(
-                id: ctx.snapshotRef.snapshotID,
-                hydrateMs: hydrateSeconds
-            ))
-            await MainActor.run {
-                ctx.ssdStore.recordHit(id: ctx.snapshotRef.snapshotID)
-                prefixCache.promote(
-                    node: ctx.node,
-                    snapshot: hydrated,
-                    partitionKey: partitionKey
-                )
-            }
-            diagnosticsContext.log(PrefixCacheDiagnostics.SSDRecordHitEvent(
-                id: ctx.snapshotRef.snapshotID
-            ))
-            return PrefixCacheManager.LookupResult(
-                snapshot: hydrated,
-                partitionKey: partitionKey,
-                snapshotTokenOffset: hydrated.tokenOffset,
-                sharedPrefixLength: lookupResult.sharedPrefixLength,
-                reason: .hit(
-                    snapshotOffset: hydrated.tokenOffset,
-                    totalTokens: totalTokens,
-                    type: hydrated.checkpointType
-                )
-            )
-        }
-
-        await MainActor.run {
-            prefixCache.clearCommittedSnapshotRefAfterHydrationFailure(
-                node: ctx.node,
-                partitionKey: partitionKey
-            )
-        }
-        return PrefixCacheManager.LookupResult(
-            snapshot: nil,
-            partitionKey: partitionKey,
-            snapshotTokenOffset: 0,
-            sharedPrefixLength: lookupResult.sharedPrefixLength,
-            reason: .missNoSnapshotInPrefix
-        )
-    }
-
     /// Capture the canonical leaf for templates whose non-latest assistant turns
     /// may differ from the just-generated latest assistant form.
     ///
@@ -2350,18 +2280,22 @@ actor LLMActor {
                transientBoundarySnapshot.tokenOffset < canonicalStoredTokens.count {
                 boundarySnapshot = transientBoundarySnapshot
             } else {
-                let initialFallbackLookup = await MainActor.run {
-                    prefixCache.lookup(tokens: canonicalStoredTokens, partitionKey: partitionKey)
+                // No in-request transient boundary: resolve the canonical path's
+                // snapshot through Snapshot Resolution — the same lookup-then-
+                // hydrate-if-SSD home the main prefill path uses. Driven from
+                // inside `container.perform` so the `loadSync` disk read stays
+                // off-MainActor (ADR-0001), exactly as the main caller does.
+                let resolved = await container.perform { _ in
+                    await SnapshotResolution.resolve(
+                        tokens: canonicalStoredTokens,
+                        promptTokenCount: canonicalStoredTokens.count,
+                        partitionKey: partitionKey,
+                        modelFingerprint: partitionKey.modelFingerprint,
+                        prefixCache: prefixCache,
+                        diagnostics: diagnosticsContext
+                    )
                 }
-                let fallbackLookup = await Self.hydrateSSDLookupIfNeeded(
-                    container: container,
-                    lookupResult: initialFallbackLookup,
-                    partitionKey: partitionKey,
-                    totalTokens: canonicalStoredTokens.count,
-                    prefixCache: prefixCache,
-                    diagnosticsContext: diagnosticsContext
-                )
-                if let snapshot = fallbackLookup.snapshot,
+                if let snapshot = resolved.lookup.snapshot,
                    snapshot.tokenOffset > 0,
                    snapshot.tokenOffset < canonicalStoredTokens.count {
                     boundarySnapshot = snapshot

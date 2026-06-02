@@ -4,9 +4,9 @@ import MLXLMCommon
 /// Resolves a token path to the best usable cached prefix under a
 /// `CachePartitionKey`: the radix **lookup** plus lazy **SSD hydration**, in
 /// one place. The read-side counterpart to **Snapshot Admission**. It owns this
-/// lookup-then-hydrate-if-SSD sequence for the main prefill path; the
-/// canonical-leaf fallback still hydrates inline via
-/// `LLMActor.hydrateSSDLookupIfNeeded` and is the next caller to converge here.
+/// lookup-then-hydrate-if-SSD sequence for both callers — the main prefill path
+/// and the canonical-leaf fallback, which drives `resolve` from inside its own
+/// `container.perform` exactly as the main path does.
 ///
 /// Surfaces only `.hit` or a miss — the `.ssdHit` hydration intermediate is
 /// consumed internally (promote on success, Committed Ref Cleanup on failure).
