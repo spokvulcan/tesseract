@@ -237,7 +237,7 @@ private enum StreamResult: Sendable {
 /// is persisted and the user can see a tool call was attempted. Otherwise the
 /// message is empty (no text, no tool calls) and `runLoop`'s `hasContent` check
 /// drops it as contentless — the model's attempt vanishes silently. Mirrors the
-/// server path's `CompletionHandler.malformedFallbackText` recovery so the
+/// server path's `CompletionProjection` malformed→text fallback so the
 /// agent path actually benefits from surfacing the dropped buffer rather than
 /// only recording it in a dead accumulator field.
 private func malformedFallbackContent(

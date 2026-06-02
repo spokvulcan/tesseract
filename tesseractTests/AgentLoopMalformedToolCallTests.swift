@@ -6,7 +6,7 @@ import Testing
 /// Story 4). When a turn produces only an interrupted `<tool_call>` at EOS, the
 /// raw buffer must become the committed message content so the turn is persisted
 /// and the user can see a tool call was attempted — mirroring the server path's
-/// `CompletionHandler.malformedFallbackText`. Before the fix the
+/// `CompletionProjection` malformed→text fallback. Before the fix the
 /// `.malformedToolCall` event reached a dead accumulator field and the turn was
 /// dropped as contentless (empty text + no tool calls).
 @MainActor

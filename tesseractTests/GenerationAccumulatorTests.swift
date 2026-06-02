@@ -69,8 +69,8 @@ struct GenerationAccumulatorTests {
         var acc = GenerationAccumulator()
         acc.ingest(.malformedToolCall("{bad"))
         acc.ingest(.malformedToolCall("json}"))
-        acc.ingest(.toolCall(Self.makeToolCall(name: "first")))
-        acc.ingest(.toolCall(Self.makeToolCall(name: "second")))
+        acc.ingest(.toolCall(GenerationFixtures.toolCall(name: "first")))
+        acc.ingest(.toolCall(GenerationFixtures.toolCall(name: "second")))
 
         #expect(acc.malformedToolCallRaw == "{badjson}")
         #expect(acc.toolCalls.map { $0.function.name } == ["first", "second"])
@@ -82,7 +82,7 @@ struct GenerationAccumulatorTests {
         var acc = GenerationAccumulator()
         acc.ingest(.text("hi"))
         acc.ingest(.toolCallDelta(name: "f", argumentsDelta: "{partial"))
-        acc.ingest(.info(Self.makeInfo()))
+        acc.ingest(.info(GenerationFixtures.info()))
 
         #expect(acc.text == "hi")
         #expect(acc.thinking == nil)
@@ -92,19 +92,4 @@ struct GenerationAccumulatorTests {
         #expect(!acc.safeguardTriggered)
     }
 
-    // MARK: - Fixtures
-
-    private static func makeToolCall(name: String) -> ToolCall {
-        ToolCall(function: .init(name: name, arguments: [:]))
-    }
-
-    private static func makeInfo() -> AgentGeneration.Info {
-        AgentGeneration.Info(
-            promptTokenCount: 1,
-            generationTokenCount: 1,
-            promptTime: 0,
-            generateTime: 0,
-            stopReason: .stop
-        )
-    }
 }
