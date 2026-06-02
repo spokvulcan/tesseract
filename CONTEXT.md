@@ -484,14 +484,33 @@ is *upstream* — it produces the events the accumulator folds).
 
 **Generation Projection**:
 The per-caller mapping from a **Generation Accumulator**'s state to that caller's
-output shape — `AssistantMessage` (agent loop), `StreamResult` plus the HTTP replay
-message (server), the leaf-store `HTTPPrefixCacheMessage` (`LLMActor`), or just `text`
-(the summarizer). The projection is where a caller's *intent* lives: the summarizer
-ignores `thinking`/`toolCalls`; the server's malformed→text fallback fires only when
-the turn is otherwise empty; the agent loop assigns stable tool-call identities.
-Projections stay out of the accumulator so adding a consumer never edits the shared
-fold.
+output shape — `AssistantMessage` (agent loop), the server's **CompletionProjection**
+plus the shared HTTP replay message (both completion paths), the leaf-store
+`HTTPPrefixCacheMessage` (`LLMActor`), or just `text` (the summarizer). The projection
+is where a caller's *intent* lives: the summarizer ignores `thinking`/`toolCalls`; the
+server's malformed→text fallback fires only when the turn is otherwise empty; the agent
+loop assigns stable tool-call identities. Projections stay out of the accumulator so
+adding a consumer never edits the shared fold.
 _Avoid_: conversion, adapter (it is not a seam adapter), output builder.
+
+**CompletionProjection**:
+The server's concrete **Generation Projection** — one `nonisolated Sendable` value that
+both HTTP completion paths (streaming SSE, non-streaming JSON) build from a terminal
+**Generation Accumulator** plus the turn's completion `info`, effective max-tokens, and
+completion id. It is the one home for the rules the two paths used to hand-roll in
+parallel: the `finish_reason` rule (previously computed three times), the
+malformed-tool-call→text fallback, the empty-payload finish-reason diagnostic, the
+thinking-safeguard sidecar. Each path then keeps only its framing (per-event SSE
+chunking vs one JSON encode). It stays **pure** — no logging, I/O, or transport — and
+returns a `FinishReasonDiagnostic` *value* the caller logs, so the classification (which
+had drifted: the non-streaming copy classified *post*-fallback and lacked the malformed
+branch and `malformedLen` field) has one unit-tested home while emission stays each
+path's side effect. The deletion test passes: remove it and the finish_reason rule, the
+fallback, the diagnostic classification, and the safeguard sidecar reappear across both
+paths.
+_Avoid_: StreamResult (the dissolved per-path capsule — both paths now build one
+CompletionProjection), response builder, envelope (that is the per-path framing the
+projection feeds, not the projection).
 
 > **Flagged ambiguity — `thinking` nil vs "".** `thinking == nil` means no `<think>`
 > block was ever opened (so no thinking row renders); `thinking == ""` means a block

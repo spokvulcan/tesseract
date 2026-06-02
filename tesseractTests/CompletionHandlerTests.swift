@@ -190,13 +190,9 @@ struct CompletionHandlerTests {
             generateTime: 0.4,
             stopReason: .stop
         )
-        let response = CompletionHandler.makeNonStreamingResponse(
-            completionID: "chatcmpl-123",
-            requestModel: "client-model",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            textContent: "Done",
-            thinkingContent: "Need to inspect first.",
+        let projection = makeProjection(
+            text: "Done",
+            thinking: "Need to inspect first.",
             toolCalls: [
                 ToolCall(function: .init(
                     name: "bash",
@@ -204,8 +200,16 @@ struct CompletionHandlerTests {
                 )),
             ],
             info: info,
-            cachedTokenCount: 12,
-            maxTokens: 256
+            maxTokens: 256,
+            completionID: "chatcmpl-123"
+        )
+        let response = CompletionHandler.makeNonStreamingResponse(
+            projection: projection,
+            completionID: "chatcmpl-123",
+            requestModel: "client-model",
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            cachedTokenCount: 12
         )
 
         #expect(response.model == "client-model")
@@ -228,17 +232,19 @@ struct CompletionHandlerTests {
             generateTime: 0.3,
             stopReason: .length
         )
+        let projection = makeProjection(
+            text: "Truncated",
+            info: info,
+            maxTokens: 32,
+            completionID: "chatcmpl-456"
+        )
         let response = CompletionHandler.makeNonStreamingResponse(
+            projection: projection,
             completionID: "chatcmpl-456",
             requestModel: "   ",
             physicalModelID: "qwen3.5-9b-paro",
             created: 1_712_345_678,
-            textContent: "Truncated",
-            thinkingContent: "",
-            toolCalls: [],
-            info: info,
-            cachedTokenCount: 0,
-            maxTokens: 32
+            cachedTokenCount: 0
         )
 
         #expect(response.model == "qwen3.5-9b-paro")
@@ -256,15 +262,19 @@ struct CompletionHandlerTests {
             generateTime: 0.2,
             stopReason: .stop
         )
+        let projection = makeProjection(
+            text: "Hi",
+            info: info,
+            maxTokens: 256,
+            completionID: "chatcmpl-789"
+        )
         let chunk = CompletionHandler.makeFinalStreamingChunk(
+            projection: projection,
             completionID: "chatcmpl-789",
             requestModel: "client-model",
             physicalModelID: "qwen3.5-4b-paro",
             created: 1_712_345_678,
-            hasToolCalls: false,
-            info: info,
             cachedTokenCount: 7,
-            maxTokens: 256,
             includeUsage: true
         )
 
@@ -283,15 +293,19 @@ struct CompletionHandlerTests {
             generateTime: 0.2,
             stopReason: .stop
         )
+        let projection = makeProjection(
+            toolCalls: [ToolCall(function: .init(name: "bash", arguments: [:]))],
+            info: info,
+            maxTokens: 256,
+            completionID: "chatcmpl-999"
+        )
         let chunk = CompletionHandler.makeFinalStreamingChunk(
+            projection: projection,
             completionID: "chatcmpl-999",
             requestModel: nil,
             physicalModelID: "qwen3.5-4b-paro",
             created: 1_712_345_678,
-            hasToolCalls: true,
-            info: info,
             cachedTokenCount: 7,
-            maxTokens: 256,
             includeUsage: false
         )
 
@@ -302,14 +316,16 @@ struct CompletionHandlerTests {
 
     /// Epic 3 Task 3 parity gate — the OpenAI response envelope is invariant
     /// over attention mode. `makeNonStreamingResponse` and
-    /// `makeFinalStreamingChunk` do not take an attention-mode parameter: the
-    /// HTTP contract sees only `modelID`, `cachedTokenCount`, and generation
-    /// `info`. Identical inputs must therefore produce byte-identical envelopes
-    /// regardless of whether the engine ran dense or TriAttention underneath.
+    /// `makeFinalStreamingChunk` take only a `CompletionProjection` plus the
+    /// envelope identity (`completionID`, model ids, `created`,
+    /// `cachedTokenCount`): no attention-mode parameter. Identical inputs must
+    /// therefore produce byte-identical envelopes regardless of whether the
+    /// engine ran dense or TriAttention underneath.
     ///
-    /// This regression-guards against future refactors that might thread an
-    /// attention-mode flag into envelope construction and accidentally leak
-    /// runtime-mode information into the OpenAI-compatible response.
+    /// Now that both emitters derive every turn-shaped field from one
+    /// projection, this holds by construction — it regression-guards against a
+    /// future refactor threading an attention-mode flag into envelope
+    /// construction and leaking runtime-mode information into the response.
     @MainActor @Test func responseEnvelopesDoNotVaryWhenInputsAreIdentical() throws {
         let info = AgentGeneration.Info(
             promptTokenCount: 120,
@@ -318,30 +334,31 @@ struct CompletionHandlerTests {
             generateTime: 0.4,
             stopReason: .stop
         )
+        func parityProjection() -> CompletionProjection {
+            makeProjection(
+                text: "Answer",
+                thinking: "Reasoning",
+                info: info,
+                maxTokens: 512,
+                completionID: "chatcmpl-parity"
+            )
+        }
 
         let firstNonStreaming = CompletionHandler.makeNonStreamingResponse(
+            projection: parityProjection(),
             completionID: "chatcmpl-parity",
             requestModel: "qwen3.5-4b-paro",
             physicalModelID: "qwen3.5-4b-paro",
             created: 1_712_345_678,
-            textContent: "Answer",
-            thinkingContent: "Reasoning",
-            toolCalls: [],
-            info: info,
-            cachedTokenCount: 19,
-            maxTokens: 512
+            cachedTokenCount: 19
         )
         let secondNonStreaming = CompletionHandler.makeNonStreamingResponse(
+            projection: parityProjection(),
             completionID: "chatcmpl-parity",
             requestModel: "qwen3.5-4b-paro",
             physicalModelID: "qwen3.5-4b-paro",
             created: 1_712_345_678,
-            textContent: "Answer",
-            thinkingContent: "Reasoning",
-            toolCalls: [],
-            info: info,
-            cachedTokenCount: 19,
-            maxTokens: 512
+            cachedTokenCount: 19
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -350,25 +367,21 @@ struct CompletionHandlerTests {
         #expect(firstData == secondData)
 
         let firstStreaming = CompletionHandler.makeFinalStreamingChunk(
+            projection: parityProjection(),
             completionID: "chatcmpl-parity",
             requestModel: "qwen3.5-4b-paro",
             physicalModelID: "qwen3.5-4b-paro",
             created: 1_712_345_678,
-            hasToolCalls: false,
-            info: info,
             cachedTokenCount: 19,
-            maxTokens: 512,
             includeUsage: true
         )
         let secondStreaming = CompletionHandler.makeFinalStreamingChunk(
+            projection: parityProjection(),
             completionID: "chatcmpl-parity",
             requestModel: "qwen3.5-4b-paro",
             physicalModelID: "qwen3.5-4b-paro",
             created: 1_712_345_678,
-            hasToolCalls: false,
-            info: info,
             cachedTokenCount: 19,
-            maxTokens: 512,
             includeUsage: true
         )
         let firstChunkData = try encoder.encode(firstStreaming)
@@ -392,27 +405,27 @@ struct CompletionHandlerTests {
             stopReason: .stop
         )
 
+        let projection = makeProjection(
+            text: "Ok",
+            info: info,
+            maxTokens: 1024,
+            completionID: "chatcmpl-cached"
+        )
         let nonStreaming = CompletionHandler.makeNonStreamingResponse(
+            projection: projection,
             completionID: "chatcmpl-cached",
             requestModel: "qwen3.5-4b-paro",
             physicalModelID: "qwen3.5-4b-paro",
             created: 1_712_345_678,
-            textContent: "Ok",
-            thinkingContent: "",
-            toolCalls: [],
-            info: info,
-            cachedTokenCount: 77,
-            maxTokens: 1024
+            cachedTokenCount: 77
         )
         let streaming = CompletionHandler.makeFinalStreamingChunk(
+            projection: projection,
             completionID: "chatcmpl-cached",
             requestModel: "qwen3.5-4b-paro",
             physicalModelID: "qwen3.5-4b-paro",
             created: 1_712_345_678,
-            hasToolCalls: false,
-            info: info,
             cachedTokenCount: 77,
-            maxTokens: 1024,
             includeUsage: true
         )
 
@@ -428,15 +441,19 @@ struct CompletionHandlerTests {
     }
 
     @MainActor @Test func finalStreamingChunkOmitsUsageWhenMetricsAreUnavailable() {
+        let projection = makeProjection(
+            text: "Hi",
+            info: nil,
+            maxTokens: 256,
+            completionID: "chatcmpl-1000"
+        )
         let chunk = CompletionHandler.makeFinalStreamingChunk(
+            projection: projection,
             completionID: "chatcmpl-1000",
             requestModel: "client-model",
             physicalModelID: "qwen3.5-4b-paro",
             created: 1_712_345_678,
-            hasToolCalls: false,
-            info: nil,
             cachedTokenCount: 7,
-            maxTokens: 256,
             includeUsage: true
         )
 
@@ -1062,3 +1079,30 @@ struct HTTPServerIntegrationTests {
 }
 
 private struct PortError: Error {}
+
+/// Builds a terminal `GenerationAccumulator` from components and projects it —
+/// the `CompletionProjection` both completion emitters now consume. Lets the
+/// emitter tests keep asserting the JSON/SSE envelope shape while feeding the
+/// new single-argument interface.
+private func makeProjection(
+    text: String = "",
+    thinking: String? = nil,
+    toolCalls: [ToolCall] = [],
+    info: AgentGeneration.Info?,
+    maxTokens: Int?,
+    completionID: String = "chatcmpl-test"
+) -> CompletionProjection {
+    var acc = GenerationAccumulator()
+    if let thinking {
+        acc.ingest(.thinkStart)
+        if !thinking.isEmpty { acc.ingest(.thinking(thinking)) }
+    }
+    if !text.isEmpty { acc.ingest(.text(text)) }
+    for call in toolCalls { acc.ingest(.toolCall(call)) }
+    return CompletionProjection(
+        accumulator: acc,
+        info: info,
+        maxTokens: maxTokens,
+        completionID: completionID
+    )
+}

@@ -441,26 +441,29 @@ struct CompletionHandler: Sendable {
             return
         }
 
-        // Project accumulator state into this path's output. `thinking ?? ""`
-        // collapses the nil-vs-empty distinction the non-streaming response does
-        // not carry; the safeguard sidecar reads the recorded safe-prefix length.
-        let toolCalls = accumulator.toolCalls
-        let thinkingContent = accumulator.thinking ?? ""
-        let safeguardReport = accumulator.safeguardSafePrefixChars.map {
-            OpenAI.ThinkingSafeguardReport(safePrefixChars: $0)
-        }
+        // One Generation Projection maps the terminal accumulator to this path's
+        // output: finish_reason, fallback-applied text, reasoning, tool calls,
+        // the safeguard sidecar, and the finish-reason diagnostic.
+        let projection = CompletionProjection(
+            accumulator: accumulator,
+            info: info,
+            maxTokens: request.effectiveMaxTokens,
+            completionID: start.completionID
+        )
+
+        // The caller logs the diagnostic the projection classified on pre-fallback
+        // state — identical classification to the streaming path.
+        projection.diagnostic.emit(label: "non-streaming")
 
         // Surface a dropped tool-call buffer as text so the caller sees the
         // attempted tool call instead of an empty-stop response (shared with the
-        // streaming path).
-        var textContent = accumulator.text
-        if let surfaced = Self.malformedFallbackText(
-            text: textContent,
-            toolCallCount: toolCalls.count,
-            malformedRaw: accumulator.malformedToolCallRaw,
-            completionID: start.completionID
-        ) {
-            textContent = surfaced
+        // streaming path, which additionally emits one SSE content chunk).
+        if projection.malformedFallbackSurfaced {
+            Log.server.info(
+                "Surfaced dropped tool-call buffer as text content — "
+                + "completionID=\(start.completionID) "
+                + "rawLen=\(accumulator.malformedToolCallRaw.count)"
+            )
         }
 
         await Self.sessionReplayStore.record(
@@ -468,31 +471,27 @@ struct CompletionHandler: Sendable {
             modelID: start.modelID,
             visionMode: start.visionMode,
             assistantMessage: makeReplayAssistantMessage(
-                textContent: textContent,
-                thinkingContent: thinkingContent,
-                toolCalls: toolCalls
+                textContent: projection.textContent,
+                thinkingContent: projection.thinkingContent,
+                toolCalls: projection.toolCalls
             )
         )
 
         var response = Self.makeNonStreamingResponse(
+            projection: projection,
             completionID: start.completionID,
             requestModel: request.model,
             physicalModelID: start.modelID,
             created: Int(Date().timeIntervalSince1970),
-            textContent: textContent,
-            thinkingContent: thinkingContent,
-            toolCalls: toolCalls,
-            info: info,
-            cachedTokenCount: start.cachedTokenCount,
-            maxTokens: request.effectiveMaxTokens
+            cachedTokenCount: start.cachedTokenCount
         )
-        response.tesseract_thinking_safeguard = safeguardReport
+        response.tesseract_thinking_safeguard = projection.safeguardReport
 
         // Encodable conformance requires MainActor context (Swift 6.2 isolation inference)
         let data: Data = await MainActor.run {
             (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
         }
-        let finishReason = response.choices[0].finish_reason ?? .stop
+        let finishReason = projection.finishReason
         Log.server.info(
             "HTTP completion finished — completionID=\(start.completionID) "
             + "stream=false finishReason=\(finishReason.rawValue) "
@@ -607,88 +606,55 @@ struct CompletionHandler: Sendable {
         }
 
         switch outcome {
-        case .completed(let streamResult):
-            var finishReason: OpenAI.FinishReason = .stop
-            if streamResult.hasToolCalls {
-                finishReason = .tool_calls
-            } else if let info = streamResult.info, let maxTokens = request.effectiveMaxTokens,
-                      info.generationTokenCount >= maxTokens {
-                finishReason = .length
-            }
+        case .completed(let accumulator, let info):
+            // One Generation Projection — identical construction to the
+            // non-streaming path — owns finish_reason, the malformed→text
+            // fallback, the safeguard sidecar, and the diagnostic.
+            let projection = CompletionProjection(
+                accumulator: accumulator,
+                info: info,
+                maxTokens: request.effectiveMaxTokens,
+                completionID: start.completionID
+            )
 
-            // Diagnostic log before any client bytes go out: correlates which
-            // state inputs produced the finish_reason. Warning path catches
-            // the exact shape of request #68 (stop with empty text AND empty
-            // tool_calls but non-empty reasoning) — this is the
-            // jundot/omlx#825 stale-recurrent-state symptom on Qwen3.6.
-            let stopWithEmptyPayload = finishReason == .stop
-                && streamResult.textContent.isEmpty
-                && streamResult.toolCalls.isEmpty
-            let finishReasonLog =
-                "HTTP streaming finish_reason decision — "
-                + "completionID=\(start.completionID) "
-                + "finishReason=\(finishReason.rawValue) "
-                + "textLen=\(streamResult.textContent.count) "
-                + "toolCalls=\(streamResult.toolCalls.count) "
-                + "reasoningLen=\(streamResult.thinkingContent.count) "
-                + "malformedLen=\(streamResult.malformedToolCallRaw.count) "
-                + "genTokens=\(streamResult.info?.generationTokenCount ?? 0) "
-                + "maxTokens=\(request.effectiveMaxTokens ?? -1) "
-                + "stopReason=\(streamResult.info.map { describeStopReason($0.stopReason) } ?? "nil")"
-            let hadMalformed = !streamResult.malformedToolCallRaw.isEmpty
-            if stopWithEmptyPayload && streamResult.thinkingContent.isEmpty == false {
-                Log.server.warning("\(finishReasonLog) — EMPTY PAYLOAD WITH REASONING")
-            } else if hadMalformed && streamResult.toolCalls.isEmpty {
-                Log.server.warning("\(finishReasonLog) — MALFORMED TOOL CALL DROPPED")
-            } else {
-                Log.server.info("\(finishReasonLog)")
-            }
-
-            let safeguardReport: OpenAI.ThinkingSafeguardReport? =
-                streamResult.thinkingSafeguardTriggered
-                ? OpenAI.ThinkingSafeguardReport(
-                    safePrefixChars: streamResult.thinkingSafeguardSafePrefixChars
-                )
-                : nil
+            // Diagnostic log before the terminal chunk goes out: correlates which
+            // state inputs produced the finish_reason. The warning paths catch a
+            // stop with empty text AND empty tool_calls but non-empty reasoning
+            // (the jundot/omlx#825 stale-recurrent-state symptom on Qwen3.6) and a
+            // dropped malformed tool call — classified once, on pre-fallback state.
+            projection.diagnostic.emit(label: "streaming")
 
             // Surface a dropped tool-call buffer as final text content when the
             // response would otherwise be empty. Without this the client sees
             // `finish_reason=stop` with empty `content` and empty `tool_calls`
             // and has no way to know the model attempted a tool call — it
             // treats the turn as "model chose to stop", so no retry happens at
-            // the agent-loop layer upstream. Emitting the raw buffer lets the
-            // caller detect the pattern (e.g. content contains `<tool_call>`)
-            // and decide how to recover.
-            var streamResult = streamResult
-            if let raw = Self.malformedFallbackText(
-                text: streamResult.textContent,
-                toolCallCount: streamResult.toolCalls.count,
-                malformedRaw: streamResult.malformedToolCallRaw,
-                completionID: start.completionID
-            ) {
-                streamResult.textContent = raw
+            // the agent-loop layer upstream. Emitting the raw buffer (as the
+            // final text content and one SSE content chunk) lets the caller
+            // detect the pattern (e.g. content contains `<tool_call>`) and
+            // decide how to recover.
+            if projection.malformedFallbackSurfaced {
+                Log.server.info(
+                    "Surfaced dropped tool-call buffer as text content — "
+                    + "completionID=\(start.completionID) "
+                    + "rawLen=\(accumulator.malformedToolCallRaw.count)"
+                )
                 _ = await sse.send(makeChunk(
                     id: start.completionID,
-                    model: Self.echoModelID(
-                        requestModel: request.model,
-                        physical: start.modelID
-                    ),
+                    model: model,
                     created: created,
-                    delta: OpenAI.ChunkDelta(content: raw)
+                    delta: OpenAI.ChunkDelta(content: projection.textContent)
                 ))
             }
 
             let finalChunk = Self.makeFinalStreamingChunk(
+                projection: projection,
                 completionID: start.completionID,
                 requestModel: request.model,
                 physicalModelID: start.modelID,
                 created: created,
-                hasToolCalls: streamResult.hasToolCalls,
-                info: streamResult.info,
                 cachedTokenCount: start.cachedTokenCount,
-                maxTokens: request.effectiveMaxTokens,
-                includeUsage: includeUsage,
-                thinkingSafeguard: safeguardReport
+                includeUsage: includeUsage
             )
 
             guard await sse.send(finalChunk) else {
@@ -712,20 +678,20 @@ struct CompletionHandler: Sendable {
                 modelID: start.modelID,
                 visionMode: start.visionMode,
                 assistantMessage: makeReplayAssistantMessage(
-                    textContent: streamResult.textContent,
-                    thinkingContent: streamResult.thinkingContent,
-                    toolCalls: streamResult.toolCalls
+                    textContent: projection.textContent,
+                    thinkingContent: projection.thinkingContent,
+                    toolCalls: projection.toolCalls
                 )
             )
 
             Log.server.info(
                 "HTTP completion finished — completionID=\(start.completionID) "
-                + "stream=true finishReason=\(finishReason.rawValue) "
-                + "promptTokens=\(streamResult.info?.promptTokenCount ?? 0) "
-                + "completionTokens=\(streamResult.info?.generationTokenCount ?? 0) "
+                + "stream=true finishReason=\(projection.finishReason.rawValue) "
+                + "promptTokens=\(projection.info?.promptTokenCount ?? 0) "
+                + "completionTokens=\(projection.info?.generationTokenCount ?? 0) "
                 + "cachedTokens=\(start.cachedTokenCount)"
             )
-            await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
+            await activityLog.complete(handle: logHandle, finishReason: projection.finishReason.rawValue)
 
         case .disconnected(let source):
             Log.server.info(
@@ -843,20 +809,6 @@ struct CompletionHandler: Sendable {
         )
     }
 
-    nonisolated static func finishReason(
-        hasToolCalls: Bool,
-        generationTokenCount: Int?,
-        maxTokens: Int?
-    ) -> OpenAI.FinishReason {
-        if hasToolCalls {
-            return .tool_calls
-        }
-        if let generationTokenCount, let maxTokens, generationTokenCount >= maxTokens {
-            return .length
-        }
-        return .stop
-    }
-
     nonisolated static func makeUsage(
         info: AgentGeneration.Info?,
         cachedTokenCount: Int
@@ -870,46 +822,16 @@ struct CompletionHandler: Sendable {
     }
 
     static func makeNonStreamingResponse(
+        projection: CompletionProjection,
         completionID: String,
         requestModel: String?,
         physicalModelID: String,
         created: Int,
-        textContent: String,
-        thinkingContent: String,
-        toolCalls: [ToolCall],
-        info: AgentGeneration.Info?,
-        cachedTokenCount: Int,
-        maxTokens: Int?
+        cachedTokenCount: Int
     ) -> OpenAI.ChatCompletionResponse {
-        let finishReason = finishReason(
-            hasToolCalls: !toolCalls.isEmpty,
-            generationTokenCount: info?.generationTokenCount,
-            maxTokens: maxTokens
-        )
-
-        // Mirror of the streaming-path diagnostic at ~line 603: record the
-        // state that produced this finish_reason so an empty-payload .stop
-        // on the non-streaming path leaves the same log fingerprint.
-        let stopWithEmptyPayload = finishReason == .stop
-            && textContent.isEmpty
-            && toolCalls.isEmpty
-        let finishReasonLog =
-            "HTTP non-streaming finish_reason decision — "
-            + "completionID=\(completionID) "
-            + "finishReason=\(finishReason.rawValue) "
-            + "textLen=\(textContent.count) "
-            + "toolCalls=\(toolCalls.count) "
-            + "reasoningLen=\(thinkingContent.count) "
-            + "genTokens=\(info?.generationTokenCount ?? 0) "
-            + "maxTokens=\(maxTokens ?? -1) "
-            + "stopReason=\(info.map { describeStopReason($0.stopReason) } ?? "nil")"
-        if stopWithEmptyPayload && !thinkingContent.isEmpty {
-            Log.server.warning("\(finishReasonLog) — EMPTY PAYLOAD WITH REASONING")
-        } else {
-            Log.server.info("\(finishReasonLog)")
-        }
-
-        let openAIToolCalls = toolCalls.isEmpty ? nil : ToolCallConverter.convertToOpenAI(toolCalls)
+        let openAIToolCalls = projection.toolCalls.isEmpty
+            ? nil
+            : ToolCallConverter.convertToOpenAI(projection.toolCalls)
 
         return OpenAI.ChatCompletionResponse(
             id: completionID,
@@ -919,33 +841,30 @@ struct CompletionHandler: Sendable {
             choices: [
                 OpenAI.ChatCompletionChoice(
                     index: 0,
-                    finish_reason: finishReason,
+                    finish_reason: projection.finishReason,
                     message: OpenAI.ResponseMessage(
                         role: .assistant,
-                        content: textContent.isEmpty ? nil : textContent,
-                        reasoning_content: thinkingContent.isEmpty ? nil : thinkingContent,
+                        content: projection.textContent.isEmpty ? nil : projection.textContent,
+                        reasoning_content: projection.thinkingContent.isEmpty ? nil : projection.thinkingContent,
                         tool_calls: openAIToolCalls
                     )
                 ),
             ],
             usage: makeUsage(
-                info: info,
+                info: projection.info,
                 cachedTokenCount: cachedTokenCount
             )
         )
     }
 
     static func makeFinalStreamingChunk(
+        projection: CompletionProjection,
         completionID: String,
         requestModel: String?,
         physicalModelID: String,
         created: Int,
-        hasToolCalls: Bool,
-        info: AgentGeneration.Info?,
         cachedTokenCount: Int,
-        maxTokens: Int?,
-        includeUsage: Bool,
-        thinkingSafeguard: OpenAI.ThinkingSafeguardReport? = nil
+        includeUsage: Bool
     ) -> OpenAI.ChatCompletionChunk {
         var chunk = OpenAI.ChatCompletionChunk(
             id: completionID,
@@ -956,46 +875,21 @@ struct CompletionHandler: Sendable {
                 OpenAI.ChatCompletionChunkChoice(
                     index: 0,
                     delta: OpenAI.ChunkDelta(),
-                    finish_reason: finishReason(
-                        hasToolCalls: hasToolCalls,
-                        generationTokenCount: info?.generationTokenCount,
-                        maxTokens: maxTokens
-                    )
+                    finish_reason: projection.finishReason
                 ),
             ]
         )
-        if includeUsage {
-            if let info {
-                chunk.usage = makeUsage(
-                    info: info,
-                    cachedTokenCount: cachedTokenCount
-                )
-            }
+        if includeUsage, let info = projection.info {
+            chunk.usage = makeUsage(
+                info: info,
+                cachedTokenCount: cachedTokenCount
+            )
         }
-        chunk.tesseract_thinking_safeguard = thinkingSafeguard
+        chunk.tesseract_thinking_safeguard = projection.safeguardReport
         return chunk
     }
 
     // MARK: - Stream Event Loop
-
-    private struct StreamResult: Sendable {
-        var hasToolCalls = false
-        var info: AgentGeneration.Info?
-        var textContent = ""
-        var thinkingContent = ""
-        var toolCalls: [ToolCall] = []
-        /// Set when a `.thinkTruncate` event arrives mid-stream. Surfaces the
-        /// safeguard firing to downstream response-emission code so it can emit
-        /// a vendor sidecar / header.
-        var thinkingSafeguardTriggered = false
-        var thinkingSafeguardSafePrefixChars: Int?
-        /// Accumulates raw content from `.malformedToolCall` events. When set,
-        /// the model tried to emit a tool call that couldn't be parsed (usually
-        /// vendor ToolCallProcessor's EOS-drop path for Qwen3.6 intermittent
-        /// malformed output). Surfaced in the finish_reason decision log and
-        /// used by the empty-content retry signal.
-        var malformedToolCallRaw = ""
-    }
 
     private enum DisconnectSource: String, Sendable {
         case connectionState = "connection_state"
@@ -1004,7 +898,9 @@ struct CompletionHandler: Sendable {
     }
 
     private enum StreamingOutcome: Sendable {
-        case completed(StreamResult)
+        /// The terminal Generation Accumulator plus captured completion metrics.
+        /// Both completion paths build one `CompletionProjection` from this.
+        case completed(GenerationAccumulator, AgentGeneration.Info?)
         case disconnected(DisconnectSource)
         case failed(String)
         case cancelled
@@ -1105,38 +1001,9 @@ struct CompletionHandler: Sendable {
             return .failed(error.localizedDescription)
         }
 
-        // Project the fold into StreamResult. `thinking ?? ""` matches the prior
-        // non-optional accumulator; the safeguard fields mirror the accumulator.
-        var result = StreamResult()
-        result.textContent = accumulator.text
-        result.thinkingContent = accumulator.thinking ?? ""
-        result.toolCalls = accumulator.toolCalls
-        result.hasToolCalls = !accumulator.toolCalls.isEmpty
-        result.malformedToolCallRaw = accumulator.malformedToolCallRaw
-        result.thinkingSafeguardTriggered = accumulator.safeguardTriggered
-        result.thinkingSafeguardSafePrefixChars = accumulator.safeguardSafePrefixChars
-        result.info = info
-        return .completed(result)
-    }
-
-    /// Shared Generation Projection for both completion paths: when a turn
-    /// produced no text and no tool calls but a malformed tool-call buffer was
-    /// captured, surface that raw buffer as the text content so the client sees
-    /// the attempted call instead of an empty stop. Returns the text to surface,
-    /// or `nil` when the fallback does not apply. Callers apply their own side
-    /// effects (the streaming path additionally emits an SSE content chunk).
-    private static func malformedFallbackText(
-        text: String,
-        toolCallCount: Int,
-        malformedRaw: String,
-        completionID: String
-    ) -> String? {
-        guard toolCallCount == 0, text.isEmpty, !malformedRaw.isEmpty else { return nil }
-        Log.server.info(
-            "Surfaced dropped tool-call buffer as text content — "
-            + "completionID=\(completionID) rawLen=\(malformedRaw.count)"
-        )
-        return malformedRaw
+        // Hand the terminal accumulator (plus completion metrics) to the caller;
+        // both completion paths build one CompletionProjection from it.
+        return .completed(accumulator, info)
     }
 
     private func makeReplayAssistantMessage(
