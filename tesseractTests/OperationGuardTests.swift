@@ -47,4 +47,19 @@ struct OperationGuardTests {
         #expect(!earlier.isCurrent)
         #expect(later.isCurrent)
     }
+
+    /// `capture()` is a pure read: it snapshots the epoch without advancing it, so two
+    /// tickets taken with no `invalidate()` between them are both current. The dual of the
+    /// staleness tests — it pins the invariant the docs warn against losing: a naive
+    /// `begin()` that bumped-and-snapshotted would make this fail.
+    @Test
+    func captureDoesNotAdvanceEpoch() {
+        let guardian = OperationGuard()
+
+        let first = guardian.capture()
+        let second = guardian.capture()
+
+        #expect(first.isCurrent)
+        #expect(second.isCurrent)
+    }
 }

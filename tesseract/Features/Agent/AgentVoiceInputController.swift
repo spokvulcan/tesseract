@@ -72,6 +72,10 @@ final class AgentVoiceInputController {
         }
 
         do {
+            // Bump for uniformity with DictationCoordinator + as defense-in-depth.
+            // NOT load-bearing here: start() is `.idle`-gated (above), so — unlike
+            // DictationCoordinator — no overlapping-restart path exists; any in-flight op
+            // was already superseded by cancel()'s bump. See CONTEXT.md → "Operation staleness".
             operations.invalidate()
             try audioCapture.startCapture()
             voiceState = .recording

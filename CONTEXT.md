@@ -759,11 +759,14 @@ recognizer may *ignore cancellation and return success anyway*, so a `Task.cance
 cannot stop a stale transcription from committing — only a post-`await` epoch comparison
 can. The load-bearing rule it concentrates: the epoch is advanced at **two** distinct
 moments — at `cancel()` (drop the in-flight op) **and** at *operation start*
-(`startRecording`/`start`, to supersede an *overlapping previous* op, since neither caller
-cancels the prior task on restart) — while the snapshot is taken at a **third** moment, the
+(`startRecording`/`start`) — while the snapshot is taken at a **third** moment, the
 async-work entry (`processAudio`/`finishCapture`), and compared after **every** `await`
-resume. A naive `begin()` that bumped-and-snapshotted only at the async entry would drop the
-operation-start bump and silently reintroduce stale-result commits. It owns **only** the
+resume. The operation-start bump is load-bearing in `DictationCoordinator`, which can begin
+a new recording while a prior transcription is still in flight without cancelling it (its
+restart paths, plus a second `await` for text injection); in `AgentVoiceInputController` it
+is uniformity/defense-in-depth only, since `start()` is `.idle`-gated and so cannot overlap
+a live op. A naive `begin()` that bumped-and-snapshotted only at the async entry would drop
+the operation-start bump and silently reintroduce stale-result commits in the dictation case. It owns **only** the
 epoch protocol: `Task` cancellation, `audioCapture.stopCapture()`, and
 `transcriptionEngine.cancelTranscription()` stay caller-side (those are domain-specific and
 already served by Swift's `Task`). It needs no `Sendable`: the guard is a stored property of

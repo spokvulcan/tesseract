@@ -4,29 +4,21 @@
 //
 //  The **Operation Guard** — the single home for the monotonic-epoch *stale-result*
 //  protocol shared by the capture→transcribe→commit coordinators (today
-//  `DictationCoordinator` and **Voice Input** / `AgentVoiceInputController`).
+//  `DictationCoordinator` and **Voice Input** / `AgentVoiceInputController`). It exists
+//  because the underlying recognizer may *ignore `Task` cancellation and return success
+//  anyway*, so cancelling the task cannot stop a stale transcription from committing —
+//  only a post-`await` epoch comparison can.
 //
-//  It exists because the underlying recognizer may *ignore `Task` cancellation and
-//  return success anyway*, so cancelling the task is not enough to stop a stale
-//  transcription from committing — only a post-`await` epoch comparison can. Callers:
+//  Usage contract (the *why* behind each step lives in CONTEXT.md → "Operation staleness"):
 //
-//    - call `invalidate()` to advance the epoch — at **two** distinct moments: at
-//      `cancel()` (drop the in-flight operation) **and** at *operation start*
-//      (`startRecording`/`start`, to supersede an *overlapping previous* operation,
-//      since neither caller cancels the prior task on restart);
-//    - call `capture()` once at the entry of async work to snapshot the epoch into an
-//      `OperationTicket`;
-//    - read `ticket.isCurrent` after **every** `await` resume to decide whether the
-//      still-running work may commit.
+//    - `invalidate()` advances the epoch — called at `cancel()` and at *operation start*;
+//    - `capture()` snapshots the epoch into an `OperationTicket` at the entry of async work;
+//    - `ticket.isCurrent` is read after **every** `await` resume to gate the commit.
 //
-//  It owns **only** the epoch protocol. `Task` cancellation, `audioCapture.stopCapture()`,
-//  and `transcriptionEngine.cancelTranscription()` stay caller-side — they are the
-//  complementary, cancellation-*aware* mechanism (see CONTEXT.md → Operation staleness).
-//
-//  Distinct from Swift's `guard` statement (which is, confusingly, how `isCurrent` is
-//  read at the call sites) and from `Task` cancellation. No `Sendable`: the guard is a
-//  stored property of an `@MainActor` coordinator and every ticket is captured inside a
-//  coordinator-owned non-detached `Task`, so the guard outlives every ticket it vends.
+//  It owns **only** the epoch protocol; `Task` cancellation and the audio/transcription
+//  teardown stay caller-side. No `Sendable`: the guard is a stored property of an
+//  `@MainActor` coordinator and every ticket is captured inside a coordinator-owned
+//  non-detached `Task`, so the guard outlives every ticket it vends.
 //
 
 /// Owns one monotonic `epoch` counter and vends inert `OperationTicket` snapshots of it.
