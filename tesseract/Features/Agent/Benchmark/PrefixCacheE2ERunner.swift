@@ -778,9 +778,12 @@ final class PrefixCacheE2ERunner {
         // branch-point's larger deltaL outweighs the noise leaves' newer
         // access times.
         log("\n── Step 9: Branch-point survival under pressure ──")
-        let originalAlpha = EvictionPolicy.alpha
-        EvictionPolicy.alpha = 2.0
-        defer { EvictionPolicy.alpha = originalAlpha }
+        // Force F/B-weighted eviction by configuring this cache directly —
+        // per-cache Eviction Configuration. Capture the prior weighting so the
+        // step restores it before every exit and stays self-contained, rather
+        // than leaving the engine's cache at alpha=2.0 for any later step.
+        let priorAlpha = await engine.evictionAlpha() ?? 0.0
+        await engine.setEvictionAlpha(2.0)
 
         guard let preStats = await engine.prefixCacheStats(),
               preStats.snapshotCount > 0
@@ -791,6 +794,7 @@ final class PrefixCacheE2ERunner {
                 passed: false,
                 detail: "prefix cache empty before pressure step"
             ))
+            await engine.setEvictionAlpha(priorAlpha)
             return
         }
 
@@ -833,6 +837,9 @@ final class PrefixCacheE2ERunner {
                 + "noise requests + tight budget: \(postBranchCount) "
                 + "(≥1 means utility scoring preserved it)"
         ))
+
+        // Restore the pre-step weighting so the step is self-contained.
+        await engine.setEvictionAlpha(priorAlpha)
     }
 
     private func branchPointCount(engine: AgentEngine) async -> Int {

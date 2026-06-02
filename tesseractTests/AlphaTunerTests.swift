@@ -7,11 +7,11 @@ import Testing
 
 /// Tests for the adaptive `alpha` tuner.
 ///
-/// `EvictionPolicy.alpha` is a static, so this suite is `.serialized`
-/// to keep tests from racing on the global. Each test that mutates the
-/// policy resets in `defer`.
+/// The tuner returns its tuned winning `alpha` from `recordRequest`
+/// instead of writing a global, so the suite carries no ambient state and
+/// needs neither serialization nor a per-test reset. Tests rely on the
+/// default injected profile (`.qwen35_4B_PARO`).
 @MainActor
-@Suite(.serialized)
 struct AlphaTunerTests {
 
     // MARK: - Helpers
@@ -60,40 +60,44 @@ struct AlphaTunerTests {
     /// `tallVariantModulus` controls how many distinct tall variants
     /// repeat across the window — smaller values give more re-hit
     /// opportunities under F/B preservation.
+    @discardableResult
     private func populateMixedBootstrapWorkload(
         tuner: AlphaTuner,
         count: Int,
         tallVariantModulus: Int = 3
-    ) {
+    ) -> Double? {
+        var tunedAlpha: Double?
         for record in makeMixedBootstrapWorkloadRecords(
             count: count, tallVariantModulus: tallVariantModulus
         ) {
-            tuner.recordRequest(record)
+            if let result = tuner.recordRequest(record) { tunedAlpha = result }
         }
+        return tunedAlpha
     }
 
     // MARK: - 1. startsAtZeroBeforeFirstEviction
 
     /// Until `notifyFirstEviction` is called the tuner stays in the
     /// `.waitingForFirstEviction` phase, just incrementing
-    /// `requestsBeforeFirstEviction`. `EvictionPolicy.alpha` must not
-    /// change.
+    /// `requestsBeforeFirstEviction`. No tuned `alpha` is returned.
     @Test func startsAtZeroBeforeFirstEviction() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
-        EvictionPolicy.alpha = 0.0
         let tuner = AlphaTuner()
 
+        var tunedAlphas: [Double] = []
         for i in 0..<10 {
-            tuner.recordRequest(makeLeafOnlyRecord(
+            if let tuned = tuner.recordRequest(makeLeafOnlyRecord(
                 promptTokens: [1, 2, 3, i],
                 storedTokens: [1, 2, 3, i, 99]
-            ))
+            )) {
+                tunedAlphas.append(tuned)
+            }
         }
 
         #expect(tuner.phase == .waitingForFirstEviction)
         #expect(tuner.requestsBeforeFirstEviction == 10)
         #expect(tuner.bootstrapWindowCount == 0)
-        #expect(EvictionPolicy.alpha == 0.0)
+        // No tuned alpha is emitted before the first eviction fires.
+        #expect(tunedAlphas.isEmpty)
     }
 
     // MARK: - 2. bootstrapWindowUsesMultiplierTimesFirstEvictionCount
@@ -106,7 +110,6 @@ struct AlphaTunerTests {
     /// enough that `multiplier * count` is the dominant term (above the
     /// floor and below the cap).
     @Test func bootstrapWindowUsesMultiplierTimesFirstEvictionCount() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
 
         // Pick a count where `multiplier * count` lands strictly
@@ -144,7 +147,6 @@ struct AlphaTunerTests {
     /// recorded, the bootstrap window falls back to the safety floor
     /// instead of running with size zero.
     @Test func bootstrapTargetHonorsMinimumWindow() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
 
         tuner.notifyFirstEviction(startingInventory: [])
@@ -158,7 +160,6 @@ struct AlphaTunerTests {
     /// tuner can finish in a single typical session even when first
     /// eviction takes hundreds of requests.
     @Test func bootstrapTargetHonorsMaximumWindow() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
 
         // Pick a pre-eviction count guaranteed to overshoot the cap.
@@ -178,10 +179,8 @@ struct AlphaTunerTests {
     // MARK: - 3. gridSearchTransitionsToTunedWithCandidateAlpha
 
     /// The grid search must terminate, transition the tuner to
-    /// `.tuned`, and write a value into `EvictionPolicy.alpha` from the
-    /// `alphaCandidates` set.
+    /// `.tuned`, and return a value from the `alphaCandidates` set.
     @Test func gridSearchTransitionsToTunedWithCandidateAlpha() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
 
         for _ in 0..<3 {
@@ -194,15 +193,16 @@ struct AlphaTunerTests {
 
         // Mixed shared-prefix / one-off workload so different alphas
         // pick different victims and the grid search has signal.
-        populateMixedBootstrapWorkload(tuner: tuner, count: tuner.bootstrapTarget)
+        let tunedAlpha = populateMixedBootstrapWorkload(
+            tuner: tuner, count: tuner.bootstrapTarget
+        )
 
         #expect(tuner.phase == .tuned)
-        #expect(AlphaTuner.alphaCandidates.contains(EvictionPolicy.alpha))
+        #expect(tunedAlpha.map { AlphaTuner.alphaCandidates.contains($0) } == true)
     }
 
     /// `alphaCandidates` covers `[0.0, 0.1, ..., 2.0]` evenly.
     @Test func alphaCandidatesCoverFullGrid() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let candidates = AlphaTuner.alphaCandidates
         #expect(candidates.count == 21)
         #expect(candidates.first == 0.0)
@@ -214,39 +214,76 @@ struct AlphaTunerTests {
 
     // MARK: - 4. tunedAlphaUsedForSubsequentEvictions
 
-    /// After the tuner finishes, `EvictionPolicy.alpha` reflects the
-    /// chosen value. Regression test for the `defer`-overwrites-tuned-
-    /// value bug from the previous revision.
+    /// When the tuner finishes, `recordRequest` returns exactly one
+    /// grid-member `alpha` — the winner the manager assigns to its
+    /// **Eviction Configuration**. No global is read back.
     @Test func tunedAlphaUsedForSubsequentEvictions() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
-        // Start from a non-grid alpha so a buggy `defer` restore would
-        // flunk the candidate-set check.
-        EvictionPolicy.alpha = 1.7
-        let sentinel = EvictionPolicy.alpha
-
         let tuner = AlphaTuner()
         tuner.notifyFirstEviction(startingInventory: [])
+
+        // The grid search fires exactly once, on the record that fills the
+        // bootstrap window; every earlier call returns nil.
+        var tunedAlpha: Double?
         for i in 0..<tuner.bootstrapTarget {
-            tuner.recordRequest(makeLeafOnlyRecord(
+            tunedAlpha = tuner.recordRequest(makeLeafOnlyRecord(
                 promptTokens: [i, i + 1],
                 storedTokens: [i, i + 1, i + 2]
             ))
         }
         #expect(tuner.phase == .tuned)
-        #expect(AlphaTuner.alphaCandidates.contains(EvictionPolicy.alpha))
-        #expect(EvictionPolicy.alpha != sentinel)
+        #expect(tunedAlpha.map { AlphaTuner.alphaCandidates.contains($0) } == true)
     }
 
-    /// Creating a fresh production prefix cache should reset the global
-    /// eviction alpha back to the default before a new tuner boots.
-    @Test func freshPrefixCacheResetsGlobalAlpha() async {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
-        EvictionPolicy.alpha = 1.7
+    /// A freshly constructed prefix cache starts at the LRU default
+    /// (`alpha = 0`, `ModelFlopProfile.fallback`). Because each cache owns
+    /// its **Eviction Configuration**, there is no process global for a
+    /// previous cache's tuned `alpha` to leak through.
+    @Test func freshPrefixCacheStartsAtLRUDefault() {
+        let mgr = PrefixCacheManager(memoryBudgetBytes: 1024)
+        #expect(mgr.evictionConfig.alpha == 0.0)
+        #expect(mgr.evictionConfig.flopProfile == .fallback)
+    }
+
+    /// `ensurePrefixCache` folds the model's `flopProfile` into the cache's
+    /// **Eviction Configuration**. Before a model loads there is no identity,
+    /// so the cache gets the shared `ModelFlopProfile.fallback` and the LRU
+    /// default `alpha`. Drives the real actor construction path, not a
+    /// hand-built manager.
+    @Test func ensurePrefixCacheUsesFallbackProfileBeforeLoad() async {
+        let actor = LLMActor()
+        // setPrefixCacheBudgetBytes builds the cache through ensurePrefixCache.
+        await actor.setPrefixCacheBudgetBytes(4096)
+        let config = await actor.currentEvictionConfigForTesting()
+        #expect(config?.flopProfile == .fallback)
+        #expect(config?.alpha == 0.0)
+    }
+
+    /// Once an identity is installed, the cache `ensurePrefixCache` builds
+    /// scores against *that* model's `flopProfile`, not the fallback — the
+    /// wiring this change adds. Without this assertion a regression that
+    /// ignored the identity (always using the fallback, or wiring the budget
+    /// in place of the profile) would compile and ship green.
+    @Test func ensurePrefixCacheSourcesProfileFromModelIdentity() async {
+        // A Qwen3.5 config whose dimensions differ from the PARO fallback.
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5",
+                "num_hidden_layers": 64,
+                "hidden_size": 5120,
+                "linear_num_value_heads": 16,
+                "linear_key_head_dim": 128,
+                "full_attention_interval": 4,
+            ],
+            chatTemplate: nil
+        )
+        #expect(identity.flopProfile != .fallback)  // sanity: distinct profile
 
         let actor = LLMActor()
-        await actor.setPrefixCacheBudgetBytes(1024)
+        await actor.setModelIdentityForTesting(identity)
+        await actor.setPrefixCacheBudgetBytes(4096)
 
-        #expect(EvictionPolicy.alpha == 0.0)
+        let config = await actor.currentEvictionConfigForTesting()
+        #expect(config?.flopProfile == identity.flopProfile)
     }
 
     // MARK: - 5. recordRequest no-op after .tuned
@@ -255,7 +292,6 @@ struct AlphaTunerTests {
     /// ignored — the tuner does not retune in this implementation.
     /// `bootstrapWindow` is also cleared after tuning.
     @Test func recordRequestIsNoOpAfterTuned() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
         tuner.notifyFirstEviction(startingInventory: [])
         for i in 0..<tuner.bootstrapTarget {
@@ -285,7 +321,6 @@ struct AlphaTunerTests {
     /// post-request cache state, not the mid-request state at the
     /// moment of the first drain.
     @Test func managerCallsTunerWithInventoryOnFirstEviction() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
         let snap = PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf)
         let snapBytes = snap.memoryBytes
@@ -337,7 +372,6 @@ struct AlphaTunerTests {
     /// `InventoryEntry` per snapshot, with the path reconstructed from
     /// the radix tree.
     @Test func collectSnapshotInventoryReturnsAllSnapshots() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let mgr = PrefixCacheManager(memoryBudgetBytes: 1024 * 1024 * 1024)
 
         let pathA = Array(1...10)
@@ -372,7 +406,6 @@ struct AlphaTunerTests {
     /// `lastAccessTime`, preserving the relative recency that the
     /// tuner's replay needs.
     @Test func restoreSnapshotPreservesLastAccessTime() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let mgr = PrefixCacheManager(memoryBudgetBytes: 1024 * 1024 * 1024)
         let path = Array(1...50)
         let snap = PrefixCacheTestFixtures.makeUniformSnapshot(
@@ -408,7 +441,6 @@ struct AlphaTunerTests {
     /// boundary-capture timing, not the type-priority rule, so we use
     /// types that participate in normal recency-based eviction.
     @Test func managerDefersBootstrapBoundaryUntilFullRequestCompletes() throws {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
         let boundaryRequestID = UUID()
         let snapshotA = PrefixCacheTestFixtures.makeUniformSnapshot(offset: 10, type: .branchPoint)
@@ -488,7 +520,6 @@ struct AlphaTunerTests {
     /// The manager should wait for the matching request ID before starting
     /// bootstrapping and dropping the boundary request.
     @Test func managerWaitsForMatchingBoundaryRequestID() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
         let snap = PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf)
         let snapBytes = snap.memoryBytes
@@ -574,7 +605,6 @@ struct AlphaTunerTests {
     /// comparison or tie-break logic would diverge the two, and the
     /// test catches it.
     @Test func gridSearchPicksMaximumAcrossAllCandidates() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
         let tuner = AlphaTuner()
 
         // Populate a deterministic bootstrap window with mixed
@@ -609,14 +639,14 @@ struct AlphaTunerTests {
         // before the final record fires the real grid search.
         let budget = tuner.simBudget(for: records)
 
-        // Score every candidate independently.
+        // Score every candidate independently. `replayWindow` builds its
+        // own sandbox configuration per candidate — there is no global to
+        // save and restore.
         var alphaResults: [(alpha: Double, flops: Double, hits: Int)] = []
-        let originalAlpha = EvictionPolicy.alpha
         for candidate in AlphaTuner.alphaCandidates {
             let result = tuner.replayWindow(alpha: candidate, simBudget: budget, records: records)
             alphaResults.append((candidate, result.flopsSaved, result.hitTokens))
         }
-        EvictionPolicy.alpha = originalAlpha
 
         // Compute the expected winner with the same comparison rule
         // the grid search uses: max flops, ties broken by hit tokens,
@@ -634,12 +664,12 @@ struct AlphaTunerTests {
 
         // Now fire the grid search by appending the final record from
         // the same full window we scored above.
-        tuner.recordRequest(records.last!)
+        let tunedAlpha = tuner.recordRequest(records.last!)
         #expect(tuner.phase == .tuned)
 
-        // The grid search must pick exactly the alpha our manual
+        // The grid search must return exactly the alpha our manual
         // replay-and-compare loop identified.
-        #expect(EvictionPolicy.alpha == expectedAlpha)
+        #expect(tunedAlpha == expectedAlpha)
     }
 
     /// Degenerate case: every candidate scores zero (no shared
@@ -648,23 +678,22 @@ struct AlphaTunerTests {
     /// comparison (alpha = 0.0). A regression that flips the
     /// comparison to `>=` would walk all the way to alpha = 2.0.
     @Test func gridSearchPicksZeroAlphaWhenAllCandidatesTie() {
-        defer { PrefixCacheTestFixtures.resetPolicyDefaults() }
-        // Start from a non-zero sentinel so a no-op grid search would
-        // also fail the assertion.
-        EvictionPolicy.alpha = 1.3
         let tuner = AlphaTuner()
         tuner.notifyFirstEviction(startingInventory: [])
         // Each request has a totally unique prompt/stored path, so the
         // simulated cache never returns a hit and every candidate
         // scores zero flops + zero hit tokens.
+        var tunedAlpha: Double?
         for i in 0..<tuner.bootstrapTarget {
             let unique = 100_000 + i * 7
-            tuner.recordRequest(makeLeafOnlyRecord(
+            tunedAlpha = tuner.recordRequest(makeLeafOnlyRecord(
                 promptTokens: [unique],
                 storedTokens: [unique, unique + 1]
             ))
         }
         #expect(tuner.phase == .tuned)
-        #expect(EvictionPolicy.alpha == 0.0)
+        // All candidates tie at zero, so the strict `>` comparison keeps
+        // the first one (alpha = 0).
+        #expect(tunedAlpha == 0.0)
     }
 }

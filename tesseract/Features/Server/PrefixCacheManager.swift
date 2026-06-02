@@ -144,14 +144,23 @@ final class PrefixCacheManager {
     /// test/replay caches pass `nil` to avoid recursive recording when
     /// the tuner itself spins up sandboxed caches during grid search.
     let alphaTuner: AlphaTuner?
+    /// The one mutable cell holding the eviction weighting. `flopProfile`
+    /// is fixed for this cache's model; `alpha` rides the LRU default
+    /// until the attached `AlphaTuner` returns a tuned winner from
+    /// `recordRequest`. Every eviction and telemetry score reads it by
+    /// value — there is no process global. See `CONTEXT.md` → Eviction
+    /// tuning (**Eviction Configuration**).
+    var evictionConfig: EvictionConfiguration
 
     init(
         memoryBudgetBytes: Int,
+        evictionConfig: EvictionConfiguration = EvictionConfiguration(),
         alphaTuner: AlphaTuner? = nil,
         tieredStore: TieredSnapshotStore? = nil
     ) {
         self.store = tieredStore ?? TieredSnapshotStore(ssdConfig: nil)
         self.memoryBudgetBytes = memoryBudgetBytes
+        self.evictionConfig = evictionConfig
         self.alphaTuner = alphaTuner
     }
 
@@ -941,12 +950,17 @@ final class PrefixCacheManager {
                 type: snap.checkpointType
             )
         }
-        alphaTuner.recordRequest(AlphaTuner.RequestRecord(
+        // The tuner returns its tuned winner exactly once, on the call
+        // that completes the grid search; assign it to the one mutable
+        // cell. No global write, no back-reference from the tuner.
+        if let tunedAlpha = alphaTuner.recordRequest(AlphaTuner.RequestRecord(
             partitionKey: partitionKey,
             promptTokens: promptTokens,
             midPrefillSnapshots: metadata,
             leafStore: leafStore
-        ))
+        )) {
+            evictionConfig.alpha = tunedAlpha
+        }
     }
 
     /// Walk every partition's snapshot inventory and return a flat list
@@ -1075,7 +1089,7 @@ final class PrefixCacheManager {
         let cacheStats = stats
         let clockNow: ContinuousClock.Instant = .now
         let trees = store.orderedPartitions().map { key, tree in
-            tree.makeTopologySnapshot(partition: key, now: clockNow)
+            tree.makeTopologySnapshot(partition: key, now: clockNow, config: evictionConfig)
         }
         let snapshotsByType = Dictionary(
             uniqueKeysWithValues: cacheStats.snapshotsByType.map { ($0.key.wireString, $0.value) }
@@ -1125,7 +1139,7 @@ final class PrefixCacheManager {
         if let preferredTree {
             let preferredCandidates = preferredTree.eligibleEvictionNodes()
             if let victim = EvictionPolicy.selectVictim(
-                candidates: preferredCandidates, now: now
+                candidates: preferredCandidates, now: now, config: evictionConfig
             ) {
                 return EvictionCandidate(
                     tree: preferredTree,
@@ -1145,7 +1159,9 @@ final class PrefixCacheManager {
                 candidates.append(node)
             }
         }
-        if let victim = EvictionPolicy.selectVictim(candidates: candidates, now: now),
+        if let victim = EvictionPolicy.selectVictim(
+               candidates: candidates, now: now, config: evictionConfig
+           ),
            let tree = nodeToTree[ObjectIdentifier(victim.node)]
         {
             return EvictionCandidate(

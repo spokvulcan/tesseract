@@ -37,9 +37,9 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     let promptStartsThinking: Bool
 
     /// FLOP/state-size profile the eviction policy scores against. **Total**:
-    /// a non-Qwen3.5 or unparseable config yields the `.qwen35_4B_PARO`
-    /// fallback, never `nil`, so the single consumer (`EvictionPolicy`) never
-    /// handles an absent profile.
+    /// a non-Qwen3.5 or unparseable config yields `ModelFlopProfile.fallback`,
+    /// never `nil`, so the single consumer (`EvictionPolicy`) never handles an
+    /// absent profile.
     let flopProfile: ModelFlopProfile
 
     /// Whether the model is eligible for TriAttention. A **computed view** of
@@ -107,13 +107,13 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// Qwen3.5 hybrid profile from `config.json` (the VLM variant nests
     /// architecture fields under `text_config`; LLM-only puts them at the top
     /// level). Non-Qwen3.5, missing fields, or a malformed config fall back to
-    /// `.qwen35_4B_PARO` — the fallback that used to sit at the call site as
-    /// `?? .qwen35_4B_PARO`, now with one home.
+    /// `ModelFlopProfile.fallback` — the one shared default, so the
+    /// parse-failure path and `LLMActor`'s pre-load path agree in one place.
     private static func interpretFlopProfile(configJSON: [String: Any]?) -> ModelFlopProfile {
         guard let root = configJSON,
               let topModelType = root["model_type"] as? String,
               topModelType.hasPrefix("qwen3_5")
-        else { return .qwen35_4B_PARO }
+        else { return .fallback }
 
         let textConfig = (root["text_config"] as? [String: Any]) ?? root
         guard let hiddenLayers = textConfig["num_hidden_layers"] as? Int,
@@ -121,7 +121,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
               let linearNumValueHeads = textConfig["linear_num_value_heads"] as? Int,
               let linearKeyHeadDim = textConfig["linear_key_head_dim"] as? Int,
               let fullAttentionInterval = textConfig["full_attention_interval"] as? Int
-        else { return .qwen35_4B_PARO }
+        else { return .fallback }
 
         return .qwen35(
             hiddenLayers: hiddenLayers,

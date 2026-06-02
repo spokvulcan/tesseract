@@ -474,7 +474,8 @@ final class TokenRadixTree {
 
     func makeTopologySnapshot(
         partition: CachePartitionKey,
-        now: ContinuousClock.Instant = .now
+        now: ContinuousClock.Instant = .now,
+        config: EvictionConfiguration
     ) -> PromptCacheTreeSnapshot {
         var nodes: [PromptCacheTreeNodeSnapshot] = []
         var edges: [PromptCacheTreeEdgeSnapshot] = []
@@ -485,6 +486,7 @@ final class TokenRadixTree {
             path: [],
             depth: 0,
             now: now,
+            config: config,
             nodes: &nodes,
             edges: &edges
         )
@@ -616,6 +618,7 @@ final class TokenRadixTree {
         path: [Int],
         depth: Int,
         now: ContinuousClock.Instant,
+        config: EvictionConfiguration,
         nodes: inout [PromptCacheTreeNodeSnapshot],
         edges: inout [PromptCacheTreeEdgeSnapshot]
     ) {
@@ -625,7 +628,9 @@ final class TokenRadixTree {
         let state = node.state
         let snapshot = state.body
         let checkpointType = state.checkpointType?.wireString
-        let scores = snapshot.map { _ in telemetryEvictionScore(for: node, now: now) } ?? nil
+        let scores = snapshot.map { _ in
+            telemetryEvictionScore(for: node, now: now, config: config)
+        } ?? nil
 
         nodes.append(PromptCacheTreeNodeSnapshot(
             id: nodeID,
@@ -665,6 +670,7 @@ final class TokenRadixTree {
                 path: childPath,
                 depth: depth + 1,
                 now: now,
+                config: config,
                 nodes: &nodes,
                 edges: &edges
             )
@@ -673,13 +679,16 @@ final class TokenRadixTree {
 
     private func telemetryEvictionScore(
         for node: RadixTreeNode,
-        now: ContinuousClock.Instant
+        now: ContinuousClock.Instant,
+        config: EvictionConfiguration
     ) -> EvictionScore? {
         guard let body = node.state.body,
               node.childCount <= 1,
               body.checkpointType != .system
         else { return nil }
-        return EvictionPolicy.computeScores(candidates: [node], now: now).first
+        return EvictionPolicy.computeScores(
+            candidates: [node], now: now, config: config
+        ).first
     }
 
     private static func telemetryStorageState(_ node: RadixTreeNode) -> PromptCacheStorageState {

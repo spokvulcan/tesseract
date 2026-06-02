@@ -643,7 +643,9 @@ struct TokenRadixTreeTests {
         tree.storeSnapshot(makeSnapshot(offset: 4, type: .leaf), on: node)
         let partition = CachePartitionKey(modelID: "telemetry-model", kvBits: 8, kvGroupSize: 64)
 
-        let snapshot = tree.makeTopologySnapshot(partition: partition)
+        let snapshot = tree.makeTopologySnapshot(
+            partition: partition, config: EvictionConfiguration()
+        )
         let root = snapshot.nodes.first { $0.parentID == nil }
         let leaf = snapshot.nodes.first { $0.tokenOffset == 4 }
         let edge = snapshot.edges.first
@@ -690,7 +692,8 @@ struct TokenRadixTreeTests {
                 kvBits: nil,
                 kvGroupSize: 64,
                 modelFingerprint: "abcdef123456"
-            )
+            ),
+            config: EvictionConfiguration()
         )
         let branchNode = snapshot.nodes.first { $0.tokenOffset == 2 }
         let pendingNode = snapshot.nodes.first { $0.snapshotRefID == pendingRef.snapshotID }
@@ -717,7 +720,8 @@ struct TokenRadixTreeTests {
         }
 
         let snapshot = tree.makeTopologySnapshot(
-            partition: CachePartitionKey(modelID: "large-tree", kvBits: 4, kvGroupSize: 32)
+            partition: CachePartitionKey(modelID: "large-tree", kvBits: 4, kvGroupSize: 32),
+            config: EvictionConfiguration()
         )
         let nodeIDs = Set(snapshot.nodes.map(\.id))
         let edgeIDs = Set(snapshot.edges.map(\.id))
