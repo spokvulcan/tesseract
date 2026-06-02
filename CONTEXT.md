@@ -98,12 +98,11 @@ deepest reachable radix node for the path under a `CachePartitionKey`, and when 
 node carries only a committed **Snapshot Ref** with no RAM body (the `.ssdHit` lookup
 reason), it hydrates the body from disk via the off-MainActor `loadSync` (ADR-0001),
 then either *promotes* the node back to a resident state on success or applies
-**Committed Ref Cleanup** on failure and downgrades to a miss. On the main prefill path
-it is the home for the lookup-then-hydrate-if-SSD composition, replacing the dance that
-was previously hand-written there. The canonical-leaf fallback still hydrates inline
-through `LLMActor.hydrateSSDLookupIfNeeded` — a near-duplicate of the same composition,
-slated to converge onto resolution next (see **Leaf Admission Builder**) — so it does not
-yet acquire its snapshot through here. `.ssdHit` is an internal intermediate the resolution
+**Committed Ref Cleanup** on failure and downgrades to a miss. It is the home for the
+lookup-then-hydrate-if-SSD composition for **both** callers — the main prefill path and the
+canonical-leaf fallback (see **Leaf Admission Builder**), which drives resolution from inside
+its own `container.perform` exactly as the main path does, replacing the near-duplicate dance
+each previously hand-wrote. `.ssdHit` is an internal intermediate the resolution
 consumes and never surfaces: callers receive a resolved `LookupResult` whose reason is
 only `.hit` or a miss. Checkpoint planning is **not** part of resolution — planning runs
 *after* resolution against the settled tree, so a post-hydration-failure replan is the
@@ -234,8 +233,8 @@ path). It would emit `.skip(reason:)` only for tokenizer/resolver-decidable fail
 snapshot); the live-`finalCache` skips (`no-final-cache`, `no-reusable-cache-state`,
 `normalization-trim`, `unsupported-cache-type`, `invalid-path`, `capturedThenEvicted`) and
 the `intervention` guard stay actor-side. Until that lands, the *canonical* fallback
-resolves its boundary through `LLMActor.hydrateSSDLookupIfNeeded`, not through the builder
-or **Snapshot Resolution**.
+resolves its boundary directly through **Snapshot Resolution** — the lookup-then-hydrate
+home both prefill callers share — rather than through the builder.
 _Avoid_: leaf store mode as the whole story (mode is one of its inputs), the builder owning
 capture or `admit` (model-affine, actor-side), a capture port (the builder returns a
 decision; the actor executes Metal — no behaviour-less fake seam).
