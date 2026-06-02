@@ -35,11 +35,12 @@ final class DictationCoordinator {
     /// suspended in flight — cancelling the task does.
     private var processingTask: Task<Void, Never>?
 
-    /// Monotonic token identifying the current dictation operation (a record →
-    /// process attempt). Bumped when a new operation begins so a background
-    /// transcription task that finishes *after* a cancel-and-restart recognizes
-    /// it is stale and leaves the newer operation's state untouched.
-    private var currentOperationID = 0
+    /// The **Operation Guard** for this coordinator's dictation operations (a record →
+    /// process attempt). `invalidate()`d when a new operation begins so a background
+    /// transcription task that finishes *after* a cancel-and-restart recognizes it is
+    /// stale (via its `OperationTicket`) and leaves the newer operation's state
+    /// untouched. See CONTEXT.md → "Operation staleness".
+    private let operations = OperationGuard()
 
     init(
         audioCapture: any AudioCapturing,
@@ -91,7 +92,7 @@ final class DictationCoordinator {
         // Invalidate any in-flight processing so a transcription that completes
         // (or races cancellation to *success*) after this point is recognized as
         // stale and commits nothing — no history, no injection, no state change.
-        currentOperationID += 1
+        operations.invalidate()
 
         // Cancel the processing task itself so a cancellation-aware side effect
         // suspended mid-flight (text injection) aborts rather than completing
@@ -112,7 +113,11 @@ final class DictationCoordinator {
 
     private func startRecording() {
         lastError = nil
-        currentOperationID += 1
+        // Advance the epoch at operation start: this coordinator can begin a new
+        // recording while a prior transcription is still in flight (toggle/hotkey
+        // restart) without cancelling it, so the start-bump is what supersedes that
+        // overlapping prior operation.
+        operations.invalidate()
 
         do {
             try audioCapture.startCapture()
@@ -159,7 +164,7 @@ final class DictationCoordinator {
 
     private func processAudio(_ audioData: AudioData) {
         state = .processing
-        let operationID = currentOperationID
+        let ticket = operations.capture()
 
         processingTask = Task {
             do {
@@ -169,7 +174,7 @@ final class DictationCoordinator {
                 // Stale-task guard: a cancel-and-restart since this operation
                 // began means a newer operation owns the coordinator state — drop
                 // this result instead of clobbering it (or injecting stale text).
-                guard operationID == currentOperationID else { return }
+                guard ticket.isCurrent else { return }
 
                 // Post-process
                 let processedText = postProcessor.process(result.text)
@@ -196,7 +201,7 @@ final class DictationCoordinator {
                     // Injection suspends; a cancel-and-restart during it means a
                     // newer operation owns the state — don't play success or
                     // overwrite it.
-                    guard operationID == currentOperationID else { return }
+                    guard ticket.isCurrent else { return }
                 }
 
                 if settings.playSounds {
@@ -209,13 +214,13 @@ final class DictationCoordinator {
                 // Cancelled (e.g. `cancel()` while processing) — not a failure.
                 // Only return to idle if this is still the current operation; a
                 // newer recording must not be clobbered by this stale task.
-                guard operationID == currentOperationID else { return }
+                guard ticket.isCurrent else { return }
                 state = .idle
             } catch let error as DictationError {
-                guard operationID == currentOperationID else { return }
+                guard ticket.isCurrent else { return }
                 handleError(error)
             } catch {
-                guard operationID == currentOperationID else { return }
+                guard ticket.isCurrent else { return }
                 handleError(.transcriptionFailed(error.localizedDescription))
             }
         }
