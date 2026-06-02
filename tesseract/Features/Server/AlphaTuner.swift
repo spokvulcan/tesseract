@@ -2,9 +2,11 @@ import Foundation
 import MLX
 import MLXLMCommon
 
-/// Adaptive `EvictionPolicy.alpha` tuner — paper/repo-aligned Marconi
-/// retrospective tuning. Tunes once per process and writes the result
-/// back to `EvictionPolicy.alpha`. Continuous retuning is out of scope.
+/// Adaptive eviction-`alpha` tuner — paper/repo-aligned Marconi
+/// retrospective tuning. Tunes once per process and **returns** the tuned
+/// winner from `recordRequest`, leaving the `PrefixCacheManager` to write
+/// it into its **Eviction Configuration** — the tuner holds no global and
+/// no back-reference to the manager. Continuous retuning is out of scope.
 ///
 /// Tie-break rule for the grid search: highest cumulative
 /// parent-relative FLOPs saved wins, breaking ties on cached-token
@@ -97,6 +99,12 @@ final class AlphaTuner {
     /// grid search to discriminate between alpha candidates.
     static let maximumBootstrapWindow = 60
 
+    /// Production FLOP profile, injected at construction. The grid-search
+    /// sandbox replays and the direct FLOP tally score against this
+    /// instead of a process global. Immutable — a model swap builds a new
+    /// tuner alongside a new cache.
+    let flopProfile: ModelFlopProfile
+
     private(set) var phase: Phase = .waitingForFirstEviction
     private(set) var requestsBeforeFirstEviction: Int = 0
     private(set) var bootstrapTarget: Int = 0
@@ -106,22 +114,31 @@ final class AlphaTuner {
 
     var bootstrapWindowCount: Int { bootstrapWindow.count }
 
+    init(flopProfile: ModelFlopProfile = .qwen35_4B_PARO) {
+        self.flopProfile = flopProfile
+    }
+
     // MARK: - State machine hooks
 
     /// Called by `PrefixCacheManager.recordRequest` after every request
     /// finishes its lifecycle (post-store, including paths where the
     /// leaf store was skipped). Drives the phase machine.
-    func recordRequest(_ record: RequestRecord) {
+    ///
+    /// Returns the tuned winning `alpha` on the single call that completes
+    /// the grid search — the manager assigns it to its **Eviction
+    /// Configuration** — and `nil` on every other call.
+    @discardableResult
+    func recordRequest(_ record: RequestRecord) -> Double? {
         switch phase {
         case .waitingForFirstEviction:
             requestsBeforeFirstEviction += 1
+            return nil
         case .bootstrapping:
             bootstrapWindow.append(record)
-            if bootstrapWindow.count >= bootstrapTarget {
-                runGridSearch()
-            }
+            guard bootstrapWindow.count >= bootstrapTarget else { return nil }
+            return runGridSearch()
         case .tuned:
-            break
+            return nil
         }
     }
 
@@ -167,7 +184,7 @@ final class AlphaTuner {
         return max((inventoryBytes + windowSnapshotBytes) / 2, 1)
     }
 
-    private func runGridSearch() {
+    private func runGridSearch() -> Double {
         let records = bootstrapWindow
         let budget = simBudget(for: records)
 
@@ -186,11 +203,6 @@ final class AlphaTuner {
             }
         }
 
-        // The replay loop above leaves `EvictionPolicy.alpha` set to the
-        // last candidate; writing the winner here is the explicit
-        // contract. No `defer` restore — that would clobber the value we
-        // just chose.
-        EvictionPolicy.alpha = bestAlpha
         phase = .tuned
         let windowSize = bootstrapWindow.count
         let inventorySize = startingInventory.count
@@ -202,6 +214,7 @@ final class AlphaTuner {
             + "(flopsSaved=\(bestFlops) hitTokens=\(bestHitTokens) "
             + "windowSize=\(windowSize) inventorySize=\(inventorySize))"
         )
+        return bestAlpha
     }
 
     /// Replay the recorded window against a fresh sandboxed
@@ -224,8 +237,11 @@ final class AlphaTuner {
     func replayWindow(
         alpha: Double, simBudget: Int, records: [RequestRecord]
     ) -> (flopsSaved: Double, hitTokens: Int) {
-        EvictionPolicy.alpha = alpha
-        let simCache = PrefixCacheManager(memoryBudgetBytes: simBudget, alphaTuner: nil)
+        let simCache = PrefixCacheManager(
+            memoryBudgetBytes: simBudget,
+            evictionConfig: EvictionConfiguration(flopProfile: flopProfile, alpha: alpha),
+            alphaTuner: nil
+        )
 
         // Reseed: shift each entry's lastAccessTime by `now - capture`
         // so the relative recency between inventory snapshots is
@@ -256,7 +272,8 @@ final class AlphaTuner {
             if let snapshot = lookup.snapshot {
                 totalFlops += EvictionPolicy.parentRelativeFlops(
                     nodeOffset: snapshot.tokenOffset,
-                    parentOffset: 0
+                    parentOffset: 0,
+                    profile: flopProfile
                 )
                 totalHitTokens += snapshot.tokenOffset
             }

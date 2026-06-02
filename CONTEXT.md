@@ -848,10 +848,13 @@ rather than a re-parse. The same value is also installed as load-time actor stat
 existing `installLoadTimeState` single-site (beside the fingerprint, SSD config, and TriAttention
 selection), populated even on a failed container load and cleared on unload; that installed
 snapshot is the load/unload lifecycle the unit suite pins across the actor boundary (via
-`currentModelIdentityForTesting`), not a second source the gates read from. The flop profile is still
-published into the `@MainActor EvictionPolicy.modelProfile` knob at load; retiring that
-mutable static (with its sibling `alpha`) in favour of injected eviction configuration is a
-**separate** deepening, not part of naming the identity.
+`currentModelIdentityForTesting`), not a second source the gates read from. The flop profile is no
+longer published into a `@MainActor EvictionPolicy.modelProfile` knob: that mutable static
+(with its sibling `alpha`) has been **retired** in favour of an injected **Eviction
+Configuration** (see **Eviction tuning** below) — a **separate** deepening from naming the
+identity. That retirement does *not* ride on the `LoadTimeState` bundle: `flopProfile` is
+load-time and could live there, but `alpha` is runtime-tuned and belongs to the cache/tuner, so
+the global's home is the prefix-cache `EvictionConfiguration`, not load-time state.
 
 The public interface is `init(directory:)` — the directory is the seam (production model
 dirs and test fixture dirs are its two real inhabitants, so there is no filesystem *port*:
@@ -862,8 +865,9 @@ seam for the test surface, reached via `@testable` and kept off the directory-ba
 designed and **deferred**: a `ModelFamilyDescriptor` registry (open-for-extension, but
 speculative generality while only the Qwen3.5 family exists — revisit when a second family
 lands), and a `LoadTimeState` bundle subsuming the fingerprint/SSD/TriAttention selection
-that would also own the `EvictionPolicy` publish (the natural home for retiring the global —
-a separate follow-up).
+(a locality pass on the scattered load-time fields, complicated by the two-moment install —
+directory facts pre-container-load, sizing post-load; **not** a prerequisite for retiring the
+eviction global, which is its own **Eviction tuning** deepening, now implemented).
 _Avoid_: ModelProfile (collides with the `ModelFlopProfile` it contains), model config /
 the `config.json` dict (one of its two sources), ModelFingerprint (separate, throwing),
 model capabilities as a runtime grab-bag (it is the *load-time, directory-derived* facts
@@ -885,6 +889,63 @@ only — never lease/timeout/lifecycle state).
 > **Expert:** It matches today's behaviour, and `alpha` defaults to `0` so the flop term is
 > usually skipped. The identity is honest that eviction has one cost model; it does not
 > pretend to know a bespoke profile it can't parse.
+
+### Eviction tuning
+
+**Eviction Configuration**:
+The `(flopProfile, alpha)` pair the prefix cache scores eviction against — the single mutable
+home replacing the two `@MainActor` statics that used to sit on `EvictionPolicy`
+(`modelProfile`, `alpha`). A `nonisolated Sendable` value with `let flopProfile: ModelFlopProfile`
+and `var alpha: Double`, owned by `PrefixCacheManager` as its **one mutable cell**
+(`var evictionConfig`). `flopProfile` is set once when the cache is built, read straight from
+**Model Identity**'s `flopProfile` in `ensurePrefixCache` (no separate publish — the redundant
+`EvictionPolicy.modelProfile = identity.flopProfile` at load is gone), falling back to
+`.qwen35_4B_PARO` before a model loads, the same default the static carried. `alpha` starts at
+`0` (LRU within the eligible set) and is adapted at runtime by the **AlphaTuner**. The
+configuration dies with the cache on unload — no separate clear.
+
+`EvictionPolicy` stays a pure-function namespace — `computeScores(candidates:now:config:)`,
+`selectVictim(…:config:)`, `parentRelativeFlops(…:profile:)` — taking the configuration **by
+value**, so every scorer (the manager's two eviction calls, the radix tree's telemetry score,
+the tuner's sandbox replays) gets a snapshot it cannot alias. There is exactly one mutable cell;
+an instance-shaped policy was rejected because a shared mutable `alpha` is just a cache-scoped
+global. `EvictionPolicy` stays MainActor-isolated either way — its scorers read MainActor-isolated
+`RadixTreeNode` state (the build defaults actor isolation to MainActor), so the isolation was
+never only about the statics — but it sheds all *mutable* state, which is the point.
+_Avoid_: `EvictionPolicy.modelProfile` / `EvictionPolicy.alpha` (the retired statics), eviction
+settings (it is not a user **Setting**), model profile as a global, the `LoadTimeState` bundle
+as its home (the bundle is a separate deepening for the scattered load-time fields; `alpha` is
+runtime state and never belonged there).
+
+**AlphaTuner inversion**:
+The **AlphaTuner** is constructed with the production `flopProfile` (`AlphaTuner(flopProfile:)`)
+so its sandbox-replay caches and its direct `parentRelativeFlops` flops tally score against the
+real architecture without reaching a global. Each grid-search replay builds a sandbox
+`PrefixCacheManager(evictionConfig:…, alphaTuner: nil)` carrying its **own** candidate `alpha`,
+so the search no longer mutates a shared register — the old "leaves `alpha` set to the last
+candidate; no `defer` restore" hazard is unrepresentable. The tuned winner returns through
+`recordRequest(...) -> Double?` on the call that completes bootstrapping; the manager assigns it
+to `evictionConfig.alpha`. The tuner never holds a back-reference to the manager.
+_Avoid_: writing `EvictionPolicy.alpha` (the retired global write), a tuner→manager callback or
+weak back-reference (the winner rides the return value), continuous retuning (still out of scope).
+
+> **Flagged ambiguity — "profile" vs "config".** The **flop profile** (`ModelFlopProfile`) is the
+> immutable per-architecture cost model; the **Eviction Configuration** is the `(flopProfile,
+> alpha)` pair the cache holds, whose `alpha` half is runtime-mutable. When unqualified, say
+> "flop profile" vs "eviction configuration".
+
+**Example dialogue:**
+
+> **Dev:** If we're retiring the eviction global, why doesn't `alpha` go into the `LoadTimeState`
+> bundle with the flop profile?
+> **Expert:** Different clocks. `flopProfile` is decided once at load — it could live in the
+> bundle. `alpha` is tuned *after* the first eviction by the **AlphaTuner** and keeps adapting;
+> it's runtime state, not load-time. So the home for both is the cache's **Eviction
+> Configuration**, and the bundle stays a separate concern.
+> **Dev:** The grid search used to set the global per candidate. Where does that go?
+> **Expert:** Each replay builds its own sandbox cache with its own `evictionConfig`. No shared
+> register, so no "left it set to the last candidate" footgun. The winner comes back as the
+> `recordRequest` return value and the manager writes its one cell.
 
 ## Why
 

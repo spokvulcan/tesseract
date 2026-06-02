@@ -4,11 +4,11 @@ import MLXLMCommon
 
 @testable import Tesseract_Agent
 
-/// Shared snapshot factories and reset hooks for prefix-cache test
-/// files. Centralizes construction so eviction tests across
-/// `PrefixCacheManagerTests`, `EvictionPolicyTests`, and
-/// `AlphaTunerTests` produce the same shapes and reset the same global
-/// state.
+/// Shared snapshot factories for prefix-cache test files. Centralizes
+/// construction so eviction tests across `PrefixCacheManagerTests`,
+/// `EvictionPolicyTests`, and `AlphaTunerTests` produce the same shapes.
+/// There is no shared global state to reset — eviction inputs travel as
+/// **Eviction Configuration** values passed by each test.
 @MainActor
 enum PrefixCacheTestFixtures {
 
@@ -47,13 +47,6 @@ enum PrefixCacheTestFixtures {
             checkpointType: type,
             bytesOnDisk: 1024
         )
-    }
-
-    /// Reset `EvictionPolicy`'s static state to defaults. Tests that
-    /// mutate `alpha` or `modelProfile` should call this in a `defer`.
-    static func resetPolicyDefaults() {
-        EvictionPolicy.alpha = 0.0
-        EvictionPolicy.modelProfile = .qwen35_4B_PARO
     }
 
     /// Build a leaf-only `AlphaTuner.RequestRecord` (no mid-prefill

@@ -7,11 +7,10 @@ import Testing
 
 /// Tests for the Marconi-style FLOP-aware eviction policy.
 ///
-/// `EvictionPolicy.alpha` and `.modelProfile` are static, so the suite is
-/// `.serialized` to keep tests from racing on those globals. Each test that
-/// mutates them resets in a `defer`.
+/// Scoring is a pure function of the **Eviction Configuration** passed by
+/// value, so the suite carries no ambient global state and needs neither
+/// serialization nor a per-test reset.
 @MainActor
-@Suite(.serialized)
 struct EvictionPolicyTests {
 
     // MARK: - Helpers
@@ -64,10 +63,6 @@ struct EvictionPolicyTests {
         return node
     }
 
-    private func resetPolicyDefaults() {
-        PrefixCacheTestFixtures.resetPolicyDefaults()
-    }
-
     private func makeUniformSnapshot(
         offset: Int,
         type: HybridCacheSnapshot.CheckpointType = .system
@@ -82,7 +77,6 @@ struct EvictionPolicyTests {
     /// branch with `childCount == 2` after the single forced eviction so it
     /// stays protected for the life of the test.
     @Test func candidateSetExcludesMultiChildNodes() {
-        defer { resetPolicyDefaults() }
         let mgr = makeManager(budgetMB: 1000)
 
         // root → [1..10] (system snap)
@@ -133,13 +127,12 @@ struct EvictionPolicyTests {
     /// snapshot whose parent sits closer to the root saves more FLOPs
     /// (longer unique suffix) and scores higher on the FLOP term.
     @Test func parentRelativeFlopsUsed() {
-        defer { resetPolicyDefaults() }
 
         let dfShallow = EvictionPolicy.parentRelativeFlops(
-            nodeOffset: 4096, parentOffset: 100
+            nodeOffset: 4096, parentOffset: 100, profile: .qwen35_4B_PARO
         )
         let dfDeep = EvictionPolicy.parentRelativeFlops(
-            nodeOffset: 4096, parentOffset: 3000
+            nodeOffset: 4096, parentOffset: 3000, profile: .qwen35_4B_PARO
         )
 
         #expect(dfShallow > dfDeep)
@@ -148,13 +141,13 @@ struct EvictionPolicyTests {
     }
 
     @Test func parentRelativeFlopsZeroWhenParentAtNode() {
-        defer { resetPolicyDefaults() }
-        let df = EvictionPolicy.parentRelativeFlops(nodeOffset: 100, parentOffset: 100)
+        let df = EvictionPolicy.parentRelativeFlops(
+            nodeOffset: 100, parentOffset: 100, profile: .qwen35_4B_PARO
+        )
         #expect(df == 0)
     }
 
     @Test func minMaxNormalizationHandlesDegenerateCase() {
-        defer { resetPolicyDefaults() }
 
         #expect(EvictionPolicy.normalize([5.0, 5.0, 5.0]) == [1.0, 1.0, 1.0])
         #expect(EvictionPolicy.normalize([42.0]) == [1.0])
@@ -167,22 +160,19 @@ struct EvictionPolicyTests {
     }
 
     @Test func recentAccessBoostsUtility() {
-        defer { resetPolicyDefaults() }
-        EvictionPolicy.alpha = 0.0
-
         let older = makeNode(tokenOffset: 1024, accessAge: .seconds(60))
         let newer = makeNode(tokenOffset: 1024, accessAge: .seconds(1))
 
         let victim = EvictionPolicy.selectVictim(
-            candidates: [older, newer], now: .now
+            candidates: [older, newer], now: .now,
+            config: EvictionConfiguration(alpha: 0.0)
         )
         #expect(victim?.node === older)
         #expect(victim?.score.normalizedRecency == 0.0)
     }
 
     @Test func higherFlopEfficiencyBoostsUtility() {
-        defer { resetPolicyDefaults() }
-        EvictionPolicy.alpha = 1.0
+        let config = EvictionConfiguration(alpha: 1.0)
 
         let now: ContinuousClock.Instant = .now
 
@@ -193,11 +183,13 @@ struct EvictionPolicyTests {
         short.lastAccessTime = now
 
         let victim = EvictionPolicy.selectVictim(
-            candidates: [tall, short], now: now
+            candidates: [tall, short], now: now, config: config
         )
         #expect(victim?.node === short)
 
-        let scores = EvictionPolicy.computeScores(candidates: [tall, short], now: now)
+        let scores = EvictionPolicy.computeScores(
+            candidates: [tall, short], now: now, config: config
+        )
         #expect(scores[0].normalizedFlopEfficiency > scores[1].normalizedFlopEfficiency)
     }
 
@@ -205,7 +197,6 @@ struct EvictionPolicyTests {
     /// not "lowest within tree A, then tree B" but "lowest across all
     /// trees combined."
     @Test func lowestUtilityEvictedAcrossPartitions() {
-        defer { resetPolicyDefaults() }
         let snapBytes = makeUniformSnapshot(offset: 100, type: .leaf).memoryBytes
         let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 2)
 
@@ -243,7 +234,6 @@ struct EvictionPolicyTests {
     /// interfere — the test is about the collapse mechanism, not type
     /// priority.
     @Test func singleChildEvictionCollapsesNode() {
-        defer { resetPolicyDefaults() }
 
         let snapBytes = makeUniformSnapshot(offset: 10).memoryBytes
         let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 100)
@@ -273,7 +263,6 @@ struct EvictionPolicyTests {
     }
 
     @Test func memoryBudgetRespected() {
-        defer { resetPolicyDefaults() }
         let snap = makeUniformSnapshot(offset: 100, type: .leaf)
         let snapBytes = snap.memoryBytes
         let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 3)
@@ -298,9 +287,6 @@ struct EvictionPolicyTests {
     /// pure recency. With `alpha > 0`, the F/B term saves the tall one
     /// because its FLOP savings dominate the score.
     @Test func tallMainAgentSurvivesSubagentChurn() {
-        defer { resetPolicyDefaults() }
-        EvictionPolicy.alpha = 1.0
-
         // Bytes targets are kept in the kilobyte range — only the *ratio*
         // between candidates matters because of min-max normalization.
         let mainAgent = makeNode(
@@ -322,7 +308,8 @@ struct EvictionPolicyTests {
         )
 
         let victim = EvictionPolicy.selectVictim(
-            candidates: [mainAgent, sub1, sub2, sub3]
+            candidates: [mainAgent, sub1, sub2, sub3],
+            config: EvictionConfiguration(alpha: 1.0)
         )
         #expect(victim?.node !== mainAgent)
     }
@@ -331,8 +318,7 @@ struct EvictionPolicyTests {
     /// utility scoring. All four tall-prefix snapshots survive while
     /// shorter leaf-like entries evict first.
     @Test func parallelSubagentsCoexistWithMainAgent() {
-        defer { resetPolicyDefaults() }
-        EvictionPolicy.alpha = 1.0
+        let config = EvictionConfiguration(alpha: 1.0)
 
         let main = makeNode(
             tokenOffset: 80_000, snapshotBytesTarget: 200 * 1024,
@@ -365,7 +351,9 @@ struct EvictionPolicyTests {
         ]
 
         for _ in 0..<2 {
-            guard let victim = EvictionPolicy.selectVictim(candidates: remaining)
+            guard let victim = EvictionPolicy.selectVictim(
+                candidates: remaining, config: config
+            )
             else { break }
             #expect(leaves.contains(ObjectIdentifier(victim.node)))
             remaining.removeAll { $0 === victim.node }
@@ -378,6 +366,49 @@ struct EvictionPolicyTests {
             ObjectIdentifier(s2),
             ObjectIdentifier(s3),
         ])
+    }
+
+    /// The injected **Eviction Configuration** steers eviction end-to-end
+    /// through the manager, with no process global. Two caches built over
+    /// the same two snapshots — a tall, FLOP-rich leaf last touched long
+    /// ago and a short, fresh leaf — evict opposite victims solely because
+    /// their configured `alpha` differs: `alpha = 0` is LRU and drops the
+    /// stale tall leaf, while `alpha = 2` lets that leaf's F/B savings
+    /// outweigh its staleness and drops the fresh short one instead. It is
+    /// the loaded-model gate's branch-point survival, expressed at the
+    /// constructor seam.
+    @Test func injectedConfigSteersManagerEviction() {
+        let tallPath = Array(1...200)
+        let shortPath = Array(1000...1019)
+        let snapBytes = makeUniformSnapshot(offset: 200, type: .leaf).memoryBytes
+
+        func tallSurvives(alpha: Double) -> Bool {
+            let mgr = PrefixCacheManager(
+                memoryBudgetBytes: snapBytes * 2,
+                evictionConfig: EvictionConfiguration(alpha: alpha)
+            )
+            mgr.restoreSnapshot(
+                path: tallPath,
+                snapshot: makeUniformSnapshot(offset: tallPath.count, type: .leaf),
+                partitionKey: defaultKey,
+                lastAccessTime: .now - .seconds(60)
+            )
+            mgr.restoreSnapshot(
+                path: shortPath,
+                snapshot: makeUniformSnapshot(offset: shortPath.count, type: .leaf),
+                partitionKey: defaultKey,
+                lastAccessTime: .now - .seconds(1)
+            )
+            // Tighten to one snapshot's worth so exactly one node drops.
+            mgr.memoryBudgetBytes = snapBytes
+            mgr.evictToFitBudget()
+            return mgr.lookup(tokens: tallPath, partitionKey: defaultKey).snapshot != nil
+        }
+
+        // alpha = 0 → pure recency drops the stale tall leaf.
+        #expect(tallSurvives(alpha: 0.0) == false)
+        // alpha = 2 → the tall leaf's FLOP savings keep it alive.
+        #expect(tallSurvives(alpha: 2.0) == true)
     }
 
     // MARK: - Prefix cache budget sizing

@@ -1182,9 +1182,10 @@ actor LLMActor {
     /// Lazily creates and returns the `PrefixCacheManager`. Initialization requires
     /// a MainActor hop because PrefixCacheManager is `@MainActor`.
     /// The production cache attaches an `AlphaTuner` so eviction `alpha`
-    /// adapts to the workload after the first eviction fires. Reset the
-    /// global `EvictionPolicy.alpha` when creating a fresh cache so a
-    /// previous cache's tuned value doesn't leak into the new tuner.
+    /// adapts to the workload after the first eviction fires. Each cache
+    /// owns its **Eviction Configuration**, so a fresh cache starts at the
+    /// LRU default (`alpha = 0`) and reads the model's `flopProfile` from
+    /// **Model Identity** — there is no global to reset or leak.
     ///
     /// When `ssdConfig?.enabled == true` the manager is composed over
     /// a `TieredSnapshotStore` owning an `SSDSnapshotStore`, and
@@ -1197,12 +1198,13 @@ actor LLMActor {
         let budget = defaultPrefixCacheMemoryBudgetBytes
         let ssdConfigSnapshot = self.ssdConfig
         let fingerprint = self.modelFingerprint
+        let flopProfile = self.modelIdentity?.flopProfile ?? .qwen35_4B_PARO
         let cache = await MainActor.run { () -> PrefixCacheManager in
-            EvictionPolicy.alpha = 0.0
             let tieredStore = TieredSnapshotStore(ssdConfig: ssdConfigSnapshot)
             return PrefixCacheManager(
                 memoryBudgetBytes: budget,
-                alphaTuner: AlphaTuner(),
+                evictionConfig: EvictionConfiguration(flopProfile: flopProfile),
+                alphaTuner: AlphaTuner(flopProfile: flopProfile),
                 tieredStore: tieredStore
             )
         }
@@ -1239,6 +1241,19 @@ actor LLMActor {
         await MainActor.run {
             cache.memoryBudgetBytes = bytes
             cache.evictToFitBudget()
+        }
+    }
+
+    /// Override the prefix-cache eviction weighting (`alpha`) by writing
+    /// the manager's **Eviction Configuration**. Used by the loaded-model
+    /// E2E runner to force F/B-weighted eviction for the branch-point
+    /// survival check — it replaces the retired `EvictionPolicy.alpha`
+    /// global. Production code should not call this; the `AlphaTuner` owns
+    /// `alpha` after warmup.
+    func setEvictionAlpha(_ alpha: Double) async {
+        let cache = await ensurePrefixCache()
+        await MainActor.run {
+            cache.evictionConfig.alpha = alpha
         }
     }
 
@@ -1494,9 +1509,9 @@ actor LLMActor {
             totalMemoryBytes: totalMemoryBytes,
             modelMemoryBytes: modelWeightBytes
         )
-        await MainActor.run { EvictionPolicy.modelProfile = profile }
         Log.agent.info(
-            "EvictionPolicy.modelProfile — D=\(profile.hiddenSize) "
+            "Model FLOP profile (flows into the prefix cache's Eviction "
+            + "Configuration at construction) — D=\(profile.hiddenSize) "
             + "attn=\(profile.attentionLayers) ssm=\(profile.ssmLayers) "
             + "mlp=\(profile.mlpLayers) N=\(profile.ssmStateDim)"
         )

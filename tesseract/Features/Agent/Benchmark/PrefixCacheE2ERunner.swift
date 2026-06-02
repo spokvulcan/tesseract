@@ -778,9 +778,9 @@ final class PrefixCacheE2ERunner {
         // branch-point's larger deltaL outweighs the noise leaves' newer
         // access times.
         log("\n── Step 9: Branch-point survival under pressure ──")
-        let originalAlpha = EvictionPolicy.alpha
-        EvictionPolicy.alpha = 2.0
-        defer { EvictionPolicy.alpha = originalAlpha }
+        // Force F/B-weighted eviction by configuring this cache directly
+        // — per-cache Eviction Configuration, no global to save/restore.
+        await engine.setEvictionAlpha(2.0)
 
         guard let preStats = await engine.prefixCacheStats(),
               preStats.snapshotCount > 0

@@ -369,6 +369,13 @@ final class AgentEngine {
         await llmActor.setPrefixCacheBudgetBytes(bytes)
     }
 
+    /// Override the prefix-cache eviction weighting (`alpha`). Observer
+    /// hook intended for the loaded-model E2E runner; production code
+    /// should not call this.
+    func setEvictionAlpha(_ alpha: Double) async {
+        await llmActor.setEvictionAlpha(alpha)
+    }
+
     /// Block until any pending SSD-tier writes drain and the
     /// manifest is persisted. Exposed as a standalone primitive for
     /// callers that want to observe durability without tearing down

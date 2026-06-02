@@ -14,8 +14,8 @@ import MLXLMCommon
 /// hold shared cache state and must not be scored here.
 /// FLOP/state-size constants for one transformer architecture. Pure value
 /// type — non-isolated so non-MainActor callers (e.g. `LLMActor` reading
-/// `config.json` at model load) can construct one and hand it to the
-/// `@MainActor`-isolated `EvictionPolicy.modelProfile`.
+/// `config.json` at model load) can construct one and fold it into the
+/// cache's **Eviction Configuration**.
 nonisolated struct ModelFlopProfile: Equatable, Sendable {
     let attentionLayers: Int
     let ssmLayers: Int
@@ -60,18 +60,38 @@ nonisolated struct ModelFlopProfile: Equatable, Sendable {
     )
 }
 
+/// The eviction policy's load-bearing inputs, owned per-cache by
+/// `PrefixCacheManager` instead of published as process globals.
+/// `flopProfile` is read once from **Model Identity** when the cache is
+/// built and never changes for that model; `alpha` starts at the LRU
+/// default and is adapted at runtime by the **AlphaTuner**.
+/// `EvictionPolicy`'s scorers take this by value, so every caller — and
+/// every test — crosses the same global-free seam.
+///
+/// Defaults match the retired `EvictionPolicy` statics
+/// (`.qwen35_4B_PARO`, `alpha = 0`), so eviction behavior is unchanged.
+/// See `CONTEXT.md` → Eviction tuning (**Eviction Configuration**).
+nonisolated struct EvictionConfiguration: Sendable, Equatable {
+    /// FLOP/state-size profile the `F/B` term scores against. Immutable
+    /// for the life of the cache — a model swap builds a new cache.
+    let flopProfile: ModelFlopProfile
+
+    /// FLOP weighting. `0` (the default) collapses utility to pure
+    /// recency, equivalent to LRU within the eligible set.
+    var alpha: Double
+
+    init(flopProfile: ModelFlopProfile = .qwen35_4B_PARO, alpha: Double = 0.0) {
+        self.flopProfile = flopProfile
+        self.alpha = alpha
+    }
+}
+
+/// Marconi FLOP-aware scoring as a pure-function namespace. Holds no
+/// mutable state: every scorer takes the **Eviction Configuration** by
+/// value. Stays `@MainActor` because its candidates are MainActor-isolated
+/// `RadixTreeNode`s, not because it owns any global.
 @MainActor
 enum EvictionPolicy {
-
-    /// FLOP weighting. `0` (the default) collapses utility to pure recency,
-    /// equivalent to LRU within the eligible set.
-    static var alpha: Double = 0.0
-
-    /// Active model FLOP profile. Production code (`LLMActor`) overrides
-    /// this at model-load time after parsing the loaded model's
-    /// `config.json`. The default is the Qwen3.5-4B-PARO shape and exists
-    /// only as a fallback for unit tests and unknown architectures.
-    static var modelProfile: ModelFlopProfile = .qwen35_4B_PARO
 
     // MARK: - FLOP formulas (Marconi Appendix A / reference repo `utils.py`)
 
@@ -82,14 +102,14 @@ enum EvictionPolicy {
     /// in `F_attn` does not factor cleanly into a parent-relative form.
     static func parentRelativeFlops(
         nodeOffset: Int,
-        parentOffset: Int
+        parentOffset: Int,
+        profile: ModelFlopProfile
     ) -> Double {
         let total = max(nodeOffset, 0)
         let parent = max(min(parentOffset, total), 0)
         let delta = total - parent
         guard delta > 0 else { return 0 }
 
-        let profile = modelProfile
         let D = profile.hiddenSize
         let N = profile.ssmStateDim
 
@@ -150,7 +170,8 @@ enum EvictionPolicy {
     /// clock reading across passes.
     static func computeScores(
         candidates: [RadixTreeNode],
-        now: ContinuousClock.Instant
+        now: ContinuousClock.Instant,
+        config: EvictionConfiguration
     ) -> [EvictionScore] {
         guard !candidates.isEmpty else { return [] }
 
@@ -159,7 +180,7 @@ enum EvictionPolicy {
             return 1.0 / age
         }
         let normRecencies = normalize(rawRecencies)
-        let alpha = Self.alpha
+        let alpha = config.alpha
 
         // Fast path: alpha == 0 collapses utility to pure recency. Skip the
         // FLOP work entirely — `parentRelativeFlops` runs `O(L²)` math per
@@ -177,7 +198,8 @@ enum EvictionPolicy {
             let parentOffset = node.parent?.tokenOffset ?? 0
             let deltaF = parentRelativeFlops(
                 nodeOffset: node.tokenOffset,
-                parentOffset: parentOffset
+                parentOffset: parentOffset,
+                profile: config.flopProfile
             )
             return deltaF / Double(snapshot.memoryBytes)
         }
@@ -195,11 +217,12 @@ enum EvictionPolicy {
     /// Pick the candidate with the lowest utility, or `nil` if empty.
     static func selectVictim(
         candidates: [RadixTreeNode],
-        now: ContinuousClock.Instant = .now
+        now: ContinuousClock.Instant = .now,
+        config: EvictionConfiguration
     ) -> (node: RadixTreeNode, score: EvictionScore)? {
         guard !candidates.isEmpty else { return nil }
 
-        let scores = computeScores(candidates: candidates, now: now)
+        let scores = computeScores(candidates: candidates, now: now, config: config)
 
         var lowestIdx = 0
         for i in 1..<scores.count where scores[i].utility < scores[lowestIdx].utility {
