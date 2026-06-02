@@ -15,11 +15,11 @@ struct CompletionProjectionTests {
     /// Tracer bullet: a turn that produced a tool call finishes as `.tool_calls`.
     @Test func toolCallsYieldToolCallsFinishReason() {
         var acc = GenerationAccumulator()
-        acc.ingest(.toolCall(Self.makeToolCall(name: "bash")))
+        acc.ingest(.toolCall(GenerationFixtures.toolCall(name: "bash")))
 
         let projection = CompletionProjection(
             accumulator: acc,
-            info: Self.makeInfo(generationTokenCount: 5),
+            info: GenerationFixtures.info(generationTokenCount: 5),
             maxTokens: 256,
             completionID: "chatcmpl-tracer"
         )
@@ -38,7 +38,7 @@ struct CompletionProjectionTests {
 
         let projection = CompletionProjection(
             accumulator: acc,
-            info: Self.makeInfo(generationTokenCount: 32, stopReason: .length),
+            info: GenerationFixtures.info(generationTokenCount: 32, stopReason: .length),
             maxTokens: 32,
             completionID: "chatcmpl-len"
         )
@@ -59,7 +59,7 @@ struct CompletionProjectionTests {
 
         let projection = CompletionProjection(
             accumulator: acc,
-            info: Self.makeInfo(generationTokenCount: 5),
+            info: GenerationFixtures.info(generationTokenCount: 5),
             maxTokens: 256,
             completionID: "chatcmpl-stop"
         )
@@ -81,7 +81,7 @@ struct CompletionProjectionTests {
 
         let projection = CompletionProjection(
             accumulator: acc,
-            info: Self.makeInfo(generationTokenCount: 5),
+            info: GenerationFixtures.info(generationTokenCount: 5),
             maxTokens: 256,
             completionID: "chatcmpl-empty"
         )
@@ -106,7 +106,7 @@ struct CompletionProjectionTests {
 
         let projection = CompletionProjection(
             accumulator: acc,
-            info: Self.makeInfo(generationTokenCount: 7),
+            info: GenerationFixtures.info(generationTokenCount: 7),
             maxTokens: 256,
             completionID: "chatcmpl-malformed"
         )
@@ -132,7 +132,7 @@ struct CompletionProjectionTests {
 
         let projection = CompletionProjection(
             accumulator: acc,
-            info: Self.makeInfo(generationTokenCount: 9),
+            info: GenerationFixtures.info(generationTokenCount: 9),
             maxTokens: 256,
             completionID: "chatcmpl-mixed"
         )
@@ -155,7 +155,7 @@ struct CompletionProjectionTests {
 
         let projection = CompletionProjection(
             accumulator: acc,
-            info: Self.makeInfo(generationTokenCount: 4),
+            info: GenerationFixtures.info(generationTokenCount: 4),
             maxTokens: 256,
             completionID: "chatcmpl-both"
         )
@@ -177,7 +177,7 @@ struct CompletionProjectionTests {
         opened.ingest(.thinkStart)   // thinking == ""
         opened.ingest(.text("a"))
 
-        let info = Self.makeInfo(generationTokenCount: 1)
+        let info = GenerationFixtures.info(generationTokenCount: 1)
         let p1 = CompletionProjection(accumulator: never, info: info, maxTokens: 256, completionID: "n")
         let p2 = CompletionProjection(accumulator: opened, info: info, maxTokens: 256, completionID: "o")
 
@@ -198,7 +198,7 @@ struct CompletionProjectionTests {
         var quiet = GenerationAccumulator()
         quiet.ingest(.text("done"))
 
-        let info = Self.makeInfo(generationTokenCount: 3)
+        let info = GenerationFixtures.info(generationTokenCount: 3)
         let firedP = CompletionProjection(accumulator: fired, info: info, maxTokens: 256, completionID: "f")
         let quietP = CompletionProjection(accumulator: quiet, info: info, maxTokens: 256, completionID: "q")
 
@@ -229,22 +229,66 @@ struct CompletionProjectionTests {
         #expect(projection.diagnostic.stopReason == "nil")
     }
 
-    // MARK: - Fixtures
+    // MARK: - Rendered line & severity
 
-    private static func makeToolCall(name: String) -> ToolCall {
-        ToolCall(function: .init(name: name, arguments: [:]))
+    /// The malformed-dropped case renders a `warning` line carrying the
+    /// `malformedLen=` field and the MALFORMED suffix — the exact log artifact
+    /// that drifted between the two paths in #46, now pinned at the render layer
+    /// (not just the classification).
+    @Test func diagnosticRendersMalformedLineAtWarningWithMalformedLen() {
+        var acc = GenerationAccumulator()
+        acc.ingest(.malformedToolCall(#"{"name":"bash""#))
+        let diagnostic = CompletionProjection(
+            accumulator: acc,
+            info: GenerationFixtures.info(generationTokenCount: 7),
+            maxTokens: 256,
+            completionID: "chatcmpl-render-malformed"
+        ).diagnostic
+
+        #expect(diagnostic.severity == .warning)
+        let line = diagnostic.renderedLine(label: "non-streaming")
+        #expect(line.contains("HTTP non-streaming finish_reason decision"))
+        #expect(line.contains("malformedLen=\(diagnostic.malformedLen)"))
+        #expect(line.hasSuffix("— MALFORMED TOOL CALL DROPPED"))
     }
 
-    private static func makeInfo(
-        generationTokenCount: Int,
-        stopReason: GenerateStopReason = .stop
-    ) -> AgentGeneration.Info {
-        AgentGeneration.Info(
-            promptTokenCount: 10,
-            generationTokenCount: generationTokenCount,
-            promptTime: 0.1,
-            generateTime: 0.2,
-            stopReason: stopReason
+    /// An empty `.stop` with reasoning renders the EMPTY PAYLOAD warning line.
+    @Test func diagnosticRendersEmptyPayloadLineAtWarning() {
+        var acc = GenerationAccumulator()
+        acc.ingest(.thinkStart)
+        acc.ingest(.thinking("Reasoned."))
+        acc.ingest(.thinkEnd)
+        let diagnostic = CompletionProjection(
+            accumulator: acc,
+            info: GenerationFixtures.info(generationTokenCount: 3),
+            maxTokens: 256,
+            completionID: "chatcmpl-render-empty"
+        ).diagnostic
+
+        #expect(diagnostic.severity == .warning)
+        #expect(
+            diagnostic.renderedLine(label: "streaming")
+                .hasSuffix("— EMPTY PAYLOAD WITH REASONING")
         )
+    }
+
+    /// A normal turn renders an `info` line with no classification suffix, and
+    /// the `label` distinguishes the path.
+    @Test func diagnosticRendersNormalLineAtInfoWithoutSuffix() {
+        var acc = GenerationAccumulator()
+        acc.ingest(.text("Hello"))
+        let diagnostic = CompletionProjection(
+            accumulator: acc,
+            info: GenerationFixtures.info(generationTokenCount: 5),
+            maxTokens: 256,
+            completionID: "chatcmpl-render-normal"
+        ).diagnostic
+
+        #expect(diagnostic.severity == .info)
+        let line = diagnostic.renderedLine(label: "streaming")
+        #expect(line.contains("HTTP streaming finish_reason decision"))
+        #expect(line.contains("malformedLen=0"))
+        #expect(!line.contains("MALFORMED TOOL CALL DROPPED"))
+        #expect(!line.contains("EMPTY PAYLOAD WITH REASONING"))
     }
 }

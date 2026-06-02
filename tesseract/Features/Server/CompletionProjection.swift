@@ -162,8 +162,10 @@ nonisolated struct CompletionProjection: Sendable {
 
 /// The finish-reason decision recorded for offline investigation: the
 /// classification plus the state inputs that produced it. A `Sendable, Equatable`
-/// value — the classification (the part that drifted between the two completion
-/// paths) has one tested home; emission is each path's concern via `emit`.
+/// value — the classification, the rendered line, and the severity (the parts
+/// that drifted between the two completion paths) are pure and unit-tested via
+/// `renderedLine`/`severity`; `emit` is the convenience that logs them through
+/// `Log.server` so neither path repeats the level switch.
 nonisolated struct FinishReasonDiagnostic: Sendable, Equatable {
     /// Why this finish-reason fired, and the severity the caller logs at.
     enum Classification: Sendable, Equatable {
@@ -190,11 +192,28 @@ nonisolated struct FinishReasonDiagnostic: Sendable, Equatable {
     let maxTokens: Int
     let stopReason: String
 
-    /// Emit the diagnostic via `Log.server`, picking severity from the
-    /// classification. `label` distinguishes the path (`"streaming"` /
-    /// `"non-streaming"`); the rendered line is otherwise identical, so the same
-    /// turn leaves the same fingerprint regardless of which path served it.
-    func emit(label: String) {
+    /// The log level the diagnostic is emitted at, derived purely from the
+    /// classification. Exposed so the classification→severity mapping — part of
+    /// what drifted between the two paths — is assertable without logging.
+    enum Severity: Sendable, Equatable {
+        case info
+        case warning
+    }
+
+    var severity: Severity {
+        switch classification {
+        case .normal:
+            return .info
+        case .emptyPayloadWithReasoning, .malformedToolCallDropped:
+            return .warning
+        }
+    }
+
+    /// The rendered diagnostic line. `label` distinguishes the path (`"streaming"`
+    /// / `"non-streaming"`); the line is otherwise identical, so the same turn
+    /// leaves the same fingerprint regardless of which path served it. A pure
+    /// function — the caller (or `emit`) does the logging.
+    func renderedLine(label: String) -> String {
         let base =
             "HTTP \(label) finish_reason decision — "
             + "completionID=\(completionID) "
@@ -208,11 +227,24 @@ nonisolated struct FinishReasonDiagnostic: Sendable, Equatable {
             + "stopReason=\(stopReason)"
         switch classification {
         case .normal:
-            Log.server.info("\(base)")
+            return base
         case .emptyPayloadWithReasoning:
-            Log.server.warning("\(base) — EMPTY PAYLOAD WITH REASONING")
+            return "\(base) — EMPTY PAYLOAD WITH REASONING"
         case .malformedToolCallDropped:
-            Log.server.warning("\(base) — MALFORMED TOOL CALL DROPPED")
+            return "\(base) — MALFORMED TOOL CALL DROPPED"
+        }
+    }
+
+    /// Render the line and log it via `Log.server` at the classification's
+    /// severity. A thin convenience over the pure `renderedLine`/`severity`; the
+    /// callers use this so neither completion path repeats the level switch.
+    func emit(label: String) {
+        let line = renderedLine(label: label)
+        switch severity {
+        case .info:
+            Log.server.info(line)
+        case .warning:
+            Log.server.warning(line)
         }
     }
 }

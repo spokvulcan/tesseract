@@ -459,10 +459,9 @@ struct CompletionHandler: Sendable {
         // attempted tool call instead of an empty-stop response (shared with the
         // streaming path, which additionally emits one SSE content chunk).
         if projection.malformedFallbackSurfaced {
-            Log.server.info(
-                "Surfaced dropped tool-call buffer as text content — "
-                + "completionID=\(start.completionID) "
-                + "rawLen=\(accumulator.malformedToolCallRaw.count)"
+            logSurfacedFallback(
+                completionID: start.completionID,
+                rawLen: projection.diagnostic.malformedLen
             )
         }
 
@@ -634,10 +633,9 @@ struct CompletionHandler: Sendable {
             // detect the pattern (e.g. content contains `<tool_call>`) and
             // decide how to recover.
             if projection.malformedFallbackSurfaced {
-                Log.server.info(
-                    "Surfaced dropped tool-call buffer as text content — "
-                    + "completionID=\(start.completionID) "
-                    + "rawLen=\(accumulator.malformedToolCallRaw.count)"
+                logSurfacedFallback(
+                    completionID: start.completionID,
+                    rawLen: projection.diagnostic.malformedLen
                 )
                 _ = await sse.send(makeChunk(
                     id: start.completionID,
@@ -1004,6 +1002,17 @@ struct CompletionHandler: Sendable {
         // Hand the terminal accumulator (plus completion metrics) to the caller;
         // both completion paths build one CompletionProjection from it.
         return .completed(accumulator, info)
+    }
+
+    /// Emit the shared "surfaced dropped tool-call buffer" info-log. Both
+    /// completion paths call this when `CompletionProjection.malformedFallbackSurfaced`
+    /// is set, so the line has one home; `rawLen` reads through the projection's
+    /// diagnostic rather than re-walking the raw accumulator buffer.
+    private func logSurfacedFallback(completionID: String, rawLen: Int) {
+        Log.server.info(
+            "Surfaced dropped tool-call buffer as text content — "
+            + "completionID=\(completionID) rawLen=\(rawLen)"
+        )
     }
 
     private func makeReplayAssistantMessage(
