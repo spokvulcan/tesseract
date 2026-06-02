@@ -100,9 +100,9 @@ reason), it hydrates the body from disk via the off-MainActor `loadSync` (ADR-00
 then either *promotes* the node back to a resident state on success or applies
 **Committed Ref Cleanup** on failure and downgrades to a miss. It is the home for the
 lookup-then-hydrate-if-SSD composition for **both** callers — the main prefill path and the
-canonical-leaf fallback (see **Leaf Admission Builder**), which drives resolution from inside
-its own `container.perform` exactly as the main path does, replacing the near-duplicate dance
-each previously hand-wrote. `.ssdHit` is an internal intermediate the resolution
+canonical-leaf fallback, which the **Leaf Admission Builder** reaches through an injected
+`resolveBoundary` closure-**peer** the actor wires to drive resolution inside `container.perform`
+(ADR-0001), exactly as the main path does. `.ssdHit` is an internal intermediate the resolution
 consumes and never surfaces: callers receive a resolved `LookupResult` whose reason is
 only `.hit` or a miss. Checkpoint planning is **not** part of resolution — planning runs
 *after* resolution against the settled tree, so a post-hydration-failure replan is the
@@ -211,33 +211,46 @@ configures), the planner owning lookup/hydration (resolution runs *before* the p
 feeds it a value), carrying the full token array on the plan (it lives on the handle).
 
 **Leaf Admission Builder**:
-The GPU-free routing core for storing one leaf snapshot. Today it owns the token-path
-**reusable-prefix probes**: given a stored conversation it renders the turn in isolation
-and again with one synthetic continuation appended — a user turn for the *canonical* mode
-(`.userTurn`), a tool result for the *directTool* mode (`.toolResult`) — and returns the
-shared token prefix the immediate continuation can hydrate, or `nil` when the probe
-diverges. It is tokenizer-affine (an injected `any Tokenizer`, no model), so it tests
-against a fake tokenizer with no model files. Every model-affine and live-cache step stays
-in `LLMActor`: leaf-mode selection (`selectHTTPLeafStoreMode`), boundary acquisition, the
-Metal capture, **Snapshot Admission** construction at the edge, and `admit`.
+The GPU-free routing core for storing one leaf snapshot. It owns the token-path
+**reusable-prefix probes** — given a stored conversation it renders the turn in isolation
+and again with one synthetic continuation appended (a user turn for the *canonical* mode,
+`.userTurn`; a tool result for the *directTool* mode, `.toolResult`) and returns the shared
+token prefix the immediate continuation can hydrate, or `nil` when the probe diverges — and
+emits the whole decidable routing decision as a three-case **Leaf Capture Plan**:
+`.liveCache(storedTokens:)` (the *directLeaf* mode — snapshot the live final KV cache at
+`storedTokens.count`), `.fromBoundary(boundary:storedTokens:)` (the *directTool* and
+*canonical* modes — restore a boundary snapshot, reprefill the residual
+`storedTokens[boundary.tokenOffset...]`, capture a leaf), or `.skip(reason:)`. It takes the
+selected `HTTPLeafStoreMode` as an input rather than re-deriving it (`selectHTTPLeafStoreMode`
+stays the separately-tested pure function it is today), and owns boundary acquisition and the
+offset-guard arithmetic. It acquires the boundary from the transient boundary snapshot when
+usable, else falls back through **Snapshot Resolution** on the canonical path — injected as a
+closure-**peer** `resolveBoundary: ([Int]) async -> HybridCacheSnapshot?` so the builder's own
+code stays GPU-free: the actor wires the production closure that drives `SnapshotResolution.resolve`
+inside `container.perform` (ADR-0001), while a test drives the same routing with a pure closure.
+(One production resolver, so a closure — not a one-adapter resolver protocol, which would be a
+hypothetical seam.) It is tokenizer-affine (an injected `any Tokenizer`, no model), so the whole
+routing tests against a fake tokenizer and a pure resolver with no model files.
 
-_Planned (deferred from the prefill carve, not yet built):_ promoting the builder's output
-to a three-case **Leaf Capture Plan** value — `.liveCache(storedTokens:)` (the *directLeaf*
-mode — snapshot the live final KV cache at `storedTokens.count`), `.fromBoundary(boundary:storedTokens:)`
-(the *directTool* and *canonical* modes — restore a boundary snapshot, reprefill the
-residual `storedTokens[boundary.tokenOffset...]`, capture a leaf), or `.skip(reason:)` — so
-the builder also owns mode selection and boundary acquisition (the transient boundary
-snapshot when usable, else falling back through **Snapshot Resolution** on the canonical
-path). It would emit `.skip(reason:)` only for tokenizer/resolver-decidable failures
-(tokenization failed, no common prefix, missing transient boundary, no usable resolved
-snapshot); the live-`finalCache` skips (`no-final-cache`, `no-reusable-cache-state`,
-`normalization-trim`, `unsupported-cache-type`, `invalid-path`, `capturedThenEvicted`) and
-the `intervention` guard stay actor-side. Until that lands, the *canonical* fallback
-resolves its boundary directly through **Snapshot Resolution** — the lookup-then-hydrate
-home both prefill callers share — rather than through the builder.
+`.skip(reason:)` carries a **typed** `LeafSkipReason` whose cases hold their own diagnostic
+payload (offsets, lengths), so the actor reproduces today's `logSkip` fields byte-for-byte and
+the decidable-skip vocabulary lives in one typed place rather than string literals scattered
+across capture helpers. It emits `.skip` only for tokenizer/resolver-decidable failures
+(tokenization failed, no common prefix, missing transient boundary, no usable resolved snapshot,
+the residual offset guards); the live-`finalCache` skips (`no-final-cache`, `no-reusable-cache-state`,
+`normalization-trim`, `unsupported-cache-type`, `invalid-path`, `capturedThenEvicted`) and the
+`intervention` guard stay actor-side. The actor's post-generation spine collapses to one
+exhaustive `switch` over the plan — `.liveCache` and `.fromBoundary` execute Metal (the latter
+is `captureStructuredLeafFromBoundary`, now purely the executor), `.skip` logs the mapped reason
+and breaks — so leaf-mode selection, the Metal capture, **Snapshot Admission** construction at
+the edge, and `admit` are the only leaf steps left in `LLMActor`. The probe-only predecessor's
+two capture helpers (`captureDirectToolLeaf` / `captureCanonicalTemplateLeaf`) dissolved into the
+builder.
 _Avoid_: leaf store mode as the whole story (mode is one of its inputs), the builder owning
-capture or `admit` (model-affine, actor-side), a capture port (the builder returns a
-decision; the actor executes Metal — no behaviour-less fake seam).
+capture or `admit` (model-affine, actor-side), the builder calling `loadSync` directly (it takes
+a `resolveBoundary` closure-peer; the Metal-affine hydration stays the actor's to wire), a
+capture port (the builder returns a decision; the actor executes Metal — no behaviour-less fake
+seam).
 
 > **Flagged ambiguity — "plan": prefill plan vs checkpoint plan.** The **Prefill Plan** is
 > the whole pre-prefill decision value. The *checkpoint plan* is one field inside it — the

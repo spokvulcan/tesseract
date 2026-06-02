@@ -793,31 +793,56 @@ actor LLMActor {
                             : HTTPLeafContinuationKind.toolResult.rawValue
                     ))
 
-                    if leafStoreMode == .canonicalUserLeaf {
-                        leafStoreForTuner = await Self.captureCanonicalTemplateLeaf(
-                            container: container,
-                            storedConversation: storedConversation,
-                            storedTokens: storedTokens,
-                            toolSpecs: canonicalTools,
-                            transientBoundarySnapshot: mlxStart.transientLastUserBoundarySnapshot,
-                            partitionKey: mlxStart.partitionKey,
-                            prefillStepSize: mlxStart.prefillStepSize,
-                            tokenNDim: mlxStart.tokenNDim,
-                            requestID: requestID,
-                            prefixCache: prefixCache,
-                            diagnosticsContext: diagnosticsContext,
-                            ssdEnabled: mlxStart.ssdEnabled,
-                            generateParameters: postGenerationParams
-                        )
-                        break leafBlock
+                    // Resolve the GPU-free leaf-capture plan. The reusable-prefix
+                    // probe and the canonical Snapshot Resolution fallback are
+                    // tokenizer/resolver-decidable, so they live in the **Leaf
+                    // Admission Builder**; the live final-cache capture stays
+                    // actor-side under `.liveCache` below.
+                    let transientBoundary: HybridCacheSnapshot? = switch leafStoreMode {
+                    case .directToolLeaf: mlxStart.transientLastMessageBoundarySnapshot
+                    case .canonicalUserLeaf: mlxStart.transientLastUserBoundarySnapshot
+                    case .directLeaf: nil
                     }
+                    let leafTokenizer = await container.perform { $0.tokenizer }
+                    let leafPlan = await LeafAdmissionBuilder.plan(
+                        mode: leafStoreMode,
+                        storedConversation: storedConversation,
+                        storedTokens: storedTokens,
+                        toolSpecs: canonicalTools,
+                        transientBoundary: transientBoundary,
+                        tokenizer: leafTokenizer,
+                        resolveBoundary: { tokens in
+                            // Drive Snapshot Resolution inside `container.perform`
+                            // so the SSD `loadSync` stays off-MainActor (ADR-0001).
+                            await container.perform { _ in
+                                await SnapshotResolution.resolve(
+                                    tokens: tokens,
+                                    promptTokenCount: tokens.count,
+                                    partitionKey: mlxStart.partitionKey,
+                                    modelFingerprint: mlxStart.partitionKey.modelFingerprint,
+                                    prefixCache: prefixCache,
+                                    diagnostics: diagnosticsContext
+                                ).lookup.snapshot
+                            }
+                        }
+                    )
 
-                    if leafStoreMode == .directToolLeaf {
-                        leafStoreForTuner = await Self.captureDirectToolLeaf(
+                    // The spine collapses to one exhaustive switch over the plan.
+                    // `.skip` logs the decidable reason; `.fromBoundary` runs the
+                    // shared restore→reprefill→capture executor; `.liveCache`
+                    // falls through to the directLeaf final-cache capture below.
+                    switch leafPlan {
+                    case .skip(let reason):
+                        Self.logLeafSkip(
+                            reason, mode: leafStoreMode, diagnosticsContext: diagnosticsContext
+                        )
+                        break leafBlock
+                    case .fromBoundary(let boundarySnapshot, let boundaryStoredTokens):
+                        let stages = Self.leafStages(for: leafStoreMode)
+                        leafStoreForTuner = await Self.captureStructuredLeafFromBoundary(
                             container: container,
-                            storedConversation: storedConversation,
-                            toolSpecs: canonicalTools,
-                            transientBoundarySnapshot: mlxStart.transientLastMessageBoundarySnapshot,
+                            storedTokens: boundaryStoredTokens,
+                            boundarySnapshot: boundarySnapshot,
                             partitionKey: mlxStart.partitionKey,
                             prefillStepSize: mlxStart.prefillStepSize,
                             tokenNDim: mlxStart.tokenNDim,
@@ -825,9 +850,17 @@ actor LLMActor {
                             prefixCache: prefixCache,
                             diagnosticsContext: diagnosticsContext,
                             ssdEnabled: mlxStart.ssdEnabled,
-                            generateParameters: postGenerationParams
+                            generateParameters: postGenerationParams,
+                            storeStage: stages.store,
+                            captureStage: stages.capture,
+                            admissionStage: stages.admission,
+                            captureSource: stages.source
                         )
                         break leafBlock
+                    case .liveCache:
+                        // directLeaf: the plan carries `storedTokens` unchanged;
+                        // capture from the live final cache below.
+                        break
                     }
 
                     guard !Task.isCancelled,
@@ -1942,6 +1975,70 @@ actor LLMActor {
         return .directLeaf
     }
 
+    /// The diagnostics stage labels for a `.fromBoundary` capture, by leaf-store
+    /// mode — the exact strings the dissolved `captureDirectToolLeaf` /
+    /// `captureCanonicalTemplateLeaf` helpers passed to the shared executor.
+    private nonisolated static func leafStages(
+        for mode: HTTPLeafStoreMode
+    ) -> (store: String, capture: String, admission: String, source: String) {
+        switch mode {
+        case .directToolLeaf:
+            ("directToolLeafStore", "directToolLeafCapture", "directToolLeafAdmission", "directToolLeaf")
+        case .canonicalUserLeaf:
+            ("canonicalLeafStore", "canonicalLeafCapture", "canonicalLeafAdmission", "canonicalLeaf")
+        case .directLeaf:
+            // directLeaf never yields a `.fromBoundary` plan (it captures from the
+            // live final cache); these labels exist only for switch totality.
+            ("store", "leafCapture", "leafAdmission", "leaf")
+        }
+    }
+
+    /// Reproduce today's `logSkip` call for a decidable `LeafSkipReason` the
+    /// **Leaf Admission Builder** returned. The builder concentrates the *decision*;
+    /// the wire-format stage/reason/fields stay byte-for-byte what the dissolved
+    /// capture helpers logged, so existing dashboards and the diagnostics net keep
+    /// working. The stage prefix follows the mode, exactly as those helpers did.
+    private nonisolated static func logLeafSkip(
+        _ reason: LeafSkipReason,
+        mode: HTTPLeafStoreMode,
+        diagnosticsContext: PrefixCacheDiagnostics.Context
+    ) {
+        let stage = leafStages(for: mode).store
+        switch reason {
+        case .tokenizationFailed(let error):
+            // The probe's chat-template render threw — today's helpers catch this
+            // in the same `do/catch` as the prefill, logged as `prefill-threw`.
+            diagnosticsContext.logSkip(
+                stage: stage, reason: "prefill-threw", level: .warning,
+                extraFields: [("error", error)]
+            )
+        case .probeDivergence:
+            diagnosticsContext.logSkip(stage: stage, reason: "probe-divergence-failed")
+        case .noTransientBoundary:
+            diagnosticsContext.logSkip(stage: stage, reason: "no-transient-boundary-snapshot")
+        case .noResolvedBoundary(let canonicalLen):
+            diagnosticsContext.logSkip(
+                stage: stage, reason: "no-canonical-restore-boundary",
+                extraFields: [("canonicalLen", "\(canonicalLen)")]
+            )
+        case .storedAtOrBeforeBoundary(let storedLen, let boundaryOffset):
+            diagnosticsContext.logSkip(
+                stage: stage, reason: "stored-at-or-before-boundary",
+                extraFields: [("storedLen", "\(storedLen)"), ("boundaryOffset", "\(boundaryOffset)")]
+            )
+        case .canonicalAtOrBeforeBoundary(let canonicalLen, let boundaryOffset):
+            diagnosticsContext.logSkip(
+                stage: stage, reason: "canonical-at-or-before-boundary",
+                extraFields: [("canonicalLen", "\(canonicalLen)"), ("boundaryOffset", "\(boundaryOffset)")]
+            )
+        case .canonicalLongerThanStored(let canonicalLen, let storedLen):
+            diagnosticsContext.logSkip(
+                stage: stage, reason: "canonical-longer-than-stored", level: .warning,
+                extraFields: [("canonicalLen", "\(canonicalLen)"), ("storedLen", "\(storedLen)")]
+            )
+        }
+    }
+
     /// Re-tokenize the stored conversation (prompt + generated response) and return
     /// the flat token sequence. The HTTP prefix cache uses raw prompt messages here
     /// so assistant `reasoning_content` and `tool_calls` survive template rendering.
@@ -1968,17 +2065,18 @@ actor LLMActor {
         }
     }
 
-    /// Restore the transient boundary snapshot, prefill the provided stored
-    /// token suffix, capture a `.leaf`, and store it under the given token
-    /// path. Shared by direct-tool and canonical-user leaf modes so both are
-    /// aligned to the structured template render, not the raw generated bytes.
+    /// Restore the boundary snapshot, prefill the residual stored-token suffix,
+    /// capture a `.leaf`, and admit it under the given token path. The pure
+    /// model-affine executor for a `.fromBoundary` **Leaf Capture Plan**, shared
+    /// by the direct-tool and canonical-user modes so both align to the
+    /// structured template render, not the raw generated bytes.
     ///
-    /// TriAttention-safe by construction: the `storedTokens.count > boundaryOffset`
-    /// guard below ensures the residual is non-empty, so no caller-side trim
-    /// is required. The leaf is captured at `storedTokens.count` after a clean
-    /// extension prefill, which works identically for dense and TriAttention
-    /// sparse caches because each cache type's `update(...)` extends its own
-    /// state at the absolute offset.
+    /// TriAttention-safe by construction: the **Leaf Admission Builder** only
+    /// emits `.fromBoundary` when `storedTokens.count > boundary.tokenOffset`, so
+    /// the residual is non-empty and no caller-side trim is required. The leaf is
+    /// captured at `storedTokens.count` after a clean extension prefill, which
+    /// works identically for dense and TriAttention sparse caches because each
+    /// cache type's `update(...)` extends its own state at the absolute offset.
     private static func captureStructuredLeafFromBoundary(
         container: ModelContainer,
         storedTokens: [Int],
@@ -1996,18 +2094,9 @@ actor LLMActor {
         admissionStage: String,
         captureSource: String
     ) async -> AlphaTuner.LeafStore? {
+        // The residual is guaranteed non-empty by the builder's offset guard
+        // (it only emits `.fromBoundary` when `storedTokens.count > tokenOffset`).
         let boundaryOffset = boundarySnapshot.tokenOffset
-        guard storedTokens.count > boundaryOffset else {
-            diagnosticsContext.logSkip(
-                stage: storeStage,
-                reason: "stored-at-or-before-boundary",
-                extraFields: [
-                    ("storedLen", "\(storedTokens.count)"),
-                    ("boundaryOffset", "\(boundaryOffset)"),
-                ]
-            )
-            return nil
-        }
 
         do {
             return try await container.perform { context in
@@ -2155,210 +2244,6 @@ actor LLMActor {
         } catch {
             diagnosticsContext.logSkip(
                 stage: storeStage,
-                reason: "prefill-threw",
-                level: .warning,
-                extraFields: [("error", error.localizedDescription)]
-            )
-            return nil
-        }
-    }
-
-    /// Tool-call turns are reused by the immediate tool-result continuation, so
-    /// store the direct assistant turn exactly as the structured template renders
-    /// it from the request-local boundary snapshot.
-    private static func captureDirectToolLeaf(
-        container: ModelContainer,
-        storedConversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?,
-        transientBoundarySnapshot: HybridCacheSnapshot?,
-        partitionKey: CachePartitionKey,
-        prefillStepSize: Int,
-        tokenNDim: Int,
-        requestID: UUID,
-        prefixCache: PrefixCacheManager,
-        diagnosticsContext: PrefixCacheDiagnostics.Context,
-        ssdEnabled: Bool,
-        generateParameters: GenerateParameters
-    ) async -> AlphaTuner.LeafStore? {
-        guard let boundarySnapshot = transientBoundarySnapshot else {
-            diagnosticsContext.logSkip(
-                stage: "directToolLeafStore",
-                reason: "no-transient-boundary-snapshot"
-            )
-            return nil
-        }
-
-        do {
-            guard let toolContinuationStoredTokens = try await container.perform({ context in
-                try LeafAdmissionBuilder.reusablePrefix(
-                    continuation: .toolResult,
-                    storedConversation: storedConversation,
-                    toolSpecs: toolSpecs,
-                    tokenizer: context.tokenizer
-                )
-            }) else {
-                diagnosticsContext.logSkip(
-                    stage: "directToolLeafStore",
-                    reason: "probe-divergence-failed"
-                )
-                return nil
-            }
-
-            return await Self.captureStructuredLeafFromBoundary(
-                container: container,
-                storedTokens: toolContinuationStoredTokens,
-                boundarySnapshot: boundarySnapshot,
-                partitionKey: partitionKey,
-                prefillStepSize: prefillStepSize,
-                tokenNDim: tokenNDim,
-                requestID: requestID,
-                prefixCache: prefixCache,
-                diagnosticsContext: diagnosticsContext,
-                ssdEnabled: ssdEnabled,
-                generateParameters: generateParameters,
-                storeStage: "directToolLeafStore",
-                captureStage: "directToolLeafCapture",
-                admissionStage: "directToolLeafAdmission",
-                captureSource: "directToolLeaf"
-            )
-        } catch {
-            diagnosticsContext.logSkip(
-                stage: "directToolLeafStore",
-                reason: "prefill-threw",
-                level: .warning,
-                extraFields: [("error", error.localizedDescription)]
-            )
-            return nil
-        }
-    }
-
-    /// Capture the canonical leaf for templates whose non-latest assistant turns
-    /// may differ from the just-generated latest assistant form.
-    ///
-    /// The helper restores the request-local transient boundary snapshot,
-    /// prefills only the canonical residual `[assistant_opener + response + <|im_end|>]`,
-    /// and stores the resulting `.leaf` under the token path that a future
-    /// non-latest-assistant render will actually see. The boundary snapshot
-    /// never leaves this request: it is neither stored in RAM nor persisted
-    /// to SSD.
-    ///
-    /// Returns the alpha-tuner `LeafStore` metadata only when the canonical
-    /// leaf survived admission. All failure paths are logged and return `nil`.
-    private static func captureCanonicalTemplateLeaf(
-        container: ModelContainer,
-        storedConversation: HTTPPrefixCacheConversation,
-        storedTokens: [Int],
-        toolSpecs: [ToolSpec]?,
-        transientBoundarySnapshot: HybridCacheSnapshot?,
-        partitionKey: CachePartitionKey,
-        prefillStepSize: Int,
-        tokenNDim: Int,
-        requestID: UUID,
-        prefixCache: PrefixCacheManager,
-        diagnosticsContext: PrefixCacheDiagnostics.Context,
-        ssdEnabled: Bool,
-        generateParameters: GenerateParameters
-    ) async -> AlphaTuner.LeafStore? {
-        do {
-            guard let canonicalStoredTokens = try await container.perform({ context in
-                try LeafAdmissionBuilder.reusablePrefix(
-                    continuation: .userTurn,
-                    storedConversation: storedConversation,
-                    toolSpecs: toolSpecs,
-                    tokenizer: context.tokenizer
-                )
-            }) else {
-                diagnosticsContext.logSkip(
-                    stage: "canonicalLeafStore",
-                    reason: "probe-divergence-failed"
-                )
-                return nil
-            }
-
-            let boundarySnapshot: HybridCacheSnapshot?
-            if let transientBoundarySnapshot,
-               transientBoundarySnapshot.tokenOffset < canonicalStoredTokens.count {
-                boundarySnapshot = transientBoundarySnapshot
-            } else {
-                // No in-request transient boundary: resolve the canonical path's
-                // snapshot through Snapshot Resolution — the same lookup-then-
-                // hydrate-if-SSD home the main prefill path uses. Driven from
-                // inside `container.perform` so the `loadSync` disk read stays
-                // off-MainActor (ADR-0001), exactly as the main caller does.
-                let resolved = await container.perform { _ in
-                    await SnapshotResolution.resolve(
-                        tokens: canonicalStoredTokens,
-                        promptTokenCount: canonicalStoredTokens.count,
-                        partitionKey: partitionKey,
-                        modelFingerprint: partitionKey.modelFingerprint,
-                        prefixCache: prefixCache,
-                        diagnostics: diagnosticsContext
-                    )
-                }
-                if let snapshot = resolved.lookup.snapshot,
-                   snapshot.tokenOffset > 0,
-                   snapshot.tokenOffset < canonicalStoredTokens.count {
-                    boundarySnapshot = snapshot
-                } else {
-                    boundarySnapshot = nil
-                }
-            }
-
-            guard let boundarySnapshot else {
-                diagnosticsContext.logSkip(
-                    stage: "canonicalLeafStore",
-                    reason: "no-canonical-restore-boundary",
-                    extraFields: [("canonicalLen", "\(canonicalStoredTokens.count)")]
-                )
-                return nil
-            }
-            let boundaryOffset = boundarySnapshot.tokenOffset
-
-            guard canonicalStoredTokens.count > boundaryOffset else {
-                diagnosticsContext.logSkip(
-                    stage: "canonicalLeafStore",
-                    reason: "canonical-at-or-before-boundary",
-                    extraFields: [
-                        ("canonicalLen", "\(canonicalStoredTokens.count)"),
-                        ("boundaryOffset", "\(boundaryOffset)"),
-                    ]
-                )
-                return nil
-            }
-
-            guard canonicalStoredTokens.count <= storedTokens.count else {
-                diagnosticsContext.logSkip(
-                    stage: "canonicalLeafStore",
-                    reason: "canonical-longer-than-stored",
-                    level: .warning,
-                    extraFields: [
-                        ("canonicalLen", "\(canonicalStoredTokens.count)"),
-                        ("storedLen", "\(storedTokens.count)"),
-                    ]
-                )
-                return nil
-            }
-
-            return await Self.captureStructuredLeafFromBoundary(
-                container: container,
-                storedTokens: canonicalStoredTokens,
-                boundarySnapshot: boundarySnapshot,
-                partitionKey: partitionKey,
-                prefillStepSize: prefillStepSize,
-                tokenNDim: tokenNDim,
-                requestID: requestID,
-                prefixCache: prefixCache,
-                diagnosticsContext: diagnosticsContext,
-                ssdEnabled: ssdEnabled,
-                generateParameters: generateParameters,
-                storeStage: "canonicalLeafStore",
-                captureStage: "canonicalLeafCapture",
-                admissionStage: "canonicalLeafAdmission",
-                captureSource: "canonicalLeaf"
-            )
-        } catch {
-            diagnosticsContext.logSkip(
-                stage: "canonicalLeafStore",
                 reason: "prefill-threw",
                 level: .warning,
                 extraFields: [("error", error.localizedDescription)]
