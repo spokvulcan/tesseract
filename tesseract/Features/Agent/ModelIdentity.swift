@@ -86,13 +86,11 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         return json
     }
 
-    /// Qwen3.5 requires `.xmlFunction`; everything else defers to the vendor's
-    /// `model_type` inference (`nil` ⇒ JSON default).
+    /// Defers to the vendor's `model_type` inference, which already maps the
+    /// Qwen3.5 family to `.xmlFunction`. A `nil` `model_type` ⇒ `nil` (no
+    /// override — use the vendor JSON default).
     private static func interpretToolCallFormat(modelType: String?) -> ToolCallFormat? {
         guard let modelType else { return nil }
-        if modelType.hasPrefix("qwen3_5") {
-            return .xmlFunction
-        }
         return ToolCallFormat.infer(from: modelType)
     }
 

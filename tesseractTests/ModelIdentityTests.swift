@@ -79,14 +79,17 @@ struct ModelIdentityTests {
         #expect(profile != .qwen35_4B_PARO)
     }
 
-    /// LLM-only checkpoints keep the fields at the top level; a 4B-shaped config
-    /// matches the `.qwen35_4B_PARO` fallback shape.
+    /// LLM-only checkpoints keep the fields at the top level; the same 9B shape
+    /// as the nested case (now top-level) yields a profile distinct from the 4B
+    /// fallback — proving the top-level fields are actually read, not silently
+    /// falling through to `.qwen35_4B_PARO`. (A 4B-shaped fixture would parse
+    /// byte-identical to the fallback and pass even if the read path broke.)
     @Test func flopProfileReadsTopLevelFields() throws {
         let dir = try makeModelDir(config: #"""
         {
           "model_type": "qwen3_5",
           "num_hidden_layers": 32,
-          "hidden_size": 2560,
+          "hidden_size": 4096,
           "linear_num_value_heads": 32,
           "linear_key_head_dim": 128,
           "full_attention_interval": 4
@@ -94,7 +97,13 @@ struct ModelIdentityTests {
         """#)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        #expect(ModelIdentity(directory: dir).flopProfile == .qwen35_4B_PARO)
+        let profile = ModelIdentity(directory: dir).flopProfile
+        #expect(profile.hiddenSize == 4096)
+        #expect(profile.attentionLayers == 8)
+        #expect(profile.ssmLayers == 24)
+        #expect(profile.mlpLayers == 32)
+        #expect(profile.ssmStateDim == 32 * 128)
+        #expect(profile != .qwen35_4B_PARO)
     }
 
     /// An unknown `model_type` falls back to `.qwen35_4B_PARO` — the field is

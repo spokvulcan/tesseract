@@ -842,10 +842,13 @@ stays in `ParoQuantLoader`, a container-load concern, not a capability fact. The
 **fingerprint** (`ModelFingerprint`) is also separate: it throws, and it is
 identity-*for-cache-invalidation*, not capability.
 
-Model Identity is installed as load-time actor state through the existing
-`installLoadTimeState` single-site (beside the fingerprint, SSD config, and TriAttention
-selection) and cleared on unload — visible to every `loadModel` gate and to `verifyAndStore`
-from one place, and populated even on a failed container load. The flop profile is still
+Model Identity is computed once at the top of `loadModel` and threaded as a **local** — through
+every gate and into `verifyAndStore` as a parameter — so all reads come from that one value
+rather than a re-parse. The same value is also installed as load-time actor state through the
+existing `installLoadTimeState` single-site (beside the fingerprint, SSD config, and TriAttention
+selection), populated even on a failed container load and cleared on unload; that installed
+snapshot is the load/unload lifecycle the unit suite pins across the actor boundary (via
+`currentModelIdentityForTesting`), not a second source the gates read from. The flop profile is still
 published into the `@MainActor EvictionPolicy.modelProfile` knob at load; retiring that
 mutable static (with its sibling `alpha`) in favour of injected eviction configuration is a
 **separate** deepening, not part of naming the identity.
