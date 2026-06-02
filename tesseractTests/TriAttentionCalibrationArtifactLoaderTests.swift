@@ -135,7 +135,7 @@ struct TriAttentionCalibrationArtifactLoaderTests {
     // Same scenarios exercised for both PARO (`z-lab/Qwen3.5-*-PARO`) and
     // non-PARO MLX-native Qwen3.5 MoE (`unsloth/Qwen3.6-35B-A3B-UD-MLX-*`) —
     // both are TriAttention-eligible under the decoupled gate in
-    // `LLMActor.isTriAttentionEligibleModel`. The shared assertions ensure
+    // `ModelIdentity.isTriAttentionEligible`. The shared assertions ensure
     // the actor computes a fingerprint, performs the lookup, and wires
     // identity/fallback into the runtime selection for both quant formats.
 

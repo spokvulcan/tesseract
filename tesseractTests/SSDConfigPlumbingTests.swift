@@ -273,6 +273,10 @@ struct SSDConfigPlumbingTests {
         #expect(unwrappedConfig.budgetBytes == 7 * 1024 * 1024 * 1024)
         #expect(installedFingerprint != nil)
         #expect(installedFingerprint?.count == 64)
+
+        // Model identity rides the same single install site and is populated
+        // even though the container load failed.
+        #expect(await engine.llmActor.currentModelIdentityForTesting != nil)
     }
 
     @Test
@@ -323,12 +327,14 @@ struct SSDConfigPlumbingTests {
         // Sanity: state was installed.
         #expect(await engine.llmActor.currentSSDConfigForTesting != nil)
         #expect(await engine.llmActor.currentModelFingerprintForTesting != nil)
+        #expect(await engine.llmActor.currentModelIdentityForTesting != nil)
 
         engine.unloadModel()
         await engine.awaitPendingUnload()
 
         #expect(await engine.llmActor.currentSSDConfigForTesting == nil)
         #expect(await engine.llmActor.currentModelFingerprintForTesting == nil)
+        #expect(await engine.llmActor.currentModelIdentityForTesting == nil)
     }
 
     // MARK: - CachePartitionKey fingerprint folding

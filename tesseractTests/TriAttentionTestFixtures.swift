@@ -5,8 +5,8 @@ import Foundation
 /// Shared directory helpers for TriAttention test files. Every TriAttention
 /// test needs a scratch workspace and, for the actor-load tests, a config.json
 /// that passes `ModelFingerprint.computeFingerprint` and either
-/// `isParoQuantModel` (PARO path) or `isTriAttentionEligibleModel` (non-PARO
-/// Qwen3.5 family path) before the real container load fails.
+/// `isParoQuantModel` (PARO path) or `ModelIdentity.isTriAttentionEligible`
+/// (non-PARO Qwen3.5 family path) before the real container load fails.
 enum TriAttentionTestFixtures {
 
     /// Shape of the fake model directory to produce.
@@ -15,13 +15,13 @@ enum TriAttentionTestFixtures {
         /// "unknown checkpoint" fallback.
         case empty
         /// PARO-quantized Qwen3.5 (e.g. `z-lab/Qwen3.5-*-PARO`). Passes
-        /// `isParoQuantModel` and `isTriAttentionEligibleModel`.
+        /// `isParoQuantModel` and is `ModelIdentity.isTriAttentionEligible`.
         case paro
         /// Qwen3.5-family MoE with standard MLX-native affine quantization
         /// (e.g. `unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit`). Does NOT pass
-        /// `isParoQuantModel`, and no longer passes
-        /// `isTriAttentionEligibleModel` after the MoE gate — still needed
-        /// to exercise the dense-gate fallback path.
+        /// `isParoQuantModel`, but is `ModelIdentity.isTriAttentionEligible`
+        /// (the whole Qwen3.5 family is eligible) — exercises the non-PARO
+        /// eligible path.
         case qwen35MoeMlxNative
     }
 

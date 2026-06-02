@@ -214,36 +214,38 @@ struct TriAttentionRuntimeSelectionTests {
         }
     }
 
-    // MARK: - Eligibility gate (static API)
+    // MARK: - Eligibility gate (via Model Identity)
     //
     // Pins the decision that drives `TriAttentionRuntimeSelection.resolve`.
     // Both dense and MoE Qwen3.5-family checkpoints are eligible by config
-    // shape; `isQwen35MoEModel` remains a separate discriminator for any
+    // shape; `ModelIdentity.isMoE` remains a separate discriminator for any
     // MoE-specific runtime specialization downstream of the gate.
 
     @Test
-    func isTriAttentionEligibleModelReturnsTrueForMoE() throws {
+    func modelIdentityIsTriAttentionEligibleForMoE() throws {
         let modelDir = try TriAttentionTestFixtures.makeFakeModelDirectory(
             prefix: "triattention-eligibility-moe",
             kind: .qwen35MoeMlxNative
         )
         defer { try? FileManager.default.removeItem(at: modelDir) }
 
-        #expect(LLMActor.isQwen35Model(directory: modelDir) == true)
-        #expect(LLMActor.isQwen35MoEModel(directory: modelDir) == true)
-        #expect(LLMActor.isTriAttentionEligibleModel(directory: modelDir) == true)
+        let identity = ModelIdentity(directory: modelDir)
+        #expect(identity.isQwen35 == true)
+        #expect(identity.isMoE == true)
+        #expect(identity.isTriAttentionEligible == true)
     }
 
     @Test
-    func isTriAttentionEligibleModelReturnsTrueForParoDense() throws {
+    func modelIdentityIsTriAttentionEligibleForParoDense() throws {
         let modelDir = try TriAttentionTestFixtures.makeFakeModelDirectory(
             prefix: "triattention-eligibility-paro",
             kind: .paro
         )
         defer { try? FileManager.default.removeItem(at: modelDir) }
 
-        #expect(LLMActor.isQwen35Model(directory: modelDir) == true)
-        #expect(LLMActor.isQwen35MoEModel(directory: modelDir) == false)
-        #expect(LLMActor.isTriAttentionEligibleModel(directory: modelDir) == true)
+        let identity = ModelIdentity(directory: modelDir)
+        #expect(identity.isQwen35 == true)
+        #expect(identity.isMoE == false)
+        #expect(identity.isTriAttentionEligible == true)
     }
 }

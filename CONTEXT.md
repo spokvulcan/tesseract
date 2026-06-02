@@ -818,6 +818,71 @@ prefix-cache concept).
 > unrelated to Swift's `guard` statement (which is, confusingly, how its `isCurrent` check is
 > written at call sites). When ambiguous, say "operation guard".
 
+### Model loading
+
+**Model Identity**:
+The value computed **once** from a model directory at load that answers "what model is this,
+and what does that imply downstream." A `nonisolated Sendable Equatable` value with a
+**total, non-throwing** `init(directory:)` that reads `config.json` and `chat_template.jinja`
+exactly once — replacing the loose `LLMActor` statics (`detectToolCallFormat`,
+`isQwen35Model`, `isQwen35MoEModel`, `isTriAttentionEligibleModel`, `detectModelFlopProfile`,
+`detectPromptStartsThinking`) that each re-read the directory at their own call site (four
+`config.json` parses per load today). It carries: `toolCallFormat` (optional — `nil` means
+"no override, use the vendor JSON default"), `isQwen35` and `isMoE` (the `model_type`
+family/variant facts), `promptStartsThinking` (from the generation-prompt block of the chat
+template), and `flopProfile`. `isTriAttentionEligible` is a **computed view** of `isQwen35` —
+eligibility is architecture-coupled to Qwen3.5 today, but the property names the *caller's
+intent* so it can diverge from the raw family check later.
+
+`flopProfile` is **total**: a non-Qwen3.5 or unparseable config yields the `.qwen35_4B_PARO`
+fallback, not `nil`, so the single consumer (`EvictionPolicy`) never handles an absent
+profile and the `?? .qwen35_4B_PARO` that used to sit at the call site has one home (the
+identity's construction). Quant-format routing (`isParoQuantModel`) is **not** identity — it
+stays in `ParoQuantLoader`, a container-load concern, not a capability fact. The weight
+**fingerprint** (`ModelFingerprint`) is also separate: it throws, and it is
+identity-*for-cache-invalidation*, not capability.
+
+Model Identity is installed as load-time actor state through the existing
+`installLoadTimeState` single-site (beside the fingerprint, SSD config, and TriAttention
+selection) and cleared on unload — visible to every `loadModel` gate and to `verifyAndStore`
+from one place, and populated even on a failed container load. The flop profile is still
+published into the `@MainActor EvictionPolicy.modelProfile` knob at load; retiring that
+mutable static (with its sibling `alpha`) in favour of injected eviction configuration is a
+**separate** deepening, not part of naming the identity.
+
+The public interface is `init(directory:)` — the directory is the seam (production model
+dirs and test fixture dirs are its two real inhabitants, so there is no filesystem *port*:
+a lone production adapter would be a hypothetical seam). No-disk interpretation tests use an
+**internal `init(configJSON:chatTemplate:)`** the directory init delegates to — an *internal*
+seam for the test surface, reached via `@testable` and kept off the directory-based interface
+(`@testable` cannot see a `private` init, so the seam is `internal`, not `private`). Two alternatives were
+designed and **deferred**: a `ModelFamilyDescriptor` registry (open-for-extension, but
+speculative generality while only the Qwen3.5 family exists — revisit when a second family
+lands), and a `LoadTimeState` bundle subsuming the fingerprint/SSD/TriAttention selection
+that would also own the `EvictionPolicy` publish (the natural home for retiring the global —
+a separate follow-up).
+_Avoid_: ModelProfile (collides with the `ModelFlopProfile` it contains), model config /
+the `config.json` dict (one of its two sources), ModelFingerprint (separate, throwing),
+model capabilities as a runtime grab-bag (it is the *load-time, directory-derived* facts
+only — never lease/timeout/lifecycle state).
+
+> **Flagged ambiguity — "profile".** **Model Identity** is the directory-derived capability
+> value; `ModelFlopProfile` is the eviction cost model it carries in its `flopProfile` field.
+> When unqualified, say "model identity" vs "flop profile".
+
+**Example dialogue:**
+
+> **Dev:** Why is `flopProfile` non-optional when `detectModelFlopProfile` returned `nil` for
+> non-Qwen3.5 models?
+> **Expert:** Because the only consumer is `EvictionPolicy`, and it always needs *some*
+> architecture to score with — the old call site just wrote `?? .qwen35_4B_PARO` right there.
+> Making the field total moves that fallback into the identity's construction, so the default
+> lives once and eviction never branches on a missing profile.
+> **Dev:** A non-Qwen model reporting a Qwen flop shape isn't wrong?
+> **Expert:** It matches today's behaviour, and `alpha` defaults to `0` so the flop term is
+> usually skipped. The identity is honest that eviction has one cost model; it does not
+> pretend to know a bespoke profile it can't parse.
+
 ## Why
 
 _TODO: the constraints that shape the system (fully offline, on-device MLX,
