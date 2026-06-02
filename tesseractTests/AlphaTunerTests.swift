@@ -198,8 +198,7 @@ struct AlphaTunerTests {
         )
 
         #expect(tuner.phase == .tuned)
-        #expect(tunedAlpha != nil)
-        #expect(AlphaTuner.alphaCandidates.contains(tunedAlpha ?? -1))
+        #expect(tunedAlpha.map { AlphaTuner.alphaCandidates.contains($0) } == true)
     }
 
     /// `alphaCandidates` covers `[0.0, 0.1, ..., 2.0]` evenly.
@@ -222,28 +221,69 @@ struct AlphaTunerTests {
         let tuner = AlphaTuner()
         tuner.notifyFirstEviction(startingInventory: [])
 
+        // The grid search fires exactly once, on the record that fills the
+        // bootstrap window; every earlier call returns nil.
         var tunedAlpha: Double?
         for i in 0..<tuner.bootstrapTarget {
-            if let result = tuner.recordRequest(makeLeafOnlyRecord(
+            tunedAlpha = tuner.recordRequest(makeLeafOnlyRecord(
                 promptTokens: [i, i + 1],
                 storedTokens: [i, i + 1, i + 2]
-            )) {
-                tunedAlpha = result
-            }
+            ))
         }
         #expect(tuner.phase == .tuned)
-        #expect(tunedAlpha != nil)
-        #expect(AlphaTuner.alphaCandidates.contains(tunedAlpha ?? -1))
+        #expect(tunedAlpha.map { AlphaTuner.alphaCandidates.contains($0) } == true)
     }
 
     /// A freshly constructed prefix cache starts at the LRU default
-    /// (`alpha = 0`, `.qwen35_4B_PARO` profile). Because each cache owns
+    /// (`alpha = 0`, `ModelFlopProfile.fallback`). Because each cache owns
     /// its **Eviction Configuration**, there is no process global for a
     /// previous cache's tuned `alpha` to leak through.
     @Test func freshPrefixCacheStartsAtLRUDefault() {
         let mgr = PrefixCacheManager(memoryBudgetBytes: 1024)
         #expect(mgr.evictionConfig.alpha == 0.0)
-        #expect(mgr.evictionConfig.flopProfile == .qwen35_4B_PARO)
+        #expect(mgr.evictionConfig.flopProfile == .fallback)
+    }
+
+    /// `ensurePrefixCache` folds the model's `flopProfile` into the cache's
+    /// **Eviction Configuration**. Before a model loads there is no identity,
+    /// so the cache gets the shared `ModelFlopProfile.fallback` and the LRU
+    /// default `alpha`. Drives the real actor construction path, not a
+    /// hand-built manager.
+    @Test func ensurePrefixCacheUsesFallbackProfileBeforeLoad() async {
+        let actor = LLMActor()
+        // setPrefixCacheBudgetBytes builds the cache through ensurePrefixCache.
+        await actor.setPrefixCacheBudgetBytes(4096)
+        let config = await actor.currentEvictionConfigForTesting()
+        #expect(config?.flopProfile == .fallback)
+        #expect(config?.alpha == 0.0)
+    }
+
+    /// Once an identity is installed, the cache `ensurePrefixCache` builds
+    /// scores against *that* model's `flopProfile`, not the fallback — the
+    /// wiring this change adds. Without this assertion a regression that
+    /// ignored the identity (always using the fallback, or wiring the budget
+    /// in place of the profile) would compile and ship green.
+    @Test func ensurePrefixCacheSourcesProfileFromModelIdentity() async {
+        // A Qwen3.5 config whose dimensions differ from the PARO fallback.
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5",
+                "num_hidden_layers": 64,
+                "hidden_size": 5120,
+                "linear_num_value_heads": 16,
+                "linear_key_head_dim": 128,
+                "full_attention_interval": 4,
+            ],
+            chatTemplate: nil
+        )
+        #expect(identity.flopProfile != .fallback)  // sanity: distinct profile
+
+        let actor = LLMActor()
+        await actor.setModelIdentityForTesting(identity)
+        await actor.setPrefixCacheBudgetBytes(4096)
+
+        let config = await actor.currentEvictionConfigForTesting()
+        #expect(config?.flopProfile == identity.flopProfile)
     }
 
     // MARK: - 5. recordRequest no-op after .tuned
@@ -646,12 +686,10 @@ struct AlphaTunerTests {
         var tunedAlpha: Double?
         for i in 0..<tuner.bootstrapTarget {
             let unique = 100_000 + i * 7
-            if let result = tuner.recordRequest(makeLeafOnlyRecord(
+            tunedAlpha = tuner.recordRequest(makeLeafOnlyRecord(
                 promptTokens: [unique],
                 storedTokens: [unique, unique + 1]
-            )) {
-                tunedAlpha = result
-            }
+            ))
         }
         #expect(tuner.phase == .tuned)
         // All candidates tie at zero, so the strict `>` comparison keeps

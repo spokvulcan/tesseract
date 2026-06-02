@@ -475,7 +475,7 @@ final class TokenRadixTree {
     func makeTopologySnapshot(
         partition: CachePartitionKey,
         now: ContinuousClock.Instant = .now,
-        config: EvictionConfiguration = EvictionConfiguration()
+        config: EvictionConfiguration
     ) -> PromptCacheTreeSnapshot {
         var nodes: [PromptCacheTreeNodeSnapshot] = []
         var edges: [PromptCacheTreeEdgeSnapshot] = []

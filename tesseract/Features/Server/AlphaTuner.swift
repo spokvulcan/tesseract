@@ -114,7 +114,7 @@ final class AlphaTuner {
 
     var bootstrapWindowCount: Int { bootstrapWindow.count }
 
-    init(flopProfile: ModelFlopProfile = .qwen35_4B_PARO) {
+    init(flopProfile: ModelFlopProfile = .fallback) {
         self.flopProfile = flopProfile
     }
 

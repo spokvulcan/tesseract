@@ -58,6 +58,14 @@ nonisolated struct ModelFlopProfile: Equatable, Sendable {
         linearKeyHeadDim: 128,
         fullAttentionInterval: 4
     )
+
+    /// The profile assumed when the model architecture is unknown — no model
+    /// loaded yet, or a config that can't be parsed. The **single home** for
+    /// the "unknown ⇒ Qwen3.5-4B-PARO" default: `ModelIdentity`'s parse
+    /// fallback, the `EvictionConfiguration` and `AlphaTuner` construct-time
+    /// defaults, and `LLMActor`'s pre-load cache all resolve here, so a change
+    /// of assumed-default model lands in exactly one place.
+    static let fallback = qwen35_4B_PARO
 }
 
 /// The eviction policy's load-bearing inputs, owned per-cache by
@@ -69,9 +77,9 @@ nonisolated struct ModelFlopProfile: Equatable, Sendable {
 /// every test — crosses the same global-free seam.
 ///
 /// Defaults match the retired `EvictionPolicy` statics
-/// (`.qwen35_4B_PARO`, `alpha = 0`), so eviction behavior is unchanged.
-/// See `CONTEXT.md` → Eviction tuning (**Eviction Configuration**).
-nonisolated struct EvictionConfiguration: Sendable, Equatable {
+/// (`ModelFlopProfile.fallback`, `alpha = 0`), so eviction behavior is
+/// unchanged. See `CONTEXT.md` → Eviction tuning (**Eviction Configuration**).
+nonisolated struct EvictionConfiguration: Sendable {
     /// FLOP/state-size profile the `F/B` term scores against. Immutable
     /// for the life of the cache — a model swap builds a new cache.
     let flopProfile: ModelFlopProfile
@@ -80,7 +88,7 @@ nonisolated struct EvictionConfiguration: Sendable, Equatable {
     /// recency, equivalent to LRU within the eligible set.
     var alpha: Double
 
-    init(flopProfile: ModelFlopProfile = .qwen35_4B_PARO, alpha: Double = 0.0) {
+    init(flopProfile: ModelFlopProfile = .fallback, alpha: Double = 0.0) {
         self.flopProfile = flopProfile
         self.alpha = alpha
     }

@@ -834,10 +834,11 @@ template), and `flopProfile`. `isTriAttentionEligible` is a **computed view** of
 eligibility is architecture-coupled to Qwen3.5 today, but the property names the *caller's
 intent* so it can diverge from the raw family check later.
 
-`flopProfile` is **total**: a non-Qwen3.5 or unparseable config yields the `.qwen35_4B_PARO`
-fallback, not `nil`, so the single consumer (`EvictionPolicy`) never handles an absent
-profile and the `?? .qwen35_4B_PARO` that used to sit at the call site has one home (the
-identity's construction). Quant-format routing (`isParoQuantModel`) is **not** identity — it
+`flopProfile` is **total**: a non-Qwen3.5 or unparseable config yields `ModelFlopProfile.fallback`,
+not `nil`, so the single consumer (`EvictionPolicy`) never handles an absent profile. That
+`.fallback` is the **one home** for the "unknown ⇒ Qwen3.5-4B-PARO" default — the identity's
+parse path and `LLMActor`'s pre-load cache both resolve to it, so the `?? .qwen35_4B_PARO`
+literals that used to sit at call sites are gone. Quant-format routing (`isParoQuantModel`) is **not** identity — it
 stays in `ParoQuantLoader`, a container-load concern, not a capability fact. The weight
 **fingerprint** (`ModelFingerprint`) is also separate: it throws, and it is
 identity-*for-cache-invalidation*, not capability.
@@ -899,8 +900,8 @@ home replacing the two `@MainActor` statics that used to sit on `EvictionPolicy`
 and `var alpha: Double`, owned by `PrefixCacheManager` as its **one mutable cell**
 (`var evictionConfig`). `flopProfile` is set once when the cache is built, read straight from
 **Model Identity**'s `flopProfile` in `ensurePrefixCache` (no separate publish — the redundant
-`EvictionPolicy.modelProfile = identity.flopProfile` at load is gone), falling back to
-`.qwen35_4B_PARO` before a model loads, the same default the static carried. `alpha` starts at
+`EvictionPolicy.modelProfile = identity.flopProfile` at load is gone), falling back to the
+shared `ModelFlopProfile.fallback` before a model loads (equal to the value the static carried). `alpha` starts at
 `0` (LRU within the eligible set) and is adapted at runtime by the **AlphaTuner**. The
 configuration dies with the cache on unload — no separate clear.
 
