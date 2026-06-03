@@ -121,6 +121,15 @@ nonisolated struct AssistantMessage: AgentMessageProtocol, Codable, Equatable, I
             toolCalls: toolCalls.isEmpty ? nil : toolCalls
         )
     }
+
+    /// Carries something worth committing: visible text, thinking, or tool
+    /// calls. Empty turns (model errors before any tokens, cancel paths) are
+    /// dropped rather than polluting history with blank assistant messages.
+    /// The single definition both `runLoop` (on persist) and the **Agent State
+    /// Reducer** (on `messageEnd` commit) fold against.
+    var hasContent: Bool {
+        !content.isEmpty || (thinking?.isEmpty == false) || !toolCalls.isEmpty
+    }
 }
 
 // MARK: - ToolResultMessage

@@ -255,12 +255,11 @@ final class AgentCoordinator {
 
         let contextWindow = self.contextWindow
         agentRun.runUnderLease { [agent] in
-            agent.forceCompact(
+            await agent.forceCompact(
                 contextManager: contextManager,
                 contextWindow: contextWindow,
                 summarize: summarize
             )
-            await agent.waitForIdle()
         }
     }
 
@@ -435,10 +434,6 @@ final class AgentCoordinator {
                     Log.agent.info("Extension transform applied: \(name)")
                 }
                 rebuildTranscript()
-            }
-            // Reset isGenerating for standalone compaction (not part of an agent loop)
-            if case .compaction = reason, agent.state.phase == .idle {
-                agentRun.markStandaloneCompactionFinished()
             }
 
         case .messageUpdate:

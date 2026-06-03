@@ -119,8 +119,7 @@ struct AgentRunControllerTests {
         )
 
         run.runUnderLease { [agent] in
-            agent.forceCompact(contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
-            await agent.waitForIdle()
+            await agent.forceCompact(contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
         }
 
         #expect(run.isGenerating == true)   // eager, synchronous
@@ -134,7 +133,9 @@ struct AgentRunControllerTests {
 
     /// Without an arbiter, `runUnderLease` drives the body directly (no lease) —
     /// so `summarize` still runs. Locks the back-compat branch so a future
-    /// refactor cannot silently require an arbiter.
+    /// refactor cannot silently require an arbiter. Also re-pins the standalone
+    /// `/compact` busy-flag clearing to **body completion** (no event gate): once
+    /// the awaited `forceCompact` finishes, `isGenerating` drops to `false`.
     /// (Absorbs `compactCommandFallsBackToDirectPathWhenArbiterMissing`.)
     @Test func runUnderLeaseFallsBackToDirectBodyWhenArbiterMissing() async throws {
         let agent = makeAgent()
@@ -154,8 +155,7 @@ struct AgentRunControllerTests {
         )
 
         run.runUnderLease { [agent] in
-            agent.forceCompact(contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
-            await agent.waitForIdle()
+            await agent.forceCompact(contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
         }
 
         let deadline = ContinuousClock.now + .seconds(3)
@@ -167,6 +167,11 @@ struct AgentRunControllerTests {
             }
         }
         #expect(await recorder.callCount >= 1)
+
+        // The completion-based clear: `/compact` owns its busy-flag lifecycle by
+        // finishing under the lease, not via a `phase == .idle` event gate.
+        try await waitUntilIdle(run)
+        #expect(run.isGenerating == false)
     }
 
     // MARK: - send
