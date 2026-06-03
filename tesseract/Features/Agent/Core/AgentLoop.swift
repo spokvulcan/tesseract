@@ -146,11 +146,7 @@ private func runLoop(
             // Only persist the assistant message if it has actual content.
             // Zero-output failures (model errors before any tokens) should not
             // pollute conversation history with blank turns.
-            let hasContent = !assistantMessage.content.isEmpty
-                || (assistantMessage.thinking?.isEmpty == false)
-                || !assistantMessage.toolCalls.isEmpty
-
-            if hasContent {
+            if assistantMessage.hasContent {
                 context.messages.append(assistantMessage)
                 allNewMessages.append(assistantMessage)
             }

@@ -62,12 +62,10 @@ enum AgentStateReducer {
             // pi-mono: clear the progressive stream on commit.
             state.streamMessage = nil
             // Commit on message_end; drop empty assistant turns from cancel/error
-            // paths (the `hasContent` guard).
+            // paths (`AssistantMessage.hasContent` — the same rule `runLoop`
+            // folds against on persist).
             if let assistant = message as? AssistantMessage {
-                let hasContent = !assistant.content.isEmpty
-                    || (assistant.thinking?.isEmpty == false)
-                    || !assistant.toolCalls.isEmpty
-                guard hasContent else { break }
+                guard assistant.hasContent else { break }
             }
             state.messages.append(message)
 
