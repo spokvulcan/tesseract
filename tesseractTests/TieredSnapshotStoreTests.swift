@@ -176,6 +176,12 @@ struct TieredSnapshotStoreTests {
     func ramOnlyModeSkipsSSDAdmission() async {
         // No config → SSD disabled → admitSnapshot always returns nil.
         let store = TieredSnapshotStore(ssdConfig: nil)
+        // Positive disabled-mode precondition. `admitSnapshot` now returns
+        // a bare `SnapshotRef?`, so `nil` no longer distinguishes the
+        // disabled path from a wrongful rejection of a valid admission.
+        // Pin that this store truly has no SSD tier, so the `nil` below
+        // can only mean "disabled".
+        #expect(store.ssdStoreForTesting == nil)
         let key = makePartitionKey()
         let tree = store.getOrCreateTree(for: key)
         let node = insertWithBody(tree, tokens: [1, 2, 3])
@@ -487,6 +493,70 @@ struct TieredSnapshotStoreTests {
         #expect(residents.contains(leafARef!.snapshotID) == false)
         #expect(residents.contains(leafBRef!.snapshotID))
         #expect(residents.contains(systemRef!.snapshotID))
+    }
+
+    @Test
+    func systemAdmissionLaterallyEvictsOldestSystemThroughWriter() async {
+        // Front-door coverage for the pass-2 lateral system-evicts-system
+        // branch. The ledger-direct case lives in
+        // `SnapshotLedgerTests.admitLaterallyEvictsOldestSystemForSystemIncoming`;
+        // this drives the same branch end-to-end through tryEnqueue →
+        // writer → admit → commit, including the evicted-file delete and
+        // the `onDrop(.evictedByLRU)` callback.
+        let (root, store, tree, key) = makeFixture(budgetBytes: 3_500)
+        defer { cleanup(root) }
+
+        let nodes = [
+            insertWithBody(tree, tokens: [10, 20], type: .system),
+            insertWithBody(tree, tokens: [30, 40], type: .system),
+            insertWithBody(tree, tokens: [50, 60], type: .system),
+        ]
+
+        // Two `.system` leaves admitted in order. `commit` stamps
+        // `lastAccessAt` at write time and the writer commits FIFO, so
+        // systemA becomes the oldest `.system` resident.
+        let systemARef = store.admitSnapshot(
+            node: nodes[0],
+            tree: tree,
+            partitionKey: key,
+            pathFromRoot: [10, 20],
+            snapshot: makeSnapshot(checkpointType: .system),
+            payload: makePayload(bytes: 1_500, checkpointType: .system)
+        )
+        let systemBRef = store.admitSnapshot(
+            node: nodes[1],
+            tree: tree,
+            partitionKey: key,
+            pathFromRoot: [30, 40],
+            snapshot: makeSnapshot(checkpointType: .system),
+            payload: makePayload(bytes: 1_500, checkpointType: .system)
+        )
+
+        let bothCommitted = await waitUntil {
+            nodes[0].state.committed && nodes[1].state.committed
+        }
+        #expect(bothCommitted)
+
+        // Third `.system` admit does not fit (1_500 × 3 = 4_500 > 3_500)
+        // and there is no non-system resident to reclaim in pass 1, so the
+        // admission-time LRU cut laterally evicts the oldest `.system`
+        // resident (systemA) in pass 2.
+        let systemCRef = store.admitSnapshot(
+            node: nodes[2],
+            tree: tree,
+            partitionKey: key,
+            pathFromRoot: [50, 60],
+            snapshot: makeSnapshot(checkpointType: .system),
+            payload: makePayload(bytes: 1_500, checkpointType: .system)
+        )
+
+        let systemCCommitted = await waitUntil { nodes[2].state.committed }
+        #expect(systemCCommitted)
+
+        let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
+        #expect(residents.contains(systemARef!.snapshotID) == false)
+        #expect(residents.contains(systemBRef!.snapshotID))
+        #expect(residents.contains(systemCRef!.snapshotID))
     }
 
     @Test

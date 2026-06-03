@@ -32,19 +32,20 @@
 
 import Foundation
 
-// MARK: - SSDLoadError
+// MARK: - PlaceholderContainerError
 
-/// Errors thrown by the placeholder-container codec. The header-parse
-/// variants (`truncatedHeader`, `invalidHeader`) originate here; the
-/// blob/dtype variants (`truncatedBlob`, `unknownDType`) are thrown by
-/// the store's Metal-affine `decodePlaceholderContainer`. All variants
-/// map to a terminal `loadSync` failure that drops the descriptor and
-/// the on-disk file before reporting a miss.
-nonisolated enum SSDLoadError: Error {
+/// Errors thrown by the placeholder-container *header* codec. Only the
+/// two header-parse variants live here, because this module is
+/// deliberately MLX-free and never touches the tensor payload: a
+/// truncated length prefix / header section (`truncatedHeader`), or a
+/// header section that fails JSON decode (`invalidHeader`). The
+/// blob/dtype decode errors belong with the store's Metal-affine
+/// decoder — see `SSDLoadError` in `SSDSnapshotStore`. Both error types
+/// funnel into the same terminal `loadSync` failure that drops the
+/// descriptor and the on-disk file before reporting a miss.
+nonisolated enum PlaceholderContainerError: Error {
     case truncatedHeader
-    case truncatedBlob
     case invalidHeader(String)
-    case unknownDType(String)
 }
 
 // MARK: - Placeholder container header
@@ -109,12 +110,20 @@ nonisolated struct PlaceholderContainerHeader: Codable, Sendable {
     nonisolated static func parse(
         from data: Data
     ) throws -> (header: PlaceholderContainerHeader, blobsStart: Int) {
-        guard data.count >= 8 else { throw SSDLoadError.truncatedHeader }
+        guard data.count >= 8 else { throw PlaceholderContainerError.truncatedHeader }
         let headerLength = data.prefix(8).withUnsafeBytes {
             $0.load(as: UInt64.self).littleEndian
         }
+        // The length prefix is untrusted (corrupt / truncated / foreign
+        // file). Reject any value that would trap when converted to `Int`
+        // or when the 8-byte prefix is added below, *before* the
+        // conversion runs — the `- 8` keeps `8 + Int(headerLength)` in
+        // range. The sibling `readHeaderOnly` guards the same way.
+        guard headerLength <= UInt64(Int.max) - 8 else {
+            throw PlaceholderContainerError.truncatedHeader
+        }
         let headerEnd = 8 + Int(headerLength)
-        guard headerEnd <= data.count else { throw SSDLoadError.truncatedHeader }
+        guard headerEnd <= data.count else { throw PlaceholderContainerError.truncatedHeader }
         let headerData = data[8..<headerEnd]
         let header: PlaceholderContainerHeader
         do {
@@ -123,7 +132,7 @@ nonisolated struct PlaceholderContainerHeader: Codable, Sendable {
                 from: headerData
             )
         } catch {
-            throw SSDLoadError.invalidHeader(String(describing: error))
+            throw PlaceholderContainerError.invalidHeader(String(describing: error))
         }
         return (header, headerEnd)
     }

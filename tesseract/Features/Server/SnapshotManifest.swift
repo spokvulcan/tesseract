@@ -148,7 +148,7 @@ nonisolated struct PersistedSnapshotDescriptor: Codable, Sendable, Equatable {
     /// (`partitions/{digest}/snapshots/{shardByte}/{id}.safetensors`,
     /// where `shardByte` is the first character of `snapshotID`).
     /// Called by the writer (`SSDSnapshotStore.fileURL`), the
-    /// descriptor factory (`PrefixCacheManager.makePersistedDescriptor`),
+    /// descriptor factory (`SnapshotLedger.makeDescriptor`),
     /// and the warm-start path. Any change to this layout invalidates
     /// every previously persisted snapshot — see the stability
     /// contract on `CachePartitionKey.partitionDigest`.

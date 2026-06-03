@@ -46,6 +46,22 @@ import Foundation
 import MLX
 import MLXLMCommon
 
+// MARK: - SSD decode errors
+
+/// Errors thrown by the store's Metal-affine `decodePlaceholderContainer`
+/// while reconstructing tensor blobs from a placeholder container. The
+/// header-parse errors are separate — they belong to the MLX-free codec
+/// (`PlaceholderContainerError` in `PlaceholderContainer.swift`). Both
+/// error types funnel into the same recoverable `.decodeFailed` miss in
+/// `loadSync`, which drops the descriptor and the on-disk file.
+nonisolated enum SSDLoadError: Error {
+    /// A header `byte_offset` / `byte_size` pair points outside the
+    /// container's blob section — truncated, corrupt, or hostile file.
+    case truncatedBlob
+    /// A header array's `dtype` string has no MLX dtype mapping.
+    case unknownDType(String)
+}
+
 // MARK: - Front door outcome types
 
 /// Result of attempting to enqueue a payload into the SSD writer's
@@ -322,6 +338,13 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     }
 
     nonisolated func diagnosticsSnapshot() -> PromptCacheSSDSnapshot {
+        // Two independent critical sections by design: the ledger's
+        // residency totals and the queue depth live under separate locks
+        // that intentionally never nest. A writer committing between the
+        // two samples can yield a frame mixing pre-/post-commit
+        // `currentBytes` and `pendingBytes`. That is acceptable — this is
+        // purely observational telemetry, never a control input — so the
+        // returned pair is *not* a consistent cross-lock snapshot.
         let residency = ledger.residencyStats()
         queueLock.lock()
         let queuedBytes = pendingBytes
@@ -1004,9 +1027,19 @@ extension SSDSnapshotStore {
                 guard let dtype = LLMActor.dtypeFromWireString(arrayHeader.dtype) else {
                     throw SSDLoadError.unknownDType(arrayHeader.dtype)
                 }
-                let sliceStart = blobsStart + arrayHeader.byteOffset
-                let sliceEnd = sliceStart + arrayHeader.byteSize
-                guard sliceEnd <= data.count else {
+                // `byteOffset` / `byteSize` are `Int`s JSON-decoded from
+                // the untrusted header — guard non-negativity and use
+                // checked adds so a corrupt or hostile pair throws the
+                // recoverable `.truncatedBlob` miss instead of trapping
+                // the `Int` arithmetic or the `Data` subscript below.
+                guard arrayHeader.byteOffset >= 0, arrayHeader.byteSize >= 0 else {
+                    throw SSDLoadError.truncatedBlob
+                }
+                let (sliceStart, startOverflow) =
+                    blobsStart.addingReportingOverflow(arrayHeader.byteOffset)
+                let (sliceEnd, endOverflow) =
+                    sliceStart.addingReportingOverflow(arrayHeader.byteSize)
+                guard !startOverflow, !endOverflow, sliceEnd <= data.count else {
                     throw SSDLoadError.truncatedBlob
                 }
                 let blob = data[sliceStart..<sliceEnd]
@@ -1036,11 +1069,6 @@ extension SSDSnapshotStore {
 // MARK: - Testing hooks
 
 extension SSDSnapshotStore {
-
-    /// White-box accessor to the composed ledger so tests can drive the
-    /// residency seam directly. Production code reaches the SSD tier only
-    /// through this store's sealed interface.
-    var ledgerForTesting: SnapshotLedger { ledger }
 
     /// Synchronous accessor for the current SSD byte count. Delegates to
     /// the ledger, which owns the byte total.

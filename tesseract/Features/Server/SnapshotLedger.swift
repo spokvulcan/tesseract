@@ -400,7 +400,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
                 else { return false }
                 return predicate(checkpointType)
             }
-            .sorted { $0.lastAccessAt < $1.lastAccessAt }
+            .sorted { ($0.lastAccessAt, $0.snapshotID) < ($1.lastAccessAt, $1.snapshotID) }
     }
 
     /// Drop the manifest entry, decrement the SSD byte count, and return
@@ -442,6 +442,15 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         var fresh = descriptor
         fresh.lastAccessAt = Date().timeIntervalSinceReferenceDate
 
+        // Idempotent byte accounting: if this ID is already resident,
+        // subtract its prior bytes before adding the fresh entry's, so a
+        // re-commit replaces rather than double-counts (mirrors
+        // `seedDescriptorForTesting`). The sole production caller commits
+        // each fresh UUID once, so this is defensive against future
+        // re-commit paths, not a live correction.
+        if let prior = manifest.snapshots[descriptor.snapshotID] {
+            currentSSDBytes -= prior.bytes
+        }
         manifest.snapshots[descriptor.snapshotID] = fresh
         currentSSDBytes += descriptor.bytes
         manifestDirty = true
@@ -559,26 +568,16 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
 
     // MARK: - File path derivation
 
-    /// Canonical on-disk URL for a snapshot file. Goes through the same
-    /// `PersistedSnapshotDescriptor.relativeFilePath` sharding rule the
-    /// store's writer/reader use, so an `EvictedResident.fileURL` the
-    /// ledger hands back always names the file the store wrote.
-    private func fileURL(
-        snapshotID: String,
-        partitionDigest: String
-    ) -> URL {
-        let relative = PersistedSnapshotDescriptor.relativeFilePath(
-            snapshotID: snapshotID,
-            partitionDigest: partitionDigest
-        )
-        return rootURL.appendingPathComponent(relative)
-    }
-
+    /// Canonical on-disk URL for a snapshot file, read straight from the
+    /// descriptor's persisted `fileRelativePath` rather than recomputing
+    /// the shard layout. The path is stamped once at write time (via
+    /// `PersistedSnapshotDescriptor.relativeFilePath`) and carried in the
+    /// manifest, so an `EvictedResident.fileURL` the ledger hands back
+    /// always names the file the store wrote — and the sharding rule has
+    /// a single source of truth instead of a recomputation that could
+    /// silently diverge from the stored field.
     private func fileURL(for descriptor: PersistedSnapshotDescriptor) -> URL {
-        fileURL(
-            snapshotID: descriptor.snapshotID,
-            partitionDigest: descriptor.partitionDigest
-        )
+        rootURL.appendingPathComponent(descriptor.fileRelativePath)
     }
 }
 
@@ -808,7 +807,7 @@ extension SnapshotLedger {
             // Same rationale as the `PartitionMeta` filter above.
             guard desc.schemaVersion == SnapshotManifestSchema.currentVersion else {
                 deadDescriptorFiles.append(
-                    fileURL(snapshotID: desc.snapshotID, partitionDigest: desc.partitionDigest)
+                    fileURL(for: desc)
                 )
                 continue
             }
@@ -820,7 +819,7 @@ extension SnapshotLedger {
                 wireString: desc.checkpointType
             ) != nil else {
                 deadDescriptorFiles.append(
-                    fileURL(snapshotID: desc.snapshotID, partitionDigest: desc.partitionDigest)
+                    fileURL(for: desc)
                 )
                 continue
             }
@@ -926,7 +925,7 @@ extension SnapshotLedger {
         lock.lock()
         defer { lock.unlock() }
         return manifest.snapshots.values
-            .sorted { $0.lastAccessAt < $1.lastAccessAt }
+            .sorted { ($0.lastAccessAt, $0.snapshotID) < ($1.lastAccessAt, $1.snapshotID) }
             .map(\.snapshotID)
     }
 
