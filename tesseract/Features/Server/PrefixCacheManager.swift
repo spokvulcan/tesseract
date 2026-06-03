@@ -555,17 +555,15 @@ final class PrefixCacheManager {
             guard case .ramAndSSD(let payload) = entry.storage else {
                 return
             }
-            let descriptor = makePersistedDescriptor(
-                partitionKey: admission.partitionKey,
-                pathFromRoot: path,
-                snapshot: entry.snapshot,
-                payloadBytes: payload.totalBytes
-            )
+            // Hand the front door domain inputs; the ledger owns the
+            // descriptor schema (`SnapshotLedger.makeDescriptor`).
             store.admitSnapshot(
                 node: node,
                 tree: tree,
-                payload: payload,
-                descriptor: descriptor
+                partitionKey: admission.partitionKey,
+                pathFromRoot: path,
+                snapshot: entry.snapshot,
+                payload: payload
             )
         }
 
@@ -855,32 +853,6 @@ final class PrefixCacheManager {
                 invalidatedPartitionCount: outcome.invalidatedPartitionDigests.count,
                 durationSeconds: durationSeconds
             )
-        )
-    }
-
-    private func makePersistedDescriptor(
-        partitionKey: CachePartitionKey,
-        pathFromRoot: [Int],
-        snapshot: HybridCacheSnapshot,
-        payloadBytes: Int
-    ) -> PersistedSnapshotDescriptor {
-        let snapshotID = UUID().uuidString
-        let partitionDigest = partitionKey.partitionDigest
-        let now = Date().timeIntervalSinceReferenceDate
-        return PersistedSnapshotDescriptor(
-            snapshotID: snapshotID,
-            partitionDigest: partitionDigest,
-            pathFromRoot: pathFromRoot,
-            tokenOffset: snapshot.tokenOffset,
-            checkpointType: snapshot.checkpointType.wireString,
-            bytes: payloadBytes,
-            createdAt: now,
-            lastAccessAt: now,
-            fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
-                snapshotID: snapshotID,
-                partitionDigest: partitionDigest
-            ),
-            schemaVersion: SnapshotManifestSchema.currentVersion
         )
     }
 

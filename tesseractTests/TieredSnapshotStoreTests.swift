@@ -97,24 +97,19 @@ struct TieredSnapshotStoreTests {
         )
     }
 
-    private func makeDescriptor(
-        id: String = UUID().uuidString,
-        partitionDigest: String,
-        checkpointType: String = "leaf",
-        bytes: Int,
-        lastAccessAt: Double = 0
-    ) -> PersistedSnapshotDescriptor {
-        PersistedSnapshotDescriptor(
-            snapshotID: id,
-            partitionDigest: partitionDigest,
-            pathFromRoot: [1, 2, 3],
-            tokenOffset: 4_096,
+    /// A minimal `HybridCacheSnapshot` for the domain-input admission
+    /// front door. The factory reads only `tokenOffset` / `checkpointType`,
+    /// so the layers are empty — no MLX tensors needed.
+    private func makeSnapshot(
+        checkpointType: HybridCacheSnapshot.CheckpointType = .leaf,
+        tokenOffset: Int = 4_096
+    ) -> HybridCacheSnapshot {
+        HybridCacheSnapshot(
+            tokenOffset: tokenOffset,
+            layers: [],
             checkpointType: checkpointType,
-            bytes: bytes,
-            createdAt: 100_000,
-            lastAccessAt: lastAccessAt,
-            fileRelativePath: "partitions/\(partitionDigest)/snapshots/\(id.prefix(1))/\(id).safetensors",
-            schemaVersion: SnapshotManifestSchema.currentVersion
+            memoryBytes: 0,
+            createdAt: ContinuousClock().now
         )
     }
 
@@ -186,16 +181,14 @@ struct TieredSnapshotStoreTests {
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024)
-        let descriptor = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            bytes: payload.totalBytes
-        )
 
         let result = store.admitSnapshot(
             node: node,
             tree: tree,
-            payload: payload,
-            descriptor: descriptor
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: payload
         )
         #expect(result == nil)
         #expect(node.state.ref == nil)
@@ -228,16 +221,14 @@ struct TieredSnapshotStoreTests {
         #expect(node.state.ref == nil)
 
         let payload = makePayload(bytes: 1_024)
-        let descriptor = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            bytes: payload.totalBytes
-        )
 
-        guard case .accepted(let ref) = store.admitSnapshot(
+        guard let ref = store.admitSnapshot(
             node: node,
             tree: tree,
-            payload: payload,
-            descriptor: descriptor
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: payload
         ) else {
             Issue.record("admitSnapshot did not accept")
             return
@@ -256,6 +247,46 @@ struct TieredSnapshotStoreTests {
         #expect(store.isPendingForTesting(id: ref.snapshotID) == false)
     }
 
+    // MARK: - Domain-input admission front door
+
+    @Test
+    func admitSnapshotBuildsDescriptorFromDomainInputsAndReturnsRef() async {
+        let (root, store, tree, key) = makeFixture()
+        defer { cleanup(root) }
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
+
+        // Hand the front door domain inputs — no caller-built descriptor.
+        let payload = makePayload(bytes: 2_048, checkpointType: .system)
+        guard let ref = store.admitSnapshot(
+            node: node,
+            tree: tree,
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(checkpointType: .system, tokenOffset: 4_096),
+            payload: payload
+        ) else {
+            Issue.record("admitSnapshot did not accept")
+            return
+        }
+
+        // The returned **Snapshot Ref** mirrors the descriptor the front
+        // door minted from those inputs: the partition key's digest, the
+        // snapshot's type/offset, and the payload's byte count.
+        #expect(ref.partitionDigest == key.partitionDigest)
+        #expect(ref.checkpointType == .system)
+        #expect(ref.tokenOffset == 4_096)
+        #expect(ref.bytesOnDisk == payload.totalBytes)
+
+        // …and it was routed into the tree as a pending ref (state 2).
+        #expect(node.state.refID == ref.snapshotID)
+        #expect(!node.state.committed)
+        #expect(store.isPendingForTesting(id: ref.snapshotID))
+
+        // The write still drains to a commit end-to-end.
+        let committed = await waitUntil { node.state.committed }
+        #expect(committed)
+    }
+
     // MARK: - State 2 → 3 → 5 (body-drop then commit)
 
     @Test
@@ -265,16 +296,14 @@ struct TieredSnapshotStoreTests {
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024, checkpointType: .leaf)
-        let descriptor = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            bytes: payload.totalBytes
-        )
 
-        guard case .accepted(let ref) = store.admitSnapshot(
+        guard let ref = store.admitSnapshot(
             node: node,
             tree: tree,
-            payload: payload,
-            descriptor: descriptor
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(checkpointType: .leaf),
+            payload: payload
         ) else {
             Issue.record("admitSnapshot did not accept")
             return
@@ -309,16 +338,14 @@ struct TieredSnapshotStoreTests {
         #expect(siblingNode !== node)
 
         let payload = makePayload(bytes: 1_024)
-        let descriptor = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            bytes: payload.totalBytes
-        )
 
-        guard case .accepted(let ref) = store.admitSnapshot(
+        guard let ref = store.admitSnapshot(
             node: node,
             tree: tree,
-            payload: payload,
-            descriptor: descriptor
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: payload
         ) else {
             Issue.record("admitSnapshot did not accept")
             return
@@ -346,16 +373,14 @@ struct TieredSnapshotStoreTests {
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024)
-        let descriptor = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            bytes: payload.totalBytes
-        )
 
-        guard case .accepted(let ref) = store.admitSnapshot(
+        guard let ref = store.admitSnapshot(
             node: node,
             tree: tree,
-            payload: payload,
-            descriptor: descriptor
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: payload
         ) else {
             Issue.record("admitSnapshot did not accept")
             return
@@ -382,16 +407,14 @@ struct TieredSnapshotStoreTests {
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024)
-        let descriptor = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            bytes: payload.totalBytes
-        )
 
         _ = store.admitSnapshot(
             node: node,
             tree: tree,
-            payload: payload,
-            descriptor: descriptor
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: payload
         )
 
         // Wait for commit (state 2 → state 4).
@@ -421,29 +444,24 @@ struct TieredSnapshotStoreTests {
             insertWithBody(tree, tokens: [50, 60], type: .system),
         ]
 
-        let leafA = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            checkpointType: "leaf",
-            bytes: 1_024,
-            lastAccessAt: 1_000  // oldest
-        )
-        let leafB = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            checkpointType: "leaf",
-            bytes: 1_024,
-            lastAccessAt: 2_000
-        )
-        _ = store.admitSnapshot(
+        // Two leaves admitted in order — `commit` stamps `lastAccessAt`
+        // at write time, so the writer's FIFO commit makes the first
+        // (leafA) the oldest non-system resident.
+        let leafARef = store.admitSnapshot(
             node: nodes[0],
             tree: tree,
-            payload: makePayload(bytes: 1_024, checkpointType: .leaf),
-            descriptor: leafA
+            partitionKey: key,
+            pathFromRoot: [10, 20],
+            snapshot: makeSnapshot(checkpointType: .leaf),
+            payload: makePayload(bytes: 1_024, checkpointType: .leaf)
         )
-        _ = store.admitSnapshot(
+        let leafBRef = store.admitSnapshot(
             node: nodes[1],
             tree: tree,
-            payload: makePayload(bytes: 1_024, checkpointType: .leaf),
-            descriptor: leafB
+            partitionKey: key,
+            pathFromRoot: [30, 40],
+            snapshot: makeSnapshot(checkpointType: .leaf),
+            payload: makePayload(bytes: 1_024, checkpointType: .leaf)
         )
 
         let bothCommitted = await waitUntil {
@@ -453,26 +471,22 @@ struct TieredSnapshotStoreTests {
 
         // Third admit is `.system` and forces the writer's admission-time
         // LRU cut to evict the oldest non-system resident (leafA).
-        let systemDesc = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            checkpointType: "system",
-            bytes: 2_048,
-            lastAccessAt: 3_000
-        )
-        _ = store.admitSnapshot(
+        let systemRef = store.admitSnapshot(
             node: nodes[2],
             tree: tree,
-            payload: makePayload(bytes: 2_048, checkpointType: .system),
-            descriptor: systemDesc
+            partitionKey: key,
+            pathFromRoot: [50, 60],
+            snapshot: makeSnapshot(checkpointType: .system),
+            payload: makePayload(bytes: 2_048, checkpointType: .system)
         )
 
         let systemCommitted = await waitUntil { nodes[2].state.committed }
         #expect(systemCommitted)
 
         let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
-        #expect(residents.contains(leafA.snapshotID) == false)
-        #expect(residents.contains(leafB.snapshotID))
-        #expect(residents.contains(systemDesc.snapshotID))
+        #expect(residents.contains(leafARef!.snapshotID) == false)
+        #expect(residents.contains(leafBRef!.snapshotID))
+        #expect(residents.contains(systemRef!.snapshotID))
     }
 
     @Test
@@ -483,17 +497,13 @@ struct TieredSnapshotStoreTests {
         let systemNode = insertWithBody(tree, tokens: [10, 20], type: .system)
         let leafNode = insertWithBody(tree, tokens: [30, 40])
 
-        let systemDesc = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            checkpointType: "system",
-            bytes: 2_048,
-            lastAccessAt: 1_000
-        )
-        _ = store.admitSnapshot(
+        let systemRef = store.admitSnapshot(
             node: systemNode,
             tree: tree,
-            payload: makePayload(bytes: 2_048, checkpointType: .system),
-            descriptor: systemDesc
+            partitionKey: key,
+            pathFromRoot: [10, 20],
+            snapshot: makeSnapshot(checkpointType: .system),
+            payload: makePayload(bytes: 2_048, checkpointType: .system)
         )
 
         let systemCommitted = await waitUntil { systemNode.state.committed }
@@ -501,17 +511,13 @@ struct TieredSnapshotStoreTests {
 
         // Admit a non-system entry that does not fit without evicting the
         // protected `.system` resident.
-        let leafDesc = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            checkpointType: "leaf",
-            bytes: 1_024,
-            lastAccessAt: 2_000
-        )
-        _ = store.admitSnapshot(
+        let leafRef = store.admitSnapshot(
             node: leafNode,
             tree: tree,
-            payload: makePayload(bytes: 1_024, checkpointType: .leaf),
-            descriptor: leafDesc
+            partitionKey: key,
+            pathFromRoot: [30, 40],
+            snapshot: makeSnapshot(checkpointType: .leaf),
+            payload: makePayload(bytes: 1_024, checkpointType: .leaf)
         )
 
         // The writer drops the incoming with `.systemProtectionWins`. The
@@ -524,8 +530,8 @@ struct TieredSnapshotStoreTests {
         // System resident is still intact.
         #expect(systemNode.state.committed)
         let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
-        #expect(residents.contains(systemDesc.snapshotID))
-        #expect(residents.contains(leafDesc.snapshotID) == false)
+        #expect(residents.contains(systemRef!.snapshotID))
+        #expect(residents.contains(leafRef!.snapshotID) == false)
         #expect(store.pendingRefCountForTesting == 0)
     }
 
@@ -547,12 +553,10 @@ struct TieredSnapshotStoreTests {
         func admit(_ node: RadixTreeNode) {
             _ = store.admitSnapshot(
                 node: node, tree: tree,
-                payload: makePayload(bytes: payloadBytes),
-                descriptor: makeDescriptor(
-                    partitionDigest: key.partitionDigest,
-                    checkpointType: "leaf",
-                    bytes: payloadBytes
-                )
+                partitionKey: key,
+                pathFromRoot: [1, 2, 99],
+                snapshot: makeSnapshot(checkpointType: .leaf),
+                payload: makePayload(bytes: payloadBytes)
             )
         }
 
@@ -589,15 +593,10 @@ struct TieredSnapshotStoreTests {
 
         let count = 100
         let payload = makePayload(bytes: 16)
-        let descriptors = (0..<count).map { i in
-            makeDescriptor(
-                id: "bulk-\(i)",
-                partitionDigest: key.partitionDigest,
-                checkpointType: "leaf",
-                bytes: 16
-            )
-        }
+        let snapshot = makeSnapshot(checkpointType: .leaf)
         // Bodies are seeded before the timed loop, so they do not count.
+        // Descriptor construction now happens *inside* `admitSnapshot`
+        // (the ledger schema factory), so it is part of the timed work.
         let nodes = (0..<count).map { i in
             insertWithBody(tree, tokens: [1, 2, 1_000 + i])
         }
@@ -607,8 +606,10 @@ struct TieredSnapshotStoreTests {
             _ = store.admitSnapshot(
                 node: nodes[i],
                 tree: tree,
-                payload: payload,
-                descriptor: descriptors[i]
+                partitionKey: key,
+                pathFromRoot: [1, 2, 1_000 + i],
+                snapshot: snapshot,
+                payload: payload
             )
         }
         let elapsed = ContinuousClock.now - start
@@ -629,15 +630,13 @@ struct TieredSnapshotStoreTests {
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
         let payload = makePayload(bytes: 1_024)
-        let descriptor = makeDescriptor(
-            partitionDigest: key.partitionDigest,
-            bytes: payload.totalBytes
-        )
 
         _ = store.admitSnapshot(
             node: node, tree: tree,
-            payload: payload,
-            descriptor: descriptor
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: payload
         )
 
         // Body-drop while the pending ref is still uncommitted → state 3.
@@ -660,10 +659,12 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard case .accepted(let ref) = store.admitSnapshot(
+        guard let ref = store.admitSnapshot(
             node: node, tree: tree,
-            payload: makePayload(bytes: 1_024),
-            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
         ) else {
             Issue.record("admitSnapshot did not accept")
             return
@@ -686,10 +687,12 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard case .accepted(let ref) = store.admitSnapshot(
+        guard let ref = store.admitSnapshot(
             node: node, tree: tree,
-            payload: makePayload(bytes: 1_024),
-            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
         ) else {
             Issue.record("admitSnapshot did not accept")
             return
@@ -714,10 +717,12 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard case .accepted(let ref) = store.admitSnapshot(
+        guard let ref = store.admitSnapshot(
             node: node, tree: tree,
-            payload: makePayload(bytes: 1_024),
-            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
         ) else {
             Issue.record("admitSnapshot did not accept")
             return
@@ -752,10 +757,12 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard case .accepted(let firstRef) = store.admitSnapshot(
+        guard let firstRef = store.admitSnapshot(
             node: node, tree: tree,
-            payload: makePayload(bytes: 1_024),
-            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
         ) else {
             Issue.record("first admitSnapshot did not accept")
             return
@@ -766,10 +773,12 @@ struct TieredSnapshotStoreTests {
 
         // Re-admit over the committed node (state 4). The node still has a
         // RAM body, so admit applies and supersedes firstRef.
-        guard case .accepted(let secondRef) = store.admitSnapshot(
+        guard let secondRef = store.admitSnapshot(
             node: node, tree: tree,
-            payload: makePayload(bytes: 1_024),
-            descriptor: makeDescriptor(partitionDigest: key.partitionDigest, bytes: 1_024)
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
         ) else {
             Issue.record("second admitSnapshot did not accept")
             return

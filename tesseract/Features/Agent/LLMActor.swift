@@ -1375,10 +1375,10 @@ actor LLMActor {
 
     /// Stable wire-format name for an MLX `DType`. Load-bearing: the
     /// result is written into the SSD snapshot header at
-    /// `SSDSnapshotStore.encodePlaceholderContainer(payload:descriptor:)`,
-    /// so the mapping is part of the on-disk contract. A vendor-side
-    /// rename of any `DType` case label would silently corrupt files
-    /// without this explicit table.
+    /// `encodePlaceholderContainer(payload:descriptor:)` (in
+    /// `PlaceholderContainer.swift`), so the mapping is part of the
+    /// on-disk contract. A vendor-side rename of any `DType` case label
+    /// would silently corrupt files without this explicit table.
     ///
     /// `@unknown default` traps via `fatalError` rather than inventing
     /// a placeholder string, because reaching it means the vendor
