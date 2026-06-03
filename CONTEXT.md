@@ -802,6 +802,73 @@ _Avoid_: generation lifecycle (collides with the Generation* stream family), sen
 coordinator, run as a transcript/loop turn, busy flag as standalone spine state (the run
 owns it).
 
+### Agent state reduction
+
+**Agent State Reducer**:
+The single home for folding the `AgentEvent` stream into the `@Observable @MainActor
+AgentState` — the run-level view state (`messages`, `streamMessage`, `phase`,
+`pendingToolCalls`, `error`) the chat UI and the coordinator's dispatcher read. A pure
+fold, `reduce(_ event:, into: state)`, **total** over `AgentEvent`, that mutates the
+`@Observable` class **in place** — not a value-type swap, per ADR-0002: a whole-value copy
+looks like every property changed and coarsens Observation's per-property invalidation
+(the same reason the **Settings Facade** keeps stored properties). It restores pi-mono's
+`processEvents` shape — *reduce all state, then notify listeners* — replacing the prior
+Swift `Agent.handleEvent`, which split the fold across **two switches with the subscriber
+notify wedged between them** (messages/streamMessage before, phase/pendingToolCalls after).
+The rules it concentrates: `messageEnd` clears `streamMessage` then appends under a
+`hasContent` guard (empty assistant turns from cancel/error paths are dropped); `turnEnd`
+does the authoritative full-replace of `messages` from the loop's context snapshot (which
+carries tool results `messageEnd` never saw) — pi-mono additionally folds a turn-level
+assistant error into `error`, but Swift's `AssistantMessage`/`turnEnd` shape carries no error
+field, so that fold has nothing to act on here and is omitted;
+`messageUpdate` sets `streamMessage`; `toolExecutionStart`/`End` maintain `pendingToolCalls`
+and the `.executingTool`/.streaming phase; `agentStart` → `.streaming`;
+`contextTransformStart`/`End` drive the **Swift-only** `.transformingContext`/.streaming
+phase. It owns the **event fold only**; the run-lifecycle envelope — the `.idle` transition
+and the end-of-run clear of `streamMessage`/`pendingToolCalls` — stays in
+`beginRun`/`finishRun`, exactly as pi-mono splits `processEvents` from `finishRun`. Because
+the reduce settles before any notify, the coordinator's dispatcher reads fully-current
+`AgentState`; it needs no rewrite to read event payloads.
+
+The `AgentPhase` apparatus (`.transformingContext`, `.executingTool`, the `contextTransform*`
+events) has **no pi-mono analog** — pi-mono applies the transform inside the loop and tracks
+only an `isStreaming` boolean — so it is the genuinely Swift-specific part of the fold and
+is where the residual subtlety lived. The retired standalone-`/compact` gate is part of it:
+the two-switch split let the coordinator catch a transient `phase == .idle` to fire
+`markStandaloneCompactionFinished`; reduce-then-notify removes that transient, so `/compact`
+instead **awaits its body under the lease** and clears `isGenerating` on lease completion
+like `send` (see **Agent Run**), and both `markStandaloneCompactionFinished` and the
+`phase == .idle` read are deleted. The deletion test passes: remove the reducer and the
+hasContent guard, the `turnEnd` replace, and the phase/pending transitions reappear inside a
+private `handleEvent` with no test surface — today no test constructs an `AgentState` and
+feeds it events.
+_Avoid_: **Generation Accumulator** (that folds within-turn `Generation` *token* events into
+one `AssistantMessage`'s content — a different layer and source; the reducer folds
+agent-lifecycle `AgentEvent`s into run-level `AgentState`), event handler / `handleEvent`
+(the two-switch predecessor it replaces), dispatcher (that is the coordinator's
+`handleAgentEvent`, which routes events to sub-controllers *after* the reduce), state
+machine, store.
+
+> **Flagged ambiguity — "fold": accumulator vs reducer.** The **Generation Accumulator**
+> folds one turn's token stream into `AssistantMessage` content; the **Agent State Reducer**
+> folds the agent's lifecycle events into the run-level `AgentState`. Both are folds;
+> different layers, different inputs. When unqualified, say "generation accumulator" vs
+> "agent state reducer".
+
+**Example dialogue:**
+
+> **Dev:** If the reducer settles phase before notifying, doesn't the coordinator's
+> `phase == .idle` compaction check break?
+> **Expert:** It does — and that's the point. The check only ever worked off a transient the
+> two-switch split exposed. So we delete it. `/compact` now awaits its body under the lease,
+> so `isGenerating` clears when the lease finishes, exactly like a `send` turn. No
+> event-derived gate, no race.
+> **Dev:** Why not fold a value-type `AgentState` and copy it back — wouldn't that be purer?
+> **Expert:** Observation. `AgentState` is `@Observable`; a whole-value copy looks like every
+> property changed and coarsens invalidation — the ADR-0002 lesson. The reducer mutates the
+> class in place, so only the properties an event actually touches invalidate, and
+> `$state.foo` bindings survive.
+
 ### Agent coordinator leaves
 
 The publisher-agnostic sub-controllers carved off `AgentCoordinator` that own their state
@@ -1046,6 +1113,69 @@ weak back-reference (the winner rides the return value), continuous retuning (st
 > **Expert:** Each replay builds its own sandbox cache with its own `evictionConfig`. No shared
 > register, so no "left it set to the last candidate" footgun. The winner comes back as the
 > `recordRequest` return value and the manager writes its one cell.
+
+### Overlay presentation
+
+**Overlay Panel**:
+The deep module owning the lifecycle of a transparent, click-through global
+`NSPanel` that floats above all apps (including full-screen) and reacts to
+`DictationState`. It owns *everything the dictation HUD and the full-screen border
+share line-for-line today*: panel creation (the borderless / `.nonactivatingPanel`
+style mask, `.statusBar` level, `canJoinAllSpaces`/`fullScreenAuxiliary`/`ignoresCycle`
+collection behaviour, clear-background transparency), the show/hide alpha fade with the
+`hideRequestID` cancellation so a stale fade-out can't hide a re-shown panel, the
+four-notification screen observation (`didChangeScreenParameters`, `activeSpaceDidChange`,
+`didWake`, `screensDidWake`) driving `refreshPanelLayout`, the post-show
+visibility re-assertion (`scheduleVisibilityCheck` → `ensureVisibleIfNeeded`: re-`orderFront`
+on occlusion, correct alpha drift), and the `DictationState`→visible rule. Generic over its
+hosted SwiftUI `Content`. Visibility is driven through one side-effecting entry,
+`handleStateChange(_:)`; pure view data (`audioLevel`, `glowTheme`) is set directly on
+the injected `OverlayState` the content view reads, so those carry no panel-side behaviour
+and need no method. The only injected difference between overlays is an **Overlay Placement**
+plus the content view; both former controllers (`OverlayPanelController`,
+`FullScreenBorderPanelController`) collapse into two configured instances wired in
+`DependencyContainer`. The single screen seam stays `OverlayScreenLocator.preferredScreen()`.
+_Avoid_: overlay controller (the per-overlay class is what dissolved *into* this), overlay
+manager, HUD window, generic NSPanel wrapper (it is specifically the dictation-reactive
+floating overlay, not any panel — see the TTS notch ambiguity), config-flag panel (the
+behaviour is uniform; differences are an **Overlay Placement**, not toggles).
+
+**Overlay Placement**:
+The whole injected difference between one **Overlay Panel** and another, as a small
+value: a `frame(NSScreen, DictationState) -> NSRect` (the dictation HUD: a state-sized
+rect centred at the bottom inset; the border: the full `screen.frame`) and
+`animatesReposition` (the HUD animates its size change on show; the border snaps). Because
+the frame computation is now a pure closure rather than a private `updatePanelFrame`, it has
+a focused test surface — assert the rect math for a given screen and `DictationState` with no
+panel, no app. Two presets exist: `.pill` and `.fullScreenBorder`.
+_Avoid_: layout strategy, frame provider (it carries the reposition-animation bit too, not
+only the frame), overlay style (`OverlayStyle` is the user **Setting** that selects *which*
+placement is live, not the placement itself).
+
+> **Flagged ambiguity — Overlay Panel vs the TTS notch.** The **Overlay Panel** is the
+> shared lifecycle behind the dictation HUD and the full-screen border — both non-interactive,
+> faded, screen-observed, `.statusBar`-level, created once. `TTSNotchPanelController` is a
+> deliberately separate beast: interactive (`ignoresMouseEvents = false`), `.screenSaver` level,
+> no fade, no screen observation, no occlusion re-assertion, created per `show()` with a fresh
+> view, and self-resizing via `NotchFrameTracker`. It shares almost no behaviour, so it stays
+> its own controller rather than paying an **Overlay Panel**'s interface for behaviour it opts
+> out of. When unqualified, "overlay panel" means the dictation-reactive one, not the notch.
+
+**Example dialogue:**
+
+> **Dev:** The dictation HUD and the border are basically the same file — why not one panel
+> class for all three overlays, notch included?
+> **Expert:** Because the HUD and border *are* the same behaviour — same fade, same screen
+> observation, same re-assertion — differing only in frame math and which view they host. That
+> difference is an **Overlay Placement**, so they collapse cleanly into one **Overlay Panel**.
+> The notch shares none of it: it's interactive, never fades, ignores screen changes, and
+> rebuilds per show. Folding it in would mean `fade: false, observe: false, reassert: false,
+> interactive: true` — a config-flag soup that re-shallows the module. It earns staying separate.
+> **Dev:** If the lifecycle is all `NSPanel`/`NSScreen`, what's actually testable after the carve?
+> **Expert:** The placement. The frame math moves out of a private method into a pure
+> `frame(screen, state)` closure, so you assert "recording state on this screen → this rect"
+> with no panel. The fade and re-assertion stay AppKit-bound and are exercised through the app —
+> the win there is locality and the ~400 deduplicated lines, not a unit test.
 
 ## Why
 

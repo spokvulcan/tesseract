@@ -14,8 +14,9 @@
 //
 //  Publisher-agnostic (ARCHITECTURE.md's panel-controller rule): the
 //  coordinator's event dispatcher *feeds* the event-side transitions
-//  (`markStarted`/`finish`/`markStandaloneCompactionFinished`); this module
-//  never subscribes to `AgentEvent`s itself.
+//  (`markStarted`/`finish`); this module never subscribes to `AgentEvent`s
+//  itself. A standalone `/compact` carries no `.agentEnd`, so it clears the flag
+//  by completing its body under `runUnderLease`, not via an event gate.
 //
 
 import Foundation
@@ -86,9 +87,12 @@ final class AgentRunController {
     ///
     /// Arbiter-less fallback: with no arbiter wired, the body is driven directly
     /// with no lease — the back-compat branch locked by
-    /// `compactCommandFallsBackToDirectPathWhenArbiterMissing`. `isGenerating`
-    /// is set eagerly either way; in the lease path the catch blocks reset it,
-    /// in the direct path the event spine does.
+    /// `runUnderLeaseFallsBackToDirectBodyWhenArbiterMissing`. `isGenerating`
+    /// is set eagerly and cleared when the body completes (or on cancel/error),
+    /// so a body that awaits its work to completion — a `send` turn *or* a
+    /// `/compact` — owns the whole busy-flag lifecycle through one rule. (A
+    /// `send` body also sees `.agentEnd` clear the flag via the event spine; the
+    /// completion clear is idempotent with it.)
     func runUnderLease(_ body: @escaping @MainActor () async -> Void) {
         isGenerating = true
 
@@ -102,6 +106,7 @@ final class AgentRunController {
                     return
                 }
                 await body()
+                self.isGenerating = false
                 self.sendTask = nil
             }
             return
@@ -112,6 +117,8 @@ final class AgentRunController {
                 try await arbiter.withExclusiveGPU(.llm) {
                     await body()
                 }
+                // Body ran to completion under the lease — clear the busy flag.
+                self.isGenerating = false
             } catch is CancellationError {
                 // Cancelled while queued or during run — clean up.
                 self.isGenerating = false
@@ -152,12 +159,6 @@ final class AgentRunController {
     /// `.agentEnd`: the run finished. Also used by conversation-reset to clear
     /// the flag synchronously.
     func finish() {
-        isGenerating = false
-    }
-
-    /// `.contextTransformEnd(.compaction)` with the agent idle: a standalone
-    /// `/compact` (outside an agent loop) completed.
-    func markStandaloneCompactionFinished() {
         isGenerating = false
     }
 

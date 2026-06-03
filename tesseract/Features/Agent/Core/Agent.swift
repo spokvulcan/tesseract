@@ -152,13 +152,15 @@ final class Agent {
         }
     }
 
-    /// Force context compaction outside of the normal agent loop.
-    /// Used by the `/compact` slash command.
+    /// Force context compaction outside of the normal agent loop (the `/compact`
+    /// slash command). **Awaited** under the **Agent Run** lease, so `isGenerating`
+    /// clears on lease completion exactly like a `send` turn — there is no
+    /// event-derived busy-flag gate. Cancellation propagates from the lease task.
     func forceCompact(
         contextManager: ContextManager,
         contextWindow: Int,
         summarize: @escaping @Sendable (String) async throws -> String
-    ) {
+    ) async {
         guard state.phase == .idle else { return }
         guard !context.messages.isEmpty else { return }
 
@@ -168,39 +170,35 @@ final class Agent {
         let emit = makeEmitter()
         emit(.contextTransformStart(reason: .compaction))
 
-        runTask = Task { [weak self] in
-            do {
-                let compacted = try await contextManager.compact(
-                    messages: messages,
-                    contextWindow: contextWindow,
-                    summarize: summarize
-                )
-                await MainActor.run {
-                    guard let self else { return }
-                    self.context.messages = compacted
-                    self.state.messages = compacted.map { $0 as any AgentMessageProtocol }
-                    emit(.contextTransformEnd(
-                        reason: .compaction,
-                        didMutate: true,
-                        messages: compacted
-                    ))
-                    self.state.phase = .idle
-                    self.runTask = nil
-                }
-            } catch {
-                await MainActor.run {
-                    guard let self else { return }
-                    emit(.contextTransformEnd(
-                        reason: .compaction,
-                        didMutate: false,
-                        messages: nil
-                    ))
-                    self.state.phase = .idle
-                    self.state.error = error.localizedDescription
-                    self.runTask = nil
-                }
-            }
+        do {
+            let compacted = try await contextManager.compact(
+                messages: messages,
+                contextWindow: contextWindow,
+                summarize: summarize
+            )
+            context.messages = compacted
+            state.messages = compacted.map { $0 as any AgentMessageProtocol }
+            emit(.contextTransformEnd(
+                reason: .compaction,
+                didMutate: true,
+                messages: compacted
+            ))
+        } catch {
+            emit(.contextTransformEnd(
+                reason: .compaction,
+                didMutate: false,
+                messages: nil
+            ))
+            state.error = error.localizedDescription
         }
+
+        // Standalone run-lifecycle envelope: drain the transform events (the
+        // reducer resumes `.streaming` on `contextTransformEnd`) *then* settle to
+        // `.idle`, mirroring `finishRun`. Draining here makes the final phase
+        // deterministic instead of racing the async event drain — the subtlety
+        // the old two-switch `phase == .idle` compaction gate depended on.
+        drainPendingEvents()
+        state.phase = .idle
     }
 
     /// Cancel in-progress generation.
@@ -256,8 +254,8 @@ final class Agent {
             // `body` is @Sendable and runs off-MainActor, so this continuation
             // resumes off-MainActor too. `finishRun` is @MainActor (it mutates
             // observable `state`), so hop back explicitly — matching the
-            // `forceCompact` / steering-queue closures below. Calling it
-            // directly here traps under Swift's dynamic isolation check.
+            // steering-queue closures below. Calling it directly here traps
+            // under Swift's dynamic isolation check.
             await MainActor.run { self?.finishRun(result) }
         }
     }
@@ -328,68 +326,16 @@ final class Agent {
         }
     }
 
-    /// Process a single agent event: update observable state and notify subscribers.
+    /// Process a single agent event: fold it into observable state through the
+    /// **Agent State Reducer**, then notify subscribers — pi-mono's
+    /// `processEvents` shape (reduce all state, *then* notify). Because the
+    /// reduce fully settles before any listener runs, subscribers always read
+    /// current `AgentState`.
     private func handleEvent(_ event: AgentEvent) {
-        // Sync messages BEFORE notifying subscribers so they see current state.
-        // The loop mutates its own context copy; these events carry snapshots.
-        switch event {
-        case .messageEnd(let message):
-            // pi-mono: clear progressive stream on commit (this._state.streamMessage = null)
-            state.streamMessage = nil
-            // Commit to observable state on message_end (pi-mono pattern).
-            // Guard: skip empty assistant messages from cancel/error paths.
-            if let assistant = message as? AssistantMessage {
-                let hasContent = !assistant.content.isEmpty
-                    || (assistant.thinking?.isEmpty == false)
-                    || !assistant.toolCalls.isEmpty
-                guard hasContent else { break }
-            }
-            state.messages.append(message)
-        case .turnEnd(_, _, let contextMessages):
-            // Authoritative sync — full replace from loop context snapshot.
-            state.messages = contextMessages.map { $0 as any AgentMessageProtocol }
-        case .agentEnd:
-            // finishRun sets state.messages from finalContext; no need to duplicate here.
-            break
-        default:
-            break
-        }
+        AgentStateReducer.reduce(event, into: state)
 
-        // Notify all subscribers
         for handler in subscribers.values {
             handler(event)
-        }
-
-        // Update other observable state
-        switch event {
-        case .agentStart:
-            state.phase = .streaming
-
-        case .contextTransformStart(let reason):
-            state.phase = .transformingContext(reason)
-
-        case .contextTransformEnd(_, let didMutate, let messages):
-            if didMutate, let messages {
-                state.messages = messages.map { $0 as any AgentMessageProtocol }
-            }
-            state.phase = .streaming
-
-        case .messageUpdate(let message, _):
-            state.streamMessage = message
-
-        case .toolExecutionStart(let id, let name, _):
-            state.pendingToolCalls.insert(id)
-            state.phase = .executingTool(name)
-
-        case .toolExecutionEnd(let id, _, _, _):
-            state.pendingToolCalls.remove(id)
-            if state.pendingToolCalls.isEmpty {
-                state.phase = .streaming
-            }
-
-        case .turnStart, .turnEnd, .agentEnd, .messageStart, .messageEnd,
-             .toolExecutionUpdate, .malformedToolCall:
-            break
         }
     }
 }
