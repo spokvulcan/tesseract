@@ -185,6 +185,86 @@ _Avoid_: body-removable, resident snapshot.
 > predicates: a `ramOnly` node has both `hasResidentBody` and `canEvictNode`, while
 > a committed node with RAM has `hasResidentBody` but not `canEvictNode`.
 
+### SSD snapshot ledger
+
+**Snapshot Ledger**:
+The in-memory authority over the SSD prefix-cache tier — which snapshots are
+resident, their byte budget, their recency, and the durability of that record —
+carved out of `SSDSnapshotStore` (#48). A `nonisolated final class` (`@unchecked Sendable`, one `NSLock`)
+owning the `manifest: SnapshotManifest` value (partition registry + descriptor
+set), `currentSSDBytes`, the debounced `manifest.json` persist, the corrupt-manifest
+directory-walk rebuild, and the **type-protected LRU** eviction policy. It is the
+single home for the on-disk schema's whole life: load `manifest.json`,
+rebuild-on-corruption, fingerprint/schema/checkpoint-type restore filtering, commit,
+recency bump, debounced persist — including descriptor construction
+(`SnapshotLedger.makeDescriptor`), moved off `PrefixCacheManager` behind the
+`TieredSnapshotStore` enqueue front door, which hands domain inputs and returns a
+**Snapshot Ref**.
+
+**The split from the store is along the lock.** `SSDSnapshotStore` keeps the *queue
+lock* (`pending`, `pendingBytes`, `drainWaiters`) and the `.safetensors` body I/O
+(`writePayload`, `loadSync`, the placeholder-container codec); the Ledger keeps the
+*ledger lock* (`manifest`, `currentSSDBytes`, the persist dirty-flag/task, and the
+in-flight-delete tombstones). This is safe because the writer is single-threaded and
+already releases the lock between every step, so the two locks never nest. The one
+method spanning both — `deleteSnapshot` — runs as *sequential* locked steps
+(queue-lock to check `pending`; if absent, `ledger.removeOrTombstone(id)`) and is
+correct under every writer interleaving because `removeOrTombstone` atomically does
+"resident → remove+return, else tombstone." The whole tombstone protocol is the
+Ledger's: `commit(descriptor) -> Bool` (vetoed by a prior tombstone),
+`consumeTombstone(id) -> Bool` (the writer's pre-write skip),
+`removeOrTombstone(id) -> EvictedResident?`.
+
+**The Ledger returns what changed; the store performs the effects.**
+`admit(descriptor) -> (decision, evicted: [EvictedResident])`,
+`retryAfterDiskFull -> EvictedResident?`, and `remove -> EvictedResident?` return the
+residents that left the manifest; the store deletes their files and fires
+`onCommit`/`onDrop` + diagnostics *outside* any lock. The type-protected LRU policy
+(asymmetric system/non-system pass-1/pass-2) lives **inside** `admit`, run atomically
+under the ledger lock — a multi-candidate cut must not tear. The SSD tier's α=0
+type-protected LRU is local and does not collide with the RAM tier's **Eviction
+Configuration** / **AlphaTuner**.
+
+It is reached from the off-MainActor `loadSync` (the ADR-0001 path) for the
+`partitionFingerprint(digest:)` gate and the failure-path `remove`, so it stays
+`nonisolated` and lock-based — never an actor. This does **not** reopen ADR-0001: a
+lock is not a MainActor hop, the same reason the store satisfied the ADR. The Ledger
+owns `manifest.json` + `_meta.json` durability; the store owns `.safetensors` bodies.
+`SSDSnapshotStore` composes the Ledger in its `init`, so the external
+`SSDSnapshotStore(config:)` interface and the `TieredSnapshotStore` wiring are
+unchanged, while Ledger unit tests construct it standalone — corrupt→rebuild,
+schema-mismatch→wipe, LRU ordering, byte accounting, and the tombstone protocol no
+longer stand up the detached `writerLoop`/`wakeupStream`.
+_Avoid_: Snapshot Manifest Store (the working title — "store" overloads
+`SnapshotStore`/`SSDSnapshotStore`, "manifest" undersells the live budget/recency
+authority), manifest-as-cold-path-only (`loadSync` reads and writes it on the hot
+path), descriptor schema as the manager's concern (construction moved onto the
+Ledger), eviction *effects* (file delete + `onDrop`) as ledger work (those are the
+store's, outside the lock).
+
+> **Flagged ambiguity — Snapshot Ledger vs SSDSnapshotStore.** The **Snapshot
+> Ledger** is the in-memory authority over the SSD-resident set plus its
+> `manifest.json`/`_meta.json` durability. `SSDSnapshotStore` is the writer queue +
+> `.safetensors` body I/O that composes the Ledger and performs the effects of its
+> decisions. When unqualified, say "snapshot ledger" vs "SSD store".
+
+**Example dialogue:**
+
+> **Dev:** If the manifest moves into the Ledger, doesn't splitting the one `NSLock`
+> race the writer against a delete?
+> **Expert:** No, because the writer never holds the lock across steps — every helper
+> locks and unlocks on its own, and there's exactly one writer. The only method
+> touching both locks is `deleteSnapshot`, and it goes queue-lock-then-ledger
+> sequentially. If the item's still queued, it's removed from `pending` and never
+> written. If it's in flight, the Ledger tombstones it and `commit` later vetoes
+> itself. If it already committed, `removeOrTombstone` finds the resident and returns
+> it for deletion. Every ordering resolves.
+> **Dev:** Why is the LRU cut inside the Ledger instead of the store driving it?
+> **Expert:** Because the cut walks many candidates and frees bytes until the incoming
+> fits — that has to be one atomic step under the ledger lock, or a concurrent
+> `recordHit` or hydration-failure drop could tear it. The store gets back the list of
+> evicted residents and does the file deletes and `onDrop` callbacks outside the lock.
+
 ### Prefill orchestration
 
 **Prefill Plan**:

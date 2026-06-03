@@ -243,9 +243,9 @@ struct LLMActorExtractSnapshotPayloadsTests {
 
     /// Literal pinning of the SSD on-disk wire-format contract. These
     /// strings are written verbatim into the snapshot header at
-    /// `SSDSnapshotStore.encodePlaceholderContainer`, so a typo, a
-    /// case rename, or any divergence from this table silently
-    /// corrupts cache files that a future reader would reject.
+    /// `encodePlaceholderContainer` (in `PlaceholderContainer.swift`),
+    /// so a typo, a case rename, or any divergence from this table
+    /// silently corrupts cache files that a future reader would reject.
     /// Assertions are literal — NOT sourced from
     /// `LLMActor.dtypeWireString` — so self-consistency cannot mask a
     /// contract drift. If a new `DType` case is added, extend this

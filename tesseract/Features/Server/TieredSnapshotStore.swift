@@ -187,16 +187,23 @@ final class TieredSnapshotStore: SnapshotStore {
 
     // MARK: - SSD admission (state 1 → state 2)
 
-    /// Enqueue a freshly captured payload into the SSD writer's
-    /// pending queue and route the resulting pending `SnapshotRef`
-    /// into `tree.admit`. Returns the raw writer result
-    /// so the caller can branch on rejection outcomes
-    /// (`rejectedTooLargeForBudget`, `rejectedInvalidCheckpointType`,
-    /// `rejectedUnregisteredPartition`). Returns `nil` when the SSD
-    /// tier is disabled — callers must treat that as "RAM-only
-    /// admission, no ref to track".
+    /// Build a descriptor from a captured snapshot's **domain inputs**,
+    /// enqueue the payload into the SSD writer's pending queue, and route
+    /// the resulting pending **Snapshot Ref** into `tree.admit`. The
+    /// caller hands the snapshot, its path-from-root, the partition key,
+    /// and the payload — never a hand-shaped `PersistedSnapshotDescriptor`.
+    /// The on-disk schema is owned by the ledger, so descriptor
+    /// construction goes through `SnapshotLedger.makeDescriptor`.
     ///
-    /// **Side effects on `.accepted`:**
+    /// Returns the pending `SnapshotRef` on admission, or `nil` when the
+    /// SSD tier is disabled **or** the writer rejected the enqueue (budget
+    /// / invalid checkpoint type / unregistered partition). The rejection
+    /// *reasons* are intentionally not surfaced here — no caller branches
+    /// on them, and they are asserted at the `SSDSnapshotStore.tryEnqueue`
+    /// seam. A `nil` return means "no ref to track" for both the disabled
+    /// and rejected cases.
+    ///
+    /// **Side effects on admission:**
     /// - The tree applies `admit` (state 1/2/4 → pending write), the sole
     ///   mutator of node state. Re-admission over a still-live ref returns
     ///   the superseded ID; its SSD backing is deleted *before* the new
@@ -206,41 +213,49 @@ final class TieredSnapshotStore: SnapshotStore {
     ///   `(node, tree)` pair so the writer's commit / drop callback can
     ///   always find the node, even after RAM eviction drops the body.
     ///
-    /// Non-suspending by construction: the underlying
-    /// `SSDSnapshotStore.tryEnqueue` is `nonisolated` and acquires
-    /// a plain `NSLock` for cross-thread safety, so calling this
+    /// Non-suspending by construction: descriptor construction is pure and
+    /// the underlying `SSDSnapshotStore.tryEnqueue` is `nonisolated` and
+    /// acquires a plain `NSLock` for cross-thread safety, so calling this
     /// from a synchronous MainActor Snapshot Admission closure never
     /// forces an `await` on the caller.
     @discardableResult
     func admitSnapshot(
         node: RadixTreeNode,
         tree: TokenRadixTree,
-        payload: SnapshotPayload,
-        descriptor: PersistedSnapshotDescriptor
-    ) -> TryEnqueueResult? {
+        partitionKey: CachePartitionKey,
+        pathFromRoot: [Int],
+        snapshot: HybridCacheSnapshot,
+        payload: SnapshotPayload
+    ) -> SnapshotRef? {
         guard let ssdStore else { return nil }
 
-        let result = ssdStore.tryEnqueue(
-            payload: payload,
-            descriptor: descriptor
+        let descriptor = SnapshotLedger.makeDescriptor(
+            partitionKey: partitionKey,
+            pathFromRoot: pathFromRoot,
+            snapshot: snapshot,
+            payloadBytes: payload.totalBytes
         )
 
-        if case .accepted(let ref) = result {
-            let supersededID = tree.admit(node: node, ref: ref)
-            if let supersededID {
-                // The old write may have already committed to the manifest
-                // with its file on disk; deleting it (SSD backing + stale
-                // pending entry) before seeding the new entry prevents an
-                // orphaned file + manifest entry.
-                deleteSnapshot(snapshotID: supersededID)
-            }
-            pendingRefsByID[ref.snapshotID] = PendingRef(
-                node: node,
-                tree: tree
-            )
+        guard case .accepted(let ref) = ssdStore.tryEnqueue(
+            payload: payload,
+            descriptor: descriptor
+        ) else {
+            return nil
         }
 
-        return result
+        let supersededID = tree.admit(node: node, ref: ref)
+        if let supersededID {
+            // The old write may have already committed to the manifest
+            // with its file on disk; deleting it (SSD backing + stale
+            // pending entry) before seeding the new entry prevents an
+            // orphaned file + manifest entry.
+            deleteSnapshot(snapshotID: supersededID)
+        }
+        pendingRefsByID[ref.snapshotID] = PendingRef(
+            node: node,
+            tree: tree
+        )
+        return ref
     }
 
     /// Remove a snapshot's SSD backing immediately. Used by leaf
