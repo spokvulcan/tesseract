@@ -121,9 +121,17 @@ final class DependencyContainer: ObservableObject {
         )
     }()
 
-    // Overlays
-    lazy var overlayPanelController = OverlayPanelController(settings: settingsManager)
-    lazy var fullScreenBorderController = FullScreenBorderPanelController(settings: settingsManager)
+    // Overlays — two configured instances of the one OverlayPanel module.
+    lazy var pillOverlay = OverlayPanel(
+        state: OverlayState(),
+        placement: .pill,
+        content: { GlobalOverlayHUD(overlayState: $0) }
+    )
+    lazy var borderOverlay = OverlayPanel(
+        state: OverlayState(),
+        placement: .fullScreenBorder,
+        content: { FullScreenBorderOverlayView(overlayState: $0) }
+    )
     private var cancellables = Set<AnyCancellable>()
     private var observationTasks: [Task<Void, Never>] = []
 
@@ -218,25 +226,32 @@ final class DependencyContainer: ObservableObject {
         hotkeyManager.startListening()
         startSettingsObservation()
 
-        // Setup overlay panels
-        overlayPanelController.setup()
-        fullScreenBorderController.setup()
+        // Setup overlay panels. Seed the border's glow theme synchronously
+        // *before* its view is created, so a user's non-default theme shows on the
+        // very first frame instead of flashing the default while the settings
+        // observation below catches up (it emits at subscription, but async).
+        borderOverlay.state.glowTheme = settingsManager.glowTheme
+        pillOverlay.setup()
+        borderOverlay.setup()
 
-        // Forward dictation state to overlay panels
+        // Forward dictation state to both overlays (the disabled one stays hidden).
         observationTasks.append(Task { [weak self] in
             guard let self else { return }
             for await state in Observations({ self.dictationCoordinator.state }) {
-                self.overlayPanelController.handleStateChange(state)
-                self.fullScreenBorderController.handleStateChange(state)
+                self.pillOverlay.handleStateChange(state)
+                self.borderOverlay.handleStateChange(state)
             }
         })
 
-        // Forward audio level to overlay panels
+        // Forward audio level to both overlays; each drops it while disabled, so the
+        // hidden overlay does no SwiftUI work at audio frame-rate. The `isEnabled`
+        // gate inside the panel is the single source of truth for which overlay is
+        // live — no separate active-overlay pointer to keep in sync.
         observationTasks.append(Task { [weak self] in
             guard let self else { return }
             for await level in Observations({ self.audioCaptureEngine.audioLevel }) {
-                self.overlayPanelController.handleAudioLevelChange(level)
-                self.fullScreenBorderController.handleAudioLevelChange(level)
+                self.pillOverlay.handleAudioLevelChange(level)
+                self.borderOverlay.handleAudioLevelChange(level)
             }
         })
 
@@ -251,10 +266,11 @@ final class DependencyContainer: ObservableObject {
             }
         })
 
+        // Keep the border's glow theme live — pure view data, set on state directly.
         observationTasks.append(Task { [weak self] in
             guard let self else { return }
             for await glowTheme in Observations({ self.settingsManager.glowTheme }) {
-                self.fullScreenBorderController.handleGlowThemeChange(glowTheme)
+                self.borderOverlay.state.glowTheme = glowTheme
             }
         })
 
@@ -335,15 +351,17 @@ final class DependencyContainer: ObservableObject {
         }
     }
 
-    /// Updates which overlay controller is active based on current settings
+    /// Enables the overlay matching the current style and disables the other. Each
+    /// panel's `isEnabled` then gates both its visibility and its audio-frame
+    /// handling, so the disabled overlay stays hidden and idle.
     private func updateActiveOverlay() {
         switch settingsManager.overlayStyle {
         case .pill:
-            overlayPanelController.setEnabled(true)
-            fullScreenBorderController.setEnabled(false)
+            pillOverlay.setEnabled(true)
+            borderOverlay.setEnabled(false)
         case .fullScreenBorder:
-            overlayPanelController.setEnabled(false)
-            fullScreenBorderController.setEnabled(true)
+            pillOverlay.setEnabled(false)
+            borderOverlay.setEnabled(true)
         }
     }
 

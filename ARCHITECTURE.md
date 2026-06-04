@@ -83,11 +83,11 @@ tesseract/
 │   ├── TextInjector.swift             # Clipboard-based paste injection
 │   ├── TextExtractor.swift            # Selected text extraction
 │   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
-│   ├── OverlayPanelController.swift   # Recording pill overlay (NSPanel)
-│   ├── FullScreenBorderPanelController.swift  # Full-screen glow overlay
+│   ├── OverlayPanel.swift             # Dictation overlay lifecycle: pill + border (NSPanel)
+│   ├── OverlayPlacement.swift         # Overlay frame math (pure value, unit-tested)
+│   ├── PillMetrics.swift              # Pill per-state sizes (shared by placement + HUD)
 │   ├── OverlayScreenLocator.swift     # Screen detection for overlays
-│   ├── AgentNotchPanelController.swift# Agent notch overlay
-│   └── TTSNotchPanelController.swift  # TTS notch overlay
+│   └── TTSNotchPanelController.swift  # TTS notch overlay (separate; not unified)
 │
 ├── Features/                    # Feature modules
 │   ├── Dictation/
@@ -156,7 +156,7 @@ struct DictationContentView: View {
 Task { [weak self] in
     guard let self else { return }
     for await state in Observations { self.dictationCoordinator.state } {
-        self.overlayPanelController.handleStateChange(state)
+        self.pillOverlay.handleStateChange(state)
     }
 }
 ```
@@ -312,9 +312,9 @@ All AppKit bridging lives in `Platform/`. These are the features that SwiftUI ca
 - Clipboard text injection (CGEvent Cmd+V simulation)
 - Always-on-top overlay panels (NSPanel)
 - Menu bar status item (NSStatusItem)
-- Notch overlays for TTS/Agent
+- Notch overlay for TTS
 
-Panel controllers receive state via push methods (`handleStateChange`, `handleAudioLevelChange`) — they are publisher-agnostic. The DependencyContainer owns the `Observations` subscriptions and pushes values.
+The Overlay Panel receives dictation state via a push method (`handleStateChange`) — it is publisher-agnostic. Pure view data (`audioLevel`, `glowTheme`) carries no panel-side behaviour, so it is set directly on the panel's exposed `OverlayState`. The DependencyContainer owns the `Observations` subscriptions and pushes/sets values.
 
 ---
 
@@ -360,7 +360,7 @@ Key architectural decisions documented in `docs/macos26-swiftui-architecture-rev
 - **Speech model ports below the engines/coordinator**: `SpeechRecognizer`, `SpeechSynthesizer`, and the `@MainActor` `AudioPlayback` sibling seam make the speech engines' and coordinator's orchestration testable without models, a mic, or `AVAudioEngine` — same facade-above / port-below shape as the Settings Store. See ADR-0003 and `CONTEXT.md` → Speech model ports and playback.
 - **`Observations` async sequence for non-view code**: Replaces Combine `$property.sink` for observing `@Observable` types outside SwiftUI views.
 - **`AgentFactory` separate from container**: Container wires dependencies; factory orchestrates multi-step bootstrap.
-- **Panel controllers are publisher-agnostic**: Accept values via `handleStateChange`/`handleAudioLevelChange` methods. The subscription mechanism lives in DependencyContainer and can change independently.
+- **Overlay Panel is publisher-agnostic**: Accepts dictation state via `handleStateChange`; pure view data (`audioLevel`, `glowTheme`) is set directly on its exposed `OverlayState`. The subscription mechanism lives in DependencyContainer and can change independently.
 - **Defer Agent package extraction**: Don't extract `Features/Agent` into a separate Swift package until dependency boundaries are clearer.
 - **Defer separate Settings scene**: Keep settings in the main window sidebar.
 - **Defer UI automation**: Invest in coordinator unit tests first.
