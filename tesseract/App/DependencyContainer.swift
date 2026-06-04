@@ -132,9 +132,6 @@ final class DependencyContainer: ObservableObject {
         placement: .fullScreenBorder,
         content: { FullScreenBorderOverlayView(overlayState: $0) }
     )
-    /// The enabled overlay's state — the audio-level forwarder mutates only this,
-    /// so the hidden overlay does no work at audio frame-rate.
-    private var activeOverlayState: OverlayState?
     private var cancellables = Set<AnyCancellable>()
     private var observationTasks: [Task<Void, Never>] = []
 
@@ -246,13 +243,15 @@ final class DependencyContainer: ObservableObject {
             }
         })
 
-        // Forward audio level to the *active* overlay only, so the hidden overlay
-        // does no SwiftUI work at audio frame-rate (parity with the per-controller
-        // gate this replaces). `dictationState` still goes to both above.
+        // Forward audio level to both overlays; each drops it while disabled, so the
+        // hidden overlay does no SwiftUI work at audio frame-rate. The `isEnabled`
+        // gate inside the panel is the single source of truth for which overlay is
+        // live — no separate active-overlay pointer to keep in sync.
         observationTasks.append(Task { [weak self] in
             guard let self else { return }
             for await level in Observations({ self.audioCaptureEngine.audioLevel }) {
-                self.activeOverlayState?.audioLevel = level
+                self.pillOverlay.handleAudioLevelChange(level)
+                self.borderOverlay.handleAudioLevelChange(level)
             }
         })
 
@@ -352,18 +351,17 @@ final class DependencyContainer: ObservableObject {
         }
     }
 
-    /// Updates which overlay is active based on current settings, and records its
-    /// state as the audio-level target so only the visible overlay reacts to audio.
+    /// Enables the overlay matching the current style and disables the other. Each
+    /// panel's `isEnabled` then gates both its visibility and its audio-frame
+    /// handling, so the disabled overlay stays hidden and idle.
     private func updateActiveOverlay() {
         switch settingsManager.overlayStyle {
         case .pill:
             pillOverlay.setEnabled(true)
             borderOverlay.setEnabled(false)
-            activeOverlayState = pillOverlay.state
         case .fullScreenBorder:
             pillOverlay.setEnabled(false)
             borderOverlay.setEnabled(true)
-            activeOverlayState = borderOverlay.state
         }
     }
 

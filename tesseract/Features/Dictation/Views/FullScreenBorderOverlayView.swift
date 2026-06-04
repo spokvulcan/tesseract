@@ -179,21 +179,15 @@ struct FullScreenBorderOverlayView: View {
     }
 
     private var shouldShow: Bool {
-        switch overlayState.dictationState {
-        case .recording, .processing, .error:
-            return true
-        default:
-            return false
-        }
+        overlayState.dictationState.showsOverlay
     }
 
     private func handleStateChange(_ newState: DictationState) {
-        switch newState {
-        case .recording, .processing, .error:
+        if newState.showsOverlay {
             withAnimation(.easeInOut(duration: 0.3)) {
                 isVisible = true
             }
-        default:
+        } else {
             withAnimation(.easeInOut(duration: 0.25)) {
                 isVisible = false
             }

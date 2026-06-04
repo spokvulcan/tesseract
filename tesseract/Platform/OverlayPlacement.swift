@@ -11,7 +11,7 @@ import AppKit
 /// Lifted from `OverlayScreenLocator.preferredScreen()` by the ``OverlayPanel``,
 /// it lets the placement frame math be a pure function of CoreGraphics rects
 /// with no live `NSScreen` dependency — which is what makes it unit-testable.
-struct ScreenGeometry: Equatable {
+nonisolated struct ScreenGeometry: Equatable, Sendable {
     let frame: NSRect
     let visibleFrame: NSRect
 }
@@ -20,27 +20,32 @@ struct ScreenGeometry: Equatable {
 ///
 /// A small value carrying a pure `frame(ScreenGeometry, DictationState) -> NSRect`
 /// — the only genuinely policy-bearing logic the two overlay controllers held —
-/// plus `animatesReposition`, which governs the show / visible-state-apply path
+/// plus `animatesResizeOnShow`, which governs the show / visible-state-apply path
 /// only (screen-change relayout is always instant for both overlays).
 ///
 /// Two presets exist: ``pill`` and ``fullScreenBorder``.
-struct OverlayPlacement {
-    /// Where the panel sits for a given screen geometry and dictation state.
-    /// `@MainActor` because the pill reads the MainActor-isolated
-    /// `GlobalOverlayHUD.Metrics` sizes (the single source of truth for them).
-    let frame: @MainActor (ScreenGeometry, DictationState) -> NSRect
+///
+/// `nonisolated` so it escapes the build's MainActor default isolation: a pure
+/// value the frame math (and its tests) can use off the main actor.
+nonisolated struct OverlayPlacement: Sendable {
+    /// Where the panel sits for a given screen geometry and dictation state. A pure
+    /// function of CoreGraphics rects (sizes come from the non-isolated
+    /// ``PillMetrics``), so it carries no actor isolation and stays off-main-testable.
+    let frame: @Sendable (ScreenGeometry, DictationState) -> NSRect
 
-    /// Whether the show / visible-state-apply path animates the reposition/resize.
-    /// The pill animates; the border snaps. Screen-change relayout ignores this.
-    let animatesReposition: Bool
+    /// Whether the show / visible-state-apply path animates the resize. Only the
+    /// pill's frame changes size between states, so only the pill animates; the
+    /// border's frame is state-independent and snaps. Screen-change relayout always
+    /// snaps regardless (see `OverlayPanel.refreshPanelLayout`).
+    let animatesResizeOnShow: Bool
 }
 
-extension OverlayPlacement {
+nonisolated extension OverlayPlacement {
     /// The dictation HUD: a state-sized rect centred horizontally in the visible
     /// frame, sitting at a fixed bottom inset. Animates its resize on show.
     static let pill = OverlayPlacement(
         frame: { geometry, state in
-            let size = pillSize(for: state)
+            let size = PillMetrics.size(for: state)
             let visible = geometry.visibleFrame
             return NSRect(
                 x: visible.midX - size.width / 2,
@@ -49,27 +54,16 @@ extension OverlayPlacement {
                 height: size.height
             )
         },
-        animatesReposition: true
+        animatesResizeOnShow: true
     )
 
     /// The pill floats this far above the bottom of the visible frame.
     private static let pillBottomInset: CGFloat = 60
 
-    private static func pillSize(for state: DictationState) -> CGSize {
-        switch state {
-        case .error:
-            return GlobalOverlayHUD.Metrics.errorSize
-        case .processing:
-            return GlobalOverlayHUD.Metrics.processingSize
-        case .recording, .listening, .idle:
-            return GlobalOverlayHUD.Metrics.recordingSize
-        }
-    }
-
     /// The full-screen border: fills the whole screen `frame` for any state,
-    /// and snaps (no reposition animation).
+    /// and snaps (no resize animation — its frame never changes size).
     static let fullScreenBorder = OverlayPlacement(
         frame: { geometry, _ in geometry.frame },
-        animatesReposition: false
+        animatesResizeOnShow: false
     )
 }

@@ -15,12 +15,6 @@ struct GlobalOverlayHUD: View {
     @State private var isVisible = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    enum Metrics {
-        static let recordingSize = CGSize(width: 120, height: 32)
-        static let processingSize = CGSize(width: 112, height: 34)
-        static let errorSize = CGSize(width: 260, height: 44)
-    }
-
     var body: some View {
         ZStack {
             if shouldShow {
@@ -41,12 +35,7 @@ struct GlobalOverlayHUD: View {
     }
 
     private var shouldShow: Bool {
-        switch overlayState.dictationState {
-        case .recording, .processing, .error:
-            return true
-        default:
-            return false
-        }
+        overlayState.dictationState.showsOverlay
     }
 
     @ViewBuilder
@@ -133,7 +122,11 @@ struct GlobalOverlayHUD: View {
         time: TimeInterval?,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        let size = pillSize(for: style)
+        // Size from the shared PillMetrics keyed on the live dictation state, so the
+        // hosted pill always matches the NSPanel frame the placement sized (which
+        // reads the same source). `hudContent` only renders for overlay-showing
+        // states, so the state→size lookup is always one of the three pill sizes.
+        let size = PillMetrics.size(for: overlayState.dictationState)
         let cornerRadius = size.height / 2
 
         return ZStack {
@@ -166,17 +159,6 @@ struct GlobalOverlayHUD: View {
         case recording
         case processing
         case error
-    }
-
-    private func pillSize(for style: PillStyle) -> CGSize {
-        switch style {
-        case .error:
-            return Metrics.errorSize
-        case .recording:
-            return Metrics.recordingSize
-        case .processing:
-            return Metrics.processingSize
-        }
     }
 
     private func backgroundMaterial(for style: PillStyle) -> Material {
@@ -276,15 +258,7 @@ struct GlobalOverlayHUD: View {
     }
 
     private func updateVisibility(for newState: DictationState) {
-        let show: Bool
-        switch newState {
-        case .recording, .processing, .error:
-            show = true
-        default:
-            show = false
-        }
-
-        if show {
+        if newState.showsOverlay {
             animateVisibility(show: true, response: 0.3, dampingFraction: 0.7)
         } else {
             animateVisibility(show: false, response: 0.25, dampingFraction: 0.8)

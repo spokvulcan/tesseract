@@ -85,6 +85,7 @@ tesseract/
 │   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
 │   ├── OverlayPanel.swift             # Dictation overlay lifecycle: pill + border (NSPanel)
 │   ├── OverlayPlacement.swift         # Overlay frame math (pure value, unit-tested)
+│   ├── PillMetrics.swift              # Pill per-state sizes (shared by placement + HUD)
 │   ├── OverlayScreenLocator.swift     # Screen detection for overlays
 │   └── TTSNotchPanelController.swift  # TTS notch overlay (separate; not unified)
 │

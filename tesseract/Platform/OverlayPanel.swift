@@ -35,7 +35,6 @@ final class OverlayPanel<Content: View> {
     private var hostingView: NSHostingView<Content>?
     private var cancellables = Set<AnyCancellable>()
     private var hideRequestID: UInt = 0
-    private var lastState: DictationState = .idle
     private var visibilityCheckTask: Task<Void, Never>?
     private var isEnabled = true
 
@@ -61,11 +60,21 @@ final class OverlayPanel<Content: View> {
         startScreenObservation()
     }
 
-    /// Enable or disable this overlay (the pill-vs-border style switch).
+    /// Enable or disable this overlay (the pill-vs-border style switch). `isEnabled`
+    /// is the single gate for "is this overlay live": it governs both visibility
+    /// (here) and whether audio frames are applied (``handleAudioLevelChange(_:)``).
     func setEnabled(_ enabled: Bool) {
         isEnabled = enabled
         if enabled {
-            applyVisibility(for: lastState)
+            // Start from a clean amplitude. While disabled this overlay drops audio
+            // frames, so its `audioLevel` is frozen at whatever it held when last
+            // hidden — including the non-zero level captured mid-utterance if the
+            // style was switched during `.processing`/`.error` (capture already
+            // stopped, so no fresh frame arrives to correct it). Zeroing here keeps
+            // a stale amplitude from flashing on first show; a live recording's next
+            // frame overwrites it within ~1/60s.
+            state.audioLevel = 0
+            applyVisibility()
         } else {
             hidePanel()
         }
@@ -73,10 +82,17 @@ final class OverlayPanel<Content: View> {
 
     /// The single side-effecting entry: updates dictation state and drives show/hide.
     func handleStateChange(_ dictationState: DictationState) {
-        lastState = dictationState
         state.dictationState = dictationState
         guard isEnabled else { return }
-        applyVisibility(for: dictationState)
+        applyVisibility()
+    }
+
+    /// Forward an audio level to the hosted content. Dropped while disabled, so the
+    /// hidden overlay does no SwiftUI work at audio frame-rate — gated on the same
+    /// `isEnabled` as visibility, so "which overlay is live" has one source of truth.
+    func handleAudioLevelChange(_ level: Float) {
+        guard isEnabled else { return }
+        state.audioLevel = level
     }
 
     // MARK: - Panel creation
@@ -124,20 +140,11 @@ final class OverlayPanel<Content: View> {
 
     // MARK: - Visibility
 
-    private func applyVisibility(for dictationState: DictationState) {
-        if shouldBeVisible(for: dictationState) {
+    private func applyVisibility() {
+        if state.dictationState.showsOverlay {
             showPanel()
         } else {
             hidePanel()
-        }
-    }
-
-    private func shouldBeVisible(for dictationState: DictationState) -> Bool {
-        switch dictationState {
-        case .recording, .processing, .error:
-            return true
-        case .idle, .listening:
-            return false
         }
     }
 
@@ -146,8 +153,8 @@ final class OverlayPanel<Content: View> {
         hideRequestID &+= 1
 
         // Reposition in case the screen changed. The placement decides whether the
-        // reposition/resize animates (the pill) or snaps (the border).
-        applyFrame(for: lastState, animated: placement.animatesReposition)
+        // resize animates (the pill) or snaps (the border).
+        applyFrame(for: state.dictationState, animated: placement.animatesResizeOnShow)
 
         panel.orderFrontRegardless()
 
@@ -221,10 +228,10 @@ final class OverlayPanel<Content: View> {
     private func refreshPanelLayout() {
         guard isEnabled else { return }
         guard let panel = panel else { return }
-        // Screen-change relayout is always instant — `animatesReposition` governs
+        // Screen-change relayout is always instant — `animatesResizeOnShow` governs
         // only the show / visible-state path, not following the active screen.
-        applyFrame(for: lastState, animated: false)
-        if shouldBeVisible(for: lastState) {
+        applyFrame(for: state.dictationState, animated: false)
+        if state.dictationState.showsOverlay {
             panel.orderFrontRegardless()
         }
         ensureVisibleIfNeeded()
@@ -240,7 +247,7 @@ final class OverlayPanel<Content: View> {
 
     private func ensureVisibleIfNeeded() {
         guard isEnabled else { return }
-        guard shouldBeVisible(for: lastState) else { return }
+        guard state.dictationState.showsOverlay else { return }
         guard let panel = panel else { return }
         if !panel.isVisible || !panel.occlusionState.contains(.visible) {
             panel.orderFrontRegardless()

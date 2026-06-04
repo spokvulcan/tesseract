@@ -1145,16 +1145,20 @@ behaviour is uniform; differences are an **Overlay Placement**, not toggles).
 The whole injected difference between one **Overlay Panel** and another, as a small
 value: a pure `frame(ScreenGeometry, DictationState) -> NSRect` (the dictation HUD: a
 state-sized rect centred at the bottom inset of the visible frame; the border: the full
-screen frame) and `animatesReposition` (the HUD animates its resize when a visible state is
+screen frame) and `animatesResizeOnShow` (the HUD animates its resize when a visible state is
 applied — *including* transitions between visible states while already on screen, e.g.
-`recording → processing → error`; the border snaps). `animatesReposition` governs only the
-show / visible-state path; screen-change relayout (the four observed notifications) is
-instant for both overlays. Because the frame computation takes a **Screen Geometry** value
+`recording → processing → error`; the border, whose frame never changes size, snaps).
+`animatesResizeOnShow` governs only the show / visible-state path; screen-change relayout
+(the four observed notifications) is instant for both overlays. The per-state pill sizes are
+a single non-isolated `PillMetrics` value shared by the placement (which sizes the panel) and
+the HUD (which sizes the pill it hosts), so the frame and its content can't drift; being
+non-isolated is also what lets the frame closure (and its tests) run off the main actor.
+Because the frame computation takes a **Screen Geometry** value
 rather than an `NSScreen`, and is a pure closure rather than the former private
 `updatePanelFrame`, it has a focused test surface — assert the rect math for a given geometry
 and `DictationState` with no panel, no app, no `NSScreen`. Two presets exist: `.pill` and
 `.fullScreenBorder`.
-_Avoid_: layout strategy, frame provider (it carries the reposition-animation bit too, not
+_Avoid_: layout strategy, frame provider (it carries the resize-animation bit too, not
 only the frame), overlay style (`OverlayStyle` is the user **Setting** that selects *which*
 placement is live, not the placement itself), `NSScreen` in the signature (the placement
 takes a **Screen Geometry** so it stays unit-testable).
