@@ -1134,7 +1134,8 @@ the injected `OverlayState` the content view reads, so those carry no panel-side
 and need no method. The only injected difference between overlays is an **Overlay Placement**
 plus the content view; both former controllers (`OverlayPanelController`,
 `FullScreenBorderPanelController`) collapse into two configured instances wired in
-`DependencyContainer`. The single screen seam stays `OverlayScreenLocator.preferredScreen()`.
+`DependencyContainer`. The single screen seam stays `OverlayScreenLocator.preferredScreen()`,
+from which it lifts a **Screen Geometry** to feed the **Overlay Placement**.
 _Avoid_: overlay controller (the per-overlay class is what dissolved *into* this), overlay
 manager, HUD window, generic NSPanel wrapper (it is specifically the dictation-reactive
 floating overlay, not any panel — see the TTS notch ambiguity), config-flag panel (the
@@ -1142,15 +1143,31 @@ behaviour is uniform; differences are an **Overlay Placement**, not toggles).
 
 **Overlay Placement**:
 The whole injected difference between one **Overlay Panel** and another, as a small
-value: a `frame(NSScreen, DictationState) -> NSRect` (the dictation HUD: a state-sized
-rect centred at the bottom inset; the border: the full `screen.frame`) and
-`animatesReposition` (the HUD animates its size change on show; the border snaps). Because
-the frame computation is now a pure closure rather than a private `updatePanelFrame`, it has
-a focused test surface — assert the rect math for a given screen and `DictationState` with no
-panel, no app. Two presets exist: `.pill` and `.fullScreenBorder`.
+value: a pure `frame(ScreenGeometry, DictationState) -> NSRect` (the dictation HUD: a
+state-sized rect centred at the bottom inset of the visible frame; the border: the full
+screen frame) and `animatesReposition` (the HUD animates its resize when a visible state is
+applied — *including* transitions between visible states while already on screen, e.g.
+`recording → processing → error`; the border snaps). `animatesReposition` governs only the
+show / visible-state path; screen-change relayout (the four observed notifications) is
+instant for both overlays. Because the frame computation takes a **Screen Geometry** value
+rather than an `NSScreen`, and is a pure closure rather than the former private
+`updatePanelFrame`, it has a focused test surface — assert the rect math for a given geometry
+and `DictationState` with no panel, no app, no `NSScreen`. Two presets exist: `.pill` and
+`.fullScreenBorder`.
 _Avoid_: layout strategy, frame provider (it carries the reposition-animation bit too, not
 only the frame), overlay style (`OverlayStyle` is the user **Setting** that selects *which*
-placement is live, not the placement itself).
+placement is live, not the placement itself), `NSScreen` in the signature (the placement
+takes a **Screen Geometry** so it stays unit-testable).
+
+**Screen Geometry**:
+The plain-rect screen value an **Overlay Placement** consumes — `{ frame, visibleFrame }`,
+both `NSRect`. The **Overlay Panel** lifts it from `OverlayScreenLocator.preferredScreen()`
+(`.frame` / `.visibleFrame`) and hands it to the placement, so the frame math depends on
+CoreGraphics rects, not on a live `NSScreen` that cannot be constructed under test. This is
+the move that turns the buried `updatePanelFrame` into the carve's one real unit-test surface.
+_Avoid_: passing `NSScreen` to the placement, screen frame as a bare `NSRect` (the placement
+needs both the full frame and the visible frame — the HUD insets the visible frame, the
+border fills the full frame).
 
 > **Flagged ambiguity — Overlay Panel vs the TTS notch.** The **Overlay Panel** is the
 > shared lifecycle behind the dictation HUD and the full-screen border — both non-interactive,
@@ -1173,8 +1190,9 @@ placement is live, not the placement itself).
 > interactive: true` — a config-flag soup that re-shallows the module. It earns staying separate.
 > **Dev:** If the lifecycle is all `NSPanel`/`NSScreen`, what's actually testable after the carve?
 > **Expert:** The placement. The frame math moves out of a private method into a pure
-> `frame(screen, state)` closure, so you assert "recording state on this screen → this rect"
-> with no panel. The fade and re-assertion stay AppKit-bound and are exercised through the app —
+> `frame(geometry, state)` closure over a **Screen Geometry** value, so you assert "recording
+> state on this geometry → this rect" with no panel and no `NSScreen`. The fade and
+> re-assertion stay AppKit-bound and are exercised through the app —
 > the win there is locality and the ~400 deduplicated lines, not a unit test.
 
 ## Why
