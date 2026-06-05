@@ -39,6 +39,10 @@ Not unit tests — these run against a real model.
 ```bash
 scripts/dev.sh prefix-cache-e2e          # PrefixCacheE2ERunner — TTFT/output equivalence proxy
 scripts/dev.sh hybrid-cache-correctness  # HybridCacheCorrectnessRunner — bitwise logit + state equivalence
+
+TESSERACT_ENABLE_DECODE_RATE_TESTS=1 \
+  xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -only-testing:tesseractTests/TriAttentionMoEDecodeRateTests
 ```
 
 Both exit non-zero on any failed check. Run before releases and after any change

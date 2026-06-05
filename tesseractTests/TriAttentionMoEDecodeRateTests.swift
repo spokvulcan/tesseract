@@ -13,9 +13,9 @@ import Testing
 /// the same shape fails loudly instead of silently degrading user-visible
 /// decode throughput.
 ///
-/// Opt-in: tests skip (and log) when the MoE model is not on disk. Run
-/// manually with the MoE artifact downloaded via the Tesseract model
-/// manager.
+/// Opt-in: tests skip (and log) unless `TESSERACT_ENABLE_DECODE_RATE_TESTS=1`
+/// is set and the MoE model is on disk. Run manually with the MoE artifact
+/// downloaded via the Tesseract model manager.
 @MainActor
 @Suite(.serialized)
 struct TriAttentionMoEDecodeRateTests {
@@ -150,6 +150,13 @@ struct TriAttentionMoEDecodeRateTests {
     /// `~/Library/Containers/app.tesseract.agent/Data/Library/Application Support/models/<name>` —
     /// the same directory the Tesseract model manager writes into.
     private static func resolveMoEModelOrSkip() -> URL? {
+        guard ProcessInfo.processInfo.environment["TESSERACT_ENABLE_DECODE_RATE_TESTS"] == "1" else {
+            print(
+                "[decode-rate] SKIP — set TESSERACT_ENABLE_DECODE_RATE_TESTS=1 "
+                    + "to run the MoE decode-rate regression gate."
+            )
+            return nil
+        }
         let modelDir = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support/models", isDirectory: true)
             .appendingPathComponent(moeModelDirectoryName, isDirectory: true)

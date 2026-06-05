@@ -82,22 +82,24 @@ struct PromptCacheTelemetryStoreTests {
 
     @Test func pauseBuffersDiagnosticsUntilResume() async {
         let store = PromptCacheTelemetryStore(registerDiagnosticsSink: true)
+        let requestID = UUID()
         store.toggleLiveUpdates()
 
-        PrefixCacheDiagnostics.forwardTelemetryEvent(event("lookup", fields: [
+        PrefixCacheDiagnostics.forwardTelemetryEvent(event("lookup", requestID: requestID, fields: [
             ("reason", "hit"),
             ("promptTokens", "32"),
             ("skippedPrefillTokens", "16"),
         ]))
 
         try? await Task.sleep(nanoseconds: 50_000_000)
-        #expect(store.events.isEmpty)
+        #expect(events(in: store, matching: requestID).isEmpty)
 
         store.toggleLiveUpdates()
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        try? await waitUntil { !events(in: store, matching: requestID).isEmpty }
 
-        #expect(store.events.count == 1)
-        #expect(store.aggregate.hitRate == 1)
+        let matchingEvents = events(in: store, matching: requestID)
+        #expect(matchingEvents.count == 1)
+        #expect(PromptCacheTelemetryAggregate.from(events: matchingEvents).hitRate == 1)
     }
 
     @Test func exportJSONContainsSnapshotAggregateAndEvents() throws {
@@ -140,17 +142,39 @@ struct PromptCacheTelemetryStoreTests {
 
     private func event(
         _ name: String,
+        requestID: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
         fields: [(String, String)] = []
     ) -> PromptCacheTelemetryEvent {
         PromptCacheTelemetryEvent(
             timestamp: Date(timeIntervalSince1970: 100),
             scope: .request,
             eventName: name,
-            requestID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            requestID: requestID,
             modelID: "telemetry-test",
             kvBits: 8,
             kvGroupSize: 64,
             fields: fields
         )
+    }
+
+    private func events(
+        in store: PromptCacheTelemetryStore,
+        matching requestID: UUID
+    ) -> [PromptCacheTelemetryEvent] {
+        store.events.filter { $0.requestID == requestID }
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(3),
+        _ condition: @MainActor @Sendable () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            try await Task.sleep(for: .milliseconds(10))
+            if ContinuousClock.now >= deadline {
+                Issue.record("waitUntil timed out after \(timeout)")
+                return
+            }
+        }
     }
 }

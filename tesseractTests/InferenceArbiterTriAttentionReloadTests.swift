@@ -120,7 +120,7 @@ struct InferenceArbiterTriAttentionReloadTests {
         try await waitUntil({ await counter.iterations >= 3 })
         #expect(await counter.records == 0)
 
-        settings.selectedAgentModelID = "qwen3.5-4b-paro"
+        settings.selectedAgentModelID = "qwen3.5-9b-paro"
         try await waitUntil({ await counter.iterations >= 4 })
         #expect(await counter.records == 0)
 
@@ -130,7 +130,7 @@ struct InferenceArbiterTriAttentionReloadTests {
         try await waitUntil({ await counter.iterations >= 5 })
         #expect(await counter.records == 1)
 
-        settings.selectedAgentModelID = "qwen3-thinking-2507"
+        settings.selectedAgentModelID = "qwen3.5-4b-paro"
         try await waitUntil({ await counter.iterations >= 6 })
         #expect(await counter.records == 2)
     }
