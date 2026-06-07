@@ -2,9 +2,14 @@
 //  TTSWordTracker.swift
 //  tesseract
 //
-//  Token-aligned word tracker for TTS playback overlay.
-//  Uses BPE token-to-character offsets for ~80ms resolution tracking.
-//  Falls back to proportional estimation when token offsets are unavailable.
+//  The @Observable @MainActor stateful driver of the pure `WordTimeline`. It owns
+//  the 60fps Timer, the injected `playbackTimeProvider` clock seam, the monotonic
+//  `recognizedCharCount` and the other published view state the notch overlay reads,
+//  and the per-segment carry-over (the smoothing `Pacing`, the static learned
+//  chars/sec, the segment time window). It delegates the per-tick pacing *fold* to
+//  `WordTimeline`, keeping only the cross-segment estimate model here (the duration
+//  seed, the learned chars/sec, the smoothing carry) — the Chat Transcript / Chat
+//  Transcript Controller shape, one layer over in the speech feature.
 //
 
 import Foundation
@@ -26,35 +31,38 @@ final class TTSWordTracker {
     }
     private(set) var isActive: Bool = false
 
+    /// The pure word model the view renders — word char-ranges, annotation flags, and
+    /// the pacing fold. Reassigned per segment; the view reads it instead of
+    /// re-deriving word boundaries.
+    private(set) var timeline = WordTimeline(text: "")
+
     // MARK: - Internal state
 
-    private(set) var words: [String] = []
-    private var wordEndOffsets: [Int] = []
-    private(set) var totalCharCount: Int = 0
     private var totalDuration: TimeInterval = 0
     private var playbackTimeProvider: (() -> TimeInterval)?
     private var timer: Timer?
     private var tickLogCounter: Int = 0
 
-    // MARK: - Segment time windowing
+    // MARK: - Segment Window
 
-    /// Cumulative playback time at the start of the current segment
-    private var segmentTimeBase: TimeInterval = 0
-    /// Cumulative scheduled duration at the start of the current segment
-    private var segmentDurationBase: TimeInterval = 0
+    /// The single playback-time base this segment's pacing is measured against — the
+    /// previous segment's cumulative scheduled duration (CONTEXT.md → Segment Window).
+    /// Replaces the coupled time/duration bases that were always assigned the same value.
+    ///
+    /// Invariant: this is subtracted from BOTH the playback head time (`tick`) and the
+    /// cumulative scheduled duration (`updateTotalDuration`). One base is correct for
+    /// both only because they share an origin — playback start, where head time and
+    /// scheduled duration coincide. If playback ever offsets the head from scheduled
+    /// duration (pre-roll, gapless trim, a resume that shifts the head origin), this
+    /// must split back into two bases.
+    private var segmentBase: TimeInterval = 0
 
-    // MARK: - Token timeline (primary path)
+    // MARK: - Pacing carry-over
 
-    /// Per-token character offsets from BPE tokenization.
-    /// Entry i = character offset where token i starts in the text.
-    /// Stretched across the full audio duration for pacing.
-    private var tokenCharOffsets: [Int] = []
-
-    // MARK: - Proportional fallback state
-
-    /// Smoothed effective duration — blends from estimate to actual when generation completes
-    private var smoothedEffDuration: TimeInterval = 0
-    /// The text-length-based estimate computed at start
+    /// The `WordTimeline` smoothing carry threaded through `advance` each tick.
+    private var pacing = WordTimeline.Pacing(seed: 0)
+    /// The text-length-based estimate computed at start, aligned to actual on
+    /// `markSegmentComplete`. Fed into the pacing fold; never stored on the timeline.
     private var estimatedFinalDuration: TimeInterval = 0
 
     /// Adaptive chars/sec rate, learned from previous generations.
@@ -62,95 +70,51 @@ final class TTSWordTracker {
     /// Default of 15 is a reasonable starting point for English TTS.
     private static var learnedCharsPerSec: Double = 15.0
 
-    /// Whether we're using token-aligned tracking (true) or proportional fallback (false)
-    private var useTokenTimeline: Bool = false
-
     // MARK: - Public API
 
     func start(text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval) {
         Log.speech.info("[WordTracker] start() — text=\(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count)")
         stop()
 
-        let normalized = text
-            .replacingOccurrences(of: "\n", with: " ")
-            .split(omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
-            .map { String($0) }
-
-        words = normalized
-        totalCharCount = normalized.joined(separator: " ").count
+        timeline = WordTimeline(text: text, tokenCharOffsets: tokenCharOffsets)
         self.playbackTimeProvider = playbackTimeProvider
         recognizedCharCount = 0
         isGenerationComplete = false
         shouldDismiss = false
         isActive = true
-        segmentTimeBase = 0
-        segmentDurationBase = 0
+        segmentBase = 0
 
-        // Build cumulative character offsets for word boundaries
-        var offset = 0
-        wordEndOffsets = []
-        for word in words {
-            offset += word.count
-            wordEndOffsets.append(offset)
-            offset += 1 // space
-        }
-
-        // Both paths need a duration estimate for pacing
-        estimatedFinalDuration = Double(totalCharCount) / Self.learnedCharsPerSec
-        smoothedEffDuration = estimatedFinalDuration
-
-        // Use token timeline if offsets are available, otherwise fall back
-        if !tokenCharOffsets.isEmpty {
-            self.tokenCharOffsets = tokenCharOffsets
-            useTokenTimeline = true
-            Log.speech.info("[WordTracker] start() — using token timeline (\(tokenCharOffsets.count) tokens, estDur=\(String(format: "%.1f", self.estimatedFinalDuration))s)")
-        } else {
-            self.tokenCharOffsets = []
-            useTokenTimeline = false
-            Log.speech.info("[WordTracker] start() — proportional fallback, estimatedDuration=\(String(format: "%.1f", self.estimatedFinalDuration))s")
-        }
+        // Seed the pacing smoothing from the text-length estimate.
+        estimatedFinalDuration = seededEstimate()
+        pacing = WordTimeline.Pacing(seed: estimatedFinalDuration)
+        Log.speech.info("[WordTracker] start() — \(tokenCharOffsets.isEmpty ? "proportional" : "token-aligned"), estDur=\(String(format: "%.1f", self.estimatedFinalDuration))s")
 
         tickLogCounter = 0
         startTimer()
     }
 
     func updateTotalDuration(_ cumulativeDuration: TimeInterval) {
-        totalDuration = cumulativeDuration - segmentDurationBase
+        totalDuration = cumulativeDuration - segmentBase
     }
 
-    func updateText(_ text: String, tokenCharOffsets: [Int], segmentTimeBase: TimeInterval = 0, segmentDurationBase: TimeInterval = 0) {
-        Log.speech.info("[WordTracker] updateText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), timeBase=\(String(format: "%.2f", segmentTimeBase)), durBase=\(String(format: "%.2f", segmentDurationBase))")
-        let normalized = text
-            .replacingOccurrences(of: "\n", with: " ")
-            .split(omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
-            .map { String($0) }
+    func updateText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval) {
+        Log.speech.info("[WordTracker] updateText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), segmentBase=\(String(format: "%.2f", segmentBase))")
 
-        words = normalized
-        totalCharCount = normalized.joined(separator: " ").count
+        timeline = WordTimeline(text: text, tokenCharOffsets: tokenCharOffsets)
         recognizedCharCount = 0
         isGenerationComplete = false
         totalDuration = 0
-        self.segmentTimeBase = segmentTimeBase
-        self.segmentDurationBase = segmentDurationBase
+        self.segmentBase = segmentBase
 
-        var offset = 0
-        wordEndOffsets = []
-        for word in words {
-            offset += word.count
-            wordEndOffsets.append(offset)
-            offset += 1
-        }
+        estimatedFinalDuration = seededEstimate()
+        pacing = WordTimeline.Pacing(seed: estimatedFinalDuration)
+    }
 
-        estimatedFinalDuration = Double(totalCharCount) / Self.learnedCharsPerSec
-        smoothedEffDuration = estimatedFinalDuration
-
-        if !tokenCharOffsets.isEmpty {
-            self.tokenCharOffsets = tokenCharOffsets
-            useTokenTimeline = true
-        } else {
-            self.tokenCharOffsets = []
-            useTokenTimeline = false
-        }
+    /// The text-length duration estimate seeded into the pacing smoothing at each
+    /// segment start: chars over the learned chars/sec. One home for `start` /
+    /// `updateText` so the seed formula can't drift between them.
+    private func seededEstimate() -> TimeInterval {
+        Double(timeline.totalCharCount) / Self.learnedCharsPerSec
     }
 
     /// Called when a single segment's generation finishes (but more segments remain).
@@ -167,15 +131,15 @@ final class TTSWordTracker {
         isGenerationComplete = true
 
         // Learn the actual chars/sec for future duration estimates
-        if totalDuration > 0 && totalCharCount > 0 {
-            let actualRate = Double(totalCharCount) / totalDuration
+        if totalDuration > 0 && timeline.totalCharCount > 0 {
+            let actualRate = Double(timeline.totalCharCount) / totalDuration
             Self.learnedCharsPerSec = actualRate * 0.7 + Self.learnedCharsPerSec * 0.3
             Log.speech.info("[WordTracker] markGenerationComplete() — actualRate=\(String(format: "%.1f", actualRate)) c/s, learnedRate=\(String(format: "%.1f", Self.learnedCharsPerSec)) c/s, totalDuration=\(String(format: "%.1f", self.totalDuration))s")
         }
     }
 
     func jumpTo(charOffset: Int) {
-        recognizedCharCount = max(0, min(charOffset, totalCharCount))
+        recognizedCharCount = max(0, min(charOffset, timeline.totalCharCount))
     }
 
     func stop() {
@@ -183,17 +147,12 @@ final class TTSWordTracker {
         stopTimer()
         isActive = false
         playbackTimeProvider = nil
-        words = []
-        wordEndOffsets = []
-        totalCharCount = 0
+        timeline = WordTimeline(text: "")
         totalDuration = 0
         recognizedCharCount = 0
-        smoothedEffDuration = 0
+        pacing = WordTimeline.Pacing(seed: 0)
         estimatedFinalDuration = 0
-        tokenCharOffsets = []
-        useTokenTimeline = false
-        segmentTimeBase = 0
-        segmentDurationBase = 0
+        segmentBase = 0
         if wasActive {
             Log.speech.info("[WordTracker] stop() — was active, now stopped")
         }
@@ -220,19 +179,22 @@ final class TTSWordTracker {
     private func tick() {
         guard isActive,
               totalDuration > 0,
-              totalCharCount > 0,
+              timeline.totalCharCount > 0,
               let provider = playbackTimeProvider else { return }
 
-        let elapsed = provider() - segmentTimeBase
+        let elapsed = provider() - segmentBase
 
-        let newCount: Int
-        if useTokenTimeline {
-            newCount = tickTokenTimeline(elapsed: elapsed)
-        } else {
-            newCount = tickProportional(elapsed: elapsed)
-        }
+        // Fold the pure timeline; it threads the smoothing carry in and out.
+        let (newCount, newPacing) = timeline.advance(
+            elapsed: elapsed,
+            totalDuration: totalDuration,
+            estimatedFinalDuration: estimatedFinalDuration,
+            isGenerationComplete: isGenerationComplete,
+            pacing: pacing
+        )
+        pacing = newPacing
 
-        // Monotonic: only advance forward to prevent highlight from jumping back
+        // Monotonic: only advance forward to prevent highlight from jumping back.
         if newCount > recognizedCharCount {
             recognizedCharCount = newCount
         }
@@ -240,62 +202,7 @@ final class TTSWordTracker {
         // Log every ~1 second (60 ticks)
         tickLogCounter += 1
         if tickLogCounter % 60 == 1 {
-            Log.speech.info("[WordTracker] tick #\(self.tickLogCounter): elapsed=\(String(format: "%.2f", elapsed)), charCount=\(self.recognizedCharCount)/\(self.totalCharCount), mode=\(self.useTokenTimeline ? "token" : "proportional")")
+            Log.speech.info("[WordTracker] tick #\(self.tickLogCounter): elapsed=\(String(format: "%.2f", elapsed)), charCount=\(self.recognizedCharCount)/\(self.timeline.totalCharCount)")
         }
-    }
-
-    // MARK: - Token timeline tick
-
-    /// Map elapsed time → token index → character offset.
-    /// Token offsets are stretched across the effective audio duration so that
-    /// highlighting paces with actual speech, not raw token consumption rate.
-    private func tickTokenTimeline(elapsed: TimeInterval) -> Int {
-        guard !tokenCharOffsets.isEmpty else { return 0 }
-
-        // Compute effective duration (same smoothing as proportional path)
-        let targetEffDuration: TimeInterval
-        if isGenerationComplete {
-            targetEffDuration = totalDuration
-        } else {
-            targetEffDuration = max(totalDuration, estimatedFinalDuration)
-        }
-        smoothedEffDuration += (targetEffDuration - smoothedEffDuration) * 0.08
-
-        let progress = min(max(elapsed / smoothedEffDuration, 0), 1.0)
-
-        // Map time proportionally to characters (weighted by text length per token)
-        // rather than uniform per-token, better matching speech pacing
-        let targetChars = Int(progress * Double(totalCharCount))
-
-        // Binary search tokenCharOffsets for the token covering targetChars
-        var lo = 0, hi = tokenCharOffsets.count
-        while lo < hi {
-            let mid = (lo + hi) / 2
-            if tokenCharOffsets[mid] <= targetChars {
-                lo = mid + 1
-            } else {
-                hi = mid
-            }
-        }
-        // lo is the first index where tokenCharOffsets[lo] > targetChars
-        let charPos = lo > 0 ? tokenCharOffsets[lo - 1] : 0
-        return min(max(charPos, targetChars), totalCharCount)
-    }
-
-    // MARK: - Proportional fallback tick
-
-    private func tickProportional(elapsed: TimeInterval) -> Int {
-        let targetEffDuration: TimeInterval
-        if isGenerationComplete {
-            targetEffDuration = totalDuration
-        } else {
-            targetEffDuration = max(totalDuration, estimatedFinalDuration)
-        }
-
-        smoothedEffDuration += (targetEffDuration - smoothedEffDuration) * 0.08
-
-        let progress = min(max(elapsed / smoothedEffDuration, 0), 1.0)
-        let targetCharPosition = Int(progress * Double(totalCharCount))
-        return min(targetCharPosition, totalCharCount)
     }
 }

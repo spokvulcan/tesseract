@@ -11,7 +11,7 @@ import Combine
 import os
 
 @MainActor
-final class TTSNotchPanelController {
+final class TTSNotchPanelController: WordHighlightSurface {
     private var panel: NSPanel?
     private let wordTracker = TTSWordTracker()
     private var isDismissing = false
@@ -25,7 +25,7 @@ final class TTSNotchPanelController {
 
     // MARK: - Public API
 
-    func show(text: String, tokenCharOffsets: [Int] = [], playbackTimeProvider: @escaping () -> TimeInterval) {
+    func show(text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval) {
         Log.speech.info("[NotchPanel] show() called, text=\(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), isDismissing=\(self.isDismissing)")
         isDismissing = false
         forceClose()
@@ -91,9 +91,9 @@ final class TTSNotchPanelController {
         wordTracker.updateTotalDuration(duration)
     }
 
-    func updateText(_ text: String, tokenCharOffsets: [Int] = [], segmentTimeBase: TimeInterval = 0, segmentDurationBase: TimeInterval = 0) {
-        Log.speech.info("[NotchPanel] updateText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), timeBase=\(String(format: "%.2f", segmentTimeBase)), durBase=\(String(format: "%.2f", segmentDurationBase))")
-        wordTracker.updateText(text, tokenCharOffsets: tokenCharOffsets, segmentTimeBase: segmentTimeBase, segmentDurationBase: segmentDurationBase)
+    func switchText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval) {
+        Log.speech.info("[NotchPanel] switchText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), segmentBase=\(String(format: "%.2f", segmentBase))")
+        wordTracker.updateText(text, tokenCharOffsets: tokenCharOffsets, segmentBase: segmentBase)
     }
 
     func markSegmentComplete() {
