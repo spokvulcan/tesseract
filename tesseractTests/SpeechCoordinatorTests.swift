@@ -204,7 +204,9 @@ struct SpeechCoordinatorTests {
         #expect(coordinator.state == .idle)
     }
 
-    // MARK: - C5: long-form actually waits below a segment boundary until the clock advances past it
+    // MARK: - C5: long-form actually waits below a segment boundary until the clock
+    //         advances past it — and the boundary switch reaches the highlight surface
+    //         in the right order (the seam that was previously untestable).
 
     @Test
     func longFormBlocksAtSegmentBoundaryThenCrossesWhenVirtualClockAdvances() async throws {
@@ -212,20 +214,25 @@ struct SpeechCoordinatorTests {
         // the boundary the coordinator waits on is genuinely above zero.
         let longText = Array(repeating: "This sentence has exactly eight words in it.", count: 30)
             .joined(separator: " ")
-        #expect(TextSegmenter.segment(longText).count == 2)
+        let segments = TextSegmenter.segment(longText)
+        #expect(segments.count == 2)
 
         let sampleRate = 22_050
         let samples = [Float](repeating: 0.3, count: sampleRate / 5)  // 0.2s per segment
         let synth = InMemorySpeechSynthesizer(samples: samples, sampleRate: sampleRate)
         let engine = try await makeLoadedEngine(synth)
         let playback = InMemoryAudioPlayback()  // clock at 0 — below segment 0's end
+        let surface = RecordingHighlightSurface()
+        // Segment 0's audio ends at this cumulative scheduled duration — the Segment
+        // Window the overlay switch is keyed to.
+        let segmentBoundary = Double(samples.count) / Double(sampleRate)
 
         let coordinator = SpeechCoordinator(
             textExtractor: FakeTextExtractor(),
             speechEngine: engine,
             playback: playback,
             settings: makeSettings(streaming: true),
-            notchOverlay: nil,
+            notchOverlay: surface,
             arbiter: nil
         )
 
@@ -240,13 +247,75 @@ struct SpeechCoordinatorTests {
         #expect(playback.finishStreamingCount == 0)
         #expect(coordinator.state == .streamingLongForm(segment: 2, of: 2))
 
+        // The surface shows segment 0, and segment 1 has NOT been switched in while the
+        // playback head sits below the boundary — the deferred switch (#55 US#17).
+        // (speakText() opens with stop(), so a leading `.dismiss` precedes the show;
+        // displayedTexts ignores it and pins what was actually shown.)
+        #expect(surface.displayedTexts == [segments[0].text])
+        #expect(!surface.didSwitch)
+
         // Advance the virtual playback head past the boundary — the wait loop exits.
         playback.advance(by: 1.0)
         try await waitUntil { playback.finishStreamingCount == 1 }
         #expect(playback.startStreamingCount == 1)
 
+        // The switch fired exactly once the clock crossed the Segment Window, to
+        // segment 1's text, keyed to the boundary (#55 US#18).
+        let switchIndex = try #require(surface.firstSwitchIndex)
+        guard case let .switchText(text, base) = surface.calls[switchIndex] else {
+            Issue.record("expected a switchText at \(switchIndex)")
+            return
+        }
+        #expect(text == segments[1].text)
+        #expect(abs(base - segmentBoundary) < 1e-9)
+
+        // The switch precedes this segment's first duration update (#55 US#19): no
+        // segment-1 `updateTotalDuration` leaks before the switch — only segment 0's
+        // single update does — and the very next call after the switch is segment 1's
+        // first duration update. This is the "don't corrupt the previous segment's
+        // pacing" rule, previously guarded only by a local bool.
+        let durationUpdatesBeforeSwitch = surface.calls[..<switchIndex].filter {
+            if case .updateTotalDuration = $0 { return true }
+            return false
+        }
+        #expect(durationUpdatesBeforeSwitch.count == 1)
+        if case .updateTotalDuration = surface.calls[switchIndex + 1] {} else {
+            Issue.record("expected the first post-switch call to be updateTotalDuration")
+        }
+
+        // Both segments aligned (markSegmentComplete ×2) and the run finished.
+        #expect(surface.calls.filter { $0 == .markSegmentComplete }.count == 2)
+        #expect(surface.calls.contains(.markGenerationComplete))
+
         playback.firePlaybackFinished()
         #expect(coordinator.state == .idle)
+    }
+
+    // MARK: - C5b: the non-streaming batch path drives the highlight surface too
+
+    @Test
+    func batchPlaybackDrivesTheHighlightSurfaceWithoutASwitch() async throws {
+        let synth = InMemorySpeechSynthesizer(samples: [0.1, 0.2, 0.3], sampleRate: 24_000)
+        let engine = try await makeLoadedEngine(synth)
+        let playback = InMemoryAudioPlayback()
+        let surface = RecordingHighlightSurface()
+
+        let coordinator = SpeechCoordinator(
+            textExtractor: FakeTextExtractor(),
+            speechEngine: engine,
+            playback: playback,
+            settings: makeSettings(streaming: false),
+            notchOverlay: surface,
+            arbiter: nil
+        )
+
+        coordinator.speakText("hello")
+
+        // Batch is one-shot — not a Segment Playback caller — but it still goes through
+        // the seam (#55 US#33): a fresh show and generation-complete, no boundary switch.
+        try await waitUntil { surface.calls.contains(.markGenerationComplete) }
+        #expect(surface.displayedTexts == ["hello"])
+        #expect(!surface.didSwitch)
     }
 
     // MARK: - C6: pausing below a boundary halts long-form; resume continues from the next segment

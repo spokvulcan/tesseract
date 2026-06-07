@@ -30,7 +30,7 @@ struct WordYPreferenceKey: PreferenceKey {
 // MARK: - SpeechScrollView
 
 struct SpeechScrollView: View {
-    let words: [String]
+    let timeline: WordTimeline
     let highlightedCharCount: Int
     var font: NSFont = .systemFont(ofSize: 20, weight: .semibold)
     var highlightColor: Color = .yellow
@@ -44,7 +44,7 @@ struct SpeechScrollView: View {
     var body: some View {
         GeometryReader { geo in
             WordFlowLayout(
-                words: words,
+                timeline: timeline,
                 highlightedCharCount: highlightedCharCount,
                 font: font,
                 highlightColor: highlightColor,
@@ -134,20 +134,14 @@ struct SpeechScrollView: View {
     }
 
     private func activeWordIndex() -> Int {
-        var offset = 0
-        for (i, word) in words.enumerated() {
-            let end = offset + word.count
-            if highlightedCharCount <= end { return i }
-            offset = end + 1
-        }
-        return max(0, words.count - 1)
+        timeline.cursor(highlightedCharCount: highlightedCharCount).activeWordIndex
     }
 }
 
 // MARK: - Word Flow Layout
 
 struct WordFlowLayout: View {
-    let words: [String]
+    let timeline: WordTimeline
     let highlightedCharCount: Int
     let font: NSFont
     var highlightColor: Color = .yellow
@@ -156,12 +150,9 @@ struct WordFlowLayout: View {
 
     private func nextWordIndex() -> Int {
         let items = buildItems()
-        for item in items {
-            if item.isAnnotation { continue }
-            let charsIntoWord = highlightedCharCount - item.charOffset
-            let litCount = max(0, min(item.word.count, charsIntoWord))
-            let letterCount = max(1, item.word.filter { $0.isLetter || $0.isNumber }.count)
-            if litCount < letterCount {
+        for item in items where !item.isAnnotation {
+            // First non-annotation word that is not yet fully lit (lit < letters).
+            if timeline.litFraction(wordIndex: item.id, charCount: highlightedCharCount) < 1.0 {
                 return item.id
             }
         }
@@ -187,11 +178,8 @@ struct WordFlowLayout: View {
     }
 
     private func wordView(for item: WordItem, isNextWord: Bool) -> some View {
-        let wordLen = item.word.count
         let charsIntoWord = highlightedCharCount - item.charOffset
-        let litCount = max(0, min(wordLen, charsIntoWord))
-        let letterCount = max(1, item.word.filter { $0.isLetter || $0.isNumber }.count)
-        let isFullyLit = litCount >= letterCount
+        let isFullyLit = timeline.litFraction(wordIndex: item.id, charCount: highlightedCharCount) >= 1.0
         let isCurrentWord = isNextWord || (charsIntoWord >= 0 && !isFullyLit)
 
         if item.isAnnotation {
@@ -245,20 +233,10 @@ struct WordFlowLayout: View {
     }
 
     private func buildItems() -> [WordItem] {
-        var items: [WordItem] = []
-        var offset = 0
-        for (i, word) in words.enumerated() {
-            let isAnnotation = Self.isAnnotationWord(word)
-            items.append(WordItem(id: i, word: word, charOffset: offset, isAnnotation: isAnnotation))
-            offset += word.count + 1
+        // Read the word model from the timeline instead of re-deriving boundaries.
+        timeline.words.enumerated().map { i, word in
+            WordItem(id: i, word: word.text, charOffset: word.charOffset, isAnnotation: word.isAnnotation)
         }
-        return items
-    }
-
-    static func isAnnotationWord(_ word: String) -> Bool {
-        if word.hasPrefix("[") && word.hasSuffix("]") { return true }
-        let stripped = word.filter { $0.isLetter || $0.isNumber }
-        return stripped.isEmpty
     }
 
     private func buildLines(items: [WordItem]) -> [[WordItem]] {

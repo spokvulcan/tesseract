@@ -539,6 +539,113 @@ CoreAudio, audio output, player.
 > **Expert:** No. The `InferenceArbiter` drives `loadModel`/`unloadModel` on the
 > engine, above the port. The port is model-only.
 
+### Speech word timeline
+
+**Word Timeline**:
+The pure projection of one segment's spoken text plus the current playback position into
+the highlighted character count and the active word — the single home for the
+token→char→word model and the elapsed→position pacing the TTS notch overlay renders. An
+immutable `nonisolated` value type, built once per segment from the text plus token offsets:
+it holds the per-word character ranges (the `offset += word.count + 1` model, computed
+**once** at construction, not re-derived per call) and exposes three entry points — `advance`
+(the **single** pacing fold: token character offsets stretched across the smoothed effective
+duration, absent offsets degrading to uniform proportional — one path, not the former
+`tickTokenTimeline`/`tickProportional` pair), `cursor` (the lean char→word query — active
+index plus in-word lit fraction, the scalar the driver folds each tick) and
+`litFraction(wordIndex:)` (the per-word value the view renders, so it stops re-deriving
+boundaries). It owns **no** timer, clock,
+`@Observable` state, or UI: elapsed time, total/estimated duration, the `* 0.08` smoothing
+carry-over, and the **Segment Window** are passed in and returned, never stored. It is the
+**internal seam** inside `TTSWordTracker` — reached by its own unit tests with no timer and no
+MainActor — and is driven by the **TTS Word Tracker**, exactly as the **Chat Transcript** is
+driven by the **Chat Transcript Controller**. The deletion test passes: remove it and the
+`offset += word.count + 1` arithmetic reappears across five sites (the tracker's
+`start`/`updateText` and the view's `activeWordIndex`/`buildItems`) and the smoothing across
+two.
+_Avoid_: WordPacing (names the operation; we name the value), TTSWordTracker (that is the
+**TTS Word Tracker** driver above it), word highlighter, marquee, pacing model.
+
+**TTS Word Tracker**:
+The `@Observable @MainActor` stateful driver of the pure **Word Timeline**
+(`TTSWordTracker`). It owns the 60fps `Timer`, the injected `playbackTimeProvider` clock seam
+(the ADR-0003 virtual clock under test), the monotonic `recognizedCharCount` and the other
+published view state the notch overlay reads, and the per-segment carry-over (smoothed
+duration, the static learned chars/sec, the **Segment Window**). It folds **Word Timeline**
+each tick and holds none of the pacing math itself. Distinct from **Word Timeline** (the pure
+fold it calls): the tracker decides *when* to re-fold and publishes the result, and exposes
+the word model so the view stops re-deriving word boundaries.
+_Avoid_: word timeline (that is the pure core it drives), word highlighter, word state machine.
+
+**Segment Window**:
+The single playback-time base a **TTS Word Tracker** measures one long-form segment's pacing
+against — replacing the coupled `segmentTimeBase` / `segmentDurationBase` pair that were
+always assigned the same value (the previous segment's cumulative scheduled duration). One
+value, so "the time base and the duration base disagree" is unrepresentable.
+_Avoid_: segmentTimeBase, segmentDurationBase, segment offset, time base.
+
+**Segment Playback**:
+The deep module owning the consume-one-TTS-stream-into-playback loop shared by every speech
+path — the first long-form segment, each subsequent segment, and single-shot streaming. Given
+a generated-sample stream and a small `Segment` value (its optional **segment boundary** plus
+the `SpeechState` to assume on the first chunk), it drains the stream into
+`AudioPlayback.appendChunk`, drives the **Word Highlight Surface** — pushing total duration
+**for the segment the surface is currently displaying**, performing the boundary switch and
+drain-wait when a boundary is present — and returns `false` on cancellation so each caller keeps its own cleanup
+(`cleanupLongForm` versus the streaming stop/dismiss). The per-segment difference is the
+`Segment` *value*, not a bag of flags — the same "the only injected difference is a value"
+move as **Overlay Placement** — so it stays deep rather than a config-flag loop. The
+duration-update timing and the boundary switch are not separate knobs: both are *derived* from
+whether the `Segment` carries a boundary. The deletion test passes: remove it and the
+cancel-check / `appendChunk` / duration-update loop reappears in three places and the boundary
+switch-and-wait in one.
+_Avoid_: chunk loop, stream pump, playback driver, SegmentConsumer, a config-flag loop (the
+difference is a `Segment` value, never toggles).
+
+**Word Highlight Surface**:
+The `@MainActor` port the **Segment Playback** loop and `SpeechCoordinator`'s session-level
+calls drive to render spoken-word highlighting — `show` a fresh segment, `switchText` to the
+next segment at a crossed **Segment Window**, push the running `updateTotalDuration`,
+`markSegmentComplete` / `markGenerationComplete`, and `dismiss`. The methods are exactly the
+surface the real call sites use, nothing more. The production adapter is `TTSNotchPanelController`
+(the `NSPanel` plus the **TTS Word Tracker** it hosts); the second adapter is a test-only
+`RecordingHighlightSurface` peer that records the call sequence — which is what finally makes
+the **segment boundary** switch, and its ordering against the ADR-0003 virtual clock,
+*assertable* (every `SpeechCoordinator` test previously passed `notchOverlay: nil`, so the
+switch was untested). A **real** seam, not hypothetical: two behaviorally-distinct adapters,
+justified exactly as ADR-0003 justifies `InMemoryAudioPlayback` ("peer implementations, not
+mocks"). Promoting it also collapses the overlay's old
+`updateText(segmentTimeBase:segmentDurationBase:)` — always passed the same value twice — into
+one `switchText(…, segmentBase:)` over the **Segment Window**. Not the **Overlay Panel**: the
+notch stays its own surface (ADR-0003).
+_Avoid_: notch overlay / TTSNotchPanelController (that is *one* adapter, not the seam), overlay
+protocol, highlight view, Overlay Panel (a different surface).
+
+> **Flagged parallel — Word Timeline mirrors Chat Transcript.** Both are pure, stateless
+> projections driven by an `@Observable @MainActor` controller that decides *when* to re-fold:
+> **Word Timeline** / **TTS Word Tracker** for spoken-word highlight pacing, **Chat
+> Transcript** / **Chat Transcript Controller** for the chat row list. Different layers and
+> inputs; the same pure-fold-plus-driver shape.
+
+> **Flagged ambiguity — Word Timeline vs the dictation Overlay.** The **Word Timeline** paces
+> the TTS notch overlay's spoken-word highlight. It is unrelated to the **Overlay Panel** (the
+> dictation HUD + full-screen border) and to ASR/dictation. When unqualified, say "word
+> timeline" vs "overlay panel".
+
+**Example dialogue:**
+
+> **Dev:** If the word pacing stays inside `TTSWordTracker`, how is it suddenly testable?
+> **Expert:** The math moves into **Word Timeline** — a pure `nonisolated` namespace the
+> tracker calls. A test feeds it elapsed values and asserts the highlighted char and active
+> word, with no `Timer`, no clock, no MainActor. The tracker keeps the timer and the
+> `@Observable` output; it just folds the timeline now.
+> **Dev:** Three playback loops, one **Segment Playback** — doesn't the first segment differ
+> from the later ones?
+> **Expert:** Only by its `Segment` value. The first/only segment carries no boundary, so the
+> overlay is already showing it and duration updates from the first chunk. A later segment
+> carries a boundary, so **Segment Playback** waits for the previous segment's audio to drain,
+> switches the overlay, then updates duration — same code, different value. Cancellation
+> returns `false` and the caller cleans up its own way.
+
 ### Generation accumulation
 
 **Generation Accumulator**:
