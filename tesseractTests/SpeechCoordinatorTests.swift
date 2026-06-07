@@ -262,7 +262,7 @@ struct SpeechCoordinatorTests {
         // The switch fired exactly once the clock crossed the Segment Window, to
         // segment 1's text, keyed to the boundary (#55 US#18).
         let switchIndex = try #require(surface.firstSwitchIndex)
-        guard case let .switchText(text, base) = surface.calls[switchIndex] else {
+        guard case let .switchText(text, _, base) = surface.calls[switchIndex] else {
             Issue.record("expected a switchText at \(switchIndex)")
             return
         }
@@ -316,6 +316,53 @@ struct SpeechCoordinatorTests {
         try await waitUntil { surface.calls.contains(.markGenerationComplete) }
         #expect(surface.displayedTexts == ["hello"])
         #expect(!surface.didSwitch)
+        // The duration push is what actually advances the highlight — assert it reached
+        // the surface, not just that show / markGenerationComplete bracketed it.
+        #expect(surface.calls.contains { if case .updateTotalDuration = $0 { return true }; return false })
+    }
+
+    // MARK: - C5c: single-shot streaming drives the surface through Segment Playback's `.single`
+
+    @Test
+    func singleStreamingDrivesTheSurfaceShownWithForwardedOffsets() async throws {
+        // streaming + one short segment routes through Segment Playback's `.single`
+        // path (no boundary, no switch) — previously exercised only with notchOverlay: nil.
+        let synth = InMemorySpeechSynthesizer(samples: [0.1, 0.2, 0.3], sampleRate: 24_000, tokenOffsets: [0, 6])
+        let engine = try await makeLoadedEngine(synth)
+        let playback = InMemoryAudioPlayback()
+        let surface = RecordingHighlightSurface()
+
+        let coordinator = SpeechCoordinator(
+            textExtractor: FakeTextExtractor(),
+            speechEngine: engine,
+            playback: playback,
+            settings: makeSettings(streaming: true),
+            notchOverlay: surface,
+            arbiter: nil
+        )
+
+        coordinator.speakText("hello world")
+
+        try await waitUntil { surface.calls.contains(.markGenerationComplete) }
+
+        // Shown once, never switched (single segment).
+        #expect(surface.displayedTexts == ["hello world"])
+        #expect(!surface.didSwitch)
+
+        // The engine's token offsets are forwarded to the surface — the input the
+        // recording peer now captures (previously dropped on the floor).
+        let shown = surface.calls.first { if case .show = $0 { return true }; return false }
+        guard case let .show(_, offsets)? = shown else {
+            Issue.record("expected a show call")
+            return
+        }
+        #expect(offsets == [0, 6])
+
+        // The running duration is pushed (what drives the highlight); and `.single`
+        // leaves segment-completion to the caller's markGenerationComplete, so no
+        // per-segment markSegmentComplete fires.
+        #expect(surface.calls.contains { if case .updateTotalDuration = $0 { return true }; return false })
+        #expect(!surface.calls.contains(.markSegmentComplete))
     }
 
     // MARK: - C6: pausing below a boundary halts long-form; resume continues from the next segment

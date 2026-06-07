@@ -6,9 +6,10 @@
 //  the 60fps Timer, the injected `playbackTimeProvider` clock seam, the monotonic
 //  `recognizedCharCount` and the other published view state the notch overlay reads,
 //  and the per-segment carry-over (the smoothing `Pacing`, the static learned
-//  chars/sec, the segment time window). It folds `WordTimeline` each tick and holds
-//  none of the pacing math itself — exactly the Chat Transcript / Chat Transcript
-//  Controller shape, one layer over in the speech feature.
+//  chars/sec, the segment time window). It delegates the per-tick pacing *fold* to
+//  `WordTimeline`, keeping only the cross-segment estimate model here (the duration
+//  seed, the learned chars/sec, the smoothing carry) — the Chat Transcript / Chat
+//  Transcript Controller shape, one layer over in the speech feature.
 //
 
 import Foundation
@@ -47,6 +48,13 @@ final class TTSWordTracker {
     /// The single playback-time base this segment's pacing is measured against — the
     /// previous segment's cumulative scheduled duration (CONTEXT.md → Segment Window).
     /// Replaces the coupled time/duration bases that were always assigned the same value.
+    ///
+    /// Invariant: this is subtracted from BOTH the playback head time (`tick`) and the
+    /// cumulative scheduled duration (`updateTotalDuration`). One base is correct for
+    /// both only because they share an origin — playback start, where head time and
+    /// scheduled duration coincide. If playback ever offsets the head from scheduled
+    /// duration (pre-roll, gapless trim, a resume that shifts the head origin), this
+    /// must split back into two bases.
     private var segmentBase: TimeInterval = 0
 
     // MARK: - Pacing carry-over
@@ -77,7 +85,7 @@ final class TTSWordTracker {
         segmentBase = 0
 
         // Seed the pacing smoothing from the text-length estimate.
-        estimatedFinalDuration = Double(timeline.totalCharCount) / Self.learnedCharsPerSec
+        estimatedFinalDuration = seededEstimate()
         pacing = WordTimeline.Pacing(seed: estimatedFinalDuration)
         Log.speech.info("[WordTracker] start() — \(tokenCharOffsets.isEmpty ? "proportional" : "token-aligned"), estDur=\(String(format: "%.1f", self.estimatedFinalDuration))s")
 
@@ -89,7 +97,7 @@ final class TTSWordTracker {
         totalDuration = cumulativeDuration - segmentBase
     }
 
-    func updateText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval = 0) {
+    func updateText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval) {
         Log.speech.info("[WordTracker] updateText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), segmentBase=\(String(format: "%.2f", segmentBase))")
 
         timeline = WordTimeline(text: text, tokenCharOffsets: tokenCharOffsets)
@@ -98,8 +106,15 @@ final class TTSWordTracker {
         totalDuration = 0
         self.segmentBase = segmentBase
 
-        estimatedFinalDuration = Double(timeline.totalCharCount) / Self.learnedCharsPerSec
+        estimatedFinalDuration = seededEstimate()
         pacing = WordTimeline.Pacing(seed: estimatedFinalDuration)
+    }
+
+    /// The text-length duration estimate seeded into the pacing smoothing at each
+    /// segment start: chars over the learned chars/sec. One home for `start` /
+    /// `updateText` so the seed formula can't drift between them.
+    private func seededEstimate() -> TimeInterval {
+        Double(timeline.totalCharCount) / Self.learnedCharsPerSec
     }
 
     /// Called when a single segment's generation finishes (but more segments remain).

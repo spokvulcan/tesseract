@@ -25,7 +25,7 @@ final class TTSNotchPanelController: WordHighlightSurface {
 
     // MARK: - Public API
 
-    func show(text: String, tokenCharOffsets: [Int] = [], playbackTimeProvider: @escaping () -> TimeInterval) {
+    func show(text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval) {
         Log.speech.info("[NotchPanel] show() called, text=\(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), isDismissing=\(self.isDismissing)")
         isDismissing = false
         forceClose()
@@ -91,7 +91,7 @@ final class TTSNotchPanelController: WordHighlightSurface {
         wordTracker.updateTotalDuration(duration)
     }
 
-    func switchText(_ text: String, tokenCharOffsets: [Int] = [], segmentBase: TimeInterval = 0) {
+    func switchText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval) {
         Log.speech.info("[NotchPanel] switchText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), segmentBase=\(String(format: "%.2f", segmentBase))")
         wordTracker.updateText(text, tokenCharOffsets: tokenCharOffsets, segmentBase: segmentBase)
     }

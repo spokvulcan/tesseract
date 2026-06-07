@@ -29,8 +29,8 @@ struct WordTimelineTests {
     }
 
     @Test func normalizesNewlinesAndCollapsesWhitespace() {
-        // Matches the tracker/view: "\n" → space, then split on whitespace omitting
-        // empties, so runs of separators don't yield empty words.
+        // Shared word split (StringWordSplitting): whitespace OR newline separators,
+        // empty runs omitted — so newlines and runs of spaces don't yield empty words.
         let timeline = WordTimeline(text: "a\nb  c")
         #expect(timeline.words.map(\.text) == ["a", "b", "c"])
         #expect(timeline.words.map(\.charOffset) == [0, 2, 4])
@@ -51,23 +51,26 @@ struct WordTimelineTests {
 
     // MARK: - cursor: char → active word + in-word lit fraction
 
-    @Test func cursorReportsActiveWordByEndOffset() {
+    @Test func activeWordIndexReportsActiveWordByEndOffset() {
         // ends: hello→5, world→11, foo→15 (charOffset + word.count).
         let timeline = WordTimeline(text: "hello world foo")
-        #expect(timeline.cursor(highlightedCharCount: 0).activeWordIndex == 0)
-        #expect(timeline.cursor(highlightedCharCount: 5).activeWordIndex == 0)   // <= end is still this word
-        #expect(timeline.cursor(highlightedCharCount: 6).activeWordIndex == 1)
-        #expect(timeline.cursor(highlightedCharCount: 9).activeWordIndex == 1)
+        #expect(timeline.activeWordIndex(highlightedCharCount: 0) == 0)
+        #expect(timeline.activeWordIndex(highlightedCharCount: 5) == 0)   // <= end is still this word
+        #expect(timeline.activeWordIndex(highlightedCharCount: 6) == 1)
+        #expect(timeline.activeWordIndex(highlightedCharCount: 9) == 1)
         // Past the end clamps to the last word (matches the view's fallback).
-        #expect(timeline.cursor(highlightedCharCount: 100).activeWordIndex == 2)
+        #expect(timeline.activeWordIndex(highlightedCharCount: 100) == 2)
     }
 
-    @Test func cursorInWordLitFractionTracksLetterProgress() {
+    @Test func activeWordLitFractionTracksLetterProgress() {
         let timeline = WordTimeline(text: "hello world foo")
-        // 3 chars into "world" (5 letters) → 0.6.
-        #expect(abs(timeline.cursor(highlightedCharCount: 9).inWordLitFraction - 0.6) < 1e-9)
+        // 3 chars into "world" (5 letters) → 0.6 — the view composes activeWordIndex
+        // with litFraction, so assert them together.
+        let mid = timeline.activeWordIndex(highlightedCharCount: 9)
+        #expect(abs(timeline.litFraction(wordIndex: mid, charCount: 9) - 0.6) < 1e-9)
         // Start of a word → nothing lit yet.
-        #expect(timeline.cursor(highlightedCharCount: 6).inWordLitFraction == 0.0)
+        let start = timeline.activeWordIndex(highlightedCharCount: 6)
+        #expect(timeline.litFraction(wordIndex: start, charCount: 6) == 0.0)
     }
 
     // MARK: - litFraction: the per-word value the view renders

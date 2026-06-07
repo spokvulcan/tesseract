@@ -9,15 +9,6 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Data
-
-struct WordItem: Identifiable {
-    let id: Int
-    let word: String
-    let charOffset: Int
-    let isAnnotation: Bool
-}
-
 // MARK: - Preference key
 
 struct WordYPreferenceKey: PreferenceKey {
@@ -134,7 +125,7 @@ struct SpeechScrollView: View {
     }
 
     private func activeWordIndex() -> Int {
-        timeline.cursor(highlightedCharCount: highlightedCharCount).activeWordIndex
+        timeline.activeWordIndex(highlightedCharCount: highlightedCharCount)
     }
 }
 
@@ -149,26 +140,24 @@ struct WordFlowLayout: View {
     var onWordTap: ((Int) -> Void)? = nil
 
     private func nextWordIndex() -> Int {
-        let items = buildItems()
-        for item in items where !item.isAnnotation {
+        for (index, word) in timeline.words.enumerated() where !word.isAnnotation {
             // First non-annotation word that is not yet fully lit (lit < letters).
-            if timeline.litFraction(wordIndex: item.id, charCount: highlightedCharCount) < 1.0 {
-                return item.id
+            if timeline.litFraction(wordIndex: index, charCount: highlightedCharCount) < 1.0 {
+                return index
             }
         }
         return -1
     }
 
     var body: some View {
-        let items = buildItems()
-        let lines = buildLines(items: items)
+        let lines = buildLines()
         let nextIdx = nextWordIndex()
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 HStack(spacing: 0) {
-                    ForEach(line, id: \.id) { item in
-                        wordView(for: item, isNextWord: item.id == nextIdx)
-                            .id(item.id)
+                    ForEach(line, id: \.self) { index in
+                        wordView(for: index, isNextWord: index == nextIdx)
+                            .id(index)
                     }
                 }
             }
@@ -177,31 +166,32 @@ struct WordFlowLayout: View {
         .coordinateSpace(name: "flowLayout")
     }
 
-    private func wordView(for item: WordItem, isNextWord: Bool) -> some View {
-        let charsIntoWord = highlightedCharCount - item.charOffset
-        let isFullyLit = timeline.litFraction(wordIndex: item.id, charCount: highlightedCharCount) >= 1.0
+    private func wordView(for index: Int, isNextWord: Bool) -> some View {
+        let word = timeline.words[index]
+        let charsIntoWord = highlightedCharCount - word.charOffset
+        let isFullyLit = timeline.litFraction(wordIndex: index, charCount: highlightedCharCount) >= 1.0
         let isCurrentWord = isNextWord || (charsIntoWord >= 0 && !isFullyLit)
 
-        if item.isAnnotation {
+        if word.isAnnotation {
             let annotationColor: Color = isFullyLit
                 ? Color.white.opacity(0.5)
                 : Color.white.opacity(0.2)
 
             return AnyView(
-                Text(item.word + " ")
+                Text(word.text + " ")
                     .font(Font(font).italic())
                     .foregroundStyle(annotationColor)
                     .background(
                         GeometryReader { wordGeo in
                             Color.clear.preference(
                                 key: WordYPreferenceKey.self,
-                                value: [item.id: wordGeo.frame(in: .named("flowLayout")).midY]
+                                value: [index: wordGeo.frame(in: .named("flowLayout")).midY]
                             )
                         }
                     )
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        onWordTap?(item.charOffset)
+                        onWordTap?(word.charOffset)
                     }
             )
         }
@@ -213,7 +203,7 @@ struct WordFlowLayout: View {
         let wordColor: Color = isFullyLit ? highlightColor.opacity(0.3) : dimColor
 
         return AnyView(
-            Text(item.word + " ")
+            Text(word.text + " ")
                 .font(Font(font))
                 .foregroundStyle(wordColor)
                 .underline(isCurrentWord, color: wordColor)
@@ -221,36 +211,31 @@ struct WordFlowLayout: View {
                     GeometryReader { wordGeo in
                         Color.clear.preference(
                             key: WordYPreferenceKey.self,
-                            value: [item.id: wordGeo.frame(in: .named("flowLayout")).midY]
+                            value: [index: wordGeo.frame(in: .named("flowLayout")).midY]
                         )
                     }
                 )
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    onWordTap?(item.charOffset)
+                    onWordTap?(word.charOffset)
                 }
         )
     }
 
-    private func buildItems() -> [WordItem] {
-        // Read the word model from the timeline instead of re-deriving boundaries.
-        timeline.words.enumerated().map { i, word in
-            WordItem(id: i, word: word.text, charOffset: word.charOffset, isAnnotation: word.isAnnotation)
-        }
-    }
-
-    private func buildLines(items: [WordItem]) -> [[WordItem]] {
-        var lines: [[WordItem]] = [[]]
+    /// Group word indices into lines that fit `containerWidth`, measuring each word
+    /// once. Reads `timeline.words` directly — there is no parallel item model.
+    private func buildLines() -> [[Int]] {
+        var lines: [[Int]] = [[]]
         var currentLineWidth: CGFloat = 0
         let spaceWidth = (" " as NSString).size(withAttributes: [.font: font]).width
 
-        for item in items {
-            let wordWidth = (item.word as NSString).size(withAttributes: [.font: font]).width + spaceWidth
+        for (index, word) in timeline.words.enumerated() {
+            let wordWidth = (word.text as NSString).size(withAttributes: [.font: font]).width + spaceWidth
             if currentLineWidth + wordWidth > containerWidth && !lines[lines.count - 1].isEmpty {
                 lines.append([])
                 currentLineWidth = 0
             }
-            lines[lines.count - 1].append(item)
+            lines[lines.count - 1].append(index)
             currentLineWidth += wordWidth
         }
         return lines

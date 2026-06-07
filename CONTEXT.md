@@ -550,18 +550,17 @@ it holds the per-word character ranges (the `offset += word.count + 1` model, co
 **once** at construction, not re-derived per call) and exposes three entry points — `advance`
 (the **single** pacing fold: token character offsets stretched across the smoothed effective
 duration, absent offsets degrading to uniform proportional — one path, not the former
-`tickTokenTimeline`/`tickProportional` pair), `cursor` (the lean char→word query — active
-index plus in-word lit fraction, the scalar the driver folds each tick) and
-`litFraction(wordIndex:)` (the per-word value the view renders, so it stops re-deriving
-boundaries). It owns **no** timer, clock,
+`tickTokenTimeline`/`tickProportional` pair), `activeWordIndex` (the char→word query the
+view's scroll-centering uses) and `litFraction(wordIndex:)` (the per-word value the view
+renders, reading the lengths cached on each `Word` so it stops re-deriving boundaries or
+re-walking strings each frame). It owns **no** timer, clock,
 `@Observable` state, or UI: elapsed time, total/estimated duration, the `* 0.08` smoothing
 carry-over, and the **Segment Window** are passed in and returned, never stored. It is the
 **internal seam** inside `TTSWordTracker` — reached by its own unit tests with no timer and no
 MainActor — and is driven by the **TTS Word Tracker**, exactly as the **Chat Transcript** is
 driven by the **Chat Transcript Controller**. The deletion test passes: remove it and the
-`offset += word.count + 1` arithmetic reappears across five sites (the tracker's
-`start`/`updateText` and the view's `activeWordIndex`/`buildItems`) and the smoothing across
-two.
+`offset += word.count + 1` arithmetic reappears across the tracker's `start`/`updateText`
+and the view's word rendering, and the smoothing across two.
 _Avoid_: WordPacing (names the operation; we name the value), TTSWordTracker (that is the
 **TTS Word Tracker** driver above it), word highlighter, marquee, pacing model.
 
@@ -570,8 +569,9 @@ The `@Observable @MainActor` stateful driver of the pure **Word Timeline**
 (`TTSWordTracker`). It owns the 60fps `Timer`, the injected `playbackTimeProvider` clock seam
 (the ADR-0003 virtual clock under test), the monotonic `recognizedCharCount` and the other
 published view state the notch overlay reads, and the per-segment carry-over (smoothed
-duration, the static learned chars/sec, the **Segment Window**). It folds **Word Timeline**
-each tick and holds none of the pacing math itself. Distinct from **Word Timeline** (the pure
+duration, the static learned chars/sec, the **Segment Window**). It delegates the per-tick
+pacing fold to **Word Timeline**, keeping only the cross-segment estimate model (the duration
+seed, the learned chars/sec, the smoothing carry). Distinct from **Word Timeline** (the pure
 fold it calls): the tracker decides *when* to re-fold and publishes the result, and exposes
 the word model so the view stops re-deriving word boundaries.
 _Avoid_: word timeline (that is the pure core it drives), word highlighter, word state machine.

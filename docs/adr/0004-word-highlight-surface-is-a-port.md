@@ -13,11 +13,12 @@ The TTS notch overlay — until now a concrete `TTSNotchPanelController?` that
 `SpeechCoordinator` held and called directly — becomes a **port**,
 `WordHighlightSurface`. It is the fourth speech seam in the ADR-0003 family and the same
 **`@MainActor` sibling** shape as `AudioPlayback`: class-bound, main-actor-isolated, and
-called **synchronously** by the new **Segment Playback** loop (`show`, `switchText`,
-`updateTotalDuration`, `markSegmentComplete` / `markGenerationComplete`, `dismiss`). It is
-deliberately not an actor, for the same reason `AudioPlayback` is not — the calls are
-already main-actor-bound, so an actor would add cross-actor hops on a hot path for no
-isolation gain.
+called **synchronously**. The **Segment Playback** loop drives the per-segment calls
+(`switchText`, `updateTotalDuration`, `markSegmentComplete`); `SpeechCoordinator` makes
+the session-level ones (`show`, `markGenerationComplete`, `dismiss`). It is deliberately
+not an actor, for the same reason `AudioPlayback` is not — the calls are already
+main-actor-bound, so an actor would add cross-actor hops on a hot path for no isolation
+gain.
 
 Two adapters, exactly as ADR-0003 requires to make a seam real rather than hypothetical:
 

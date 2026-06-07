@@ -59,7 +59,7 @@ enum TextSegmenter {
     // MARK: - Private
 
     private static func estimateTokens(_ text: String) -> Int {
-        let words = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+        let words = text.splitIntoWords().count
         return Int(Double(words) * Defaults.tokensPerWordEstimate)
     }
 

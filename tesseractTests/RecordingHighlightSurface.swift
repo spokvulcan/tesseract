@@ -17,10 +17,11 @@ import Foundation
 @MainActor
 final class RecordingHighlightSurface: WordHighlightSurface {
 
-    /// One recorded call, capturing only what tests assert on (text + Segment Window).
+    /// One recorded call, capturing what tests assert on (text, forwarded token
+    /// offsets, and the Segment Window).
     enum Call: Equatable {
-        case show(text: String)
-        case switchText(text: String, segmentBase: TimeInterval)
+        case show(text: String, tokenCharOffsets: [Int])
+        case switchText(text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval)
         case updateTotalDuration(TimeInterval)
         case markSegmentComplete
         case markGenerationComplete
@@ -30,11 +31,11 @@ final class RecordingHighlightSurface: WordHighlightSurface {
     private(set) var calls: [Call] = []
 
     func show(text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval) {
-        calls.append(.show(text: text))
+        calls.append(.show(text: text, tokenCharOffsets: tokenCharOffsets))
     }
 
     func switchText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval) {
-        calls.append(.switchText(text: text, segmentBase: segmentBase))
+        calls.append(.switchText(text: text, tokenCharOffsets: tokenCharOffsets, segmentBase: segmentBase))
     }
 
     func updateTotalDuration(_ duration: TimeInterval) {
@@ -52,8 +53,8 @@ final class RecordingHighlightSurface: WordHighlightSurface {
     var displayedTexts: [String] {
         calls.compactMap {
             switch $0 {
-            case .show(let text): return text
-            case .switchText(let text, _): return text
+            case .show(let text, _): return text
+            case .switchText(let text, _, _): return text
             default: return nil
             }
         }

@@ -10,11 +10,12 @@
 //  An immutable `nonisolated` value built once per segment from the text plus token
 //  offsets. It owns the per-word character ranges (the `offset += word.count + 1`
 //  model, computed once at construction) and three entry points: `advance` (the
-//  single pacing fold), `cursor` (the char→word query), and `litFraction` (the
-//  per-word value the view renders). It holds no timer, clock, `@Observable` state,
-//  or UI: elapsed time, durations, and the smoothing carry-over pass in and out via
-//  `Pacing`, never stored. The driver — `TTSWordTracker` — decides *when* to re-fold
-//  and owns the monotonic clamp on the published count; this fold is not monotonic.
+//  single pacing fold), `activeWordIndex` (the char→word query), and `litFraction`
+//  (the per-word value the view renders). It holds no timer, clock, `@Observable`
+//  state, or UI: elapsed time, durations, and the smoothing carry-over pass in and out
+//  via `Pacing`, never stored. The driver — `TTSWordTracker` — decides *when* to
+//  re-fold and owns the monotonic clamp on the published count; this fold is not
+//  monotonic.
 //
 
 import Foundation
@@ -22,12 +23,18 @@ import Foundation
 nonisolated struct WordTimeline: Equatable, Sendable {
 
     /// One whitespace-separated word with its start offset into the highlighted
-    /// character space and whether it is an annotation (`[...]` or punctuation-only).
+    /// character space, whether it is an annotation (`[...]` or punctuation-only), and
+    /// the per-word lengths the render path needs — all computed once at construction
+    /// so the 60fps highlight never re-walks the string.
     struct Word: Equatable, Sendable {
         let text: String
         /// Character offset where this word starts (cumulative `word.count + 1`).
         let charOffset: Int
         let isAnnotation: Bool
+        /// `text.count`, precomputed — the highlight cap for this word.
+        let charCount: Int
+        /// Letters/numbers in the word, precomputed — the lit-fraction denominator.
+        let letterCount: Int
     }
 
     let words: [Word]
@@ -39,64 +46,61 @@ nonisolated struct WordTimeline: Equatable, Sendable {
     private let tokenCharOffsets: [Int]
 
     init(text: String, tokenCharOffsets: [Int] = []) {
-        let normalized = text
-            .replacingOccurrences(of: "\n", with: " ")
-            .split(omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
-            .map(String.init)
+        // One shared definition of "a word" (see StringWordSplitting) so the rendered
+        // model and TextSegmenter's token estimate can't drift on what splits a word.
+        let normalized = text.splitIntoWords().map(String.init)
 
         var built: [Word] = []
         built.reserveCapacity(normalized.count)
         var offset = 0
         for word in normalized {
-            built.append(Word(text: word, charOffset: offset, isAnnotation: Self.isAnnotation(word)))
+            // A word is an annotation if it is bracketed (`[...]`) or carries no letters
+            // or numbers (punctuation-only); letterCount is reused as the lit denominator.
+            let letterCount = word.filter { $0.isLetter || $0.isNumber }.count
+            let isAnnotation = (word.hasPrefix("[") && word.hasSuffix("]")) || letterCount == 0
+            built.append(Word(
+                text: word,
+                charOffset: offset,
+                isAnnotation: isAnnotation,
+                charCount: word.count,
+                letterCount: letterCount
+            ))
             offset += word.count + 1   // word characters plus one separating space
         }
 
         self.words = built
-        self.totalCharCount = normalized.joined(separator: " ").count
+        // The single-space-joined length the highlight runs across. The loop above
+        // already accumulated Σ(word.count + 1), so this is `offset - 1` (0 when empty)
+        // — no need to build and measure a joined copy.
+        self.totalCharCount = max(0, offset - 1)
         self.tokenCharOffsets = tokenCharOffsets
-    }
-
-    /// A word is an annotation if it is bracketed (`[...]`) or carries no letters or
-    /// numbers (punctuation-only) — the classification the view used to own.
-    static func isAnnotation(_ word: String) -> Bool {
-        if word.hasPrefix("[") && word.hasSuffix("]") { return true }
-        return word.filter { $0.isLetter || $0.isNumber }.isEmpty
     }
 
     // MARK: - char → word query
 
-    /// The active word for a highlighted character count, plus how far the highlight
-    /// has progressed into that word. `activeWordIndex` is the first word whose end
+    /// The active word for a highlighted character count: the first word whose end
     /// offset reaches `highlightedCharCount`, clamping to the last word once the
-    /// highlight runs past the text — the rule the view's `activeWordIndex` used.
-    struct Cursor: Equatable, Sendable {
-        let activeWordIndex: Int
-        let inWordLitFraction: Double
-    }
-
-    func cursor(highlightedCharCount: Int) -> Cursor {
-        guard !words.isEmpty else { return Cursor(activeWordIndex: 0, inWordLitFraction: 0) }
-        var active = words.count - 1
-        for (i, word) in words.enumerated() where highlightedCharCount <= word.charOffset + word.text.count {
-            active = i
-            break
+    /// highlight runs past the text — the rule the view's scroll-centering uses. How
+    /// far into that word the highlight has progressed is `litFraction`, computed only
+    /// where the view needs it, never eagerly here.
+    func activeWordIndex(highlightedCharCount: Int) -> Int {
+        guard !words.isEmpty else { return 0 }
+        for (i, word) in words.enumerated() where highlightedCharCount <= word.charOffset + word.charCount {
+            return i
         }
-        return Cursor(
-            activeWordIndex: active,
-            inWordLitFraction: litFraction(wordIndex: active, charCount: highlightedCharCount)
-        )
+        return words.count - 1
     }
 
     /// How lit one word is: lit characters over its letter/number count (the word's
-    /// own length is the cap; `>= 1.0` means fully lit). Matches the view's per-word
-    /// `litCount` / `letterCount` computation. Out-of-range indices read as `0`.
+    /// own length is the cap; `>= 1.0` means fully lit). Reads the per-word lengths
+    /// cached on `Word` at construction rather than re-walking the string each call —
+    /// this runs ~2×N per frame on the highlight path. Out-of-range indices read as `0`.
     func litFraction(wordIndex: Int, charCount: Int) -> Double {
         guard words.indices.contains(wordIndex) else { return 0 }
         let word = words[wordIndex]
         let charsIntoWord = charCount - word.charOffset
-        let litCount = max(0, min(word.text.count, charsIntoWord))
-        let letterCount = max(1, word.text.filter { $0.isLetter || $0.isNumber }.count)
+        let litCount = max(0, min(word.charCount, charsIntoWord))
+        let letterCount = max(1, word.letterCount)
         return Double(litCount) / Double(letterCount)
     }
 
