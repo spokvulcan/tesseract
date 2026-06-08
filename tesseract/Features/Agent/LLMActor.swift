@@ -538,7 +538,7 @@ actor LLMActor {
         let loopCancel = LateBoundCancel()
 
         let task = Task {
-            [conversation, container, canonicalTools, requestID, loadedModelWeightBytes, genParams] in
+            [conversation, container, canonicalTools, requestID, loadedModelWeightBytes] in
             let mlxStart = mlxStartBox.value
             let diagnosticsContext = mlxStart.diagnosticsContext
             // The accumulator fold and the `.toolCall → HTTPPrefixCacheToolCall`
@@ -714,7 +714,6 @@ actor LLMActor {
                 // - non-thinking templates store the direct post-response
                 //   leaf captured from the final cache
                 var leafStoreForTuner: AlphaTuner.LeafStore? = nil
-                let postGenerationParams = genParams
                 leafBlock: do {
                     // Skip leaf-store when a thinking-safeguard intervention
                     // fired: the continuation ran through the raw path, so the
@@ -831,7 +830,6 @@ actor LLMActor {
                                 prefixCache: prefixCache,
                                 diagnosticsContext: diagnosticsContext,
                                 ssdEnabled: mlxStart.ssdEnabled,
-                                generateParameters: postGenerationParams,
                                 storeStage: stages.store,
                                 captureStage: stages.capture,
                                 admissionStage: stages.admission,
@@ -1995,7 +1993,6 @@ actor LLMActor {
         prefixCache: PrefixCacheManager,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         ssdEnabled: Bool,
-        generateParameters: GenerateParameters,
         storeStage: String,
         captureStage: String,
         admissionStage: String,
@@ -2013,8 +2010,6 @@ actor LLMActor {
                 )
 
                 let residual = Array(storedTokens[boundaryOffset...])
-                var prefillParameters = generateParameters
-                prefillParameters.checkpointBaseOffset = boundaryOffset
                 let prefillStart = Date.timeIntervalSinceReferenceDate
                 // Qwen3.5 is a `Qwen3_5ForConditionalGeneration` (VLM)
                 // whose `prepare` indexes tokens with two axes

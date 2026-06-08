@@ -31,14 +31,6 @@ nonisolated struct ServerInferenceModelState: Sendable, Equatable {
     let modelID: String
     let visionMode: Bool
 
-    init(
-        modelID: String,
-        visionMode: Bool
-    ) {
-        self.modelID = modelID
-        self.visionMode = visionMode
-    }
-
     static let unavailable = ServerInferenceModelState(
         modelID: "",
         visionMode: false

@@ -618,6 +618,62 @@ struct WarmStartTests {
         #expect(mgr.stats.partitionCount == 1)
     }
 
+    /// A partition whose on-disk digest key disagrees with the digest its
+    /// own `PartitionMeta` reconstructs to — a corrupted/inconsistent meta
+    /// sidecar — must be dropped at warm start, not reattached under the
+    /// reconstructed key. Reattaching would cross-contaminate snapshots
+    /// across partition identities at lookup time. Mirrors the digest-match
+    /// guard in `PrefixCacheManager.warmStart`.
+    @Test func warmStartDropsPartitionWhenOnDiskDigestMismatchesMeta() async throws {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+
+        // The digest this partition's own meta reconstructs to…
+        let reconstructedKey = makePartitionKey(fingerprint: testFingerprint)
+        // …and a different digest it is actually stored under on disk.
+        let tamperedDigest = "deadbeef"
+        #expect(tamperedDigest != reconstructedKey.partitionDigest)
+
+        let descriptor = makeDescriptor(
+            partitionDigest: tamperedDigest,
+            pathFromRoot: Array(1...10),
+            tokenOffset: 10,
+            bytes: 4096
+        )
+
+        // The meta carries the matching fingerprint, so the partition
+        // survives the store's fingerprint filter and reaches the manager's
+        // digest-match guard — but it reconstructs to a key that is NOT
+        // `tamperedDigest`, so the guard must drop it.
+        var manifest = SnapshotManifest.empty()
+        manifest.partitions[tamperedDigest] = makePartitionMeta(fingerprint: testFingerprint)
+        manifest.snapshots[descriptor.snapshotID] = descriptor
+        try writeManifest(manifest, rootURL: root)
+
+        let (mgr, _) = makeManager(rootURL: root)
+        try await mgr.warmStart(modelFingerprint: testFingerprint)
+
+        // Dropped from the manager's tree: the partition is not registered
+        // under the reconstructed key, so it cannot be reached by a lookup.
+        // (The store seeds byte accounting earlier, during warm-start load;
+        // this guard governs reattachment, not the byte budget.)
+        #expect(mgr.stats.partitionCount == 0)
+
+        // A lookup under the correctly-reconstructed key must not surface the
+        // dropped partition.
+        let result = mgr.lookup(
+            tokens: descriptor.pathFromRoot,
+            partitionKey: reconstructedKey
+        )
+        #expect(result.snapshot == nil)
+        if case .hit = result.reason {
+            #expect(Bool(false), "dropped partition must not surface as a hit")
+        }
+        if case .ssdHit = result.reason {
+            #expect(Bool(false), "dropped partition must not surface as an ssdHit")
+        }
+    }
+
     // MARK: - Rebuild-path fixtures
 
     private func makeWriterPayload(bytes: Int) -> SnapshotPayload {
