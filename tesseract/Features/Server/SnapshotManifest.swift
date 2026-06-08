@@ -58,7 +58,12 @@ nonisolated enum SnapshotManifestSchema {
     ///   public prefix-protection mode, so persisted TriAttention
     ///   partitions written under v5 must be wiped rather than
     ///   silently reattached under a different runtime policy.
-    static let currentVersion: Int = 6
+    /// - v7: TriAttention removed from the app; `PartitionMeta` no longer
+    ///   carries a TriAttention identity and `partitionDigest` drops the
+    ///   `\0TA:` segment. Dense digests are unchanged, but v6 manifests are
+    ///   wiped on first boot under v7 so no stale TriAttention partition
+    ///   lingers (see docs/adr/0005).
+    static let currentVersion: Int = 7
 }
 
 // MARK: - Persisted descriptor (Codable, manifest.json + safetensors header)
@@ -200,23 +205,13 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
     /// top-level manifest.
     let schemaVersion: Int
 
-    /// TriAttention identity carried so warm-start can reconstruct
-    /// the partition's full `CachePartitionKey` — including the
-    /// TriAttention discriminator — and verify the on-disk digest
-    /// matches without collapsing TriAttention partitions back to
-    /// `.dense`. Defaults to `.dense` so v5 reads of files that
-    /// somehow omit the field still produce a valid dense partition
-    /// rather than throwing a decode error. Added in schema v5.
-    let triAttention: TriAttentionPartitionIdentity
-
     init(
         modelID: String,
         modelFingerprint: String,
         kvBits: Int?,
         kvGroupSize: Int,
         createdAt: Double,
-        schemaVersion: Int,
-        triAttention: TriAttentionPartitionIdentity = .dense
+        schemaVersion: Int
     ) {
         self.modelID = modelID
         self.modelFingerprint = modelFingerprint
@@ -224,7 +219,6 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         self.kvGroupSize = kvGroupSize
         self.createdAt = createdAt
         self.schemaVersion = schemaVersion
-        self.triAttention = triAttention
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -234,7 +228,6 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         case kvGroupSize
         case createdAt
         case schemaVersion
-        case triAttention
     }
 
     init(from decoder: Decoder) throws {
@@ -245,10 +238,6 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         self.kvGroupSize = try container.decode(Int.self, forKey: .kvGroupSize)
         self.createdAt = try container.decode(Double.self, forKey: .createdAt)
         self.schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        self.triAttention =
-            try container.decodeIfPresent(
-                TriAttentionPartitionIdentity.self, forKey: .triAttention
-            ) ?? .dense
     }
 }
 
@@ -455,32 +444,14 @@ extension CachePartitionKey {
     /// and no value starting with `"S"` can ever equal the bare
     /// `"N"` sentinel.
     ///
-    /// When `triAttention == .dense` the canonical string stops here,
-    /// keeping the pre-TriAttention digest stable so dense partitions
-    /// persisted before TriAttention landed remain reachable under the
-    /// exact same on-disk digest. `.triAttention(...)` appends a
-    /// `\0TA:` tagged segment so TriAttention-enabled partitions can
-    /// never collide with their dense counterparts (nor with each
-    /// other across budget / calibration / impl-version changes).
-    ///
     /// The null-byte separator cannot appear inside any field:
     /// `modelID` is a HuggingFace ID, `kvBits`/`kvGroupSize` are
-    /// decimal integers, `modelFingerprint` is hex SHA-256,
-    /// `budgetTokens` is a decimal integer,
-    /// `calibrationArtifactIdentity` is hex SHA-256, and
-    /// `implementationVersion` is a restricted identifier string
-    /// (`"v1"` today), and `prefixProtectionMode` is a restricted
-    /// identifier string (`"protectNone"`, `"protectStablePrefixOnly"`,
-    /// or `"protectAllPrefill"`).
+    /// decimal integers, and `modelFingerprint` is hex SHA-256.
     nonisolated var partitionDigest: String {
         let kvBitsField = kvBits.map { "S\($0)" } ?? "N"
         let fingerprintField = modelFingerprint.map { "S" + $0 } ?? "N"
-        var canonical =
+        let canonical =
             "\(modelID)\0\(kvBitsField)\0\(kvGroupSize)\0\(fingerprintField)"
-        if case let .triAttention(budget, artifact, impl, mode) = triAttention {
-            let artifactField = artifact.map { "S" + $0.rawValue } ?? "N"
-            canonical += "\0TA:S\(budget)\0\(artifactField)\0\(impl.rawValue)\0\(mode.rawValue)"
-        }
 
         // FNV-1a 32-bit: offset_basis = 0x811c9dc5, prime = 0x01000193.
         var hash: UInt32 = 0x811c_9dc5

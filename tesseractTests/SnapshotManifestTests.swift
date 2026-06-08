@@ -67,12 +67,13 @@ struct SnapshotManifestTests {
     // MARK: - Schema version
 
     @Test
-    func schemaVersionIsSix() {
+    func schemaVersionIsSeven() {
         // Bumping invalidates every existing manifest. Pinned so an
-        // accidental bump trips this test. v6 adds TriAttention
-        // prefix-protection mode to partition canonicalization and is the on-disk schema all
-        // current-build writes produce.
-        #expect(SnapshotManifestSchema.currentVersion == 6)
+        // accidental bump trips this test. v7 removes TriAttention from
+        // the app: `PartitionMeta` no longer carries a TriAttention
+        // identity and `partitionDigest` drops its TriAttention branch.
+        // It is the on-disk schema all current-build writes produce.
+        #expect(SnapshotManifestSchema.currentVersion == 7)
     }
 
     @Test
@@ -170,57 +171,6 @@ struct SnapshotManifestTests {
         let decoded = try decoder.decode(PartitionMeta.self, from: data)
 
         #expect(decoded == original)
-    }
-
-    @Test
-    func partitionMetaPreservesTriAttentionIdentityAcrossJSONRoundTrip() throws {
-        let triAttention: TriAttentionPartitionIdentity = .triAttention(
-            budgetTokens: 12_000,
-            calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
-                rawValue: "aaa"
-            ),
-            implementationVersion: .v1,
-            prefixProtectionMode: .protectStablePrefixOnly
-        )
-        let original = PartitionMeta(
-            modelID: "mlx-community/Qwen3-4B-paro",
-            modelFingerprint: String(repeating: "a", count: 64),
-            kvBits: 8,
-            kvGroupSize: 64,
-            createdAt: 100_000,
-            schemaVersion: SnapshotManifestSchema.currentVersion,
-            triAttention: triAttention
-        )
-        let (encoder, decoder) = jsonCodecs()
-
-        let data = try encoder.encode(original)
-        let decoded = try decoder.decode(PartitionMeta.self, from: data)
-
-        #expect(decoded == original)
-        #expect(decoded.triAttention == triAttention)
-    }
-
-    @Test
-    func partitionMetaDefaultsTriAttentionToDenseWhenFieldOmitted() throws {
-        // Forward-compat for v5 manifests written by an older build that
-        // didn't yet emit the `triAttention` key — decode must default
-        // to `.dense` rather than throwing. The bumped schemaVersion is
-        // still load-bearing as a coarse wipe gate; this default just
-        // keeps the per-partition decode resilient.
-        let json = #"""
-        {
-          "createdAt": 100000,
-          "kvBits": 8,
-          "kvGroupSize": 64,
-          "modelFingerprint": "abc",
-          "modelID": "m",
-          "schemaVersion": 5
-        }
-        """#.data(using: .utf8)!
-        let decoded = try JSONDecoder().decode(PartitionMeta.self, from: json)
-        #expect(decoded.triAttention == .dense)
-        #expect(decoded.modelID == "m")
-        #expect(decoded.schemaVersion == 5)
     }
 
     @Test
@@ -676,144 +626,6 @@ struct SnapshotManifestTests {
                 "nil modelFingerprint collides with literal \"\(probe.label)\""
             )
         }
-    }
-
-    // MARK: - TriAttention partition identity
-
-    private func makeTriAttentionIdentity(
-        budget: Int = 12_000,
-        artifact: String? = "aaa",
-        impl: TriAttentionImplementationVersion = .v1,
-        mode: TriAttentionPrefixProtectionMode = .protectStablePrefixOnly
-    ) -> TriAttentionPartitionIdentity {
-        .triAttention(
-            budgetTokens: budget,
-            calibrationArtifactIdentity: artifact.map {
-                TriAttentionCalibrationArtifactIdentity(rawValue: $0)
-            },
-            implementationVersion: impl,
-            prefixProtectionMode: mode
-        )
-    }
-
-    private func makeKey(
-        modelID: String = "mlx-community/Qwen3-4B-4bit",
-        fingerprint: String? = "deadbeef",
-        triAttention: TriAttentionPartitionIdentity = .dense
-    ) -> CachePartitionKey {
-        CachePartitionKey(
-            modelID: modelID,
-            kvBits: 8,
-            kvGroupSize: 64,
-            modelFingerprint: fingerprint,
-            triAttention: triAttention
-        )
-    }
-
-    /// `.dense` must digest to the same value the pre-TriAttention
-    /// canonicalization produced. Any drift silently orphans every
-    /// dense snapshot persisted before TriAttention support landed.
-    @Test
-    func partitionDigestDenseMatchesPreTriAttentionWirePin() {
-        let explicitDense = makeKey(triAttention: .dense)
-        let defaulted = makeKey()
-        #expect(explicitDense.partitionDigest == "ecfce886")
-        #expect(defaulted.partitionDigest == "ecfce886")
-        #expect(explicitDense == defaulted)
-    }
-
-    @Test
-    func partitionDigestTriAttentionSplitsFromDense() {
-        let base = makeKey()
-        let triAttention = makeKey(
-            triAttention: makeTriAttentionIdentity(artifact: "cafef00d")
-        )
-        #expect(base.partitionDigest != triAttention.partitionDigest)
-        #expect(base != triAttention)
-    }
-
-    @Test
-    func partitionDigestDistinguishesTriAttentionFields() {
-        let base = makeKey(
-            modelID: "m",
-            fingerprint: "f",
-            triAttention: makeTriAttentionIdentity()
-        )
-        let diffs: [(label: String, identity: TriAttentionPartitionIdentity)] = [
-            ("budgetTokens", makeTriAttentionIdentity(budget: 8_000)),
-            ("calibrationArtifactIdentity", makeTriAttentionIdentity(artifact: "bbb")),
-            ("calibrationArtifactIdentity nil vs Some", makeTriAttentionIdentity(artifact: nil)),
-            ("prefixProtectionMode", makeTriAttentionIdentity(mode: .protectNone)),
-        ]
-        for diff in diffs {
-            let other = makeKey(
-                modelID: "m",
-                fingerprint: "f",
-                triAttention: diff.identity
-            )
-            #expect(
-                base.partitionDigest != other.partitionDigest,
-                "\(diff.label) does not affect the TriAttention digest"
-            )
-            #expect(base != other, "\(diff.label) does not affect equality")
-        }
-    }
-
-    @Test
-    func partitionKeySortsDenseBeforeTriAttention() {
-        let dense = makeKey(modelID: "m", fingerprint: "f")
-        let triAttention = makeKey(
-            modelID: "m", fingerprint: "f",
-            triAttention: makeTriAttentionIdentity()
-        )
-        #expect(dense < triAttention)
-        #expect(!(triAttention < dense))
-
-        let smallerBudget = makeKey(
-            modelID: "m", fingerprint: "f",
-            triAttention: makeTriAttentionIdentity(budget: 8_000)
-        )
-        #expect(smallerBudget < triAttention)
-    }
-
-    /// `enabled == false` must collapse onto `.dense` regardless of
-    /// the carried budget/artifact/impl fields; otherwise dense
-    /// partitions fragment whenever the runtime selector forwards a
-    /// non-default budget through a disabled configuration.
-    @Test
-    func triAttentionPartitionIdentityFromConfigurationCollapsesDisabled() {
-        #expect(TriAttentionPartitionIdentity.from(.v1Disabled) == .dense)
-
-        let disabledWithFields = TriAttentionPartitionIdentity.from(
-            TriAttentionConfiguration(
-                enabled: false,
-                budgetTokens: 8_000,
-                calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
-                    rawValue: "cafebabe"
-                ),
-                implementationVersion: .v1
-            )
-        )
-        #expect(disabledWithFields == .dense)
-
-        let artifact = TriAttentionCalibrationArtifactIdentity(rawValue: "cafebabe")
-        let enabled = TriAttentionPartitionIdentity.from(
-            TriAttentionConfiguration(
-                enabled: true,
-                budgetTokens: 12_000,
-                calibrationArtifactIdentity: artifact,
-                implementationVersion: .v1,
-                prefixProtectionMode: .protectStablePrefixOnly
-            )
-        )
-        #expect(
-            enabled == .triAttention(
-                budgetTokens: 12_000,
-                calibrationArtifactIdentity: artifact,
-                implementationVersion: .v1,
-                prefixProtectionMode: .protectStablePrefixOnly
-            )
-        )
     }
 
     // MARK: - Schema-version compatibility

@@ -47,7 +47,6 @@ final class AgentEngine {
     private(set) var isGenerating = false
 
     private(set) var agentTokenizer: AgentTokenizer?
-    private(set) var triAttentionRuntimeSelection: TriAttentionRuntimeSelection = .disabledDefault
 
     /// Whether the loaded model's template starts generation inside a `<think>` block.
     private(set) var promptStartsThinking = false
@@ -109,12 +108,6 @@ final class AgentEngine {
         }
     }
 
-    /// Resolve the hidden TriAttention setting at the moment of the call. The
-    /// zero-arg/test engine shape stays disabled-by-default.
-    func resolveTriAttentionConfig() -> TriAttentionConfiguration {
-        settingsManager?.makeTriAttentionConfig() ?? .v1Disabled
-    }
-
     /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
     ///
     /// - Parameters:
@@ -123,12 +116,9 @@ final class AgentEngine {
     ///   - visionMode: When `true`, loads the VLM variant of ParoQuant models (supports
     ///     image attachments but has slower prefill). When `false`, loads the LLM variant
     ///     with fast chunked prefill. Ignored for non-ParoQuant models.
-    ///   - triAttention: Explicit TriAttention request. `nil` falls back to
-    ///     ``resolveTriAttentionConfig()``.
     func loadModel(
         from directory: URL,
-        visionMode: Bool,
-        triAttention: TriAttentionConfiguration? = nil
+        visionMode: Bool
     ) async throws {
         guard !isModelLoaded, !isLoading else { return }
 
@@ -139,8 +129,7 @@ final class AgentEngine {
             let (tokenizer, startsThinking) = try await llmActor.loadModel(
                 from: directory,
                 visionMode: visionMode,
-                ssdConfig: resolveSSDConfig(),
-                triAttention: triAttention ?? resolveTriAttentionConfig()
+                ssdConfig: resolveSSDConfig()
             )
 
             let st = tokenizer.specialTokens
@@ -152,7 +141,6 @@ final class AgentEngine {
 
             agentTokenizer = tokenizer
             promptStartsThinking = startsThinking
-            triAttentionRuntimeSelection = await llmActor.currentTriAttentionRuntimeSelection
             isModelLoaded = true
             loadingStatus = ""
             Log.agent.info("Model loaded — promptStartsThinking=\(promptStartsThinking)")
@@ -403,7 +391,6 @@ final class AgentEngine {
         cancelGeneration()
         agentTokenizer = nil
         promptStartsThinking = false
-        triAttentionRuntimeSelection = .disabledDefault
         isModelLoaded = false
         loadingStatus = ""
         unloadTask = Task { [llmActor] in

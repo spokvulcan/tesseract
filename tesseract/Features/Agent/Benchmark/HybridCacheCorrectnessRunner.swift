@@ -608,10 +608,6 @@ final class HybridCacheCorrectnessRunner {
         let lmInput = LMInput(text: .init(tokens: inputArr, mask: nil))
         var effectiveParameters = generateParameters
         effectiveParameters.checkpointBaseOffset = checkpointBaseOffset
-        effectiveParameters.configureTriAttentionCachesForPrefill(
-            cache,
-            inputTokenCount: tokens.count
-        )
         let (prepareResult, snapshots) = try context.model.prepareWithCheckpoints(
             lmInput,
             cache: cache,

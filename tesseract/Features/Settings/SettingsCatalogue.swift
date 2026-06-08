@@ -67,7 +67,6 @@ enum SettingsCatalogue {
 
     static let webAccessEnabled = Setting.bool("webAccessEnabled", default: true)
     static let visionModeEnabled = Setting.bool("visionModeEnabled", default: false)
-    static let triattentionEnabled = Setting.bool("triattentionEnabled", default: false)
 
     // MARK: - Server
 

@@ -42,12 +42,6 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// absent profile.
     let flopProfile: ModelFlopProfile
 
-    /// Whether the model is eligible for TriAttention. A **computed view** of
-    /// `isQwen35` — eligibility is architecture-coupled to the Qwen3.5 family
-    /// today, but naming the caller's intent lets it diverge from the raw
-    /// family check without editing the gate call site.
-    var isTriAttentionEligible: Bool { isQwen35 }
-
     /// Build the identity from a model directory, reading `config.json` and
     /// `chat_template.jinja` **exactly once each**. The directory-based
     /// constructor is the module-facing interface; total and non-throwing.

@@ -725,8 +725,7 @@ final class TokenRadixTree {
 private extension CachePartitionKey {
     var telemetrySummary: String {
         let kv = kvBits.map { "kv\($0)" } ?? "denseKV"
-        let tri: String = triAttention.isDense ? "dense" : "triattention"
         let fingerprint = modelFingerprint.map { String($0.prefix(8)) } ?? "nofp"
-        return "\(modelID) · \(kv)/g\(kvGroupSize) · \(tri) · \(fingerprint)"
+        return "\(modelID) · \(kv)/g\(kvGroupSize) · \(fingerprint)"
     }
 }

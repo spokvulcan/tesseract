@@ -1,83 +1,6 @@
 import Foundation
 import MLXLMCommon
 
-/// Normalized TriAttention identity folded into `CachePartitionKey`.
-///
-/// Every `TriAttentionConfiguration` with `enabled == false` collapses
-/// to `.dense` so unused budget/impl fields cannot fragment dense
-/// partitions. The `.dense` case is also load-bearing for the on-disk
-/// digest: a default dense key must canonicalize to the exact bytes
-/// the pre-TriAttention code produced, or persisted snapshots become
-/// unreachable.
-nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable, Codable {
-    case dense
-    case triAttention(
-        budgetTokens: Int,
-        calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity?,
-        implementationVersion: TriAttentionImplementationVersion,
-        prefixProtectionMode: TriAttentionPrefixProtectionMode
-    )
-
-    nonisolated static func from(_ configuration: TriAttentionConfiguration) -> Self {
-        guard configuration.enabled else { return .dense }
-        return .triAttention(
-            budgetTokens: configuration.budgetTokens,
-            calibrationArtifactIdentity: configuration.calibrationArtifactIdentity,
-            implementationVersion: configuration.implementationVersion,
-            prefixProtectionMode: configuration.prefixProtectionMode
-        )
-    }
-
-    nonisolated var isDense: Bool {
-        if case .dense = self { return true }
-        return false
-    }
-
-    private var sortKey: (Int, Int, String, String, String) {
-        switch self {
-        case .dense:
-            return (0, 0, "", "", "")
-        case .triAttention(let budget, let artifact, let impl, let mode):
-            return (1, budget, artifact?.rawValue ?? "", impl.rawValue, mode.rawValue)
-        }
-    }
-
-    nonisolated static func < (lhs: Self, rhs: Self) -> Bool {
-        lhs.sortKey < rhs.sortKey
-    }
-
-    // MARK: Codable
-
-    /// Round-trips through `TriAttentionConfiguration`'s synthesized
-    /// Codable so the wire shape matches the runtime config tuple the
-    /// rest of the stack already serializes. `from(_:)` collapses any
-    /// disabled configuration back to `.dense` so a manifest written
-    /// with disabled-but-populated fields cannot fragment dense
-    /// partitions on warm start.
-    nonisolated init(from decoder: Decoder) throws {
-        self = .from(try TriAttentionConfiguration(from: decoder))
-    }
-
-    nonisolated func encode(to encoder: Encoder) throws {
-        try asConfiguration.encode(to: encoder)
-    }
-
-    private var asConfiguration: TriAttentionConfiguration {
-        switch self {
-        case .dense:
-            return .v1Disabled
-        case .triAttention(let budget, let artifact, let impl, let mode):
-            return TriAttentionConfiguration(
-                enabled: true,
-                budgetTokens: budget,
-                calibrationArtifactIdentity: artifact,
-                implementationVersion: impl,
-                prefixProtectionMode: mode
-            )
-        }
-    }
-}
-
 /// Partition key for isolating radix trees by runtime configuration.
 ///
 /// Tool/template digests are intentionally NOT part of the partition key:
@@ -85,7 +8,7 @@ nonisolated enum TriAttentionPartitionIdentity: Hashable, Sendable, Comparable, 
 /// naturally isolated within one partition.
 ///
 /// `Comparable` so partition iteration can produce a deterministic order
-/// (modelID → kvBits → kvGroupSize → modelFingerprint → triAttention)
+/// (modelID → kvBits → kvGroupSize → modelFingerprint)
 /// for stable tie-break behavior in eviction.
 nonisolated struct CachePartitionKey: Hashable, Sendable, Comparable {
     let modelID: String
@@ -96,27 +19,23 @@ nonisolated struct CachePartitionKey: Hashable, Sendable, Comparable {
     /// under the same `modelID` cannot surface stale persisted snapshots.
     /// `nil` for RAM-only test fixtures.
     let modelFingerprint: String?
-    let triAttention: TriAttentionPartitionIdentity
 
     nonisolated init(
         modelID: String,
         kvBits: Int?,
         kvGroupSize: Int,
-        modelFingerprint: String? = nil,
-        triAttention: TriAttentionPartitionIdentity = .dense
+        modelFingerprint: String? = nil
     ) {
         self.modelID = modelID
         self.kvBits = kvBits
         self.kvGroupSize = kvGroupSize
         self.modelFingerprint = modelFingerprint
-        self.triAttention = triAttention
     }
 
     static func < (lhs: CachePartitionKey, rhs: CachePartitionKey) -> Bool {
         let lhsHead = (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize, lhs.modelFingerprint ?? "")
         let rhsHead = (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize, rhs.modelFingerprint ?? "")
-        if lhsHead != rhsHead { return lhsHead < rhsHead }
-        return lhs.triAttention < rhs.triAttention
+        return lhsHead < rhsHead
     }
 }
 
@@ -280,14 +199,11 @@ final class PrefixCacheManager {
 
         /// Restore the cached KV/Mamba state. Each call produces an independent deep copy.
         /// Nonisolated because it operates only on the snapshot's deep-copy data.
-        nonisolated func restoreCache(
-            triAttentionRestoreContext: TriAttentionSnapshotRestoreContext? = nil
-        ) -> [any KVCache]? {
+        nonisolated func restoreCache() -> [any KVCache]? {
             guard let snapshot, let key = partitionKey else { return nil }
             return snapshot.restore(
                 kvBitsHint: key.kvBits,
-                kvGroupSizeHint: key.kvGroupSize,
-                triAttentionRestoreContext: triAttentionRestoreContext
+                kvGroupSizeHint: key.kvGroupSize
             )
         }
     }
@@ -391,11 +307,9 @@ final class PrefixCacheManager {
     /// already-shared gap. This is layered on top of the existing Phase 2
     /// planner and does not change its speculative branch-point rules.
     ///
-    /// TriAttention-safe: the planner returns an offset, not a state. The
-    /// captured `.branchPoint` snapshot at `M` is produced by the prefill
-    /// loop using whatever cache type the runtime configured — dense or
-    /// TriAttention — and the partition key already isolates the two
-    /// modes so a TriAttention checkpoint cannot surface to a dense lookup.
+    /// The planner returns an offset, not a state. The captured
+    /// `.branchPoint` snapshot at `M` is produced by the prefill loop, so the
+    /// alignment checkpoint stays consistent with the request's cache type.
     func alignmentCheckpointOffset(
         lookupResult: LookupResult,
         totalTokenCount: Int,
@@ -790,14 +704,11 @@ final class PrefixCacheManager {
                 modelID: partition.meta.modelID,
                 kvBits: partition.meta.kvBits,
                 kvGroupSize: partition.meta.kvGroupSize,
-                modelFingerprint: partition.meta.modelFingerprint,
-                triAttention: partition.meta.triAttention
+                modelFingerprint: partition.meta.modelFingerprint
             )
-            // `PartitionMeta` (v5) carries the TriAttention identity, so
-            // the reconstructed key matches the on-disk digest for both
-            // dense and TriAttention partitions. A mismatch now signals
-            // a corrupted/inconsistent meta sidecar — drop the partition
-            // rather than reattaching it under the wrong key and
+            // The reconstructed key must match the on-disk digest. A mismatch
+            // signals a corrupted/inconsistent meta sidecar — drop the
+            // partition rather than reattaching it under the wrong key and
             // cross-contaminating at lookup time.
             guard partition.digest == partitionKey.partitionDigest else {
                 digestMismatchPartitions.append(partition.digest)
@@ -876,8 +787,7 @@ final class PrefixCacheManager {
             kvBits: partitionKey.kvBits,
             kvGroupSize: partitionKey.kvGroupSize,
             createdAt: Date().timeIntervalSinceReferenceDate,
-            schemaVersion: SnapshotManifestSchema.currentVersion,
-            triAttention: partitionKey.triAttention
+            schemaVersion: SnapshotManifestSchema.currentVersion
         )
         store.registerPartition(meta, for: partitionKey)
     }

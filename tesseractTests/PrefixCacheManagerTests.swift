@@ -27,15 +27,13 @@ struct PrefixCacheManagerTests {
     }
 
     private func makeSSDKey(
-        fingerprint: String = String(repeating: "a", count: 64),
-        triAttention: TriAttentionPartitionIdentity = .dense
+        fingerprint: String = String(repeating: "a", count: 64)
     ) -> CachePartitionKey {
         CachePartitionKey(
             modelID: "test-model",
             kvBits: nil,
             kvGroupSize: 64,
-            modelFingerprint: fingerprint,
-            triAttention: triAttention
+            modelFingerprint: fingerprint
         )
     }
 
@@ -776,93 +774,6 @@ struct PrefixCacheManagerTests {
 
         let result = mgr.lookup(tokens: tokens, partitionKey: key8)
         #expect(result.snapshotTokenOffset == 100)
-    }
-
-    // MARK: - TriAttention partition isolation
-
-    private func makeKey(
-        triAttention: TriAttentionPartitionIdentity = .dense
-    ) -> CachePartitionKey {
-        CachePartitionKey(
-            modelID: "m", kvBits: 8, kvGroupSize: 64,
-            modelFingerprint: "fp",
-            triAttention: triAttention
-        )
-    }
-
-    private func triAttentionIdentity(
-        budget: Int = 12_000
-    ) -> TriAttentionPartitionIdentity {
-        .triAttention(
-            budgetTokens: budget,
-            calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
-                rawValue: "aaa"
-            ),
-            implementationVersion: .v1,
-            prefixProtectionMode: .protectStablePrefixOnly
-        )
-    }
-
-    @Test func denseAndTriAttentionPartitionsIsolated() {
-        let mgr = makeManager()
-        let tokens = Array(1...100)
-        let denseKey = makeKey()
-        let triKey = makeKey(triAttention: triAttentionIdentity())
-
-        let snap = makeSnapshot(offset: 100, type: .leaf)
-        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: denseKey)!)
-
-        #expect(mgr.stats.partitionCount == 1)
-        let missFromTri = mgr.lookup(tokens: tokens, partitionKey: triKey)
-        #expect(missFromTri.snapshot == nil)
-
-        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: triKey)!)
-        #expect(mgr.stats.partitionCount == 2)
-
-        let triHit = mgr.lookup(tokens: tokens, partitionKey: triKey)
-        #expect(triHit.snapshotTokenOffset == 100)
-        let denseHit = mgr.lookup(tokens: tokens, partitionKey: denseKey)
-        #expect(denseHit.snapshotTokenOffset == 100)
-    }
-
-    @Test func alignmentCheckpointPlanningWorksInTriAttentionPartition() {
-        // Same shape as `largeGapTriggersTwoPass`, but the snapshot lives
-        // in a TriAttention partition. The planner returns an offset only
-        // — capture and restore happen later via TriAttention-aware
-        // HybridCacheSnapshot codepaths — so the alignment-checkpoint
-        // logic must stay partition-agnostic.
-        let mgr = makeManager()
-        let triKey = makeKey(triAttention: triAttentionIdentity())
-        let matchedPath = Array(1...500)
-        mgr.admit(SnapshotAdmission.checkpoints(
-            fullPromptTokens: matchedPath,
-            candidates: [.ramOnly(makeSnapshot(offset: 100, type: .system))],
-            partitionKey: triKey
-        )!)
-
-        let lookup = mgr.lookup(tokens: matchedPath + [999], partitionKey: triKey)
-        #expect(lookup.snapshotTokenOffset == 100)
-        #expect(lookup.sharedPrefixLength == 500)
-
-        let alignmentOffset = mgr.alignmentCheckpointOffset(
-            lookupResult: lookup,
-            totalTokenCount: matchedPath.count + 1,
-            plannedCheckpoints: []
-        )
-        #expect(alignmentOffset == 500)
-    }
-
-    @Test func triAttentionPartitionsIsolatedAcrossBudgets() {
-        let mgr = makeManager()
-        let tokens = Array(1...50)
-        let keySmall = makeKey(triAttention: triAttentionIdentity(budget: 8_000))
-        let keyLarge = makeKey(triAttention: triAttentionIdentity(budget: 12_000))
-
-        let snap = makeSnapshot(offset: tokens.count, type: .leaf)
-        mgr.admit(SnapshotAdmission.leaf(storedTokens: tokens, snapshot: snap, storage: .ramOnly, partitionKey: keySmall)!)
-
-        let result = mgr.lookup(tokens: tokens, partitionKey: keyLarge)
-        #expect(result.snapshot == nil)
     }
 
     // MARK: - 17. differentModelIDsIsolated
@@ -2115,68 +2026,7 @@ struct PrefixCacheManagerTests {
         )
     }
 
-    // MARK: - TriAttention SSD admission (v6)
-
-    private static let triAttentionIdentity: TriAttentionPartitionIdentity =
-        .triAttention(
-            budgetTokens: 12_000,
-            calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
-                rawValue: "aaa"
-            ),
-            implementationVersion: .v1,
-            prefixProtectionMode: .protectStablePrefixOnly
-        )
-
-    /// v6 admits TriAttention partitions to SSD now that `PartitionMeta`
-    /// carries the TriAttention identity. The on-disk digest is unique
-    /// per identity, so warm-start can reattach the partition under the
-    /// same key without cross-contaminating dense lookups.
-    @Test func checkpointAdmissionAdmitsSSDForTriAttentionPartition() async throws {
-        let (mgr, tieredStore, root) = makeSSDManager()
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let key = makeSSDKey(triAttention: Self.triAttentionIdentity)
-        let promptTokens = Array(1...10)
-        let snapshot = makeUniformSnapshot(offset: 5, type: .system)
-        let payload = makeSSDPayload(bytes: 256, checkpointType: .system)
-
-        mgr.admit(SnapshotAdmission.checkpoints(
-            fullPromptTokens: promptTokens,
-            candidates: [.ramAndSSD(snapshot, payload: payload)],
-            partitionKey: key
-        )!)
-        await tieredStore.ssdStoreForTesting!.flushAsync()
-
-        #expect(mgr.stats.partitionCount == 1)
-        #expect(mgr.stats.snapshotCount == 1)
-        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
-
-        let partitionDir = root
-            .appendingPathComponent("partitions")
-            .appendingPathComponent(key.partitionDigest)
-        #expect(FileManager.default.fileExists(atPath: partitionDir.path))
-    }
-
-    @Test func leafAdmissionAdmitsSSDForTriAttentionPartition() async throws {
-        let (mgr, tieredStore, root) = makeSSDManager()
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let key = makeSSDKey(triAttention: Self.triAttentionIdentity)
-        let tokens = Array(1...10)
-        let leafSnapshot = makeUniformSnapshot(offset: tokens.count, type: .leaf)
-        let leafPayload = makeSSDPayload(bytes: 256, checkpointType: .leaf)
-
-        mgr.admit(SnapshotAdmission.leaf(
-            storedTokens: tokens,
-            snapshot: leafSnapshot,
-            storage: .ramAndSSD(leafPayload),
-            partitionKey: key
-        )!)
-        await tieredStore.ssdStoreForTesting!.flushAsync()
-
-        #expect(mgr.stats.snapshotCount == 1)
-        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == leafPayload.totalBytes)
-    }
+    // MARK: - SSD admission (dense partition)
 
     @Test func checkpointAdmissionStillAdmitsSSDForDensePartition() async throws {
         let (mgr, tieredStore, root) = makeSSDManager()

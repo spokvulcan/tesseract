@@ -29,9 +29,8 @@ struct ModelIdentityTests {
         #expect(identity.toolCallFormat == .xmlFunction)
     }
 
-    /// The MoE variant sets both `isQwen35` and `isMoE`, and is TriAttention
-    /// eligible (eligibility is the Qwen3.5 family today).
-    @Test func qwen35MoEDirectoryIsFamilyAndMoEAndEligible() throws {
+    /// The MoE variant sets both `isQwen35` and `isMoE`.
+    @Test func qwen35MoEDirectoryIsFamilyAndMoE() throws {
         let dir = try makeModelDir(config: #"{ "model_type": "qwen3_5_moe" }"#)
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -39,7 +38,6 @@ struct ModelIdentityTests {
 
         #expect(identity.isQwen35 == true)
         #expect(identity.isMoE == true)
-        #expect(identity.isTriAttentionEligible == true)
     }
 
     /// The dense variant is family but not MoE.
@@ -116,7 +114,6 @@ struct ModelIdentityTests {
         let identity = ModelIdentity(directory: dir)
         #expect(identity.flopProfile == .qwen35_4B_PARO)
         #expect(identity.isQwen35 == false)
-        #expect(identity.isTriAttentionEligible == false)
         #expect(identity.toolCallFormat == nil)
     }
 
@@ -183,7 +180,6 @@ struct ModelIdentityTests {
         #expect(identity.isMoE == false)
         #expect(identity.toolCallFormat == nil)
         #expect(identity.promptStartsThinking == false)
-        #expect(identity.isTriAttentionEligible == false)
         #expect(identity.flopProfile == .qwen35_4B_PARO)
     }
 

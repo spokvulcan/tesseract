@@ -316,17 +316,6 @@ final class DependencyContainer: ObservableObject {
         // lazy loading is preserved.
         observationTasks.append(Task { [weak self] in
             guard let self else { return }
-            for await _ in Observations({ self.settingsManager.triattentionEnabled }) {
-                guard self.inferenceArbiter.loadedSlots.contains(.llm) else { continue }
-                do {
-                    try await self.inferenceArbiter.reloadLLMIfNeeded()
-                } catch {
-                    Log.agent.error("TriAttention reload failed: \(error.localizedDescription)")
-                }
-            }
-        })
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
             for await _ in Observations({ self.settingsManager.selectedAgentModelID }) {
                 guard self.inferenceArbiter.loadedSlots.contains(.llm) else { continue }
                 do {

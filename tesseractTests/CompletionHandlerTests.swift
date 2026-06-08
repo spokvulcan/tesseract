@@ -112,8 +112,7 @@ struct CompletionHandlerTests {
         )
         let modelState = ServerInferenceModelState(
             modelID: "qwen3.5-4b-paro",
-            visionMode: false,
-            triAttention: .v1Disabled
+            visionMode: false
         )
 
         let params = CompletionHandler.makeGenerateParameters(from: request, modelState: modelState)
@@ -125,7 +124,6 @@ struct CompletionHandlerTests {
         #expect(params.minP == AgentGenerateParameters.qwen35.minP)
         #expect(params.presencePenalty == AgentGenerateParameters.qwen35.presencePenalty)
         #expect(params.repetitionPenalty == AgentGenerateParameters.qwen35.repetitionPenalty)
-        #expect(params.triAttention == .v1Disabled)
     }
 
     @MainActor
@@ -141,15 +139,9 @@ struct CompletionHandlerTests {
             presence_penalty: 0.75,
             repetition_penalty: 1.1
         )
-        let triAttention = TriAttentionConfiguration(
-            enabled: true,
-            budgetTokens: 4096,
-            calibrationArtifactIdentity: .init(rawValue: "test-artifact")
-        )
         let modelState = ServerInferenceModelState(
             modelID: "qwen3.5-4b-paro",
-            visionMode: false,
-            triAttention: triAttention
+            visionMode: false
         )
 
         let params = CompletionHandler.makeGenerateParameters(from: request, modelState: modelState)
@@ -161,7 +153,6 @@ struct CompletionHandlerTests {
         #expect(params.minP == 0.1)
         #expect(params.presencePenalty == 0.75)
         #expect(params.repetitionPenalty == 1.1)
-        #expect(params.triAttention == triAttention)
     }
 
     @MainActor
@@ -173,8 +164,7 @@ struct CompletionHandlerTests {
         )
         let modelState = ServerInferenceModelState(
             modelID: "qwen3.5-4b-paro",
-            visionMode: false,
-            triAttention: .v1Disabled
+            visionMode: false
         )
 
         let params = CompletionHandler.makeGenerateParameters(from: request, modelState: modelState)
@@ -315,16 +305,16 @@ struct CompletionHandlerTests {
     }
 
     /// Epic 3 Task 3 parity gate — the OpenAI response envelope is invariant
-    /// over attention mode. `makeNonStreamingResponse` and
+    /// over engine internals. `makeNonStreamingResponse` and
     /// `makeFinalStreamingChunk` take only a `CompletionProjection` plus the
     /// envelope identity (`completionID`, model ids, `created`,
-    /// `cachedTokenCount`): no attention-mode parameter. Identical inputs must
-    /// therefore produce byte-identical envelopes regardless of whether the
-    /// engine ran dense or TriAttention underneath.
+    /// `cachedTokenCount`): no engine-mode parameter. Identical inputs must
+    /// therefore produce byte-identical envelopes regardless of how the engine
+    /// produced the tokens underneath.
     ///
     /// Now that both emitters derive every turn-shaped field from one
     /// projection, this holds by construction — it regression-guards against a
-    /// future refactor threading an attention-mode flag into envelope
+    /// future refactor threading an engine-mode flag into envelope
     /// construction and leaking runtime-mode information into the response.
     @MainActor @Test func responseEnvelopesDoNotVaryWhenInputsAreIdentical() throws {
         let info = AgentGeneration.Info(

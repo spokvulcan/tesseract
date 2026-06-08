@@ -8,7 +8,6 @@ import SwiftUI
 struct ServerDashboardView: View {
     @Environment(SettingsManager.self) private var settings
     @Environment(HTTPServer.self) private var httpServer
-    @Environment(InferenceArbiter.self) private var arbiter
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
@@ -35,7 +34,6 @@ struct ServerDashboardView: View {
             runStatePill
             endpointDisplay
             Spacer()
-            triAttentionChip
         }
     }
 
@@ -75,24 +73,5 @@ struct ServerDashboardView: View {
             .foregroundStyle(.secondary)
             .help("Copy Endpoint")
         }
-    }
-
-    @ViewBuilder
-    private var triAttentionChip: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "cpu")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(triAttentionModeDescription(for: arbiter))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color.secondary.opacity(0.08), in: Capsule())
-        .overlay(
-            Capsule()
-                .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 0.5)
-        )
     }
 }

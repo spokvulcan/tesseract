@@ -92,14 +92,13 @@ enum ModelFingerprint {
     /// same HuggingFace checkpoint — it does not fold in the local filesystem
     /// mtime, and it reads weight bytes rather than trusting their mtime.
     ///
-    /// Used for shipped-artifact lookup (e.g. TriAttention calibration stats
-    /// keyed by content-identity of the checkpoint). The local SSD prefix
-    /// cache continues to use the cheaper `computeFingerprint`.
+    /// Content-stable identity for shipped per-checkpoint artifact lookup
+    /// (keyed by the checkpoint's content rather than its local mtime). The
+    /// local SSD prefix cache continues to use the cheaper `computeFingerprint`.
     ///
     /// Cost: streams safetensors content through SHA-256 in 8 MiB chunks. On
     /// Apple Silicon expect ~500 MB/s → a few seconds for 4B, tens of seconds
-    /// for 27B. Only call this when the result is actually needed (e.g.
-    /// TriAttention requested + model is PARO + not vision mode).
+    /// for 27B. Only call this when the result is actually needed.
     nonisolated static func computeContentFingerprint(modelDir: URL) throws -> String {
         let fm = FileManager.default
         var isDirectory: ObjCBool = false

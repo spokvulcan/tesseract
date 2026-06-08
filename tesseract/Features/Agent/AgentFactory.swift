@@ -69,8 +69,8 @@ enum AgentFactory {
         )
 
         // 7. Build compaction transform. The provider live-reads settings so a
-        // runtime change to the selected model or TriAttention toggle takes
-        // effect on the very next inference call without rebuilding the agent.
+        // runtime change to the selected model takes effect on the very next
+        // inference call without rebuilding the agent.
         let parametersProvider: @MainActor @Sendable () -> AgentGenerateParameters = {
             [settingsManager] in
             settingsManager.makeAgentGenerateParameters()
