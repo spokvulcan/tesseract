@@ -57,14 +57,3 @@ func copyServerEndpointToPasteboard(port: Int) {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(serverEndpointURL(port: port), forType: .string)
 }
-
-@MainActor
-func triAttentionModeDescription(for arbiter: InferenceArbiter) -> String {
-    guard let state = arbiter.loadedLLMState else {
-        return "Pending — no model loaded yet"
-    }
-    if let reason = state.triAttentionFallbackReason {
-        return "Dense (fallback: \(reason.displayLabel))"
-    }
-    return state.effectiveTriAttention.enabled ? "TriAttention" : "Dense"
-}

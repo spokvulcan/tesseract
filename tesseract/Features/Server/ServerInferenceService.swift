@@ -16,9 +16,7 @@ final class ServerInferenceService {
             arbiter.loadedLLMState.map {
                 ServerInferenceModelState(
                     modelID: $0.modelID,
-                    visionMode: $0.visionMode,
-                    triAttention: $0.effectiveTriAttention,
-                    triAttentionFallbackReason: $0.triAttentionFallbackReason
+                    visionMode: $0.visionMode
                 )
             }
         }
@@ -50,18 +48,9 @@ final class ServerInferenceService {
         case .chat:
             "chat"
         }
-        let attentionMode: String
-        if let fallbackReason = modelState?.triAttentionFallbackReason {
-            attentionMode = "denseFallback(\(fallbackReason.rawValue))"
-        } else if modelState?.triAttention.enabled == true {
-            attentionMode = "triAttention"
-        } else {
-            attentionMode = "dense"
-        }
         Log.server.info(
             "Server inference start — route=\(routeDescription) input=\(inputDescription) "
-            + "model=\(modelState?.modelID ?? "") visionMode=\(modelState?.visionMode ?? false) "
-            + "attentionMode=\(attentionMode)"
+            + "model=\(modelState?.modelID ?? "") visionMode=\(modelState?.visionMode ?? false)"
         )
 
         switch request.input {

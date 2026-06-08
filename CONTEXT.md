@@ -9,8 +9,8 @@ system. Keep this narrative current; record discrete decisions as ADRs in
 
 ## Domain
 
-_TODO: the ubiquitous language — Agent, Session, Prefix Cache, TriAttention,
-Package, Tool — defined in one place._
+_TODO: the ubiquitous language — Agent, Session, Prefix Cache, Package, Tool —
+defined in one place._
 
 ## Language
 
@@ -1098,14 +1098,12 @@ The value computed **once** from a model directory at load that answers "what mo
 and what does that imply downstream." A `nonisolated Sendable Equatable` value with a
 **total, non-throwing** `init(directory:)` that reads `config.json` and `chat_template.jinja`
 exactly once — replacing the loose `LLMActor` statics (`detectToolCallFormat`,
-`isQwen35Model`, `isQwen35MoEModel`, `isTriAttentionEligibleModel`, `detectModelFlopProfile`,
+`isQwen35Model`, `isQwen35MoEModel`, `detectModelFlopProfile`,
 `detectPromptStartsThinking`) that each re-read the directory at their own call site (four
 `config.json` parses per load today). It carries: `toolCallFormat` (optional — `nil` means
 "no override, use the vendor JSON default"), `isQwen35` and `isMoE` (the `model_type`
 family/variant facts), `promptStartsThinking` (from the generation-prompt block of the chat
-template), and `flopProfile`. `isTriAttentionEligible` is a **computed view** of `isQwen35` —
-eligibility is architecture-coupled to Qwen3.5 today, but the property names the *caller's
-intent* so it can diverge from the raw family check later.
+template), and `flopProfile`.
 
 `flopProfile` is **total**: a non-Qwen3.5 or unparseable config yields `ModelFlopProfile.fallback`,
 not `nil`, so the single consumer (`EvictionPolicy`) never handles an absent profile. That
@@ -1119,8 +1117,8 @@ identity-*for-cache-invalidation*, not capability.
 Model Identity is computed once at the top of `loadModel` and threaded as a **local** — through
 every gate and into `verifyAndStore` as a parameter — so all reads come from that one value
 rather than a re-parse. The same value is also installed as load-time actor state through the
-existing `installLoadTimeState` single-site (beside the fingerprint, SSD config, and TriAttention
-selection), populated even on a failed container load and cleared on unload; that installed
+existing `installLoadTimeState` single-site (beside the fingerprint and SSD config),
+populated even on a failed container load and cleared on unload; that installed
 snapshot is the load/unload lifecycle the unit suite pins across the actor boundary (via
 `currentModelIdentityForTesting`), not a second source the gates read from. The flop profile is no
 longer published into a `@MainActor EvictionPolicy.modelProfile` knob: that mutable static
@@ -1138,7 +1136,7 @@ seam for the test surface, reached via `@testable` and kept off the directory-ba
 (`@testable` cannot see a `private` init, so the seam is `internal`, not `private`). Two alternatives were
 designed and **deferred**: a `ModelFamilyDescriptor` registry (open-for-extension, but
 speculative generality while only the Qwen3.5 family exists — revisit when a second family
-lands), and a `LoadTimeState` bundle subsuming the fingerprint/SSD/TriAttention selection
+lands), and a `LoadTimeState` bundle subsuming the fingerprint/SSD selection
 (a locality pass on the scattered load-time fields, complicated by the two-moment install —
 directory facts pre-container-load, sizing post-load; **not** a prerequisite for retiring the
 eviction global, which is its own **Eviction tuning** deepening, now implemented).

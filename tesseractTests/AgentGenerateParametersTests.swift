@@ -9,10 +9,6 @@ struct AgentGenerateParametersTests {
     @Test func defaultPrefillStepSizeIs1024() {
         #expect(AgentGenerateParameters.default.prefillStepSize == 1024)
         #expect(AgentGenerateParameters.qwen35.prefillStepSize == 1024)
-        #expect(AgentGenerateParameters.default.triAttention.enabled == false)
-        #expect(AgentGenerateParameters.default.triAttention.budgetTokens == 12_000)
-        #expect(AgentGenerateParameters.default.triAttention.implementationVersion == .v1)
-        #expect(AgentGenerateParameters.default.triAttention.calibrationArtifactIdentity == nil)
     }
 
     @MainActor
@@ -115,7 +111,6 @@ struct AgentGenerateParametersTests {
         base.thinkingSafeguard.enabled = false
         base.thinkingSafeguard.maxThinkingChars = 12_345
         base.frequencyPenalty = 0.7
-        base.triAttention = .v1Disabled
 
         let out = SamplingPreset.qwenThinkingCoding.apply(to: base)
 

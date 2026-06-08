@@ -262,19 +262,6 @@ final class SettingsManager {
         didSet { SettingsCatalogue.visionModeEnabled.write(visionModeEnabled, to: store) }
     }
 
-    /// Runtime gate for TriAttention sparse attention on Qwen3.5 PARO text
-    /// models. Defaults to `false`. Surfaced in `ServerConfigurationView` as a plain
-    /// toggle; plumbing flows through `makeTriAttentionConfig()` →
-    /// `AgentGenerateParameters` → server core. Flipping this while an LLM is
-    /// loaded kicks off an eager reload via `InferenceArbiter.reloadLLMIfNeeded()`
-    /// (observed in `DependencyContainer`). Flipping before any LLM is loaded
-    /// is picked up at the next lazy-load `ensureLoaded(.llm)` call. The view
-    /// reads `arbiter.loadedLLMState.triAttentionFallbackReason` to surface
-    /// dense fallback reasons (non-PARO model, vision mode, missing artifact).
-    var triattentionEnabled: Bool {
-        didSet { SettingsCatalogue.triattentionEnabled.write(triattentionEnabled, to: store) }
-    }
-
     // MARK: - Server Settings
 
     var isServerEnabled: Bool {
@@ -354,7 +341,6 @@ final class SettingsManager {
         self.playSounds = SettingsCatalogue.playSounds.load(from: store)
         self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
         self.visionModeEnabled = SettingsCatalogue.visionModeEnabled.load(from: store)
-        self.triattentionEnabled = SettingsCatalogue.triattentionEnabled.load(from: store)
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
         self.serverPort = SettingsCatalogue.serverPort.load(from: store)
         self.prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.load(from: store)
@@ -382,25 +368,14 @@ final class SettingsManager {
     }
 
     /// Build the agent generation parameters implied by the current settings:
-    /// model-derived preset + user sampling override + TriAttention toggle.
-    /// Live-reads all three so a settings change takes effect on the very
-    /// next call. Factories should prefer this over assembling the pieces
-    /// inline to keep the ordering and sources canonical.
+    /// model-derived preset + user sampling override. Live-reads both so a
+    /// settings change takes effect on the very next call. Factories should
+    /// prefer this over assembling the pieces inline to keep the ordering and
+    /// sources canonical.
     func makeAgentGenerateParameters() -> AgentGenerateParameters {
         var parameters = AgentGenerateParameters.forModel(selectedAgentModelID)
-        parameters.triAttention = makeTriAttentionConfig()
         parameters = samplingPreset.apply(to: parameters)
         return parameters
-    }
-
-    func makeTriAttentionConfig() -> TriAttentionConfiguration {
-        TriAttentionConfiguration(
-            enabled: triattentionEnabled,
-            budgetTokens: TriAttentionConfiguration.v1BudgetTokens,
-            calibrationArtifactIdentity: nil,
-            implementationVersion: .v1,
-            prefixProtectionMode: .protectStablePrefixOnly
-        )
     }
 
     private func resolvedSSDPrefixCacheRootURL() -> URL {
@@ -459,7 +434,6 @@ final class SettingsManager {
         selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.default
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default
         visionModeEnabled = SettingsCatalogue.visionModeEnabled.default
-        triattentionEnabled = SettingsCatalogue.triattentionEnabled.default
         samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
         isServerEnabled = SettingsCatalogue.isServerEnabled.default
         serverPort = SettingsCatalogue.serverPort.default

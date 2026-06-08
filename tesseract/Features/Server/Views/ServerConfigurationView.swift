@@ -8,7 +8,6 @@ import SwiftUI
 
 struct ServerConfigurationView: View {
     @Environment(SettingsManager.self) private var settings
-    @Environment(InferenceArbiter.self) private var arbiter
     @State private var portText: String = ""
     @FocusState private var isFocused: Bool
 
@@ -52,21 +51,6 @@ struct ServerConfigurationView: View {
                 }
             } footer: {
                 Text("The local API server provides an OpenAI-compatible /v1/chat/completions endpoint for integration with other tools.")
-            }
-
-            Section {
-                Toggle("Enable TriAttention", isOn: $settings.triattentionEnabled)
-
-                if settings.triattentionEnabled {
-                    LabeledContent("Active mode") {
-                        Text(triAttentionModeDescription(for: arbiter))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            } header: {
-                Text("Sparse Attention (Advanced)")
-            } footer: {
-                Text("TriAttention reduces attention compute on long-context text inference. Supported only on PARO quantized Qwen3.5 models — other models automatically fall back to dense attention. Vision mode also falls back to dense. Toggling reloads the currently loaded model.")
             }
         }
         .formStyle(.grouped)

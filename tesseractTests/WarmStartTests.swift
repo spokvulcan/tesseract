@@ -505,142 +505,7 @@ struct WarmStartTests {
         }
     }
 
-    // MARK: - TriAttention digest-mismatch invariant
-
-    /// A partition written under a TriAttention digest must be dropped
-    /// at warm start, not reattached under the reconstructed `.dense`
-    /// key — otherwise a dense lookup would hydrate TriAttention state.
-    @Test func warmStartDropsPartitionWhenOnDiskDigestMismatches() async throws {
-        let root = makeScratchDir()
-        defer { cleanup(root) }
-
-        let triAttentionKey = CachePartitionKey(
-            modelID: "test-model",
-            kvBits: nil,
-            kvGroupSize: 64,
-            modelFingerprint: testFingerprint,
-            triAttention: .triAttention(
-                budgetTokens: 12_000,
-                calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
-                    rawValue: "aaa"
-                ),
-                implementationVersion: .v1,
-                prefixProtectionMode: .protectStablePrefixOnly
-            )
-        )
-        let triDigest = triAttentionKey.partitionDigest
-        let denseKey = makePartitionKey(fingerprint: testFingerprint)
-        #expect(triDigest != denseKey.partitionDigest)
-
-        let descriptor = makeDescriptor(
-            partitionDigest: triDigest,
-            pathFromRoot: Array(1...10),
-            tokenOffset: 10,
-            bytes: 4096
-        )
-
-        var manifest = SnapshotManifest.empty()
-        manifest.partitions[triDigest] = makePartitionMeta(fingerprint: testFingerprint)
-        manifest.snapshots[descriptor.snapshotID] = descriptor
-        try writeManifest(manifest, rootURL: root)
-
-        let (mgr, _) = makeManager(rootURL: root)
-        try await mgr.warmStart(modelFingerprint: testFingerprint)
-
-        #expect(mgr.stats.partitionCount == 0)
-
-        let denseResult = mgr.lookup(
-            tokens: descriptor.pathFromRoot,
-            partitionKey: denseKey
-        )
-        #expect(denseResult.snapshot == nil)
-        if case .hit = denseResult.reason {
-            #expect(Bool(false), "dense lookup should not hit a TriAttention-digest partition")
-        }
-        if case .ssdHit = denseResult.reason {
-            #expect(Bool(false), "dense lookup should not resolve an ssdHit against TriAttention state")
-        }
-    }
-
-    /// v6 round-trip: a TriAttention partition whose `PartitionMeta`
-    /// carries the matching identity reattaches under the same key
-    /// rather than being dropped as a digest mismatch. Pinned because
-    /// the dense-only gate in the legacy leaf write path for v4 was
-    /// removed when v5 added the `triAttention` field, and
-    /// v6 extended that identity with prefix protection mode —
-    /// regressing this test would silently re-introduce the gate.
-    @Test func warmStartReattachesTriAttentionPartitionWhenMetaCarriesIdentity() async throws {
-        let root = makeScratchDir()
-        defer { cleanup(root) }
-
-        let triIdentity: TriAttentionPartitionIdentity = .triAttention(
-            budgetTokens: 12_000,
-            calibrationArtifactIdentity: TriAttentionCalibrationArtifactIdentity(
-                rawValue: "aaa"
-            ),
-            implementationVersion: .v1,
-            prefixProtectionMode: .protectStablePrefixOnly
-        )
-        let triKey = CachePartitionKey(
-            modelID: "test-model",
-            kvBits: nil,
-            kvGroupSize: 64,
-            modelFingerprint: testFingerprint,
-            triAttention: triIdentity
-        )
-        let triDigest = triKey.partitionDigest
-        let triMeta = PartitionMeta(
-            modelID: "test-model",
-            modelFingerprint: testFingerprint,
-            kvBits: nil,
-            kvGroupSize: 64,
-            createdAt: 100_000,
-            schemaVersion: SnapshotManifestSchema.currentVersion,
-            triAttention: triIdentity
-        )
-
-        let descriptor = makeDescriptor(
-            partitionDigest: triDigest,
-            pathFromRoot: Array(1...10),
-            tokenOffset: 10,
-            bytes: 4096
-        )
-        var manifest = SnapshotManifest.empty()
-        manifest.partitions[triDigest] = triMeta
-        manifest.snapshots[descriptor.snapshotID] = descriptor
-        try writeManifest(manifest, rootURL: root)
-
-        let (mgr, ssdStore) = makeManager(rootURL: root)
-        try await mgr.warmStart(modelFingerprint: testFingerprint)
-
-        #expect(ssdStore.currentSSDBytesForTesting() == descriptor.bytes)
-        #expect(mgr.stats.partitionCount == 1)
-
-        // Lookup under the reconstructed TriAttention key surfaces the
-        // restored ref…
-        let triLookup = mgr.lookup(
-            tokens: descriptor.pathFromRoot,
-            partitionKey: triKey
-        )
-        guard case .ssdHit(let ctx) = triLookup.reason else {
-            #expect(Bool(false), "Expected .ssdHit for TriAttention key, got \(triLookup.reason)")
-            return
-        }
-        #expect(ctx.snapshotRef.snapshotID == descriptor.snapshotID)
-
-        // …while a dense lookup at the same path remains a miss because
-        // the partition is isolated by digest.
-        let denseLookup = mgr.lookup(
-            tokens: descriptor.pathFromRoot,
-            partitionKey: makePartitionKey(fingerprint: testFingerprint)
-        )
-        #expect(denseLookup.snapshot == nil)
-        if case .ssdHit = denseLookup.reason {
-            #expect(Bool(false), "Dense lookup must not resolve to a TriAttention ref")
-        }
-    }
-
-    /// v6 wipe gate: a partition meta written under v4 (or any
+    /// Stale-schema wipe gate: a partition meta written under v4 (or any
     /// schema-version other than the current one) must be invalidated
     /// at warm-start, even if the top-level manifest version matches.
     /// Defends the descriptor-level filter added to
@@ -751,6 +616,62 @@ struct WarmStartTests {
 
         #expect(ssdStore.currentSSDBytesForTesting() == descriptor.bytes)
         #expect(mgr.stats.partitionCount == 1)
+    }
+
+    /// A partition whose on-disk digest key disagrees with the digest its
+    /// own `PartitionMeta` reconstructs to — a corrupted/inconsistent meta
+    /// sidecar — must be dropped at warm start, not reattached under the
+    /// reconstructed key. Reattaching would cross-contaminate snapshots
+    /// across partition identities at lookup time. Mirrors the digest-match
+    /// guard in `PrefixCacheManager.warmStart`.
+    @Test func warmStartDropsPartitionWhenOnDiskDigestMismatchesMeta() async throws {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+
+        // The digest this partition's own meta reconstructs to…
+        let reconstructedKey = makePartitionKey(fingerprint: testFingerprint)
+        // …and a different digest it is actually stored under on disk.
+        let tamperedDigest = "deadbeef"
+        #expect(tamperedDigest != reconstructedKey.partitionDigest)
+
+        let descriptor = makeDescriptor(
+            partitionDigest: tamperedDigest,
+            pathFromRoot: Array(1...10),
+            tokenOffset: 10,
+            bytes: 4096
+        )
+
+        // The meta carries the matching fingerprint, so the partition
+        // survives the store's fingerprint filter and reaches the manager's
+        // digest-match guard — but it reconstructs to a key that is NOT
+        // `tamperedDigest`, so the guard must drop it.
+        var manifest = SnapshotManifest.empty()
+        manifest.partitions[tamperedDigest] = makePartitionMeta(fingerprint: testFingerprint)
+        manifest.snapshots[descriptor.snapshotID] = descriptor
+        try writeManifest(manifest, rootURL: root)
+
+        let (mgr, _) = makeManager(rootURL: root)
+        try await mgr.warmStart(modelFingerprint: testFingerprint)
+
+        // Dropped from the manager's tree: the partition is not registered
+        // under the reconstructed key, so it cannot be reached by a lookup.
+        // (The store seeds byte accounting earlier, during warm-start load;
+        // this guard governs reattachment, not the byte budget.)
+        #expect(mgr.stats.partitionCount == 0)
+
+        // A lookup under the correctly-reconstructed key must not surface the
+        // dropped partition.
+        let result = mgr.lookup(
+            tokens: descriptor.pathFromRoot,
+            partitionKey: reconstructedKey
+        )
+        #expect(result.snapshot == nil)
+        if case .hit = result.reason {
+            #expect(Bool(false), "dropped partition must not surface as a hit")
+        }
+        if case .ssdHit = result.reason {
+            #expect(Bool(false), "dropped partition must not surface as an ssdHit")
+        }
     }
 
     // MARK: - Rebuild-path fixtures

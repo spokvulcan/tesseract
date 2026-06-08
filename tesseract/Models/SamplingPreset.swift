@@ -10,7 +10,7 @@ import Foundation
 /// Presets override only the six sampling fields that differ across
 /// Qwen3.5/3.6 recommendations (temperature, topP, topK, minP,
 /// presencePenalty, repetitionPenalty). Everything else — thinkingSafeguard,
-/// kvBits, prefillStepSize, triAttention, maxTokens — continues to come from
+/// kvBits, prefillStepSize, maxTokens — continues to come from
 /// the model-derived base returned by `AgentGenerateParameters.forModel`.
 ///
 /// See: https://huggingface.co/Qwen/Qwen3.5-4B (Chat Completions usage).

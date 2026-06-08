@@ -40,7 +40,6 @@ nonisolated struct PrefillPlan: Sendable {
     /// The raw last-message / last-user boundary offsets, kept individually so
     /// the orchestrator can lift each transient boundary snapshot by name.
     let transientBoundaries: (lastMessage: Int?, lastUser: Int?)
-    let stablePrefixOffset: Int?
     /// Token count of the full conversation; bounds the restore and transient
     /// decisions.
     let promptTokenCount: Int
@@ -157,7 +156,6 @@ nonisolated enum PrefillPlanner {
             restore: restore,
             checkpointsToCapture: checkpointsToCapture,
             transientBoundaries: (boundaries.lastMessageOffset, boundaries.lastUserOffset),
-            stablePrefixOffset: boundaries.stablePrefixOffset,
             promptTokenCount: promptTokenCount
         )
     }

@@ -44,29 +44,12 @@ final class InferenceArbiter {
         return slots
     }
 
-    /// Identity of the currently-loaded `.llm` slot — model ID, vision mode,
-    /// and the hidden TriAttention runtime snapshot. Kept as a single struct
-    /// so reload-relevant keys can never drift out of sync.
+    /// Identity of the currently-loaded `.llm` slot — model ID and vision mode.
+    /// Kept as a single struct so reload-relevant keys can never drift out of
+    /// sync.
     struct LoadedLLMState: Equatable {
         let modelID: String
         let visionMode: Bool
-        let requestedTriAttention: TriAttentionConfiguration
-        let effectiveTriAttention: TriAttentionConfiguration
-        let triAttentionFallbackReason: TriAttentionDenseFallbackReason?
-
-        init(
-            modelID: String,
-            visionMode: Bool,
-            requestedTriAttention: TriAttentionConfiguration = .v1Disabled,
-            effectiveTriAttention: TriAttentionConfiguration = .v1Disabled,
-            triAttentionFallbackReason: TriAttentionDenseFallbackReason? = nil
-        ) {
-            self.modelID = modelID
-            self.visionMode = visionMode
-            self.requestedTriAttention = requestedTriAttention
-            self.effectiveTriAttention = effectiveTriAttention
-            self.triAttentionFallbackReason = triAttentionFallbackReason
-        }
     }
 
     private(set) var loadedLLMState: LoadedLLMState?
@@ -181,8 +164,8 @@ final class InferenceArbiter {
         return try await body()
     }
 
-    /// Propagate a settings change (selected model, vision mode, TriAttention
-    /// toggle) into an eager model reload. Acquires the `.llm` lease FIFO-fair,
+    /// Propagate a settings change (selected model or vision mode) into an
+    /// eager model reload. Acquires the `.llm` lease FIFO-fair,
     /// runs `ensureLoaded(.llm)` — which compares desired state against
     /// `loadedLLMState` and reloads on mismatch — and releases. A no-op when
     /// nothing relevant changed and the model is already loaded. Throws the
@@ -262,16 +245,13 @@ final class InferenceArbiter {
         switch slot {
         case .llm:
             let targetModelID = llmModelIDOverride ?? settingsManager.selectedAgentModelID
-            let requestedTriAttention = settingsManager.makeTriAttentionConfig()
             let desired = LoadedLLMState(
                 modelID: targetModelID,
-                visionMode: settingsManager.visionModeEnabled,
-                requestedTriAttention: requestedTriAttention
+                visionMode: settingsManager.visionModeEnabled
             )
             if loadedSlots.contains(.llm),
                 loadedLLMState?.modelID == desired.modelID,
-                loadedLLMState?.visionMode == desired.visionMode,
-                loadedLLMState?.requestedTriAttention == desired.requestedTriAttention
+                loadedLLMState?.visionMode == desired.visionMode
             {
                 return
             }
@@ -279,33 +259,15 @@ final class InferenceArbiter {
             if loadedSlots.contains(.llm) { unload(.llm) }
             // Drain the detached unload task before the next load. Without
             // this, the actor-level `llmActor.unloadModel()` can interleave
-            // after the new `llmActor.loadModel()` has already populated
-            // `triAttentionRuntimeSelection`, wiping it back to defaults and
-            // silently erasing the fallback reason surfaced to the UI.
+            // after the new `llmActor.loadModel()` and tear down the freshly
+            // loaded model, tokenizer, and prefix-cache state.
             await agentEngine.awaitPendingUnload()
             try await loadSlot(
                 .llm,
                 modelID: desired.modelID,
-                visionMode: desired.visionMode,
-                triAttention: desired.requestedTriAttention
+                visionMode: desired.visionMode
             )
-            let triAttentionRuntimeSelection = agentEngine.triAttentionRuntimeSelection
-            loadedLLMState = LoadedLLMState(
-                modelID: desired.modelID,
-                visionMode: desired.visionMode,
-                requestedTriAttention: desired.requestedTriAttention,
-                effectiveTriAttention: triAttentionRuntimeSelection.effectiveConfiguration,
-                triAttentionFallbackReason: triAttentionRuntimeSelection.fallbackReason
-            )
-            if let fallbackReason = triAttentionRuntimeSelection.fallbackReason {
-                Log.general.notice(
-                    "InferenceArbiter: TriAttention dense fallback — "
-                    + "model=\(desired.modelID) visionMode=\(desired.visionMode) "
-                    + "requestedEnabled=\(desired.requestedTriAttention.enabled) "
-                    + "effectiveEnabled=\(triAttentionRuntimeSelection.effectiveConfiguration.enabled) "
-                    + "reason=\(fallbackReason.rawValue)"
-                )
-            }
+            loadedLLMState = desired
 
         case .tts:
             if loadedSlots.contains(.tts) { return }
@@ -316,8 +278,7 @@ final class InferenceArbiter {
     private func loadSlot(
         _ slot: ModelSlot,
         modelID: String? = nil,
-        visionMode: Bool = false,
-        triAttention: TriAttentionConfiguration = .v1Disabled
+        visionMode: Bool = false
     ) async throws {
         switch slot {
         case .llm:
@@ -336,13 +297,11 @@ final class InferenceArbiter {
             }
             Log.general.info(
                 "InferenceArbiter: loading LLM model '\(modelID)' "
-                + "visionMode=\(visionMode) "
-                + "triAttentionRequested=\(triAttention.enabled)"
+                + "visionMode=\(visionMode)"
             )
             try await agentEngine.loadModel(
                 from: path,
-                visionMode: visionMode,
-                triAttention: triAttention
+                visionMode: visionMode
             )
 
         case .tts:

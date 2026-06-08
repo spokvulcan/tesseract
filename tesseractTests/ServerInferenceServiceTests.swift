@@ -6,13 +6,6 @@ import Testing
 @MainActor
 struct ServerInferenceServiceTests {
 
-    private static let enabledTriAttention = TriAttentionConfiguration(
-        enabled: true,
-        budgetTokens: TriAttentionConfiguration.v1BudgetTokens,
-        calibrationArtifactIdentity: nil,
-        implementationVersion: .v1
-    )
-
     @Test func promptRequestsRouteToPromptInference() async throws {
         let engine = StubServerInferenceEngine()
         engine.promptStart = makeStart(textChunks: ["prompt path"])
@@ -20,20 +13,16 @@ struct ServerInferenceServiceTests {
             engine: engine,
             modelStateProvider: { nil }
         )
-        var parameters = AgentGenerateParameters.default
-        parameters.triAttention = Self.enabledTriAttention
-
         let start = try await service.start(
             ServerInferenceRequest(
                 input: .prompt("Summarize this"),
-                parameters: parameters
+                parameters: .default
             )
         )
 
         #expect(engine.calls.count == 1)
         #expect(engine.calls[0].kind == .prompt)
         #expect(engine.calls[0].prompt == "Summarize this")
-        #expect(engine.calls[0].parameters.triAttention == Self.enabledTriAttention)
         #expect(start.modelState == nil)
         #expect(try await collectText(from: start.stream) == "prompt path")
     }
@@ -45,9 +34,6 @@ struct ServerInferenceServiceTests {
             engine: engine,
             modelStateProvider: { nil }
         )
-        var parameters = AgentGenerateParameters.default
-        parameters.triAttention = Self.enabledTriAttention
-
         let start = try await service.start(
             ServerInferenceRequest(
                 input: .chat(.init(
@@ -56,7 +42,7 @@ struct ServerInferenceServiceTests {
                     toolSpecs: nil,
                     prefixCacheConversation: nil
                 )),
-                parameters: parameters
+                parameters: .default
             )
         )
 
@@ -65,7 +51,6 @@ struct ServerInferenceServiceTests {
         #expect(engine.calls[0].systemPrompt == "System")
         #expect(engine.calls[0].messageCount == 1)
         #expect(engine.calls[0].usedPrefixCacheConversation == false)
-        #expect(engine.calls[0].parameters.triAttention == Self.enabledTriAttention)
         #expect(try await collectText(from: start.stream) == "chat path")
     }
 
@@ -77,9 +62,7 @@ struct ServerInferenceServiceTests {
         )
         let expectedState = ServerInferenceModelState(
             modelID: "qwen3.5-4b-paro",
-            visionMode: true,
-            triAttention: .v1Disabled,
-            triAttentionFallbackReason: .visionMode
+            visionMode: true
         )
         let service = ServerInferenceService(
             engine: engine,
@@ -107,10 +90,8 @@ struct ServerInferenceServiceTests {
         #expect(engine.calls[0].kind == .serverChat)
         #expect(engine.calls[0].modelID == expectedState.modelID)
         #expect(engine.calls[0].usedPrefixCacheConversation)
-        #expect(engine.calls[0].parameters.triAttention == .v1Disabled)
         #expect(start.cachedTokenCount == 42)
         #expect(start.modelState == expectedState)
-        #expect(start.modelState?.triAttentionFallbackReason == .visionMode)
         #expect(try await collectText(from: start.stream) == "server path")
     }
 
@@ -202,118 +183,6 @@ struct ServerInferenceServiceTests {
         #expect(engine.calls[0].kind == .serverChat)
         #expect(engine.calls[0].usedPrefixCacheConversation == false)
         #expect(try await collectText(from: start.stream) == "server fallback")
-    }
-
-    /// Epic 3 Task 3 parity gate — identical HTTP contract between dense and
-    /// TriAttention modes. Runs the same chat request twice against a service
-    /// backed by dense and TriAttention model states, and asserts:
-    ///
-    /// - **Model routing**: engine receives identical `modelID`.
-    /// - **Tool formatting**: engine receives identical `toolSpecCount`.
-    /// - **Response envelope inputs**: engine receives identical `systemPrompt`,
-    ///   `messageCount`, and `usedPrefixCacheConversation`.
-    /// - **cached_tokens accounting**: `ServerInferenceStart.cachedTokenCount`
-    ///   is forwarded byte-identically from the engine layer.
-    ///
-    /// The one permitted difference is `parameters.triAttention`, which is the
-    /// intended carrier for the vendor cache/runtime selection below this
-    /// layer. Everything HTTP clients can observe must be invariant.
-    @Test func serverCompatibleChatPreservesParityAcrossAttentionModes() async throws {
-        let modelID = "qwen3.5-4b-paro"
-        let systemPrompt = "System"
-        let chatMessages: [LLMMessage] = [.user(content: "Hello")]
-        let toolSpec: ToolSpec = [
-            "type": "function",
-            "function": [
-                "name": "fetch",
-                "description": "Fetch data",
-                "parameters": [
-                    "type": "object",
-                    "properties": [:] as [String: any Sendable],
-                ] as [String: any Sendable],
-            ] as [String: any Sendable],
-        ]
-        let prefixConversation = HTTPPrefixCacheConversation(
-            systemPrompt: systemPrompt,
-            messages: [.init(role: .user, content: "Hello")]
-        )
-
-        func run(
-            triAttention: TriAttentionConfiguration,
-            fallbackReason: TriAttentionDenseFallbackReason?
-        ) async throws -> (call: StubServerInferenceEngine.Call, start: ServerInferenceStart) {
-            let engine = StubServerInferenceEngine()
-            engine.serverStart = makeStart(
-                textChunks: ["shared response"],
-                cachedTokenCount: 23
-            )
-            let service = ServerInferenceService(
-                engine: engine,
-                modelStateProvider: {
-                    ServerInferenceModelState(
-                        modelID: modelID,
-                        visionMode: false,
-                        triAttention: triAttention,
-                        triAttentionFallbackReason: fallbackReason
-                    )
-                }
-            )
-            var parameters = AgentGenerateParameters.default
-            parameters.triAttention = triAttention
-
-            let start = try await service.start(
-                ServerInferenceRequest(
-                    input: .chat(.init(
-                        systemPrompt: systemPrompt,
-                        messages: chatMessages,
-                        toolSpecs: [toolSpec],
-                        prefixCacheConversation: prefixConversation
-                    )),
-                    parameters: parameters,
-                    route: .serverCompatible
-                )
-            )
-            return (engine.calls[0], start)
-        }
-
-        let dense = try await run(triAttention: .v1Disabled, fallbackReason: nil)
-        let tri = try await run(
-            triAttention: Self.enabledTriAttention,
-            fallbackReason: nil
-        )
-
-        // Model routing: identical physical model targets the engine.
-        #expect(dense.call.modelID == tri.call.modelID)
-        #expect(dense.call.modelID == modelID)
-
-        // Tool formatting: the ToolSpec count reaches the engine unchanged.
-        #expect(dense.call.toolSpecCount == tri.call.toolSpecCount)
-        #expect(dense.call.toolSpecCount == 1)
-
-        // Response envelope inputs that drive chat templating are invariant.
-        #expect(dense.call.kind == tri.call.kind)
-        #expect(dense.call.kind == .serverChat)
-        #expect(dense.call.systemPrompt == tri.call.systemPrompt)
-        #expect(dense.call.messageCount == tri.call.messageCount)
-        #expect(dense.call.usedPrefixCacheConversation == tri.call.usedPrefixCacheConversation)
-
-        // cached_tokens accounting contract: the same engine-reported count
-        // reaches the transport unchanged by attention-mode selection.
-        #expect(dense.start.cachedTokenCount == tri.start.cachedTokenCount)
-        #expect(dense.start.cachedTokenCount == 23)
-
-        // Stream content is identical (the helper engine yields the same text).
-        let denseText = try await collectText(from: dense.start.stream)
-        let triText = try await collectText(from: tri.start.stream)
-        #expect(denseText == triText)
-        #expect(denseText == "shared response")
-
-        // The permitted difference — the vendor runtime carrier — is the only
-        // thing that changed. If this becomes equal in the future, TriAttention
-        // mode stopped propagating to the vendor layer.
-        #expect(dense.call.parameters.triAttention != tri.call.parameters.triAttention)
-        #expect(dense.call.parameters.triAttention.enabled == false)
-        #expect(tri.call.parameters.triAttention.enabled == true)
     }
 
     @Test func serverCompatibleChatWithoutModelStateUsesUnavailableSentinel() async throws {
@@ -417,12 +286,11 @@ struct ServerInferenceServiceTests {
 
     /// The `AgentFactory`-style parametersProvider must live-read the current
     /// `SettingsManager` values on every call. Capturing them at agent-build
-    /// time is what made /compact and auto-compaction miss the user toggling
-    /// TriAttention or switching model mid-session.
-    @Test func agentFactoryStyleProviderLiveReadsModelAndTriAttentionFromSettings() async throws {
+    /// time is what made /compact and auto-compaction miss the user switching
+    /// model mid-session.
+    @Test func agentFactoryStyleProviderLiveReadsModelFromSettings() async throws {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.selectedAgentModelID = "qwen3.5-4b-paro"
-        settings.triattentionEnabled = false
 
         let engine = StubServerInferenceEngine()
         engine.chatStart = makeStart(textChunks: ["ok"])
@@ -435,9 +303,7 @@ struct ServerInferenceServiceTests {
         // call re-reads the live settings rather than freezing them at init.
         let provider: @MainActor @Sendable () -> AgentGenerateParameters = {
             [settings] in
-            var parameters = AgentGenerateParameters.forModel(settings.selectedAgentModelID)
-            parameters.triAttention = settings.makeTriAttentionConfig()
-            return parameters
+            AgentGenerateParameters.forModel(settings.selectedAgentModelID)
         }
         let generate = makeServerInferenceGenerateClosure(
             inferenceService: service,
@@ -447,18 +313,15 @@ struct ServerInferenceServiceTests {
         _ = try await collectText(from: generate("System", [.user(content: "q1")], nil, nil))
         #expect(engine.calls.count == 1)
         #expect(engine.calls[0].parameters.temperature == AgentGenerateParameters.qwen35.temperature)
-        #expect(engine.calls[0].parameters.triAttention.enabled == false)
 
-        // Flip the model and the TriAttention toggle after the closure exists.
-        // The provider must observe the new values on the very next call.
+        // Flip the model after the closure exists. The provider must observe
+        // the new value on the very next call.
         settings.selectedAgentModelID = "qwen3-thinking-2507"
-        settings.triattentionEnabled = true
 
         engine.chatStart = makeStart(textChunks: ["ok"])
         _ = try await collectText(from: generate("System", [.user(content: "q2")], nil, nil))
         #expect(engine.calls.count == 2)
         #expect(engine.calls[1].parameters.temperature == AgentGenerateParameters.qwen3Thinking.temperature)
-        #expect(engine.calls[1].parameters.triAttention.enabled == true)
     }
 
     /// Internal agent sessions must reach `ServerInferenceService` whether or

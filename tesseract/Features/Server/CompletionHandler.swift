@@ -306,8 +306,6 @@ struct CompletionHandler: Sendable {
             + "stream=\(request.stream == true) "
             + "messages=\(repairedRequest.messages.count) normalizedMessages=\(messages.count) "
             + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCache=\(prefixCacheEligibility) "
-            + "triAttentionEnabled=\(modelState.triAttention.enabled) "
-            + "triAttentionFallbackReason=\(modelState.triAttentionFallbackReason?.rawValue ?? "none") "
             + "maxTokens=\(params.maxTokens)"
         )
 
@@ -353,7 +351,6 @@ struct CompletionHandler: Sendable {
         userPreset: SamplingPreset = .automatic
     ) -> AgentGenerateParameters {
         var params = AgentGenerateParameters.forModel(modelState.modelID)
-        params.triAttention = modelState.triAttention
         params = userPreset.apply(to: params)
         if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
         if let temp = request.temperature { params.temperature = Float(temp) }
