@@ -15,7 +15,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-DOCS="README.md CLAUDE.md ARCHITECTURE.md DISTRIBUTION.md docs/testing.md docs/agents/domain.md docs/agents/issue-tracker.md docs/agents/triage-labels.md"
+DOCS="README.md CLAUDE.md ARCHITECTURE.md DISTRIBUTION.md REVIEW.md docs/testing.md docs/agents/domain.md docs/agents/issue-tracker.md docs/agents/triage-labels.md"
 
 # Top-level dirs whose paths the docs are expected to reference accurately.
 KNOWN_DIRS="tesseract tesseractTests tesseractUITests scripts docs assets benchmarks AgentPackages Vendor .claude .agents .github"
