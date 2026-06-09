@@ -58,7 +58,7 @@ Benchmark-shaped siblings (informational, not gates):
 ## Gotchas
 
 - `-only-testing` filters must target **suite** granularity. A method-granularity
-  filter (`-only-testing:tesseractTests/Suite/testName`) runs zero Swift Testing
+  filter (`-only-testing:tesseractTests/<Suite>/<testName>`) runs zero Swift Testing
   tests and still reports `** TEST SUCCEEDED **`.
 - `xcodebuild test` hides `#expect` failure details from stdout. Read them from
   the `.xcresult` bundle:

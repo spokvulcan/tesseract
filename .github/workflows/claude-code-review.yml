@@ -41,7 +41,13 @@ jobs:
           #   effort-word: low|medium|high|max|ultra (review breadth; `max` is
           #     the broadest non-cloud level). `--comment` posts inline PR
           #     comments instead of just printing the review.
-          prompt: '/code-review max ${{ github.event.pull_request.number }} --comment'
+          prompt: |
+            /code-review max ${{ github.event.pull_request.number }} --comment
+
+            Additionally, flag documentation drift: call it out if the PR
+            renames, moves, or deletes a module that ARCHITECTURE.md names;
+            introduces domain vocabulary that CONTEXT.md lacks; or changes a
+            test workflow documented in docs/testing.md.
           # `--model opus` pins the latest Opus; `--effort xhigh` raises the
           # session thinking level (separate scale from the skill effort word).
           claude_args: |

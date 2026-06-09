@@ -313,11 +313,18 @@ Coordinators manage user-facing flows as state machines:
 
 ### 3. Actor Isolation
 
-Thread safety uses Swift concurrency:
+Thread safety uses Swift concurrency. The app target builds with
+`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so every type is implicitly
+`@MainActor` unless it opts out (`actor`, `nonisolated`).
 
-- **@MainActor**: All coordinators, engines, managers, views
+- **@MainActor** (the implicit default): all coordinators, engines, managers, views
 - **Actors**: `WhisperKitSpeechRecognizer` (CoreML ASR adapter), `Qwen3SpeechSynthesizer` (MLX TTS adapter), `LLMActor` (MLX LLM), `ContextManager` (compaction)
 - **@unchecked Sendable**: `SampleBuffer`, `AudioLevelRelay` (manual NSLock for real-time audio thread)
+
+Trap: a protocol that an actor adapter satisfies must be declared
+`nonisolated protocol` — otherwise the protocol inherits the MainActor default
+and drags the actor's conformance (including its `init`) onto the main actor.
+The speech model ports (ADR-0003) are the worked example.
 
 ### 4. Agent Architecture
 
@@ -325,7 +332,7 @@ Thread safety uses Swift concurrency:
 
 **Agent bootstrap** (`AgentFactory.makeAgent()`): Discovers packages → registers extensions → discovers skills → loads context files → assembles system prompt → wires compaction → creates Agent instance.
 
-**Double-loop** (`Core/AgentLoop.swift`): Outer loop handles follow-ups, inner loop handles tool calls + steering. No fixed round limit.
+**Double-loop** (`Features/Agent/Core/AgentLoop.swift`): Outer loop handles follow-ups, inner loop handles tool calls + steering. No fixed round limit.
 
 **4 built-in tools**: `read`, `write`, `edit`, `ls` — all sandboxed via `PathSandbox`.
 
