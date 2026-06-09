@@ -35,7 +35,7 @@ final class AgentRunController {
     // MARK: - Dependencies
 
     private let agent: Agent
-    private let arbiter: InferenceArbiter?
+    private let arbiter: any InferenceArbitrating
     private let toolRegistry: ToolRegistry?
     private let settings: SettingsManager?
     /// Failures inside the lease task surface through the coordinator's shared
@@ -51,7 +51,7 @@ final class AgentRunController {
 
     init(
         agent: Agent,
-        arbiter: InferenceArbiter? = nil,
+        arbiter: any InferenceArbitrating,
         toolRegistry: ToolRegistry? = nil,
         settings: SettingsManager? = nil,
         reportError: @escaping @MainActor (String) -> Void = { _ in }
@@ -85,32 +85,13 @@ final class AgentRunController {
     /// (and the in-agent work it awaits) finishes. Shared by `send` and
     /// `/compact` so the lease/flag/cancel contract is written once.
     ///
-    /// Arbiter-less fallback: with no arbiter wired, the body is driven directly
-    /// with no lease — the back-compat branch locked by
-    /// `runUnderLeaseFallsBackToDirectBodyWhenArbiterMissing`. `isGenerating`
-    /// is set eagerly and cleared when the body completes (or on cancel/error),
-    /// so a body that awaits its work to completion — a `send` turn *or* a
-    /// `/compact` — owns the whole busy-flag lifecycle through one rule. (A
-    /// `send` body also sees `.agentEnd` clear the flag via the event spine; the
-    /// completion clear is idempotent with it.)
+    /// `isGenerating` is set eagerly and cleared when the body completes (or on
+    /// cancel/error), so a body that awaits its work to completion — a `send`
+    /// turn *or* a `/compact` — owns the whole busy-flag lifecycle through one
+    /// rule. (A `send` body also sees `.agentEnd` clear the flag via the event
+    /// spine; the completion clear is idempotent with it.)
     func runUnderLease(_ body: @escaping @MainActor () async -> Void) {
         isGenerating = true
-
-        guard let arbiter else {
-            sendTask = Task {
-                // A same-turn `cancel()` lands before this body runs; honor it so the
-                // arbiter-less path matches the lease path's pre-`body` cancellation
-                // check (`withExclusiveGPU` runs `Task.checkCancellation()` first).
-                guard !Task.isCancelled else {
-                    self.isGenerating = false
-                    return
-                }
-                await body()
-                self.isGenerating = false
-                self.sendTask = nil
-            }
-            return
-        }
 
         sendTask = Task {
             do {

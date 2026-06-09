@@ -4,10 +4,11 @@
 //
 //  Tests the **Agent Run** module at its own seam — no AgentCoordinator, no
 //  conversation store, no transcript. Covers the single-writer `isGenerating`
-//  with its eager "queued-behind-the-lease" semantics, and BOTH lease paths:
-//  the arbiter lease contract and the arbiter-less direct fallback. Absorbs the
-//  former `AgentCoordinatorCompactLeaseTests`, whose `/compact` lease coverage
-//  now lives here via the shared `runUnderLease` entry.
+//  with its eager "queued-behind-the-lease" semantics, and the lease contract
+//  through the **Inference Arbitrating** peer: the happy path (acquire → body →
+//  release) and the lease-throws path. Absorbs the former
+//  `AgentCoordinatorCompactLeaseTests`, whose `/compact` lease coverage now
+//  lives here via the shared `runUnderLease` entry.
 //
 
 import Foundation
@@ -40,18 +41,14 @@ struct AgentRunControllerTests {
         makeNoOpAgent(modelID: "agent-run-controller-test-model")
     }
 
-    /// An arbiter whose `ensureLoaded(.llm)` throws deterministically — the model
-    /// id points at something the download manager has never seen, so the lease
-    /// throws `modelNotDownloaded` *before* the body runs.
-    private func makeFailingArbiter() -> InferenceArbiter {
-        let settings = SettingsManager(store: InMemorySettingsStore())
-        settings.selectedAgentModelID = "agent-run-controller-nonexistent-model"
-        return InferenceArbiter(
-            agentEngine: AgentEngine(),
-            speechEngine: SpeechEngine(),
-            settingsManager: settings,
-            modelDownloadManager: ModelDownloadManager()
+    /// A peer whose lease throws deterministically before the body runs — the
+    /// in-memory analogue of `ensureLoaded` failing with `modelNotDownloaded`.
+    private func makeFailingArbiter() -> InMemoryInferenceArbiter {
+        let peer = InMemoryInferenceArbiter()
+        peer.ensureLoadedError = AgentEngineError.modelNotDownloaded(
+            modelID: "agent-run-controller-nonexistent-model"
         )
+        return peer
     }
 
     private func waitUntilIdle(
@@ -96,6 +93,31 @@ struct AgentRunControllerTests {
 
     // MARK: - Lease path
 
+    /// The happy lease path — previously unreachable in tests: `runUnderLease`
+    /// wraps its body in the `.llm` lease (the peer records the acquisition and
+    /// runs the body), and `isGenerating` clears when the body completes.
+    @Test func runUnderLeaseRunsBodyInsideLLMLease() async throws {
+        let agent = makeAgent()
+        let peer = InMemoryInferenceArbiter()
+        let log = ErrorRecorder()
+        let run = AgentRunController(
+            agent: agent,
+            arbiter: peer,
+            reportError: { log.report($0) }
+        )
+
+        let bodyMark = ErrorRecorder()
+        run.runUnderLease { bodyMark.report("body") }
+
+        #expect(run.isGenerating == true)   // eager, while queued
+        try await waitUntilIdle(run)
+
+        #expect(bodyMark.messages == ["body"])
+        #expect(peer.leaseCalls == [.init(slot: .llm, llmModelIDOverride: nil)])
+        #expect(log.messages.isEmpty)
+        #expect(run.isGenerating == false)
+    }
+
     /// With the arbiter present and its model load failing, the lease throws
     /// before the body — so a `/compact`-shaped body never reaches `summarize`,
     /// `isGenerating` resets, and the failure surfaces through `reportError`.
@@ -129,15 +151,13 @@ struct AgentRunControllerTests {
         #expect(errors.messages.isEmpty == false)
     }
 
-    // MARK: - Arbiter-less fallback
+    // MARK: - /compact under the lease
 
-    /// Without an arbiter, `runUnderLease` drives the body directly (no lease) —
-    /// so `summarize` still runs. Locks the back-compat branch so a future
-    /// refactor cannot silently require an arbiter. Also re-pins the standalone
-    /// `/compact` busy-flag clearing to **body completion** (no event gate): once
-    /// the awaited `forceCompact` finishes, `isGenerating` drops to `false`.
-    /// (Absorbs `compactCommandFallsBackToDirectPathWhenArbiterMissing`.)
-    @Test func runUnderLeaseFallsBackToDirectBodyWhenArbiterMissing() async throws {
+    /// A `/compact`-shaped body runs to completion under the lease — `summarize`
+    /// fires — and re-pins the standalone `/compact` busy-flag clearing to
+    /// **body completion** (no event gate): once the awaited `forceCompact`
+    /// finishes, `isGenerating` drops to `false`.
+    @Test func compactBodyRunsUnderLeaseAndClearsFlagOnCompletion() async throws {
         let agent = makeAgent()
         agent.loadMessages([Self.oldUser, Self.oldAssistant, Self.recentUser, Self.recentAssistant])
 
@@ -147,10 +167,11 @@ struct AgentRunControllerTests {
             return "## Goal\ncompacted"
         }
         let contextManager = ContextManager(settings: .small)
+        let peer = InMemoryInferenceArbiter()
 
         let run = AgentRunController(
             agent: agent,
-            arbiter: nil,
+            arbiter: peer,
             reportError: { _ in }
         )
 
@@ -162,11 +183,12 @@ struct AgentRunControllerTests {
         while await recorder.callCount == 0 {
             try await Task.sleep(for: .milliseconds(20))
             if ContinuousClock.now >= deadline {
-                Issue.record("Fallback path did not invoke summarize within timeout")
+                Issue.record("Lease body did not invoke summarize within timeout")
                 break
             }
         }
         #expect(await recorder.callCount >= 1)
+        #expect(peer.leaseCalls == [.init(slot: .llm)])
 
         // The completion-based clear: `/compact` owns its busy-flag lifecycle by
         // finishing under the lease, not via a `phase == .idle` event gate.
@@ -176,12 +198,12 @@ struct AgentRunControllerTests {
 
     // MARK: - send
 
-    /// Arbiter-less `send` issues the prompt to the agent and raises the eager
-    /// flag. The no-op agent finishes the stream; with no dispatcher wired, the
-    /// flag stays up (only the event spine flips it down).
+    /// `send` issues the prompt to the agent and raises the eager flag. The
+    /// no-op agent finishes the stream; with no dispatcher wired, the flag stays
+    /// up (only the event spine flips it down).
     @Test func sendIssuesPromptAndRaisesEagerFlag() async throws {
         let agent = makeAgent()
-        let run = AgentRunController(agent: agent, arbiter: nil, reportError: { _ in })
+        let run = AgentRunController(agent: agent, arbiter: InMemoryInferenceArbiter(), reportError: { _ in })
 
         run.send(CoreMessage.user(UserMessage(content: "Hello")))
         #expect(run.isGenerating == true)
@@ -196,7 +218,7 @@ struct AgentRunControllerTests {
     /// `cancelAndWait` drains the run and drives `isGenerating` to `false`.
     @Test func cancelAndWaitResetsIsGenerating() async throws {
         let agent = makeAgent()
-        let run = AgentRunController(agent: agent, arbiter: nil, reportError: { _ in })
+        let run = AgentRunController(agent: agent, arbiter: InMemoryInferenceArbiter(), reportError: { _ in })
 
         run.send(CoreMessage.user(UserMessage(content: "Hi")))
         #expect(run.isGenerating == true)

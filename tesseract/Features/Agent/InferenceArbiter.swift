@@ -11,7 +11,7 @@ import os
 /// Which model occupies a GPU slot.
 ///
 /// Co-resident slots (`.llm`, `.tts`) can coexist in memory.
-enum ModelSlot: Sendable, Hashable, CustomStringConvertible {
+nonisolated enum ModelSlot: Sendable, Hashable, CustomStringConvertible {
     case llm
     case tts
 
@@ -33,7 +33,7 @@ enum ModelSlot: Sendable, Hashable, CustomStringConvertible {
 ///     memory simultaneously). Neither evicts the other.
 ///   - STT (WhisperKit) runs on CoreML in a separate memory pool — not managed here.
 @Observable @MainActor
-final class InferenceArbiter {
+final class InferenceArbiter: InferenceArbitrating {
 
     /// Which slots are currently loaded. Derived from engine state so it cannot
     /// desync if engines are loaded/unloaded outside the arbiter (e.g., AppDelegate teardown).
@@ -58,14 +58,10 @@ final class InferenceArbiter {
     /// Thin accessor over `loadedLLMState` — retained for existing call sites.
     var loadedLLMModelID: String? { loadedLLMState?.modelID }
 
-    /// FIFO waiter queue for GPU access. Each entry is identified by UUID
-    /// for cancellation-safe removal.
-    @ObservationIgnored private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, any Error>)] = []
-    @ObservationIgnored private var isLeased: Bool = false
-
-    /// Continuations waiting for the GPU to become fully idle (no lease, no queued waiters).
-    /// Used by background tasks to defer to foreground work.
-    @ObservationIgnored private var idleWaiters: [(id: UUID, continuation: CheckedContinuation<Void, Never>)] = []
+    /// The GPU mutual-exclusion lease — FIFO queue, atomic handoff, cancellation
+    /// protocol. Owned and tested as its own module (`GPULeaseQueueTests`); the
+    /// arbiter composes it with model loading.
+    @ObservationIgnored private let lease = GPULeaseQueue()
 
     // MARK: - Dependencies
 
@@ -92,76 +88,20 @@ final class InferenceArbiter {
     /// (FIFO order), ensures the required model is loaded, runs the closure,
     /// and releases the lease on exit — including on throw.
     ///
-    /// Cancellation:
-    ///   - While waiting in the queue: the waiter is removed and
-    ///     `CancellationError` is thrown without ever acquiring the lease.
-    ///   - After resumption but before ownership transfer: `Task.checkCancellation()`
-    ///     runs before `isLeased` is set, so a cancelled waiter cannot inherit
-    ///     the lease during handoff.
-    ///   - Once the lease is acquired: cancellation propagates normally through
-    ///     the body and the lease is released via `defer`.
+    /// The lease semantics (FIFO, atomic handoff, cancellation while queued or
+    /// during handoff) live in `GPULeaseQueue`; the arbiter's contribution is
+    /// holding the lease across `ensureLoaded` *and* the body, so model identity
+    /// can never change under a running consumer.
     func withExclusiveGPU<T: Sendable>(
         _ slot: ModelSlot,
         llmModelIDOverride: String? = nil,
         body: () async throws -> T
     ) async throws -> T {
-        // Block if lease is held OR waiters exist (prevents queue bypass).
-        if isLeased || !waiters.isEmpty {
-            let waiterID = UUID()
-            try await withTaskCancellationHandler {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                    if Task.isCancelled {
-                        continuation.resume(throwing: CancellationError())
-                        return
-                    }
-                    waiters.append((id: waiterID, continuation: continuation))
-                }
-            } onCancel: {
-                // Runs concurrently — MainActor hop to safely mutate waiters.
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    if let idx = self.waiters.firstIndex(where: { $0.id == waiterID }) {
-                        let removed = self.waiters.remove(at: idx)
-                        removed.continuation.resume(throwing: CancellationError())
-                    }
-                    // If already removed by the defer handoff (which removes
-                    // before resuming), firstIndex returns nil — no double-resume.
-                }
-            }
+        try await lease.withExclusive {
+            Log.general.info("InferenceArbiter: lease acquired for \(slot)")
+            try await ensureLoaded(slot, llmModelIDOverride: llmModelIDOverride)
+            return try await body()
         }
-
-        // A waiter may have been resumed just before cancellation won the race.
-        // Re-check before claiming the lease so cancelled waiters never inherit it.
-        try Task.checkCancellation()
-
-        // At this point we own the lease — set flag before any await.
-        isLeased = true
-        Log.general.info("InferenceArbiter: lease acquired for \(slot)")
-
-        defer {
-            // Atomic handoff: if waiters exist, keep isLeased = true and
-            // resume the next waiter directly. Only set isLeased = false
-            // when the queue is drained.
-            if !waiters.isEmpty {
-                let next = waiters.removeFirst()
-                Log.general.debug("InferenceArbiter: handing off lease, \(self.waiters.count) still queued")
-                next.continuation.resume()
-            } else {
-                isLeased = false
-                Log.general.info("InferenceArbiter: lease released for \(slot)")
-                // Signal background tasks waiting for idle
-                if !idleWaiters.isEmpty {
-                    let pending = idleWaiters
-                    idleWaiters.removeAll()
-                    for waiter in pending { waiter.continuation.resume() }
-                }
-            }
-        }
-
-        // Ensure requested model is loaded (co-resident or exclusive)
-        try await ensureLoaded(slot, llmModelIDOverride: llmModelIDOverride)
-
-        return try await body()
     }
 
     /// Propagate a settings change (selected model or vision mode) into an
@@ -175,58 +115,6 @@ final class InferenceArbiter {
     /// without the public HTTP listener enabled.
     func reloadLLMIfNeeded() async throws {
         try await withExclusiveGPU(.llm) { }
-    }
-
-    /// Like `withExclusiveGPU`, but defers to foreground work.
-    ///
-    /// The caller waits until no lease is held and no FIFO waiters are queued,
-    /// then acquires. If foreground work arrives while waiting, the caller
-    /// re-waits rather than competing in FIFO order. This prevents background
-    /// tasks from wedging between consecutive user turns.
-    func withDeferredGPU<T: Sendable>(
-        _ slot: ModelSlot,
-        llmModelIDOverride: String? = nil,
-        body: () async throws -> T
-    ) async throws -> T {
-        // Loop: wait for idle, then re-check. If a foreground request arrived
-        // between the idle signal and our continuation running, loop back.
-        while isLeased || !waiters.isEmpty {
-            await suspendUntilIdle()
-            try Task.checkCancellation()
-        }
-        // GPU is idle with no foreground waiters — acquire immediately.
-        // On MainActor, no work can interleave between the loop exit and
-        // withExclusiveGPU's synchronous isLeased/waiters check.
-        return try await withExclusiveGPU(
-            slot,
-            llmModelIDOverride: llmModelIDOverride,
-            body: body
-        )
-    }
-
-    // MARK: - Idle Signaling
-
-    /// Suspends until the next idle signal. Called inside `withDeferredGPU`'s
-    /// retry loop. Does NOT check if currently idle — the caller handles that.
-    private func suspendUntilIdle() async {
-        let waiterID = UUID()
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                if Task.isCancelled {
-                    continuation.resume()
-                    return
-                }
-                idleWaiters.append((id: waiterID, continuation: continuation))
-            }
-        } onCancel: {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if let idx = self.idleWaiters.firstIndex(where: { $0.id == waiterID }) {
-                    let removed = self.idleWaiters.remove(at: idx)
-                    removed.continuation.resume()
-                }
-            }
-        }
     }
 
     // MARK: - Model Management

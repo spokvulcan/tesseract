@@ -84,7 +84,7 @@ struct SpeechCoordinatorTests {
             playback: playback,
             settings: makeSettings(streaming: false),
             notchOverlay: nil,
-            arbiter: nil
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.speakText("hello") { probe.fire() }
@@ -101,6 +101,38 @@ struct SpeechCoordinatorTests {
         #expect(probe.fireCount == 1)
     }
 
+    // MARK: - Lease path
+
+    /// Every TTS operation wraps in the `.tts` lease through the **Inference
+    /// Arbitrating** seam — the path the retired arbiter-less construction used
+    /// to skip. The peer records the acquisition and runs the body, so playback
+    /// still reaches the seam.
+    @Test
+    func speakTextWrapsSynthesisInTTSLease() async throws {
+        let synth = InMemorySpeechSynthesizer(samples: [0.1, 0.2], sampleRate: 24_000)
+        let engine = try await makeLoadedEngine(synth)
+        let playback = InMemoryAudioPlayback()
+        let peer = InMemoryInferenceArbiter()
+
+        let coordinator = SpeechCoordinator(
+            textExtractor: FakeTextExtractor(),
+            speechEngine: engine,
+            playback: playback,
+            settings: makeSettings(streaming: false),
+            notchOverlay: nil,
+            arbiter: peer
+        )
+
+        coordinator.speakText("hello")
+
+        try await waitUntil { coordinator.state == .playing }
+        #expect(peer.leaseCalls == [.init(slot: .tts)])
+        #expect(playback.playCount == 1)
+
+        playback.firePlaybackFinished()
+        #expect(coordinator.state == .idle)
+    }
+
     // MARK: - C2: single (non-long-form) streaming uses the default diagnostics policy
 
     @Test
@@ -115,7 +147,7 @@ struct SpeechCoordinatorTests {
             playback: playback,
             settings: makeSettings(streaming: true),
             notchOverlay: nil,
-            arbiter: nil
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.speakText("short text")
@@ -156,7 +188,7 @@ struct SpeechCoordinatorTests {
             playback: playback,
             settings: makeSettings(streaming: true),
             notchOverlay: nil,
-            arbiter: nil
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.speakText(longText)
@@ -191,7 +223,7 @@ struct SpeechCoordinatorTests {
             playback: playback,
             settings: makeSettings(streaming: false),
             notchOverlay: nil,
-            arbiter: nil
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.speakText("hello")
@@ -233,7 +265,7 @@ struct SpeechCoordinatorTests {
             playback: playback,
             settings: makeSettings(streaming: true),
             notchOverlay: surface,
-            arbiter: nil
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.speakText(longText)
@@ -306,7 +338,7 @@ struct SpeechCoordinatorTests {
             playback: playback,
             settings: makeSettings(streaming: false),
             notchOverlay: surface,
-            arbiter: nil
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.speakText("hello")
@@ -338,7 +370,7 @@ struct SpeechCoordinatorTests {
             playback: playback,
             settings: makeSettings(streaming: true),
             notchOverlay: surface,
-            arbiter: nil
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.speakText("hello world")
@@ -386,7 +418,7 @@ struct SpeechCoordinatorTests {
             playback: playback,
             settings: makeSettings(streaming: true),
             notchOverlay: nil,
-            arbiter: nil
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.speakText(longText)

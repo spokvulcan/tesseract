@@ -61,7 +61,8 @@ struct AgentCoordinatorDispatchOrderingTests {
         let coordinator = AgentCoordinator(
             agent: makeScriptedAgent(),
             conversationStore: InMemoryAgentConversationStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.sendMessage("hi")

@@ -218,7 +218,7 @@ private struct SpeechStatusView: View {
         switch state {
         case .idle:
             isLoading ? .orange : .green
-        case .capturingText, .loadingModel:
+        case .capturingText:
             .orange
         case .generating:
             .blue
@@ -242,8 +242,6 @@ private struct SpeechStatusView: View {
             return "Ready"
         case .capturingText:
             return "Capturing text..."
-        case .loadingModel:
-            return "Loading model..."
         case .generating(let progress):
             return progress.isEmpty ? "Generating speech..." : progress
         case .streaming:
