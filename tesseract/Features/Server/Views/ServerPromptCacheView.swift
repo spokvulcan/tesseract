@@ -46,7 +46,7 @@ struct ServerPromptCacheView: View {
                 }
 
                 Button {
-                    Task { await telemetry.refreshSnapshot(agentEngine: agentEngine) }
+                    Task { await telemetry.refreshSnapshot(llmActor: agentEngine.llmActor) }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -68,8 +68,8 @@ struct ServerPromptCacheView: View {
             }
         }
         .task {
-            telemetry.startPolling(agentEngine: agentEngine)
-            await telemetry.refreshSnapshot(agentEngine: agentEngine)
+            telemetry.startPolling(llmActor: agentEngine.llmActor)
+            await telemetry.refreshSnapshot(llmActor: agentEngine.llmActor)
         }
         .onDisappear {
             telemetry.stopPolling()

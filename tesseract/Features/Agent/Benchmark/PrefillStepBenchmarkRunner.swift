@@ -289,7 +289,7 @@ final class PrefillStepBenchmarkRunner {
         try await engine.loadModel(from: modelDir, visionMode: false)
         log("Model loaded.")
 
-        let fixtureData = try await engine.withModelContainer { container in
+        let fixtureData = try await engine.llmActor.withModelContainer { container in
             try await container.perform { context in
                 try await Self.buildBalancedFixture(context: context)
             }
@@ -401,9 +401,9 @@ final class PrefillStepBenchmarkRunner {
                 )
             }
 
-            await engine.clearMemoryCache()
+            await engine.llmActor.clearMemoryCache()
             Memory.peakMemory = 0
-            let activeBefore = await engine.memoryStats().activeMB
+            let activeBefore = await engine.llmActor.memoryStats().activeMB
             let measuredUserMessage = spec.mode == .cold
                 ? fixture.coldUserMessage
                 : fixture.warmUserMessage
@@ -416,8 +416,8 @@ final class PrefillStepBenchmarkRunner {
                 toolSpecs: fixture.toolSpecs,
                 parameters: parameters
             )
-            let activeAfter = await engine.memoryStats().activeMB
-            let peakMB = await engine.memoryStats().peakMB
+            let activeAfter = await engine.llmActor.memoryStats().activeMB
+            let peakMB = await engine.llmActor.memoryStats().peakMB
             let prefilledTokens = max(0, request.promptTokenCount - request.cachedTokenCount)
 
             if let failure = PrefillStepBenchmarkSupport.validationFailure(
@@ -489,15 +489,11 @@ final class PrefillStepBenchmarkRunner {
             systemPrompt: systemPrompt,
             messages: [HTTPPrefixCacheMessage(role: .user, content: userMessage)]
         )
-        let llmMessages: [LLMMessage] = [.user(content: userMessage, images: [])]
-
         let startInstant = ContinuousClock.now
-        let start = try await engine.generateServerTextCompletion(
+        let start = try await engine.llmActor.startServerCompletion(
             modelID: modelID,
-            systemPrompt: systemPrompt,
-            messages: llmMessages,
+            conversation: prefixCacheConversation,
             toolSpecs: toolSpecs,
-            prefixCacheConversation: prefixCacheConversation,
             parameters: parameters
         )
 

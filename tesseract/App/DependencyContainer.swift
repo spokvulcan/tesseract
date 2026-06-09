@@ -32,11 +32,17 @@ final class DependencyContainer: ObservableObject {
     // Model Downloads
     lazy var modelDownloadManager = ModelDownloadManager()
 
-    // Agent (LLM). Plumb `settingsManager` so the SSD prefix-cache config
-    // is snapshotted from live user settings at each model load. Benchmark
-    // and test call sites use `AgentEngine()` to stay SSD-disabled for
-    // reproducibility.
-    lazy var agentEngine = AgentEngine(settingsManager: settingsManager)
+    // Agent (LLM). The inference actor is created here and injected into the
+    // agent engine; the server dispatcher reaches the same actor for the
+    // cache-aware completion route (ADR-0006). Plumb `settingsManager` so the
+    // SSD prefix-cache config is snapshotted from live user settings at each
+    // model load. Benchmark and test call sites use `AgentEngine()` to stay
+    // SSD-disabled for reproducibility.
+    lazy var llmActor = LLMActor()
+    lazy var agentEngine = AgentEngine(
+        settingsManager: settingsManager,
+        llmActor: llmActor
+    )
 
     // New architecture (Epics 0-5)
     lazy var agentSandbox: PathSandbox = {
@@ -58,6 +64,7 @@ final class DependencyContainer: ObservableObject {
         )
     }()
     lazy var serverInferenceService = ServerInferenceService(
+        completionStarter: llmActor,
         engine: agentEngine,
         arbiter: inferenceArbiter
     )

@@ -132,7 +132,8 @@ ledger work (those are the store's).
 
 **Prefill Plan**:
 The pre-prefill decision value for one HTTP prefix-cache generation, produced by
-the tokenizer-affine **Prefill Planner** and read by `LLMActor`: the restore
+the tokenizer-affine **Prefill Planner** and read by the **Server Completion**
+module: the restore
 decision (cold vs suffix-prefill from the resolved offset), the checkpoint offsets
 filtered to the suffix, the transient boundary offsets, and the stable-prefix
 offset. It carries offsets — never snapshots or the token array — and the planner
@@ -149,7 +150,8 @@ else **Snapshot Resolution** through an injected `resolveBoundary` closure-peer)
 and returns a two-case **Leaf Capture Plan** — `.fromBoundary(...)` or
 `.skip(reason:)` with a typed `LeafSkipReason` — for the two boundary modes
 (`.directTool`, `.canonical`). The *directLeaf* mode never enters the builder: it
-snapshots the live final KV cache. The actor executes the plan: Metal capture,
+snapshots the live final KV cache. The **Server Completion** module executes the
+plan: Metal capture,
 **Snapshot Admission** at the edge, `admit`, and the test-pinned skip-log mapping.
 _Avoid_: leaf store mode as the whole story (mode is one input), the builder owning
 capture or `admit` (model-affine, actor-side), a capture port (the builder returns
@@ -171,6 +173,48 @@ a decision; the actor executes Metal).
 > **Expert:** That fake would exercise no behaviour. The routing — mode, probe,
 > boundary source, skip — is what's worth testing, and it needs only a tokenizer
 > and a resolver closure; the actor keeps the Metal.
+
+### Server completion
+
+**Server Completion**:
+The deep module owning one cache-aware HTTP completion on `LLMActor`'s isolation —
+an actor-confined module installed at model load (with the prefix cache, the SSD
+config snapshot, and the load-time identity facts) and drained-then-cleared at
+unload. It executes what the decision modules produce — **Snapshot Resolution**,
+restore, suffix prefill from the **Prefill Plan**, the **Generation Stream Loop**
+drive, **Snapshot Admission** at the MLX extraction edge, and the **Leaf Capture
+Plan** — and keeps the former cross-step generation bundle as a private value, not
+an interface. It registers its active completion so unload cancels-and-awaits
+before the container is released; the GPU lease, held across the whole HTTP
+request, stays the primary guard.
+_Avoid_: CompletionHandler (the HTTP framing edge), CompletionProjection (the
+output rules), managed HTTP generation (the deleted MainActor re-pump), server
+engine, HTTP generation pipeline.
+
+**Completion Route**:
+The dispatcher's pure decision for one server inference request — cache-aware
+versus standard-with-reason — computed from request shape alone (empty
+conversation, last message from the assistant, no usable prefix-cache
+conversation), never from model state. Owned by `ServerInferenceService`, whose
+dispatch between the **Server Completion** module and the engine's managed path is
+what makes it a real module rather than a pass-through.
+_Avoid_: prefix-cache bypass (the retired in-actor `nil` returns), fallback flag,
+route checks inside `CompletionHandler` or the actor.
+
+> **Flagged ambiguity — "completion".** `CompletionHandler` is the HTTP framing
+> edge; **CompletionProjection** is the terminal output rules; **Server
+> Completion** is the model-affine execution module. Say which.
+
+**Example dialogue:**
+
+> **Dev:** A request arrives whose last message is an assistant turn — who bails
+> to the standard path?
+> **Expert:** The **Completion Route**, in the dispatcher, from request shape
+> alone. The **Server Completion** module never sees a request it cannot serve.
+> **Dev:** And a model unload mid-stream?
+> **Expert:** Can't happen through the arbiter — the GPU lease spans the whole
+> request. For non-lease teardown, `LLMActor.unloadModel` drains the module's
+> active-completion registry before releasing the container.
 
 ### Settings persistence
 
@@ -386,7 +430,8 @@ agent's `AgentGeneration` event stream under the thinking-loop safeguard
 swap (cancel → await → restart from the safe prefix → re-init the parser
 out-of-think), and `cancelCurrent` — the one place an external cancel reaches
 whichever raw handle is live *across* swaps. Per-caller side effects and
-projections stay with the callers (`AgentEngine`, `LLMActor`) via an inline `sink`;
+projections stay with the callers (`AgentEngine`, the **Server Completion**
+module) via an inline `sink`;
 terminal info and diagnostics return on the `Outcome`.
 _Avoid_: managed generation (`AgentEngine`'s wrapper), stream consumer / generation
 pump, GenerationFold (the fold is the **Generation Accumulator**), ToolCallParser

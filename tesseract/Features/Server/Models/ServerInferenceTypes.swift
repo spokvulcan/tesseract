@@ -124,8 +124,28 @@ nonisolated struct ServerInferenceRequest: Sendable {
     }
 }
 
+/// The dispatcher's cache-aware arm — one **Server Completion** on a servable
+/// conversation shape (the **Completion Route** guarantees the shape before
+/// this is called). Production adapter: `LLMActor`. Declared `nonisolated`
+/// because the build's MainActor-default isolation would otherwise drag the
+/// actor's conformance onto the main actor.
+nonisolated protocol ServerCompletionStarting: AnyObject, Sendable {
+    func startServerCompletion(
+        modelID: String,
+        conversation: HTTPPrefixCacheConversation,
+        toolSpecs: [ToolSpec]?,
+        parameters: AgentGenerateParameters,
+        progressHandler: ServerInferenceProgressHandler?
+    ) async throws -> HTTPServerGenerationStart
+}
+
+/// The dispatcher's managed arm — the agent engine's lifecycle-managed
+/// generation entries (busy flag, engine registry, engine-level cancel).
+/// Production adapter: `AgentEngine`. Also serves the standard fallback for
+/// HTTP requests the **Completion Route** bypasses, which is why the chat
+/// entry carries the progress handler.
 @MainActor
-protocol ServerInferenceEngine: AnyObject {
+protocol ManagedInferenceStarting: AnyObject {
     func startPromptInference(
         prompt: String,
         parameters: AgentGenerateParameters
@@ -135,16 +155,7 @@ protocol ServerInferenceEngine: AnyObject {
         systemPrompt: String,
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
-    ) throws -> HTTPServerGenerationStart
-
-    func startServerChatInference(
-        modelID: String,
-        systemPrompt: String,
-        messages: [LLMMessage],
-        toolSpecs: [ToolSpec]?,
-        prefixCacheConversation: HTTPPrefixCacheConversation?,
         parameters: AgentGenerateParameters,
         progressHandler: ServerInferenceProgressHandler?
-    ) async throws -> HTTPServerGenerationStart
+    ) throws -> HTTPServerGenerationStart
 }

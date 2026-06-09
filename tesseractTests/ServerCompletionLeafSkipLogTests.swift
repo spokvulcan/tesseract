@@ -4,20 +4,20 @@ import Testing
 
 /// Byte-for-byte wire format of the leaf-skip diagnostics — the stage / reason /
 /// level / fields the dissolved `captureDirectToolLeaf` and
-/// `captureCanonicalTemplateLeaf` helpers logged. `LLMActor.leafSkipLog` is the
+/// `captureCanonicalTemplateLeaf` helpers logged. `ServerCompletion.leafSkipLog` is the
 /// single pure mapping behind `logLeafSkip`; pinning it here means a renamed
 /// stage label or a flipped log level fails a test rather than silently shifting
 /// dashboards and the diagnostics net. (Prior art: `ssdDropReasonString`.)
-struct LLMActorLeafSkipLogTests {
+struct ServerCompletionLeafSkipLogTests {
 
-    private func fields(_ log: LLMActor.LeafSkipLog) -> [[String]] {
+    private func fields(_ log: ServerCompletion.LeafSkipLog) -> [[String]] {
         log.extraFields.map { [$0.0, $0.1] }
     }
 
     // MARK: stage prefix follows the boundary mode
 
     @Test func directToolStagePrefixMatchesTheDissolvedHelper() {
-        let log = LLMActor.leafSkipLog(for: .noTransientBoundary, mode: .directTool)
+        let log = ServerCompletion.leafSkipLog(for: .noTransientBoundary, mode: .directTool)
         #expect(log.stage == "directToolLeafStore")
         #expect(log.reason == "no-transient-boundary-snapshot")
         #expect(log.level == .info)
@@ -25,7 +25,7 @@ struct LLMActorLeafSkipLogTests {
     }
 
     @Test func canonicalStagePrefixMatchesTheDissolvedHelper() {
-        let log = LLMActor.leafSkipLog(for: .noResolvedBoundary(canonicalLen: 12), mode: .canonical)
+        let log = ServerCompletion.leafSkipLog(for: .noResolvedBoundary(canonicalLen: 12), mode: .canonical)
         #expect(log.stage == "canonicalLeafStore")
         #expect(log.reason == "no-canonical-restore-boundary")
         #expect(log.level == .info)
@@ -35,7 +35,7 @@ struct LLMActorLeafSkipLogTests {
     // MARK: each reason's reason-string / level / fields
 
     @Test func tokenizationFailureIsPrefillThrewAtWarning() {
-        let log = LLMActor.leafSkipLog(for: .tokenizationFailed(error: "boom"), mode: .directTool)
+        let log = ServerCompletion.leafSkipLog(for: .tokenizationFailed(error: "boom"), mode: .directTool)
         #expect(log.stage == "directToolLeafStore")
         #expect(log.reason == "prefill-threw")
         #expect(log.level == .warning)
@@ -43,7 +43,7 @@ struct LLMActorLeafSkipLogTests {
     }
 
     @Test func probeDivergenceIsInfoWithNoFields() {
-        let log = LLMActor.leafSkipLog(for: .probeDivergence, mode: .canonical)
+        let log = ServerCompletion.leafSkipLog(for: .probeDivergence, mode: .canonical)
         #expect(log.stage == "canonicalLeafStore")
         #expect(log.reason == "probe-divergence-failed")
         #expect(log.level == .info)
@@ -51,7 +51,7 @@ struct LLMActorLeafSkipLogTests {
     }
 
     @Test func storedAtOrBeforeBoundaryCarriesStoredLenThenBoundaryOffset() {
-        let log = LLMActor.leafSkipLog(
+        let log = ServerCompletion.leafSkipLog(
             for: .storedAtOrBeforeBoundary(storedLen: 7, boundaryOffset: 7), mode: .directTool
         )
         #expect(log.stage == "directToolLeafStore")
@@ -61,7 +61,7 @@ struct LLMActorLeafSkipLogTests {
     }
 
     @Test func canonicalLongerThanStoredIsWarningWithBothLengths() {
-        let log = LLMActor.leafSkipLog(
+        let log = ServerCompletion.leafSkipLog(
             for: .canonicalLongerThanStored(canonicalLen: 9, storedLen: 4), mode: .canonical
         )
         #expect(log.stage == "canonicalLeafStore")

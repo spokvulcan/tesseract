@@ -67,7 +67,7 @@ final class BenchmarkRunner {
                 )
                 scenarioResults.append(result)
 
-                let mem = await engine.memoryStats()
+                let mem = await engine.llmActor.memoryStats()
                 peakMemoryMB = max(peakMemoryMB, mem.peakMB)
 
                 let status = result.passed ? "PASS" : "FAIL"
