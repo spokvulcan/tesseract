@@ -3,8 +3,8 @@
 # Usage: scripts/dev.sh <command>
 #
 # Commands:
-#   build       Build the project (Debug; shows errors/warnings only)
-#   run         Kill running app + launch the built app (Debug)
+#   build [debug|release]  Build the project (default: debug; errors/warnings only)
+#   run [debug|release]    Kill running app + launch the built app (default: debug)
 #   dev         Build + kill + run using Debug (fast iteration)
 #   dev-release Build + kill + run using Release (perf testing)
 #   dev-profile Build + kill + run with profiling env vars enabled
@@ -34,6 +34,17 @@ find_app() {
         return 1
     fi
     echo "$app_path"
+}
+
+normalize_config() {
+    case "$1" in
+        Debug|debug)     echo "Debug" ;;
+        Release|release) echo "Release" ;;
+        *)
+            echo "Error: unknown configuration '$1' (expected debug or release)" >&2
+            return 1
+            ;;
+    esac
 }
 
 kill_app() {
@@ -87,7 +98,8 @@ cmd_resolve() {
 }
 
 cmd_build() {
-    local configuration="${1:-Debug}"
+    local configuration
+    configuration=$(normalize_config "${1:-Debug}") || return 1
     shift || true
 
     local derived_data
@@ -165,7 +177,8 @@ cmd_build() {
 }
 
 cmd_run() {
-    local configuration="${1:-Debug}"
+    local configuration
+    configuration=$(normalize_config "${1:-Debug}") || return 1
     local app_path
     app_path=$(find_app "$configuration") || return 1
 
@@ -343,8 +356,8 @@ usage() {
     echo "Usage: scripts/dev.sh <command>"
     echo ""
     echo "Commands:"
-    echo "  build       Build the project (Debug; shows errors/warnings only)"
-    echo "  run         Kill running app + launch the built app (Debug)"
+    echo "  build [debug|release]  Build the project (default: debug)"
+    echo "  run [debug|release]    Kill running app + launch the built app (default: debug)"
     echo "  dev         Build + kill + run using Debug (fast iteration)"
     echo "  dev-release Build + kill + run using Release (perf testing)"
     echo "  dev-profile Build + kill + run with profiling (QWEN3TTS_PROFILE=1)"
@@ -361,8 +374,8 @@ usage() {
 # --- Main ------------------------------------------------------------------
 
 case "${1:-}" in
-    build)       cmd_build ;;
-    run)         cmd_run ;;
+    build)       shift; cmd_build "$@" ;;
+    run)         shift; cmd_run "$@" ;;
     dev)         cmd_dev ;;
     dev-release) cmd_dev_release ;;
     dev-profile) cmd_dev_profile ;;
@@ -374,5 +387,11 @@ case "${1:-}" in
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;
     log)         cmd_log ;;
-    *)           usage ;;
+    "")          usage ;;
+    *)
+        echo "Unknown command: $1" >&2
+        echo "" >&2
+        usage >&2
+        exit 1
+        ;;
 esac

@@ -3,13 +3,13 @@
 This document describes the architecture of Tesseract Agent, a privacy-focused, fully offline AI assistant for macOS.
 
 For development guidelines and build commands, see [CLAUDE.md](./CLAUDE.md).
-For the detailed architecture review and modernization rationale, see [docs/macos26-swiftui-architecture-review.md](./docs/macos26-swiftui-architecture-review.md).
+For domain vocabulary, see [CONTEXT.md](./CONTEXT.md); for decision records, see `docs/adr/`.
 
 ---
 
 ## Overview
 
-Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation (speech-to-text), text-to-speech, and an LLM-powered agent with tool-calling capabilities. All inference uses local models: WhisperKit (CoreML) for ASR, MLX for LLM and TTS.
+Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation (speech-to-text), text-to-speech, an LLM-powered agent with tool-calling capabilities, and a local OpenAI-compatible HTTP server accelerated by a tiered KV prefix cache. All inference uses local models: WhisperKit (CoreML) for ASR, MLX for LLM and TTS.
 
 **Key Principles:**
 - Privacy-first: No audio or text data leaves the device
@@ -61,11 +61,14 @@ Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation 
 
 ## Directory Structure
 
+Representative, not exhaustive — trust the file system over this listing.
+
 ```
 tesseract/
 ├── App/                         # Application lifecycle
 │   ├── TesseractApp.swift       # SwiftUI App entry (Window scene)
 │   ├── AppDelegate.swift        # macOS lifecycle, single instance
+│   ├── OverlayState.swift       # Pure overlay view data (audioLevel, glowTheme)
 │   └── DependencyContainer.swift# Composition root, service wiring
 │
 ├── Core/                        # Shared services
@@ -97,26 +100,49 @@ tesseract/
 │   │   ├── SpeechCoordinator.swift    # @Observable TTS orchestrator
 │   │   ├── SpeechEngine.swift         # @Observable facade over SpeechSynthesizer
 │   │   ├── SpeechSynthesizer.swift    # Model port (seam) for TTS
-│   │   ├── Qwen3SpeechSynthesizer.swift   # MLX adapter (formerly TTSActor)
+│   │   ├── Qwen3SpeechSynthesizer.swift   # MLX adapter
 │   │   ├── AudioPlayback.swift        # @MainActor playback port (seam)
 │   │   ├── AudioPlaybackManager.swift # AVFoundation adapter
-│   │   └── Views/ + NotchOverlay/     # TTS UI
+│   │   ├── SegmentPlayback.swift      # Shared stream→playback loop
+│   │   ├── WordHighlightSurface.swift # Spoken-word highlight port (ADR-0004)
+│   │   └── Views/ + NotchOverlay/     # TTS UI; WordTimeline + TTSWordTracker
 │   ├── Transcription/
 │   │   ├── TranscriptionEngine.swift  # @Observable facade over SpeechRecognizer
 │   │   ├── SpeechRecognizer.swift     # Model port (seam) for ASR
-│   │   ├── WhisperKitSpeechRecognizer.swift  # CoreML adapter (formerly WhisperActor)
+│   │   ├── WhisperKitSpeechRecognizer.swift  # CoreML adapter
 │   │   ├── TranscriptionHistory.swift # @Observable, JSON persistence
 │   │   └── TranscriptionPostProcessor.swift
 │   ├── Agent/
-│   │   ├── AgentCoordinator.swift     # @Observable UI bridge
+│   │   ├── AgentCoordinator.swift     # @Observable spine; dispatches agent events
+│   │   ├── AgentRunController.swift   # Foreground run: lease + isGenerating + cancel
+│   │   ├── ChatTranscriptController.swift # Drives the pure ChatTranscript fold
+│   │   ├── AgentVoiceInputController.swift  # Composer push-to-talk (leaf)
 │   │   ├── AgentEngine.swift          # @Observable, wraps LLMActor
 │   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
-│   │   ├── Core/                      # Agent loop, state, config
+│   │   ├── LLMActor.swift             # MLX LLM inference actor
+│   │   ├── GPULeaseQueue.swift        # FIFO GPU mutual-exclusion lease
+│   │   ├── InferenceArbiter.swift     # Lease + model ownership facade
+│   │   ├── Core/                      # Agent loop, state reducer, accumulator
 │   │   ├── Tools/                     # Built-in + extension tools
+│   │   ├── Commands/                  # Slash command registry + parser
 │   │   ├── Context/                   # System prompt, skills, compaction
+│   │   ├── ParoQuant/                 # PARO-quantized weight loading
 │   │   └── Views/                     # Chat UI
+│   ├── Server/                        # Local OpenAI-compatible HTTP server
+│   │   ├── HTTPServer.swift           # HTTP/1.1 server
+│   │   ├── CompletionHandler.swift    # Streaming + non-streaming completions
+│   │   ├── ServerInferenceService.swift
+│   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
+│   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
+│   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
+│   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions
+│   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
+│   │   ├── EvictionPolicy.swift       # Pure eviction scoring + AlphaTuner
+│   │   └── Telemetry/                 # Prompt-cache telemetry store
 │   ├── Settings/
-│   │   ├── SettingsManager.swift      # @Observable, manual UserDefaults
+│   │   ├── SettingsManager.swift      # @Observable Settings Facade
+│   │   ├── SettingsStore.swift        # Persistence seam + Setting declarations
+│   │   ├── SettingsCatalogue.swift    # Single home for every default
 │   │   └── SettingsView.swift         # Settings UI sections
 │   └── Models/                        # Model download management
 │
@@ -264,6 +290,7 @@ so the long-form segment-boundary wait loop is deterministic.
 //   .injectSpeechDependencies(...)     — coordinator, engine
 //   .injectAgentDependencies(...)      — coordinator, engine, conversation store
 //   .injectModelDependencies(...)      — download manager, inference arbiter
+//   .injectServerDependencies(...)     — HTTP server, generation log, cache telemetry
 ```
 
 AppKit consumers (MenuBarManager, panel controllers) receive dependencies via constructor injection — they cannot use `@Environment`.
@@ -280,17 +307,24 @@ The app uses `Window("Tesseract", id: "main")` — a single-instance window. Thi
 
 Coordinators manage user-facing flows as state machines:
 
-- **DictationCoordinator**: idle → recording → processing → inject → idle
+- **DictationCoordinator**: idle → recording → processing → idle (text injection happens during processing)
 - **SpeechCoordinator**: idle → capturingText → generating → streaming/playing → idle
 - **AgentCoordinator**: bridges the Agent double-loop to SwiftUI via cached `ChatRow` arrays
 
 ### 3. Actor Isolation
 
-Thread safety uses Swift concurrency:
+Thread safety uses Swift concurrency. The app target builds with
+`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so every type is implicitly
+`@MainActor` unless it opts out (`actor`, `nonisolated`).
 
-- **@MainActor**: All coordinators, engines, managers, views
+- **@MainActor** (the implicit default): all coordinators, engines, managers, views
 - **Actors**: `WhisperKitSpeechRecognizer` (CoreML ASR adapter), `Qwen3SpeechSynthesizer` (MLX TTS adapter), `LLMActor` (MLX LLM), `ContextManager` (compaction)
 - **@unchecked Sendable**: `SampleBuffer`, `AudioLevelRelay` (manual NSLock for real-time audio thread)
+
+Trap: a protocol that an actor adapter satisfies must be declared
+`nonisolated protocol` — otherwise the protocol inherits the MainActor default
+and drags the actor's conformance (including its `init`) onto the main actor.
+The speech model ports (ADR-0003) are the worked example.
 
 ### 4. Agent Architecture
 
@@ -298,13 +332,34 @@ Thread safety uses Swift concurrency:
 
 **Agent bootstrap** (`AgentFactory.makeAgent()`): Discovers packages → registers extensions → discovers skills → loads context files → assembles system prompt → wires compaction → creates Agent instance.
 
-**Double-loop** (`Core/AgentLoop.swift`): Outer loop handles follow-ups, inner loop handles tool calls + steering. No fixed round limit.
+**Double-loop** (`Features/Agent/Core/AgentLoop.swift`): Outer loop handles follow-ups, inner loop handles tool calls + steering. No fixed round limit.
 
 **4 built-in tools**: `read`, `write`, `edit`, `ls` — all sandboxed via `PathSandbox`.
 
-**Extensibility**: Packages, Extensions (tool plugins), Skills (markdown with YAML frontmatter).
+**Extensibility**: Packages, Extensions (tool plugins), Skills (markdown with YAML frontmatter), slash commands (built-in + skills + extensions).
 
-### 5. Platform Adapters
+### 5. GPU Lease Arbitration
+
+GPU inference is serialized behind a lease. `GPULeaseQueue` is the pure FIFO
+mutual-exclusion mechanism (atomic handoff, cancellation-safe); `InferenceArbiter`
+composes it with model ownership (`.llm`/`.tts` slots, load/unload,
+reload-on-mismatch), so model identity cannot change under a running consumer.
+Lease-acquiring consumers depend on the single-member `InferenceArbitrating` seam;
+tests inject `InMemoryInferenceArbiter`. Vocabulary: CONTEXT.md → GPU lease
+arbitration.
+
+### 6. HTTP Server and Prefix Cache
+
+`Features/Server/` hosts a local OpenAI-compatible HTTP server (`HTTPServer`,
+`CompletionHandler`) that drives the same `LLMActor` through the GPU lease.
+Repeated prompts are accelerated by a tiered KV prefix cache
+(`PrefixCacheManager`): a radix tree of KV-cache snapshots in RAM, spilled to SSD
+(`SSDSnapshotStore` + `SnapshotLedger`), with flop-aware LRU eviction
+(`EvictionPolicy`, `AlphaTuner`). Vocabulary: CONTEXT.md → Prefix cache snapshot
+lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
+Verification gates: docs/testing.md → Loaded-model verification.
+
+### 7. Platform Adapters
 
 All AppKit bridging lives in `Platform/`. These are the features that SwiftUI cannot cover:
 
@@ -351,7 +406,7 @@ Microphone (48kHz stereo) → AVAudioEngine tap (device rate, mono float32)
 
 ## Decisions and Rationale
 
-Key architectural decisions documented in `docs/macos26-swiftui-architecture-review.md`:
+Key architectural decisions (durable records live in `docs/adr/`):
 
 - **`Window` not `WindowGroup`**: Product intent is a single main window. `Window` eliminates 5 workarounds for multi-window suppression.
 - **`@Observable` not `ObservableObject`**: Observation framework tracks property access precisely (no coarse object-wide invalidation). Better SwiftUI performance.

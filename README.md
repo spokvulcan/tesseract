@@ -17,9 +17,12 @@ A personal AI assistant that runs entirely on your Mac. No cloud. No accounts. N
 ## Development
 
 ```bash
-scripts/dev.sh dev     # Build, kill running app, launch new build
-scripts/dev.sh log     # Tail app logs
-scripts/dev.sh clean   # Clean build artifacts
+scripts/dev.sh dev          # Build Debug, kill running app, launch new build
+scripts/dev.sh dev-release  # Same, with the Release configuration
+scripts/dev.sh log          # Tail app logs
+scripts/dev.sh clean        # Clean build artifacts
 ```
 
-See [CLAUDE.md](CLAUDE.md) for architecture details, build commands, and contribution guidelines.
+Run `scripts/dev.sh` with no arguments for the full command list. See
+[CLAUDE.md](CLAUDE.md) for working conventions, [ARCHITECTURE.md](ARCHITECTURE.md)
+for design, and [CONTEXT.md](CONTEXT.md) for domain vocabulary.

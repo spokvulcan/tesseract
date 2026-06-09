@@ -10,6 +10,12 @@ on:
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
 
+# One review per PR at a time; a new push cancels the stale in-flight review
+# instead of letting both run to completion.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
     # Optional: Filter by PR author
@@ -18,7 +24,9 @@ jobs:
     #   github.event.pull_request.user.login == 'new-developer' ||
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
 
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write # required to post the review as PR comments
@@ -38,15 +46,19 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Built-in /code-review skill (no plugin marketplace needed).
           # Args: <effort-word> <PR#> --comment
-          #   effort-word: low|medium|high|max|ultra (review breadth; `max` is
-          #     the broadest non-cloud level). `--comment` posts inline PR
-          #     comments instead of just printing the review.
-          prompt: '/code-review max ${{ github.event.pull_request.number }} --comment'
-          # `--model opus` pins the latest Opus; `--effort xhigh` raises the
-          # session thinking level (separate scale from the skill effort word).
+          #   effort-word `high` is the documented default review breadth;
+          #   `max` (broadest non-cloud level) pushed runs to 20-30+ min.
+          #   Review scoping rules (skip paths, nit cap, severity, doc-drift
+          #   checks) live in REVIEW.md at the repo root.
+          prompt: '/code-review high ${{ github.event.pull_request.number }} --comment'
+          # Sonnet is the fast-CI choice: near-parity review quality at ~2x
+          # the output speed and a fraction of the cost of Opus. --effort
+          # medium caps the session thinking level (separate scale from the
+          # skill effort word). Target: ~5 min typical; the 15-min job
+          # timeout is the backstop.
           claude_args: |
-            --model opus
-            --effort xhigh
+            --model sonnet
+            --effort medium
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 

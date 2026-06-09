@@ -12,6 +12,8 @@ an on-device tool-calling LLM agent). macOS 26+, Swift 6.2 / SwiftUI.
   and follow them over any local pattern. The architecture is an evolving MVP
   mid-refactor — do **NOT** treat the current structure as prescriptive.
 - **Build & run:** `scripts/dev.sh dev-release`. `ls scripts/` for the rest.
+- **New files:** Xcode synchronized groups pick up anything added under
+  `tesseract/` or `tesseractTests/` automatically — never edit `project.pbxproj`.
 - **Never use `print()`** — use the `Log` enum (`Core/Logging.swift`).
 - **Commits:** follow Conventional Commits.
 
@@ -20,6 +22,7 @@ an on-device tool-calling LLM agent). macOS 26+, Swift 6.2 / SwiftUI.
 - Architecture → `ARCHITECTURE.md`
 - Tests & suites → `docs/testing.md`
 - Decisions & domain → `CONTEXT.md`, `docs/adr/`
+- After editing docs, run `scripts/check-docs.sh` (also a CI gate).
 
 ## Agent skills
 
