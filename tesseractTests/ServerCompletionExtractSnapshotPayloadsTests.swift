@@ -1,8 +1,8 @@
 //
-//  LLMActorExtractSnapshotPayloadsTests.swift
+//  ServerCompletionExtractSnapshotPayloadsTests.swift
 //  tesseractTests
 //
-//  Unit tests for the LLMActor snapshot extraction edge: attaching
+//  Unit tests for the Server Completion snapshot extraction edge: attaching
 //  RAM-only or SSD-backed storage to Snapshot Admission entries while
 //  converting live Metal-resident `HybridCacheSnapshot` instances into
 //  pure `Sendable` `SnapshotPayload` values via `MLXArray.asData()`.
@@ -19,7 +19,7 @@ import Testing
 
 @testable import Tesseract_Agent
 
-struct LLMActorExtractSnapshotPayloadsTests {
+struct ServerCompletionExtractSnapshotPayloadsTests {
 
     // MARK: - Fixture builders
 
@@ -69,7 +69,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
         for snapshots: [HybridCacheSnapshot],
         ssdEnabled: Bool = true
     ) -> [SnapshotAdmission.CheckpointCandidate] {
-        LLMActor.extractCheckpointAdmissionCandidates(
+        ServerCompletion.extractCheckpointAdmissionCandidates(
             snapshots,
             ssdEnabled: ssdEnabled
         )
@@ -247,25 +247,25 @@ struct LLMActorExtractSnapshotPayloadsTests {
     /// so a typo, a case rename, or any divergence from this table
     /// silently corrupts cache files that a future reader would reject.
     /// Assertions are literal — NOT sourced from
-    /// `LLMActor.dtypeWireString` — so self-consistency cannot mask a
+    /// `ServerCompletion.dtypeWireString` — so self-consistency cannot mask a
     /// contract drift. If a new `DType` case is added, extend this
     /// table in lockstep with the production helper.
     @Test
     func dtypeWireStringsArePinned() {
-        #expect(LLMActor.dtypeWireString(.bool) == "bool")
-        #expect(LLMActor.dtypeWireString(.uint8) == "uint8")
-        #expect(LLMActor.dtypeWireString(.uint16) == "uint16")
-        #expect(LLMActor.dtypeWireString(.uint32) == "uint32")
-        #expect(LLMActor.dtypeWireString(.uint64) == "uint64")
-        #expect(LLMActor.dtypeWireString(.int8) == "int8")
-        #expect(LLMActor.dtypeWireString(.int16) == "int16")
-        #expect(LLMActor.dtypeWireString(.int32) == "int32")
-        #expect(LLMActor.dtypeWireString(.int64) == "int64")
-        #expect(LLMActor.dtypeWireString(.float16) == "float16")
-        #expect(LLMActor.dtypeWireString(.float32) == "float32")
-        #expect(LLMActor.dtypeWireString(.bfloat16) == "bfloat16")
-        #expect(LLMActor.dtypeWireString(.complex64) == "complex64")
-        #expect(LLMActor.dtypeWireString(.float64) == "float64")
+        #expect(ServerCompletion.dtypeWireString(.bool) == "bool")
+        #expect(ServerCompletion.dtypeWireString(.uint8) == "uint8")
+        #expect(ServerCompletion.dtypeWireString(.uint16) == "uint16")
+        #expect(ServerCompletion.dtypeWireString(.uint32) == "uint32")
+        #expect(ServerCompletion.dtypeWireString(.uint64) == "uint64")
+        #expect(ServerCompletion.dtypeWireString(.int8) == "int8")
+        #expect(ServerCompletion.dtypeWireString(.int16) == "int16")
+        #expect(ServerCompletion.dtypeWireString(.int32) == "int32")
+        #expect(ServerCompletion.dtypeWireString(.int64) == "int64")
+        #expect(ServerCompletion.dtypeWireString(.float16) == "float16")
+        #expect(ServerCompletion.dtypeWireString(.float32) == "float32")
+        #expect(ServerCompletion.dtypeWireString(.bfloat16) == "bfloat16")
+        #expect(ServerCompletion.dtypeWireString(.complex64) == "complex64")
+        #expect(ServerCompletion.dtypeWireString(.float64) == "float64")
     }
 
     @Test
@@ -319,7 +319,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     @MainActor
     @Test
     func snapshotAdmissionSupportsRAMOnlyCheckpointEntries() throws {
-        // When `ssdConfig?.enabled` is off, the LLMActor helper returns
+        // When `ssdConfig?.enabled` is off, the Server Completion helper returns
         // `[]` for payload extraction. The extraction edge represents
         // that as a RAM-only admission entry, not as "no snapshots".
         let manager = PrefixCacheManager(
@@ -348,7 +348,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
 
     // MARK: - Call-site wiring regression coverage
     //
-    // The leaf LLMActor call sites cannot be exercised by unit tests
+    // The leaf Server Completion call sites cannot be exercised by unit tests
     // without a loaded MLX model — the full wiring is gated behind
     // `container.perform` on a real `ModelContainer`. These source
     // checks pin shared structured leaf capture and the synchronous
@@ -356,7 +356,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     // Mirrors the `threadAffinityContractDocCommentIsPinned` pattern
     // at `HybridCacheSnapshotTests.swift:539`.
 
-    private func readLLMActorSource() throws -> String {
+    private func readServerCompletionSource() throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
         let projectRoot = testFile
             .deletingLastPathComponent()   // tesseractTests
@@ -364,8 +364,8 @@ struct LLMActorExtractSnapshotPayloadsTests {
         let sourceFile = projectRoot
             .appendingPathComponent("tesseract")
             .appendingPathComponent("Features")
-            .appendingPathComponent("Agent")
-            .appendingPathComponent("LLMActor.swift")
+            .appendingPathComponent("Server")
+            .appendingPathComponent("ServerCompletion.swift")
         return try String(contentsOf: sourceFile, encoding: .utf8)
     }
 
@@ -377,7 +377,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
         // with the leaf snapshot in one admission value; the older dedicated
         // `strippedLeafPayload` path no longer exists under the
         // single-leaf policy.
-        let source = try readLLMActorSource()
+        let source = try readServerCompletionSource()
         #expect(
             source.contains("private static func captureStructuredLeafFromBoundary("),
             "Structured leaf helper must exist so direct-tool and canonical-user modes share one leaf admission path"
@@ -404,7 +404,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
         // under an `NSLock`; an `await` inside the closure would
         // force the HTTP hot path to suspend mid-admission and break
         // the ordering the pending-ref map was designed around.
-        let source = try readLLMActorSource()
+        let source = try readServerCompletionSource()
         let bodies = extractMainActorRunBodies(
             source: source,
             containing: ["prefixCache.admit"]
@@ -424,7 +424,7 @@ struct LLMActorExtractSnapshotPayloadsTests {
     /// Scan `source` for every `MainActor.run { ... }` trailing-closure
     /// body and return the ones whose body contains at least one of
     /// `anchors`. Uses naive brace matching — adequate because the
-    /// closures of interest in `LLMActor.swift` contain no string
+    /// closures of interest in `ServerCompletion.swift` contain no string
     /// literals with braces, no block comments, and no nested closures
     /// wider than the enclosing `MainActor.run`. If that changes, the
     /// call-site count assertion above will start failing and the

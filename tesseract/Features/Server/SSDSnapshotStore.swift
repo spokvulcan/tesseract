@@ -1024,7 +1024,7 @@ extension SSDSnapshotStore {
             var stateArrays: [MLXArray] = []
             stateArrays.reserveCapacity(layerHeader.arrays.count)
             for arrayHeader in layerHeader.arrays {
-                guard let dtype = LLMActor.dtypeFromWireString(arrayHeader.dtype) else {
+                guard let dtype = ServerCompletion.dtypeFromWireString(arrayHeader.dtype) else {
                     throw SSDLoadError.unknownDType(arrayHeader.dtype)
                 }
                 // `byteOffset` / `byteSize` are `Int`s JSON-decoded from

@@ -352,15 +352,11 @@ final class PrefixCacheE2ERunner {
             systemPrompt: systemPrompt,
             messages: messages.map(\.prefixCacheMessage)
         )
-        let llmMessages = messages.map(\.llmMessage)
-
         let startInstant = ContinuousClock.now
-        let start = try await engine.generateServerTextCompletion(
+        let start = try await engine.llmActor.startServerCompletion(
             modelID: modelID,
-            systemPrompt: systemPrompt,
-            messages: llmMessages,
+            conversation: prefixCacheConversation,
             toolSpecs: toolSpecs,
-            prefixCacheConversation: prefixCacheConversation,
             parameters: parameters
         )
 
@@ -444,6 +440,7 @@ final class PrefixCacheE2ERunner {
         var toolLoopParams = parameters
         toolLoopParams.maxTokens = max(parameters.maxTokens, 160)
         let service = ServerInferenceService(
+            completionStarter: engine.llmActor,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -782,10 +779,10 @@ final class PrefixCacheE2ERunner {
         // per-cache Eviction Configuration. Capture the prior weighting so the
         // step restores it before every exit and stays self-contained, rather
         // than leaving the engine's cache at alpha=2.0 for any later step.
-        let priorAlpha = await engine.evictionAlpha() ?? 0.0
-        await engine.setEvictionAlpha(2.0)
+        let priorAlpha = await engine.llmActor.evictionAlpha() ?? 0.0
+        await engine.llmActor.setEvictionAlpha(2.0)
 
-        guard let preStats = await engine.prefixCacheStats(),
+        guard let preStats = await engine.llmActor.prefixCacheStats(),
               preStats.snapshotCount > 0
         else {
             log("  skipping — prefix cache empty")
@@ -794,7 +791,7 @@ final class PrefixCacheE2ERunner {
                 passed: false,
                 detail: "prefix cache empty before pressure step"
             ))
-            await engine.setEvictionAlpha(priorAlpha)
+            await engine.llmActor.setEvictionAlpha(priorAlpha)
             return
         }
 
@@ -808,7 +805,7 @@ final class PrefixCacheE2ERunner {
         // branch-point regardless of F/B).
         let avgBytes = preStats.totalSnapshotBytes / preStats.snapshotCount
         let tightBudget = max(preStats.totalSnapshotBytes - avgBytes, avgBytes)
-        await engine.setPrefixCacheBudgetBytes(tightBudget)
+        await engine.llmActor.setPrefixCacheBudgetBytes(tightBudget)
         log("  tight budget = \(tightBudget) bytes "
             + "(pre-pressure total = \(preStats.totalSnapshotBytes), "
             + "avg snapshot size = \(avgBytes), "
@@ -825,7 +822,7 @@ final class PrefixCacheE2ERunner {
             )
         }
 
-        let postStats = await engine.prefixCacheStats()
+        let postStats = await engine.llmActor.prefixCacheStats()
         let postBranchCount = postStats?.snapshotsByType[.branchPoint] ?? 0
         let postTotalBytes = postStats?.totalSnapshotBytes ?? 0
         log("  post-pressure branchPoint count = \(postBranchCount), "
@@ -839,11 +836,11 @@ final class PrefixCacheE2ERunner {
         ))
 
         // Restore the pre-step weighting so the step is self-contained.
-        await engine.setEvictionAlpha(priorAlpha)
+        await engine.llmActor.setEvictionAlpha(priorAlpha)
     }
 
     private func branchPointCount(engine: AgentEngine) async -> Int {
-        let stats = await engine.prefixCacheStats()
+        let stats = await engine.llmActor.prefixCacheStats()
         return stats?.snapshotsByType[.branchPoint] ?? 0
     }
 

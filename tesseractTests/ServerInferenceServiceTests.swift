@@ -3,13 +3,19 @@ import MLXLMCommon
 import Testing
 @testable import Tesseract_Agent
 
+/// The dispatcher composes two arms — the cache-aware **Server Completion**
+/// arm and the managed arm — and owns the **Completion Route** (ADR-0006).
+/// Each test injects a double per arm and asserts exactly one arm serves
+/// each request, model state is attached, and errors propagate.
 @MainActor
 struct ServerInferenceServiceTests {
 
     @Test func promptRequestsRouteToPromptInference() async throws {
-        let engine = StubServerInferenceEngine()
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
         engine.promptStart = makeStart(textChunks: ["prompt path"])
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -23,14 +29,17 @@ struct ServerInferenceServiceTests {
         #expect(engine.calls.count == 1)
         #expect(engine.calls[0].kind == .prompt)
         #expect(engine.calls[0].prompt == "Summarize this")
+        #expect(completion.calls.isEmpty)
         #expect(start.modelState == nil)
         #expect(try await collectText(from: start.stream) == "prompt path")
     }
 
     @Test func standardChatRequestsRouteToManagedChatInference() async throws {
-        let engine = StubServerInferenceEngine()
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
         engine.chatStart = makeStart(textChunks: ["chat path"])
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -50,13 +59,14 @@ struct ServerInferenceServiceTests {
         #expect(engine.calls[0].kind == .chat)
         #expect(engine.calls[0].systemPrompt == "System")
         #expect(engine.calls[0].messageCount == 1)
-        #expect(engine.calls[0].usedPrefixCacheConversation == false)
+        #expect(completion.calls.isEmpty)
         #expect(try await collectText(from: start.stream) == "chat path")
     }
 
-    @Test func serverCompatibleChatRoutesToServerPathAndPreservesCachedTokens() async throws {
-        let engine = StubServerInferenceEngine()
-        engine.serverStart = makeStart(
+    @Test func serverCompatibleChatWithServableConversationRoutesToCompletionArm() async throws {
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
+        completion.start = makeStart(
             textChunks: ["server path"],
             cachedTokenCount: 42
         )
@@ -65,6 +75,7 @@ struct ServerInferenceServiceTests {
             visionMode: true
         )
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { expectedState }
         )
@@ -86,19 +97,20 @@ struct ServerInferenceServiceTests {
             )
         )
 
-        #expect(engine.calls.count == 1)
-        #expect(engine.calls[0].kind == .serverChat)
-        #expect(engine.calls[0].modelID == expectedState.modelID)
-        #expect(engine.calls[0].usedPrefixCacheConversation)
+        #expect(completion.calls.count == 1)
+        #expect(completion.calls[0].modelID == expectedState.modelID)
+        #expect(completion.calls[0].conversation == prefixConversation)
+        #expect(engine.calls.isEmpty)
         #expect(start.cachedTokenCount == 42)
         #expect(start.modelState == expectedState)
         #expect(try await collectText(from: start.stream) == "server path")
     }
 
     @Test func serverCompatibleChatForwardsProgressBeforeStreamConsumption() async throws {
-        let engine = StubServerInferenceEngine()
-        engine.serverStart = makeStart(textChunks: ["server path"])
-        engine.serverProgressEvents = [
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
+        completion.start = makeStart(textChunks: ["server path"])
+        completion.progressEvents = [
             .cacheLookupStarted,
             .cacheLookupFinished(.init(
                 reason: "missNoEntries",
@@ -122,6 +134,7 @@ struct ServerInferenceServiceTests {
         )
         log.markLeaseAcquired(handle: handle)
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: {
                 ServerInferenceModelState(modelID: "qwen3.5-4b-paro", visionMode: false)
@@ -149,17 +162,22 @@ struct ServerInferenceServiceTests {
             )
         )
 
-        #expect(engine.calls[0].progressHandlerForwarded)
+        #expect(completion.calls[0].progressHandlerForwarded)
         #expect(log.traces[0].phase == .prefilling)
         #expect(log.traces[0].cachedTokens == 0)
         #expect(log.traces[0].newTokensToPrefill == 4096)
         #expect(try await collectText(from: start.stream) == "server path")
     }
 
-    @Test func serverCompatibleChatWithoutPrefixConversationStillUsesServerPath() async throws {
-        let engine = StubServerInferenceEngine()
-        engine.serverStart = makeStart(textChunks: ["server fallback"])
+    /// No usable prefix-cache conversation ⇒ the **Completion Route** decides
+    /// standard, and the dispatcher falls back to the managed arm — the
+    /// completion arm never sees a request it cannot serve.
+    @Test func serverCompatibleChatWithoutPrefixConversationFallsBackToManagedArm() async throws {
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
+        engine.chatStart = makeStart(textChunks: ["managed fallback"])
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: {
                 ServerInferenceModelState(modelID: "qwen3.5-9b-paro", visionMode: false)
@@ -180,15 +198,58 @@ struct ServerInferenceServiceTests {
         )
 
         #expect(engine.calls.count == 1)
-        #expect(engine.calls[0].kind == .serverChat)
-        #expect(engine.calls[0].usedPrefixCacheConversation == false)
-        #expect(try await collectText(from: start.stream) == "server fallback")
+        #expect(engine.calls[0].kind == .chat)
+        #expect(completion.calls.isEmpty)
+        #expect(try await collectText(from: start.stream) == "managed fallback")
+    }
+
+    /// A conversation ending on an assistant turn routes standard — the bypass
+    /// that used to be a `nil`-return inside the actor is now a route case
+    /// observable at this seam.
+    @Test func serverCompatibleChatEndingOnAssistantTurnFallsBackToManagedArm() async throws {
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
+        engine.chatStart = makeStart(textChunks: ["managed fallback"])
+        let service = ServerInferenceService(
+            completionStarter: completion,
+            engine: engine,
+            modelStateProvider: {
+                ServerInferenceModelState(modelID: "qwen3.5-9b-paro", visionMode: false)
+            }
+        )
+        let assistantLast = HTTPPrefixCacheConversation(
+            systemPrompt: "System",
+            messages: [
+                .init(role: .user, content: "Hello"),
+                .assistant(content: "Hi there"),
+            ]
+        )
+
+        let start = try await service.start(
+            ServerInferenceRequest(
+                input: .chat(.init(
+                    systemPrompt: "System",
+                    messages: [.user(content: "Hello")],
+                    toolSpecs: nil,
+                    prefixCacheConversation: assistantLast
+                )),
+                parameters: .default,
+                route: .serverCompatible
+            )
+        )
+
+        #expect(engine.calls.count == 1)
+        #expect(engine.calls[0].kind == .chat)
+        #expect(completion.calls.isEmpty)
+        #expect(try await collectText(from: start.stream) == "managed fallback")
     }
 
     @Test func serverCompatibleChatWithoutModelStateUsesUnavailableSentinel() async throws {
-        let engine = StubServerInferenceEngine()
-        engine.serverStart = makeStart(textChunks: ["server fallback"])
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
+        engine.chatStart = makeStart(textChunks: ["managed fallback"])
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -207,16 +268,47 @@ struct ServerInferenceServiceTests {
         )
 
         #expect(engine.calls.count == 1)
-        #expect(engine.calls[0].kind == .serverChat)
-        #expect(engine.calls[0].modelID == "")
         #expect(start.modelState == .unavailable)
-        #expect(try await collectText(from: start.stream) == "server fallback")
+        #expect(try await collectText(from: start.stream) == "managed fallback")
+    }
+
+    @Test func completionArmErrorsPropagateToCaller() async throws {
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
+        completion.error = AgentEngineError.modelNotLoaded
+        let service = ServerInferenceService(
+            completionStarter: completion,
+            engine: engine,
+            modelStateProvider: { nil }
+        )
+        let prefixConversation = HTTPPrefixCacheConversation(
+            systemPrompt: "System",
+            messages: [.init(role: .user, content: "Hello")]
+        )
+
+        await #expect(throws: AgentEngineError.self) {
+            _ = try await service.start(
+                ServerInferenceRequest(
+                    input: .chat(.init(
+                        systemPrompt: "System",
+                        messages: [.user(content: "Hello")],
+                        toolSpecs: nil,
+                        prefixCacheConversation: prefixConversation
+                    )),
+                    parameters: .default,
+                    route: .serverCompatible
+                )
+            )
+        }
+        #expect(engine.calls.isEmpty)
     }
 
     @Test func sharedGenerateClosureRoutesManagedChatThroughService() async throws {
-        let engine = StubServerInferenceEngine()
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
         engine.chatStart = makeStart(textChunks: ["foreground", " background"])
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -238,9 +330,11 @@ struct ServerInferenceServiceTests {
     }
 
     @Test func summarizeClosureRoutesPromptThroughService() async throws {
-        let engine = StubServerInferenceEngine()
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
         engine.promptStart = makeStart(textChunks: ["sum", "mary"])
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -257,7 +351,8 @@ struct ServerInferenceServiceTests {
     }
 
     @Test func summarizeClosureReclassifiesThinkingIntoReturnedText() async throws {
-        let engine = StubServerInferenceEngine()
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
         engine.promptStart = HTTPServerGenerationStart(
             stream: makeEventStream(events: [
                 .thinkStart,
@@ -269,6 +364,7 @@ struct ServerInferenceServiceTests {
             cachedTokenCount: 0
         )
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -292,9 +388,11 @@ struct ServerInferenceServiceTests {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.selectedAgentModelID = "qwen3.5-4b-paro"
 
-        let engine = StubServerInferenceEngine()
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
         engine.chatStart = makeStart(textChunks: ["ok"])
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -331,9 +429,11 @@ struct ServerInferenceServiceTests {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.isServerEnabled = false
 
-        let engine = StubServerInferenceEngine()
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
         engine.chatStart = makeStart(textChunks: ["service path"])
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -354,11 +454,13 @@ struct ServerInferenceServiceTests {
     }
 
     @Test func sharedGenerateClosureCancelsUnderlyingServiceStartWhenConsumerTaskIsCancelled() async {
-        let engine = StubServerInferenceEngine()
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
         let probe = ControlledInferenceStart()
         let firstChunkSeen = AsyncFlag()
         engine.chatStart = await probe.makeStart()
         let service = ServerInferenceService(
+            completionStarter: completion,
             engine: engine,
             modelStateProvider: { nil }
         )
@@ -398,12 +500,12 @@ struct ServerInferenceServiceTests {
     }
 }
 
+/// In-memory double for the managed arm.
 @MainActor
-private final class StubServerInferenceEngine: ServerInferenceEngine {
+private final class StubManagedInferenceEngine: ManagedInferenceStarting {
     enum CallKind {
         case prompt
         case chat
-        case serverChat
     }
 
     struct Call {
@@ -412,8 +514,6 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
         let systemPrompt: String?
         let messageCount: Int
         let toolSpecCount: Int
-        let modelID: String?
-        let usedPrefixCacheConversation: Bool
         let progressHandlerForwarded: Bool
         let parameters: AgentGenerateParameters
     }
@@ -421,8 +521,6 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
     var calls: [Call] = []
     var promptStart = makeStart(textChunks: [])
     var chatStart = makeStart(textChunks: [])
-    var serverStart = makeStart(textChunks: [])
-    var serverProgressEvents: [ServerInferenceProgressEvent] = []
 
     func startPromptInference(
         prompt: String,
@@ -434,8 +532,6 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
             systemPrompt: nil,
             messageCount: 0,
             toolSpecCount: 0,
-            modelID: nil,
-            usedPrefixCacheConversation: false,
             progressHandlerForwarded: false,
             parameters: parameters
         ))
@@ -446,7 +542,8 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
         systemPrompt: String,
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        progressHandler: ServerInferenceProgressHandler?
     ) throws -> HTTPServerGenerationStart {
         calls.append(.init(
             kind: .chat,
@@ -454,41 +551,59 @@ private final class StubServerInferenceEngine: ServerInferenceEngine {
             systemPrompt: systemPrompt,
             messageCount: messages.count,
             toolSpecCount: toolSpecs?.count ?? 0,
-            modelID: nil,
-            usedPrefixCacheConversation: false,
-            progressHandlerForwarded: false,
+            progressHandlerForwarded: progressHandler != nil,
             parameters: parameters
         ))
         return chatStart
     }
+}
 
-    func startServerChatInference(
+/// In-memory double for the cache-aware **Server Completion** arm.
+@MainActor
+private final class StubServerCompletionStarter: ServerCompletionStarting {
+    struct Call {
+        let modelID: String
+        let conversation: HTTPPrefixCacheConversation
+        let toolSpecCount: Int
+        let progressHandlerForwarded: Bool
+        let parameters: AgentGenerateParameters
+    }
+
+    var calls: [Call] = []
+    var start = makeStart(textChunks: [])
+    var progressEvents: [ServerInferenceProgressEvent] = []
+    var error: (any Error)?
+
+    // Explicitly `@MainActor`: the `nonisolated` protocol would otherwise
+    // pull the witness off the main actor and away from the stub's state.
+    // An isolated method may witness a nonisolated async requirement —
+    // callers hop, exactly as they do for the production actor adapter.
+    @MainActor
+    func startServerCompletion(
         modelID: String,
-        systemPrompt: String,
-        messages: [LLMMessage],
+        conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
-        prefixCacheConversation: HTTPPrefixCacheConversation?,
         parameters: AgentGenerateParameters,
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart {
         calls.append(.init(
-            kind: .serverChat,
-            prompt: nil,
-            systemPrompt: systemPrompt,
-            messageCount: messages.count,
-            toolSpecCount: toolSpecs?.count ?? 0,
             modelID: modelID,
-            usedPrefixCacheConversation: prefixCacheConversation != nil,
+            conversation: conversation,
+            toolSpecCount: toolSpecs?.count ?? 0,
             progressHandlerForwarded: progressHandler != nil,
             parameters: parameters
         ))
-        for event in serverProgressEvents {
+        if let error {
+            throw error
+        }
+        for event in progressEvents {
             progressHandler?(event)
         }
-        return serverStart
+        return start
     }
 }
 
+@MainActor
 private func makeStart(
     textChunks: [String],
     cachedTokenCount: Int = 0

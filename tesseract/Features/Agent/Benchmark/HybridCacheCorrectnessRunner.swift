@@ -34,7 +34,7 @@ final class HybridCacheCorrectnessRunner {
         try await engine.loadModel(from: modelDir, visionMode: false)
         log("Model loaded.")
 
-        let testRun = try await engine.withModelContainer { container in
+        let testRun = try await engine.llmActor.withModelContainer { container in
             await container.perform { context in
                 Self.runAllTests(context: context)
             }
@@ -490,10 +490,10 @@ final class HybridCacheCorrectnessRunner {
     }
 
     /// Diagnostic: simulates the trim-and-restore path that **production no
-    /// longer reaches**. `LLMActor.generateServerTextCompletion` now skips
+    /// longer reaches**. The **Server Completion** module now skips
     /// the leaf store entirely when re-tokenization would require any
     /// non-zero `trimAmount` (see the offset-alignment guard in
-    /// `LLMActor.swift` around line 337). The reasoning, validated by this
+    /// `ServerCompletion.swift`). The reasoning, validated by this
     /// test, is that trimming attention K/V while Mamba's recurrent state
     /// stays advanced past the trimmed offset perturbs raw logits by ~10
     /// even at `trim = 1` on Qwen3.5. Argmax stays stable at trim=1

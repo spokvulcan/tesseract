@@ -2,15 +2,25 @@ import Foundation
 import MLXLMCommon
 import os
 
+/// The inference **dispatcher**: composes the two arms of server inference —
+/// the cache-aware **Server Completion** arm (production adapter: `LLMActor`)
+/// and the managed arm (production adapter: `AgentEngine`) — and owns the
+/// **Completion Route**, the pure request-shape decision between them
+/// (ADR-0006). Deleting this service would scatter that routing into the
+/// completion handler; it earns its keep as the composition point of the two
+/// adapters.
 @MainActor
 final class ServerInferenceService {
-    private let engine: any ServerInferenceEngine
+    private let completionStarter: any ServerCompletionStarting
+    private let engine: any ManagedInferenceStarting
     private let modelStateProvider: @MainActor () -> ServerInferenceModelState?
 
     init(
-        engine: some ServerInferenceEngine,
+        completionStarter: some ServerCompletionStarting,
+        engine: some ManagedInferenceStarting,
         arbiter: InferenceArbiter
     ) {
+        self.completionStarter = completionStarter
         self.engine = engine
         self.modelStateProvider = {
             arbiter.loadedLLMState.map {
@@ -23,9 +33,11 @@ final class ServerInferenceService {
     }
 
     init(
-        engine: some ServerInferenceEngine,
+        completionStarter: some ServerCompletionStarting,
+        engine: some ManagedInferenceStarting,
         modelStateProvider: @escaping @MainActor () -> ServerInferenceModelState?
     ) {
+        self.completionStarter = completionStarter
         self.engine = engine
         self.modelStateProvider = modelStateProvider
     }
@@ -68,22 +80,44 @@ final class ServerInferenceService {
                     systemPrompt: chat.systemPrompt,
                     messages: chat.messages,
                     toolSpecs: chat.toolSpecs,
-                    parameters: request.parameters
+                    parameters: request.parameters,
+                    progressHandler: chat.progressHandler
                 )
                 return ServerInferenceStart(start, modelState: modelState)
 
             case .serverCompatible:
                 let modelState = modelState ?? .unavailable
-                let start = try await engine.startServerChatInference(
-                    modelID: modelState.modelID,
-                    systemPrompt: chat.systemPrompt,
-                    messages: chat.messages,
-                    toolSpecs: chat.toolSpecs,
-                    prefixCacheConversation: chat.prefixCacheConversation,
-                    parameters: request.parameters,
-                    progressHandler: chat.progressHandler
-                )
-                return ServerInferenceStart(start, modelState: modelState)
+
+                switch CompletionRoute.decide(conversation: chat.prefixCacheConversation) {
+                case .cacheAware(let conversation):
+                    let start = try await completionStarter.startServerCompletion(
+                        modelID: modelState.modelID,
+                        conversation: conversation,
+                        toolSpecs: chat.toolSpecs,
+                        parameters: request.parameters,
+                        progressHandler: chat.progressHandler
+                    )
+                    Log.server.info(
+                        "HTTP completion using prefix-cache path — model=\(modelState.modelID) "
+                        + "cachedTokens=\(start.cachedTokenCount)"
+                    )
+                    return ServerInferenceStart(start, modelState: modelState)
+
+                case .standard(let reason):
+                    Log.server.info(
+                        "HTTP completion using standard generation path — "
+                        + "model=\(modelState.modelID) reason=\(reason.rawValue) "
+                        + "toolDefinitions=\(chat.toolSpecs?.count ?? 0)"
+                    )
+                    let start = try engine.startChatInference(
+                        systemPrompt: chat.systemPrompt,
+                        messages: chat.messages,
+                        toolSpecs: chat.toolSpecs,
+                        parameters: request.parameters,
+                        progressHandler: chat.progressHandler
+                    )
+                    return ServerInferenceStart(start, modelState: modelState)
+                }
             }
         }
     }

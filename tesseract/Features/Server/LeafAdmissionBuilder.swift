@@ -62,7 +62,7 @@ nonisolated enum LeafSkipReason: Sendable, Equatable {
 ///
 /// Today this owns the **reusable-prefix probes** shared by the canonical-user
 /// and tool-continuation leaf modes. Leaf-mode selection still lives on
-/// `LLMActor.selectHTTPLeafStoreMode` (already a tested pure function), and the
+/// `ServerCompletion.selectHTTPLeafStoreMode` (already a tested pure function), and the
 /// Metal capture stays in the actor.
 nonisolated enum LeafAdmissionBuilder {
 

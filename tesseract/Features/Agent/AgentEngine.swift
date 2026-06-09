@@ -51,10 +51,10 @@ final class AgentEngine {
     /// Whether the loaded model's template starts generation inside a `<think>` block.
     private(set) var promptStartsThinking = false
 
-    /// Internal (not private) so unit tests can reach across the actor
-    /// boundary to assert load/unload state transitions; production code
-    /// never references this directly.
-    let llmActor = LLMActor()
+    /// The shared inference actor. Created by the composition root and
+    /// injected so the server dispatcher can reach the same actor (ADR-0006);
+    /// benchmarks and unit tests rely on the `init` default instead.
+    let llmActor: LLMActor
     @ObservationIgnored private var activeGenerationID: UUID?
     @ObservationIgnored private var activeGeneration: HTTPServerGenerationStart?
 
@@ -81,9 +81,11 @@ final class AgentEngine {
     /// default shape used by benchmarks and unit tests.
     init(
         settingsManager: SettingsManager? = nil,
-        ssdConfig: SSDPrefixCacheConfig? = nil
+        ssdConfig: SSDPrefixCacheConfig? = nil,
+        llmActor: LLMActor = LLMActor()
     ) {
         self.settingsManager = settingsManager
+        self.llmActor = llmActor
         if let ssdConfig {
             self.ssdConfigSource = .explicit(ssdConfig)
         } else if let settingsManager {
@@ -210,66 +212,9 @@ final class AgentEngine {
             systemPrompt: systemPrompt,
             messages: messages,
             toolSpecs: toolSpecs,
-            parameters: parameters
-        ).stream
-    }
-
-    /// Start HTTP-server generation, opportunistically reusing a cached prefix when the
-    /// request can be canonicalized into the text-based HTTP prefix-cache shape.
-    func generateServerTextCompletion(
-        modelID: String,
-        systemPrompt: String,
-        messages: [LLMMessage],
-        toolSpecs: [ToolSpec]?,
-        prefixCacheConversation: HTTPPrefixCacheConversation?,
-        parameters: AgentGenerateParameters = .default,
-        progressHandler: ServerInferenceProgressHandler? = nil
-    ) async throws -> HTTPServerGenerationStart {
-        guard isModelLoaded else {
-            throw AgentEngineError.modelNotLoaded
-        }
-
-        if let prefixCacheConversation,
-           let start = try await llmActor.generateServerTextCompletion(
-                modelID: modelID,
-                conversation: prefixCacheConversation,
-                toolSpecs: toolSpecs,
-                parameters: parameters,
-                progressHandler: progressHandler
-           ) {
-            Log.agent.info(
-                "HTTP completion using prefix-cache path — model=\(modelID) "
-                + "cachedTokens=\(start.cachedTokenCount)"
-            )
-            return startManagedHTTPGeneration(start)
-        }
-
-        Log.agent.info(
-            "HTTP completion using standard generation path — model=\(modelID) "
-            + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCacheConversation=\(prefixCacheConversation != nil)"
-        )
-
-        let input = Self.buildUserInput(
-            systemPrompt: systemPrompt,
-            messages: messages,
-            toolSpecs: toolSpecs,
-        )
-        return try startManagedHTTPFallbackGeneration(
-            input: input,
-            toolSpecs: toolSpecs,
             parameters: parameters,
-            progressHandler: progressHandler
-        )
-    }
-
-    /// Run a closure with the loaded `ModelContainer`. Used by loaded-model
-    /// runners that need raw forward-pass access via
-    /// `container.perform { context in ... }` outside the agent generation
-    /// pipeline (e.g. `HybridCacheCorrectnessRunner`).
-    func withModelContainer<T: Sendable>(
-        _ body: @Sendable (ModelContainer) async throws -> T
-    ) async throws -> T {
-        try await llmActor.withModelContainer(body)
+            progressHandler: nil
+        ).stream
     }
 
     /// Build a `UserInput` from a system prompt, messages, and optional raw tool specs.
@@ -327,57 +272,6 @@ final class AgentEngine {
         activeGeneration?.cancel()
         await activeGeneration?.waitForCompletion()
         isGenerating = false
-    }
-
-    /// Frees unreferenced MLX buffers (safe to call between tool rounds).
-    func clearMemoryCache() async {
-        await llmActor.clearMemoryCache()
-    }
-
-    /// Returns current MLX memory usage in MB.
-    func memoryStats() async -> (activeMB: Float, peakMB: Float) {
-        await llmActor.memoryStats()
-    }
-
-    /// Snapshot of the live prefix-cache state, or `nil` if the cache has
-    /// not yet been instantiated. Observer hook intended for the loaded-
-    /// model E2E runner; production code should not depend on it.
-    func prefixCacheStats() async -> PrefixCacheManager.CacheStats? {
-        await llmActor.prefixCacheStats()
-    }
-
-    func promptCacheTelemetrySnapshot() async -> PromptCacheTelemetrySnapshot? {
-        await llmActor.promptCacheTelemetrySnapshot()
-    }
-
-    /// Override the prefix-cache memory budget, triggering an immediate
-    /// eviction pass. Observer hook intended for the loaded-model E2E
-    /// runner; production code should not call this.
-    func setPrefixCacheBudgetBytes(_ bytes: Int) async {
-        await llmActor.setPrefixCacheBudgetBytes(bytes)
-    }
-
-    /// Override the prefix-cache eviction weighting (`alpha`). Observer
-    /// hook intended for the loaded-model E2E runner; production code
-    /// should not call this.
-    func setEvictionAlpha(_ alpha: Double) async {
-        await llmActor.setEvictionAlpha(alpha)
-    }
-
-    /// Current prefix-cache eviction weighting, or `nil` if the cache hasn't
-    /// been built. Lets the E2E runner save/restore `alpha` around its
-    /// forced-pressure step so the step stays self-contained.
-    func evictionAlpha() async -> Double? {
-        await llmActor.evictionAlpha()
-    }
-
-    /// Block until any pending SSD-tier writes drain and the
-    /// manifest is persisted. Exposed as a standalone primitive for
-    /// callers that want to observe durability without tearing down
-    /// the engine; `unloadModel()` already runs this first on the
-    /// detached unload task.
-    func flushPrefixCache() async {
-        await llmActor.flushPrefixCache()
     }
 
     /// Releases the model from memory. The detached unload task
@@ -442,31 +336,8 @@ final class AgentEngine {
     private func startManagedGeneration(
         input: UserInput,
         toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
-    ) throws -> HTTPServerGenerationStart {
-        guard isModelLoaded else {
-            throw AgentEngineError.modelNotLoaded
-        }
-
-        let actor = llmActor
-        return wrapManagedGeneration(
-            input: input,
-            toolSpecs: toolSpecs,
-            parameters: parameters
-        ) {
-            try await actor.startRawGeneration(
-                input: input,
-                toolSpecs: toolSpecs,
-                parameters: parameters
-            )
-        }
-    }
-
-    private func startManagedHTTPFallbackGeneration(
-        input: UserInput,
-        toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
-        progressHandler: ServerInferenceProgressHandler?
+        progressHandler: ServerInferenceProgressHandler? = nil
     ) throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
             throw AgentEngineError.modelNotLoaded
@@ -600,53 +471,10 @@ final class AgentEngine {
         return registerActiveGeneration(start, id: generationID)
     }
 
-    private func startManagedHTTPGeneration(
-        _ start: HTTPServerGenerationStart
-    ) -> HTTPServerGenerationStart {
-        isGenerating = true
-
-        let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
-        let generationID = UUID()
-
-        let task = Task { @MainActor [weak self] in
-            defer {
-                self?.isGenerating = false
-                self?.clearActiveGeneration(id: generationID)
-            }
-
-            do {
-                for try await event in start.stream {
-                    try Task.checkCancellation()
-                    continuation.yield(event)
-                }
-                continuation.finish()
-            } catch is CancellationError {
-                continuation.finish()
-            } catch {
-                continuation.finish(throwing: error)
-            }
-        }
-
-        let managedStart = HTTPServerGenerationStart(
-            stream: stream,
-            cachedTokenCount: start.cachedTokenCount,
-            cancel: {
-                task.cancel()
-                start.cancel()
-            },
-            waitForCompletion: {
-                _ = await task.result
-                await start.waitForCompletion()
-            },
-            diagnostics: start.diagnostics
-        )
-        continuation.onTermination = { _ in managedStart.cancel() }
-        return registerActiveGeneration(managedStart, id: generationID)
-    }
 }
 
 @MainActor
-extension AgentEngine: ServerInferenceEngine {
+extension AgentEngine: ManagedInferenceStarting {
     func startPromptInference(
         prompt: String,
         parameters: AgentGenerateParameters
@@ -662,7 +490,8 @@ extension AgentEngine: ServerInferenceEngine {
         systemPrompt: String,
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        progressHandler: ServerInferenceProgressHandler?
     ) throws -> HTTPServerGenerationStart {
         let input = Self.buildUserInput(
             systemPrompt: systemPrompt,
@@ -672,25 +501,6 @@ extension AgentEngine: ServerInferenceEngine {
         return try startManagedGeneration(
             input: input,
             toolSpecs: toolSpecs,
-            parameters: parameters
-        )
-    }
-
-    func startServerChatInference(
-        modelID: String,
-        systemPrompt: String,
-        messages: [LLMMessage],
-        toolSpecs: [ToolSpec]?,
-        prefixCacheConversation: HTTPPrefixCacheConversation?,
-        parameters: AgentGenerateParameters,
-        progressHandler: ServerInferenceProgressHandler?
-    ) async throws -> HTTPServerGenerationStart {
-        try await generateServerTextCompletion(
-            modelID: modelID,
-            systemPrompt: systemPrompt,
-            messages: messages,
-            toolSpecs: toolSpecs,
-            prefixCacheConversation: prefixCacheConversation,
             parameters: parameters,
             progressHandler: progressHandler
         )

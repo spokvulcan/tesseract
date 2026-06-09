@@ -113,7 +113,7 @@ final class PrefixCacheManager {
         /// because it carried a live Snapshot Ref — the RAM body was
         /// freed but the SSD-backed node remains reachable for future
         /// lookups. Consumers
-        /// (`LLMActor.makeHTTPPrefixCacheGeneration`) emit a
+        /// (the **Server Completion** module) emit a
         /// `ssdBodyDrop(id:)` diagnostic event for each non-nil
         /// entry. `nil` for plain RAM-only evictions.
         let bodyDroppedSnapshotRefID: String?

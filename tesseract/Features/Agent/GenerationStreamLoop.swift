@@ -427,11 +427,9 @@ extension GenerationStreamLoop.RawGenerationHandle {
         )
     }
 
-    /// The server's rich prefill handle collapses to `{ stream, cancel, wait }`;
-    /// the prefill/cache metadata stays with the server and never crosses the seam.
-    nonisolated init(_ generation: HTTPPrefixCacheGeneration) {
-        self.init(stream: generation.stream, completion: generation.completion)
-    }
+    // The Server Completion module adds one more normalization in
+    // `ServerCompletion.swift`: its private prefill bundle collapses to
+    // `{ stream, cancel, wait }` there, so the bundle never crosses the seam.
 }
 
 // MARK: - Late-bound cancel bridge

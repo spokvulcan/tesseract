@@ -117,7 +117,7 @@ tesseract/
 │   │   ├── AgentRunController.swift   # Foreground run: lease + isGenerating + cancel
 │   │   ├── ChatTranscriptController.swift # Drives the pure ChatTranscript fold
 │   │   ├── AgentVoiceInputController.swift  # Composer push-to-talk (leaf)
-│   │   ├── AgentEngine.swift          # @Observable, wraps LLMActor
+│   │   ├── AgentEngine.swift          # @Observable, wraps LLMActor (chat path)
 │   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
 │   │   ├── LLMActor.swift             # MLX LLM inference actor
 │   │   ├── GPULeaseQueue.swift        # FIFO GPU mutual-exclusion lease
@@ -131,7 +131,9 @@ tesseract/
 │   ├── Server/                        # Local OpenAI-compatible HTTP server
 │   │   ├── HTTPServer.swift           # HTTP/1.1 server
 │   │   ├── CompletionHandler.swift    # Streaming + non-streaming completions
-│   │   ├── ServerInferenceService.swift
+│   │   ├── ServerInferenceService.swift   # Dispatcher: Completion Route → two arms
+│   │   ├── CompletionRoute.swift      # Pure cache-aware vs standard decision
+│   │   ├── ServerCompletion.swift     # Actor-confined cache-aware execution module
 │   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
@@ -352,6 +354,11 @@ arbitration.
 
 `Features/Server/` hosts a local OpenAI-compatible HTTP server (`HTTPServer`,
 `CompletionHandler`) that drives the same `LLMActor` through the GPU lease.
+`ServerInferenceService` is the dispatcher: it owns the **Completion Route**
+(`CompletionRoute`, the pure request-shape decision) and composes two arms —
+the cache-aware **Server Completion** module (`ServerCompletion`, an
+actor-confined module stored in `LLMActor`; ADR-0006) and the agent engine's
+managed fallback.
 Repeated prompts are accelerated by a tiered KV prefix cache
 (`PrefixCacheManager`): a radix tree of KV-cache snapshots in RAM, spilled to SSD
 (`SSDSnapshotStore` + `SnapshotLedger`), with flop-aware LRU eviction

@@ -2,11 +2,11 @@ import Testing
 
 @testable import Tesseract_Agent
 
-struct LLMActorLeafStoreModeTests {
+struct ServerCompletionLeafStoreModeTests {
 
     @Test func toolCallTurnsPreferDirectToolLeafOnThinkingTemplates() {
         #expect(
-            LLMActor.selectHTTPLeafStoreMode(
+            ServerCompletion.selectHTTPLeafStoreMode(
                 promptStartsThinking: true,
                 emittedToolCalls: true
             ) == .directToolLeaf
@@ -15,7 +15,7 @@ struct LLMActorLeafStoreModeTests {
 
     @Test func stopTurnsUseCanonicalUserLeafOnThinkingTemplates() {
         #expect(
-            LLMActor.selectHTTPLeafStoreMode(
+            ServerCompletion.selectHTTPLeafStoreMode(
                 promptStartsThinking: true,
                 emittedToolCalls: false
             ) == .canonicalUserLeaf
@@ -24,7 +24,7 @@ struct LLMActorLeafStoreModeTests {
 
     @Test func nonThinkingTemplatesKeepDirectLeafForNormalReplies() {
         #expect(
-            LLMActor.selectHTTPLeafStoreMode(
+            ServerCompletion.selectHTTPLeafStoreMode(
                 promptStartsThinking: false,
                 emittedToolCalls: false
             ) == .directLeaf
@@ -33,7 +33,7 @@ struct LLMActorLeafStoreModeTests {
 
     @Test func toolCallsStillForceDirectToolLeafWithoutThinkingPrompt() {
         #expect(
-            LLMActor.selectHTTPLeafStoreMode(
+            ServerCompletion.selectHTTPLeafStoreMode(
                 promptStartsThinking: false,
                 emittedToolCalls: true
             ) == .directToolLeaf

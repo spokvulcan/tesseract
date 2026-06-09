@@ -113,15 +113,13 @@ final class PromptCacheTelemetryStore {
         return events.first { $0.id == selectedEventID }
     }
 
-    func startPolling(agentEngine: AgentEngine) {
+    func startPolling(llmActor: LLMActor) {
         guard !isPolling else { return }
         isPolling = true
-        pollingTask = Task { @MainActor [weak self, weak agentEngine] in
+        pollingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                if let agentEngine {
-                    await self.refreshSnapshot(agentEngine: agentEngine)
-                }
+                await self.refreshSnapshot(llmActor: llmActor)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -133,8 +131,8 @@ final class PromptCacheTelemetryStore {
         pollingTask = nil
     }
 
-    func refreshSnapshot(agentEngine: AgentEngine) async {
-        snapshot = await agentEngine.promptCacheTelemetrySnapshot()
+    func refreshSnapshot(llmActor: LLMActor) async {
+        snapshot = await llmActor.promptCacheTelemetrySnapshot()
         lastRefreshError = nil
         appendSample()
         normalizeSelection()

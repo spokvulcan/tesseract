@@ -46,8 +46,8 @@ scripts/dev.sh hybrid-cache-correctness  # HybridCacheCorrectnessRunner — bitw
 ```
 
 Both exit non-zero on any failed check. Run before releases and after any change
-to `LLMActor`, `PrefixCacheManager`, `HybridCacheSnapshot`, or
-`StablePrefixDetector`. The correctness runner is the stronger gate (bitwise
+to `LLMActor`, `ServerCompletion`, `PrefixCacheManager`, `HybridCacheSnapshot`,
+or `StablePrefixDetector`. The correctness runner is the stronger gate (bitwise
 tensor comparison via raw `ModelContainer.perform` access); the e2e runner
 exercises the full HTTP path and is the right shape for catching pipeline
 regressions the correctness runner can't see.
