@@ -1,10 +1,35 @@
 # CLAUDE.md
 
-## What this is
+## What this is — and why
 
-Tesseract Agent — a privacy-focused, fully offline AI assistant for macOS.
-All inference runs locally on Apple Silicon via MLX (WhisperKit ASR, Qwen3TTS,
-an on-device tool-calling LLM agent). macOS 26+, Swift 6.2 / SwiftUI.
+Tesseract Agent — a fully offline AI assistant for macOS (macOS 26+,
+Swift 6.2 / SwiftUI), everything running locally on Apple Silicon via
+MLX. Nothing ever leaves the Mac — no cloud, no telemetry. The stack,
+in priority order:
+
+1. **The agent** — an on-device tool-calling LLM assistant you can
+   trust with your whole life precisely because it is local.
+2. **The inference server** — the foundation the agent stands on, and
+   a product in its own right: an OpenAI-compatible
+   `/v1/chat/completions` server whose tiered RAM + SSD radix prefix
+   cache delivers hit rates no other on-device stack matches. A good
+   server is a good agent.
+3. **Dictation** — push-to-talk speech-to-text typed into any app:
+   the everyday convenience, fully offline.
+4. **Text-to-speech** — natural long-form voice synthesis: the
+   nice-to-have, held to state-of-the-art on-device quality.
+
+We are at the frontier of what's possible on-device — Tesseract is the
+living proof — and the only real failure is not pushing it. When
+weighing decisions:
+
+- **Be ambitious in everything** — never write an idea off as "too
+  ambitious for local hardware"; aim at the frontier in every decision,
+  product and code alike.
+- **Constraints are the design material** — one GPU, tight RAM,
+  sandboxed, offline: design within them, not around them.
+- **Knowing the user is first-class** — persistent memory of goals,
+  habits, and preferences is the product, not a feature.
 
 ## Working here
 
