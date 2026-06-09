@@ -5,6 +5,10 @@ before committing changes to server, caching, or agent engine code.
 
 ## Unit / integration suites
 
+The suite lists below are the recommended *focused* runs for the two hottest
+areas; there are ~100 suites in total — discover the rest with
+`grep -r "@Suite" tesseractTests/`.
+
 ```bash
 # Server + agent suites (recommended for fast, focused runs):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
@@ -47,3 +51,18 @@ to `LLMActor`, `PrefixCacheManager`, `HybridCacheSnapshot`, or
 tensor comparison via raw `ModelContainer.perform` access); the e2e runner
 exercises the full HTTP path and is the right shape for catching pipeline
 regressions the correctness runner can't see.
+
+Benchmark-shaped siblings (informational, not gates):
+`scripts/dev.sh prefill-step-benchmark` and `scripts/dev.sh paroquant-vlm-smoke`.
+
+## Gotchas
+
+- `-only-testing` filters must target **suite** granularity. A method-granularity
+  filter (`-only-testing:tesseractTests/Suite/testName`) runs zero Swift Testing
+  tests and still reports `** TEST SUCCEEDED **`.
+- `xcodebuild test` hides `#expect` failure details from stdout. Read them from
+  the `.xcresult` bundle:
+  `xcrun xcresulttool get test-results tests --path <bundle>.xcresult`.
+- Known flake (not a regression):
+  `WarmStartTests/warmStartRebuildsFromDirectoryWalkAfterCorruption` can fail when
+  co-bundled with `PrefixCacheManagerTests` in one test run; it passes solo.

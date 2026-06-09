@@ -5,9 +5,8 @@ status: accepted
 # The spoken-word highlight surface is a port, so the segment-boundary switch is testable
 
 This records a design decision for the **Word Timeline** / **Segment Playback**
-deepening (see `CONTEXT.md` → **Speech word timeline**). The modules named below are
-agreed but **not yet implemented** in the tree — this ADR exists so the seam is not
-re-litigated once it lands.
+deepening (see `CONTEXT.md` → **Speech word timeline**). The modules named below
+landed with that refactor (#56); this ADR exists so the seam is not re-litigated.
 
 The TTS notch overlay — until now a concrete `TTSNotchPanelController?` that
 `SpeechCoordinator` held and called directly — becomes a **port**,

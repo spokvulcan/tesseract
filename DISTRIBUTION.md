@@ -34,7 +34,7 @@ Both share:
 - `NSPrivacyTracking` = false
 - `NSPrivacyCollectedDataTypes` = none (all processing is on-device)
 - `NSPrivacyAccessedAPITypes`:
-  - `NSPrivacyAccessedAPICategoryUserDefaults` — reason `CA92.1` (app-own `@AppStorage` preferences)
+  - `NSPrivacyAccessedAPICategoryUserDefaults` — reason `CA92.1` (app-own settings via `UserDefaultsSettingsStore`)
 
 ---
 
@@ -87,11 +87,8 @@ Draft copy is in `APP_STORE_METADATA.md`. Still needed:
 ### 4. Archive and Upload
 
 ```bash
-# Archive with Release configuration
-xcodebuild archive \
-  -project tesseract.xcodeproj \
-  -scheme tesseract \
-  -archivePath build/Tesseract Agent.xcarchive
+# Archive with Release configuration → build/Tesseract.xcarchive
+scripts/dev.sh archive
 
 # Or use Xcode: Product → Archive → Distribute App → App Store Connect
 ```
@@ -130,26 +127,23 @@ If App Store review is problematic (Accessibility permission usage can get scrut
 
 ```bash
 # 1. Archive
-xcodebuild archive \
-  -project tesseract.xcodeproj \
-  -scheme tesseract \
-  -archivePath build/Tesseract Agent.xcarchive
+scripts/dev.sh archive   # → build/Tesseract.xcarchive
 
 # 2. Export
 xcodebuild -exportArchive \
-  -archivePath build/Tesseract Agent.xcarchive \
+  -archivePath build/Tesseract.xcarchive \
   -exportPath build/export \
   -exportOptionsPlist ExportOptions.plist
 
 # 3. Notarize
-xcrun notarytool submit build/export/Tesseract Agent.app.zip \
+xcrun notarytool submit "build/export/Tesseract Agent.app.zip" \
   --apple-id YOUR_APPLE_ID \
   --team-id 5RBTC2MNY8 \
   --password APP_SPECIFIC_PASSWORD \
   --wait
 
 # 4. Staple
-xcrun stapler staple build/export/Tesseract Agent.app
+xcrun stapler staple "build/export/Tesseract Agent.app"
 ```
 
 ### 3. Create DMG
