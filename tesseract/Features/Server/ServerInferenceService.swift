@@ -76,14 +76,9 @@ final class ServerInferenceService {
         case .chat(let chat):
             switch request.route {
             case .standard:
-                let start = try engine.startChatInference(
-                    systemPrompt: chat.systemPrompt,
-                    messages: chat.messages,
-                    toolSpecs: chat.toolSpecs,
-                    parameters: request.parameters,
-                    progressHandler: chat.progressHandler
+                return try startStandardChat(
+                    chat, parameters: request.parameters, modelState: modelState
                 )
-                return ServerInferenceStart(start, modelState: modelState)
 
             case .serverCompatible:
                 let modelState = modelState ?? .unavailable
@@ -109,16 +104,28 @@ final class ServerInferenceService {
                         + "model=\(modelState.modelID) reason=\(reason.rawValue) "
                         + "toolDefinitions=\(chat.toolSpecs?.count ?? 0)"
                     )
-                    let start = try engine.startChatInference(
-                        systemPrompt: chat.systemPrompt,
-                        messages: chat.messages,
-                        toolSpecs: chat.toolSpecs,
-                        parameters: request.parameters,
-                        progressHandler: chat.progressHandler
+                    return try startStandardChat(
+                        chat, parameters: request.parameters, modelState: modelState
                     )
-                    return ServerInferenceStart(start, modelState: modelState)
                 }
             }
         }
+    }
+
+    /// The managed arm for chat input — shared by the `.standard` route and
+    /// the **Completion Route**'s standard-with-reason fallback.
+    private func startStandardChat(
+        _ chat: ServerInferenceRequest.ChatInput,
+        parameters: AgentGenerateParameters,
+        modelState: ServerInferenceModelState?
+    ) throws -> ServerInferenceStart {
+        let start = try engine.startChatInference(
+            systemPrompt: chat.systemPrompt,
+            messages: chat.messages,
+            toolSpecs: chat.toolSpecs,
+            parameters: parameters,
+            progressHandler: chat.progressHandler
+        )
+        return ServerInferenceStart(start, modelState: modelState)
     }
 }

@@ -126,6 +126,9 @@ final class AgentEngine {
 
         isLoading = true
         loadingStatus = "Loading model…"
+        // Reset on every exit, including the throwing path — a stuck `true`
+        // would block all future load attempts behind the reentrancy guard.
+        defer { isLoading = false }
 
         do {
             let (tokenizer, startsThinking) = try await llmActor.loadModel(
@@ -151,8 +154,6 @@ final class AgentEngine {
             Log.agent.error("Failed to load model: \(error)")
             throw error
         }
-
-        isLoading = false
     }
 
     /// Streams text generation from a raw prompt string.
@@ -288,6 +289,12 @@ final class AgentEngine {
         isModelLoaded = false
         loadingStatus = ""
         unloadTask = Task { [llmActor] in
+            // Stop the in-flight server completion BEFORE the SSD flush:
+            // admissions landing mid-flush would miss the persisted manifest,
+            // and the engine no longer registers cache-aware completions, so
+            // the `cancelGeneration()` above does not cover them. The drain
+            // inside `unloadModel` remains the backstop.
+            await llmActor.drainServerCompletion()
             await llmActor.flushPrefixCache()
             await llmActor.unloadModel()
         }

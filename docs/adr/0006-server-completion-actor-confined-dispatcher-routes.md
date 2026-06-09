@@ -57,7 +57,9 @@ already-decided:
   Sendable` values (`ModelContainer`, `HybridCacheSnapshot`) across a new actor
   hop, split unload sequencing across two actors, and buy no isolation — the GPU
   lease already serializes consumers. This is a module split, not an isolation
-  split: every model-affine step stays on `LLMActor`'s executor.
+  split: module state stays confined to `LLMActor`, and the driving loop runs
+  off-actor with its model-affine steps inside `container.perform`, exactly as
+  the pre-carve driving task did — no new hop, no second unload sequence.
 - **"Keep the `nil`-fallback in the actor."** No. The bypass checks are pure
   request-shape facts; inside the actor they are untestable without a model and
   smear the route across two modules.

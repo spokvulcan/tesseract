@@ -4,6 +4,12 @@ import MLXLMCommon
 import Tokenizers
 import os
 
+/// Workaround for a region-based isolation checker limitation: capturing
+/// `HTTPPrefixCacheGeneration` (an `@unchecked Sendable` struct) directly in
+/// the driving `Task` fails to compile with "pattern that the region-based
+/// isolation checker does not understand how to check" — boxing it in a
+/// `Sendable` class routes it past the checker. Do not "simplify" this away
+/// without building first.
 nonisolated final class UnsafeSendableBox<T>: @unchecked Sendable {
     let value: T
 
@@ -143,15 +149,32 @@ nonisolated final class ServerCompletion {
 
     private var _prefixCache: PrefixCacheManager?
 
-    /// Active-completion registry: the most recent cache-aware start. The GPU
-    /// lease — held across the whole HTTP request by `CompletionHandler` —
-    /// is the primary guard against unload/reload interleaving; this handle
-    /// is the in-actor backstop `LLMActor.unloadModel` drains
-    /// (cancel-and-await) before the container is released, replacing the
-    /// engine's old fire-and-forget cancel. Replaced on each start (cancel
-    /// and wait on an already-finished handle are no-ops); cleared by the
-    /// drain.
-    private var activeCompletion: HTTPServerGenerationStart?
+    /// Active-completion registry: the most recent cache-aware start, keyed
+    /// by its request ID so the natural-finish clear and the drain can tell
+    /// handles apart. The GPU lease — held across the whole HTTP request by
+    /// `CompletionHandler` — is the primary guard against unload/reload
+    /// interleaving; this handle is the in-actor backstop
+    /// `LLMActor.unloadModel` drains (cancel-and-await) before the container
+    /// is released, replacing the engine's old fire-and-forget cancel.
+    /// Replaced on each start; cleared by the drain and by the driving
+    /// task's natural-finish hook (`clearFinishedCompletion`), so an idle
+    /// server doesn't retain the finished handle — and through it the
+    /// final-cache handle's KV tensors — until the next request.
+    private var activeCompletion: (id: UUID, handle: HTTPServerGenerationStart)?
+
+    /// `start` calls still in their heavy restore/prefill phase, which runs
+    /// *before* the handle lands in `activeCompletion` — the drain cannot see
+    /// those starts through the registry alone, so it parks on this count.
+    private var inflightStartCount = 0
+
+    /// Continuations parked by `drainActiveCompletion` until every in-flight
+    /// start settles (aborts or registers).
+    private var inflightStartWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Bumped by every drain. A `start` that observes a bump across its heavy
+    /// awaits aborts instead of handing a live generation into model state
+    /// that is being torn down.
+    private var drainGeneration = 0
 
     // MARK: - Install / lifecycle
 
@@ -192,14 +215,51 @@ nonisolated final class ServerCompletion {
         self.modelIdentity = identity
     }
 
-    /// Cancel-and-await the active cache-aware completion, if any. Called by
-    /// `LLMActor.unloadModel` before the model container is released so no
-    /// in-flight server completion can touch model state during teardown.
+    /// Cancel-and-await every cache-aware completion the module knows about:
+    /// the registered handle plus any `start` still in its pre-registration
+    /// restore/prefill phase. Called by `LLMActor.unloadModel` (and by the
+    /// engine's unload task ahead of the SSD flush) before the model
+    /// container is released, so no in-flight server completion can touch
+    /// model state during teardown.
+    ///
+    /// Reentrancy-safe: the slot is cleared only *after* the awaited handle
+    /// has fully finished, and both conditions re-check until the module is
+    /// quiescent — a concurrent second drain or a start interleaved during
+    /// an await cannot slip past the teardown.
     func drainActiveCompletion(on actor: isolated LLMActor) async {
-        guard let active = activeCompletion else { return }
-        activeCompletion = nil
-        active.cancel()
-        await active.waitForCompletion()
+        drainGeneration += 1
+        while inflightStartCount > 0 || activeCompletion != nil {
+            if let active = activeCompletion {
+                active.handle.cancel()
+                await active.handle.waitForCompletion()
+                if activeCompletion?.id == active.id {
+                    activeCompletion = nil
+                }
+            } else {
+                await withCheckedContinuation { continuation in
+                    inflightStartWaiters.append(continuation)
+                }
+            }
+        }
+    }
+
+    /// Natural-finish hook from the driving task: drop the registry slot for
+    /// `requestID` once its stream has fully completed. Keyed by request ID
+    /// so a newer registered start is never dropped by a stale finisher.
+    func clearFinishedCompletion(_ requestID: UUID, on actor: isolated LLMActor) {
+        if activeCompletion?.id == requestID {
+            activeCompletion = nil
+        }
+    }
+
+    /// Test-only: register a handle in the active-completion slot without a
+    /// model load, so the unit suite can exercise the drain contract.
+    func registerActiveCompletionForTesting(
+        _ handle: HTTPServerGenerationStart,
+        id: UUID,
+        on actor: isolated LLMActor
+    ) {
+        activeCompletion = (id: id, handle: handle)
     }
 
     // MARK: - Cache-aware completion
@@ -220,6 +280,24 @@ nonisolated final class ServerCompletion {
     ) async throws -> HTTPServerGenerationStart {
         Memory.cacheLimit = LLMActor.Defaults.cacheLimitMB * 1024 * 1024
 
+        // The heavy restore/prefill phase below suspends before the handle is
+        // registered. Track the start so a concurrent drain (the unload
+        // backstop) can both abort it — via the generation bump checked after
+        // the last await — and park until it has stopped touching the
+        // container before teardown proceeds.
+        let entryDrainGeneration = drainGeneration
+        inflightStartCount += 1
+        defer {
+            inflightStartCount -= 1
+            if inflightStartCount == 0 {
+                let waiters = inflightStartWaiters
+                inflightStartWaiters = []
+                for waiter in waiters {
+                    waiter.resume()
+                }
+            }
+        }
+
         let prefixCache = await ensurePrefixCache(on: actor)
         let requestID = UUID()
         let genParams = LLMActor.makeGenerateParameters(from: parameters)
@@ -238,7 +316,16 @@ nonisolated final class ServerCompletion {
             progressHandler: progressHandler
         )
 
-        let mlxStartBox = UnsafeSendableBox(mlxStart)
+        // A drain ran while restore/prefill was suspended: the model is
+        // tearing down, so stop the freshly started generation and bail
+        // before wiring up a handle nothing would ever drain.
+        if drainGeneration != entryDrainGeneration {
+            mlxStart.completion.cancel()
+            await mlxStart.completion.value
+            Memory.clearCache()
+            throw CancellationError()
+        }
+
         let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
         let startsInsideThinkBlock = promptStartsThinking
         let loadedModelWeightBytes = modelWeightBytes
@@ -268,14 +355,37 @@ nonisolated final class ServerCompletion {
         // starts — bridge through a late-bound cancel the task fills.
         let loopCancel = LateBoundCancel()
 
-        // The driving work lives in a static helper taking `isolated LLMActor`
-        // so it runs on the actor's executor — the same isolation the
-        // pre-carve actor method inherited implicitly — while the `Task`
-        // closure itself captures only Sendable values (which the
-        // region-isolation checker requires here).
-        let task = Task {
+        // Hoisted before the Task so the closure's `mlxStart` capture is its
+        // last use — the region-isolation checker rejects a capture-then-use
+        // of the @unchecked Sendable struct.
+        let cachedTokenCount = mlxStart.skippedPrefillTokens
+        let completionDiagnostics = HTTPServerGenerationStart.Diagnostics.fromSeconds(
+            lookup: mlxStart.lookupMs,
+            restore: mlxStart.restoreMs,
+            prefill: mlxStart.prefillMs,
+            cacheReason: String(describing: mlxStart.lookupReason),
+            sharedPrefixLength: mlxStart.sharedPrefixLength,
+            promptTokenCount: mlxStart.promptTokenCount
+        )
+
+        // The driving work lives in a nonisolated static helper, so it runs
+        // off the actor's executor — exactly like the pre-carve driving task,
+        // whose capture list omitted `self` and therefore never inherited the
+        // actor's isolation. Keeping it off-actor means per-token sink work
+        // never serializes against unrelated actor calls; every model-affine
+        // step inside hops through `container.perform`, and module state
+        // crosses only as the immutable copies captured above. After the
+        // drive finishes (naturally or cancelled), the task hops back to the
+        // actor to release this request's registry slot.
+        // Region-isolation workaround, part 2: the checker rejects sending
+        // this argument bundle into the nonisolated callee directly ("pattern
+        // that the region-based isolation checker does not understand").
+        // Every captured value is an immutable copy or a Sendable handle, so
+        // boxing the whole drive closure is safe for the same reason
+        // `mlxStartBox` is.
+        let mlxStartBox = UnsafeSendableBox(mlxStart)
+        let driveBox = UnsafeSendableBox<() async -> Void>({
             await Self.driveCompletion(
-                on: actor,
                 mlxStartBox: mlxStartBox,
                 conversation: conversation,
                 container: container,
@@ -287,8 +397,12 @@ nonisolated final class ServerCompletion {
                 safeguardConfig: safeguardConfig,
                 loopCancel: loopCancel,
                 continuationStarter: continuationStarter,
-                continuation: continuation
+                continuation: continuation,
+                finishHook: { await actorRef.clearFinishedServerCompletion(requestID) }
             )
+        })
+        let task = Task {
+            await driveBox.value()
         }
 
         continuation.onTermination = { _ in
@@ -297,7 +411,7 @@ nonisolated final class ServerCompletion {
 
         let completionStart = HTTPServerGenerationStart(
             stream: stream,
-            cachedTokenCount: mlxStart.skippedPrefillTokens,
+            cachedTokenCount: cachedTokenCount,
             cancel: {
                 // Cancel the live raw handle (whichever is current after an
                 // intervention swap) to unpark a mid-generation `for await`, then
@@ -310,24 +424,19 @@ nonisolated final class ServerCompletion {
                 // waiting on the task is sufficient.
                 _ = await task.result
             },
-            diagnostics: .fromSeconds(
-                lookup: mlxStart.lookupMs,
-                restore: mlxStart.restoreMs,
-                prefill: mlxStart.prefillMs,
-                cacheReason: String(describing: mlxStart.lookupReason),
-                sharedPrefixLength: mlxStart.sharedPrefixLength,
-                promptTokenCount: mlxStart.promptTokenCount
-            )
+            diagnostics: completionDiagnostics
         )
-        activeCompletion = completionStart
+        activeCompletion = (id: requestID, handle: completionStart)
         return completionStart
     }
 
     /// Drive one cache-aware completion to its end: the stream-loop run with
     /// the server's sink, snapshot admissions, leaf capture, and the
-    /// request-end tuner record.
+    /// request-end tuner record. Deliberately nonisolated — see the comment
+    /// at the call site's `Task`. `finishHook` runs after every exit path
+    /// (natural finish, cancellation, error) and releases this request's
+    /// registry slot back on the actor.
     private static func driveCompletion(
-        on actor: isolated LLMActor,
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
         conversation: HTTPPrefixCacheConversation,
         container: ModelContainer,
@@ -339,7 +448,8 @@ nonisolated final class ServerCompletion {
         safeguardConfig: ThinkingRepetitionDetector.Config,
         loopCancel: LateBoundCancel,
         continuationStarter: @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
-        continuation: AsyncThrowingStream<AgentGeneration, Error>.Continuation
+        continuation: AsyncThrowingStream<AgentGeneration, Error>.Continuation,
+        finishHook: @escaping @Sendable () async -> Void
     ) async {
         let mlxStart = mlxStartBox.value
         let diagnosticsContext = mlxStart.diagnosticsContext
@@ -349,7 +459,7 @@ nonisolated final class ServerCompletion {
         var accumulator = GenerationAccumulator()
         var toolCalls: [HTTPPrefixCacheToolCall] = []
 
-        do {
+        drive: do {
             func handle(_ event: AgentGeneration) {
                 // Fold shared accumulation (text/thinking/safeguard prefix)
                 // in one place. The leaf-store tool-call projection
@@ -433,7 +543,7 @@ nonisolated final class ServerCompletion {
             if outcome.cancelled {
                 Memory.clearCache()
                 continuation.finish()
-                return
+                break drive
             }
 
             if let completionInfo = outcome.completionInfo {
@@ -502,7 +612,7 @@ nonisolated final class ServerCompletion {
             if Task.isCancelled {
                 Memory.clearCache()
                 continuation.finish()
-                return
+                break drive
             }
 
             // Leaf store, wrapped so any skip path falls through to
@@ -834,6 +944,8 @@ nonisolated final class ServerCompletion {
                 error.localizedDescription
             ))
         }
+
+        await finishHook()
     }
 
     /// Build the lower-level MLX generation pipeline using the radix-tree prefix cache.

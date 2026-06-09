@@ -452,12 +452,37 @@ actor LLMActor {
     /// container. The GPU lease remains the primary guard; this drain is the
     /// in-actor backstop (ADR-0006).
     func unloadModel() async {
+        let containerAtEntry = modelContainer
         if let serverCompletion {
             await serverCompletion.drainActiveCompletion(on: self)
+        }
+        // The drain suspends, so a concurrent `loadModel` can interleave and
+        // install a fresh container (actor reentrancy). Tear down only the
+        // state this call set out to release — never a newer load's.
+        guard modelContainer === containerAtEntry else {
+            Log.agent.info(
+                "unloadModel skipped teardown — a newer load replaced the container during the drain"
+            )
+            return
         }
         modelContainer = nil
         agentTokenizer = nil
         serverCompletion = nil
+    }
+
+    /// Cancel-and-await the active **Server Completion**, leaving the model
+    /// loaded. Callers that flush the prefix cache before unloading use this
+    /// to stop in-flight server generations first, so snapshot admissions
+    /// cannot land after the SSD manifest has been persisted.
+    func drainServerCompletion() async {
+        guard let serverCompletion else { return }
+        await serverCompletion.drainActiveCompletion(on: self)
+    }
+
+    /// Natural-finish hook from the Server Completion driving task: drop the
+    /// registry slot for `requestID` once its stream has fully completed.
+    func clearFinishedServerCompletion(_ requestID: UUID) {
+        serverCompletion?.clearFinishedCompletion(requestID, on: self)
     }
 
     /// Frees unreferenced MLX buffers between tool rounds.
@@ -729,10 +754,15 @@ actor LLMActor {
         )
     }
 
-    func makeGenerateParametersForTesting(
-        from parameters: AgentGenerateParameters
-    ) -> GenerateParameters {
-        Self.makeGenerateParameters(from: parameters)
+    /// Test-only: register a fake server-completion handle so the unit suite
+    /// can exercise the unload drain contract without a loaded model.
+    func registerServerCompletionForTesting(
+        _ handle: HTTPServerGenerationStart,
+        id: UUID
+    ) {
+        ensureServerCompletion().registerActiveCompletionForTesting(
+            handle, id: id, on: self
+        )
     }
 }
 
