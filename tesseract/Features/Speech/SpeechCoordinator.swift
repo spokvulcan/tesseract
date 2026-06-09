@@ -19,7 +19,7 @@ final class SpeechCoordinator {
     private let playback: any AudioPlayback
     private let settings: SettingsManager
     private let notchOverlay: (any WordHighlightSurface)?
-    private let arbiter: InferenceArbiter?
+    private let arbiter: any InferenceArbitrating
 
     private enum Defaults {
         static let voiceAnchorTokenCount = 48
@@ -37,7 +37,7 @@ final class SpeechCoordinator {
         playback: any AudioPlayback = AudioPlaybackManager(),
         settings: SettingsManager,
         notchOverlay: (any WordHighlightSurface)? = nil,
-        arbiter: InferenceArbiter? = nil
+        arbiter: any InferenceArbitrating
     ) {
         self.textExtractor = textExtractor
         self.speechEngine = speechEngine
@@ -125,17 +125,8 @@ final class SpeechCoordinator {
     // MARK: - Private
 
     /// Wraps a TTS operation in the arbiter lease (GPU serialization + model loading).
-    /// Falls back to manual model loading when no arbiter is configured.
     private func withTTSReady<T: Sendable>(_ body: () async throws -> T) async throws -> T {
-        if let arbiter {
-            return try await arbiter.withExclusiveGPU(.tts, body: body)
-        }
-        if !speechEngine.isModelLoaded {
-            state = .loadingModel
-            try await speechEngine.loadModel()
-        }
-        try Task.checkCancellation()
-        return try await body()
+        try await arbiter.withExclusiveGPU(.tts, body: body)
     }
 
     private func captureAndSpeak() async {

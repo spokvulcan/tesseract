@@ -897,9 +897,9 @@ written once) is driven by the view and command execution; the event-side transi
 `.agentStart`/`.agentEnd`. Failures inside the lease task are reported to the
 coordinator's shared `error` banner via an injected closure; the only view surface it
 owns is `isGenerating`, which the coordinator re-exposes as a computed passthrough so
-existing call sites are unchanged. Both `send` and `runUnderLease` preserve the
-arbiter-less fallback — with no arbiter wired they drive `agent.prompt`/`agent.forceCompact`
-directly (the back-compat branch locked by `compactCommandFallsBackToDirectPathWhenArbiterMissing`).
+existing call sites are unchanged. The module depends on a non-optional
+`any InferenceArbitrating` (see **GPU lease arbitration**) — the former arbiter-less
+fallback branch was test-induced and is deleted; tests inject the in-memory peer instead.
 The deletion test passes: remove it and the
 eager-flag-while-queued semantics plus the lease/cancel contract reappear in the
 coordinator. Distinct from the **Generation** family (Accumulator / Projection / Stream
@@ -1090,6 +1090,75 @@ prefix-cache concept).
 > **Flagged ambiguity — "guard".** The **Operation Guard** is the staleness module. It is
 > unrelated to Swift's `guard` statement (which is, confusingly, how its `isCurrent` check is
 > written at call sites). When ambiguous, say "operation guard".
+
+### GPU lease arbitration
+
+**GPU Lease Queue**:
+The pure mutual-exclusion lease for the GPU — a zero-dependency `@MainActor final class`
+(`GPULeaseQueue`) exposing one scoped operation, `withExclusive { body }`. It owns the FIFO
+waiter queue, the `isLeased` flag, the **atomic handoff** (on release with waiters queued,
+the lease passes to the next waiter directly — there is no instant where the queue looks
+free for a third caller to barge), and the cancellation protocol (cancel-while-queued
+throws without acquiring; a waiter cancelled during the handoff race throws at the
+pre-claim check and passes the lease *onward* rather than orphaning it). Slot-agnostic: it
+knows nothing of `ModelSlot`, engines, or models, so it constructs with `()` and is
+unit-tested directly as a value (`GPULeaseQueueTests`) — the **Operation Guard** pattern
+applied to GPU serialization. It logs queue depth (handoff, drain); slot/model logging
+stays on the arbiter.
+_Avoid_: arbiter (that composes this), GPU mutex/semaphore, scheduler (it has no policy
+beyond FIFO), the deferred/idle-signaling path (pruned — zero callers; revival is git
+history).
+
+**Inference Arbiter**:
+The model-affine facade (`InferenceArbiter`, `@Observable @MainActor`) that *composes* a
+**GPU Lease Queue** with model ownership: `withExclusiveGPU(slot, override) { body }` runs
+`lease.withExclusive { ensureLoaded(slot, override); body() }`, so the lease is held across
+both the load and the body and model identity can never change under a running consumer. It
+keeps the four engine dependencies, the `.llm`/`.tts` slot model, load/unload, the
+reload-on-mismatch decision (`loadedLLMState`: model ID + vision mode), the pending-unload
+drain, and `modelNotDownloaded` mapping. `reloadLLMIfNeeded` and the read-only model state
+stay here, on the concrete facade — their only consumers already hold it.
+_Avoid_: lease queue (that is the layer below), model manager (collides with
+`ModelDownloadManager`), GPU manager.
+
+**Inference Arbitrating**:
+The narrow seam (`InferenceArbitrating`, a single-member `@MainActor protocol`:
+`withExclusiveGPU(_:llmModelIDOverride:body:)`) that the lease-acquiring consumers —
+`AgentRunController`, `SpeechCoordinator`, `AgentCoordinator` — depend on, **non-optional**.
+Two adapters make it real (ADR-0001): the production **Inference Arbiter**, and the
+in-memory peer `InMemoryInferenceArbiter` in `tesseractTests`, which records lease calls,
+runs the body without loading a model, and can be configured to throw (the `ensureLoaded`
+failure analogue). Deliberately one member: a consumer that needs `reloadLLMIfNeeded` or
+read-only model state (`DependencyContainer`, `ServerInferenceService`,
+`CompletionHandler`, the models page) holds the concrete arbiter instead. Both adapters are
+`@MainActor final class`es, so the protocol is plainly `@MainActor` — no `nonisolated`
+escape hatch (contrast the actor-backed speech model ports).
+_Avoid_: arbiter protocol / arbitering, lease provider, widening it speculatively (add a
+member only when a peer-consuming caller needs it).
+
+> **Flagged ambiguity — "lease".** Unqualified, "lease" means the GPU lease above. The
+> HTTP server's "inference lease" (`CompletionHandler.leaseTimeoutSeconds`) *is* this lease,
+> reached through the concrete arbiter. It is **not** the prefix-cache **Snapshot Ref**
+> lifecycle (pinning/committing snapshot state is a different protocol in the cache world).
+> Qualify when in earshot of the cache: "GPU lease" vs "snapshot pin".
+
+> **Flagged ambiguity — queue vs arbiter vs seam.** "The queue" is the lease mechanism
+> (`GPULeaseQueue`), "the arbiter" is the model-affine facade (`InferenceArbiter`), "the
+> seam" / "the peer" belong to the consumer interface (`InferenceArbitrating` /
+> `InMemoryInferenceArbiter`). A sentence like "the arbiter hands off the lease" is wrong —
+> the *queue* hands off; the arbiter composes.
+
+**Example dialogue:**
+
+> **Dev:** Why doesn't the protocol carry `reloadLLMIfNeeded`?
+> **Expert:** Its only caller is `DependencyContainer`, which already holds the concrete
+> arbiter. A seam member nobody reaches through the seam is interface without a consumer —
+> the narrowest protocol that makes every consumer testable is one member.
+> **Dev:** Can a cancelled waiter wedge the queue during handoff?
+> **Expert:** It could in the pre-carve arbiter — the releasing holder kept `isLeased` true
+> on the next waiter's behalf, and if that waiter threw at its pre-claim cancellation check,
+> the lease was orphaned and all inference stalled. The queue releases onward in that catch;
+> `cancelDuringHandoffCannotInheritTheLease` locks it.
 
 ### Model loading
 

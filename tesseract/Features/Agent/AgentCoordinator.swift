@@ -50,7 +50,7 @@ final class AgentCoordinator {
     private let agent: Agent
     private let conversationStore: any AgentConversationStoring
     private let settings: SettingsManager?
-    private let arbiter: InferenceArbiter?
+    private let arbiter: any InferenceArbitrating
     private let speechCoordinator: SpeechCoordinator?
     private let extensionHost: ExtensionHost?
     private let contextManager: ContextManager?
@@ -69,7 +69,7 @@ final class AgentCoordinator {
         audioCapture: (any AudioCapturing)? = nil,
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
-        arbiter: InferenceArbiter? = nil,
+        arbiter: any InferenceArbitrating,
         formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))? = nil,
         speechCoordinator: SpeechCoordinator? = nil,
         toolRegistry: ToolRegistry? = nil,
@@ -182,8 +182,8 @@ final class AgentCoordinator {
             Log.agent.info("Vision mode toggle ignored — generation in progress")
             return
         }
-        guard let arbiter, let settings else {
-            Log.agent.warning("Vision mode toggle ignored — arbiter or settings unavailable")
+        guard let settings else {
+            Log.agent.warning("Vision mode toggle ignored — settings unavailable")
             return
         }
         guard settings.visionModeEnabled != enabled else { return }
