@@ -573,6 +573,13 @@ final class HTTPServer {
 
     // MARK: - Init
 
+    /// Clamps a user-entered port setting into the listener's valid range —
+    /// the single home of the rule, shared by server construction and the
+    /// live port-change rule in App Bindings.
+    static func clampedPort(_ port: Int) -> UInt16 {
+        UInt16(clamping: max(1, port))
+    }
+
     init(port: UInt16 = 8321) {
         self.port = port
     }
