@@ -377,12 +377,24 @@ nonisolated private func installTextOnlyProcessor(on container: ModelContainer) 
 ///
 /// Delegates to MLXLMCommon's `loadParoQuantModel` which handles AutoAWQ weight
 /// conversion, rotation layer patching, and pre-rotation caching.
+///
+/// `loadParoQuantModel` is generic over a concrete `LanguageModel` type, so the
+/// shared factory registries (`ModelTypeRegistry<LanguageModel>`, existential
+/// element) don't satisfy it. ParoQuant supports exactly one architecture
+/// (Qwen3.5), so a single-creator registry mirroring the factory entry is
+/// passed instead.
 nonisolated func loadParoQuantLLMContainer(
     from directory: URL, toolCallFormat: ToolCallFormat?
 ) async throws -> ModelContainer {
+    let typeRegistry = ModelTypeRegistry<MLXLLM.Qwen35Model>(creators: [
+        "qwen3_5": { data in
+            MLXLLM.Qwen35Model(
+                try JSONDecoder.json5().decode(MLXLLM.Qwen35Configuration.self, from: data))
+        }
+    ])
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
-        typeRegistry: LLMModelFactory.shared.typeRegistry,
+        typeRegistry: typeRegistry,
         tokenizerLoader: #huggingFaceTokenizerLoader(),
         toolCallFormat: toolCallFormat
     )
@@ -399,9 +411,15 @@ nonisolated func loadParoQuantLLMContainer(
 nonisolated func loadParoQuantVLMContainer(
     from directory: URL, toolCallFormat: ToolCallFormat?
 ) async throws -> ModelContainer {
+    let typeRegistry = ModelTypeRegistry<MLXVLM.Qwen35>(creators: [
+        "qwen3_5": { data in
+            MLXVLM.Qwen35(
+                try JSONDecoder.json5().decode(MLXVLM.Qwen35Configuration.self, from: data))
+        }
+    ])
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
-        typeRegistry: VLMModelFactory.shared.typeRegistry,
+        typeRegistry: typeRegistry,
         tokenizerLoader: #huggingFaceTokenizerLoader(),
         toolCallFormat: toolCallFormat
     )

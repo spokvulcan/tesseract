@@ -28,12 +28,12 @@ private final class LockedRecorder: Sendable {
 private actor StreamProbe {
     private var cancelCalls = 0
     private var waitCalls = 0
-    private var continuation: AsyncStream<Generation>.Continuation?
+    private var continuation: AsyncStream<RawGeneration>.Continuation?
 
     /// Build a handle; `initial` events are yielded up front and the stream is
     /// left open (it only finishes on `cancel`).
-    func makeHandle(initial: [Generation] = []) -> GenerationStreamLoop.RawGenerationHandle {
-        let (stream, continuation) = AsyncStream<Generation>.makeStream()
+    func makeHandle(initial: [RawGeneration] = []) -> GenerationStreamLoop.RawGenerationHandle {
+        let (stream, continuation) = AsyncStream<RawGeneration>.makeStream()
         self.continuation = continuation
         for event in initial { continuation.yield(event) }
         return GenerationStreamLoop.RawGenerationHandle(
@@ -70,11 +70,11 @@ private func waitUntil(
 /// Build a finished `RawGenerationHandle` from a fixed event list. `cancel` /
 /// `waitForCompletion` default to no-ops; pass a probe's closures to observe them.
 private func cannedHandle(
-    _ events: [Generation],
+    _ events: [RawGeneration],
     cancel: @escaping @Sendable () -> Void = {},
     waitForCompletion: @escaping @Sendable () async -> Void = {}
 ) -> GenerationStreamLoop.RawGenerationHandle {
-    let (stream, continuation) = AsyncStream<Generation>.makeStream()
+    let (stream, continuation) = AsyncStream<RawGeneration>.makeStream()
     for event in events { continuation.yield(event) }
     continuation.finish()
     return GenerationStreamLoop.RawGenerationHandle(
@@ -84,7 +84,7 @@ private func cannedHandle(
     )
 }
 
-private func toolCallGen(name: String, arguments: [String: any Sendable] = [:]) -> Generation {
+private func toolCallGen(name: String, arguments: [String: any Sendable] = [:]) -> RawGeneration {
     .toolCall(ToolCall(function: .init(name: name, arguments: arguments)))
 }
 
@@ -94,7 +94,7 @@ private func info(
     promptTime: TimeInterval = 0.1,
     generateTime: TimeInterval = 0.2,
     stopReason: GenerateStopReason = .stop
-) -> Generation {
+) -> RawGeneration {
     .info(GenerateCompletionInfo(
         promptTokenCount: prompt,
         generationTokenCount: generated,
@@ -138,7 +138,7 @@ private let interventionPrelude = "Reasoning about the user's constraints first.
 private let interventionRepeated = "Now I loop on the same thought forever.\n"
 
 /// Stream that trips `trippingSafeguard`: one legit line then the loop line ×3.
-private let trippingThinkingEvents: [Generation] = [
+private let trippingThinkingEvents: [RawGeneration] = [
     .chunk(interventionPrelude),
     .chunk(interventionRepeated),
     .chunk(interventionRepeated),
@@ -443,7 +443,7 @@ nonisolated struct GenerationStreamLoopTests {
     func handleFromServerRawStartMapsCancelWaitAndStreamOneToOne() async {
         let cancelCalls = OSAllocatedUnfairLock<Int>(initialState: 0)
         let waitCalls = OSAllocatedUnfairLock<Int>(initialState: 0)
-        let (stream, continuation) = AsyncStream<Generation>.makeStream()
+        let (stream, continuation) = AsyncStream<RawGeneration>.makeStream()
         continuation.yield(.chunk("hi"))
         continuation.finish()
         let start = HTTPServerRawGenerationStart(
@@ -460,8 +460,8 @@ nonisolated struct GenerationStreamLoopTests {
         #expect(waitCalls.withLock { $0 } == 1)
 
         var texts: [String] = []
-        for await item in handle.stream where item.chunk != nil {
-            texts.append(item.chunk!)
+        for await item in handle.stream {
+            if case .chunk(let text) = item { texts.append(text) }
         }
         #expect(texts == ["hi"])
     }
@@ -472,7 +472,7 @@ nonisolated struct GenerationStreamLoopTests {
         let completion = Task<Void, Never> {
             while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(5)) }
         }
-        let (stream, continuation) = AsyncStream<Generation>.makeStream()
+        let (stream, continuation) = AsyncStream<RawGeneration>.makeStream()
         continuation.finish()
 
         let handle = GenerationStreamLoop.RawGenerationHandle(

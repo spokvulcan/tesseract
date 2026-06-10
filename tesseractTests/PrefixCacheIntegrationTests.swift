@@ -256,24 +256,14 @@ struct PrefixCacheIntegrationTests {
     }
 
     // MARK: - 9. noDoublePrefill
-
-    /// TokenIterator.init() calls prepareWithCheckpoints() exactly once.
-    /// This test validates the contract: checkpoint offsets flow through GenerateParameters,
-    /// and capturedSnapshots is populated after init — no separate prepare() call needed.
-    @Test func noDoublePrefill() {
-        // Verify the GenerateParameters contract: checkpoints and checkpointBaseOffset
-        // are passed through, and default to empty/zero (no double-prefill path).
-        var params = GenerateParameters()
-        #expect(params.checkpoints.isEmpty)
-        #expect(params.checkpointBaseOffset == 0)
-
-        // Setting checkpoints doesn't trigger any separate prepare call — they're
-        // read by TokenIterator.init during its single prepare() invocation.
-        params.checkpoints = [100: .system, 200: .system]
-        params.checkpointBaseOffset = 50
-        #expect(params.checkpoints.count == 2)
-        #expect(params.checkpointBaseOffset == 50)
-    }
+    //
+    // The fork-era test here asserted that checkpoint offsets flowed through
+    // `GenerateParameters` into `TokenIterator.init`'s single prepare() call.
+    // Post-migration (ADR-0006) checkpoints never touch `GenerateParameters`:
+    // the completion flow drives `PrefillExecutor.run` exactly once and hands
+    // the warmed cache plus the prompt remainder to `TokenIterator`, so a
+    // second prefill is structurally impossible. Checkpoint capture itself is
+    // covered by `CheckpointCaptureTests`.
 
     // MARK: - 10. partitionKeyIsolatesDifferentKvBits
 

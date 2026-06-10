@@ -39,7 +39,7 @@ struct AgentEngineManagedGenerationTests {
     @Test
     func managedGenerationForwardsTextThenReyieldsTerminalInfoAndFinishes() async throws {
         let engine = AgentEngine()
-        let (rawStream, rawContinuation) = AsyncStream<Generation>.makeStream()
+        let (rawStream, rawContinuation) = AsyncStream<RawGeneration>.makeStream()
         rawContinuation.yield(.chunk("hello"))
         rawContinuation.yield(.info(GenerateCompletionInfo(
             promptTokenCount: 4,
@@ -76,11 +76,11 @@ private actor RawGenerationProbe {
     private var waitAllowed = false
     private var cancelCalls = 0
     private var waitContinuation: CheckedContinuation<Void, Never>?
-    private var streamContinuation: AsyncStream<Generation>.Continuation?
+    private var streamContinuation: AsyncStream<RawGeneration>.Continuation?
 
     func makeStart() -> HTTPServerRawGenerationStart {
         started = true
-        let (stream, continuation) = AsyncStream<Generation>.makeStream()
+        let (stream, continuation) = AsyncStream<RawGeneration>.makeStream()
         streamContinuation = continuation
         return HTTPServerRawGenerationStart(
             stream: stream,

@@ -13,7 +13,7 @@ import Foundation
 ///   paraphrase-dense loops that don't line up on newlines.
 ///
 /// Detection is intentionally string-level: we only have the decoded text chunks
-/// on the streaming path (`MLXLMCommon.generateTask` yields strings, not token
+/// on the streaming path (`TokenGenerationLoop` yields strings, not token
 /// IDs). Pushing detection into the logit pipeline would require re-deriving
 /// state from token IDs every step; the string path is orders of magnitude
 /// cheaper and sufficient for the observed failure mode.

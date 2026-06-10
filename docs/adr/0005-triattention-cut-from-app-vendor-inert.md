@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by 0006 (vendor-inert clause; TriAttention is deleted with the fork pin)
 ---
 
 # TriAttention is cut from the app for MVP; the vendor fork's implementation is left inert

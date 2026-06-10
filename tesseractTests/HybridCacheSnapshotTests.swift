@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXLMCommon
 import Testing
+@testable import Tesseract_Agent
 
 struct HybridCacheSnapshotTests {
 
@@ -643,14 +644,13 @@ struct HybridCacheSnapshotTests {
         let projectRoot = testFile
             .deletingLastPathComponent()   // tesseractTests
             .deletingLastPathComponent()   // project root
-        let vendorFile = projectRoot
-            .appendingPathComponent("Vendor")
-            .appendingPathComponent("mlx-swift-lm")
-            .appendingPathComponent("Libraries")
-            .appendingPathComponent("MLXLMCommon")
+        let snapshotFile = projectRoot
+            .appendingPathComponent("tesseract")
+            .appendingPathComponent("Features")
+            .appendingPathComponent("Server")
             .appendingPathComponent("HybridCacheSnapshot.swift")
 
-        let source = try String(contentsOf: vendorFile, encoding: .utf8)
+        let source = try String(contentsOf: snapshotFile, encoding: .utf8)
 
         let phrase = "must be called from inside `container.perform`"
         let occurrences = source.components(separatedBy: phrase).count - 1
@@ -659,7 +659,7 @@ struct HybridCacheSnapshotTests {
             """
             Thread-affinity contract phrase must appear in the doc comments \
             for both serialize and deserialize — found \(occurrences) \
-            occurrence(s) at \(vendorFile.path).
+            occurrence(s) at \(snapshotFile.path).
             """
         )
     }

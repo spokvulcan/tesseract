@@ -236,9 +236,29 @@ actor LLMActor {
                 prefillMs: nil
             )))
             let prefillStarted = Date.timeIntervalSinceReferenceDate
+            // VLM-class models (2D token tensors) run upstream `prepare` as a
+            // single forward pass over the whole prompt; chunk text-only
+            // prompts through the app's prefill driver to keep peak memory
+            // bounded (ADR-0006). Image-bearing inputs stay single-shot.
+            var iteratorInput = prepared
+            var iteratorCache: [any KVCache]? = nil
+            if prepared.text.tokens.ndim >= 2,
+               prepared.image == nil, prepared.video == nil,
+               prepared.text.tokens.dim(-1) > genParams.prefillStepSize {
+                let cache = context.model.newCache(parameters: genParams)
+                let warmed = try PrefillExecutor.run(
+                    model: context.model,
+                    text: prepared.text,
+                    cache: cache,
+                    prefillStepSize: genParams.prefillStepSize
+                )
+                iteratorInput = LMInput(text: warmed.remainder)
+                iteratorCache = cache
+            }
             let iterator = try TokenIterator(
-                input: prepared,
+                input: iteratorInput,
                 model: context.model,
+                cache: iteratorCache,
                 parameters: genParams
             )
             let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
@@ -248,7 +268,7 @@ actor LLMActor {
                 newTokensToPrefill: promptTokenCount,
                 prefillMs: prefillMs
             )))
-            let (stream, completion) = MLXLMCommon.generateTask(
+            let (stream, completion) = TokenGenerationLoop.start(
                 promptTokenCount: promptTokenCount,
                 modelConfiguration: context.configuration,
                 tokenizer: context.tokenizer,
@@ -362,14 +382,32 @@ actor LLMActor {
         let tokenArr: MLXArray = tokenNDim >= 2
             ? flatArr.expandedDimensions(axis: 0)
             : flatArr
-        let continued = LMInput(text: LMInput.Text(tokens: tokenArr, mask: nil))
+        var continuedText = LMInput.Text(tokens: tokenArr, mask: nil)
+
+        // Same VLM-class chunking as `startRawGeneration`: upstream's 2D
+        // `prepare` is single-shot, so pre-chunk long token-only prompts
+        // through the app driver (ADR-0006).
+        var iteratorCache: [any KVCache]? = nil
+        if tokenNDim >= 2, combined.count > parameters.prefillStepSize {
+            let cache = context.model.newCache(parameters: parameters)
+            let warmed = try PrefillExecutor.run(
+                model: context.model,
+                text: continuedText,
+                cache: cache,
+                prefillStepSize: parameters.prefillStepSize
+            )
+            continuedText = warmed.remainder
+            iteratorCache = cache
+        }
+        let continued = LMInput(text: continuedText)
 
         let iterator = try TokenIterator(
             input: continued,
             model: context.model,
+            cache: iteratorCache,
             parameters: parameters
         )
-        let (stream, completion) = MLXLMCommon.generateTask(
+        let (stream, completion) = TokenGenerationLoop.start(
             promptTokenCount: combined.count,
             modelConfiguration: context.configuration,
             tokenizer: context.tokenizer,
