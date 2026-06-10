@@ -1,6 +1,15 @@
 {
-  "originHash" : "4b7f619860ac44d664143c480be6e3ff8b07b2b9e3ea642d65d4d0d102376e67",
+  "originHash" : "02182d496079190a86658f2b8dd8b5224a5e971895b94196cef97d62f25a4160",
   "pins" : [
+    {
+      "identity" : "argmax-oss-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/argmaxinc/argmax-oss-swift",
+      "state" : {
+        "revision" : "25c62997041c134b03ca82731ce2f6fd2cae1eb9",
+        "version" : "1.0.0"
+      }
+    },
     {
       "identity" : "demark",
       "kind" : "remoteSourceControl",
@@ -33,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-argument-parser.git",
       "state" : {
-        "revision" : "c5d11a805e765f52ba34ec7284bd4fcd6ba68615",
-        "version" : "1.7.0"
+        "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+        "version" : "1.8.2"
       }
     },
     {
@@ -179,15 +188,6 @@
       "state" : {
         "revision" : "5b06b811c0f5313b6b84bbef98c635a630638c38",
         "version" : "0.3.1"
-      }
-    },
-    {
-      "identity" : "whisperkit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/bohdanivanchenko/WhisperKit",
-      "state" : {
-        "branch" : "bump-swift-transformers-1.2",
-        "revision" : "590a797168c6988b6efc5a7d4ed20359c16f1300"
       }
     },
     {

@@ -228,7 +228,7 @@
 			mainGroup = E0C654872F2E946A003C1B55;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */,
+				E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */,
 				E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */,
 				E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */,
 				E0B999882F59F4DA00F80663 /* XCRemoteSwiftPackageReference "textual" */,
@@ -716,12 +716,12 @@
 				minimumVersion = 0.3.1;
 			};
 		};
-		E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+		E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/bohdanivanchenko/WhisperKit";
+			repositoryURL = "https://github.com/argmaxinc/argmax-oss-swift";
 			requirement = {
-				branch = "bump-swift-transformers-1.2";
-				kind = branch;
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -764,7 +764,7 @@
 		};
 		E0C655412F2EA000003C1B55 /* WhisperKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "WhisperKit" */;
+			package = E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
 			productName = WhisperKit;
 		};
 		E0C655512F3BA000003C1B55 /* MLXAudio */ = {
