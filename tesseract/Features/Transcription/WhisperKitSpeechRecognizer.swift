@@ -71,11 +71,15 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
 
         let processingTime = Date().timeIntervalSince(startTime)
 
-        guard let firstResult = results.first else {
+        // With `.vad` chunking, recordings longer than one 30s window come back
+        // as one result per chunk (in order, segment timings already rebased to
+        // the full recording) — merge them all, or everything after the first
+        // chunk is silently dropped.
+        guard !results.isEmpty else {
             throw DictationError.noSpeechDetected
         }
 
-        let segments = firstResult.segments.map { segment in
+        let segments = results.flatMap(\.segments).map { segment in
             TranscriptionSegment(
                 text: segment.text,
                 startTime: TimeInterval(segment.start),
@@ -83,10 +87,15 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
             )
         }
 
+        let text = results
+            .map { $0.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
         return TranscriptionResult(
-            text: firstResult.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
+            text: text,
             segments: segments,
-            language: firstResult.language,
+            language: results[0].language,
             processingTime: processingTime
         )
     }
