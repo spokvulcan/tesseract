@@ -199,12 +199,18 @@ final class PrefixCacheManager {
 
         /// Restore the cached KV/Mamba state. Each call produces an independent deep copy.
         /// Nonisolated because it operates only on the snapshot's deep-copy data.
+        /// A snapshot whose persisted layers fail restoration degrades to a
+        /// miss (`nil`) — corrupt warm-start data must never crash a request.
         nonisolated func restoreCache() -> [any KVCache]? {
-            guard let snapshot, let key = partitionKey else { return nil }
-            return snapshot.restore(
-                kvBitsHint: key.kvBits,
-                kvGroupSizeHint: key.kvGroupSize
-            )
+            guard let snapshot, partitionKey != nil else { return nil }
+            do {
+                return try snapshot.restore()
+            } catch {
+                Log.server.error(
+                    "snapshot restore failed — treating as cache miss: \(error)"
+                )
+                return nil
+            }
         }
     }
 

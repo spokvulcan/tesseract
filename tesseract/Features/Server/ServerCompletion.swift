@@ -20,14 +20,20 @@ nonisolated final class UnsafeSendableBox<T>: @unchecked Sendable {
 
 /// Output of `ServerCompletion.makeHTTPPrefixCacheGeneration`. Bundles the
 /// lower-level MLX generation handles together so the module can drive the
-/// stream and recover the final KV cache after generation completes.
+/// stream and capture the final KV cache after generation completes.
 ///
 /// The **Server Completion** module's private cross-step value — it never
 /// crosses the module's interface (ADR-0006).
 private nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
-    let stream: AsyncStream<Generation>
+    let stream: AsyncStream<RawGeneration>
     let completion: Task<Void, Never>
-    let finalCacheHandle: FinalizedKVCacheHandle
+    /// The app-owned KV cache array the generation runs on. The module
+    /// quantizes it *before* building the `TokenIterator` (so the iterator's
+    /// decode-time quantization pass cannot swap elements behind our back),
+    /// which makes this array the live final cache once `completion`
+    /// finishes — the post-generation leaf capture reads it directly.
+    /// Replaces the fork's `FinalizedKVCacheHandle` (ADR-0006).
+    let finalCache: [any KVCache]
     let diagnosticsContext: PrefixCacheDiagnostics.Context
     let lookupMs: TimeInterval
     let restoreMs: TimeInterval
@@ -751,18 +757,14 @@ nonisolated final class ServerCompletion {
                     }
                 }
 
-                guard !Task.isCancelled,
-                      let finalCache = await mlxStart.finalCacheHandle.takeFinalCache()
-                else {
-                    if !Task.isCancelled {
-                        diagnosticsContext.logSkip(
-                            stage: "store",
-                            reason: "no-final-cache",
-                            level: .warning
-                        )
-                    }
+                // The module owns the cache array the generation ran on; the
+                // loop's completion task has been awaited by `loop.run`, so
+                // the array is no longer being mutated (ADR-0006 — this read
+                // replaced the fork's FinalizedKVCacheHandle hand-off).
+                guard !Task.isCancelled else {
                     break leafBlock
                 }
+                let finalCache = mlxStart.finalCache
 
                 let cacheOffsets = httpPrefixCacheOffsets(finalCache)
                 guard httpPrefixCacheHasReusableState(finalCache) else {
@@ -952,8 +954,9 @@ nonisolated final class ServerCompletion {
     ///
     /// Flow: tokenize full conversation → extract flat token sequence → detect stable
     /// prefix boundary → radix tree lookup → plan checkpoints → slice suffix on hit →
-    /// set checkpoint params → create TokenIterator (captures snapshots during prefill)
-    /// → start generation stream.
+    /// app-driven chunked prefill (captures snapshots at the planned offsets) →
+    /// quantize the module-owned cache → TokenIterator on the final token →
+    /// start the app-owned generation stream (ADR-0006).
     ///
     /// Bypasses `ChatSession` because its `init(cache:)` path renders only the new
     /// message and drops intermediate history, which produces incoherent output when
@@ -1128,32 +1131,70 @@ nonisolated final class ServerCompletion {
                 plannedCheckpoints: prefillPlan.checkpointsToCapture
             ))
 
-            // 8. Set checkpoint offsets on parameters — flows into TokenIterator → prepare().
-            // Planner guarantees offset uniqueness, so uniqueKeysWithValues traps loudly
-            // on a planner-side invariant break instead of silently dropping a candidate.
-            var genParams = parameters
-            genParams.checkpoints = Dictionary(
+            // 8. Fold the plan's checkpoints plus the transient boundary
+            // helpers (captured as leaves; a planned checkpoint at the same
+            // offset wins) into one capture map for the prefill driver.
+            // Planner guarantees offset uniqueness, so uniqueKeysWithValues
+            // traps loudly on a planner-side invariant break instead of
+            // silently dropping a candidate.
+            let genParams = parameters
+            let plannedCheckpoints = Dictionary(
                 uniqueKeysWithValues: prefillPlan.checkpointsToCapture.map { ($0.offset, $0.type) }
             )
-            genParams.transientCheckpointOffsets = prefillPlan.transientCheckpointOffsets
-            genParams.checkpointBaseOffset = prefillPlan.prefillBaseOffset
+            let transientOffsets = prefillPlan.transientCheckpointOffsets
+            let helperCheckpoints = Dictionary(
+                uniqueKeysWithValues: transientOffsets.map {
+                    ($0, HybridCacheSnapshot.CheckpointType.leaf)
+                }
+            )
+            let allCheckpoints = plannedCheckpoints.merging(helperCheckpoints) { stored, _ in stored }
 
-            // 9. Create TokenIterator — this calls model.prepare() internally with checkpoints.
-            // NO separate prepare() call. TokenIterator owns prefill.
+            // 9. App-owned prefill (ADR-0006): drive chunked forward passes
+            // over the suffix, capturing snapshots at the checkpoint offsets,
+            // quantize the module-owned cache once, then hand it to a
+            // TokenIterator holding only the final prompt token. Quantizing
+            // *before* the iterator (with `kvBits` stripped from its
+            // parameters) guarantees the iterator never swaps cache elements
+            // during decode, so the array this module retains stays the live
+            // final cache for the post-generation leaf capture.
             await progressHandler?(.prefillStarted(.init(
                 promptTokens: fullTokenCount,
                 cachedTokens: skippedTokens,
                 newTokensToPrefill: newTokensToPrefill,
                 prefillMs: nil
             )))
-            let (iterator, prefillMs) = try measure {
-                try TokenIterator(
-                    input: inputForGeneration,
+            var liveCache = cacheToUse ?? context.model.newCache(parameters: genParams)
+            let (prefillResult, prefillMs) = try measure {
+                let warmed = try PrefillExecutor.run(
                     model: context.model,
-                    cache: cacheToUse,
-                    parameters: genParams
+                    text: inputForGeneration.text,
+                    cache: liveCache,
+                    checkpoints: allCheckpoints,
+                    checkpointBaseOffset: prefillPlan.prefillBaseOffset,
+                    prefillStepSize: genParams.prefillStepSize
                 )
+                maybeQuantizeKVCache(
+                    cache: &liveCache,
+                    kvBits: genParams.kvBits,
+                    kvGroupSize: genParams.kvGroupSize,
+                    quantizedKVStart: genParams.quantizedKVStart
+                )
+                var iteratorParams = genParams
+                iteratorParams.kvBits = nil
+                // `makeIterator` seeds any configured penalty processors with
+                // the full suffix — the iterator's own input is only the
+                // final prompt token, which would otherwise be the entire
+                // repetition/presence/frequency context.
+                let iterator = try PrefillExecutor.makeIterator(
+                    model: context.model,
+                    fullText: inputForGeneration.text,
+                    remainder: warmed.remainder,
+                    cache: &liveCache,
+                    parameters: iteratorParams
+                )
+                return (iterator: iterator, snapshots: warmed.snapshots)
             }
+            let iterator = prefillResult.iterator
             await progressHandler?(.prefillFinished(.init(
                 promptTokens: fullTokenCount,
                 cachedTokens: skippedTokens,
@@ -1161,17 +1202,25 @@ nonisolated final class ServerCompletion {
                 prefillMs: prefillMs * 1000
             )))
 
-            // 10. Read captured snapshots (populated by prepare() inside TokenIterator.init),
-            // then extract their payloads inside this `container.perform` so
-            // `MLXArray.asData()` runs on the Metal-affine thread before the
-            // later MainActor store hop.
-            let capturedSnapshots = iterator.capturedSnapshots
+            // 10. Split the driver's snapshots into stored checkpoints vs the
+            // request-local transient boundary helpers, then extract payloads
+            // inside this `container.perform` so `MLXArray.asData()` runs on
+            // the Metal-affine thread before the later MainActor store hop.
+            var capturedSnapshots: [HybridCacheSnapshot] = []
+            var transientSnapshots: [Int: HybridCacheSnapshot] = [:]
+            for snapshot in prefillResult.snapshots {
+                if transientOffsets.contains(snapshot.tokenOffset) {
+                    transientSnapshots[snapshot.tokenOffset] = snapshot
+                } else {
+                    capturedSnapshots.append(snapshot)
+                }
+            }
             let transientLastMessageBoundarySnapshot = prefillPlan.transientBoundaries.lastMessage.flatMap { offset in
-                iterator.transientSnapshots[offset]
+                transientSnapshots[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
             let transientLastUserBoundarySnapshot = prefillPlan.transientBoundaries.lastUser.flatMap { offset in
-                iterator.transientSnapshots[offset]
+                transientSnapshots[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
             let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
@@ -1194,8 +1243,8 @@ nonisolated final class ServerCompletion {
                 ))
             }
 
-            // 11. Start generation stream.
-            let (stream, task, finalCacheHandle) = MLXLMCommon.generateTaskWithFinalCache(
+            // 11. Start the app-owned generation stream.
+            let (stream, task) = TokenGenerationLoop.start(
                 promptTokenCount: fullTokenCount,
                 modelConfiguration: context.configuration,
                 tokenizer: context.tokenizer,
@@ -1206,7 +1255,7 @@ nonisolated final class ServerCompletion {
             return HTTPPrefixCacheGeneration(
                 stream: stream,
                 completion: task,
-                finalCacheHandle: finalCacheHandle,
+                finalCache: liveCache,
                 diagnosticsContext: diagnosticsContext,
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
@@ -1650,10 +1699,7 @@ nonisolated final class ServerCompletion {
 
         do {
             return try await container.perform { context in
-                let restoredCache = boundarySnapshot.restore(
-                    kvBitsHint: partitionKey.kvBits,
-                    kvGroupSizeHint: partitionKey.kvGroupSize
-                )
+                let restoredCache = try boundarySnapshot.restore()
 
                 let residual = Array(storedTokens[boundaryOffset...])
                 let prefillStart = Date.timeIntervalSinceReferenceDate
@@ -1668,22 +1714,14 @@ nonisolated final class ServerCompletion {
                 let inputArr = tokenNDim >= 2
                     ? flatInput.expandedDimensions(axis: 0)
                     : flatInput
-                let lmInput = LMInput(text: .init(tokens: inputArr, mask: nil))
-                let (prepareResult, _) = try context.model.prepareWithCheckpoints(
-                    lmInput,
+                _ = try PrefillExecutor.run(
+                    model: context.model,
+                    text: .init(tokens: inputArr, mask: nil),
                     cache: restoredCache,
-                    windowSize: prefillStepSize,
-                    checkpoints: [:],
-                    checkpointBaseOffset: boundaryOffset
+                    checkpointBaseOffset: boundaryOffset,
+                    prefillStepSize: prefillStepSize,
+                    consumeAll: true
                 )
-                if case .tokens(let leftover) = prepareResult, leftover.tokens.size > 0 {
-                    let batched = LMInput.Text(
-                        tokens: leftover.tokens.expandedDimensions(axis: 0),
-                        mask: leftover.mask
-                    )
-                    _ = context.model(batched, cache: restoredCache, state: nil)
-                    eval(restoredCache)
-                }
                 let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStart
 
                 guard let leaf = HybridCacheSnapshot.capture(

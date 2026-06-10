@@ -2,7 +2,7 @@ import Foundation
 import MLXLMCommon
 import os
 
-/// The streaming-generation spine: turns one raw model `AsyncStream<Generation>`
+/// The streaming-generation spine: turns one raw model `AsyncStream<RawGeneration>`
 /// into the agent's `AgentGeneration` event stream under the thinking-loop
 /// safeguard. Owns the loop, the four-case switch, the `ToolCallParser` lifecycle,
 /// the `ThinkingSafeguardObserver` intervention triple, the continuation swap, and
@@ -17,12 +17,12 @@ nonisolated struct GenerationStreamLoop {
     /// The normalized minimal handle the loop consumes. Callers adapt their richer
     /// handles down to this at the edge; the rich prefill metadata never crosses.
     nonisolated struct RawGenerationHandle: Sendable {
-        let stream: AsyncStream<Generation>
+        let stream: AsyncStream<RawGeneration>
         let cancel: @Sendable () -> Void
         let waitForCompletion: @Sendable () async -> Void
 
         init(
-            stream: AsyncStream<Generation>,
+            stream: AsyncStream<RawGeneration>,
             cancel: @escaping @Sendable () -> Void,
             waitForCompletion: @escaping @Sendable () async -> Void
         ) {
@@ -129,10 +129,11 @@ nonisolated struct GenerationStreamLoop {
         let safeguard = ThinkingSafeguardObserver(config: safeguardConfig)
         var rawChunkParts: [String] = []
         var libraryParsedToolCalls = false
-        // Vendor's ToolCallProcessor silently drops its in-flight buffer at EOS if
-        // it can't decode it. Accumulate every `.toolCallBufferDelta` so we can
-        // surface the lost content as `.malformedToolCall`; a successful `.toolCall`
-        // consumed the buffer and resets it.
+        // The ToolCallProcessor drops its in-flight buffer at EOS if it can't
+        // decode it (the producer suppresses the residual for tagged blocks).
+        // Accumulate every `.toolCallBufferDelta` so we can surface the lost
+        // content as `.malformedToolCall`; a successful `.toolCall` consumed
+        // the buffer and resets it.
         var libraryToolCallBufferAccum = ""
         var libraryToolCallEventCount = 0
         var completionInfo: AgentGeneration.Info?
@@ -362,16 +363,16 @@ nonisolated struct GenerationStreamLoop {
             }
         }
 
-        // Surface the vendor's dropped in-flight buffer: when the model emitted
-        // `<tool_call>…` then hit EOS before the close tag, no `.toolCall` ever
-        // fired and the client would otherwise see `finish_reason=stop` with no
-        // signal that a tool call was attempted.
+        // Surface the processor's dropped in-flight buffer: when the model
+        // emitted `<tool_call>…` then hit EOS before the close tag, no
+        // `.toolCall` ever fired and the client would otherwise see
+        // `finish_reason=stop` with no signal that a tool call was attempted.
         let droppedBuffer = libraryToolCallBufferAccum
         libraryToolCallBufferAccum = ""
         if libraryParsedToolCalls, libraryToolCallEventCount == 0, !droppedBuffer.isEmpty {
             let wrappedBuffer = Self.wrapMalformedToolCallBuffer(droppedBuffer)
             Log.agent.warning(
-                "Vendor ToolCallProcessor dropped unparseable buffer at EOS — "
+                "ToolCallProcessor dropped unparseable buffer at EOS — "
                 + "bufferLen=\(droppedBuffer.count) wrappedLen=\(wrappedBuffer.count) "
                 + "head=\(String(wrappedBuffer.prefix(120)).debugDescription) "
                 + "tail=\(String(wrappedBuffer.suffix(80)).debugDescription)"
@@ -407,9 +408,9 @@ nonisolated struct GenerationStreamLoop {
 // MARK: - Handle normalization at the caller edge
 
 extension GenerationStreamLoop.RawGenerationHandle {
-    /// Collapse a vendor-style `{ stream, completion }` pair: `cancel` and
-    /// `waitForCompletion` drive the underlying generation `Task`.
-    nonisolated init(stream: AsyncStream<Generation>, completion: Task<Void, Never>) {
+    /// Collapse a `{ stream, completion }` pair from ``TokenGenerationLoop``:
+    /// `cancel` and `waitForCompletion` drive the underlying generation `Task`.
+    nonisolated init(stream: AsyncStream<RawGeneration>, completion: Task<Void, Never>) {
         self.init(
             stream: stream,
             cancel: { completion.cancel() },

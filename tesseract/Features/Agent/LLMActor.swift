@@ -236,11 +236,36 @@ actor LLMActor {
                 prefillMs: nil
             )))
             let prefillStarted = Date.timeIntervalSinceReferenceDate
-            let iterator = try TokenIterator(
-                input: prepared,
-                model: context.model,
-                parameters: genParams
-            )
+            // VLM-class models (2D token tensors) run upstream `prepare` as a
+            // single forward pass over the whole prompt; chunk text-only
+            // prompts through the app's prefill driver to keep peak memory
+            // bounded (ADR-0006). Image-bearing inputs stay single-shot.
+            let iterator: TokenIterator
+            if prepared.text.tokens.ndim >= 2,
+               prepared.image == nil, prepared.video == nil,
+               prepared.text.tokens.dim(-1) > genParams.prefillStepSize {
+                var cache = context.model.newCache(parameters: genParams)
+                let warmed = try PrefillExecutor.run(
+                    model: context.model,
+                    text: prepared.text,
+                    cache: cache,
+                    prefillStepSize: genParams.prefillStepSize
+                )
+                iterator = try PrefillExecutor.makeIterator(
+                    model: context.model,
+                    fullText: prepared.text,
+                    remainder: warmed.remainder,
+                    cache: &cache,
+                    parameters: genParams
+                )
+            } else {
+                iterator = try TokenIterator(
+                    input: prepared,
+                    model: context.model,
+                    cache: nil,
+                    parameters: genParams
+                )
+            }
             let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
             await progressHandler?(.prefillFinished(.init(
                 promptTokens: promptTokenCount,
@@ -248,7 +273,7 @@ actor LLMActor {
                 newTokensToPrefill: promptTokenCount,
                 prefillMs: prefillMs
             )))
-            let (stream, completion) = MLXLMCommon.generateTask(
+            let (stream, completion) = TokenGenerationLoop.start(
                 promptTokenCount: promptTokenCount,
                 modelConfiguration: context.configuration,
                 tokenizer: context.tokenizer,
@@ -362,14 +387,36 @@ actor LLMActor {
         let tokenArr: MLXArray = tokenNDim >= 2
             ? flatArr.expandedDimensions(axis: 0)
             : flatArr
-        let continued = LMInput(text: LMInput.Text(tokens: tokenArr, mask: nil))
+        let continuedText = LMInput.Text(tokens: tokenArr, mask: nil)
 
-        let iterator = try TokenIterator(
-            input: continued,
-            model: context.model,
-            parameters: parameters
-        )
-        let (stream, completion) = MLXLMCommon.generateTask(
+        // Same VLM-class chunking as `startRawGeneration`: upstream's 2D
+        // `prepare` is single-shot, so pre-chunk long token-only prompts
+        // through the app driver (ADR-0006).
+        let iterator: TokenIterator
+        if tokenNDim >= 2, combined.count > parameters.prefillStepSize {
+            var cache = context.model.newCache(parameters: parameters)
+            let warmed = try PrefillExecutor.run(
+                model: context.model,
+                text: continuedText,
+                cache: cache,
+                prefillStepSize: parameters.prefillStepSize
+            )
+            iterator = try PrefillExecutor.makeIterator(
+                model: context.model,
+                fullText: continuedText,
+                remainder: warmed.remainder,
+                cache: &cache,
+                parameters: parameters
+            )
+        } else {
+            iterator = try TokenIterator(
+                input: LMInput(text: continuedText),
+                model: context.model,
+                cache: nil,
+                parameters: parameters
+            )
+        }
+        let (stream, completion) = TokenGenerationLoop.start(
             promptTokenCount: combined.count,
             modelConfiguration: context.configuration,
             tokenizer: context.tokenizer,

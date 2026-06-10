@@ -67,12 +67,12 @@ nonisolated struct HTTPServerGenerationStart: Sendable {
 }
 
 nonisolated struct HTTPServerRawGenerationStart: Sendable {
-    let stream: AsyncStream<Generation>
+    let stream: AsyncStream<RawGeneration>
     let cancel: @Sendable () -> Void
     let waitForCompletion: @Sendable () async -> Void
 
     init(
-        stream: AsyncStream<Generation>,
+        stream: AsyncStream<RawGeneration>,
         cancel: @escaping @Sendable () -> Void = {},
         waitForCompletion: @escaping @Sendable () async -> Void = {}
     ) {

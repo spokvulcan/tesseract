@@ -4,9 +4,9 @@ import MLXLMCommon
 import os
 
 /// Loaded-model logit-equivalence harness for the hybrid prefix cache.
-/// Drives raw `model.prepareWithCheckpoints` against a manual cache to
-/// verify mid-prefill capture/restore round-trips bit-for-bit. Run via
-/// `--hybrid-cache-correctness` on the Tesseract CLI.
+/// Drives the production `PrefillExecutor` chunked-prefill path against a
+/// manual cache to verify mid-prefill capture/restore round-trips
+/// bit-for-bit. Run via `--hybrid-cache-correctness` on the Tesseract CLI.
 @MainActor
 final class HybridCacheCorrectnessRunner {
 
@@ -222,7 +222,7 @@ final class HybridCacheCorrectnessRunner {
         let logitsLive = lastTokenLogits(context: context, tokens: tokens, cache: liveCache)
 
         // Restore a fresh copy at offset N and forward the same sentinel.
-        let restoredCache = snap.restore()
+        let restoredCache = try snap.restore()
         let logitsRestored = lastTokenLogits(
             context: context, tokens: tokens, cache: restoredCache
         )
@@ -252,7 +252,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             return (false, "capture nil", [])
         }
-        let restored = snap.restore()
+        let restored = try snap.restore()
 
         let divergentSuffix = Array(tokens.suffix(n - k).reversed())
         try prefill(
@@ -295,7 +295,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             return (false, "capture nil", [])
         }
-        let cacheB = snap.restore()
+        let cacheB = try snap.restore()
 
         let result = compareCacheStates(
             cacheA: cacheA, cacheB: cacheB, filter: filter, checkOffset: checkOffset
@@ -328,7 +328,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             return (false, "capture nil", [])
         }
-        let cacheB = snap.restore(kvBitsHint: 8, kvGroupSizeHint: 64)
+        let cacheB = try snap.restore()
 
         var maxDiff: Float = 0
         var allMetaMatch = true
@@ -371,8 +371,8 @@ final class HybridCacheCorrectnessRunner {
             return (false, "capture nil", [])
         }
 
-        let cache1 = snap.restore()
-        let cache2 = snap.restore()
+        let cache1 = try snap.restore()
+        let cache2 = try snap.restore()
         let suffix = Array(tokens.suffix(tokens.count - k))
 
         try prefill(
@@ -433,7 +433,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             return (false, "leaf capture nil", [])
         }
-        let restoredCache = leafSnap.restore()
+        let restoredCache = try leafSnap.restore()
         let restoredLogits = lastTokenLogits(
             context: context, tokens: tokens, cache: restoredCache
         )
@@ -467,7 +467,7 @@ final class HybridCacheCorrectnessRunner {
             return (false, "capture nil at K=\(k)", [])
         }
 
-        let restoredCache = snap.restore()
+        let restoredCache = try snap.restore()
         let suffix = Array(tokens[k..<(tokens.count - 1)])
         let snapshots = try prefill(
             context: context,
@@ -551,7 +551,7 @@ final class HybridCacheCorrectnessRunner {
             ) else {
                 return (false, "trimmed leaf capture nil at trim=\(trimAmount)", lines)
             }
-            let restoredCache = leafSnap.restore()
+            let restoredCache = try leafSnap.restore()
             let restoredLogits = lastTokenLogits(
                 context: context, tokens: coldTokens, cache: restoredCache
             )
@@ -585,12 +585,11 @@ final class HybridCacheCorrectnessRunner {
 
     // MARK: - Helpers — model invocation
 
-    /// Drive `model.prepareWithCheckpoints` over `tokens`. The production
-    /// prefill code path — using it here means the harness exercises the
-    /// same loop the prefix cache uses on the hot path, instead of an
-    /// independent reimplementation that could drift. Drains the leftover
-    /// remainder that `prepareWithCheckpoints` returns via `.tokens(...)`
-    /// so the cache lands at offset `checkpointBaseOffset + tokens.count`.
+    /// Drive `PrefillExecutor.run` over `tokens`. The production prefill
+    /// code path — using it here means the harness exercises the same loop
+    /// the prefix cache uses on the hot path, instead of an independent
+    /// reimplementation that could drift. `consumeAll` brings the cache to
+    /// offset `checkpointBaseOffset + tokens.count`.
     @discardableResult
     nonisolated private static func prefill(
         context: ModelContext,
@@ -601,34 +600,22 @@ final class HybridCacheCorrectnessRunner {
         cache: [any KVCache]
     ) throws -> [HybridCacheSnapshot] {
         guard !tokens.isEmpty else { return [] }
-        // 1D input: `LLMModel.prepare` chunks via `y[.newAxis, ..<step]` and
-        // expects to add the batch dim itself. Passing a pre-batched 2D input
-        // would land at a 3D chunk and silently produce wrong logits.
+        // 1D input: `PrefillExecutor` adds the batch dim per chunk itself.
+        // Passing a pre-batched 2D input would route through the VLM-shaped
+        // slicing and silently produce wrong logits for an LLM.
         let inputArr = MLXArray(tokens.map { Int32($0) })
-        let lmInput = LMInput(text: .init(tokens: inputArr, mask: nil))
-        var effectiveParameters = generateParameters
-        effectiveParameters.checkpointBaseOffset = checkpointBaseOffset
-        let (prepareResult, snapshots) = try context.model.prepareWithCheckpoints(
-            lmInput,
+        // `consumeAll` brings the cache to the full token count — the harness
+        // doesn't run a token iterator, so there is no prime token to keep.
+        let warmed = try PrefillExecutor.run(
+            model: context.model,
+            text: .init(tokens: inputArr, mask: nil),
             cache: cache,
-            windowSize: 512,
             checkpoints: checkpoints,
-            checkpointBaseOffset: checkpointBaseOffset
+            checkpointBaseOffset: checkpointBaseOffset,
+            prefillStepSize: 512,
+            consumeAll: true
         )
-        // `prepareWithCheckpoints` leaves the final remainder for the caller
-        // to evaluate via the iterator's step loop. We don't run a token
-        // iterator here, so process the remainder ourselves to bring the
-        // cache to the full token count.
-        if case .tokens(let leftover) = prepareResult, leftover.tokens.size > 0 {
-            // Add the batch dim that `model(LMInput.Text, ...)` expects.
-            let batched = LMInput.Text(
-                tokens: leftover.tokens.expandedDimensions(axis: 0),
-                mask: leftover.mask
-            )
-            _ = context.model(batched, cache: cache, state: nil)
-            eval(cache)
-        }
-        return snapshots
+        return warmed.snapshots
     }
 
     /// Full prefill of `tokens`, return the next-token logits at position
@@ -667,7 +654,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             throw HybridCacheCorrectnessError.snapshotCaptureFailed
         }
-        let cache = snap.restore()
+        let cache = try snap.restore()
         try prefill(
             context: context,
             tokens: Array(tokens[k..<(tokens.count - 1)]),

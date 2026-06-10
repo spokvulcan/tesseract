@@ -2,10 +2,11 @@ import Foundation
 import MLX
 import MLXLMCommon
 import Testing
+@testable import Tesseract_Agent
 
 /// Task 1.2 tests: checkpoint capture during prefill.
 /// Tests the chunkedPrefill() algorithm (offset rebasing, tail drain, chunk splitting)
-/// and the prepareWithCheckpoints/GenerateParameters integration contract.
+/// driven by the app-side `HybridCacheSnapshot` machinery (ADR-0006).
 struct CheckpointCaptureTests {
 
     // MARK: - Helpers
@@ -251,33 +252,14 @@ struct CheckpointCaptureTests {
         #expect(500 - result.consumed == 10)
     }
 
-    // MARK: - 12. tokenIteratorExposesSnapshots
-
-    @Test func tokenIteratorExposesSnapshots() {
-        // TokenIterator.capturedSnapshots (Evaluate.swift:564) is populated by
-        // prepare() calling model.prepareWithCheckpoints() (Evaluate.swift:674-679).
-        // Full integration requires a LanguageModel mock (Module conformance).
-        // Verify the parameter plumbing: GenerateParameters carries checkpoint fields
-        // through to TokenIterator's stored properties (Evaluate.swift:593-594, 628-629).
-        let params = GenerateParameters(
-            checkpoints: [100: .system, 200: .system],
-            checkpointBaseOffset: 50
-        )
-        #expect(Set(params.checkpoints.keys) == [100, 200])
-        #expect(params.checkpointBaseOffset == 50)
-    }
-
-    // MARK: - 13. tokenIteratorWithNoCheckpointsHasEmptySnapshots
-
-    @Test func tokenIteratorWithNoCheckpointsHasEmptySnapshots() {
-        // Default GenerateParameters: no checkpoints requested.
-        let params = GenerateParameters()
-        #expect(params.checkpoints.isEmpty)
-        #expect(params.checkpointBaseOffset == 0)
-        // With empty checkpoints, LLMModel.prepareWithCheckpoints()
-        // short-circuits to prepare() and returns (result, []).
-        // TokenIterator.capturedSnapshots stays [].
-    }
+    // MARK: - 12/13. (retired) GenerateParameters checkpoint plumbing
+    //
+    // Fork-era tests asserted that checkpoint offsets rode through
+    // `GenerateParameters` into `TokenIterator.capturedSnapshots`. Post-
+    // migration (ADR-0006) checkpoints are passed directly to
+    // `PrefillExecutor.run` / `HybridCacheSnapshot.chunkedPrefill`, which the
+    // `runPrefill`-driven tests in this file exercise end to end; there is no
+    // parameter plumbing left to verify.
 
     // MARK: - 14. checkpointRebasedOnCacheHit
 
