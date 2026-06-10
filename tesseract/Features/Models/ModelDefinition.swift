@@ -25,6 +25,16 @@ enum ModelSource: Sendable {
     case huggingFace(repo: String, requiredExtension: String, pathPrefix: String? = nil)
 }
 
+/// A file the model needs at inference time that lives in a *different*
+/// Hugging Face repo than the weights (e.g. WhisperKit reads the tokenizer
+/// from the original OpenAI repo). Downloaded into the model folder so
+/// loading never falls back to a network fetch — the app stays offline-
+/// deterministic after the explicit model download.
+struct CompanionFile: Sendable {
+    let repo: String
+    let path: String
+}
+
 struct ModelDefinition: Identifiable, Sendable {
     let id: String
     let displayName: String
@@ -33,6 +43,7 @@ struct ModelDefinition: Identifiable, Sendable {
     let source: ModelSource
     let sizeDescription: String
     let dependencies: [String]
+    var companionFiles: [CompanionFile] = []
 
     var cacheSubdirectory: String? {
         guard case .huggingFace(let repo, _, _) = source else { return nil }
@@ -70,7 +81,13 @@ extension ModelDefinition {
                 pathPrefix: "openai_whisper-large-v3-v20240930_turbo"
             ),
             sizeDescription: "~1.5 GB",
-            dependencies: []
+            dependencies: [],
+            // WhisperKit resolves the large-v3 tokenizer from the OpenAI repo;
+            // bundling it into the model folder keeps first dictation offline.
+            companionFiles: [
+                CompanionFile(repo: "openai/whisper-large-v3", path: "tokenizer.json"),
+                CompanionFile(repo: "openai/whisper-large-v3", path: "tokenizer_config.json"),
+            ]
         ),
         ModelDefinition(
             id: "qwen3-tts-voicedesign",

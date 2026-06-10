@@ -167,6 +167,8 @@ final class ModelDownloadManager: ObservableObject {
                     )
                 }
 
+                try await self?.ensureCompanionFiles(for: model)
+
                 let status = Self.computeStatus(for: model)
                 self?.statuses[modelID] = status
                 Log.general.info("Model downloaded: \(model.displayName)")
@@ -304,6 +306,46 @@ final class ModelDownloadManager: ObservableObject {
         try await downloadPendingFiles(modelID: modelID, repoID: repoID, result: result)
     }
 
+    // MARK: - Companion Files
+
+    /// Fetches the model's companion files (see `CompanionFile`) into the
+    /// model folder. Idempotent: files already present at their expected size
+    /// are skipped, truncated leftovers are re-downloaded.
+    func ensureCompanionFiles(for model: ModelDefinition) async throws {
+        guard !model.companionFiles.isEmpty, let folder = modelPath(for: model.id) else { return }
+        let client = HubClient.default
+
+        for (repo, files) in Dictionary(grouping: model.companionFiles, by: \.repo) {
+            guard let repoID = Repo.ID(rawValue: repo) else {
+                throw NSError(
+                    domain: "ModelDownload", code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Invalid companion repository ID: \(repo)"]
+                )
+            }
+            let entries = try await client.listFiles(in: repoID, recursive: false)
+
+            for file in files {
+                try Task.checkCancellation()
+
+                let target = folder.appendingPathComponent(file.path)
+                let expectedSize = entries.first { $0.path == file.path }?.size
+
+                if FileManager.default.fileExists(atPath: target.path) {
+                    if let expectedSize {
+                        let attrs = try? FileManager.default.attributesOfItem(atPath: target.path)
+                        let localSize = (attrs?[.size] as? Int64) ?? 0
+                        if localSize >= Int64(expectedSize) { continue }
+                    } else {
+                        continue
+                    }
+                }
+
+                _ = try await client.downloadFile(at: file.path, from: repoID, to: target)
+                Log.general.info("Companion file downloaded: \(file.path) for \(model.displayName)")
+            }
+        }
+    }
+
     // MARK: - Verify & Repair
 
     func verifyAndRepair(modelID: String) {
@@ -340,6 +382,7 @@ final class ModelDownloadManager: ObservableObject {
                 self?.statuses[modelID] = .verifying(progress: 1.0)
 
                 if !result.needsRepair {
+                    try await self?.ensureCompanionFiles(for: model)
                     let status = Self.computeStatus(for: model)
                     self?.statuses[modelID] = status
                     Log.general.info("Verify OK: \(model.displayName) — \(result.totalFiles) files valid")
@@ -350,6 +393,7 @@ final class ModelDownloadManager: ObservableObject {
                         repoID: repoID,
                         result: result
                     )
+                    try await self?.ensureCompanionFiles(for: model)
                     let status = Self.computeStatus(for: model)
                     self?.statuses[modelID] = status
                     Log.general.info("Repair complete: \(model.displayName)")

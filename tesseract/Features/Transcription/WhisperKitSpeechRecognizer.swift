@@ -27,19 +27,14 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
             logger.debug("Model folder contents: \(contents)")
         }
 
-        // Configure compute units for each model component
-        // GPU is faster for encoding, Neural Engine for decoding
-        let computeOptions = ModelComputeOptions(
-            melCompute: .cpuAndGPU,
-            audioEncoderCompute: .cpuAndGPU,
-            textDecoderCompute: .cpuAndNeuralEngine
-        )
-
+        // Compute units stay on WhisperKit's defaults: mel on GPU, encoder and
+        // decoder on the Neural Engine. The ANE encoder is what WhisperKit is
+        // architected for, and it keeps ASR off the GPU that the MLX LLM owns —
+        // dictation doesn't contend with agent/server generation.
         // Load from bundled model path - use the exact folder containing model files
         let config = WhisperKitConfig(
             modelFolder: modelPath.path,
-            computeOptions: computeOptions,
-            verbose: true,
+            verbose: false,
             prewarm: true,
             load: true,
             download: false
@@ -63,7 +58,8 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
             skipSpecialTokens: true,
             withoutTimestamps: false,
             clipTimestamps: [],
-            noSpeechThreshold: Defaults.noSpeechThreshold
+            noSpeechThreshold: Defaults.noSpeechThreshold,
+            chunkingStrategy: .vad               // Concurrent windows for >30s recordings
         )
 
         // Capture whisperKit in a local constant to satisfy concurrency checking
@@ -95,9 +91,9 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
         )
     }
 
-    /// WhisperKit exposes no in-flight cancellation hook; cooperative
-    /// cancellation arrives via `Task` cancellation propagating into the
-    /// suspended `transcribe`. This satisfies the port contract and is where
-    /// model-side teardown would live if WhisperKit gained one.
+    /// Cooperative cancellation arrives via `Task` cancellation propagating
+    /// into the suspended `transcribe` — WhisperKit checks it between decode
+    /// windows, so an in-flight transcription stops at the next window
+    /// boundary. This satisfies the port contract; nothing else to tear down.
     func cancel() {}
 }
