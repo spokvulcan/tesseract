@@ -57,6 +57,7 @@ enum SettingsCatalogue {
     static let ttsStreamingEnabled = Setting.bool("ttsStreamingEnabled", default: true)
     static let agentAutoSpeak = Setting.bool("agentAutoSpeak", default: false)
     static let selectedAgentModelID = Setting.string("selectedAgentModelID", default: ModelDefinition.defaultAgentModelID)
+    static let selectedSpeechToTextModelID = Setting.string("selectedSpeechToTextModelID", default: ModelDefinition.defaultSpeechToTextModelID)
 
     // MARK: - Advanced
 

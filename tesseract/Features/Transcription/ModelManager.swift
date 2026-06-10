@@ -10,14 +10,17 @@ import Foundation
 @MainActor
 final class ModelManager {
     private let modelDownloadManager: ModelDownloadManager
+    private let selectedModelID: () -> String
 
-    init(modelDownloadManager: ModelDownloadManager) {
+    init(modelDownloadManager: ModelDownloadManager, selectedModelID: @escaping () -> String) {
         self.modelDownloadManager = modelDownloadManager
+        self.selectedModelID = selectedModelID
     }
 
-    /// Returns the URL to the downloaded model folder, or nil if not downloaded.
+    /// Returns the URL to the selected model's downloaded folder, or nil if
+    /// not downloaded.
     func getModelPath() -> URL? {
-        modelDownloadManager.modelPath(for: WhisperModel.modelID)
+        modelDownloadManager.modelPath(for: selectedModelID())
     }
 
     /// Validates that the downloaded model exists and has required files.

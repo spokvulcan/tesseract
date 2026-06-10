@@ -29,8 +29,8 @@ final class AppBindings {
         /// body (not tracked), so the initial model-id emission never forces a
         /// model load and lazy loading is preserved.
         let isLLMSlotLoaded: @MainActor () -> Bool
-        /// Gate read of the Whisper model's on-disk location; nil while it is
-        /// not downloaded.
+        /// Gate read of the selected speech-to-text model's on-disk location;
+        /// nil while it is not downloaded.
         let whisperModelPath: @MainActor () -> URL?
         /// Gate read of the transcription engine's load state, so a download
         /// completion never reloads an engine that is already serving.
@@ -127,6 +127,8 @@ final class AppBindings {
     private var observationTasks: [Task<Void, Never>] = []
     private var cancellables = Set<AnyCancellable>()
     private var whisperLoadTask: Task<Void, Never>?
+    private var whisperLoadInFlightPath: URL?
+    private var lastSelectedSpeechModelStatus: ModelStatus?
     private var hasStarted = false
 
     init(settings: SettingsManager, inputs: Inputs, effects: Effects) {
@@ -172,7 +174,35 @@ final class AppBindings {
             Log.general.warning("Whisper model not downloaded — download it from the Models page")
             return
         }
+        // Collapse concurrent triggers of the same load (the launch task, a
+        // download completion, and a selection change healed onto the same
+        // model can all fire together) into one engine load per path.
+        guard whisperLoadInFlightPath != path else { return }
+        whisperLoadInFlightPath = path
+        defer { whisperLoadInFlightPath = nil }
         await effects.loadWhisperModel(path)
+    }
+
+    /// Selection follows availability only when the selected model is missing:
+    /// if the selected speech-to-text model is not on disk but another variant
+    /// is, flip the selection to the downloaded one and return true. Covers a
+    /// fresh install that downloads only the compact variant and deletion of
+    /// the selected variant — dictation is never silently dead while a speech
+    /// model exists on disk. An available selection is never overridden.
+    private func healSpeechToTextSelectionIfNeeded(statuses: [String: ModelStatus]) -> Bool {
+        let selectedID = settings.selectedSpeechToTextModelID
+        if case .downloaded = statuses[selectedID] { return false }
+        let downloadedVariant = ModelDefinition.all.first { model in
+            guard model.category == .speechToText else { return false }
+            if case .downloaded = statuses[model.id] { return true }
+            return false
+        }
+        guard let downloadedVariant else { return false }
+        Log.transcription.info(
+            "Selected dictation model \(selectedID) is not on disk — switching to \(downloadedVariant.id)"
+        )
+        settings.selectedSpeechToTextModelID = downloadedVariant.id
+        return true
     }
 
     // MARK: - Subscriptions
@@ -180,20 +210,40 @@ final class AppBindings {
     /// Every subscription relies on `Observations` emitting the current value at
     /// subscription time to apply each rule's initial seed.
     private func installSubscriptions() {
-        // Auto-load the Whisper model the moment its download completes, so
-        // dictation works without restarting the app — unless the engine is
-        // already serving a model.
+        // One rule per status emission, two duties in order: heal the
+        // dictation model selection onto a model that exists on disk, then
+        // auto-load the selected model the moment its own download completes
+        // (so dictation works without restarting the app) — unless the engine
+        // is already serving a model. A heal hands the load to the
+        // selection-change rule below — reacting to the status too would load
+        // the same model twice. The manual last-status dedupe replaces
+        // `removeDuplicates()` because the key (the selected id) is itself
+        // mutable: unrelated download progress must never thrash the engine.
         inputs.modelDownloadStatuses
-            .compactMap { $0[WhisperModel.modelID] }
-            .removeDuplicates()
-            .sink { [weak self] status in
-                guard case .downloaded = status else { return }
-                guard let self, !self.inputs.isTranscriptionModelLoaded() else { return }
+            .sink { [weak self] statuses in
+                guard let self else { return }
+                let healed = self.healSpeechToTextSelectionIfNeeded(statuses: statuses)
+                let status = statuses[self.settings.selectedSpeechToTextModelID]
+                let statusChanged = status != self.lastSelectedSpeechModelStatus
+                self.lastSelectedSpeechModelStatus = status
+                guard !healed, statusChanged, case .downloaded = status else { return }
+                guard !self.inputs.isTranscriptionModelLoaded() else { return }
                 Task {
                     await self.loadWhisperModelIfAvailable()
                 }
             }
             .store(in: &cancellables)
+
+        // Hot-swap the dictation model when the selection changes — loading
+        // the newly selected model replaces the previous one, freeing its
+        // memory. The initial emission is dropped: the launch load is
+        // `whisperLoadTask`'s job, and it must not be raced by a duplicate.
+        observationTasks.append(Task { [weak self] in
+            guard let self else { return }
+            for await _ in Observations({ self.settings.selectedSpeechToTextModelID }).dropFirst() {
+                await self.loadWhisperModelIfAvailable()
+            }
+        })
 
         // Reload the agent model when the selection changes — but only while an
         // LLM slot is already loaded. The gate drops the initial emission, so a

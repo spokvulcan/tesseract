@@ -190,7 +190,8 @@ final class DictationCoordinator {
                 history.add(
                     text: processedText,
                     duration: audioData.duration,
-                    model: WhisperModel.displayName
+                    model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
+                        ?? settings.selectedSpeechToTextModelID
                 )
 
                 // Inject text if enabled

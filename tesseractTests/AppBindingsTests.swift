@@ -264,7 +264,7 @@ struct AppBindingsTests {
 
         // The download completes while the engine is unloaded → load.
         h.driver.whisperModelPath = URL(fileURLWithPath: "/models/whisper")
-        h.statuses.send([WhisperModel.modelID: .downloaded(sizeOnDisk: 1)])
+        h.statuses.send([ModelDefinition.defaultSpeechToTextModelID: .downloaded(sizeOnDisk: 1)])
 
         #expect(await waitUntil {
             h.recorder.events(withPrefix: "loadWhisperModel")
@@ -273,12 +273,78 @@ struct AppBindingsTests {
 
         // A re-download completing while the engine is already serving → skip.
         h.driver.isTranscriptionModelLoaded = true
-        h.statuses.send([WhisperModel.modelID: .notDownloaded])
-        h.statuses.send([WhisperModel.modelID: .downloaded(sizeOnDisk: 2)])
+        h.statuses.send([ModelDefinition.defaultSpeechToTextModelID: .notDownloaded])
+        h.statuses.send([ModelDefinition.defaultSpeechToTextModelID: .downloaded(sizeOnDisk: 2)])
 
         for _ in 0..<100 { await Task.yield() }
         #expect(h.recorder.events(withPrefix: "loadWhisperModel")
             == ["loadWhisperModel(/models/whisper)"])
+    }
+
+    @Test
+    func speechModelSelectionChangeHotSwapsTheLoadedModel() async {
+        let h = makeHarness()
+        defer { h.bindings.stop() }
+        h.driver.whisperModelPath = URL(fileURLWithPath: "/models/whisper")
+        h.driver.isTranscriptionModelLoaded = true
+
+        h.bindings.start()
+
+        #expect(await waitUntil {
+            h.recorder.events(withPrefix: "loadWhisperModel")
+                == ["loadWhisperModel(/models/whisper)"]
+        })
+
+        // Switching the selection loads the newly selected model even though
+        // the engine is already serving — that is the hot-swap.
+        h.driver.whisperModelPath = URL(fileURLWithPath: "/models/whisper-compact")
+        h.settings.selectedSpeechToTextModelID = "whisper-large-v3-turbo-compact"
+
+        #expect(await waitUntil {
+            h.recorder.events(withPrefix: "loadWhisperModel") == [
+                "loadWhisperModel(/models/whisper)",
+                "loadWhisperModel(/models/whisper-compact)",
+            ]
+        })
+    }
+
+    @Test
+    func missingSelectedSpeechModelHealsSelectionToTheDownloadedVariantAndLoadsIt() async {
+        let h = makeHarness()
+        defer { h.bindings.stop() }
+
+        h.bindings.start()
+
+        // Only the non-selected compact variant exists on disk — e.g. a fresh
+        // low-memory install that skipped the default, or the selected variant
+        // was deleted.
+        h.driver.whisperModelPath = URL(fileURLWithPath: "/models/whisper-compact")
+        h.statuses.send(["whisper-large-v3-turbo-compact": .downloaded(sizeOnDisk: 1)])
+
+        #expect(await waitUntil {
+            h.settings.selectedSpeechToTextModelID == "whisper-large-v3-turbo-compact"
+        })
+        #expect(await waitUntil {
+            h.recorder.events(withPrefix: "loadWhisperModel")
+                == ["loadWhisperModel(/models/whisper-compact)"]
+        })
+    }
+
+    @Test
+    func downloadingASecondVariantNeverOverridesAnAvailableSelection() async {
+        let h = makeHarness()
+        defer { h.bindings.stop() }
+
+        h.bindings.start()
+
+        let selectedID = ModelDefinition.defaultSpeechToTextModelID
+        h.statuses.send([
+            selectedID: .downloaded(sizeOnDisk: 1),
+            "whisper-large-v3-turbo-compact": .downloaded(sizeOnDisk: 1),
+        ])
+
+        for _ in 0..<100 { await Task.yield() }
+        #expect(h.settings.selectedSpeechToTextModelID == selectedID)
     }
 
     @Test
@@ -325,7 +391,7 @@ struct AppBindingsTests {
         h.settings.isServerEnabled = true
         h.settings.overlayStyle = .fullScreenBorder
         h.driver.dictationState = .recording
-        h.statuses.send([WhisperModel.modelID: .downloaded(sizeOnDisk: 1)])
+        h.statuses.send([ModelDefinition.defaultSpeechToTextModelID: .downloaded(sizeOnDisk: 1)])
 
         for _ in 0..<200 { await Task.yield() }
         #expect(h.recorder.events.count == countAfterStop)

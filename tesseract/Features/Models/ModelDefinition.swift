@@ -68,6 +68,7 @@ struct ModelDefinition: Identifiable, Sendable {
 
 extension ModelDefinition {
     static let defaultAgentModelID = "qwen3.5-4b-paro"
+    static let defaultSpeechToTextModelID = "whisper-large-v3-turbo"
 
     static let all: [ModelDefinition] = [
         ModelDefinition(
@@ -84,6 +85,26 @@ extension ModelDefinition {
             dependencies: [],
             // WhisperKit resolves the large-v3 tokenizer from the OpenAI repo;
             // bundling it into the model folder keeps first dictation offline.
+            companionFiles: [
+                CompanionFile(repo: "openai/whisper-large-v3", path: "tokenizer.json"),
+                CompanionFile(repo: "openai/whisper-large-v3", path: "tokenizer_config.json"),
+            ]
+        ),
+        ModelDefinition(
+            id: "whisper-large-v3-turbo-compact",
+            displayName: "Whisper Turbo Compact",
+            description: "Same fast voice-to-text at less than half the size. Best for Macs with limited memory.",
+            category: .speechToText,
+            source: .huggingFace(
+                repo: "argmaxinc/whisperkit-coreml",
+                requiredExtension: "mlmodelc",
+                // Argmax's compressed turbo (<1% WER delta vs. the f16 default).
+                pathPrefix: "openai_whisper-large-v3-v20240930_turbo_632MB"
+            ),
+            sizeDescription: "~650 MB",
+            dependencies: [],
+            // Both turbo variants share the large-v3 tokenizer; see the
+            // companion-file comment on the default variant above.
             companionFiles: [
                 CompanionFile(repo: "openai/whisper-large-v3", path: "tokenizer.json"),
                 CompanionFile(repo: "openai/whisper-large-v3", path: "tokenizer_config.json"),
@@ -174,6 +195,10 @@ extension ModelDefinition {
             dependencies: []
         ),
     ]
+
+    static func withID(_ id: String) -> ModelDefinition? {
+        all.first { $0.id == id }
+    }
 
     static func byCategory() -> [(ModelCategory, [ModelDefinition])] {
         ModelCategory.allCases.compactMap { category in

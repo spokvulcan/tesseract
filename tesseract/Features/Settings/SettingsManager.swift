@@ -217,6 +217,10 @@ final class SettingsManager {
         didSet { SettingsCatalogue.selectedAgentModelID.write(selectedAgentModelID, to: store) }
     }
 
+    var selectedSpeechToTextModelID: String {
+        didSet { SettingsCatalogue.selectedSpeechToTextModelID.write(selectedSpeechToTextModelID, to: store) }
+    }
+
     var ttsParameters: TTSParameters {
         get {
             TTSParameters(
@@ -337,6 +341,7 @@ final class SettingsManager {
         self.ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.load(from: store)
         self.agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.load(from: store)
         self.selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.load(from: store)
+        self.selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.load(from: store)
         self.maxRecordingDuration = SettingsCatalogue.maxRecordingDuration.load(from: store)
         self.playSounds = SettingsCatalogue.playSounds.load(from: store)
         self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
@@ -432,6 +437,7 @@ final class SettingsManager {
         ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.default
         agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
         selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.default
+        selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.default
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default
         visionModeEnabled = SettingsCatalogue.visionModeEnabled.default
         samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
@@ -457,29 +463,46 @@ final class SettingsManager {
         }
     }
 
-    /// Stale-value migration (the one deliberate non-hydration step). When the
-    /// persisted agent model id no longer maps to a known agent model, normalise
-    /// it to the default. Runs after hydration, so the re-assignment fires
-    /// `didSet` and persists through the store for free.
+    /// Stale-value migration (the one deliberate non-hydration step). When a
+    /// persisted model selection no longer maps to a known model of its
+    /// category, normalise it to the category default. Runs after hydration,
+    /// so the re-assignment fires `didSet` and persists through the store for
+    /// free.
     private func normalizePersistedSelectionsIfNeeded() {
-        let normalizedModelID = Self.normalizedAgentModelID(selectedAgentModelID)
-        guard normalizedModelID != selectedAgentModelID else { return }
-        selectedAgentModelID = normalizedModelID
+        let normalizedAgentID = Self.normalizedModelID(
+            selectedAgentModelID,
+            category: .agent,
+            defaultID: ModelDefinition.defaultAgentModelID
+        )
+        if normalizedAgentID != selectedAgentModelID {
+            selectedAgentModelID = normalizedAgentID
+        }
+
+        let normalizedSpeechToTextID = Self.normalizedModelID(
+            selectedSpeechToTextModelID,
+            category: .speechToText,
+            defaultID: ModelDefinition.defaultSpeechToTextModelID
+        )
+        if normalizedSpeechToTextID != selectedSpeechToTextModelID {
+            selectedSpeechToTextModelID = normalizedSpeechToTextID
+        }
     }
 
-    private static func normalizedAgentModelID(_ candidate: String) -> String {
-        let agentModelIDs = Set(
+    private static func normalizedModelID(
+        _ candidate: String, category: ModelCategory, defaultID: String
+    ) -> String {
+        let knownIDs = Set(
             ModelDefinition.all
-                .filter { $0.category == .agent }
+                .filter { $0.category == category }
                 .map(\.id)
         )
-        if agentModelIDs.contains(candidate) {
+        if knownIDs.contains(candidate) {
             return candidate
         }
-        if agentModelIDs.contains(ModelDefinition.defaultAgentModelID) {
-            return ModelDefinition.defaultAgentModelID
+        if knownIDs.contains(defaultID) {
+            return defaultID
         }
-        return ModelDefinition.all.first(where: { $0.category == .agent })?.id ?? candidate
+        return ModelDefinition.all.first(where: { $0.category == category })?.id ?? candidate
     }
 
     func applyDockVisibility() {
