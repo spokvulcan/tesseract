@@ -20,7 +20,10 @@ final class DependencyContainer: ObservableObject {
     lazy var audioCaptureEngine = AudioCaptureEngine()
 
     // Transcription
-    lazy var modelManager = ModelManager(modelDownloadManager: modelDownloadManager)
+    lazy var modelManager = ModelManager(
+        modelDownloadManager: modelDownloadManager,
+        selectedModelID: { [settingsManager] in settingsManager.selectedSpeechToTextModelID }
+    )
     lazy var transcriptionEngine = TranscriptionEngine()
     lazy var transcriptionHistory = TranscriptionHistory()
 

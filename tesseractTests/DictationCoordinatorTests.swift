@@ -166,7 +166,7 @@ struct DictationCoordinatorTests {
         let expected = TranscriptionPostProcessor().process("hello world")
         #expect(!expected.isEmpty)
         #expect(coordinator.lastTranscription == expected)
-        #expect(store.entries == [FakeTranscriptionStore.Entry(text: expected, duration: 2.0, model: "Large V3 Turbo")])
+        #expect(store.entries == [FakeTranscriptionStore.Entry(text: expected, duration: 2.0, model: "Whisper Turbo")])
         #expect(injector.injected == [expected + " "])
         #expect(capture.stopCount == 1)
     }

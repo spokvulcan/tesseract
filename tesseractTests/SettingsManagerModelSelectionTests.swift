@@ -22,4 +22,17 @@ struct SettingsManagerModelSelectionTests {
             == ModelDefinition.defaultAgentModelID
         )
     }
+
+    @Test
+    func removedPersistedSpeechToTextModelFallsBackToDefaultAndPersists() {
+        let store = InMemorySettingsStore()
+        store.set("whisper-large-v2-deprecated", for: "selectedSpeechToTextModelID")
+
+        let settings = SettingsManager(store: store)
+        #expect(settings.selectedSpeechToTextModelID == ModelDefinition.defaultSpeechToTextModelID)
+        #expect(
+            store.string(for: "selectedSpeechToTextModelID", default: "")
+            == ModelDefinition.defaultSpeechToTextModelID
+        )
+    }
 }

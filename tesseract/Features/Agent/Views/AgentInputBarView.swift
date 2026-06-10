@@ -266,8 +266,13 @@ struct AgentInputBarView: View {
 
     private var isWhisperAvailable: Bool {
         if transcriptionEngine.isModelLoaded { return true }
-        if case .downloaded = downloadManager.statuses[WhisperModel.modelID] { return true }
-        return false
+        // Any downloaded speech model counts: selection auto-heals onto a
+        // downloaded variant, so voice input is usable the moment one exists.
+        return ModelDefinition.all.contains { model in
+            guard model.category == .speechToText else { return false }
+            if case .downloaded = downloadManager.statuses[model.id] { return true }
+            return false
+        }
     }
 
     private var canUseVoice: Bool {

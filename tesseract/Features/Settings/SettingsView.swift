@@ -335,6 +335,34 @@ struct RecordingSettingsSection: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Dictation Model") {
+                let speechModels = ModelDefinition.all.filter { $0.category == .speechToText }
+                let downloadedSpeechModels = speechModels.filter { model in
+                    if case .downloaded = container.modelDownloadManager.statuses[model.id] {
+                        return true
+                    }
+                    return false
+                }
+
+                if downloadedSpeechModels.isEmpty {
+                    Text("No dictation models downloaded. Download one from the Models page.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Model", selection: $settings.selectedSpeechToTextModelID) {
+                        ForEach(downloadedSpeechModels) { model in
+                            Text(model.displayName).tag(model.id)
+                        }
+                    }
+
+                    if let selected = ModelDefinition.withID(settings.selectedSpeechToTextModelID) {
+                        Text(selected.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section("Duration") {
                 VStack(alignment: .leading) {
                     let minutes = Int(settings.maxRecordingDuration) / 60

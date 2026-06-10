@@ -39,16 +39,14 @@ struct ModelsPageView: View {
     }
 
     private func isModelLoadedInMemory(_ model: ModelDefinition) -> Bool {
-        switch model.id {
-        case "whisper-large-v3-turbo":
-            return container.transcriptionEngine.isModelLoaded
-        case "qwen3-tts-voicedesign":
-            return container.speechEngine.isModelLoaded
-        default:
-            if model.category == .agent {
-                return container.inferenceArbiter.loadedLLMModelID == model.id
-            }
-            return false
+        switch model.category {
+        case .speechToText:
+            return model.id == container.settingsManager.selectedSpeechToTextModelID
+                && container.transcriptionEngine.isModelLoaded
+        case .textToSpeech:
+            return model.id == "qwen3-tts-voicedesign" && container.speechEngine.isModelLoaded
+        case .agent:
+            return container.inferenceArbiter.loadedLLMModelID == model.id
         }
     }
 }
