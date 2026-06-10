@@ -10,7 +10,7 @@
 import Foundation
 import CoreML
 import os
-@preconcurrency import WhisperKit
+import WhisperKit
 
 actor WhisperKitSpeechRecognizer: SpeechRecognizer {
     enum Defaults {
@@ -32,8 +32,7 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
         let computeOptions = ModelComputeOptions(
             melCompute: .cpuAndGPU,
             audioEncoderCompute: .cpuAndGPU,
-            textDecoderCompute: .cpuAndNeuralEngine,
-            prefillCompute: .cpuAndGPU
+            textDecoderCompute: .cpuAndNeuralEngine
         )
 
         // Load from bundled model path - use the exact folder containing model files
