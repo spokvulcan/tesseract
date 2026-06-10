@@ -1181,10 +1181,15 @@ nonisolated final class ServerCompletion {
                 )
                 var iteratorParams = genParams
                 iteratorParams.kvBits = nil
-                let iterator = try TokenIterator(
-                    input: LMInput(text: warmed.remainder),
+                // `makeIterator` seeds any configured penalty processors with
+                // the full suffix — the iterator's own input is only the
+                // final prompt token, which would otherwise be the entire
+                // repetition/presence/frequency context.
+                let iterator = try PrefillExecutor.makeIterator(
                     model: context.model,
-                    cache: liveCache,
+                    fullText: inputForGeneration.text,
+                    remainder: warmed.remainder,
+                    cache: &liveCache,
                     parameters: iteratorParams
                 )
                 return (iterator: iterator, snapshots: warmed.snapshots)
@@ -1694,10 +1699,7 @@ nonisolated final class ServerCompletion {
 
         do {
             return try await container.perform { context in
-                let restoredCache = boundarySnapshot.restore(
-                    kvBitsHint: partitionKey.kvBits,
-                    kvGroupSizeHint: partitionKey.kvGroupSize
-                )
+                let restoredCache = try boundarySnapshot.restore()
 
                 let residual = Array(storedTokens[boundaryOffset...])
                 let prefillStart = Date.timeIntervalSinceReferenceDate

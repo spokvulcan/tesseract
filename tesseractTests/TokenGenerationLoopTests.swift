@@ -5,63 +5,51 @@ import os
 
 @testable import Tesseract_Agent
 
-// MARK: - Scripted token source
-
-/// A deterministic `TokenIteratorProtocol` that replays a fixed token script —
-/// lets the tests drive `TokenGenerationLoop` without a model or GPU. The
-/// `consumed` counter is shared so a test can observe how far the loop got
-/// after the iterator itself has been consumed by the loop.
-private struct ScriptedTokenIterator: TokenIteratorProtocol {
-    private let script: [Int]
-    private var index = 0
-    let maxTokens: Int?
-    private(set) var tokenCount = 0
-    let promptPrefillTime: TimeInterval
-    let consumed: OSAllocatedUnfairLock<Int>
-
-    init(
-        script: [Int], maxTokens: Int? = nil, promptPrefillTime: TimeInterval = 0,
-        consumed: OSAllocatedUnfairLock<Int> = .init(initialState: 0)
-    ) {
-        self.script = script
-        self.maxTokens = maxTokens
-        self.promptPrefillTime = promptPrefillTime
-        self.consumed = consumed
-    }
-
-    mutating func next() -> Int? {
-        if let maxTokens, tokenCount >= maxTokens { return nil }
-        guard index < script.count else { return nil }
-        let token = script[index]
-        index += 1
-        tokenCount += 1
-        consumed.withLock { $0 += 1 }
-        return token
-    }
-}
+// MARK: - Scripted token stream
 
 /// One UTF-8 byte per token, matching `FakeChatMLTokenizer`'s byte-level scheme.
 private func tokens(for text: String) -> [Int] {
     Array(text.utf8).map(Int.init)
 }
 
-private let eosToken = 0
-
 private func makeConfiguration() -> ModelConfiguration {
-    var configuration = ModelConfiguration(id: "test/loop", toolCallFormat: .json)
-    configuration.eosTokenIds = [eosToken]
-    return configuration
+    ModelConfiguration(id: "test/loop", toolCallFormat: .json)
+}
+
+/// A finished upstream raw-token stream: the tokens followed by the
+/// authoritative `.info` — exactly what `generateTokenTask` produces.
+private func scriptedTokenStream(
+    script: [Int],
+    stopReason: GenerateStopReason,
+    promptTime: TimeInterval = 0
+) -> AsyncStream<TokenGeneration> {
+    AsyncStream { continuation in
+        for token in script {
+            continuation.yield(.token(token))
+        }
+        continuation.yield(.info(GenerateCompletionInfo(
+            promptTokenCount: 7,
+            generationTokenCount: script.count,
+            promptTime: promptTime,
+            generationTime: 0.1,
+            stopReason: stopReason
+        )))
+        continuation.finish()
+    }
 }
 
 private func collectEvents(
-    script: [Int], maxTokens: Int? = nil, promptPrefillTime: TimeInterval = 0
+    script: [Int],
+    stopReason: GenerateStopReason = .stop,
+    promptTime: TimeInterval = 0
 ) async -> [RawGeneration] {
-    let (stream, task) = TokenGenerationLoop.start(
+    let (stream, task) = TokenGenerationLoop.events(
+        from: scriptedTokenStream(
+            script: script, stopReason: stopReason, promptTime: promptTime),
+        generationTask: nil,
         promptTokenCount: 7,
         modelConfiguration: makeConfiguration(),
-        tokenizer: FakeChatMLTokenizer(),
-        iterator: ScriptedTokenIterator(
-            script: script, maxTokens: maxTokens, promptPrefillTime: promptPrefillTime)
+        tokenizer: FakeChatMLTokenizer()
     )
     var events: [RawGeneration] = []
     for await event in stream { events.append(event) }
@@ -89,22 +77,22 @@ private extension [RawGeneration] {
 
 struct TokenGenerationLoopTests {
 
-    @Test func plainTextStreamsChunksAndStopsOnEOSToken() async {
+    @Test func plainTextStreamsChunksAndPassesInfoThrough() async {
         let events = await collectEvents(
-            script: tokens(for: "Hello world") + [eosToken],
-            promptPrefillTime: 0.5
+            script: tokens(for: "Hello world"),
+            promptTime: 0.5
         )
 
         #expect(events.joinedChunks == "Hello world")
         #expect(events.joinedDeltas.isEmpty)
         #expect(events.toolCallNames.isEmpty)
 
+        // Upstream's `.info` is authoritative and passes through untouched.
         let info = events.completionInfo
         #expect(info?.stopReason == .stop)
         #expect(info?.generationTokenCount == tokens(for: "Hello world").count)
         #expect(info?.promptTokenCount == 7)
-        // promptTime folds in the iterator's chunked-prefill time.
-        #expect((info?.promptTime ?? 0) >= 0.5)
+        #expect(info?.promptTime == 0.5)
         // `.info` is the terminal event.
         guard case .info = events.last else {
             Issue.record("expected `.info` terminal event, got \(String(describing: events.last))")
@@ -115,7 +103,7 @@ struct TokenGenerationLoopTests {
     @Test func taggedToolCallIsFilteredFromChunksAndEmittedOnce() async {
         let body = #"{"name": "read", "arguments": {"file_path": "/x"}}"#
         let events = await collectEvents(
-            script: tokens(for: "Sure. <tool_call>\(body)</tool_call>") + [eosToken]
+            script: tokens(for: "Sure. <tool_call>\(body)</tool_call>")
         )
 
         #expect(events.joinedChunks == "Sure. ")
@@ -143,8 +131,10 @@ struct TokenGenerationLoopTests {
     @Test func unclosedParseableToolCallIsRecoveredAtEOS() async {
         // Generation ends (length) mid tool call, before the close tag: the
         // EOS recovery parses the buffered block and still emits the call.
-        let script = tokens(for: #"<tool_call>{"name": "read", "arguments": {}}"#)
-        let events = await collectEvents(script: script, maxTokens: script.count)
+        let events = await collectEvents(
+            script: tokens(for: #"<tool_call>{"name": "read", "arguments": {}}"#),
+            stopReason: .length
+        )
 
         #expect(events.toolCallNames == ["read"])
         #expect(events.joinedChunks.isEmpty)
@@ -156,8 +146,10 @@ struct TokenGenerationLoopTests {
         // residual as a `.chunk` would duplicate them. The consumer
         // (GenerationStreamLoop) owns malformed-tool-call surfacing from the
         // concatenated deltas.
-        let script = tokens(for: "<tool_call>not json at all")
-        let events = await collectEvents(script: script, maxTokens: script.count)
+        let events = await collectEvents(
+            script: tokens(for: "<tool_call>not json at all"),
+            stopReason: .length
+        )
 
         #expect(events.toolCallNames.isEmpty)
         #expect(events.joinedChunks.isEmpty)
@@ -165,35 +157,102 @@ struct TokenGenerationLoopTests {
         #expect(events.completionInfo?.stopReason == .length)
     }
 
-    @Test func cancellingTheTaskStopsTheLoopEarly() async {
+    @Test func partialStartTagResidualIsEmittedAsText() async {
+        // Cut mid start tag: the tracker never emitted a delta for the
+        // buffered bytes, so the EOS residual must come back as a regular
+        // chunk — suppressing it would silently drop trailing text
+        // (#67 review).
+        let events = await collectEvents(
+            script: tokens(for: "Compare: 1 <tool"),
+            stopReason: .length
+        )
+
+        #expect(events.joinedChunks == "Compare: 1 <tool")
+        #expect(events.joinedDeltas.isEmpty)
+        #expect(events.toolCallNames.isEmpty)
+    }
+
+    @Test func bareJSONToolCallEmitsNoDeltasAndParses() async {
+        // The processor's bare-JSON fallback parses the call mid-stream; the
+        // tracker mirrors that state and stays silent (no spurious deltas
+        // from the `<` inside the JSON, no suppressed text after it).
+        let body = #"{"name": "read", "arguments": {"file_path": "/x<y"}}"#
+        let events = await collectEvents(script: tokens(for: "Use \(body) ok"))
+
+        #expect(events.toolCallNames == ["read"])
+        #expect(events.joinedDeltas.isEmpty)
+        #expect(events.joinedChunks == "Use  ok")
+    }
+
+    @Test func unclosedBareJSONResidualIsEmittedAsTextWithoutDeltas() async {
+        // A bare-JSON buffer containing a literal start tag inside a string
+        // value: the old tracker misread the `<` as a tag start, emitted the
+        // processor-buffered bytes as spurious deltas, and then suppressed
+        // the EOS residual — losing the text from the chunk stream
+        // (#67 review).
+        let buffered = #"{"a": "<tool_call>x""#
+        let events = await collectEvents(
+            script: tokens(for: buffered),
+            stopReason: .length
+        )
+
+        #expect(events.joinedDeltas.isEmpty)
+        #expect(events.toolCallNames.isEmpty)
+        #expect(events.joinedChunks == buffered)
+    }
+
+    @Test func cancellingTheTaskCancelsUpstreamAndFinishesTheStream() async {
         // The production contract (`RawGenerationHandle.cancel()`): cancelling
-        // the returned task stops the loop mid-script. The script alternates in
-        // newlines so the byte-level detokenizer keeps resegmenting (stays
-        // linear) and the loop spins long enough for the cancel to land mid-run.
-        let consumed = OSAllocatedUnfairLock<Int>(initialState: 0)
-        let scriptLength = 200_000
-        let (stream, task) = TokenGenerationLoop.start(
+        // the returned task must propagate to the upstream generation task and
+        // still end the stream with a terminal `.info`.
+        let (tokens, tokensContinuation) = AsyncStream<TokenGeneration>.makeStream()
+        let upstreamCancelled = OSAllocatedUnfairLock(initialState: false)
+        // Stand-in for upstream's generation task: runs until cancelled, then
+        // finishes its stream — the upstream loop reacts to cancellation the
+        // same way.
+        let generationTask = Task {
+            while !Task.isCancelled {
+                await Task.yield()
+            }
+            upstreamCancelled.withLock { $0 = true }
+            tokensContinuation.finish()
+        }
+        // A few tokens are already buffered so the consumer sees a chunk
+        // before it cancels.
+        for token in [Int](repeating: Int(UInt8(ascii: "a")), count: 4) {
+            tokensContinuation.yield(.token(token))
+        }
+
+        let (stream, task) = TokenGenerationLoop.events(
+            from: tokens,
+            generationTask: generationTask,
             promptTokenCount: 1,
             modelConfiguration: makeConfiguration(),
-            tokenizer: FakeChatMLTokenizer(),
-            iterator: ScriptedTokenIterator(
-                script: Array(repeating: tokens(for: "a\n"), count: scriptLength / 2)
-                    .flatMap { $0 },
-                consumed: consumed)
+            tokenizer: FakeChatMLTokenizer()
         )
 
         var sawChunk = false
+        var info: GenerateCompletionInfo?
         for await event in stream {
-            if case .chunk = event, !sawChunk {
-                sawChunk = true
-                task.cancel()
+            switch event {
+            case .chunk:
+                if !sawChunk {
+                    sawChunk = true
+                    task.cancel()
+                }
+            case .info(let i):
+                info = i
+            default:
+                break
             }
         }
         await task.value
 
         #expect(sawChunk)
-        // The loop must have stopped well before draining the whole script.
-        #expect(consumed.withLock { $0 } < scriptLength)
+        #expect(upstreamCancelled.withLock { $0 })
+        // No upstream `.info` arrived, so the mapping synthesizes a
+        // cancellation one — the terminal event contract holds.
+        #expect(info?.stopReason == .cancelled)
     }
 }
 
@@ -217,8 +276,10 @@ struct ToolCallDeltaTrackerTests {
         // Partial start tag: ambiguous, nothing surfaces yet.
         #expect(tracker.observe("<tool") == nil)
         #expect(tracker.isMidToolCall)
+        #expect(tracker.deltasCarriedBuffer == false)
         // Tag confirmed: the whole buffer (open tag included) is the delta.
         #expect(tracker.observe(#"_call>{"a":"#) == #"<tool_call>{"a":"#)
+        #expect(tracker.deltasCarriedBuffer)
     }
 
     @Test func closeTagChunkEmitsNoDelta() {
@@ -248,5 +309,47 @@ struct ToolCallDeltaTrackerTests {
         #expect(tracker.observe(#"{"name""#) == #"{"name""#)
         #expect(tracker.observe(": 1}") == ": 1}")
         #expect(tracker.observe("</tool_call>") == nil)
+    }
+
+    @Test func bareJSONCollectionProducesNoDeltas() {
+        var tracker = makeTracker()
+        // The `<` inside the string value must not be misread as a tag start
+        // — the processor is collecting this as bare JSON (#67 review).
+        #expect(tracker.observe(#"{"a": "<tool_call>x"}"#) == nil)
+        #expect(tracker.isMidToolCall == false)
+    }
+
+    @Test func unclosedBareJSONIsMidCallButCarriedNoDeltas() {
+        var tracker = makeTracker()
+        #expect(tracker.observe(#"{"a": "<tool"#) == nil)
+        #expect(tracker.isMidToolCall)
+        #expect(tracker.deltasCarriedBuffer == false)
+    }
+
+    @Test func invalidJSONPrefixFallsBackToTaggedCollection() {
+        var tracker = makeTracker()
+        // `{x` cannot begin a JSON object, so the processor prefers tagged
+        // parsing from the later `<` — mirror that.
+        #expect(tracker.observe(#"{x <tool_call>{"a""#) == #"<tool_call>{"a""#)
+        #expect(tracker.deltasCarriedBuffer)
+    }
+
+    @Test func completedJSONObjectRescansTrailingForTaggedCall() {
+        var tracker = makeTracker()
+        // Bare-JSON object completes (the processor parses or flushes it),
+        // then a tagged call starts in the same chunk.
+        let delta = tracker.observe(#"{"a": 1} <tool_call>{"b""#)
+        #expect(delta == #"<tool_call>{"b""#)
+        #expect(tracker.isMidToolCall)
+    }
+
+    @Test func bareJSONSpanningChunksResolvesAndRescans() {
+        var tracker = makeTracker()
+        #expect(tracker.observe("{") == nil)
+        #expect(tracker.isMidToolCall)
+        #expect(tracker.observe(#""a": "<tool_call>x""#) == nil)
+        // Object closes; trailing tagged call is picked up.
+        #expect(tracker.observe("}<tool_call>") == "<tool_call>")
+        #expect(tracker.deltasCarriedBuffer)
     }
 }

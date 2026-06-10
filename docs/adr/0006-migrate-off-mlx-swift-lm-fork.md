@@ -26,9 +26,12 @@ The app drives chunked prefill itself (splitting chunks at planned checkpoint
 offsets — `PrefillPlanner` already computes these), snapshots via `copy()`/`trim`,
 and owns the `[KVCache]` array across generation, which makes
 `FinalizedKVCacheHandle` unnecessary. The agent path likewise stops using the
-package's `generateTask` event stream and runs its own token loop with its own
-`ToolCallProcessor` instance (in-flight tool-call deltas = text the processor
-swallows; EOS recovery via `processEOS(returnBufferedText:)`).
+package's `generateTask` event stream: it consumes the public raw-token
+`generateTokenTask` stream and owns only the event mapping — detokenization
+into its own `ToolCallProcessor` instance (in-flight tool-call deltas = text
+the processor swallows; EOS recovery via `processEOS(returnBufferedText:)`),
+with a `ToolCallDeltaTracker` mirroring the processor's collection states for
+the delta stream.
 
 Mechanics: `Vendor/mlx-swift-lm` stays a submodule but its URL changes to
 `ml-explore/mlx-swift-lm`, pinned to a vetted recent `main` commit — release tags

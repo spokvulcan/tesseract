@@ -44,15 +44,20 @@ nonisolated enum PrefillExecutor {
         let total = text.tokens.dim(-1)
         var y = text
 
-        // One chunk forward pass. Mirrors the fork's prepare loops: 1D inputs
-        // get the batch axis added here, 2D (VLM conditional-generation)
-        // inputs are already batched. The fork passed `state: nil` per chunk;
-        // hybrid models carry recurrent state inside the cache (MambaCache),
-        // not in LMOutput.State.
+        // One chunk forward pass. Mirrors upstream `LLMModel.prepare`: 1D
+        // inputs get the batch axis added here, 2D (VLM conditional-
+        // generation) inputs are already batched; `LMOutput.State` threads
+        // from each chunk into the next (Qwen3.5-VLM carries its RoPE deltas
+        // there — without it every chunk after the first restarts positions
+        // at 0), and `asyncEval` lets the CPU build chunk N+1's graph while
+        // the GPU evaluates chunk N. Checkpoint captures synchronize
+        // explicitly before copying.
+        var chunkState: LMOutput.State?
         func forward(_ chunkSize: Int) {
             let chunk = ndim >= 2 ? y[0..., ..<chunkSize] : y[.newAxis, ..<chunkSize]
-            _ = model(chunk, cache: cache.isEmpty ? nil : cache, state: nil)
-            eval(cache)
+            let output = model(chunk, cache: cache.isEmpty ? nil : cache, state: chunkState)
+            chunkState = output.state
+            asyncEval(cache)
             y = ndim >= 2 ? y[0..., chunkSize...] : y[chunkSize...]
         }
 
@@ -80,6 +85,87 @@ nonisolated enum PrefillExecutor {
             forward(tail)
         }
 
+        // Flush the pipelined chunks and release the prefill's scratch
+        // buffers (the fork cleared the MLX buffer pool after prefill too) —
+        // long cold prefills otherwise accumulate per-chunk allocations.
+        eval(cache)
+        Memory.clearCache()
+
         return Output(snapshots: snapshots, remainder: y)
+    }
+
+    /// Build the post-prefill `TokenIterator`.
+    ///
+    /// The iterator only sees the unconsumed `remainder`, but upstream seeds
+    /// its penalty processors from its own input (`processor?.prompt`) —
+    /// which would shrink the repetition/presence/frequency context to the
+    /// remainder's single token. When penalties are configured, the processor
+    /// is created here and seeded with the full prompt suffix instead.
+    ///
+    /// The explicit-processor `TokenIterator` init has no in-iterator cache
+    /// quantization, so that path quantizes once up front — the same boundary
+    /// the per-step path would hit on its first decode step
+    /// (`quantizedKVStart` defaults to 0).
+    static func makeIterator(
+        model: any LanguageModel,
+        fullText: LMInput.Text,
+        remainder: LMInput.Text,
+        cache: inout [any KVCache],
+        parameters: GenerateParameters
+    ) throws -> TokenIterator {
+        guard let penaltyProcessor = parameters.processor() else {
+            return try TokenIterator(
+                input: LMInput(text: remainder),
+                model: model,
+                cache: cache,
+                parameters: parameters
+            )
+        }
+        maybeQuantizeKVCache(
+            cache: &cache,
+            kvBits: parameters.kvBits,
+            kvGroupSize: parameters.kvGroupSize,
+            quantizedKVStart: parameters.quantizedKVStart
+        )
+        return try TokenIterator(
+            input: LMInput(text: remainder),
+            model: model,
+            cache: cache,
+            processor: PrefillSeededLogitProcessor(
+                inner: penaltyProcessor,
+                fullPrompt: fullText.tokens
+            ),
+            sampler: parameters.sampler(),
+            prefillStepSize: parameters.prefillStepSize,
+            maxTokens: parameters.maxTokens
+        )
+    }
+}
+
+/// Wraps the parameters' logit processor so penalty rings are seeded with the
+/// full prompt suffix: `TokenIterator.prepare` calls
+/// `processor?.prompt(input.text.tokens)` with the iterator's own input, and
+/// after chunked prefill that input is only the final prompt token.
+/// `TokenRing.loadPrompt` keeps the trailing context-size window, so seeding
+/// with the full suffix reproduces the unchunked behavior.
+private nonisolated struct PrefillSeededLogitProcessor: LogitProcessor {
+    private var inner: any LogitProcessor
+    private let fullPrompt: MLXArray
+
+    init(inner: any LogitProcessor, fullPrompt: MLXArray) {
+        self.inner = inner
+        self.fullPrompt = fullPrompt
+    }
+
+    mutating func prompt(_ prompt: MLXArray) {
+        inner.prompt(fullPrompt)
+    }
+
+    func process(logits: MLXArray) -> MLXArray {
+        inner.process(logits: logits)
+    }
+
+    mutating func didSample(token: MLXArray) {
+        inner.didSample(token: token)
     }
 }

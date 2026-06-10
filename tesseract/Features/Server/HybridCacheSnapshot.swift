@@ -106,12 +106,29 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         )
     }
 
+    /// A layer whose persisted data cannot be restored through the upstream
+    /// cache classes. Surfaced as a thrown error so callers degrade to a
+    /// cache miss — the upstream `metaState` setters `fatalError` on
+    /// malformed input, which would turn a corrupt snapshot file into an
+    /// app crash on a warm-start hit.
+    struct RestoreError: Error, CustomStringConvertible {
+        let layerIndex: Int
+        let className: String
+        let metaState: [String]
+
+        var description: String {
+            "HybridCacheSnapshot.RestoreError(layer: \(layerIndex), "
+                + "class: \(className), metaState: \(metaState))"
+        }
+    }
+
     /// Restore into a live cache array. Creates correct class per layer.
     /// Mirrors the upstream loadPromptCache() reconstruction logic.
-    func restore(
-        kvBitsHint: Int? = nil,
-        kvGroupSizeHint: Int? = nil
-    ) -> [any KVCache] {
+    ///
+    /// Throws ``RestoreError`` when a layer's class or metaState shape is not
+    /// restorable (corrupt or truncated persisted data) — callers treat that
+    /// as a cache miss.
+    func restore() throws -> [any KVCache] {
         let classBreakdown = Dictionary(grouping: layers, by: { $0.className })
             .mapValues { $0.count }
             .map { "\($0.key):\($0.value)" }
@@ -123,7 +140,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             + "layers=\(layers.count) maxLayerOffset=\(maxOffset) "
             + "classBreakdown=\(classBreakdown)"
         )
-        return layers.map { layerState -> any KVCache in
+        return try layers.enumerated().map { layerIndex, layerState -> any KVCache in
             // ArraysCache (and its MambaCache subclass) reject direct metaState
             // assignment upstream — slot reconstruction goes through its own path.
             if layerState.className == "MambaCache" || layerState.className == "ArraysCache" {
@@ -135,6 +152,18 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 )
             }
 
+            // Validate the metaState shape *before* the assignment below: the
+            // upstream setters `fatalError` on malformed input, so this is the
+            // only place a corrupt persisted layer can be turned into a miss.
+            guard Self.metaStateIsRestorable(layerState.metaState, for: layerState.className)
+            else {
+                throw RestoreError(
+                    layerIndex: layerIndex,
+                    className: layerState.className,
+                    metaState: layerState.metaState
+                )
+            }
+
             // `var` because `KVCache.state` has no class constraint upstream, so
             // assigning through the existential needs a mutable binding (every
             // conformer is in fact a class).
@@ -143,11 +172,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 KVCacheSimple()
 
             case "QuantizedKVCache":
-                Self.makeQuantizedCache(
-                    metaState: layerState.metaState,
-                    kvGroupSizeHint: kvGroupSizeHint,
-                    kvBitsHint: kvBitsHint
-                )
+                Self.makeQuantizedCache(metaState: layerState.metaState)
 
             case "RotatingKVCache":
                 Self.makeRotatingCache(metaState: layerState.metaState)
@@ -156,7 +181,11 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 ChunkedKVCache()
 
             default:
-                fatalError("HybridCacheSnapshot: unsupported cache class '\(layerState.className)'")
+                throw RestoreError(
+                    layerIndex: layerIndex,
+                    className: layerState.className,
+                    metaState: layerState.metaState
+                )
             }
 
             if !layerState.state.isEmpty {
@@ -179,8 +208,11 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     // MARK: - Chunked Prefill
 
     /// Runs a checkpoint-aware prefill loop: main chunking + tail drain.
-    /// The `processChunk` closure must run the forward pass for `chunkSize` tokens,
-    /// call `eval(cache)`, and advance the caller's token cursor past the chunk.
+    /// The `processChunk` closure must run the forward pass for `chunkSize`
+    /// tokens and advance the caller's token cursor past the chunk; it may
+    /// evaluate lazily (`asyncEval`) — the loop synchronizes with `eval(cache)`
+    /// before every checkpoint capture, so non-checkpoint chunks keep
+    /// upstream `prepare`'s CPU/GPU pipelining.
     /// Returns (tokensConsumed, snapshots).
     static func chunkedPrefill(
         totalTokens: Int,
@@ -205,6 +237,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             // Invariant: relativeCheckpoints derives from checkpoints.keys, so the
             // map always has an entry for any offset we capture at.
             let type = checkpoints[absoluteOffset]!
+            // Materialize any pipelined chunk work before deep-copying.
+            eval(cache)
             if let snap = capture(cache: cache, offset: absoluteOffset, type: type) {
                 snapshots.append(snap)
             }
@@ -276,38 +310,49 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         }
     }
 
-    /// Parse groupSize/bits from metaState, falling back to hints then defaults.
-    /// Stricter than loadPromptCache() which routes through the type-specific
-    /// metaState setter.
-    private static func makeQuantizedCache(
-        metaState: [String],
-        kvGroupSizeHint: Int?,
-        kvBitsHint: Int?
-    ) -> QuantizedKVCache {
-        let groupSize: Int
-        let bits: Int
-        if metaState.count >= 4,
-           let parsedGroupSize = Int(metaState[2]),
-           let parsedBits = Int(metaState[3])
-        {
-            groupSize = parsedGroupSize
-            bits = parsedBits
-        } else {
-            groupSize = kvGroupSizeHint ?? 64
-            bits = kvBitsHint ?? 8
+    /// Mirrors the preconditions of each upstream `metaState` setter (which
+    /// `fatalError` instead of failing): `restore()` only assigns metaState
+    /// that this accepts, so corrupt persisted data becomes a thrown
+    /// ``RestoreError`` (a cache miss) rather than a crash.
+    private static func metaStateIsRestorable(
+        _ metaState: [String], for className: String
+    ) -> Bool {
+        switch className {
+        case "KVCache", "KVCacheSimple":
+            // BaseKVCache: exactly [""].
+            return metaState.count == 1 && metaState[0].isEmpty
+        case "QuantizedKVCache":
+            // [step, offset, groupSize, bits]; the setter parses indices 1–3.
+            return metaState.count == 4
+                && Int(metaState[1]) != nil
+                && Int(metaState[2]) != nil
+                && Int(metaState[3]) != nil
+        case "RotatingKVCache":
+            // [keep, maxCacheSize, step, offset, idx]; maxSize must be numeric.
+            return metaState.count == 5
+                && Int(metaState[0]) != nil
+                && metaState[1] != "None" && Int(metaState[1]) != nil
+                && Int(metaState[2]) != nil
+                && Int(metaState[3]) != nil
+                && Int(metaState[4]) != nil
+        case "ChunkedKVCache":
+            // [chunkSize | "None", startPosition]; the setter tolerates the values.
+            return metaState.count == 2
+        default:
+            return false
         }
-        return QuantizedKVCache(groupSize: groupSize, bits: bits)
     }
 
-    /// Parse maxSize from metaState for RotatingKVCache constructor.
+    /// Construct from a metaState already validated by `metaStateIsRestorable`.
+    /// Stricter than loadPromptCache() which routes through the type-specific
+    /// metaState setter.
+    private static func makeQuantizedCache(metaState: [String]) -> QuantizedKVCache {
+        QuantizedKVCache(groupSize: Int(metaState[2])!, bits: Int(metaState[3])!)
+    }
+
+    /// Construct from a metaState already validated by `metaStateIsRestorable`.
     private static func makeRotatingCache(metaState: [String]) -> RotatingKVCache {
-        guard metaState.count >= 5 else {
-            fatalError("Invalid RotatingKVCache metaState — expected 5 values, got \(metaState.count)")
-        }
-        guard metaState[1] != "None", let maxSize = Int(metaState[1]) else {
-            fatalError("Failed to parse RotatingKVCache maxSize from: \(metaState[1])")
-        }
-        return RotatingKVCache(maxSize: maxSize)
+        RotatingKVCache(maxSize: Int(metaState[1])!)
     }
 
     /// Rebuild an `ArraysCache`/`MambaCache` from its slot-aware metaState.

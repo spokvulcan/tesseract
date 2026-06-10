@@ -240,27 +240,32 @@ actor LLMActor {
             // single forward pass over the whole prompt; chunk text-only
             // prompts through the app's prefill driver to keep peak memory
             // bounded (ADR-0006). Image-bearing inputs stay single-shot.
-            var iteratorInput = prepared
-            var iteratorCache: [any KVCache]? = nil
+            let iterator: TokenIterator
             if prepared.text.tokens.ndim >= 2,
                prepared.image == nil, prepared.video == nil,
                prepared.text.tokens.dim(-1) > genParams.prefillStepSize {
-                let cache = context.model.newCache(parameters: genParams)
+                var cache = context.model.newCache(parameters: genParams)
                 let warmed = try PrefillExecutor.run(
                     model: context.model,
                     text: prepared.text,
                     cache: cache,
                     prefillStepSize: genParams.prefillStepSize
                 )
-                iteratorInput = LMInput(text: warmed.remainder)
-                iteratorCache = cache
+                iterator = try PrefillExecutor.makeIterator(
+                    model: context.model,
+                    fullText: prepared.text,
+                    remainder: warmed.remainder,
+                    cache: &cache,
+                    parameters: genParams
+                )
+            } else {
+                iterator = try TokenIterator(
+                    input: prepared,
+                    model: context.model,
+                    cache: nil,
+                    parameters: genParams
+                )
             }
-            let iterator = try TokenIterator(
-                input: iteratorInput,
-                model: context.model,
-                cache: iteratorCache,
-                parameters: genParams
-            )
             let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
             await progressHandler?(.prefillFinished(.init(
                 promptTokens: promptTokenCount,
@@ -382,31 +387,35 @@ actor LLMActor {
         let tokenArr: MLXArray = tokenNDim >= 2
             ? flatArr.expandedDimensions(axis: 0)
             : flatArr
-        var continuedText = LMInput.Text(tokens: tokenArr, mask: nil)
+        let continuedText = LMInput.Text(tokens: tokenArr, mask: nil)
 
         // Same VLM-class chunking as `startRawGeneration`: upstream's 2D
         // `prepare` is single-shot, so pre-chunk long token-only prompts
         // through the app driver (ADR-0006).
-        var iteratorCache: [any KVCache]? = nil
+        let iterator: TokenIterator
         if tokenNDim >= 2, combined.count > parameters.prefillStepSize {
-            let cache = context.model.newCache(parameters: parameters)
+            var cache = context.model.newCache(parameters: parameters)
             let warmed = try PrefillExecutor.run(
                 model: context.model,
                 text: continuedText,
                 cache: cache,
                 prefillStepSize: parameters.prefillStepSize
             )
-            continuedText = warmed.remainder
-            iteratorCache = cache
+            iterator = try PrefillExecutor.makeIterator(
+                model: context.model,
+                fullText: continuedText,
+                remainder: warmed.remainder,
+                cache: &cache,
+                parameters: parameters
+            )
+        } else {
+            iterator = try TokenIterator(
+                input: LMInput(text: continuedText),
+                model: context.model,
+                cache: nil,
+                parameters: parameters
+            )
         }
-        let continued = LMInput(text: continuedText)
-
-        let iterator = try TokenIterator(
-            input: continued,
-            model: context.model,
-            cache: iteratorCache,
-            parameters: parameters
-        )
         let (stream, completion) = TokenGenerationLoop.start(
             promptTokenCount: combined.count,
             modelConfiguration: context.configuration,

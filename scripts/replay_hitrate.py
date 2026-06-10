@@ -21,6 +21,7 @@ requested model on demand (GPU lease ensureLoaded).
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -190,7 +191,22 @@ def main():
         "records": records,
     }
 
-    out_path = args.out or f"benchmarks/results/hitrate_{args.label}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.json"
+    # Anchor the default to the repo root (not the CWD) and create the
+    # directory up front: a replay takes minutes of GPU time, and failing at
+    # this final open() would throw the whole run away.
+    if args.out:
+        out_path = args.out
+    else:
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        out_path = os.path.join(
+            repo_root,
+            "benchmarks",
+            "results",
+            f"hitrate_{args.label}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.json",
+        )
+    out_dir = os.path.dirname(out_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"reuse_rate={summary['token_reuse_rate']} checks={checks}")

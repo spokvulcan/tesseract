@@ -222,7 +222,7 @@ final class HybridCacheCorrectnessRunner {
         let logitsLive = lastTokenLogits(context: context, tokens: tokens, cache: liveCache)
 
         // Restore a fresh copy at offset N and forward the same sentinel.
-        let restoredCache = snap.restore()
+        let restoredCache = try snap.restore()
         let logitsRestored = lastTokenLogits(
             context: context, tokens: tokens, cache: restoredCache
         )
@@ -252,7 +252,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             return (false, "capture nil", [])
         }
-        let restored = snap.restore()
+        let restored = try snap.restore()
 
         let divergentSuffix = Array(tokens.suffix(n - k).reversed())
         try prefill(
@@ -295,7 +295,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             return (false, "capture nil", [])
         }
-        let cacheB = snap.restore()
+        let cacheB = try snap.restore()
 
         let result = compareCacheStates(
             cacheA: cacheA, cacheB: cacheB, filter: filter, checkOffset: checkOffset
@@ -328,7 +328,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             return (false, "capture nil", [])
         }
-        let cacheB = snap.restore(kvBitsHint: 8, kvGroupSizeHint: 64)
+        let cacheB = try snap.restore()
 
         var maxDiff: Float = 0
         var allMetaMatch = true
@@ -371,8 +371,8 @@ final class HybridCacheCorrectnessRunner {
             return (false, "capture nil", [])
         }
 
-        let cache1 = snap.restore()
-        let cache2 = snap.restore()
+        let cache1 = try snap.restore()
+        let cache2 = try snap.restore()
         let suffix = Array(tokens.suffix(tokens.count - k))
 
         try prefill(
@@ -433,7 +433,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             return (false, "leaf capture nil", [])
         }
-        let restoredCache = leafSnap.restore()
+        let restoredCache = try leafSnap.restore()
         let restoredLogits = lastTokenLogits(
             context: context, tokens: tokens, cache: restoredCache
         )
@@ -467,7 +467,7 @@ final class HybridCacheCorrectnessRunner {
             return (false, "capture nil at K=\(k)", [])
         }
 
-        let restoredCache = snap.restore()
+        let restoredCache = try snap.restore()
         let suffix = Array(tokens[k..<(tokens.count - 1)])
         let snapshots = try prefill(
             context: context,
@@ -551,7 +551,7 @@ final class HybridCacheCorrectnessRunner {
             ) else {
                 return (false, "trimmed leaf capture nil at trim=\(trimAmount)", lines)
             }
-            let restoredCache = leafSnap.restore()
+            let restoredCache = try leafSnap.restore()
             let restoredLogits = lastTokenLogits(
                 context: context, tokens: coldTokens, cache: restoredCache
             )
@@ -654,7 +654,7 @@ final class HybridCacheCorrectnessRunner {
         ) else {
             throw HybridCacheCorrectnessError.snapshotCaptureFailed
         }
-        let cache = snap.restore()
+        let cache = try snap.restore()
         try prefill(
             context: context,
             tokens: Array(tokens[k..<(tokens.count - 1)]),
