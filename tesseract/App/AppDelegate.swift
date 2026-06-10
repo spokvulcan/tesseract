@@ -5,12 +5,10 @@
 
 import Foundation
 import AppKit
-import Observation
 import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var observationTask: Task<Void, Never>?
     private var terminationTask: Task<Void, Never>?
     var container: DependencyContainer?
     var menuBarManager: MenuBarManager?
@@ -87,11 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.container = container
         self.navigationSelection = navigationSelection
 
-        // Setup menu bar
-        menuBarManager = MenuBarManager(settings: container.settingsManager)
-        menuBarManager?.coordinator = container.dictationCoordinator
-        menuBarManager?.history = container.transcriptionHistory
-        menuBarManager?.speechCoordinator = container.speechCoordinator
+        // The container constructs the menu bar manager (and App Bindings feeds
+        // it dictation state); the delegate attaches only the window-management
+        // callbacks it genuinely owns.
+        menuBarManager = container.menuBarManager
         menuBarManager?.onShowMainWindow = { [weak self] in
             self?.showMainWindow()
         }
@@ -105,14 +102,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
         }
         menuBarManager?.setupMenuBar()
-
-        // Subscribe to dictation state changes
-        observationTask = Task { [weak self] in
-            guard let container = self?.container else { return }
-            for await state in Observations({ container.dictationCoordinator.state }) {
-                self?.menuBarManager?.updateState(from: state)
-            }
-        }
 
         // Apply initial dock visibility (didSet doesn't fire during SettingsManager.init)
         container.settingsManager.applyDockVisibility()
@@ -149,8 +138,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         terminationTask?.cancel()
         terminationTask = nil
-        observationTask?.cancel()
-        observationTask = nil
         menuBarManager?.teardownMenuBar()
     }
 

@@ -5,7 +5,6 @@
 
 import Foundation
 import Combine
-import Observation
 import SwiftUI
 import MLX
 import os
@@ -79,7 +78,7 @@ final class DependencyContainer: ObservableObject {
         settingsManager: settingsManager
     )
     // HTTP Server
-    lazy var httpServer = HTTPServer(port: UInt16(clamping: max(1, settingsManager.serverPort)))
+    lazy var httpServer = HTTPServer(port: HTTPServer.clampedPort(settingsManager.serverPort))
 
     lazy var terminationCoordinator = makeTerminationCoordinator()
     lazy var agentCoordinator: AgentCoordinator = {
@@ -139,8 +138,20 @@ final class DependencyContainer: ObservableObject {
         placement: .fullScreenBorder,
         content: { FullScreenBorderOverlayView(overlayState: $0) }
     )
-    private var cancellables = Set<AnyCancellable>()
-    private var observationTasks: [Task<Void, Never>] = []
+
+    // Menu bar — constructed here so App Bindings can wire its dictation-state
+    // effect before the app delegate attaches the window-management callbacks.
+    lazy var menuBarManager: MenuBarManager = {
+        let manager = MenuBarManager(settings: settingsManager)
+        manager.coordinator = dictationCoordinator
+        manager.history = transcriptionHistory
+        manager.speechCoordinator = speechCoordinator
+        return manager
+    }()
+
+    // App Bindings owns the launch sequence and every runtime subscription
+    // with a rule; this container only wires its inputs and effects.
+    lazy var appBindings = makeAppBindings()
 
     // Coordinator
     lazy var dictationCoordinator: DictationCoordinator = {
@@ -231,162 +242,99 @@ final class DependencyContainer: ObservableObject {
         await registerCoreMessageCodecs()
 
         hotkeyManager.startListening()
-        startSettingsObservation()
 
-        // Setup overlay panels. Seed the border's glow theme synchronously
-        // *before* its view is created, so a user's non-default theme shows on the
-        // very first frame instead of flashing the default while the settings
-        // observation below catches up (it emits at subscription, but async).
-        borderOverlay.state.glowTheme = settingsManager.glowTheme
-        pillOverlay.setup()
-        borderOverlay.setup()
-
-        // Forward dictation state to both overlays (the disabled one stays hidden).
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await state in Observations({ self.dictationCoordinator.state }) {
-                self.pillOverlay.handleStateChange(state)
-                self.borderOverlay.handleStateChange(state)
-            }
-        })
-
-        // Forward audio level to both overlays; each drops it while disabled, so the
-        // hidden overlay does no SwiftUI work at audio frame-rate. The `isEnabled`
-        // gate inside the panel is the single source of truth for which overlay is
-        // live — no separate active-overlay pointer to keep in sync.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await level in Observations({ self.audioCaptureEngine.audioLevel }) {
-                self.pillOverlay.handleAudioLevelChange(level)
-                self.borderOverlay.handleAudioLevelChange(level)
-            }
-        })
-
-        // Set initial active overlay based on settings
-        updateActiveOverlay()
-
-        // Observe overlay style changes to switch overlays dynamically
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await _ in Observations({ self.settingsManager.overlayStyle }) {
-                self.updateActiveOverlay()
-            }
-        })
-
-        // Keep the border's glow theme live — pure view data, set on state directly.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await glowTheme in Observations({ self.settingsManager.glowTheme }) {
-                self.borderOverlay.state.glowTheme = glowTheme
-            }
-        })
-
-        // Load Whisper model from cache if already downloaded
-        await loadWhisperModelIfAvailable()
-
-        // Auto-load Whisper model when download completes
-        modelDownloadManager.$statuses
-            .compactMap { $0[WhisperModel.modelID] }
-            .removeDuplicates()
-            .sink { [weak self] status in
-                guard case .downloaded = status else { return }
-                guard let self, !self.transcriptionEngine.isModelLoaded else { return }
-                Task {
-                    await self.loadWhisperModelIfAvailable()
-                }
-            }
-            .store(in: &cancellables)
-
-        // Register HTTP server routes
+        // Register HTTP server routes before App Bindings starts the server.
         registerHTTPRoutes()
 
-        // Observe server toggle/port changes (Observations emits current value immediately)
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await enabled in Observations({ self.settingsManager.isServerEnabled }) {
-                if enabled {
-                    await self.httpServer.start()
-                } else {
-                    self.httpServer.stop()
-                }
-            }
-        })
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await port in Observations({ self.settingsManager.serverPort }) {
-                await self.httpServer.updatePort(UInt16(clamping: max(1, port)))
-            }
-        })
-
-        // Guarded on an already-loaded `.llm` slot so the initial `Observations`
-        // emit at subscription time does not force a model load at app launch —
-        // lazy loading is preserved.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await _ in Observations({ self.settingsManager.selectedAgentModelID }) {
-                guard self.inferenceArbiter.loadedSlots.contains(.llm) else { continue }
-                do {
-                    try await self.inferenceArbiter.reloadLLMIfNeeded()
-                } catch {
-                    Log.agent.error("Agent model reload failed: \(error.localizedDescription)")
-                }
-            }
-        })
+        // Hand off to App Bindings: the launch ordering and every runtime
+        // subscription with a rule live (and are tested) there.
+        appBindings.start()
     }
 
-    private func loadWhisperModelIfAvailable() async {
-        if modelManager.isModelAvailable(), let modelPath = modelManager.getModelPath() {
-            do {
-                try await transcriptionEngine.loadModel(from: modelPath)
-                Log.general.info("Loaded Whisper model from: \(modelPath.path)")
-            } catch {
-                Log.general.error("Failed to load Whisper model: \(error)")
-            }
-        } else {
-            Log.general.warning("Whisper model not downloaded — download it from the Models page")
-        }
-    }
-
-    /// Enables the overlay matching the current style and disables the other. Each
-    /// panel's `isEnabled` then gates both its visibility and its audio-frame
-    /// handling, so the disabled overlay stays hidden and idle.
-    private func updateActiveOverlay() {
-        switch settingsManager.overlayStyle {
-        case .pill:
-            pillOverlay.setEnabled(true)
-            borderOverlay.setEnabled(false)
-        case .fullScreenBorder:
-            pillOverlay.setEnabled(false)
-            borderOverlay.setEnabled(true)
-        }
-    }
-
-    private func startSettingsObservation() {
-        // Observe dictation hotkey changes
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await hotkey in Observations({ self.settingsManager.hotkey }) {
-                if hotkey != self.hotkeyManager.currentHotkey {
-                    self.hotkeyManager.updateHotkey(hotkey)
+    private func makeAppBindings() -> AppBindings {
+        AppBindings(
+            settings: settingsManager,
+            inputs: .init(
+                dictationState: { [dictationCoordinator] in
+                    dictationCoordinator.state
+                },
+                audioLevel: { [audioCaptureEngine] in
+                    audioCaptureEngine.audioLevel
+                },
+                currentDictationHotkey: { [hotkeyManager] in
+                    hotkeyManager.currentHotkey
+                },
+                isLLMSlotLoaded: { [inferenceArbiter] in
+                    inferenceArbiter.loadedSlots.contains(.llm)
+                },
+                whisperModelPath: { [modelManager] in
+                    modelManager.isModelAvailable() ? modelManager.getModelPath() : nil
+                },
+                isTranscriptionModelLoaded: { [transcriptionEngine] in
+                    transcriptionEngine.isModelLoaded
+                },
+                modelDownloadStatuses: modelDownloadManager.$statuses.eraseToAnyPublisher()
+            ),
+            effects: .init(
+                setBorderGlowTheme: { [borderOverlay] in
+                    borderOverlay.state.glowTheme = $0
+                },
+                setUpOverlayPanels: { [pillOverlay, borderOverlay] in
+                    pillOverlay.setup()
+                    borderOverlay.setup()
+                },
+                setPillOverlayEnabled: { [pillOverlay] in
+                    pillOverlay.setEnabled($0)
+                },
+                setBorderOverlayEnabled: { [borderOverlay] in
+                    borderOverlay.setEnabled($0)
+                },
+                pushDictationStateToPill: { [pillOverlay] in
+                    pillOverlay.handleStateChange($0)
+                },
+                pushDictationStateToBorder: { [borderOverlay] in
+                    borderOverlay.handleStateChange($0)
+                },
+                pushDictationStateToMenuBar: { [menuBarManager] in
+                    menuBarManager.updateState(from: $0)
+                },
+                pushAudioLevelToPill: { [pillOverlay] in
+                    pillOverlay.handleAudioLevelChange($0)
+                },
+                pushAudioLevelToBorder: { [borderOverlay] in
+                    borderOverlay.handleAudioLevelChange($0)
+                },
+                updateDictationHotkey: { [hotkeyManager] in
+                    hotkeyManager.updateHotkey($0)
+                },
+                updateTTSHotkey: { [hotkeyManager] in
+                    hotkeyManager.updateRegisteredHotkey(id: "tts", combo: $0)
+                },
+                updateAgentHotkey: { [hotkeyManager] in
+                    hotkeyManager.updateRegisteredHotkey(id: "agent", combo: $0)
+                },
+                startHTTPServer: { [httpServer] in
+                    await httpServer.start()
+                },
+                stopHTTPServer: { [httpServer] in
+                    httpServer.stop()
+                },
+                updateHTTPServerPort: { [httpServer] in
+                    await httpServer.updatePort($0)
+                },
+                reloadLLMIfNeeded: { [inferenceArbiter] in
+                    try await inferenceArbiter.reloadLLMIfNeeded()
+                },
+                loadWhisperModel: { [transcriptionEngine] modelPath in
+                    do {
+                        try await transcriptionEngine.loadModel(from: modelPath)
+                        Log.general.info("Loaded Whisper model from: \(modelPath.path)")
+                    } catch {
+                        Log.general.error("Failed to load Whisper model: \(error)")
+                    }
                 }
-            }
-        })
-
-        // Observe TTS hotkey changes
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await hotkey in Observations({ self.settingsManager.ttsHotkey }) {
-                self.hotkeyManager.updateRegisteredHotkey(id: "tts", combo: hotkey)
-            }
-        })
-
-        // Observe agent hotkey changes
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await hotkey in Observations({ self.settingsManager.agentHotkey }) {
-                self.hotkeyManager.updateRegisteredHotkey(id: "agent", combo: hotkey)
-            }
-        })
+            )
+        )
     }
 
     private func registerHTTPRoutes() {
