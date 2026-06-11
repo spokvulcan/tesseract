@@ -36,11 +36,12 @@ import MLXLMCommon
             continuation: .userTurn,
             storedConversation: stored,
             toolSpecs: nil,
-            tokenizer: tokenizer
+            tokenizer: tokenizer,
+            keySpace: .identity()
         )
         // The reusable prefix is exactly the stored turn's own render — the
         // synthetic user continuation is excluded.
-        #expect(prefix == (try render(stored)))
+        #expect(try prefix?.get() == (try render(stored)))
     }
 
     @Test func toolResultProbeReturnsTheStoredRenderWithoutTheProbeContinuation() throws {
@@ -52,9 +53,35 @@ import MLXLMCommon
             continuation: .toolResult,
             storedConversation: stored,
             toolSpecs: nil,
-            tokenizer: tokenizer
+            tokenizer: tokenizer,
+            keySpace: .identity()
         )
-        #expect(prefix == (try render(stored)))
+        #expect(try prefix?.get() == (try render(stored)))
+    }
+
+    @Test func userTurnProbeTranslatesTheImageRenderIntoKeySpace() throws {
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(
+                role: .user, content: "describe", images: [HTTPPrefixCacheImage(data: Data([0x0A]))]
+            ),
+            HTTPPrefixCacheMessage(role: .assistant, content: "a diagram"),
+        ])
+        let keySpace = try FakeChatMLTokenizer.keySpace(for: stored, runLengths: [4])
+        let prefix = try LeafAdmissionBuilder.reusablePrefix(
+            continuation: .userTurn,
+            storedConversation: stored,
+            toolSpecs: nil,
+            tokenizer: tokenizer,
+            keySpace: keySpace
+        )
+        // The probe runs in render space (the stored turn's own render, as in
+        // the text-only probes) and the shared prefix comes back translated:
+        // the single pad becomes the image's 4-token pseudo-expansion.
+        let renderTokens = try render(stored)
+        let translated = try #require(try prefix?.get())
+        #expect(translated == (try keySpace.translate(renderTokens: renderTokens).get()))
+        #expect(translated.count == renderTokens.count + 3)
+        #expect(translated.contains { $0 < 0 })
     }
 
     @Test func probeDivergesToNilWhenThereIsNoCommonPrefix() throws {
@@ -65,7 +92,8 @@ import MLXLMCommon
             continuation: .userTurn,
             storedConversation: empty,
             toolSpecs: nil,
-            tokenizer: tokenizer
+            tokenizer: tokenizer,
+            keySpace: .identity()
         )
         #expect(prefix == nil)
     }
@@ -98,8 +126,9 @@ import MLXLMCommon
     @Test func directToolWithUsableBoundaryAndConvergingProbePlansFromBoundary() async throws {
         let stored = toolTurn()
         let toolTokens = try LeafAdmissionBuilder.reusablePrefix(
-            continuation: .toolResult, storedConversation: stored, toolSpecs: nil, tokenizer: tokenizer
-        )!
+            continuation: .toolResult, storedConversation: stored, toolSpecs: nil,
+            tokenizer: tokenizer, keySpace: .identity()
+        )!.get()
         let plan = await LeafAdmissionBuilder.plan(
             mode: .directTool,
             storedConversation: stored,
@@ -107,6 +136,7 @@ import MLXLMCommon
             toolSpecs: nil,
             transientBoundary: boundary(offset: 5),
             tokenizer: tokenizer,
+            keySpace: .identity(),
             resolveBoundary: noResolvedBoundary
         )
         guard case .fromBoundary(let b, let tokens) = plan else {
@@ -125,6 +155,7 @@ import MLXLMCommon
             toolSpecs: nil,
             transientBoundary: nil,
             tokenizer: tokenizer,
+            keySpace: .identity(),
             resolveBoundary: noResolvedBoundary
         )
         guard case .skip(let reason) = plan else {
@@ -144,6 +175,7 @@ import MLXLMCommon
             toolSpecs: nil,
             transientBoundary: boundary(offset: 5),
             tokenizer: tokenizer,
+            keySpace: .identity(),
             resolveBoundary: noResolvedBoundary
         )
         guard case .skip(let reason) = plan else {
@@ -156,8 +188,9 @@ import MLXLMCommon
     @Test func directToolWithEmptyResidualSkipsAtOrBeforeBoundary() async throws {
         let stored = toolTurn()
         let toolTokens = try LeafAdmissionBuilder.reusablePrefix(
-            continuation: .toolResult, storedConversation: stored, toolSpecs: nil, tokenizer: tokenizer
-        )!
+            continuation: .toolResult, storedConversation: stored, toolSpecs: nil,
+            tokenizer: tokenizer, keySpace: .identity()
+        )!.get()
         // Boundary sits at the end of the tool render: the residual is empty.
         let plan = await LeafAdmissionBuilder.plan(
             mode: .directTool,
@@ -166,6 +199,7 @@ import MLXLMCommon
             toolSpecs: nil,
             transientBoundary: boundary(offset: toolTokens.count),
             tokenizer: tokenizer,
+            keySpace: .identity(),
             resolveBoundary: noResolvedBoundary
         )
         guard case .skip(let reason) = plan else {
@@ -174,6 +208,137 @@ import MLXLMCommon
         }
         #expect(reason == .storedAtOrBeforeBoundary(
             storedLen: toolTokens.count, boundaryOffset: toolTokens.count
+        ))
+    }
+
+    @Test func directToolBoundaryInsideTheImagePrefixSkipsTyped() async throws {
+        // One image, run length 4: the fake key space's prepared shape puts
+        // the run end (minimum warm offset) at 5. A transient boundary at 3
+        // would leave the image run in the residual — typed skip.
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(
+                role: .user, content: "look", images: [HTTPPrefixCacheImage(data: Data([0x0C]))]
+            ),
+            HTTPPrefixCacheMessage(role: .assistant, content: "calling"),
+        ])
+        let keySpace = try FakeChatMLTokenizer.keySpace(for: stored, runLengths: [4])
+        let plan = await LeafAdmissionBuilder.plan(
+            mode: .directTool,
+            storedConversation: stored,
+            storedTokens: [1, 2, 3],
+            toolSpecs: nil,
+            transientBoundary: boundary(offset: 3),
+            tokenizer: tokenizer,
+            keySpace: keySpace,
+            resolveBoundary: noResolvedBoundary
+        )
+        guard case .skip(let reason) = plan else {
+            Issue.record("expected .skip, got \(plan)")
+            return
+        }
+        #expect(reason == .boundaryInsideImagePrefix(
+            boundaryOffset: 3, minimumWarmOffset: keySpace.minimumWarmOffset
+        ))
+        #expect(keySpace.minimumWarmOffset == 5)
+    }
+
+    @Test func canonicalBoundaryInsideTheImagePrefixFallsBackToTheResolver() async throws {
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(
+                role: .user, content: "explain this", images: [HTTPPrefixCacheImage(data: Data([0x0D]))]
+            ),
+            HTTPPrefixCacheMessage(role: .assistant, content: "because reasons"),
+        ])
+        let keySpace = try FakeChatMLTokenizer.keySpace(for: stored, runLengths: [4])
+        let canonical = try LeafAdmissionBuilder.reusablePrefix(
+            continuation: .userTurn, storedConversation: stored, toolSpecs: nil,
+            tokenizer: tokenizer, keySpace: keySpace
+        )!.get()
+        // The transient boundary sits inside the image prefix; the resolver's
+        // snapshot past the warm offset is chosen instead.
+        let resolvedOffset = keySpace.minimumWarmOffset + 2
+        let plan = await LeafAdmissionBuilder.plan(
+            mode: .canonical,
+            storedConversation: stored,
+            storedTokens: canonical,
+            toolSpecs: nil,
+            transientBoundary: boundary(offset: 3),
+            tokenizer: tokenizer,
+            keySpace: keySpace,
+            resolveBoundary: { _ in self.boundary(offset: resolvedOffset) }
+        )
+        guard case .fromBoundary(let b, let tokens) = plan else {
+            Issue.record("expected .fromBoundary, got \(plan)")
+            return
+        }
+        #expect(b.tokenOffset == resolvedOffset)
+        #expect(tokens == canonical)
+    }
+
+    @Test func canonicalSkipsWhenNoBoundaryClearsTheImagePrefix() async throws {
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(
+                role: .user, content: "explain this", images: [HTTPPrefixCacheImage(data: Data([0x0E]))]
+            ),
+            HTTPPrefixCacheMessage(role: .assistant, content: "because reasons"),
+        ])
+        let keySpace = try FakeChatMLTokenizer.keySpace(for: stored, runLengths: [4])
+        let canonical = try LeafAdmissionBuilder.reusablePrefix(
+            continuation: .userTurn, storedConversation: stored, toolSpecs: nil,
+            tokenizer: tokenizer, keySpace: keySpace
+        )!.get()
+        // Both the transient boundary and the resolved snapshot sit inside the
+        // image prefix — there is no usable restore boundary.
+        let plan = await LeafAdmissionBuilder.plan(
+            mode: .canonical,
+            storedConversation: stored,
+            storedTokens: canonical,
+            toolSpecs: nil,
+            transientBoundary: boundary(offset: 3),
+            tokenizer: tokenizer,
+            keySpace: keySpace,
+            resolveBoundary: { _ in self.boundary(offset: 2) }
+        )
+        guard case .skip(let reason) = plan else {
+            Issue.record("expected .skip, got \(plan)")
+            return
+        }
+        #expect(reason == .noResolvedBoundary(canonicalLen: canonical.count))
+    }
+
+    @Test func planSkipsTypedWhenTheProbeRenderCannotBeTranslated() async throws {
+        let first = HTTPPrefixCacheMessage(
+            role: .user, content: "one", images: [HTTPPrefixCacheImage(data: Data([0x0A]))]
+        )
+        let stored = conversation(messages: [
+            first,
+            HTTPPrefixCacheMessage(
+                role: .user, content: "two", images: [HTTPPrefixCacheImage(data: Data([0x0B]))]
+            ),
+            HTTPPrefixCacheMessage(role: .assistant, content: "calling"),
+        ])
+        // A one-image key space against a two-image probe render: the second
+        // pad has no image-table entry, so translation fails typed and only
+        // this leaf capture skips.
+        let keySpace = try FakeChatMLTokenizer.keySpace(
+            for: conversation(messages: [first]), runLengths: [4]
+        )
+        let plan = await LeafAdmissionBuilder.plan(
+            mode: .directTool,
+            storedConversation: stored,
+            storedTokens: [1, 2, 3],
+            toolSpecs: nil,
+            transientBoundary: boundary(offset: 1),
+            tokenizer: tokenizer,
+            keySpace: keySpace,
+            resolveBoundary: noResolvedBoundary
+        )
+        guard case .skip(let reason) = plan else {
+            Issue.record("expected .skip, got \(plan)")
+            return
+        }
+        #expect(reason == .renderTranslationFailed(
+            failure: .placeholderOccurrencesExceedImages(occurrences: 2, images: 1)
         ))
     }
 
@@ -188,8 +353,9 @@ import MLXLMCommon
 
     private func canonicalPrefix(_ stored: HTTPPrefixCacheConversation) throws -> [Int] {
         try LeafAdmissionBuilder.reusablePrefix(
-            continuation: .userTurn, storedConversation: stored, toolSpecs: nil, tokenizer: tokenizer
-        )!
+            continuation: .userTurn, storedConversation: stored, toolSpecs: nil,
+            tokenizer: tokenizer, keySpace: .identity()
+        )!.get()
     }
 
     @Test func canonicalWithUsableTransientBoundaryPlansFromIt() async throws {
@@ -202,6 +368,7 @@ import MLXLMCommon
             toolSpecs: nil,
             transientBoundary: boundary(offset: 4),
             tokenizer: tokenizer,
+            keySpace: .identity(),
             resolveBoundary: noResolvedBoundary
         )
         guard case .fromBoundary(let b, let tokens) = plan else {
@@ -222,6 +389,7 @@ import MLXLMCommon
             toolSpecs: nil,
             transientBoundary: nil,
             tokenizer: tokenizer,
+            keySpace: .identity(),
             resolveBoundary: { _ in self.boundary(offset: 7) }
         )
         guard case .fromBoundary(let b, let tokens) = plan else {
@@ -242,6 +410,7 @@ import MLXLMCommon
             toolSpecs: nil,
             transientBoundary: nil,
             tokenizer: tokenizer,
+            keySpace: .identity(),
             resolveBoundary: noResolvedBoundary
         )
         guard case .skip(let reason) = plan else {
@@ -263,6 +432,7 @@ import MLXLMCommon
             toolSpecs: nil,
             transientBoundary: nil,
             tokenizer: tokenizer,
+            keySpace: .identity(),
             resolveBoundary: { _ in self.boundary(offset: canonical.count) }
         )
         guard case .skip(let reason) = plan else {
@@ -284,6 +454,7 @@ import MLXLMCommon
             toolSpecs: nil,
             transientBoundary: boundary(offset: 4),
             tokenizer: tokenizer,
+            keySpace: .identity(),
             resolveBoundary: noResolvedBoundary
         )
         guard case .skip(let reason) = plan else {

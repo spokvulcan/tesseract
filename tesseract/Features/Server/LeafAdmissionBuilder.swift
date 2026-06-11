@@ -53,6 +53,14 @@ nonisolated enum LeafSkipReason: Sendable, Equatable {
     /// *canonical*: the canonical prefix is longer than the stored path — the
     /// render disagreement the canonical leaf exists to sidestep.
     case canonicalLongerThanStored(canonicalLen: Int, storedLen: Int)
+    /// The probe's render-space token path could not be translated into key
+    /// space (image placeholder arithmetic disagreed with the request's image
+    /// table). Only this leaf capture skips; the request keeps serving.
+    case renderTranslationFailed(failure: CacheKeySpace.TranslationFailure)
+    /// The restore boundary sits inside the request's image prefix: the
+    /// residual would contain an image run (pseudo-tokens, no pixels), which
+    /// cannot be reprefilled (ADR-0007 spike results).
+    case boundaryInsideImagePrefix(boundaryOffset: Int, minimumWarmOffset: Int)
 }
 
 /// The GPU-free routing decisions for capturing a **leaf** Snapshot Admission:
@@ -88,6 +96,11 @@ nonisolated enum LeafAdmissionBuilder {
     /// render that appends a single synthetic continuation. That shared prefix
     /// is the exact token path the immediate continuation can hydrate.
     ///
+    /// Both renders are *render space* (one placeholder token per image,
+    /// unexpanded); the shared prefix is translated through the **Cache Key
+    /// Space** before it can serve as an admission path or compare against
+    /// boundary offsets. Identity for text-only requests.
+    ///
     /// Returns `nil` when the probe diverges — no common prefix, or the prefix
     /// is not strictly shorter than the continuation (the appended turn added
     /// no tokens, so there is no distinct boundary to align to).
@@ -95,8 +108,9 @@ nonisolated enum LeafAdmissionBuilder {
         continuation: Continuation,
         storedConversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
-        tokenizer: any Tokenizer
-    ) throws -> [Int]? {
+        tokenizer: any Tokenizer,
+        keySpace: CacheKeySpace
+    ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
         let baseMessages = storedConversation.promptMessages
         let storedTokens = try tokenizer.applyChatTemplate(
             messages: baseMessages,
@@ -113,7 +127,44 @@ nonisolated enum LeafAdmissionBuilder {
         guard common > 0, common <= storedTokens.count, common < continuationTokens.count else {
             return nil
         }
-        return Array(continuationTokens[0..<common])
+        return keySpace.translate(renderTokens: Array(continuationTokens[0..<common]))
+    }
+
+    /// `reusablePrefix` with its three failure channels — tokenization throw,
+    /// probe divergence (`nil`), translation failure — folded into the one
+    /// `LeafSkipReason` vocabulary both boundary modes speak.
+    private enum Probe {
+        case tokens([Int])
+        case skip(LeafSkipReason)
+    }
+
+    private static func probeTokens(
+        continuation: Continuation,
+        storedConversation: HTTPPrefixCacheConversation,
+        toolSpecs: [ToolSpec]?,
+        tokenizer: any Tokenizer,
+        keySpace: CacheKeySpace
+    ) -> Probe {
+        let probe: Result<[Int], CacheKeySpace.TranslationFailure>?
+        do {
+            probe = try reusablePrefix(
+                continuation: continuation,
+                storedConversation: storedConversation,
+                toolSpecs: toolSpecs,
+                tokenizer: tokenizer,
+                keySpace: keySpace
+            )
+        } catch {
+            return .skip(.tokenizationFailed(error: error.localizedDescription))
+        }
+        switch probe {
+        case .none:
+            return .skip(.probeDivergence)
+        case .some(.failure(let failure)):
+            return .skip(.renderTranslationFailed(failure: failure))
+        case .some(.success(let translated)):
+            return .tokens(translated)
+        }
     }
 
     /// The whole GPU-free leaf-capture routing decision for one boundary mode.
@@ -133,6 +184,7 @@ nonisolated enum LeafAdmissionBuilder {
         toolSpecs: [ToolSpec]?,
         transientBoundary: HybridCacheSnapshot?,
         tokenizer: any Tokenizer,
+        keySpace: CacheKeySpace,
         resolveBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot?
     ) async -> LeafCapturePlan {
         switch mode {
@@ -143,24 +195,30 @@ nonisolated enum LeafAdmissionBuilder {
             guard let transientBoundary else {
                 return .skip(reason: .noTransientBoundary)
             }
-            let toolTokens: [Int]?
-            do {
-                toolTokens = try reusablePrefix(
-                    continuation: .toolResult,
-                    storedConversation: storedConversation,
-                    toolSpecs: toolSpecs,
-                    tokenizer: tokenizer
-                )
-            } catch {
-                return .skip(reason: .tokenizationFailed(error: error.localizedDescription))
-            }
-            guard let toolTokens else {
-                return .skip(reason: .probeDivergence)
+            let toolTokens: [Int]
+            switch probeTokens(
+                continuation: .toolResult,
+                storedConversation: storedConversation,
+                toolSpecs: toolSpecs,
+                tokenizer: tokenizer,
+                keySpace: keySpace
+            ) {
+            case .tokens(let translated): toolTokens = translated
+            case .skip(let reason): return .skip(reason: reason)
             }
             guard toolTokens.count > transientBoundary.tokenOffset else {
                 return .skip(reason: .storedAtOrBeforeBoundary(
                     storedLen: toolTokens.count,
                     boundaryOffset: transientBoundary.tokenOffset
+                ))
+            }
+            // The residual `toolTokens[boundary...]` doubles as the reprefill
+            // input, so it must be image-free — past the last image run, key
+            // space and real tokens agree token-for-token.
+            guard transientBoundary.tokenOffset >= keySpace.minimumWarmOffset else {
+                return .skip(reason: .boundaryInsideImagePrefix(
+                    boundaryOffset: transientBoundary.tokenOffset,
+                    minimumWarmOffset: keySpace.minimumWarmOffset
                 ))
             }
             return .fromBoundary(boundary: transientBoundary, storedTokens: toolTokens)
@@ -169,19 +227,16 @@ nonisolated enum LeafAdmissionBuilder {
             // Thinking templates may re-render non-latest assistant turns
             // differently from the just-generated form: capture the canonical
             // render under the token path a future non-latest render will see.
-            let canonicalTokens: [Int]?
-            do {
-                canonicalTokens = try reusablePrefix(
-                    continuation: .userTurn,
-                    storedConversation: storedConversation,
-                    toolSpecs: toolSpecs,
-                    tokenizer: tokenizer
-                )
-            } catch {
-                return .skip(reason: .tokenizationFailed(error: error.localizedDescription))
-            }
-            guard let canonicalTokens else {
-                return .skip(reason: .probeDivergence)
+            let canonicalTokens: [Int]
+            switch probeTokens(
+                continuation: .userTurn,
+                storedConversation: storedConversation,
+                toolSpecs: toolSpecs,
+                tokenizer: tokenizer,
+                keySpace: keySpace
+            ) {
+            case .tokens(let translated): canonicalTokens = translated
+            case .skip(let reason): return .skip(reason: reason)
             }
 
             // Prefer the request-local transient boundary when it sits strictly
@@ -189,13 +244,21 @@ nonisolated enum LeafAdmissionBuilder {
             // **Snapshot Resolution** closure-peer. Both arms require
             // `tokenOffset < canonicalTokens.count`, so the chosen boundary always
             // leaves a non-empty residual to reprefill — no separate
-            // at-or-before-boundary guard is needed.
+            // at-or-before-boundary guard is needed. Both arms also require the
+            // boundary to sit past the image prefix (`≥ minimumWarmOffset`):
+            // the residual doubles as the reprefill input, and an image run in
+            // it cannot be reprefilled (a resolved snapshot from an older,
+            // pre-image turn can land there).
+            let minimumWarmOffset = keySpace.minimumWarmOffset
             let boundary: HybridCacheSnapshot
-            if let transientBoundary, transientBoundary.tokenOffset < canonicalTokens.count {
+            if let transientBoundary,
+               transientBoundary.tokenOffset < canonicalTokens.count,
+               transientBoundary.tokenOffset >= minimumWarmOffset {
                 boundary = transientBoundary
             } else if let resolved = await resolveBoundary(canonicalTokens),
                       resolved.tokenOffset > 0,
-                      resolved.tokenOffset < canonicalTokens.count {
+                      resolved.tokenOffset < canonicalTokens.count,
+                      resolved.tokenOffset >= minimumWarmOffset {
                 boundary = resolved
             } else {
                 return .skip(reason: .noResolvedBoundary(canonicalLen: canonicalTokens.count))

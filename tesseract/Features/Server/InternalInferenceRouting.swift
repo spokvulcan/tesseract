@@ -49,6 +49,13 @@ private nonisolated func makeInternalInferenceStream(
 
 /// Creates an `LLMGenerateFunction` that routes internal agent chat generation
 /// through `ServerInferenceService`.
+///
+/// The request goes out server-compatible with the agent history canonicalized
+/// into the prefix-cache conversation shape (PRD #72): the **Completion
+/// Route** then decides cache-aware vs standard from the conversation shape,
+/// exactly as it does for HTTP — agent chat and the OpenAI edge ride one
+/// Server Completion machinery. A `nil` conversation (undecodable attachment)
+/// falls back to the standard managed path, today's uncached behavior.
 nonisolated func makeServerInferenceGenerateClosure(
     inferenceService: ServerInferenceService,
     parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters
@@ -58,14 +65,20 @@ nonisolated func makeServerInferenceGenerateClosure(
             inferenceService: inferenceService,
             parametersProvider: parametersProvider,
             requestBuilder: { parameters in
-                ServerInferenceRequest(
+                let toolSpecs = tools?.map(\.toolSpec)
+                return ServerInferenceRequest(
                     input: .chat(.init(
                         systemPrompt: systemPrompt,
                         messages: messages,
-                        toolSpecs: tools?.map(\.toolSpec),
-                        prefixCacheConversation: nil
+                        toolSpecs: toolSpecs,
+                        prefixCacheConversation: AgentConversationBuilder.conversation(
+                            systemPrompt: systemPrompt,
+                            messages: messages,
+                            toolSpecs: toolSpecs
+                        )
                     )),
-                    parameters: parameters
+                    parameters: parameters,
+                    route: .serverCompatible
                 )
             }
         )

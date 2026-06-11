@@ -51,7 +51,7 @@ final class HybridCacheCorrectnessRunner {
             if !check.passed { allPassed = false }
         }
 
-        try writeReport(checks: checks, allPassed: allPassed)
+        let reportURL = try writeReport(checks: checks, allPassed: allPassed)
         log("\nOverall: \(allPassed ? "PASS" : "FAIL")")
         log("Report written to: \(reportURL.path)")
         logFileHandle?.closeFile()
@@ -74,10 +74,10 @@ final class HybridCacheCorrectnessRunner {
         var logs: [String] = []
         var checks: [CheckResult] = []
 
-        let shortPrompt = buildPrompt(targetTokens: 2048, tokenizer: context.tokenizer)
+        let shortPrompt = BenchmarkHarness.promptTokens(targetTokens: 2048, tokenizer: context.tokenizer)
         // Test 8 wants a 16K prompt with restore at 8K — exercises cache shapes
         // and chunk-loop handling well past the 4K-context typical case.
-        let longPrompt = buildPrompt(targetTokens: 16384, tokenizer: context.tokenizer)
+        let longPrompt = BenchmarkHarness.promptTokens(targetTokens: 16384, tokenizer: context.tokenizer)
         logs.append("\n── Token sequences ──")
         logs.append("  short prompt: \(shortPrompt.count) tokens")
         logs.append("  long prompt:  \(longPrompt.count) tokens")
@@ -179,7 +179,7 @@ final class HybridCacheCorrectnessRunner {
             let restoredLogits = try restoreAndContinueLastLogits(
                 context: context, tokens: tokens, restoreAt: k
             )
-            let diff = maxAbsDiff(fullLogits, restoredLogits)
+            let diff = BenchmarkHarness.maxAbsDiff(fullLogits, restoredLogits)
             lines.append("  K=\(k) (\(k * 100 / n)%): maxAbsDiff=\(diff)")
             if diff > bitwiseTolerance {
                 failures.append("K=\(k) diff=\(diff)")
@@ -227,7 +227,7 @@ final class HybridCacheCorrectnessRunner {
             context: context, tokens: tokens, cache: restoredCache
         )
 
-        let diff = maxAbsDiff(logitsLive, logitsRestored)
+        let diff = BenchmarkHarness.maxAbsDiff(logitsLive, logitsRestored)
         return (diff <= bitwiseTolerance, "maxAbsDiff=\(diff)", [])
     }
 
@@ -338,7 +338,7 @@ final class HybridCacheCorrectnessRunner {
             }
             if qa.metaState != qb.metaState { allMetaMatch = false }
             for (sa, sb) in zip(qa.state, qb.state) {
-                let d = maxAbsDiff(sa, sb)
+                let d = BenchmarkHarness.maxAbsDiff(sa, sb)
                 if d > maxDiff { maxDiff = d }
             }
         }
@@ -387,7 +387,7 @@ final class HybridCacheCorrectnessRunner {
         )
         let logits2 = lastTokenLogits(context: context, tokens: suffix, cache: cache2)
 
-        let diff = maxAbsDiff(logits1, logits2)
+        let diff = BenchmarkHarness.maxAbsDiff(logits1, logits2)
         return (diff <= bitwiseTolerance, "maxAbsDiff=\(diff)", [])
     }
 
@@ -401,7 +401,7 @@ final class HybridCacheCorrectnessRunner {
         let restoredLogits = try restoreAndContinueLastLogits(
             context: context, tokens: tokens, restoreAt: k
         )
-        let diff = maxAbsDiff(fullLogits, restoredLogits)
+        let diff = BenchmarkHarness.maxAbsDiff(fullLogits, restoredLogits)
         return (
             diff <= bitwiseTolerance,
             "totalTokens=\(n) restoreAt=\(k) maxAbsDiff=\(diff)",
@@ -437,7 +437,7 @@ final class HybridCacheCorrectnessRunner {
         let restoredLogits = lastTokenLogits(
             context: context, tokens: tokens, cache: restoredCache
         )
-        let diff = maxAbsDiff(fullLogits, restoredLogits)
+        let diff = BenchmarkHarness.maxAbsDiff(fullLogits, restoredLogits)
         return (diff <= bitwiseTolerance, "maxAbsDiff=\(diff)", [])
     }
 
@@ -479,7 +479,7 @@ final class HybridCacheCorrectnessRunner {
         let restoredLogits = lastTokenLogits(
             context: context, tokens: tokens, cache: restoredCache
         )
-        let diff = maxAbsDiff(fullLogits, restoredLogits)
+        let diff = BenchmarkHarness.maxAbsDiff(fullLogits, restoredLogits)
         let capturedOffsets = snapshots.map(\.tokenOffset)
         let capturedM = capturedOffsets.contains(m)
         return (
@@ -557,7 +557,7 @@ final class HybridCacheCorrectnessRunner {
             )
             let coldLogits = try fullPrefillLastLogits(context: context, tokens: coldTokens)
 
-            let diff = maxAbsDiff(coldLogits, restoredLogits)
+            let diff = BenchmarkHarness.maxAbsDiff(coldLogits, restoredLogits)
             let coldArgmax = coldLogits.argMax().item(Int32.self)
             let restoredArgmax = restoredLogits.argMax().item(Int32.self)
             let stable = coldArgmax == restoredArgmax
@@ -702,7 +702,7 @@ final class HybridCacheCorrectnessRunner {
             layerCount += 1
             if checkOffset && la.offset != lb.offset { offsetMismatch = true }
             for (sa, sb) in zip(la.state, lb.state) {
-                let d = maxAbsDiff(sa, sb)
+                let d = BenchmarkHarness.maxAbsDiff(sa, sb)
                 if d > maxDiff { maxDiff = d }
             }
         }
@@ -711,83 +711,23 @@ final class HybridCacheCorrectnessRunner {
         )
     }
 
-    /// Maximum absolute element-wise difference between two arrays. Casts
-    /// bf16 to f32 to avoid silent precision loss in subtraction.
-    nonisolated private static func maxAbsDiff(_ a: MLXArray, _ b: MLXArray) -> Float {
-        guard a.shape == b.shape else { return Float.infinity }
-        let aF = a.dtype == .bfloat16 ? a.asType(.float32) : a
-        let bF = b.dtype == .bfloat16 ? b.asType(.float32) : b
-        return (aF - bF).abs().max().item(Float.self)
-    }
-
-    // MARK: - Helpers — prompt construction
-
-    /// Build a deterministic token sequence of `targetTokens` length. Repeats
-    /// a fixed lorem-ipsum passage until the tokenizer produces enough tokens,
-    /// then truncates exactly so each run yields identical bytes.
-    nonisolated private static func buildPrompt(
-        targetTokens: Int, tokenizer: any Tokenizer
-    ) -> [Int] {
-        let base = """
-            The cache verification harness must produce a deterministic, \
-            reproducible token sequence. We compose long passages from a \
-            fixed lexicon so the same target length yields identical bytes \
-            on every run, which in turn guarantees identical model state \
-            and lets the bitwise equality assertions hold. Lorem ipsum dolor \
-            sit amet, consectetur adipiscing elit. Sed do eiusmod tempor \
-            incididunt ut labore et dolore magna aliqua. Ut enim ad minim \
-            veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip \
-            ex ea commodo consequat. Duis aute irure dolor in reprehenderit \
-            in voluptate velit esse cillum dolore eu fugiat nulla pariatur. \
-            Excepteur sint occaecat cupidatat non proident, sunt in culpa qui \
-            officia deserunt mollit anim id est laborum.
-            """
-
-        var combined = base
-        var encoded = tokenizer.encode(text: combined, addSpecialTokens: false)
-        while encoded.count < targetTokens {
-            combined += " " + base
-            encoded = tokenizer.encode(text: combined, addSpecialTokens: false)
-        }
-        return Array(encoded.prefix(targetTokens))
-    }
-
     // MARK: - Reporting
 
-    private struct CheckResult: Codable {
-        let name: String
-        let passed: Bool
-        let detail: String
-    }
+    private typealias CheckResult = BenchmarkHarness.CheckResult
 
     private var reportDir: URL {
         runner.activeConfig.outputDir.appendingPathComponent("hybrid-cache-correctness")
     }
 
-    private var reportURL: URL {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        return reportDir
-            .appendingPathComponent("correctness_\(formatter.string(from: Date())).json")
-    }
-
-    private func writeReport(checks: [CheckResult], allPassed: Bool) throws {
-        struct Report: Codable {
-            let date: String
-            let model: String
-            let passed: Bool
-            let checks: [CheckResult]
-        }
-        let report = Report(
-            date: ISO8601DateFormatter().string(from: Date()),
-            model: runner.resolvedModelName,
-            passed: allPassed,
-            checks: checks
+    @discardableResult
+    private func writeReport(checks: [CheckResult], allPassed: Bool) throws -> URL {
+        try BenchmarkHarness.writeReport(
+            checks: checks,
+            allPassed: allPassed,
+            modelName: runner.resolvedModelName,
+            reportDir: reportDir,
+            filePrefix: "correctness"
         )
-        try FileManager.default.createDirectory(at: reportDir, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(report).write(to: reportURL)
     }
 
     // MARK: - Logging

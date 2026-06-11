@@ -191,13 +191,65 @@ struct ModelFingerprintTests {
         let fp1 = try ModelFingerprint.computeFingerprint(modelDir: dir)
 
         // Drop a README.md and a spurious .txt into the dir. Neither should
-        // affect the fingerprint — the spec is explicitly config + tokenizer
-        // + *.safetensors metadata only.
+        // affect the fingerprint — the spec is explicitly the identity files
+        // (config, tokenizer, preparation files) + *.safetensors metadata.
         try writeFile(Data("# hi".utf8), at: dir.appendingPathComponent("README.md"), modificationDate: date)
         try writeFile(Data("ignore me".utf8), at: dir.appendingPathComponent("notes.txt"), modificationDate: date)
 
         let fp2 = try ModelFingerprint.computeFingerprint(modelDir: dir)
         #expect(fp1 == fp2, "non-safetensors / non-config files must not affect the fingerprint")
+    }
+
+    /// Preparation files shape the prepared sequence — tokenization, template
+    /// rendering, image patch grids (PRD #72) — so changing any of them must
+    /// partition the cache by flipping the fingerprint.
+    @Test(arguments: [
+        "tokenizer_config.json",
+        "preprocessor_config.json",
+        "chat_template.json",
+        "chat_template.jinja",
+    ])
+    func fingerprintDifferentWhenPreparationFileContentChanges(fileName: String) throws {
+        let dir = try makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
+        try writeFile(Data(repeating: 0xAA, count: 512), at: dir.appendingPathComponent("model.safetensors"), modificationDate: date)
+
+        let preparationURL = dir.appendingPathComponent(fileName)
+        try writeFile(Data("{\"v\":\"1\"}".utf8), at: preparationURL, modificationDate: date)
+        let fp1 = try ModelFingerprint.computeFingerprint(modelDir: dir)
+
+        try writeFile(Data("{\"v\":\"2\"}".utf8), at: preparationURL, modificationDate: date)
+        let fp2 = try ModelFingerprint.computeFingerprint(modelDir: dir)
+
+        #expect(fp1 != fp2, "\(fileName) content change must change the fingerprint")
+    }
+
+    /// Absence hashes as empty — adding a preparation file where none existed
+    /// is itself a preparation change and flips the fingerprint.
+    @Test
+    func fingerprintDifferentWhenPreparationFileAppears() throws {
+        let dir = try makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
+        try writeFile(Data(repeating: 0xAA, count: 512), at: dir.appendingPathComponent("model.safetensors"), modificationDate: date)
+
+        let fpWithout = try ModelFingerprint.computeFingerprint(modelDir: dir)
+
+        try writeFile(
+            Data("{\"size\": 768}".utf8),
+            at: dir.appendingPathComponent("preprocessor_config.json"),
+            modificationDate: date
+        )
+        let fpWith = try ModelFingerprint.computeFingerprint(modelDir: dir)
+
+        #expect(fpWithout != fpWith, "a preparation file appearing must change the fingerprint")
     }
 
     @Test

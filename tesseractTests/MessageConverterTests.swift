@@ -255,7 +255,7 @@ struct MessageConverterTests {
             ])),
         ]
 
-        let conversation = MessageConverter.normalizeTextOnlyConversation(messages)
+        let conversation = MessageConverter.normalizeConversation(messages)
 
         #expect(conversation?.systemPrompt == "First system\n\nSecond system")
         #expect(conversation?.messages.count == 4)
@@ -282,7 +282,7 @@ struct MessageConverterTests {
             ),
         ]
 
-        let conversation = MessageConverter.normalizeTextOnlyConversation(messages)
+        let conversation = MessageConverter.normalizeConversation(messages)
         let history = conversation?.historyMessages ?? []
 
         #expect(history.count == 2)
@@ -364,16 +364,84 @@ struct MessageConverterTests {
         #expect(arguments["path"] as? String == "/tmp/foo.swift")
     }
 
-    @Test func textOnlyNormalizationRejectsImages() {
-        let pngData = Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString()
+    /// Image messages are cache-eligible (PRD #72): the conversation carries
+    /// the image bytes and their digests, in content order.
+    @Test func imageUserMessageIsEligibleWithDigest() throws {
         let messages: [OpenAI.ChatMessage] = [
             .init(role: .user, content: .parts([
-                .init(type: .text, text: "Look"),
-                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(pngData)")),
+                .init(type: .text, text: "Look at this"),
+                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
             ])),
         ]
 
-        #expect(MessageConverter.normalizeTextOnlyConversation(messages) == nil)
+        let conversation = try #require(MessageConverter.normalizeConversation(messages))
+        #expect(!conversation.images.isEmpty)
+        #expect(conversation.images.count == 1)
+        let image = try #require(conversation.messages.first?.images.first)
+        #expect(image.digest == ImageDigest(imageBytes: Data(base64Encoded: ImageTestFixtures.tinyPNGBase64)!))
+        #expect(conversation.messages.first?.content == "Look at this")
+    }
+
+    /// Resending identical bytes yields an equal conversation — exact-byte
+    /// identity drives prefix matching, not per-request attachment ids.
+    @Test func identicalImageBytesProduceEqualConversations() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .parts([
+                .init(type: .text, text: "Look"),
+                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
+            ])),
+        ]
+        let first = MessageConverter.normalizeConversation(messages)
+        let second = MessageConverter.normalizeConversation(messages)
+        #expect(first != nil)
+        #expect(first == second)
+        #expect(first?.isPrefix(of: second!) == true)
+    }
+
+    /// Undecodable image bytes must not be keyed — the request falls back to
+    /// the standard path, where the existing drop semantics apply.
+    @Test func undecodableImageDataBails() {
+        let garbage = Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString()
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .parts([
+                .init(type: .text, text: "Look"),
+                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(garbage)")),
+            ])),
+        ]
+
+        #expect(MessageConverter.normalizeConversation(messages) == nil)
+    }
+
+    /// Remote image URLs cannot be fetched offline — not cacheable, bail.
+    @Test func remoteImageURLBails() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .parts([
+                .init(type: .text, text: "Look"),
+                .init(type: .image_url, image_url: .init(url: "https://example.com/cat.png")),
+            ])),
+        ]
+
+        #expect(MessageConverter.normalizeConversation(messages) == nil)
+    }
+
+    /// The render form for image messages is the Qwen-VL content array —
+    /// images before text, one entry per image; text-only messages keep the
+    /// string form byte-identical.
+    @Test func imageMessageRendersContentArray() throws {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .parts([
+                .init(type: .text, text: "Describe"),
+                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
+            ])),
+        ]
+        let conversation = try #require(MessageConverter.normalizeConversation(messages))
+        let rendered = try #require(conversation.promptMessages.last)
+
+        let content = try #require(rendered["content"] as? [[String: any Sendable]])
+        #expect(content.count == 2)
+        #expect(content[0]["type"] as? String == "image")
+        #expect(content[1]["type"] as? String == "text")
+        #expect(content[1]["text"] as? String == "Describe")
     }
 
     @Test func textNormalizationKeepsAssistantToolCallsAndToolResults() {
@@ -394,7 +462,7 @@ struct MessageConverterTests {
             .init(role: .tool, content: .text("tool output"), tool_call_id: "call_1"),
         ]
 
-        let conversation = MessageConverter.normalizeTextOnlyConversation(messages)
+        let conversation = MessageConverter.normalizeConversation(messages)
 
         #expect(conversation?.messages.count == 3)
         #expect(conversation?.messages[0] == .init(role: .user, content: "Hello"))
@@ -456,7 +524,7 @@ struct MessageConverterTests {
             .init(role: .tool, content: .text("nope"), tool_call_id: "call_1"),
         ]
 
-        let conversation = MessageConverter.normalizeTextOnlyConversation(messages)
+        let conversation = MessageConverter.normalizeConversation(messages)
         #expect(conversation?.messages.count == 2)
         #expect(conversation?.messages[1] == .init(role: .tool, content: "nope"))
     }

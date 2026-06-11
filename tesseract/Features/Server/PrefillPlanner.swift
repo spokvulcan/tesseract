@@ -15,6 +15,22 @@ nonisolated struct PrefillBoundaries: Sendable, Equatable {
     let stablePrefixOffset: Int?
     let lastMessageOffset: Int?
     let lastUserOffset: Int?
+    /// Typed feature-level skip: the last-user re-render could not be
+    /// translated into key space, so only that boundary is dropped (the
+    /// request, its lookup, and the other boundaries keep working).
+    let lastUserTranslationFailure: CacheKeySpace.TranslationFailure?
+
+    init(
+        stablePrefixOffset: Int?,
+        lastMessageOffset: Int?,
+        lastUserOffset: Int?,
+        lastUserTranslationFailure: CacheKeySpace.TranslationFailure? = nil
+    ) {
+        self.stablePrefixOffset = stablePrefixOffset
+        self.lastMessageOffset = lastMessageOffset
+        self.lastUserOffset = lastUserOffset
+        self.lastUserTranslationFailure = lastUserTranslationFailure
+    }
 }
 
 /// The pre-prefill decisions for one request, as a value: whether to restore a
@@ -27,15 +43,19 @@ nonisolated struct PrefillBoundaries: Sendable, Equatable {
 /// is the write-side value it commits afterward.
 nonisolated struct PrefillPlan: Sendable {
     /// The restore-vs-cold decision. `.restore` carries the offset its KV
-    /// state covers (the prefill base).
+    /// state covers (the prefill base) and the **Position Anchor** rope delta
+    /// for that offset (zero for image-free prefixes) — a cold plan cannot
+    /// carry a delta at all.
     enum Restore: Sendable {
         case cold
-        case restore(cacheOffset: Int)
+        case restore(cacheOffset: Int, anchorDelta: Int)
     }
 
     let restore: Restore
     /// Checkpoints to capture during this prefill, already filtered to the
-    /// suffix the restored snapshot does not already cover.
+    /// suffix the restored snapshot does not already cover — and, on an
+    /// image-bearing request, to offsets past the vendor-prepared image
+    /// prefix (nothing inside `[0, minimumWarmOffset)` is capturable there).
     let checkpointsToCapture: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
     /// The raw last-message / last-user boundary offsets, kept individually so
     /// the orchestrator can lift each transient boundary snapshot by name.
@@ -43,21 +63,40 @@ nonisolated struct PrefillPlan: Sendable {
     /// Token count of the full conversation; bounds the restore and transient
     /// decisions.
     let promptTokenCount: Int
+    /// The request's smallest capturable/warm offset — the end of its last
+    /// image run (`CacheKeySpace.minimumWarmOffset`), zero for text-only.
+    let minimumWarmOffset: Int
+
+    init(
+        restore: Restore,
+        checkpointsToCapture: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)],
+        transientBoundaries: (lastMessage: Int?, lastUser: Int?),
+        promptTokenCount: Int,
+        minimumWarmOffset: Int = 0
+    ) {
+        self.restore = restore
+        self.checkpointsToCapture = checkpointsToCapture
+        self.transientBoundaries = transientBoundaries
+        self.promptTokenCount = promptTokenCount
+        self.minimumWarmOffset = minimumWarmOffset
+    }
 
     /// The number of leading tokens already covered by the restored cache —
     /// zero on a cold prefill. Single source for what were two values that
     /// could drift (`skippedTokens` and `checkpointBaseOffset`).
     var prefillBaseOffset: Int {
-        if case .restore(let cacheOffset) = restore { return cacheOffset }
+        if case .restore(let cacheOffset, _) = restore { return cacheOffset }
         return 0
     }
 
     /// The transient boundary offsets that survive: past the prefill base,
-    /// inside the prompt, and not already a planned checkpoint.
+    /// past the request's image prefix, inside the prompt, and not already a
+    /// planned checkpoint.
     var transientCheckpointOffsets: Set<Int> {
         var offsets: Set<Int> = []
         for offset in [transientBoundaries.lastMessage, transientBoundaries.lastUser].compactMap({ $0 })
         where offset > prefillBaseOffset
+            && offset >= minimumWarmOffset
             && offset < promptTokenCount
             && !checkpointsToCapture.contains(where: { $0.offset == offset }) {
             offsets.insert(offset)
@@ -75,16 +114,21 @@ nonisolated enum PrefillPlanner {
     /// `Tokenizer`; runs the same two-probe stable-prefix detection plus the
     /// generation-prompt suffix subtraction and the last-user re-render.
     ///
+    /// All offsets are detected against `keySpace.keyPath` — the one token
+    /// path the radix tree is driven with — so they cannot land in the wrong
+    /// space on an image-bearing request.
+    ///
     /// The MLXLMCommon `Tokenizer` protocol doesn't expose `addGenerationPrompt`,
     /// so the last-message boundary is found by encoding the known generation
     /// prompt string and subtracting it from the full token suffix.
     static func detectBoundaries(
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
-        fullTokens: [Int],
         promptStartsThinking: Bool,
-        tokenizer: any Tokenizer
+        tokenizer: any Tokenizer,
+        keySpace: CacheKeySpace
     ) throws -> PrefillBoundaries {
+        let fullTokens = keySpace.keyPath
         let stablePrefixOffset = try StablePrefixDetector.detect(
             systemPrompt: conversation.systemPrompt,
             toolSpecs: toolSpecs,
@@ -105,7 +149,12 @@ nonisolated enum PrefillPlanner {
             lastMessageOffset = nil
         }
 
+        // The last-user re-render is *render space* — one placeholder token
+        // per image, unexpanded. Its length is only a valid offset into the
+        // key path after translation through the **Cache Key Space**.
+        // Translation failure skips just this boundary, typed.
         let lastUserOffset: Int?
+        var lastUserTranslationFailure: CacheKeySpace.TranslationFailure?
         if let lastUserIndex = conversation.messages.lastIndex(where: { $0.role == .user }) {
             let userPrefixConversation = HTTPPrefixCacheConversation(
                 systemPrompt: conversation.systemPrompt,
@@ -113,11 +162,18 @@ nonisolated enum PrefillPlanner {
                 toolDefinitionsDigest: conversation.toolDefinitionsDigest,
                 templateContextDigest: conversation.templateContextDigest
             )
-            lastUserOffset = try tokenizer.applyChatTemplate(
+            let renderTokens = try tokenizer.applyChatTemplate(
                 messages: userPrefixConversation.promptMessages,
                 tools: toolSpecs,
                 additionalContext: ["add_generation_prompt": false]
-            ).count
+            )
+            switch keySpace.translatedLength(renderTokens: renderTokens) {
+            case .success(let keyLength):
+                lastUserOffset = keyLength
+            case .failure(let failure):
+                lastUserOffset = nil
+                lastUserTranslationFailure = failure
+            }
         } else {
             lastUserOffset = nil
         }
@@ -125,38 +181,54 @@ nonisolated enum PrefillPlanner {
         return PrefillBoundaries(
             stablePrefixOffset: stablePrefixOffset,
             lastMessageOffset: lastMessageOffset,
-            lastUserOffset: lastUserOffset
+            lastUserOffset: lastUserOffset,
+            lastUserTranslationFailure: lastUserTranslationFailure
         )
     }
 
     /// Fold the resolved lookup, the checkpoint plan, and the detected
     /// boundaries into the **Prefill Plan**. Pure: a hit inside the prompt
     /// becomes a suffix restore; everything else runs cold.
+    ///
+    /// On an image-bearing request the **Cache Key Space** narrows the plan
+    /// (ADR-0007 spike results):
+    /// - a hit is usable only when the remainder is image-free
+    ///   (`offset ≥ minimumWarmOffset`) — image runs cannot be forwarded warm,
+    ///   so lower hits degrade to cold;
+    /// - on a cold plan, checkpoints inside the vendor-prepared image prefix
+    ///   `[0, minimumWarmOffset)` are uncapturable (one-shot prepare, and
+    ///   Mamba state cannot be rewound) and are dropped here;
+    /// - a usable restore carries its **Position Anchor** rope delta.
     static func plan(
         boundaries: PrefillBoundaries,
         lookupResult: PrefixCacheManager.LookupResult,
         checkpointPlan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)],
-        promptTokenCount: Int
+        promptTokenCount: Int,
+        keySpace: CacheKeySpace
     ) -> PrefillPlan {
+        let minimumWarmOffset = keySpace.minimumWarmOffset
         let restore: PrefillPlan.Restore
         let checkpointsToCapture: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
         if let snapshot = lookupResult.snapshot,
            snapshot.tokenOffset > 0,
-           snapshot.tokenOffset < promptTokenCount {
+           snapshot.tokenOffset < promptTokenCount,
+           snapshot.tokenOffset >= minimumWarmOffset,
+           let anchorDelta = keySpace.positionAnchorDelta(upTo: snapshot.tokenOffset) {
             let cacheOffset = snapshot.tokenOffset
-            restore = .restore(cacheOffset: cacheOffset)
+            restore = .restore(cacheOffset: cacheOffset, anchorDelta: anchorDelta)
             // Only capture checkpoints in the SUFFIX the snapshot doesn't cover.
             checkpointsToCapture = checkpointPlan.filter { $0.offset > cacheOffset }
         } else {
             restore = .cold
-            checkpointsToCapture = checkpointPlan
+            checkpointsToCapture = checkpointPlan.filter { $0.offset >= minimumWarmOffset }
         }
 
         return PrefillPlan(
             restore: restore,
             checkpointsToCapture: checkpointsToCapture,
             transientBoundaries: (boundaries.lastMessageOffset, boundaries.lastUserOffset),
-            promptTokenCount: promptTokenCount
+            promptTokenCount: promptTokenCount,
+            minimumWarmOffset: minimumWarmOffset
         )
     }
 }

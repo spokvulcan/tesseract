@@ -117,17 +117,54 @@ nonisolated struct HTTPPrefixCacheAssistantSignature: Hashable, Sendable {
     let toolCalls: [HTTPPrefixCacheToolCall]
 }
 
+/// One image inside the prefix-cache conversation shape: the **Image Digest**
+/// is the identity (drives message equality, `isPrefix`, and the radix key);
+/// the raw bytes are the payload prepare decodes pixels from. Pixel decode is
+/// deferred to prepare — the conversation itself stays token/byte-only.
+nonisolated struct HTTPPrefixCacheImage: Hashable, Sendable {
+    let digest: ImageDigest
+    let data: Data
+
+    init(data: Data) {
+        self.digest = ImageDigest(imageBytes: data)
+        self.data = data
+    }
+
+    /// `digest` must be `ImageDigest(imageBytes: data)` — for callers that
+    /// already hold the digest (the agent adapter memoizes per attachment)
+    /// and must not re-hash megabytes of unchanged bytes per generate call.
+    init(data: Data, digest: ImageDigest) {
+        self.digest = digest
+        self.data = data
+    }
+
+    /// Identity is the digest; comparing/hashing the full payload would do
+    /// redundant work on every session-replay lookup (digest-equal implies
+    /// byte-equal for exact-byte SHA-256 identity).
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.digest == rhs.digest
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(digest)
+    }
+}
+
 nonisolated struct HTTPPrefixCacheMessage: Hashable, Sendable {
     let role: Chat.Message.Role
     let content: String
     let reasoning: String?
     let toolCalls: [HTTPPrefixCacheToolCall]
+    /// Images attached to this message, in content order. User messages only —
+    /// mirroring the OpenAI surface; other roles drop them like `toolCalls`.
+    let images: [HTTPPrefixCacheImage]
 
     init(
         role: Chat.Message.Role,
         content: String,
         reasoning: String? = nil,
-        toolCalls: [HTTPPrefixCacheToolCall] = []
+        toolCalls: [HTTPPrefixCacheToolCall] = [],
+        images: [HTTPPrefixCacheImage] = []
     ) {
         self.role = role
         // Normalize assistant content by trimming surrounding whitespace.
@@ -147,6 +184,7 @@ nonisolated struct HTTPPrefixCacheMessage: Hashable, Sendable {
         let trimmedReasoning = reasoning?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.reasoning = (trimmedReasoning?.isEmpty ?? true) ? nil : trimmedReasoning
         self.toolCalls = role == .assistant ? toolCalls : []
+        self.images = role == .user ? images : []
     }
 
     static func assistant(
@@ -177,9 +215,18 @@ nonisolated struct HTTPPrefixCacheMessage: Hashable, Sendable {
     }
 
     var promptMessage: [String: any Sendable] {
+        // Image-bearing messages render the Qwen-VL content-array form — one
+        // `["type": "image"]` entry per image, images before text, exactly the
+        // shape the vendored message generators emit — so the chat template
+        // places each image inside its own turn. Text-only messages keep the
+        // string form: the text path's render stays byte-identical.
+        let promptContent: any Sendable = images.isEmpty
+            ? content
+            : images.map { _ in ["type": "image"] as [String: any Sendable] }
+                + [["type": "text", "text": content] as [String: any Sendable]]
         var message: [String: any Sendable] = [
             "role": role.rawValue,
-            "content": content,
+            "content": promptContent,
         ]
 
         guard role == .assistant else { return message }
@@ -219,6 +266,14 @@ nonisolated struct HTTPPrefixCacheConversation: Hashable, Sendable {
 
     var lastMessage: HTTPPrefixCacheMessage? {
         messages.last
+    }
+
+    /// All images of the conversation, flat, in prompt order (the message
+    /// renderer emits messages — and images within them — in sequence, so
+    /// conversation order *is* prompt order). Feeds prepare's pixel list and
+    /// the Cache Key Space image table in matching order.
+    var images: [HTTPPrefixCacheImage] {
+        messages.flatMap(\.images)
     }
 
     var prefixWithoutLastMessage: HTTPPrefixCacheConversation {

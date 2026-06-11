@@ -281,12 +281,13 @@ struct CompletionHandler: Sendable {
             modelID: modelState.modelID,
             visionMode: modelState.visionMode
         )
-        let (systemPrompt, messages) = MessageConverter.convertMessages(repairedRequest.messages)
-        let toolSpecs = MessageConverter.convertToolDefinitions(request.tools)
-        let prefixCacheEligibility = MessageConverter.analyzePrefixCacheEligibility(
+        let normalized = MessageConverter.normalizeRequest(
             repairedRequest.messages,
             tools: request.tools
         )
+        let (systemPrompt, messages) = (normalized.systemPrompt, normalized.messages)
+        let toolSpecs = MessageConverter.convertToolDefinitions(request.tools)
+        let prefixCacheEligibility = normalized.prefixCacheEligibility
         let prefixCacheConversation = prefixCacheEligibility.conversation
         let params = Self.makeGenerateParameters(
             from: request,

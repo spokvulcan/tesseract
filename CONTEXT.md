@@ -128,6 +128,78 @@ ledger work (those are the store's).
 > tear it. The store gets back the evicted residents and does the file deletes and
 > callbacks outside the lock.
 
+### Image-aware prefix caching
+
+**Image Digest**:
+The content identity of one image for prefix-cache keying — a hash over the raw
+encoded bytes exactly as received, computed per image. Identity is exact-byte: a
+re-encoded or resized variant of the same picture is a *different* image — always
+a miss, never a wrong hit.
+_Avoid_: perceptual hash, pixel hash, attachment ID (the UI-side UUID is diffing
+equality, not content identity), image fingerprint (collides with
+`ModelFingerprint`).
+
+**Cache Key Path**:
+The sequence the radix tree is keyed on for one request: the prepared prompt
+tokens with each image's placeholder run replaced, length-preserving, by
+pseudo-tokens deterministically expanded from that image's **Image Digest**, drawn
+from a range no vocabulary can occupy. Same length as the KV sequence — key index
+== KV offset stays the tree's invariant. The model never sees pseudo-tokens; only
+the cache does. Produced by the **Cache Key Space**.
+_Avoid_: prompt tokens (the model-facing sequence), token path (unqualified near
+images), virtual/hash tokens, key tokens.
+
+**Cache Key Space**:
+The per-request authority over the two token spaces — built once after prepare
+from the prepared tokens, the per-image **Image Digest**s, and the family's
+placeholder identity (a **Model Identity** fact). It owns the image table
+(digest, run length, span), produces the **Cache Key Path**, and translates any
+render-space token sequence (the planner's last-user re-render, the leaf
+probes) into key space — so every token path that touches the radix tree lives
+in one space. Construction failure ⇒ **Unkeyed Completion**; a later
+translation failure degrades only the consuming feature (a typed skip), never
+the request.
+_Avoid_: key path splice (the shallow predecessor), space converter, token
+mapper, render fixup.
+
+**Conversation Render**:
+The single token-only render step the planner re-renders and the leaf probes
+share: family message-forming plus chat-template application — exactly the
+message shape prepare uses, with no pixel work. One render home means a probe
+render cannot drift from prepare's render.
+_Avoid_: re-render (unqualified), probe tokenization, per-call-site
+applyChatTemplate.
+
+**Position Anchor**:
+The M-RoPE continuation state a restored conversation resumes generation at:
+the restore offset plus the rope delta accumulated by the cached prefix.
+Reconstructed per request by the **Cache Key Space** from its image table
+(per cached image: position span minus run length) — zero for an image-free
+prefix, never persisted, seeded into the model state ahead of the first
+warm forward. Vision-container-only; the text container needs no anchor.
+_Avoid_: rope delta (the vendor-internal ingredient, not the concept), position
+offset (collides with cache/token offsets), mrope state.
+
+> **Flagged ambiguity — "tokens" near the prefix cache.** Radix paths, admission
+> paths, and prefill offsets are **Cache Key Path** positions; the model consumes
+> the prepared prompt tokens. For text-only requests the two are identical; with
+> images they differ in *values*, never in length or offsets.
+
+**Unkeyed Completion**:
+A **Server Completion** served with zero cache participation — no lookup, no
+admission — because no valid **Cache Key Path** could be built (typed reason:
+unrecognized placeholder strategy, run count ≠ image count). Discovered
+actor-side after prepare; never a bounce back to the standard path, never an
+error. Cache participation is best-effort; serving is not.
+_Avoid_: prefix-cache bypass (a route decision, not this), fallback completion,
+in-actor `nil` return (the retired pattern this is not), degraded mode
+(unqualified).
+
+> **Flagged ambiguity — "cannot serve" vs "cannot key".** The **Completion
+> Route** guarantees **Server Completion** never sees a request it cannot
+> *serve*. Image guards can make a request impossible to *key* — that yields an
+> **Unkeyed Completion**, not a route bounce.
+
 ### Prefill orchestration
 
 **Prefill Plan**:
@@ -197,9 +269,13 @@ versus standard-with-reason — computed from request shape alone (empty
 conversation, last message from the assistant, no usable prefix-cache
 conversation), never from model state. Owned by `ServerInferenceService`, whose
 dispatch between the **Server Completion** module and the engine's managed path is
-what makes it a real module rather than a pass-through.
+what makes it a real module rather than a pass-through. Image-bearing requests
+route cache-aware — key-path failures degrade actor-side to an **Unkeyed
+Completion**, never back through the route; video/audio content remains a
+no-usable-conversation reason.
 _Avoid_: prefix-cache bypass (the retired in-actor `nil` returns), fallback flag,
-route checks inside `CompletionHandler` or the actor.
+route checks inside `CompletionHandler` or the actor, image bypass (images are
+keyed, not bypassed).
 
 > **Flagged ambiguity — "completion".** `CompletionHandler` is the HTTP framing
 > edge; **CompletionProjection** is the terminal output rules; **Server
@@ -660,7 +736,9 @@ _Avoid_: arbiter protocol / arbitering, lease provider, widening it speculativel
 The value computed **once** from a model directory at load that answers "what model
 is this, and what does that imply downstream": `toolCallFormat` (`nil` means use
 the vendor default), the `model_type` family facts (`isQwen35`, `isMoE`),
-`promptStartsThinking`, and a **total** `flopProfile` — unknown architectures yield
+`promptStartsThinking`, the image-placeholder identity the **Cache Key Space**
+consumes (`nil` means the family is not recognized for image keying), and a
+**total** `flopProfile` — unknown architectures yield
 `ModelFlopProfile.fallback`, the one home for that default. Total, non-throwing
 `init(directory:)`; computed at the top of `loadModel` and threaded as a local.
 Quant-format routing stays in `ParoQuantLoader` (a container-load concern), and the

@@ -303,10 +303,13 @@ struct ServerInferenceServiceTests {
         #expect(engine.calls.isEmpty)
     }
 
-    @Test func sharedGenerateClosureRoutesManagedChatThroughService() async throws {
+    /// Agent chat goes out server-compatible with the history canonicalized by
+    /// `AgentConversationBuilder` (PRD #72) — the **Completion Route** decides
+    /// cache-aware and the completion arm serves, exactly as it does for HTTP.
+    @Test func sharedGenerateClosureRoutesAgentChatThroughCompletionArm() async throws {
         let engine = StubManagedInferenceEngine()
         let completion = StubServerCompletionStarter()
-        engine.chatStart = makeStart(textChunks: ["foreground", " background"])
+        completion.start = makeStart(textChunks: ["foreground", " background"])
         let service = ServerInferenceService(
             completionStarter: completion,
             engine: engine,
@@ -325,8 +328,46 @@ struct ServerInferenceServiceTests {
         )
 
         #expect(try await collectText(from: stream) == "foreground background")
+        #expect(completion.calls.count == 1)
+        #expect(engine.calls.isEmpty)
+        #expect(completion.calls[0].conversation == AgentConversationBuilder.conversation(
+            systemPrompt: "System",
+            messages: [.user(content: "Hello")],
+            toolSpecs: nil
+        ))
+    }
+
+    /// A history the conversation shape cannot carry (an attachment that no
+    /// longer decodes) builds no conversation — the request still goes out
+    /// server-compatible and the **Completion Route** falls back to the
+    /// managed arm: uncached but correct, never a dropped request.
+    @Test func sharedGenerateClosureFallsBackToManagedArmWhenAttachmentIsUndecodable() async throws {
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
+        engine.chatStart = makeStart(textChunks: ["managed fallback"])
+        let service = ServerInferenceService(
+            completionStarter: completion,
+            engine: engine,
+            modelStateProvider: { nil }
+        )
+        let generate = makeServerInferenceGenerateClosure(
+            inferenceService: service,
+            parametersProvider: { .default }
+        )
+
+        let stream = generate(
+            "System",
+            [.user(content: "What is in this image?", images: [
+                ImageAttachment(data: Data([0x00, 0x01]), mimeType: "image/png")
+            ])],
+            nil,
+            nil
+        )
+
+        #expect(try await collectText(from: stream) == "managed fallback")
         #expect(engine.calls.count == 1)
         #expect(engine.calls[0].kind == .chat)
+        #expect(completion.calls.isEmpty)
     }
 
     @Test func summarizeClosureRoutesPromptThroughService() async throws {
@@ -390,7 +431,7 @@ struct ServerInferenceServiceTests {
 
         let engine = StubManagedInferenceEngine()
         let completion = StubServerCompletionStarter()
-        engine.chatStart = makeStart(textChunks: ["ok"])
+        completion.start = makeStart(textChunks: ["ok"])
         let service = ServerInferenceService(
             completionStarter: completion,
             engine: engine,
@@ -409,17 +450,17 @@ struct ServerInferenceServiceTests {
         )
 
         _ = try await collectText(from: generate("System", [.user(content: "q1")], nil, nil))
-        #expect(engine.calls.count == 1)
-        #expect(engine.calls[0].parameters.temperature == AgentGenerateParameters.qwen35.temperature)
+        #expect(completion.calls.count == 1)
+        #expect(completion.calls[0].parameters.temperature == AgentGenerateParameters.qwen35.temperature)
 
         // Flip the model after the closure exists. The provider must observe
         // the new value on the very next call.
         settings.selectedAgentModelID = "qwen3-thinking-2507"
 
-        engine.chatStart = makeStart(textChunks: ["ok"])
+        completion.start = makeStart(textChunks: ["ok"])
         _ = try await collectText(from: generate("System", [.user(content: "q2")], nil, nil))
-        #expect(engine.calls.count == 2)
-        #expect(engine.calls[1].parameters.temperature == AgentGenerateParameters.qwen3Thinking.temperature)
+        #expect(completion.calls.count == 2)
+        #expect(completion.calls[1].parameters.temperature == AgentGenerateParameters.qwen3Thinking.temperature)
     }
 
     /// Internal agent sessions must reach `ServerInferenceService` whether or
@@ -431,7 +472,7 @@ struct ServerInferenceServiceTests {
 
         let engine = StubManagedInferenceEngine()
         let completion = StubServerCompletionStarter()
-        engine.chatStart = makeStart(textChunks: ["service path"])
+        completion.start = makeStart(textChunks: ["service path"])
         let service = ServerInferenceService(
             completionStarter: completion,
             engine: engine,
@@ -450,7 +491,7 @@ struct ServerInferenceServiceTests {
         )
 
         #expect(try await collectText(from: stream) == "service path")
-        #expect(engine.calls.count == 1)
+        #expect(completion.calls.count == 1)
     }
 
     @Test func sharedGenerateClosureCancelsUnderlyingServiceStartWhenConsumerTaskIsCancelled() async {
@@ -458,7 +499,7 @@ struct ServerInferenceServiceTests {
         let completion = StubServerCompletionStarter()
         let probe = ControlledInferenceStart()
         let firstChunkSeen = AsyncFlag()
-        engine.chatStart = await probe.makeStart()
+        completion.start = await probe.makeStart()
         let service = ServerInferenceService(
             completionStarter: completion,
             engine: engine,

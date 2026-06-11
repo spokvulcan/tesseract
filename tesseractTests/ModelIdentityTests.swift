@@ -193,6 +193,49 @@ struct ModelIdentityTests {
         #expect(a != other)
     }
 
+    // MARK: - Image keying
+
+    /// The Qwen3.5 vision variant (family prefix + `vision_config`) yields the
+    /// image-keying facts, reading the explicit token id and merge size.
+    @Test func imageKeyingReadsVisionConfigFields() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5",
+                "image_token_id": 248_056,
+                "vision_config": ["spatial_merge_size": 2],
+            ],
+            chatTemplate: nil
+        )
+        #expect(identity.imageKeying == ModelIdentity.ImageKeying(
+            imagePadTokenId: 248_056, spatialMergeSize: 2
+        ))
+    }
+
+    /// Missing optional fields fall back to the vendor decode defaults.
+    @Test func imageKeyingDefaultsMirrorTheVendorDecode() {
+        let identity = ModelIdentity(
+            configJSON: ["model_type": "qwen3_5", "vision_config": [String: Any]()],
+            chatTemplate: nil
+        )
+        #expect(identity.imageKeying == ModelIdentity.ImageKeying(
+            imagePadTokenId: 248_056, spatialMergeSize: 2
+        ))
+    }
+
+    /// Text-only Qwen3.5 (no `vision_config`) and non-Qwen3.5 vision models
+    /// are not recognized for image keying — their image requests degrade to
+    /// Unkeyed Completions instead of being keyed with unverified geometry.
+    @Test func imageKeyingIsNilOffTheRecognizedVisionFamily() {
+        #expect(ModelIdentity(
+            configJSON: ["model_type": "qwen3_5"], chatTemplate: nil
+        ).imageKeying == nil)
+        #expect(ModelIdentity(
+            configJSON: ["model_type": "llava", "vision_config": [String: Any]()],
+            chatTemplate: nil
+        ).imageKeying == nil)
+        #expect(ModelIdentity(configJSON: nil, chatTemplate: nil).imageKeying == nil)
+    }
+
     // MARK: - Fixtures
 
     /// Write `config.json` and/or `chat_template.jinja` (when non-nil) into a

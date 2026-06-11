@@ -1,3 +1,4 @@
+import CoreImage
 import Foundation
 import MLX
 import MLXLMCommon
@@ -49,8 +50,31 @@ private nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
 
     // -- Post-generation store context (radix tree flow) --
 
-    /// Flat token sequence for the full prompt (1D extraction from potentially 2D VLM tensor).
+    /// Flat token sequence for the full prompt (1D extraction from potentially
+    /// 2D VLM tensor). REAL prepared tokens — safe to re-forward through the
+    /// model (the thinking-safeguard continuation does). Radix-tree paths use
+    /// `keySpace.keyPath` instead, which replaces image runs with
+    /// digest-derived pseudo-tokens that must never reach an embedding lookup.
     let fullTokens: [Int]
+    /// The request's **Cache Key Space** — identity for text-only requests.
+    /// Owns the key path the radix tree was driven with and translates the
+    /// post-generation stored render the same way.
+    let keySpace: CacheKeySpace
+    /// Non-nil when this is an **Unkeyed Completion**: no valid Cache Key Path
+    /// could be built, so the request was served with zero cache
+    /// participation — the post-generation store flow must stay away from the
+    /// radix tree entirely.
+    let unkeyedReason: CacheKeySpace.UnkeyedReason?
+    /// Whether warm forwards must seed the **Position Anchor** (the loaded
+    /// family is the recognized vision container). False for text models,
+    /// where restored prefills keep their nil-state behavior.
+    let seedsPositionAnchor: Bool
+
+    /// The wire string for `Diagnostics.cacheReason`: the lookup outcome, or
+    /// the unkeyed degradation when the request never reached the lookup.
+    var cacheReasonDescription: String {
+        unkeyedReason.map { "unkeyed(\($0.rawValue))" } ?? String(describing: lookupReason)
+    }
     /// Validated mid-prefill checkpoint admission, if any checkpoints survived
     /// extraction-edge path validation.
     let snapshotAdmission: SnapshotAdmission?
@@ -369,7 +393,7 @@ nonisolated final class ServerCompletion {
             lookup: mlxStart.lookupMs,
             restore: mlxStart.restoreMs,
             prefill: mlxStart.prefillMs,
-            cacheReason: String(describing: mlxStart.lookupReason),
+            cacheReason: mlxStart.cacheReasonDescription,
             sharedPrefixLength: mlxStart.sharedPrefixLength,
             promptTokenCount: mlxStart.promptTokenCount
         )
@@ -652,6 +676,18 @@ nonisolated final class ServerCompletion {
                     break leafBlock
                 }
 
+                // An Unkeyed Completion never touches the radix tree —
+                // construction failed, so no token path of this request can
+                // be trusted as a key.
+                if let unkeyedReason = mlxStart.unkeyedReason {
+                    diagnosticsContext.logSkip(
+                        stage: "leafStore",
+                        reason: "unkeyed-completion",
+                        extraFields: [("unkeyedReason", unkeyedReason.rawValue)]
+                    )
+                    break leafBlock
+                }
+
                 // 1. Build stored conversation (prompt + generated assistant turn).
                 let storedConversation = conversation.appendingAssistant(.assistant(
                     content: accumulator.text,
@@ -659,8 +695,12 @@ nonisolated final class ServerCompletion {
                     toolCalls: toolCalls
                 ))
 
-                // 2. Re-tokenize stored conversation → flat token sequence.
-                guard let storedTokens = await Self.measureStoredTokenSequence(
+                // 2. Re-tokenize stored conversation → flat render sequence,
+                // then translate into key space (identity for text-only). The
+                // translated path is what every capture offset and admission
+                // below keys on — length-equal to the prepared sequence, so
+                // key index == KV offset holds.
+                guard let storedRenderTokens = await Self.measureStoredTokenSequence(
                     container: container,
                     conversation: storedConversation,
                     toolSpecs: canonicalTools
@@ -669,6 +709,19 @@ nonisolated final class ServerCompletion {
                         stage: "leafStore",
                         reason: "tokenization-failed",
                         level: .warning
+                    )
+                    break leafBlock
+                }
+                let storedTokens: [Int]
+                switch mlxStart.keySpace.translate(renderTokens: storedRenderTokens) {
+                case .success(let translated):
+                    storedTokens = translated
+                case .failure(let failure):
+                    diagnosticsContext.logSkip(
+                        stage: "leafStore",
+                        reason: "render-translation-failed",
+                        level: .warning,
+                        extraFields: [("failure", "\(failure)")]
                     )
                     break leafBlock
                 }
@@ -708,6 +761,7 @@ nonisolated final class ServerCompletion {
                         toolSpecs: canonicalTools,
                         transientBoundary: transientBoundary,
                         tokenizer: leafTokenizer,
+                        keySpace: mlxStart.keySpace,
                         resolveBoundary: { tokens in
                             // Drive Snapshot Resolution inside `container.perform`
                             // so the SSD `loadSync` stays off-MainActor (ADR-0001).
@@ -736,11 +790,32 @@ nonisolated final class ServerCompletion {
                         )
                         break leafBlock
                     case .fromBoundary(let boundarySnapshot, let boundaryStoredTokens):
+                        // The boundary sits past the image prefix (builder
+                        // guard), so the residual is real tokens in both
+                        // spaces and the anchor delta is always defined; on
+                        // the vision container the residual reprefill must
+                        // resume with it seeded.
+                        var positionAnchorRopeDelta: Int? = nil
+                        if mlxStart.seedsPositionAnchor {
+                            guard let delta = mlxStart.keySpace.positionAnchorDelta(
+                                upTo: boundarySnapshot.tokenOffset
+                            ) else {
+                                diagnosticsContext.logSkip(
+                                    stage: Self.leafStages(for: boundaryMode).store,
+                                    reason: "boundary-splits-image-run",
+                                    level: .warning,
+                                    extraFields: [("offset", "\(boundarySnapshot.tokenOffset)")]
+                                )
+                                break leafBlock
+                            }
+                            positionAnchorRopeDelta = delta
+                        }
                         let stages = Self.leafStages(for: boundaryMode)
                         leafStoreForTuner = await Self.captureStructuredLeafFromBoundary(
                             container: container,
                             storedTokens: boundaryStoredTokens,
                             boundarySnapshot: boundarySnapshot,
+                            positionAnchorRopeDelta: positionAnchorRopeDelta,
                             partitionKey: mlxStart.partitionKey,
                             prefillStepSize: mlxStart.prefillStepSize,
                             tokenNDim: mlxStart.tokenNDim,
@@ -919,14 +994,20 @@ nonisolated final class ServerCompletion {
             // successful leaf stores.
             let capturedSnapshots = storedSnapshotsForTuner
             let leafCapture = leafStoreForTuner
+            let unkeyed = mlxStart.unkeyedReason != nil
+            let keyPath = mlxStart.keySpace.keyPath
             let (finalStats, finalBudgetBytes) = await MainActor.run {
-                prefixCache.recordRequest(
-                    partitionKey: mlxStart.partitionKey,
-                    promptTokens: mlxStart.fullTokens,
-                    capturedSnapshots: capturedSnapshots,
-                    leafStore: leafCapture,
-                    requestID: requestID
-                )
+                // Unkeyed Completions stay out of the tuner's workload trace —
+                // they never participated in the cache this trace models.
+                if !unkeyed {
+                    prefixCache.recordRequest(
+                        partitionKey: mlxStart.partitionKey,
+                        promptTokens: keyPath,
+                        capturedSnapshots: capturedSnapshots,
+                        leafStore: leafCapture,
+                        requestID: requestID
+                    )
+                }
                 return (prefixCache.stats, prefixCache.memoryBudgetBytes)
             }
             diagnosticsContext.log(PrefixCacheDiagnostics.MemoryEvent(
@@ -984,6 +1065,7 @@ nonisolated final class ServerCompletion {
         // sync-read the actor-confined module.
         let promptStartsThinking = self.promptStartsThinking
         let modelFingerprint = self.modelFingerprint
+        let imageKeying = self.modelIdentity?.imageKeying
         let ssdEnabled = self.ssdConfig?.enabled == true
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
@@ -999,9 +1081,25 @@ nonisolated final class ServerCompletion {
                 return (value, Date.timeIntervalSinceReferenceDate - started)
             }
 
-            // 1. Tokenize the full conversation (BEFORE cache lookup).
+            // 1. Tokenize the full conversation (BEFORE cache lookup). Images
+            // ride along positionally: the renderer emits one `"image"` part
+            // per attachment and the processor matches them in order.
+            // `MessageConverter` already proved each payload `CIImage`-decodable.
+            let requestImages = conversation.images
+            let userInputImages: [UserInput.Image] = try requestImages.map { image in
+                guard let decoded = CIImage(data: image.data) else {
+                    throw AgentEngineError.generationFailed(
+                        "image attachment no longer decodes (digest \(image.digest.hexString.prefix(8)))"
+                    )
+                }
+                return .ciImage(decoded)
+            }
             let fullInput = try await context.processor.prepare(
-                input: UserInput(messages: conversation.promptMessages, tools: canonicalTools)
+                input: UserInput(
+                    messages: conversation.promptMessages,
+                    images: userInputImages,
+                    tools: canonicalTools
+                )
             )
             // Sequence length is always the LAST dim. For LLM models tokens are
             // 1D [seq], for VLM models (ParoQuant Qwen35) they are 2D [batch, seq].
@@ -1022,20 +1120,70 @@ nonisolated final class ServerCompletion {
                 modelFingerprint: modelFingerprint
             )
 
+            // 3b. Build the request's **Cache Key Space** from the prepared
+            // tokens, the conversation's images, and the family's image
+            // keying. Identity (and free) for text-only requests. A
+            // construction failure degrades the whole request to an **Unkeyed
+            // Completion** — served normally, zero cache participation.
+            let keySpace: CacheKeySpace
+            switch CacheKeySpace.make(
+                preparedTokens: fullTokens,
+                imageDigests: requestImages.map(\.digest),
+                imageGrids: (fullInput.image?.frames ?? []).map { frame in
+                    let (t, h, w) = frame.values
+                    return (t: t, height: h, width: w)
+                },
+                imageKeying: imageKeying
+            ) {
+            case .success(let space):
+                keySpace = space
+            case .failure(let reason):
+                return try await Self.makeUnkeyedGeneration(
+                    context: context,
+                    fullInput: fullInput,
+                    fullTokens: fullTokens,
+                    reason: reason,
+                    parameters: parameters,
+                    toolSpecs: canonicalTools,
+                    partitionKey: partitionKey,
+                    ssdEnabled: ssdEnabled,
+                    diagnosticsContext: diagnosticsContext,
+                    progressHandler: progressHandler
+                )
+            }
+            // The recognized vision container mis-positions M-RoPE on any
+            // nil-state warm forward — text-only restores included — so the
+            // Position Anchor is seeded whenever the family is recognized,
+            // not just when this request carries images.
+            let seedsPositionAnchor = imageKeying != nil
+
             // 4. Detect the prefill boundaries (stable prefix + last-message +
             // last-user). The Prefill Planner owns this tokenizer-affine work —
             // including the generation-prompt suffix subtraction and the
-            // last-user re-render — in one tested place.
+            // last-user re-render — in one tested place, against the key
+            // space's own path so boundary offsets are key-space offsets by
+            // construction.
             let boundaries = try PrefillPlanner.detectBoundaries(
                 conversation: conversation,
                 toolSpecs: canonicalTools,
-                fullTokens: fullTokens,
                 promptStartsThinking: promptStartsThinking,
-                tokenizer: context.tokenizer
+                tokenizer: context.tokenizer,
+                keySpace: keySpace
             )
+            if let failure = boundaries.lastUserTranslationFailure {
+                diagnosticsContext.logSkip(
+                    stage: "lastUserBoundary",
+                    reason: "render-translation-failed",
+                    level: .warning,
+                    extraFields: [("failure", "\(failure)")]
+                )
+            }
 
             // 5–6. Resolve the best cached prefix (lookup + lazy SSD hydration),
-            // then plan checkpoints against the settled tree.
+            // then plan checkpoints against the settled tree. Every radix-tree
+            // token path is the **Cache Key Path** — image runs as
+            // digest-derived pseudo-tokens, identical to the prepared text
+            // everywhere else.
             await progressHandler?(.cacheLookupStarted)
             let lookupStarted = Date.timeIntervalSinceReferenceDate
             // Resolve the best usable snapshot in one place: radix lookup plus
@@ -1043,7 +1191,7 @@ nonisolated final class ServerCompletion {
             // here). `loadSync` stays off-MainActor inside this scope per
             // ADR-0001; promote/clear hop to MainActor inside `resolve`.
             let resolved = await SnapshotResolution.resolve(
-                tokens: fullTokens,
+                tokens: keySpace.keyPath,
                 promptTokenCount: fullTokenCount,
                 partitionKey: partitionKey,
                 modelFingerprint: modelFingerprint,
@@ -1059,7 +1207,7 @@ nonisolated final class ServerCompletion {
             // `.ssdHit`.
             let checkpointPlan = await MainActor.run {
                 prefixCache.planCheckpoints(
-                    tokens: fullTokens,
+                    tokens: keySpace.keyPath,
                     stablePrefixOffset: boundaries.stablePrefixOffset,
                     partitionKey: partitionKey,
                     alignTo: resolved.alignmentLookup
@@ -1071,21 +1219,55 @@ nonisolated final class ServerCompletion {
             // restore-vs-cold, the suffix checkpoint filter, the transient
             // boundary offsets, and the single `prefillBaseOffset` (which
             // collapses the old `skippedTokens` / `checkpointBaseOffset` pair).
+            // The key space clamps image-bearing requests: hits below the end
+            // of the last image run degrade to cold, and cold checkpoints
+            // inside the image prefix are dropped (uncapturable there).
             let prefillPlan = PrefillPlanner.plan(
                 boundaries: boundaries,
                 lookupResult: lookupResult,
                 checkpointPlan: checkpointPlan,
-                promptTokenCount: fullTokenCount
+                promptTokenCount: fullTokenCount,
+                keySpace: keySpace
             )
+            if !keySpace.isIdentity,
+               case .cold = prefillPlan.restore,
+               checkpointPlan.count > prefillPlan.checkpointsToCapture.count {
+                diagnosticsContext.logSkip(
+                    stage: "checkpointPlan",
+                    reason: "inside-image-prefix",
+                    extraFields: [
+                        ("dropped", "\(checkpointPlan.count - prefillPlan.checkpointsToCapture.count)"),
+                        ("minimumWarmOffset", "\(keySpace.minimumWarmOffset)"),
+                    ]
+                )
+            }
 
             // Execute the restore decision (Metal): on a hit, slice the suffix
-            // and restore the KV cache; otherwise run cold.
+            // and restore the KV cache; otherwise run cold. Three shapes:
+            // - warm: restore the snapshot, chunk-prefill the (image-free)
+            //   remainder with a seeded **Position Anchor**;
+            // - cold, text-only: chunk-prefill everything from zero;
+            // - cold with images: one vendor `prepare` over the image prefix
+            //   `[0, minimumWarmOffset)` (pixels in, M-RoPE correct by
+            //   construction), then chunk-prefill the text tail with the
+            //   prepare's state threaded — the spike's bitwise-verified cold
+            //   chain (ADR-0007).
             let inputForGeneration: LMInput
             let cacheToUse: [any KVCache]?
             let restoreMs: TimeInterval
+            /// Offset already covered when the executor starts (restore offset
+            /// or the vendor-prepared image prefix; 0 on a text-only cold run).
+            let executionBaseOffset: Int
+            /// Image-prefix input the prefill phase vendor-prepares before the
+            /// chunked tail; nil except on a cold image-bearing plan.
+            var imagePrefixInput: LMInput? = nil
+            /// State the first executor chunk forwards with (Position Anchor
+            /// on a warm restore; the vendor prepare fills it on a cold
+            /// image-bearing plan).
+            var executorInitialState: LMOutput.State? = nil
 
             switch prefillPlan.restore {
-            case .restore(let cacheOffset):
+            case .restore(let cacheOffset, let anchorDelta):
                 // Suffix-only prefill is safe: layers are restored via
                 // `HybridCacheSnapshot` with their absolute logical offset
                 // intact, and each layer's own `makeMask` recreates the right
@@ -1096,18 +1278,40 @@ nonisolated final class ServerCompletion {
                 } else {
                     slicedTokens = fullInput.text.tokens[0..., cacheOffset...]
                 }
-                // Drop the mask — for our HTTP path the input is always pure text
-                // and downstream code recreates attention masks from cache offset.
+                // Drop the mask — the remainder is image-free by the planner's
+                // warm-offset clamp, and downstream code recreates attention
+                // masks from the cache offset.
                 inputForGeneration = LMInput(text: LMInput.Text(tokens: slicedTokens, mask: nil))
                 let (restoredCache, measuredRestoreMs) = measure {
                     lookupResult.restoreCache()
                 }
                 cacheToUse = restoredCache
                 restoreMs = measuredRestoreMs
+                executionBaseOffset = cacheOffset
+                if seedsPositionAnchor {
+                    executorInitialState = PositionAnchor.seededState(ropeDelta: anchorDelta)
+                }
+            case .cold where !keySpace.isIdentity:
+                let prefixEnd = keySpace.minimumWarmOffset
+                imagePrefixInput = LMInput(
+                    text: LMInput.Text(
+                        tokens: fullInput.text.tokens[0..., ..<prefixEnd], mask: nil
+                    ),
+                    image: fullInput.image
+                )
+                inputForGeneration = LMInput(
+                    text: LMInput.Text(
+                        tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil
+                    )
+                )
+                cacheToUse = nil
+                restoreMs = 0
+                executionBaseOffset = prefixEnd
             case .cold:
                 inputForGeneration = fullInput
                 cacheToUse = nil
                 restoreMs = 0
+                executionBaseOffset = 0
             }
             let skippedTokens = prefillPlan.prefillBaseOffset
             let newTokensToPrefill = fullTokenCount - skippedTokens
@@ -1165,13 +1369,50 @@ nonisolated final class ServerCompletion {
             )))
             var liveCache = cacheToUse ?? context.model.newCache(parameters: genParams)
             let (prefillResult, prefillMs) = try measure {
+                var initialState = executorInitialState
+                var prefixSnapshots: [HybridCacheSnapshot] = []
+                if let imagePrefixInput {
+                    // Cold image prefix: one vendor prepare carries the pixels
+                    // through the vision tower with M-RoPE correct by
+                    // construction, and its returned state anchors the chunked
+                    // text tail. `.tokens` is unreachable — a non-identity key
+                    // space implies the recognized vision container, whose
+                    // `prepare` is single-shot.
+                    guard case .logits(let prepared) = try context.model.prepare(
+                        imagePrefixInput, cache: liveCache, windowSize: genParams.prefillStepSize
+                    ) else {
+                        throw AgentEngineError.generationFailed(
+                            "vision container returned .tokens from prepare"
+                        )
+                    }
+                    initialState = prepared.state
+                    // A checkpoint at exactly the prefix end is capturable here
+                    // (the executor's relative-checkpoint loop only captures
+                    // strictly past its base) — capture needs materialized
+                    // arrays, so only that branch pays a blocking eval; the
+                    // common case dispatches the vision-tower work async so
+                    // the CPU can build the text tail's first chunk graph
+                    // while the GPU runs the prefix (the PrefillExecutor
+                    // pipelining pattern).
+                    if let type = allCheckpoints[executionBaseOffset] {
+                        eval(liveCache)
+                        if let snap = HybridCacheSnapshot.capture(
+                            cache: liveCache, offset: executionBaseOffset, type: type
+                        ) {
+                            prefixSnapshots.append(snap)
+                        }
+                    } else {
+                        asyncEval(liveCache)
+                    }
+                }
                 let warmed = try PrefillExecutor.run(
                     model: context.model,
                     text: inputForGeneration.text,
                     cache: liveCache,
                     checkpoints: allCheckpoints,
-                    checkpointBaseOffset: prefillPlan.prefillBaseOffset,
-                    prefillStepSize: genParams.prefillStepSize
+                    checkpointBaseOffset: executionBaseOffset,
+                    prefillStepSize: genParams.prefillStepSize,
+                    initialState: initialState
                 )
                 maybeQuantizeKVCache(
                     cache: &liveCache,
@@ -1181,18 +1422,21 @@ nonisolated final class ServerCompletion {
                 )
                 var iteratorParams = genParams
                 iteratorParams.kvBits = nil
-                // `makeIterator` seeds any configured penalty processors with
-                // the full suffix — the iterator's own input is only the
-                // final prompt token, which would otherwise be the entire
-                // repetition/presence/frequency context.
-                let iterator = try PrefillExecutor.makeIterator(
-                    model: context.model,
-                    fullText: inputForGeneration.text,
+                // The iterator seeds any configured penalty processors with
+                // the full suffix — its own input is only the final prompt
+                // token, which would otherwise be the entire
+                // repetition/presence/frequency context. It threads the last
+                // prefill chunk's state through the prime forward and every
+                // decode step (PRD #72 — upstream's iterator drops it).
+                let iterator = StateThreadedTokenIterator(
                     remainder: warmed.remainder,
-                    cache: &liveCache,
+                    fullText: inputForGeneration.text,
+                    model: context.model,
+                    cache: liveCache,
+                    state: warmed.state,
                     parameters: iteratorParams
                 )
-                return (iterator: iterator, snapshots: warmed.snapshots)
+                return (iterator: iterator, snapshots: prefixSnapshots + warmed.snapshots)
             }
             let iterator = prefillResult.iterator
             await progressHandler?(.prefillFinished(.init(
@@ -1228,7 +1472,7 @@ nonisolated final class ServerCompletion {
                 ssdEnabled: ssdEnabled
             )
             let snapshotAdmission = SnapshotAdmission.checkpoints(
-                fullPromptTokens: fullTokens,
+                fullPromptTokens: keySpace.keyPath,
                 candidates: checkpointCandidates,
                 partitionKey: partitionKey,
                 requestID: requestID
@@ -1265,6 +1509,9 @@ nonisolated final class ServerCompletion {
                 lookupReason: lookupResult.reason,
                 sharedPrefixLength: lookupResult.sharedPrefixLength,
                 fullTokens: fullTokens,
+                keySpace: keySpace,
+                unkeyedReason: nil,
+                seedsPositionAnchor: seedsPositionAnchor,
                 snapshotAdmission: snapshotAdmission,
                 ssdEnabled: ssdEnabled,
                 partitionKey: partitionKey,
@@ -1274,6 +1521,96 @@ nonisolated final class ServerCompletion {
                 tokenNDim: tokenNDim
             )
         }
+    }
+
+    /// Serve an **Unkeyed Completion**: a valid Cache Key Path could not be
+    /// built for an image-bearing request (unrecognized family, or the
+    /// prepared sequence disagreed with the conversation's images), so the
+    /// request is served correctly with zero cache participation — no lookup,
+    /// no checkpoints, no admission, never a route bounce.
+    ///
+    /// The whole prompt goes through the vendor `prepare` (pixels included —
+    /// for the mismatch corner on the vision container this is today's
+    /// uncached image-serving shape), and decode runs on the state-threaded
+    /// iterator so a `.logits` prepare keeps its returned state. `kvBits`
+    /// quantization is skipped on this path — there is no capture to protect,
+    /// and the degraded corner is not worth a per-step quantization loop.
+    private static func makeUnkeyedGeneration(
+        context: ModelContext,
+        fullInput: LMInput,
+        fullTokens: [Int],
+        reason: CacheKeySpace.UnkeyedReason,
+        parameters: GenerateParameters,
+        toolSpecs: [ToolSpec]?,
+        partitionKey: CachePartitionKey,
+        ssdEnabled: Bool,
+        diagnosticsContext: PrefixCacheDiagnostics.Context,
+        progressHandler: ServerInferenceProgressHandler?
+    ) async throws -> HTTPPrefixCacheGeneration {
+        diagnosticsContext.logSkip(
+            stage: "cacheKeySpace",
+            reason: reason.rawValue,
+            level: .warning,
+            extraFields: [("promptTokens", "\(fullTokens.count)")]
+        )
+
+        let fullTokenCount = fullInput.text.tokens.dim(-1)
+        await progressHandler?(.prefillStarted(.init(
+            promptTokens: fullTokenCount,
+            cachedTokens: 0,
+            newTokensToPrefill: fullTokenCount,
+            prefillMs: nil
+        )))
+        var iteratorParams = parameters
+        iteratorParams.kvBits = nil
+        let cache = context.model.newCache(parameters: parameters)
+        let prefillStarted = Date.timeIntervalSinceReferenceDate
+        let iterator = try StateThreadedTokenIterator(
+            preparing: fullInput,
+            model: context.model,
+            cache: cache,
+            parameters: iteratorParams
+        )
+        let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStarted
+        await progressHandler?(.prefillFinished(.init(
+            promptTokens: fullTokenCount,
+            cachedTokens: 0,
+            newTokensToPrefill: fullTokenCount,
+            prefillMs: prefillMs * 1000
+        )))
+
+        let (stream, task) = TokenGenerationLoop.start(
+            promptTokenCount: fullTokenCount,
+            modelConfiguration: context.configuration,
+            tokenizer: context.tokenizer,
+            iterator: iterator,
+            tools: toolSpecs
+        )
+
+        return HTTPPrefixCacheGeneration(
+            stream: stream,
+            completion: task,
+            finalCache: cache,
+            diagnosticsContext: diagnosticsContext,
+            lookupMs: 0,
+            restoreMs: 0,
+            prefillMs: prefillMs,
+            promptTokenCount: fullTokenCount,
+            skippedPrefillTokens: 0,
+            lookupReason: .missNoEntries,
+            sharedPrefixLength: 0,
+            fullTokens: fullTokens,
+            keySpace: .identity(keyPath: fullTokens),
+            unkeyedReason: reason,
+            seedsPositionAnchor: false,
+            snapshotAdmission: nil,
+            ssdEnabled: ssdEnabled,
+            partitionKey: partitionKey,
+            transientLastMessageBoundarySnapshot: nil,
+            transientLastUserBoundarySnapshot: nil,
+            prefillStepSize: parameters.prefillStepSize,
+            tokenNDim: fullInput.text.tokens.ndim
+        )
     }
 
     // MARK: - Prefix Cache Admin
@@ -1619,6 +1956,23 @@ nonisolated final class ServerCompletion {
                 stage: stage, reason: "canonical-longer-than-stored", level: .warning,
                 extraFields: [("canonicalLen", "\(canonicalLen)"), ("storedLen", "\(storedLen)")]
             )
+        case .renderTranslationFailed(let failure):
+            // The probe render's image-placeholder arithmetic disagreed with
+            // the request's image table — feature-level skip, request unharmed.
+            return LeafSkipLog(
+                stage: stage, reason: "render-translation-failed", level: .warning,
+                extraFields: [("failure", "\(failure)")]
+            )
+        case .boundaryInsideImagePrefix(let boundaryOffset, let minimumWarmOffset):
+            // The residual would contain an image run, which cannot be
+            // reprefilled — expected on image-add turns, hence `.info`.
+            return LeafSkipLog(
+                stage: stage, reason: "boundary-inside-image-prefix", level: .info,
+                extraFields: [
+                    ("boundaryOffset", "\(boundaryOffset)"),
+                    ("minimumWarmOffset", "\(minimumWarmOffset)"),
+                ]
+            )
         }
     }
 
@@ -1681,6 +2035,7 @@ nonisolated final class ServerCompletion {
         container: ModelContainer,
         storedTokens: [Int],
         boundarySnapshot: HybridCacheSnapshot,
+        positionAnchorRopeDelta: Int?,
         partitionKey: CachePartitionKey,
         prefillStepSize: Int,
         tokenNDim: Int,
@@ -1720,7 +2075,8 @@ nonisolated final class ServerCompletion {
                     cache: restoredCache,
                     checkpointBaseOffset: boundaryOffset,
                     prefillStepSize: prefillStepSize,
-                    consumeAll: true
+                    consumeAll: true,
+                    initialState: positionAnchorRopeDelta.map(PositionAnchor.seededState)
                 )
                 let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStart
 
