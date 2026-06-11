@@ -57,3 +57,9 @@ func copyServerEndpointToPasteboard(port: Int) {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(serverEndpointURL(port: port), forType: .string)
 }
+
+@MainActor
+func copyOpenCodeSetupCommandToPasteboard(port: Int) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(OpenCodeSetupScript.oneLiner(port: port), forType: .string)
+}

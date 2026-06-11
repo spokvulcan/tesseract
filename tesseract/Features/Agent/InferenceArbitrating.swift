@@ -15,6 +15,16 @@
 //  (contrast the actor-backed speech model ports of ADR-0003).
 //
 
+/// How a lease chooses the `.llm` slot's vision mode (ADR-0008).
+nonisolated enum LLMVisionRequirement: Sendable, Equatable {
+    /// Chat UI and background agents: vision follows the user's toggle.
+    case fromSettings
+    /// HTTP server path: vision whenever the target model is capable, so a
+    /// generated client config that advertises image input is always honored —
+    /// the chat toggle cannot silently break a configured client.
+    case visionIfCapable
+}
+
 /// Scoped exclusive GPU access with the required model loaded: waits FIFO-fair
 /// for the lease, ensures `slot`'s model is resident, runs `body`, releases on
 /// exit — including on throw.
@@ -23,6 +33,7 @@ protocol InferenceArbitrating {
     func withExclusiveGPU<T: Sendable>(
         _ slot: ModelSlot,
         llmModelIDOverride: String?,
+        llmVision: LLMVisionRequirement,
         body: () async throws -> T
     ) async throws -> T
 }
@@ -34,6 +45,11 @@ extension InferenceArbitrating {
         _ slot: ModelSlot,
         body: () async throws -> T
     ) async throws -> T {
-        try await withExclusiveGPU(slot, llmModelIDOverride: nil, body: body)
+        try await withExclusiveGPU(
+            slot,
+            llmModelIDOverride: nil,
+            llmVision: .fromSettings,
+            body: body
+        )
     }
 }

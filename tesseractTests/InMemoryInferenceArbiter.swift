@@ -16,10 +16,16 @@ final class InMemoryInferenceArbiter: InferenceArbitrating {
     nonisolated struct LeaseCall: Equatable {
         let slot: ModelSlot
         let llmModelIDOverride: String?
+        let llmVision: LLMVisionRequirement
 
-        init(slot: ModelSlot, llmModelIDOverride: String? = nil) {
+        init(
+            slot: ModelSlot,
+            llmModelIDOverride: String? = nil,
+            llmVision: LLMVisionRequirement = .fromSettings
+        ) {
             self.slot = slot
             self.llmModelIDOverride = llmModelIDOverride
+            self.llmVision = llmVision
         }
     }
 
@@ -33,9 +39,14 @@ final class InMemoryInferenceArbiter: InferenceArbitrating {
     func withExclusiveGPU<T: Sendable>(
         _ slot: ModelSlot,
         llmModelIDOverride: String?,
+        llmVision: LLMVisionRequirement,
         body: () async throws -> T
     ) async throws -> T {
-        leaseCalls.append(LeaseCall(slot: slot, llmModelIDOverride: llmModelIDOverride))
+        leaseCalls.append(LeaseCall(
+            slot: slot,
+            llmModelIDOverride: llmModelIDOverride,
+            llmVision: llmVision
+        ))
         if let ensureLoadedError { throw ensureLoadedError }
         return try await body()
     }

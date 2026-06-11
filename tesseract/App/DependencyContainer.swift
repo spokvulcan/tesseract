@@ -391,5 +391,33 @@ final class DependencyContainer: ObservableObject {
         httpServer.route(.POST, "/v1/chat/completions") { request, writer in
             try await completionHandler.handle(request: request, writer: writer)
         }
+
+        // OpenCode Integration (PRD #74): the Setup One-liner fetches the
+        // script, which POSTs the user's existing config to the Config Merge.
+        // Snapshots are taken per request so re-runs reflect live state.
+        let settings = settingsManager
+        httpServer.route(.GET, IntegrationRoutes.openCodeSetupScript) { _, writer in
+            let response: HTTPResponse = await MainActor.run {
+                OpenCodeIntegrationEndpoint.setupScriptResponse(
+                    snapshot: IntegrationSnapshotBuilder.current(
+                        downloads: downloads,
+                        settings: settings
+                    )
+                )
+            }
+            try await writer.send(response)
+        }
+        httpServer.route(.POST, IntegrationRoutes.openCodeMerge) { request, writer in
+            let response: HTTPResponse = await MainActor.run {
+                OpenCodeIntegrationEndpoint.mergeResponse(
+                    existingConfig: request.body,
+                    snapshot: IntegrationSnapshotBuilder.current(
+                        downloads: downloads,
+                        settings: settings
+                    )
+                )
+            }
+            try await writer.send(response)
+        }
     }
 }

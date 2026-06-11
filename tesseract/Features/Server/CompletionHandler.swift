@@ -195,7 +195,11 @@ struct CompletionHandler: Sendable {
             try await withAcquisitionTimeout { signal in
                 try await arbiter.withExclusiveGPU(
                     .llm,
-                    llmModelIDOverride: llmModelIDOverride
+                    llmModelIDOverride: llmModelIDOverride,
+                    // ADR-0008: HTTP requests load the vision variant whenever
+                    // the target model is capable — the chat toggle never
+                    // gates what a configured client was promised.
+                    llmVision: .visionIfCapable
                 ) {
                     signal.set()
                     await self.activityLog.markLeaseAcquired(handle: logHandle)

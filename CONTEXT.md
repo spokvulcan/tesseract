@@ -292,6 +292,36 @@ keyed, not bypassed).
 > request. For non-lease teardown, `LLMActor.unloadModel` drains the module's
 > active-completion registry before releasing the container.
 
+### Client integrations
+
+**Integration**:
+A supported external client (OpenCode is the first) together with Tesseract's
+recipe for configuring it to talk to the server. Each Integration is one adapter;
+the set is open-ended.
+_Avoid_: connector, plugin, client config (the artifact, not the concept).
+
+**Setup One-liner**:
+The single copyable terminal command, served by the live server itself, that
+configures an Integration end-to-end — the user-facing unit of setup. It reflects
+the server's state at the moment it runs; re-running it is how a setup is
+refreshed.
+_Avoid_: install command, onboarding script.
+
+**Config Merge**:
+The server-side operation that regenerates Tesseract's own block inside a
+client's config while preserving everything else in the file untouched.
+Tesseract's block is generated output — owned by the merge, replaced wholesale on
+every run; a backup of the prior file is the escape hatch.
+_Avoid_: config write, config sync, deep merge (explicitly not the policy).
+
+**Example dialogue:**
+
+> **Dev:** The user hand-tuned a model entry inside the tesseract provider block
+> and re-ran the **Setup One-liner** — what survives?
+> **Expert:** Nothing inside that block: the **Config Merge** owns it and rewrote
+> it from current server state. The rest of the file — other providers, MCP
+> servers, keybinds — is untouched, and the previous file is in the backup.
+
 ### Settings persistence
 
 **Settings Store**:
