@@ -69,4 +69,29 @@ struct ServerCompletionLeafSkipLogTests {
         #expect(log.level == .warning)
         #expect(fields(log) == [["canonicalLen", "9"], ["storedLen", "4"]])
     }
+
+    @Test func renderTranslationFailureIsWarningWithTheTypedFailure() {
+        let log = ServerCompletion.leafSkipLog(
+            for: .renderTranslationFailed(
+                failure: .placeholderOccurrencesExceedImages(occurrences: 2, images: 1)
+            ),
+            mode: .directTool
+        )
+        #expect(log.stage == "directToolLeafStore")
+        #expect(log.reason == "render-translation-failed")
+        #expect(log.level == .warning)
+        #expect(log.extraFields.count == 1)
+        #expect(log.extraFields[0].0 == "failure")
+    }
+
+    @Test func boundaryInsideImagePrefixIsInfoWithBothOffsets() {
+        let log = ServerCompletion.leafSkipLog(
+            for: .boundaryInsideImagePrefix(boundaryOffset: 3, minimumWarmOffset: 9),
+            mode: .directTool
+        )
+        #expect(log.stage == "directToolLeafStore")
+        #expect(log.reason == "boundary-inside-image-prefix")
+        #expect(log.level == .info)
+        #expect(fields(log) == [["boundaryOffset", "3"], ["minimumWarmOffset", "9"]])
+    }
 }

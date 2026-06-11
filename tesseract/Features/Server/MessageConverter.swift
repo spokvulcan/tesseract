@@ -45,65 +45,141 @@ enum MessageConverter {
 
     // MARK: - Messages
 
-    /// Extract system prompt and convert OpenAI messages to internal `LLMMessage` values.
-    ///
-    /// Leading system messages (before any user/assistant/tool turn) are concatenated into
-    /// the system prompt. System messages that appear mid-conversation are preserved in-place
-    /// as `.system` entries in the returned messages array.
-    static func convertMessages(_ messages: [OpenAI.ChatMessage]) -> (systemPrompt: String?, messages: [LLMMessage]) {
+    /// One normalization of an OpenAI request into both downstream shapes:
+    /// the `LLMMessage` history the engine prompts with, and the prefix-cache
+    /// eligibility decision carrying the conversation value. Built in a
+    /// single walk so each image payload is base64-decoded exactly once —
+    /// the cache shape wraps the same decoded bytes (CoW `Data`) the
+    /// attachment carries — and so the two shapes can never disagree on the
+    /// text they extract from the same message.
+    struct NormalizedRequest {
+        let systemPrompt: String?
+        let messages: [LLMMessage]
+        let prefixCacheEligibility: HTTPPrefixCacheEligibility
+    }
+
+    /// Leading system messages (before any user/assistant/tool turn) are
+    /// concatenated into the system prompt; mid-conversation system messages
+    /// are preserved in-place. The eligibility side records the FIRST
+    /// incompatible message (video/audio, undecodable images, non-text
+    /// content outside user messages) while the `LLMMessage` side keeps
+    /// converting with its lenient drop semantics — an ineligible request
+    /// still serves on the standard route.
+    static func normalizeRequest(
+        _ messages: [OpenAI.ChatMessage],
+        tools: [OpenAI.ToolDefinition]? = nil,
+        templateContextDigest: String = HTTPPrefixCacheConversation.defaultTemplateContextDigest
+    ) -> NormalizedRequest {
         let reorderedMessages = reorderToolResultMessages(messages)
         var systemPrompt: String?
-        var result: [LLMMessage] = []
+        var llmMessages: [LLMMessage] = []
+        var cacheMessages: [HTTPPrefixCacheMessage] = []
+        var firstIneligibility: HTTPPrefixCacheEligibility?
         var hasNonSystemMessage = false
 
-        for message in reorderedMessages {
+        func markIneligible(_ reason: HTTPPrefixCacheEligibility) {
+            if firstIneligibility == nil { firstIneligibility = reason }
+        }
+
+        for (index, message) in reorderedMessages.enumerated() {
             switch message.role {
             case .system:
-                let text = message.content?.textValue ?? ""
+                let (text, imageParts) = splitContent(message.content)
+                if !imageParts.isEmpty {
+                    markIneligible(.nonTextSystemMessage(index: index))
+                }
                 if !hasNonSystemMessage {
-                    // Leading system messages are concatenated into the system prompt
-                    if let existing = systemPrompt {
-                        systemPrompt = existing + "\n\n" + text
-                    } else {
-                        systemPrompt = text
-                    }
+                    systemPrompt = systemPrompt.map { $0 + "\n\n" + text } ?? text
                 } else {
-                    // Mid-conversation system messages stay in-place
-                    result.append(.system(content: text))
+                    llmMessages.append(.system(content: text))
+                    cacheMessages.append(.init(role: .system, content: text))
                 }
 
             case .user:
                 hasNonSystemMessage = true
-                let (text, images) = extractUserContent(message.content)
-                result.append(.user(content: text, images: images))
+                let (text, imageParts) = splitContent(message.content)
+                var attachments: [ImageAttachment] = []
+                var cacheImages: [HTTPPrefixCacheImage] = []
+                var cacheable = true
+                for part in imageParts {
+                    guard let attachment = convertImageContent(part) else {
+                        // The engine path drops an unparseable part; the cache
+                        // must not key a payload it cannot attribute.
+                        cacheable = false
+                        continue
+                    }
+                    attachments.append(attachment)
+                    if attachment.ciImage != nil {
+                        cacheImages.append(HTTPPrefixCacheImage(data: attachment.data))
+                    } else {
+                        cacheable = false
+                    }
+                }
+                llmMessages.append(.user(content: text, images: attachments))
+                if cacheable {
+                    cacheMessages.append(.init(role: .user, content: text, images: cacheImages))
+                } else {
+                    markIneligible(.nonTextUserMessage(index: index))
+                }
 
             case .assistant:
                 hasNonSystemMessage = true
-                let content = message.content?.textValue ?? ""
+                let (text, imageParts) = splitContent(message.content)
+                if !imageParts.isEmpty {
+                    markIneligible(.nonTextAssistantMessage(index: index))
+                }
                 let infos = convertAssistantToolCalls(message.tool_calls)
-                let toolCalls = infos?.isEmpty == false ? infos : nil
-                result.append(.assistant(
-                    content: content,
+                llmMessages.append(.assistant(
+                    content: text,
                     reasoning: message.resolvedReasoningContent,
-                    toolCalls: toolCalls
+                    toolCalls: infos?.isEmpty == false ? infos : nil
+                ))
+                cacheMessages.append(.assistant(
+                    content: text,
+                    reasoning: message.resolvedReasoningContent,
+                    toolCalls: (infos ?? []).map {
+                        HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
+                    }
                 ))
 
             case .tool:
                 hasNonSystemMessage = true
-                let content = message.content?.textValue ?? ""
-                let toolCallId = message.tool_call_id ?? ""
-                result.append(.toolResult(toolCallId: toolCallId, content: content))
+                let (text, imageParts) = splitContent(message.content)
+                if !imageParts.isEmpty {
+                    markIneligible(.nonTextToolMessage(index: index))
+                }
+                llmMessages.append(.toolResult(
+                    toolCallId: message.tool_call_id ?? "", content: text
+                ))
+                cacheMessages.append(.init(role: .tool, content: text))
             }
         }
 
-        return (systemPrompt, reorderToolResults(result))
+        let eligibility = firstIneligibility ?? .eligible(HTTPPrefixCacheConversation(
+            systemPrompt: systemPrompt,
+            messages: cacheMessages,
+            toolDefinitionsDigest: toolDefinitionDigest(tools),
+            templateContextDigest: templateContextDigest
+        ))
+        return NormalizedRequest(
+            systemPrompt: systemPrompt,
+            messages: reorderToolResults(llmMessages),
+            prefixCacheEligibility: eligibility
+        )
     }
 
-    /// Normalize a text-based OpenAI-style request into the canonical conversation shape
+    /// Extract system prompt and convert OpenAI messages to internal `LLMMessage` values.
+    static func convertMessages(_ messages: [OpenAI.ChatMessage]) -> (systemPrompt: String?, messages: [LLMMessage]) {
+        let normalized = normalizeRequest(messages)
+        return (normalized.systemPrompt, normalized.messages)
+    }
+
+    /// Normalize an OpenAI-style request into the canonical conversation shape
     /// used by the HTTP prefix cache.
     ///
-    /// Returns `nil` for requests that contain any non-text content parts.
-    static func normalizeTextOnlyConversation(
+    /// Returns `nil` for requests with content the shape cannot carry (video/
+    /// audio, undecodable images, non-text content outside user messages).
+    static func normalizeConversation(
         _ messages: [OpenAI.ChatMessage],
         tools: [OpenAI.ToolDefinition]? = nil
     ) -> HTTPPrefixCacheConversation? {
@@ -117,62 +193,9 @@ enum MessageConverter {
         tools: [OpenAI.ToolDefinition]? = nil,
         templateContextDigest: String = HTTPPrefixCacheConversation.defaultTemplateContextDigest
     ) -> HTTPPrefixCacheEligibility {
-        let reorderedMessages = reorderToolResultMessages(messages)
-        var systemPrompt: String?
-        var result: [HTTPPrefixCacheMessage] = []
-        var hasNonSystemMessage = false
-
-        for (index, message) in reorderedMessages.enumerated() {
-            switch message.role {
-            case .system:
-                guard let text = extractTextOnlyContent(message.content) else {
-                    return .nonTextSystemMessage(index: index)
-                }
-                if !hasNonSystemMessage {
-                    if let existing = systemPrompt {
-                        systemPrompt = existing + "\n\n" + text
-                    } else {
-                        systemPrompt = text
-                    }
-                } else {
-                    result.append(.init(role: .system, content: text))
-                }
-
-            case .user:
-                hasNonSystemMessage = true
-                guard let text = extractTextOnlyContent(message.content) else {
-                    return .nonTextUserMessage(index: index)
-                }
-                result.append(.init(role: .user, content: text))
-
-            case .assistant:
-                hasNonSystemMessage = true
-                guard let text = extractTextOnlyContent(message.content) else {
-                    return .nonTextAssistantMessage(index: index)
-                }
-                result.append(.assistant(
-                    content: text,
-                    reasoning: message.resolvedReasoningContent,
-                    toolCalls: (convertAssistantToolCalls(message.tool_calls) ?? []).map {
-                        HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
-                    }
-                ))
-
-            case .tool:
-                hasNonSystemMessage = true
-                guard let text = extractTextOnlyContent(message.content) else {
-                    return .nonTextToolMessage(index: index)
-                }
-                result.append(.init(role: .tool, content: text))
-            }
-        }
-
-        return .eligible(HTTPPrefixCacheConversation(
-            systemPrompt: systemPrompt,
-            messages: result,
-            toolDefinitionsDigest: toolDefinitionDigest(tools),
-            templateContextDigest: templateContextDigest
-        ))
+        normalizeRequest(
+            messages, tools: tools, templateContextDigest: templateContextDigest
+        ).prefixCacheEligibility
     }
 
     // MARK: - Tool Result Reordering
@@ -297,54 +320,30 @@ enum MessageConverter {
 
     // MARK: - Private
 
-    /// Extract text and images from user message content.
-    private static func extractUserContent(_ content: OpenAI.MessageContent?) -> (text: String, images: [ImageAttachment]) {
-        guard let content else { return ("", []) }
-
+    /// Split message content into joined text (nil-text parts skipped — the
+    /// `textValue` rule, shared by every consumer so the engine prompt and
+    /// the cache conversation can never disagree on the same message) and the
+    /// raw image parts for the caller's per-policy image handling.
+    private static func splitContent(
+        _ content: OpenAI.MessageContent?
+    ) -> (text: String, imageParts: [OpenAI.ContentPart]) {
         switch content {
+        case nil:
+            return ("", [])
         case .text(let string):
             return (string, [])
-
         case .parts(let parts):
             var texts: [String] = []
-            var images: [ImageAttachment] = []
-
+            var imageParts: [OpenAI.ContentPart] = []
             for part in parts {
                 switch part.type {
                 case .text:
-                    if let text = part.text {
-                        texts.append(text)
-                    }
+                    if let text = part.text { texts.append(text) }
                 case .image_url:
-                    if let attachment = convertImageContent(part) {
-                        images.append(attachment)
-                    }
+                    imageParts.append(part)
                 }
             }
-
-            return (texts.joined(separator: "\n"), images)
-        }
-    }
-
-    /// Extract text content only; returns `nil` if the message contains any non-text parts.
-    private static func extractTextOnlyContent(_ content: OpenAI.MessageContent?) -> String? {
-        guard let content else { return "" }
-
-        switch content {
-        case .text(let string):
-            return string
-
-        case .parts(let parts):
-            var texts: [String] = []
-            for part in parts {
-                switch part.type {
-                case .text:
-                    texts.append(part.text ?? "")
-                case .image_url:
-                    return nil
-                }
-            }
-            return texts.joined(separator: "\n")
+            return (texts.joined(separator: "\n"), imageParts)
         }
     }
 

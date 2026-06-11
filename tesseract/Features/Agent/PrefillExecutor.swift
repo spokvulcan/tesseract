@@ -21,6 +21,10 @@ nonisolated enum PrefillExecutor {
         /// Unprocessed tail of the input. When `consumeAll` is false this is
         /// at least one token — the prompt tail the `TokenIterator` primes on.
         let remainder: LMInput.Text
+        /// Model state after the last executed chunk (Qwen3.5-VLM carries its
+        /// RoPE deltas here). Callers that keep forwarding on the same cache
+        /// thread this into their next call instead of starting from nil.
+        let state: LMOutput.State?
     }
 
     /// Chunk-prefill `text` into `cache`.
@@ -31,6 +35,10 @@ nonisolated enum PrefillExecutor {
     ///     already covers (0 cold; the restored snapshot offset on a hit).
     ///   - consumeAll: when true every input token is processed (leaf
     ///     re-prefill); when false the final token is left for the iterator.
+    ///   - initialState: model state the first chunk forwards with. On a
+    ///     restored cache the VLM container recomputes positions from zero
+    ///     when this is nil; seeding the restored conversation's RoPE delta
+    ///     here keeps M-RoPE positions anchored at the restore offset.
     static func run(
         model: any LanguageModel,
         text: LMInput.Text,
@@ -38,7 +46,8 @@ nonisolated enum PrefillExecutor {
         checkpoints: [Int: HybridCacheSnapshot.CheckpointType] = [:],
         checkpointBaseOffset: Int = 0,
         prefillStepSize: Int,
-        consumeAll: Bool = false
+        consumeAll: Bool = false,
+        initialState: LMOutput.State? = nil
     ) throws -> Output {
         let ndim = text.tokens.ndim
         let total = text.tokens.dim(-1)
@@ -52,7 +61,7 @@ nonisolated enum PrefillExecutor {
         // at 0), and `asyncEval` lets the CPU build chunk N+1's graph while
         // the GPU evaluates chunk N. Checkpoint captures synchronize
         // explicitly before copying.
-        var chunkState: LMOutput.State?
+        var chunkState: LMOutput.State? = initialState
         func forward(_ chunkSize: Int) {
             let chunk = ndim >= 2 ? y[0..., ..<chunkSize] : y[.newAxis, ..<chunkSize]
             let output = model(chunk, cache: cache.isEmpty ? nil : cache, state: chunkState)
@@ -63,7 +72,7 @@ nonisolated enum PrefillExecutor {
 
         let keepBack = consumeAll ? 0 : 1
         guard total > keepBack else {
-            return Output(snapshots: [], remainder: y)
+            return Output(snapshots: [], remainder: y, state: chunkState)
         }
 
         // The checkpoint-aware loop never consumes the final token (its main
@@ -91,7 +100,7 @@ nonisolated enum PrefillExecutor {
         eval(cache)
         Memory.clearCache()
 
-        return Output(snapshots: snapshots, remainder: y)
+        return Output(snapshots: snapshots, remainder: y, state: chunkState)
     }
 
     /// Build the post-prefill `TokenIterator`.

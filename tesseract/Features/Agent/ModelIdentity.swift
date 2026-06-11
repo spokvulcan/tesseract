@@ -19,6 +19,17 @@ import MLXLMCommon
 /// throws and is identity-for-cache-invalidation, not a capability fact.
 nonisolated struct ModelIdentity: Sendable, Equatable {
 
+    /// The image-keying facts of a recognized vision family (PRD #72): the
+    /// placeholder pad token whose prepared runs are one image each, and the
+    /// spatial merge size the **Position Anchor** reconstruction needs to turn
+    /// an image grid into its M-RoPE position span. `nil` means the loaded
+    /// family is not recognized for image keying — an image-bearing request
+    /// then degrades to an **Unkeyed Completion**.
+    struct ImageKeying: Sendable, Equatable {
+        let imagePadTokenId: Int
+        let spatialMergeSize: Int
+    }
+
     /// Chat-template tool-call format. `nil` means "no override — use the
     /// vendor JSON default." Qwen3.5 uses XML function syntax
     /// (`<function=name>…</function>` inside `<tool_call>`).
@@ -41,6 +52,10 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// never `nil`, so the single consumer (`EvictionPolicy`) never handles an
     /// absent profile.
     let flopProfile: ModelFlopProfile
+
+    /// Image-keying facts for the Qwen3.5 vision variant; `nil` for text-only
+    /// models and unrecognized families.
+    let imageKeying: ImageKeying?
 
     /// Build the identity from a model directory, reading `config.json` and
     /// `chat_template.jinja` **exactly once each**. The directory-based
@@ -66,6 +81,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         self.toolCallFormat = Self.interpretToolCallFormat(modelType: modelType)
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
+        self.imageKeying = Self.interpretImageKeying(configJSON: configJSON)
     }
 
     // MARK: - Interpretation (pure)
@@ -123,6 +139,24 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             linearNumValueHeads: linearNumValueHeads,
             linearKeyHeadDim: linearKeyHeadDim,
             fullAttentionInterval: fullAttentionInterval
+        )
+    }
+
+    /// Image keying exists only for the Qwen3.5 vision variant — the family the
+    /// pseudo-token keying and Position Anchor seeding are spike-verified
+    /// against (ADR-0007). Recognized by the `qwen3_5` prefix plus a
+    /// `vision_config` block; the defaults mirror the vendor's `Qwen35`
+    /// config decode (`image_token_id` 248056, `spatial_merge_size` 2).
+    private static func interpretImageKeying(configJSON: [String: Any]?) -> ImageKeying? {
+        guard let root = configJSON,
+              let modelType = root["model_type"] as? String,
+              modelType.hasPrefix("qwen3_5"),
+              let visionConfig = root["vision_config"] as? [String: Any]
+        else { return nil }
+
+        return ImageKeying(
+            imagePadTokenId: root["image_token_id"] as? Int ?? 248_056,
+            spatialMergeSize: visionConfig["spatial_merge_size"] as? Int ?? 2
         )
     }
 }

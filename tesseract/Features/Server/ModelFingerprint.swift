@@ -6,11 +6,16 @@
 //  weight-identity term of `CachePartitionKey` so a weight swap under the
 //  same `modelID` cannot surface stale persisted prefix-cache snapshots.
 //
-//  Hash input: SHA-256 over config.json bytes + tokenizer.json bytes +
-//  sorted list of (filename, size, mtime) for every *.safetensors in the
-//  directory. Full weight-byte hashing is intentionally skipped — it would
-//  add ~100 ms to the load path for a scenario (weight swap under stable
-//  modelID) that is manual-ops-only.
+//  Hash input: SHA-256 over the identity files' bytes (config.json,
+//  tokenizer.json, and the preparation-identity files — tokenizer_config.json,
+//  preprocessor_config.json, chat_template.json/.jinja; PRD #72) + sorted
+//  list of (filename, size, mtime) for every *.safetensors in the directory.
+//  Preparation files join the hash because they shape the prepared sequence
+//  (tokenization, chat-template rendering, image patch grids): a processor or
+//  template change must partition the cache rather than leave stale
+//  never-matching paths in the tree. Full weight-byte hashing is
+//  intentionally skipped — it would add ~100 ms to the load path for a
+//  scenario (weight swap under stable modelID) that is manual-ops-only.
 //
 
 import CryptoKit
@@ -55,21 +60,27 @@ enum ModelFingerprint {
 
         var hasher = SHA256()
 
-        // 1. config.json — hash raw bytes if present; empty if absent.
-        let configURL = modelDir.appendingPathComponent("config.json", isDirectory: false)
-        hasher.update(data: try readIfPresent(configURL))
+        // 1. Identity files, fixed order — raw bytes if present; empty if
+        //    absent. The fixed 0x00 separator avoids collision between
+        //    (config="AB", tokenizer="") and (config="A", tokenizer="B");
+        //    matches the convention used by hashable multi-field
+        //    canonicalization elsewhere in the codebase. New names append at
+        //    the end of the list — order is part of the hash identity.
+        let identityFileNames = [
+            "config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "preprocessor_config.json",
+            "chat_template.json",
+            "chat_template.jinja",
+        ]
+        for name in identityFileNames {
+            let url = modelDir.appendingPathComponent(name, isDirectory: false)
+            hasher.update(data: try readIfPresent(url))
+            hasher.update(data: Data([0x00]))
+        }
 
-        // Fixed separator avoids collision between (config="AB", tokenizer="") and
-        // (config="A", tokenizer="B"). Matches the convention used by hashable
-        // multi-field canonicalization elsewhere in the codebase.
-        hasher.update(data: Data([0x00]))
-
-        // 2. tokenizer.json — hash raw bytes if present; empty if absent.
-        let tokenizerURL = modelDir.appendingPathComponent("tokenizer.json", isDirectory: false)
-        hasher.update(data: try readIfPresent(tokenizerURL))
-        hasher.update(data: Data([0x00]))
-
-        // 3. Sorted list of (filename, size, mtime) for every *.safetensors.
+        // 2. Sorted list of (filename, size, mtime) for every *.safetensors.
         //    Sorting by filename gives a deterministic order independent of
         //    filesystem enumeration order. Each tuple is encoded as
         //    "<name>\0<size>\0<mtimeNs>\n" before feeding into SHA-256.

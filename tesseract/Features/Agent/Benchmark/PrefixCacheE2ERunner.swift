@@ -241,6 +241,17 @@ final class PrefixCacheE2ERunner {
             checks: &checks
         )
 
+        // Step Z runs last: it reloads the (post-Step-X unloaded) engine
+        // with vision weights and never needs the text-only state back.
+        try await runImageScenario(
+            engine: engine,
+            modelDir: modelDir,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            params: params,
+            checks: &checks
+        )
+
         // Final report
         log("\n── Summary ──")
         var allPassed = true
@@ -281,11 +292,12 @@ final class PrefixCacheE2ERunner {
     /// `awaitPendingUnload()` hop closes that window.
     private func reloadEngine(
         _ engine: AgentEngine,
-        modelDir: URL
+        modelDir: URL,
+        visionMode: Bool = false
     ) async throws {
         engine.unloadModel()
         await engine.awaitPendingUnload()
-        try await engine.loadModel(from: modelDir, visionMode: false)
+        try await engine.loadModel(from: modelDir, visionMode: visionMode)
     }
 
     private struct RequestResult {
@@ -303,14 +315,18 @@ final class PrefixCacheE2ERunner {
     }
 
     private enum BenchmarkMessage {
-        case user(String)
+        case user(String, images: [Data] = [])
         case assistant(content: String, reasoning: String?, toolCalls: [ToolCallInfo] = [])
         case toolResult(toolCallId: String, content: String)
 
         var prefixCacheMessage: HTTPPrefixCacheMessage {
             switch self {
-            case .user(let content):
-                HTTPPrefixCacheMessage(role: .user, content: content)
+            case .user(let content, let images):
+                HTTPPrefixCacheMessage(
+                    role: .user,
+                    content: content,
+                    images: images.map { HTTPPrefixCacheImage(data: $0) }
+                )
             case .assistant(let content, let reasoning, let toolCalls):
                 .assistant(
                     content: content,
@@ -326,8 +342,10 @@ final class PrefixCacheE2ERunner {
 
         var llmMessage: LLMMessage {
             switch self {
-            case .user(let content):
-                .user(content: content, images: [])
+            case .user(let content, let images):
+                .user(content: content, images: images.map {
+                    ImageAttachment(data: $0, mimeType: "image/png")
+                })
             case .assistant(let content, let reasoning, let toolCalls):
                 .assistant(
                     content: content,
@@ -1002,6 +1020,184 @@ final class PrefixCacheE2ERunner {
         }
     }
 
+    // MARK: - Step Z: Image scenario (PRD #72)
+
+    /// Image-aware prefix caching against the loaded model: the image-add
+    /// turn serves cold by design, the follow-up turn restores at/past the
+    /// image prefix with a seeded Position Anchor (warm output byte-equal to
+    /// cold under greedy decoding — the M-RoPE correctness proxy), the
+    /// agent-shaped history rides the same cache-aware arm, and the
+    /// non-negotiable case — different image bytes at identical pixel size —
+    /// never produces a hit. Skips (passing) when the loaded model defines
+    /// no image keying.
+    private func runImageScenario(
+        engine: AgentEngine,
+        modelDir: URL,
+        modelID: String,
+        systemPrompt: String,
+        params: AgentGenerateParameters,
+        checks: inout [CheckResult]
+    ) async throws {
+        log("\n── Step Z: Image scenario ──")
+        let identity = ModelIdentity(directory: modelDir)
+        guard identity.imageKeying != nil else {
+            log("  model defines no image keying (not a recognized VLM) — skipping")
+            checks.append(CheckResult(
+                name: "image_scenario",
+                passed: true,
+                detail: "skipped — model defines no image keying"
+            ))
+            return
+        }
+
+        log("  Reloading model with vision weights…")
+        try await reloadEngine(engine, modelDir: modelDir, visionMode: true)
+
+        guard let imageA = BenchmarkHarness.deterministicPNG(width: 256, height: 256, seed: 17),
+              let imageB = BenchmarkHarness.deterministicPNG(width: 256, height: 256, seed: 41)
+        else {
+            throw PrefixCacheE2EError.imageEncodingFailed
+        }
+        let imagePrompt = "Describe the dominant colors and any visible pattern in this image."
+
+        log("\n── Step Z1: Image-add turn (cold by design) ──")
+        let requestZ1 = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: [.user(imagePrompt, images: [imageA])],
+            toolSpecs: [],
+            parameters: params
+        )
+        log("  cachedTokens=\(requestZ1.cachedTokens) ttft=\(String(format: "%.3f", requestZ1.ttftSeconds))s "
+            + "generatedChars=\(requestZ1.generatedText.count)")
+        checks.append(CheckResult(
+            name: "requestZ1_image_turn_serves_cold",
+            passed: requestZ1.cachedTokens == 0,
+            detail: "cachedTokens=\(requestZ1.cachedTokens) expected 0 (image-add turns serve cold)"
+        ))
+
+        // Extends Z1's conversation exactly — the canonical leaf stored after
+        // Z1's generation should serve the follow-up at/past the image prefix.
+        let followUpMessages: [BenchmarkMessage] = [
+            .user(imagePrompt, images: [imageA]),
+            .assistant(content: requestZ1.assistantText, reasoning: requestZ1.assistantReasoning),
+            .user("Answer in one word: which color family dominates?"),
+        ]
+
+        log("\n── Step Z2: Follow-up turn (warm restore past the image) ──")
+        let requestZ2 = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: followUpMessages,
+            toolSpecs: [],
+            parameters: params
+        )
+        log("  cachedTokens=\(requestZ2.cachedTokens) ttft=\(String(format: "%.3f", requestZ2.ttftSeconds))s "
+            + "generatedChars=\(requestZ2.generatedText.count)")
+        // Hits below the image's minimum warm offset degrade to cold by
+        // construction, so any nonzero count here is a restore past the image.
+        checks.append(CheckResult(
+            name: "requestZ2_followup_restores_past_image",
+            passed: requestZ2.cachedTokens > 0,
+            detail: "cachedTokens=\(requestZ2.cachedTokens) expected > 0 (hit at/past the image prefix)"
+        ))
+
+        log("\n── Step Z3: Warm-vs-cold equivalence (Position Anchor) ──")
+        log("  Reloading to clear the prefix cache…")
+        try await reloadEngine(engine, modelDir: modelDir, visionMode: true)
+        let requestZ3 = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: followUpMessages,
+            toolSpecs: [],
+            parameters: params
+        )
+        log("  cachedTokens=\(requestZ3.cachedTokens) (expected 0) "
+            + "generatedChars=\(requestZ3.generatedText.count)")
+        checks.append(CheckResult(
+            name: "requestZ3_cold_after_reload",
+            passed: requestZ3.cachedTokens == 0,
+            detail: "cachedTokens=\(requestZ3.cachedTokens) expected 0 after reload"
+        ))
+        let equivalence = Self.checkGreedyOutputEquivalence(
+            requestZ2.generatedText,
+            requestZ3.generatedText,
+            labelA: "warm",
+            labelB: "cold"
+        )
+        checks.append(CheckResult(
+            name: "image_warm_output_equivalence",
+            passed: equivalence.passed,
+            detail: equivalence.detail
+        ))
+
+        log("\n── Step Z4: Agent-shaped history rides the cache-aware arm ──")
+        let llmHistory = followUpMessages.map(\.llmMessage)
+        let service = ServerInferenceService(
+            completionStarter: engine.llmActor,
+            engine: engine,
+            modelStateProvider: {
+                ServerInferenceModelState(modelID: modelID, visionMode: true)
+            }
+        )
+        let agentStart = try await service.start(
+            ServerInferenceRequest(
+                input: .chat(.init(
+                    systemPrompt: systemPrompt,
+                    messages: llmHistory,
+                    toolSpecs: [],
+                    prefixCacheConversation: AgentConversationBuilder.conversation(
+                        systemPrompt: systemPrompt,
+                        messages: llmHistory,
+                        toolSpecs: []
+                    )
+                )),
+                parameters: params,
+                route: .serverCompatible
+            )
+        )
+        let agentResult = try await collectManagedRequest(stream: agentStart.stream)
+        log("  cachedTokens=\(agentStart.cachedTokenCount) "
+            + "generatedChars=\(agentResult.generatedText.count)")
+        checks.append(CheckResult(
+            name: "agent_image_history_lands_cache_aware",
+            passed: agentStart.cachedTokenCount > 0,
+            detail: "cachedTokens=\(agentStart.cachedTokenCount) expected > 0 "
+                + "(agent history with images hits the cache stored by the HTTP-shaped run)"
+        ))
+        let agentEquivalence = Self.checkGreedyOutputEquivalence(
+            agentResult.generatedText,
+            requestZ3.generatedText,
+            labelA: "agent",
+            labelB: "http"
+        )
+        checks.append(CheckResult(
+            name: "agent_image_output_matches_http_path",
+            passed: agentEquivalence.passed,
+            detail: agentEquivalence.detail
+        ))
+
+        log("\n── Step Z5: Different image, same size (must never hit) ──")
+        let requestZ5 = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: [.user(imagePrompt, images: [imageB])],
+            toolSpecs: [],
+            parameters: params
+        )
+        log("  cachedTokens=\(requestZ5.cachedTokens)")
+        checks.append(CheckResult(
+            name: "different_image_same_size_never_hits",
+            passed: requestZ5.cachedTokens == 0,
+            detail: "cachedTokens=\(requestZ5.cachedTokens) expected 0 — "
+                + "digest-keyed pseudo-tokens diverge at the image run"
+        ))
+    }
+
     /// Long shared user-message prefix (~80 tokens) for the branch-point
     /// scenario. C/D append a different terminator so the divergence
     /// happens deep in the user message — putting the captured
@@ -1113,11 +1309,7 @@ final class PrefixCacheE2ERunner {
 
     // MARK: - Helpers
 
-    private struct CheckResult: Codable {
-        let name: String
-        let passed: Bool
-        let detail: String
-    }
+    private typealias CheckResult = BenchmarkHarness.CheckResult
 
     private static func longestCommonPrefix(_ a: String, _ b: String) -> Substring {
         var count = 0
@@ -1277,11 +1469,14 @@ final class PrefixCacheE2ERunner {
 
 enum PrefixCacheE2EError: LocalizedError {
     case verificationFailed(failedChecks: [String])
+    case imageEncodingFailed
 
     var errorDescription: String? {
         switch self {
         case .verificationFailed(let names):
             "PrefixCacheE2E failed checks: \(names.joined(separator: ", "))"
+        case .imageEncodingFailed:
+            "PrefixCacheE2E could not encode the deterministic scenario image as PNG"
         }
     }
 }

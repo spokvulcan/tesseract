@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import MLXLMCommon
 
 /// The raw generation event stream produced by the app's token-event mapping —
@@ -38,6 +39,12 @@ nonisolated enum RawGeneration: Sendable {
 /// prompt/generation timing, cancellation, and the final MLX stream
 /// synchronize all live there (ADR-0006 follow-up — the app no longer
 /// carries a copy of that loop). Only the event mapping is app-owned.
+///
+/// Exception (PRD #72): the cache-aware Server Completion path decodes
+/// through the app-owned ``StateThreadedTokenIterator``, and upstream's raw
+/// entry point only accepts its concrete `TokenIterator` — so that one
+/// overload of `start` drives an app-side replica of the upstream raw loop
+/// (same stop-token set, timing split, and stream synchronize).
 nonisolated enum TokenGenerationLoop {
 
     /// Start generation and return the event stream plus the mapping task.
@@ -64,6 +71,118 @@ nonisolated enum TokenGenerationLoop {
             tokenizer: tokenizer,
             tools: tools
         )
+    }
+
+    /// Cache-aware overload: same event mapping, driven by the state-threaded
+    /// decode loop instead of upstream's concrete-`TokenIterator` task.
+    static func start(
+        promptTokenCount: Int,
+        modelConfiguration: ModelConfiguration,
+        tokenizer: any Tokenizer,
+        iterator: consuming StateThreadedTokenIterator,
+        tools: [ToolSpec]? = nil
+    ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
+        let (tokens, generationTask) = rawTokenTask(
+            promptTokenCount: promptTokenCount,
+            modelConfiguration: modelConfiguration,
+            tokenizer: tokenizer,
+            iterator: iterator
+        )
+        return events(
+            from: tokens,
+            generationTask: generationTask,
+            promptTokenCount: promptTokenCount,
+            modelConfiguration: modelConfiguration,
+            tokenizer: tokenizer,
+            tools: tools
+        )
+    }
+
+    /// App-side replica of upstream's raw token loop (`generateLoopTask`'s
+    /// `TokenGeneration` shape): per-token cancellation checks, the combined
+    /// stop-token set (`eosTokenIds` + tokenizer EOS + `extraEOSTokens`), the
+    /// prompt/generation timing split, and the final MLX stream synchronize.
+    /// Exists because upstream's public raw entry point is hardcoded to its
+    /// concrete `TokenIterator`.
+    private static func rawTokenTask(
+        promptTokenCount: Int,
+        modelConfiguration: ModelConfiguration,
+        tokenizer: any Tokenizer,
+        iterator: consuming StateThreadedTokenIterator
+    ) -> (AsyncStream<TokenGeneration>, Task<Void, Never>) {
+        let (stream, continuation) = AsyncStream<TokenGeneration>.makeStream()
+
+        var stopTokenIds = modelConfiguration.eosTokenIds
+        if let tokenizerEOS = tokenizer.eosTokenId {
+            stopTokenIds.insert(tokenizerEOS)
+        }
+        for token in modelConfiguration.extraEOSTokens {
+            if let id = tokenizer.convertTokenToId(token) {
+                stopTokenIds.insert(id)
+            }
+        }
+        let unknownTokenId = tokenizer.unknownTokenId
+
+        let iteratorBox = UnsafeSendableBox(iterator)
+        let task = Task {
+            var iterator = iteratorBox.value
+
+            var start = Date.timeIntervalSinceReferenceDate
+            var promptTime: TimeInterval = 0
+            var tokenCount = 0
+            var stopReason: GenerateStopReason?
+
+            while let token = iterator.next() {
+                if Task.isCancelled {
+                    stopReason = .cancelled
+                    break
+                }
+                if promptTime == 0 {
+                    let now = Date.timeIntervalSinceReferenceDate
+                    promptTime = now - start
+                    start = now
+                }
+                if token == unknownTokenId || stopTokenIds.contains(token) {
+                    stopReason = .stop
+                    break
+                }
+                tokenCount += 1
+                if case .terminated = continuation.yield(.token(token)) {
+                    stopReason = .cancelled
+                    break
+                }
+            }
+
+            let resolvedStopReason: GenerateStopReason = stopReason ?? {
+                if Task.isCancelled { return .cancelled }
+                if let maxTokens = iterator.maxTokens, iterator.tokenCount >= maxTokens {
+                    return .length
+                }
+                return .cancelled
+            }()
+
+            let info = GenerateCompletionInfo(
+                promptTokenCount: promptTokenCount,
+                generationTokenCount: tokenCount,
+                promptTime: promptTime + iterator.promptPrefillTime,
+                generationTime: Date.timeIntervalSinceReferenceDate - start,
+                stopReason: resolvedStopReason
+            )
+            _ = continuation.yield(.info(info))
+
+            // Match upstream: ensure pending MLX work is complete before the
+            // caller's "task done ⇒ model/cache untouched" contract kicks in.
+            Stream().synchronize()
+            continuation.finish()
+        }
+
+        continuation.onTermination = { termination in
+            if case .cancelled = termination {
+                task.cancel()
+            }
+        }
+
+        return (stream, task)
     }
 
     /// Map an upstream raw-token stream into ``RawGeneration`` events.
