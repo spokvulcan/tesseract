@@ -34,28 +34,45 @@ nonisolated enum OpenCodeSetupScript {
         BASE="http://127.0.0.1:\(snapshot.port)"
         MERGE_URL="$BASE\(IntegrationRoutes.openCodeMerge)"
         CONFIG_DIR="$HOME/.config/opencode"
-        CONFIG="$CONFIG_DIR/opencode.json"
 
         mkdir -p "$CONFIG_DIR"
-        TMP="$(mktemp)"
-        HDRS="$(mktemp)"
-        trap 'rm -f "$TMP" "$HDRS"' EXIT
+        tmp=""
+        hdrs=""
+        trap 'rm -f "$tmp" "$hdrs"' EXIT
 
-        if [ -f "$CONFIG" ]; then
-          BACKUP="$CONFIG.$(date +%s).$$.bak"
-          cp "$CONFIG" "$BACKUP"
-          echo "+ Backed up opencode.json -> $BACKUP"
-          curl -fsS -X POST --data-binary @"$CONFIG" -D "$HDRS" -o "$TMP" "$MERGE_URL"
+        apply() {
+          config="$1"
+          tmp="$(mktemp)"
+          hdrs="$(mktemp)"
+          if [ -f "$config" ]; then
+            backup="$config.$(date +%s).$$.bak"
+            cp "$config" "$backup"
+            echo "+ Backed up $(basename "$config") -> $backup"
+            curl -fsS -X POST --data-binary @"$config" -D "$hdrs" -o "$tmp" "$MERGE_URL"
+          else
+            curl -fsS -X POST -D "$hdrs" -o "$tmp" "$MERGE_URL"
+          fi
+          if grep -qi '^\(Self.configWarningHeader)' "$hdrs"; then
+            echo "! $(basename "$config") could not be parsed — replaced it (backup kept)."
+          fi
+          mv "$tmp" "$config"
+          echo "+ Wrote provider \\"tesseract\\" -> $config"
+        }
+
+        # OpenCode merges global configs in the order config.json ->
+        # opencode.json -> opencode.jsonc, later files winning per key. So the
+        # merge must land in opencode.jsonc when it exists — and when both
+        # opencode files exist, both are refreshed so no stale tesseract block
+        # leaks through the deep merge from the lower-precedence one.
+        if [ -f "$CONFIG_DIR/opencode.jsonc" ]; then
+          apply "$CONFIG_DIR/opencode.jsonc"
+          echo "  note: comments in opencode.jsonc are not preserved (backup kept)"
+          if [ -f "$CONFIG_DIR/opencode.json" ]; then
+            apply "$CONFIG_DIR/opencode.json"
+          fi
         else
-          curl -fsS -X POST -D "$HDRS" -o "$TMP" "$MERGE_URL"
+          apply "$CONFIG_DIR/opencode.json"
         fi
-
-        if grep -qi '^\(Self.configWarningHeader)' "$HDRS"; then
-          echo "! Existing config could not be parsed — replaced it (backup kept)."
-        fi
-
-        mv "$TMP" "$CONFIG"
-        echo "+ Wrote provider \\"tesseract\\" -> $CONFIG"
         \(modelSummaryLines(snapshot: snapshot))
 
         if command -v opencode >/dev/null 2>&1; then

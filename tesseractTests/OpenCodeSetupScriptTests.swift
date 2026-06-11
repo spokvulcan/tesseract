@@ -25,11 +25,27 @@ struct OpenCodeSetupScriptTests {
     @Test func scriptBacksUpThenPostsTheExistingConfig() {
         let script = OpenCodeSetupScript.render(snapshot: snapshot())
 
-        #expect(script.contains(#"cp "$CONFIG" "$BACKUP""#))
-        #expect(script.contains(#"--data-binary @"$CONFIG""#))
+        #expect(script.contains(#"cp "$config" "$backup""#))
+        #expect(script.contains(#"--data-binary @"$config""#))
         // Write is atomic: merge result lands in a temp file, then replaces
         // the config — never a partial write of the live file.
-        #expect(script.contains(#"mv "$TMP" "$CONFIG""#))
+        #expect(script.contains(#"mv "$tmp" "$config""#))
+    }
+
+    /// OpenCode merges opencode.jsonc over opencode.json, so the setup must
+    /// land in the winning file — and refresh both when both exist, or a
+    /// stale tesseract block in the lower-precedence file would leak through
+    /// OpenCode's deep merge.
+    @Test func scriptTargetsJSONCWhenPresentAndRefreshesBothFiles() throws {
+        let script = OpenCodeSetupScript.render(snapshot: snapshot())
+
+        #expect(script.contains(#"if [ -f "$CONFIG_DIR/opencode.jsonc" ]; then"#))
+        // The trailing quote disambiguates .json from .jsonc in the search.
+        let jsoncApply = try #require(script.range(of: #"apply "$CONFIG_DIR/opencode.jsonc""#))
+        let jsonApply = try #require(script.range(of: #"apply "$CONFIG_DIR/opencode.json""#))
+        // Both-files branch: jsonc (the winning file) first, json refreshed after.
+        #expect(jsoncApply.lowerBound < jsonApply.lowerBound)
+        #expect(script.contains("comments in opencode.jsonc are not preserved"))
     }
 
     @Test func scriptSurfacesTheCorruptConfigWarningHeader() {

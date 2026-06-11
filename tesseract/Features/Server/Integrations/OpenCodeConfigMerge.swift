@@ -28,7 +28,13 @@ nonisolated enum OpenCodeConfigMerge {
         var root: [String: Any]
         var replacedCorruptInput = false
         if let data = existingConfig, !data.isEmpty {
-            if let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            // OpenCode parses every config file as JSONC regardless of
+            // extension — accept the same, or a legal commented config would
+            // be misclassified as corrupt and replaced.
+            let sanitized = JSONCSanitizer.sanitize(String(decoding: data, as: UTF8.self))
+            if let parsed = (try? JSONSerialization.jsonObject(with: Data(sanitized.utf8)))
+                as? [String: Any]
+            {
                 root = parsed
             } else {
                 replacedCorruptInput = true

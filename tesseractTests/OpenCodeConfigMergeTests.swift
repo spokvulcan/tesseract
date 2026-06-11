@@ -89,6 +89,53 @@ struct OpenCodeConfigMergeTests {
         #expect(second.replacedCorruptInput == false)
     }
 
+    // MARK: - JSONC input (OpenCode parses every config file as JSONC)
+
+    @Test func commentsAndTrailingCommasAreLegalInput() throws {
+        let existing = Data(#"""
+        {
+          // line comment
+          "mcp": {
+            /* block
+               comment */
+            "pencil": { "enabled": true },
+          },
+          "model": "omlx/some-model",
+        }
+        """#.utf8)
+
+        let output = OpenCodeConfigMerge.merge(existingConfig: existing, snapshot: snapshot())
+
+        #expect(output.replacedCorruptInput == false)
+        let root = try parse(output.configData)
+        #expect((root["mcp"] as? [String: Any])?.keys.contains("pencil") == true)
+        #expect(root["model"] as? String == "tesseract/qwen3.5-27b-paro")
+    }
+
+    @Test func commentMarkersInsideStringsAreNotComments() throws {
+        let existing = Data(#"""
+        {
+          "provider": {
+            "omlx": {
+              "options": { "baseURL": "http://127.0.0.1:8000/v1" },
+              "note": "a /* literal */ value, trailing"
+            }
+          }
+        }
+        """#.utf8)
+
+        let output = OpenCodeConfigMerge.merge(existingConfig: existing, snapshot: snapshot())
+
+        #expect(output.replacedCorruptInput == false)
+        let omlx = try #require(
+            (try parse(output.configData)["provider"] as? [String: Any])?["omlx"]
+                as? [String: Any]
+        )
+        #expect((omlx["options"] as? [String: Any])?["baseURL"] as? String
+            == "http://127.0.0.1:8000/v1")
+        #expect(omlx["note"] as? String == "a /* literal */ value, trailing")
+    }
+
     // MARK: - Corrupt input
 
     @Test func unparseableInputIsFlaggedAndReplacedFresh() throws {
