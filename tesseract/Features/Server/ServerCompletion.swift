@@ -586,7 +586,7 @@ nonisolated final class ServerCompletion {
                     lookupMs: mlxStart.lookupMs,
                     restoreMs: mlxStart.restoreMs,
                     prefillMs: mlxStart.prefillMs,
-                    totalPromptMs: completionInfo.promptTime
+                    residualPromptMs: completionInfo.promptTime
                 ))
                 Log.agent.info(
                     "Generation complete — \(completionInfo.generationTokenCount) tokens, "

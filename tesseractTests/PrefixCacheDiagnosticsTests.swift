@@ -112,16 +112,16 @@ struct PrefixCacheDiagnosticsTests {
         #expect(!fallbackLine.contains("utility="))
     }
 
-    @Test func ttftClampsNegativeFirstTokenTimeToZero() {
+    @Test func ttftSumsAllPromptStages() {
         let event = PrefixCacheDiagnostics.TTFTEvent(
             lookupMs: 0.001,
             restoreMs: 0.002,
             prefillMs: 0.020,
-            totalPromptMs: 0.015
+            residualPromptMs: 0.015
         )
 
         #expect(context.render(event) ==
-            "event=ttft requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 lookupMs=1.000 restoreMs=2.000 prefillMs=20.000 firstTokenMs=0.000 totalPromptMs=15.000")
+            "event=ttft requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 lookupMs=1.000 restoreMs=2.000 prefillMs=20.000 residualPromptMs=15.000 ttftMs=38.000")
     }
 
     @Test func memoryRendersCacheAndMlxCounters() {

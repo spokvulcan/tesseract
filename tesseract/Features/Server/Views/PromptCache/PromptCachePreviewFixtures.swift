@@ -89,7 +89,8 @@ enum PromptCachePreviewFixtures {
             ("lookupMs", "8.4"),
             ("restoreMs", "4.1"),
             ("prefillMs", "71.2"),
-            ("totalPromptMs", "84.9"),
+            ("residualPromptMs", "1.2"),
+            ("ttftMs", "84.9"),
         ]),
     ]
 
@@ -146,6 +147,12 @@ enum PromptCachePreviewFixtures {
                 pendingCount: pendingBytes > 0 ? 2 : 0,
                 snapshotCount: tree.snapshotCount,
                 partitionCount: 1
+            ),
+            tuner: PromptCacheTunerSnapshot(
+                phase: "bootstrapping",
+                alpha: 0.3,
+                bootstrapProgress: 4,
+                bootstrapTarget: 12
             ),
             trees: [tree]
         )

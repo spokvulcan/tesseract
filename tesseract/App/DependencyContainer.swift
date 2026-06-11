@@ -72,6 +72,9 @@ final class DependencyContainer: ObservableObject {
     )
     lazy var serverGenerationLog = ServerGenerationLog()
     lazy var promptCacheTelemetryStore = PromptCacheTelemetryStore()
+    /// Eager (non-lazy) so the JSONL diagnostics file is written from the
+    /// first request on, whether or not the telemetry UI ever opens.
+    let promptCacheDiagnosticsFileSink = PromptCacheDiagnosticsFileSink()
     lazy var agent: Agent = AgentFactory.makeAgent(
         inferenceService: serverInferenceService,
         packageRegistry: packageRegistry,

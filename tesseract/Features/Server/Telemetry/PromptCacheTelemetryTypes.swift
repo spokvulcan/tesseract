@@ -151,7 +151,7 @@ nonisolated struct PromptCacheTelemetryAggregate: Codable, Equatable, Sendable {
                 if let value = event.doubleField("lookupMs") { lookupMs.append(value) }
                 if let value = event.doubleField("restoreMs") { restoreMs.append(value) }
                 if let value = event.doubleField("prefillMs") { prefillMs.append(value) }
-                if let value = event.doubleField("totalPromptMs") { ttftMs.append(value) }
+                if let value = event.doubleField("ttftMs") { ttftMs.append(value) }
 
             default:
                 break
@@ -241,6 +241,23 @@ nonisolated struct PromptCacheSSDSnapshot: Codable, Equatable, Sendable {
     )
 }
 
+/// Eviction-tuner state surfaced to the UI: the `AlphaTuner` phase plus the
+/// alpha the **Eviction Configuration** is currently scoring with. `alpha`
+/// is live even while the tuner is still waiting (0.0 = pure-recency LRU).
+nonisolated struct PromptCacheTunerSnapshot: Codable, Equatable, Sendable {
+    let phase: String
+    let alpha: Double
+    let bootstrapProgress: Int
+    let bootstrapTarget: Int
+
+    static let unavailable = PromptCacheTunerSnapshot(
+        phase: "unavailable",
+        alpha: 0,
+        bootstrapProgress: 0,
+        bootstrapTarget: 0
+    )
+}
+
 nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
     let capturedAt: Date
     let memoryBudgetBytes: Int
@@ -250,6 +267,7 @@ nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
     let snapshotCount: Int
     let snapshotsByType: [String: Int]
     let ssd: PromptCacheSSDSnapshot
+    let tuner: PromptCacheTunerSnapshot
     let trees: [PromptCacheTreeSnapshot]
 
     static let empty = PromptCacheTelemetrySnapshot(
@@ -261,6 +279,7 @@ nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
         snapshotCount: 0,
         snapshotsByType: [:],
         ssd: .disabled,
+        tuner: .unavailable,
         trees: []
     )
 }

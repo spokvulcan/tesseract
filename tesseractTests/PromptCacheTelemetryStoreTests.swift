@@ -36,7 +36,7 @@ struct PromptCacheTelemetryStoreTests {
                 ("lookupMs", "15"),
                 ("restoreMs", "4"),
                 ("prefillMs", "44"),
-                ("totalPromptMs", "63"),
+                ("ttftMs", "63"),
             ]),
             event("ssdAdmit", fields: [("outcome", "droppedSystemProtectionWins")]),
             event("eviction", fields: [("freedBytes", "4096")]),

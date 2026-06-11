@@ -107,7 +107,29 @@ struct PromptCacheKPIStrip: View {
                 symbol: "timer",
                 tint: .cyan
             ),
+            PromptCacheMetricTile(
+                title: "Eviction α",
+                value: tunerValue,
+                detail: tunerDetail,
+                symbol: "dial.medium",
+                tint: .pink
+            ),
         ]
+    }
+
+    private var tunerValue: String {
+        guard let tuner = snapshot?.tuner, tuner.phase != "unavailable" else { return "—" }
+        return String(format: "%.2f", tuner.alpha)
+    }
+
+    private var tunerDetail: String {
+        guard let tuner = snapshot?.tuner else { return "no data" }
+        switch tuner.phase {
+        case "waitingForFirstEviction": return "LRU · awaiting eviction"
+        case "bootstrapping": return "tuning \(tuner.bootstrapProgress)/\(tuner.bootstrapTarget)"
+        case "tuned": return "tuned"
+        default: return "no data"
+        }
     }
 }
 

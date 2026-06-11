@@ -56,6 +56,16 @@ final class AlphaTuner {
         case waitingForFirstEviction
         case bootstrapping
         case tuned
+
+        /// Stable string for diagnostics and telemetry. Pinned by tests —
+        /// renaming a case must not change these values silently.
+        var wireString: String {
+            switch self {
+            case .waitingForFirstEviction: "waitingForFirstEviction"
+            case .bootstrapping: "bootstrapping"
+            case .tuned: "tuned"
+            }
+        }
     }
 
     /// Number of requests to record post-first-eviction =

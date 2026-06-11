@@ -983,6 +983,18 @@ final class PrefixCacheManager {
             uniqueKeysWithValues: cacheStats.snapshotsByType.map { ($0.key.wireString, $0.value) }
         )
 
+        let tuner: PromptCacheTunerSnapshot
+        if let alphaTuner {
+            tuner = PromptCacheTunerSnapshot(
+                phase: alphaTuner.phase.wireString,
+                alpha: evictionConfig.alpha,
+                bootstrapProgress: alphaTuner.bootstrapWindowCount,
+                bootstrapTarget: alphaTuner.bootstrapTarget
+            )
+        } else {
+            tuner = .unavailable
+        }
+
         return PromptCacheTelemetrySnapshot(
             capturedAt: now,
             memoryBudgetBytes: memoryBudgetBytes,
@@ -992,6 +1004,7 @@ final class PrefixCacheManager {
             snapshotCount: cacheStats.snapshotCount,
             snapshotsByType: snapshotsByType,
             ssd: store.ssdDiagnosticsSnapshot(),
+            tuner: tuner,
             trees: trees
         )
     }
