@@ -378,6 +378,13 @@ Repeated prompts are accelerated by a tiered KV prefix cache
 (`EvictionPolicy`, `AlphaTuner`). Vocabulary: CONTEXT.md → Prefix cache snapshot
 lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
 Verification gates: docs/testing.md → Loaded-model verification.
+`Features/Server/Integrations/` configures external clients against the live
+server: the server itself serves a setup script whose one-liner runs the
+**Config Merge** (`OpenCodeConfigMerge`, a pure function over an
+`IntegrationSnapshot` of port + downloaded models + capabilities) — OpenCode is
+the first adapter. HTTP requests load the vision variant for vision-capable
+models unconditionally (ADR-0008), so a generated config never advertises what
+the server won't serve. Vocabulary: CONTEXT.md → Client integrations.
 
 ### 7. Platform Adapters
 

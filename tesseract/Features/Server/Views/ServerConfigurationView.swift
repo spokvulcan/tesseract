@@ -52,6 +52,35 @@ struct ServerConfigurationView: View {
             } footer: {
                 Text("The local API server provides an OpenAI-compatible /v1/chat/completions endpoint for integration with other tools.")
             }
+
+            Section {
+                if settings.isServerEnabled {
+                    LabeledContent("OpenCode") {
+                        HStack {
+                            Text(OpenCodeSetupScript.oneLiner(port: settings.serverPort))
+                                .font(.system(.callout, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+
+                            Button {
+                                copyOpenCodeSetupCommandToPasteboard(port: settings.serverPort)
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Copy Setup Command")
+                        }
+                    }
+                } else {
+                    Text("Enable the server to set up clients.")
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Integrations")
+            } footer: {
+                Text("Run the command in a terminal to configure OpenCode for this server — every downloaded model, image input included. Re-run it after downloading models or changing the port.")
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Configuration")

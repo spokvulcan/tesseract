@@ -47,9 +47,20 @@ final class InferenceArbiter: InferenceArbitrating {
     /// Identity of the currently-loaded `.llm` slot — model ID and vision mode.
     /// Kept as a single struct so reload-relevant keys can never drift out of
     /// sync.
-    struct LoadedLLMState: Equatable {
+    ///
+    /// `nonisolated` so the satisfaction rule is testable as a pure value
+    /// decision without a MainActor hop.
+    nonisolated struct LoadedLLMState: Equatable, Sendable {
         let modelID: String
         let visionMode: Bool
+
+        /// ADR-0008 satisfaction rule: loads upgrade, never downgrade. A
+        /// loaded vision container serves text-only demands for the same
+        /// model, so alternating chat (toggle off) and HTTP callers cannot
+        /// thrash reloads — and the warm prefix cache survives.
+        func satisfies(_ desired: LoadedLLMState) -> Bool {
+            modelID == desired.modelID && (visionMode || !desired.visionMode)
+        }
     }
 
     private(set) var loadedLLMState: LoadedLLMState?
@@ -69,6 +80,7 @@ final class InferenceArbiter: InferenceArbitrating {
     private let speechEngine: SpeechEngine
     private let settingsManager: SettingsManager
     private let modelDownloadManager: ModelDownloadManager
+    private let visionCapability: ModelVisionCapability
 
     init(
         agentEngine: AgentEngine,
@@ -80,6 +92,7 @@ final class InferenceArbiter: InferenceArbitrating {
         self.speechEngine = speechEngine
         self.settingsManager = settingsManager
         self.modelDownloadManager = modelDownloadManager
+        self.visionCapability = ModelVisionCapability(downloads: modelDownloadManager)
     }
 
     // MARK: - Public API
@@ -95,11 +108,16 @@ final class InferenceArbiter: InferenceArbitrating {
     func withExclusiveGPU<T: Sendable>(
         _ slot: ModelSlot,
         llmModelIDOverride: String? = nil,
+        llmVision: LLMVisionRequirement = .fromSettings,
         body: () async throws -> T
     ) async throws -> T {
         try await lease.withExclusive {
             Log.general.info("InferenceArbiter: lease acquired for \(slot)")
-            try await ensureLoaded(slot, llmModelIDOverride: llmModelIDOverride)
+            try await ensureLoaded(
+                slot,
+                llmModelIDOverride: llmModelIDOverride,
+                llmVision: llmVision
+            )
             return try await body()
         }
     }
@@ -120,26 +138,33 @@ final class InferenceArbiter: InferenceArbitrating {
     // MARK: - Model Management
 
     /// Load a model slot. Co-resident slots coexist.
-    /// For `.llm`: checks if the loaded model ID and vision mode match the
-    /// target. The target model ID is `llmModelIDOverride` when the caller
-    /// passed one (HTTP requests honoring `request.model`), otherwise the
-    /// user's `settingsManager.selectedAgentModelID` (chat UI, background
-    /// agents). Vision mode is always sourced from settings — HTTP requests
-    /// cannot override it (see docs/HTTP_SERVER_SPEC.md §4.2 Model routing).
+    /// For `.llm`: checks if the loaded state satisfies the target. The target
+    /// model ID is `llmModelIDOverride` when the caller passed one (HTTP
+    /// requests honoring `request.model`), otherwise the user's
+    /// `settingsManager.selectedAgentModelID` (chat UI, background agents).
+    /// Vision mode follows `llmVision` (ADR-0008): chat callers track the
+    /// user's toggle; HTTP callers demand vision whenever the target model is
+    /// capable. Satisfaction upgrades but never downgrades — a loaded vision
+    /// container also serves text-only demands.
     private func ensureLoaded(
         _ slot: ModelSlot,
-        llmModelIDOverride: String? = nil
+        llmModelIDOverride: String? = nil,
+        llmVision: LLMVisionRequirement = .fromSettings
     ) async throws {
         switch slot {
         case .llm:
             let targetModelID = llmModelIDOverride ?? settingsManager.selectedAgentModelID
+            let desiredVision = switch llmVision {
+            case .fromSettings: settingsManager.visionModeEnabled
+            case .visionIfCapable: visionCapability.isVisionCapable(targetModelID)
+            }
             let desired = LoadedLLMState(
                 modelID: targetModelID,
-                visionMode: settingsManager.visionModeEnabled
+                visionMode: desiredVision
             )
             if loadedSlots.contains(.llm),
-                loadedLLMState?.modelID == desired.modelID,
-                loadedLLMState?.visionMode == desired.visionMode
+                let loaded = loadedLLMState,
+                loaded.satisfies(desired)
             {
                 return
             }
