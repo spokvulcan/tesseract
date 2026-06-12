@@ -117,8 +117,10 @@ nonisolated enum SSDDropReason: Sendable, Equatable {
     /// admission's type-protected LRU cut (or by a disk-full
     /// retry) to make room for an incoming entry. The file and
     /// the manifest entry are already gone by the time this fires.
-    /// Tree-side consumers may clear the stale committed Snapshot Ref
-    /// lazily when a subsequent hydration attempt supplies the node.
+    /// The router (`TieredSnapshotStore`) clears the node's committed
+    /// Snapshot Ref eagerly — eviction scoring and **Snapshot
+    /// Demotion** read `ref != nil` as "backed", so a stale ref must
+    /// not outlive its backing.
     case evictedByLRU
 
     /// Admission LRU cut could not free enough SSD budget without

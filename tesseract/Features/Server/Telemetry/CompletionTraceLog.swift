@@ -85,15 +85,21 @@ nonisolated final class CompletionTraceLog: @unchecked Sendable {
 
     // MARK: - Reading (harness + tests)
 
-    /// Trace files in `directory`, in deterministic (name-sorted =
-    /// day-sorted) order. Pairs with the writer's `trace-` filename
-    /// prefix in `init` — the replay CLI resolves the corpus through
-    /// this, never by hand-matching filenames.
+    /// Trace files in `directory`, in deterministic day order. A
+    /// size-cap rotation moves a day's earlier records to `.jsonl.old`
+    /// (each starts with its own header line), so both shapes are part
+    /// of the corpus — the `.old` file ordered before that day's
+    /// current file. Pairs with the writer's `trace-` filename prefix
+    /// in `init` — the replay CLI resolves the corpus through this,
+    /// never by hand-matching filenames.
     static func traceFiles(in directory: URL) -> [URL] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        func sortKey(_ name: String) -> (day: String, rank: Int) {
+            name.hasSuffix(".old") ? (String(name.dropLast(4)), 0) : (name, 1)
+        }
         return names
-            .filter { $0.hasPrefix("trace-") && $0.hasSuffix(".jsonl") }
-            .sorted()
+            .filter { $0.hasPrefix("trace-") && ($0.hasSuffix(".jsonl") || $0.hasSuffix(".jsonl.old")) }
+            .sorted { sortKey($0) < sortKey($1) }
             .map { directory.appendingPathComponent($0) }
     }
 

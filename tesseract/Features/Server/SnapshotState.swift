@@ -337,12 +337,14 @@ nonisolated enum SnapshotState {
         }
     }
 
-    /// Clear a committed ref after a hydration failure (file missing /
-    /// fingerprint mismatch / decode error). `ssdOnly` → `empty`
-    /// (`.becameEmpty`); a still-bodied committed node keeps its body
-    /// (→ `ramOnly`). Pending refs are not hydration targets and return
+    /// Clear a committed ref whose SSD backing is gone — a hydration
+    /// failure (file missing / fingerprint mismatch / decode error) or
+    /// the SSD tier's LRU cut evicting a committed resident. `ssdOnly` →
+    /// `empty` (`.becameEmpty`); a still-bodied committed node keeps its
+    /// body (→ `ramOnly`). Pending refs never lose their backing this
+    /// way (the writer's drop callback owns them) and return
     /// `.ignored(.notResident)` so strict wrappers can fail loudly.
-    func clearingCommittedRefAfterHydrationFailure() -> (SnapshotState, StateEffect) {
+    func clearingCommittedRefAfterBackingLoss() -> (SnapshotState, StateEffect) {
         switch self {
         case .ssdOnly:
             (.empty, .becameEmpty)

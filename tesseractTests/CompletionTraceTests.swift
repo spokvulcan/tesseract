@@ -132,6 +132,35 @@ struct CompletionTraceTests {
         #expect(records == [first, second])
     }
 
+    /// `traceFiles` is the corpus: a size-cap rotation parks a day's
+    /// earlier records in `.jsonl.old`, and the replay harness must see
+    /// them — ordered before that day's current file, between days by
+    /// day. Dropping rotated files would silently shrink the corpus on
+    /// exactly the busiest days.
+    @Test func traceFilesIncludeRotatedOldFilesInDayOrder() throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        for name in [
+            "trace-2026-06-11.jsonl",
+            "trace-2026-06-10.jsonl",
+            "trace-2026-06-11.jsonl.old",
+            "unrelated.jsonl",
+            "trace-2026-06-12.txt",
+        ] {
+            FileManager.default.createFile(
+                atPath: directory.appendingPathComponent(name).path, contents: nil
+            )
+        }
+
+        let files = CompletionTraceLog.traceFiles(in: directory)
+        #expect(files.map(\.lastPathComponent) == [
+            "trace-2026-06-10.jsonl",
+            "trace-2026-06-11.jsonl.old",
+            "trace-2026-06-11.jsonl",
+        ])
+    }
+
     @Test func traceLogReaderRejectsForeignSchema() throws {
         let directory = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

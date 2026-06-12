@@ -355,18 +355,20 @@ final class TokenRadixTree {
         return effect
     }
 
-    /// Clear a committed Snapshot Ref after a hydration failure (state 5
-    /// → removed, or a still-bodied committed node keeps its body).
-    /// **Forgiving** (same rationale as `hydrate`): the failing lookup
-    /// captured the node before an off-main `loadSync`, so if it left the
-    /// committed/`ssdOnly` states in that window the clear is a logged
-    /// no-op rather than a process abort. The SSD file is already deleted
-    /// by `loadSync`'s failure path, so clearing never orphans a backing.
-    /// Self-heals when clearing empties the node.
+    /// Clear a committed Snapshot Ref whose SSD backing is gone (state 5
+    /// → removed, or a still-bodied committed node keeps its body). Two
+    /// callers: the hydration-failure hop from `LLMActor`, and the SSD
+    /// router's eager clear when the tier's LRU cut evicts a committed
+    /// resident. **Forgiving** (same rationale as `hydrate`): both
+    /// callers captured the node before an off-main event, so if it left
+    /// the committed/`ssdOnly` states in that window the clear is a
+    /// logged no-op rather than a process abort. The SSD file is already
+    /// deleted by the failing `loadSync` / the tier's cut, so clearing
+    /// never orphans a backing. Self-heals when clearing empties the node.
     @discardableResult
-    func clearCommittedSnapshotRefAfterHydrationFailure(node: RadixTreeNode) -> StateEffect {
+    func clearCommittedSnapshotRefAfterBackingLoss(node: RadixTreeNode) -> StateEffect {
         let old = node.state
-        let (next, effect) = old.clearingCommittedRefAfterHydrationFailure()
+        let (next, effect) = old.clearingCommittedRefAfterBackingLoss()
         if case .ignored = effect { return effect }
         commit(next, on: node, from: old)
         if effect == .becameEmpty { selfHeal(node) }

@@ -771,8 +771,10 @@ final class PrefixCacheManager {
     /// `ssdOnly` (state-5) node, without touching any RAM body. Mirrors
     /// `restoreSnapshot` — the warm-start path uses it after reading the
     /// on-disk manifest, where every persisted ref is committed by
-    /// construction. Routes through `tree.restoreCommittedRef` so the
-    /// restore uses the same sole-mutator seam as every other transition.
+    /// construction. Routes through `store.restoreCommittedRef` so the
+    /// restore uses the same sole-mutator seam as every other transition
+    /// *and* lands in the router's committed index — a later SSD-tier
+    /// eviction of the restored resident must clear this ref eagerly.
     ///
     /// Tolerates a non-empty node at `path`: a corrupted-manifest rebuild
     /// or a pre-refactor on-disk state can produce two descriptors that
@@ -804,7 +806,7 @@ final class PrefixCacheManager {
             store.deleteSnapshot(snapshotID: snapshotRef.snapshotID)
             return
         }
-        tree.restoreCommittedRef(node: node, ref: snapshotRef)
+        store.restoreCommittedRef(node: node, tree: tree, ref: snapshotRef)
         node.lastAccessTime = lastAccessTime
     }
 
@@ -863,7 +865,7 @@ final class PrefixCacheManager {
         // committed/ssdOnly states before this hop, clearing is a logged
         // no-op. `loadSync` already deleted the on-disk backing, so a still
         // -committed node downgrading to `ramOnly` orphans nothing.
-        let effect = tree.clearCommittedSnapshotRefAfterHydrationFailure(node: node)
+        let effect = tree.clearCommittedSnapshotRefAfterBackingLoss(node: node)
         if case .ignored(let reason) = effect {
             Log.agent.debug(
                 "PrefixCacheManager.clearCommittedSnapshotRefAfterHydrationFailure: ignored — "
