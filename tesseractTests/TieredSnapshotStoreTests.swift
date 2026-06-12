@@ -742,7 +742,11 @@ struct TieredSnapshotStoreTests {
 
         // Drop the pending ref (state 2 → 1), then a late commit arrives.
         store.markSnapshotRefDropped(id: ref.snapshotID, reason: .writerIOError)
-        store.markSnapshotRefCommitted(id: ref.snapshotID)
+        store.markSnapshotRefCommitted(SSDCommitInfo(
+            snapshotID: ref.snapshotID,
+            consumedBaseID: nil,
+            chainBytesOnDisk: ref.bytesOnDisk
+        ))
 
         #expect(node.state.ref == nil)       // not resurrected
         #expect(node.state.body != nil)
@@ -772,7 +776,11 @@ struct TieredSnapshotStoreTests {
         #expect(committed)
 
         // Fire commit again — already committed, not in pending map.
-        store.markSnapshotRefCommitted(id: ref.snapshotID)
+        store.markSnapshotRefCommitted(SSDCommitInfo(
+            snapshotID: ref.snapshotID,
+            consumedBaseID: nil,
+            chainBytesOnDisk: ref.bytesOnDisk
+        ))
         #expect(node.state.committed)
         #expect(store.pendingRefCountForTesting == 0)
     }

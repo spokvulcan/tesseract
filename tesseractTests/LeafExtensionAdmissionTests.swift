@@ -474,7 +474,7 @@ struct LeafExtensionStoreTests {
 
     private func makeStoreWithPartition(
         config: SSDPrefixCacheConfig,
-        onCommit: @escaping @Sendable (String) -> Void = { _ in },
+        onCommit: @escaping @Sendable (SSDCommitInfo) -> Void = { _ in },
         onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in },
         writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
     ) -> SSDSnapshotStore {
@@ -505,10 +505,30 @@ struct LeafExtensionStoreTests {
         #expect(store.transferringBaseIDsForTesting().isEmpty)
     }
 
+    /// Thread-safe collector of writer commit payloads.
+    nonisolated final class CommitInfoBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _infos: [SSDCommitInfo] = []
+
+        var infos: [SSDCommitInfo] {
+            lock.lock(); defer { lock.unlock() }
+            return _infos
+        }
+
+        func append(_ info: SSDCommitInfo) {
+            lock.lock(); defer { lock.unlock() }
+            _infos.append(info)
+        }
+    }
+
     @Test func writerFoldsBaseChainAtCommit() async throws {
         let (config, root) = makeConfig()
         defer { cleanup(root) }
-        let store = makeStoreWithPartition(config: config)
+        let commits = CommitInfoBox()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: { commits.append($0) }
+        )
 
         let basePayload = makePayload(bytes: 800, tokenOffset: 4)
         let base = makeDescriptor(id: "base", bytes: 800, tokenOffset: 4)
@@ -535,6 +555,14 @@ struct LeafExtensionStoreTests {
         #expect(folded.inheritedSegments.map(\.fileRelativePath) == [base.fileRelativePath])
         #expect(folded.totalBytes == 1_000)
         #expect(store.currentSSDBytesForTesting() == 1_000)
+
+        // The commit payloads carry the facts the tree-side router
+        // acts on: the consumed base (drives the deferred ref
+        // transfer) and the durable whole-chain byte count.
+        #expect(commits.infos == [
+            SSDCommitInfo(snapshotID: "base", consumedBaseID: nil, chainBytesOnDisk: 800),
+            SSDCommitInfo(snapshotID: "head", consumedBaseID: "base", chainBytesOnDisk: 1_000),
+        ])
 
         // Both segment files exist on disk.
         for path in [base.fileRelativePath, head.fileRelativePath] {
@@ -778,12 +806,12 @@ struct LeafExtensionSupersessionPolicyTests {
         key: CachePartitionKey
     )
 
-    private func makeFixture() -> Fixture {
+    private func makeFixture(ssdBudgetBytes: Int = 1_000_000) -> Fixture {
         let root = makeScratchDir()
         let config = SSDPrefixCacheConfig(
             enabled: true,
             rootURL: root,
-            budgetBytes: 1_000_000,
+            budgetBytes: ssdBudgetBytes,
             maxPendingBytes: 10_000_000
         )
         let store = TieredSnapshotStore(ssdConfig: config)
@@ -812,14 +840,15 @@ struct LeafExtensionSupersessionPolicyTests {
     /// ref to commit. Returns the committed snapshot ID.
     private func admitCommittedAncestor(
         _ fixture: Fixture,
-        tokens: [Int]
+        tokens: [Int],
+        bytes: Int = 1_024
     ) async throws -> String {
         let admission = try #require(SnapshotAdmission.leaf(
             storedTokens: tokens,
             snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
                 offset: tokens.count, type: .leaf
             ),
-            storage: .ramAndSSD(makePayload(bytes: 1_024, tokenOffset: tokens.count)),
+            storage: .ramAndSSD(makePayload(bytes: bytes, tokenOffset: tokens.count)),
             partitionKey: fixture.key,
             requestID: UUID()
         ))
@@ -947,5 +976,69 @@ struct LeafExtensionSupersessionPolicyTests {
         )
         #expect(head.inheritedSegments.count == 1)
         #expect(head.segmentBaseOffset == 5)
+
+        // Deferred transfer lands on the tree at the writer's commit
+        // (a MainActor hop, so poll): the consumed base's ref is
+        // discarded — it must never be offered as an extension base
+        // again.
+        let baseRefDiscarded = await waitUntil {
+            fixture.manager.extensionBase(
+                tokens: Array(1...8), partitionKey: fixture.key
+            ) == nil
+        }
+        #expect(baseRefDiscarded, "consumed base ref never left the tree")
+
+        // The committed head ref reports the whole chain's bytes — the
+        // value a warm start would restore — not just the suffix it
+        // was enqueued with.
+        let chainBytesLanded = await waitUntil {
+            tree.deepestRefBearingLeaf(tokens: Array(1...12))?.bytesOnDisk
+                == head.totalBytes
+        }
+        #expect(chainBytesLanded, "committed ref must carry chain totalBytes")
+    }
+
+    /// The writer can still drop a front-door-accepted extension (here:
+    /// the admission cut finds no victim because the only resident is
+    /// the shielded base itself). The transfer must not have stranded
+    /// the base — its tree ref stays live, so it remains hittable, the
+    /// warm-start fallback, and the next turn's extension base.
+    @Test func extensionWriterDropLeavesBaseReachable() async throws {
+        let fixture = makeFixture(ssdBudgetBytes: 1_000)
+        defer { cleanup(fixture.root) }
+        let ancestorTokens = Array(1...5)
+        let baseID = try await admitCommittedAncestor(
+            fixture, tokens: ancestorTokens, bytes: 700
+        )
+
+        // 700 (shielded base) + 400 (suffix) > 1_000 and the cut may
+        // not touch the base — the writer drops the extension.
+        let extending = SnapshotExtension(baseSnapshotID: baseID, baseOffset: 5)
+        let descendant = try #require(SnapshotAdmission.leaf(
+            storedTokens: Array(1...8),
+            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
+            storage: .ramAndSSD(makePayload(bytes: 400, tokenOffset: 8, extending: extending)),
+            partitionKey: fixture.key,
+            requestID: UUID()
+        ))
+        let diagnostics = fixture.manager.admit(descendant)
+        // The front door accepted, so the admission reports the
+        // (deferred) transfer...
+        #expect(diagnostics.supersededLeaves.first?.mode == .transferred)
+
+        let ssdStore = try #require(fixture.store.ssdStoreForTesting)
+        let settled = await waitUntil {
+            ssdStore.transferringBaseIDsForTesting().isEmpty
+                && fixture.store.pendingRefCountForTesting == 0
+        }
+        #expect(settled, "writer never settled the dropped extension")
+
+        // ...but the drop leaves the base fully reachable: manifest
+        // entry alive AND tree ref intact — still the extension base.
+        #expect(ssdStore.residentDescriptorForTesting(id: baseID) != nil)
+        let nextBase = try #require(fixture.manager.extensionBase(
+            tokens: Array(1...12), partitionKey: fixture.key
+        ))
+        #expect(nextBase.baseSnapshotID == baseID)
     }
 }

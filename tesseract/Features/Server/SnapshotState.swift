@@ -246,15 +246,22 @@ nonisolated enum SnapshotState {
 
     /// Commit a pending ref (SSD-writer callback, forgiving). `pendingWrite`
     /// → `committed`, `pendingDropped` → `ssdOnly`, gated on `expectedID`.
-    func committing(expectedID: String) -> (SnapshotState, StateEffect) {
+    /// `bytesOnDisk` (when provided) refreshes the ref's byte count with
+    /// the writer's durable value — after an extension fold the committed
+    /// entry owns its whole **Segment Chain**, not just the suffix the
+    /// ref was enqueued with.
+    func committing(
+        expectedID: String,
+        bytesOnDisk: Int? = nil
+    ) -> (SnapshotState, StateEffect) {
         switch self {
         case .pendingWrite(let b, let r):
             r.snapshotID == expectedID
-                ? (.committed(b, r), .settled)
+                ? (.committed(b, r.settingBytesOnDisk(bytesOnDisk ?? r.bytesOnDisk)), .settled)
                 : (self, .ignored(.idMismatch))
         case .pendingDropped(let r):
             r.snapshotID == expectedID
-                ? (.ssdOnly(r), .settled)
+                ? (.ssdOnly(r.settingBytesOnDisk(bytesOnDisk ?? r.bytesOnDisk)), .settled)
                 : (self, .ignored(.idMismatch))
         case .committed, .ssdOnly:
             (self, .ignored(.alreadyCommitted))

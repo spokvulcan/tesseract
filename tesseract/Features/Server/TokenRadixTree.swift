@@ -292,11 +292,17 @@ final class TokenRadixTree {
 
     /// Commit a pending ref (SSD-writer callback, **forgiving**). Returns
     /// the `StateEffect` so the router can log an `.ignored(reason)`
-    /// without recovering — newer ref wins.
+    /// without recovering — newer ref wins. `bytesOnDisk` (when provided)
+    /// refreshes the ref with the writer's durable chain byte count —
+    /// see `SnapshotState.committing`.
     @discardableResult
-    func commitRef(node: RadixTreeNode, expectedID: String) -> StateEffect {
+    func commitRef(
+        node: RadixTreeNode,
+        expectedID: String,
+        bytesOnDisk: Int? = nil
+    ) -> StateEffect {
         let old = node.state
-        let (next, effect) = old.committing(expectedID: expectedID)
+        let (next, effect) = old.committing(expectedID: expectedID, bytesOnDisk: bytesOnDisk)
         commit(next, on: node, from: old)
         return effect
     }

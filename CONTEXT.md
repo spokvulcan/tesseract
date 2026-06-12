@@ -160,9 +160,11 @@ suffix write-through.
 
 > **Flagged distinction — three supersession modes.** Superseding an ancestor
 > leaf now does one of three things to its SSD backing: **transfer** (a
-> **Leaf Extension Admission** took ownership of the chain), **delete** (a
-> full SSD write replaced it — the pre-extension behavior), or **preserve**
-> (a RAM-only leaf admission keeps the ancestor's SSD backing alive as the
+> **Leaf Extension Admission** takes ownership of the chain — completed at
+> the writer's commit, with the base staying fully reachable until then; a
+> dropped suffix degrades the transfer to preserve), **delete** (a full SSD
+> write replaced it — the pre-extension behavior), or **preserve** (a
+> RAM-only leaf admission keeps the ancestor's SSD backing alive as the
 > best on-disk approximation for warm start). RAM bodies are dropped in all
 > three.
 
@@ -172,10 +174,12 @@ suffix write-through.
 > disk?
 > **Expert:** Nothing moves. The new leaf admits one suffix segment and takes
 > ownership of the old chain; the old leaf's *identity* dies (its node ref is
-> discarded) but its bytes live on as the new leaf's prefix.
+> discarded when the suffix commits) but its bytes live on as the new leaf's
+> prefix.
 > **Dev:** And if the suffix write is dropped before it commits?
-> **Expert:** The base entry stays in the manifest — unreachable this session,
-> but warm start reattaches it, and the LRU cut reclaims it if nothing does.
+> **Expert:** Then nothing was transferred. The base keeps its manifest entry
+> *and* its node ref — it stays hittable, and the next turn just extends it
+> again.
 
 ### Image-aware prefix caching
 

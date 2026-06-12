@@ -60,10 +60,15 @@ Key shape choices, and why:
   cut while the extension is pending, and folded into the new entry
   atomically at commit. If the base vanishes mid-flight (hydration
   failure, dropped pending write), the extension self-vetoes: the leaf
-  stays RAM-only and the next turn writes full. Crash story: the base
-  entry stays authoritative in the manifest until the extension
-  commits, so a crash during the window warm-starts at the base offset
-  — strictly better than losing everything.
+  stays RAM-only and the next turn writes full. The *tree-side*
+  transfer is deferred the same way: the base's node ref stays live
+  through the pending window (hittable, warm-start fallback) and is
+  discarded only when the writer's commit reports the fold as durable
+  — a writer drop leaves the base fully reachable, degrading the
+  supersession to preserve. Crash story: the base entry stays
+  authoritative in the manifest until the extension commits, so a
+  crash during the window warm-starts at the base offset — strictly
+  better than losing everything.
 
 - **RAM-only admissions now preserve ancestor SSD backings.** Before:
   any leaf admission deleted the superseded leaf's file, so ADR-0009's
@@ -102,6 +107,6 @@ and composes per layer (sequential reads; peak RAM ≈ one snapshot plus
 one layer); the SSD budget counts chain totals, so one conversation's
 disk footprint is unchanged — only the write traffic collapses; dead
 non-sliceable-layer bytes accumulate along a chain (revisit if hybrid
-recurrent models make them material); and a dropped extension can leave
-an unreachable-but-warm-start-recoverable base entry behind until the
-LRU cut reclaims it.
+recurrent models make them material); and a dropped extension costs
+only the suffix — the base keeps both its manifest entry and its tree
+ref, so it stays hittable and the next turn extends it again.

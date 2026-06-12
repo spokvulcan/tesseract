@@ -469,6 +469,21 @@ nonisolated struct SnapshotRef: Sendable, Equatable {
     /// `snapshotID → descriptor` map just to look up a size. The RAM
     /// lookup path does not touch this value.
     let bytesOnDisk: Int
+
+    /// Copy with a refreshed on-disk byte count. The writer's commit
+    /// is the byte authority: an extension fold makes the committed
+    /// entry own its whole **Segment Chain**, so the live ref must
+    /// report the chain total (`PersistedSnapshotDescriptor.totalBytes`)
+    /// — the same value a warm start would restore.
+    func settingBytesOnDisk(_ bytes: Int) -> SnapshotRef {
+        SnapshotRef(
+            snapshotID: snapshotID,
+            partitionDigest: partitionDigest,
+            tokenOffset: tokenOffset,
+            checkpointType: checkpointType,
+            bytesOnDisk: bytes
+        )
+    }
 }
 
 // MARK: - In-memory transport payload (Sendable, not Codable)

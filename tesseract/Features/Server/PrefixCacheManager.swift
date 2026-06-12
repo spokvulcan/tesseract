@@ -153,9 +153,12 @@ final class PrefixCacheManager {
         /// What happened to the superseded leaf's SSD backing. See
         /// `CONTEXT.md` → SSD leaf extension (three supersession modes).
         enum Mode: String, Sendable {
-            /// A **Leaf Extension Admission** took ownership of the
-            /// backing's **Segment Chain**; only the node ref was
-            /// discarded.
+            /// A **Leaf Extension Admission** is taking ownership of
+            /// the backing's **Segment Chain**. The transfer completes
+            /// at the writer's commit, where the node ref is discarded
+            /// (`TieredSnapshotStore.markSnapshotRefCommitted`); until
+            /// then — and permanently, if the writer drops the
+            /// extension — the backing behaves as `preserved`.
             case transferred
             /// The backing (or the whole node, when it had none) was
             /// deleted — a full SSD write replaced it.
@@ -613,10 +616,16 @@ final class PrefixCacheManager {
             // call each only when the captured state says the transition
             // is applicable. What happens to the SSD backing rides the
             // policy:
-            // - transfer: the matching base's chain now belongs to the
-            //   new leaf (folded at the writer's commit); discard only
-            //   the node ref — deleting the backing here would orphan
-            //   the in-flight suffix.
+            // - transfer: the matching base's chain will belong to the
+            //   new leaf once the writer's fold commits. Until then the
+            //   base ref stays live — it is the warm-start fallback and
+            //   the hit target for the whole pending window, and the
+            //   writer can still drop the extension (budget cut, I/O
+            //   failure). `TieredSnapshotStore.markSnapshotRefCommitted`
+            //   discards the ref when the fold is durable; a writer
+            //   drop leaves it intact (the transfer degrades to
+            //   `preserved`). Discarding here would strand the base:
+            //   manifest-resident but tree-unreachable.
             // - preserve: keep the ref (and so the node) — the new leaf
             //   has no SSD copy, so the ancestor stays the warm-start
             //   fallback and the next turn's extension base.
@@ -626,7 +635,6 @@ final class PrefixCacheManager {
             if let snapshotRefID {
                 switch policy {
                 case .transferBacking(let baseID) where snapshotRefID == baseID:
-                    tree.discardSnapshotRefAfterExplicitDelete(node: ancestor)
                     mode = .transferred
                 case .preserveBackings:
                     mode = .preserved

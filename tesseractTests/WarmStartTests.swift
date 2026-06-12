@@ -718,11 +718,11 @@ struct WarmStartTests {
             return _committed
         }
 
-        var onCommit: @Sendable (String) -> Void {
-            { [weak self] id in
+        var onCommit: @Sendable (SSDCommitInfo) -> Void {
+            { [weak self] info in
                 guard let self else { return }
                 self.lock.lock()
-                self._committed.insert(id)
+                self._committed.insert(info.snapshotID)
                 self.lock.unlock()
             }
         }

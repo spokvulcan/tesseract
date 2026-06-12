@@ -153,6 +153,24 @@ nonisolated enum SSDDropReason: Sendable, Equatable {
     case hydrationFailure
 }
 
+/// Payload of the writer's commit callback. Beyond the committed
+/// snapshot's ID it carries the two facts only the writer's durable
+/// commit can produce, so the tree-side router never has to guess:
+/// - `consumedBaseID`: the base entry a **Leaf Extension Admission**'s
+///   fold consumed (`nil` for full writes). The router discards the
+///   base's now-stale tree ref *here* — not at admission — so a writer
+///   drop leaves the base reachable (the transfer degrades to
+///   `preserved`).
+/// - `chainBytesOnDisk`: the committed entry's whole-chain byte count
+///   (`PersistedSnapshotDescriptor.totalBytes`), refreshed onto the
+///   live ref so in-session telemetry matches what a warm start would
+///   restore.
+nonisolated struct SSDCommitInfo: Sendable, Equatable {
+    let snapshotID: String
+    let consumedBaseID: String?
+    let chainBytesOnDisk: Int
+}
+
 // MARK: - SSDSnapshotStore
 
 nonisolated final class SSDSnapshotStore: @unchecked Sendable {
@@ -200,7 +218,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
     // MARK: - Callbacks (immutable after init)
 
-    private let onCommit: @Sendable (String) -> Void
+    private let onCommit: @Sendable (SSDCommitInfo) -> Void
     private let onDrop: @Sendable (String, SSDDropReason) -> Void
     private let writerDrainPreludeForTesting: (@Sendable () async -> Void)?
 
@@ -209,7 +227,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     init(
         config: SSDPrefixCacheConfig,
         manifestDebounce: Duration = .milliseconds(500),
-        onCommit: @escaping @Sendable (String) -> Void = { _ in },
+        onCommit: @escaping @Sendable (SSDCommitInfo) -> Void = { _ in },
         onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in },
         writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
     ) {
@@ -724,7 +742,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.SnapshotRefCommitEvent(id: item.descriptor.snapshotID)
         )
-        onCommit(item.descriptor.snapshotID)
+        onCommit(SSDCommitInfo(
+            snapshotID: item.descriptor.snapshotID,
+            consumedBaseID: item.extendingBaseID,
+            chainBytesOnDisk: descriptorToWrite.totalBytes
+        ))
     }
 
     /// Centralized writer-drop emission: terminal `ssdAdmit` outcome
