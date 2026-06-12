@@ -355,18 +355,20 @@ final class TokenRadixTree {
         return effect
     }
 
-    /// Clear a committed Snapshot Ref after a hydration failure (state 5
-    /// → removed, or a still-bodied committed node keeps its body).
-    /// **Forgiving** (same rationale as `hydrate`): the failing lookup
-    /// captured the node before an off-main `loadSync`, so if it left the
-    /// committed/`ssdOnly` states in that window the clear is a logged
-    /// no-op rather than a process abort. The SSD file is already deleted
-    /// by `loadSync`'s failure path, so clearing never orphans a backing.
-    /// Self-heals when clearing empties the node.
+    /// Clear a committed Snapshot Ref whose SSD backing is gone (state 5
+    /// → removed, or a still-bodied committed node keeps its body). Two
+    /// callers: the hydration-failure hop from `LLMActor`, and the SSD
+    /// router's eager clear when the tier's LRU cut evicts a committed
+    /// resident. **Forgiving** (same rationale as `hydrate`): both
+    /// callers captured the node before an off-main event, so if it left
+    /// the committed/`ssdOnly` states in that window the clear is a
+    /// logged no-op rather than a process abort. The SSD file is already
+    /// deleted by the failing `loadSync` / the tier's cut, so clearing
+    /// never orphans a backing. Self-heals when clearing empties the node.
     @discardableResult
-    func clearCommittedSnapshotRefAfterHydrationFailure(node: RadixTreeNode) -> StateEffect {
+    func clearCommittedSnapshotRefAfterBackingLoss(node: RadixTreeNode) -> StateEffect {
         let old = node.state
-        let (next, effect) = old.clearingCommittedRefAfterHydrationFailure()
+        let (next, effect) = old.clearingCommittedRefAfterBackingLoss()
         if case .ignored = effect { return effect }
         commit(next, on: node, from: old)
         if effect == .becameEmpty { selfHeal(node) }
@@ -750,16 +752,11 @@ final class TokenRadixTree {
 
     private static func telemetryPathHash(_ tokens: [Int]) -> String {
         guard !tokens.isEmpty else { return "root" }
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        var hash = TraceBlockDigest.fnvOffsetBasis
         for token in tokens {
-            var value = UInt64(bitPattern: Int64(token))
-            for _ in 0..<8 {
-                hash ^= value & 0xff
-                hash &*= 0x0000_0100_0000_01b3
-                value >>= 8
-            }
+            TraceBlockDigest.fold(token: token, into: &hash)
         }
-        return String(format: "%016llx", hash)
+        return TraceBlockDigest.hexDigest(hash)
     }
 }
 

@@ -95,14 +95,18 @@ import MLXLMCommon
 
     @Test func alignmentLookupIsTheLookupWhenNotHydratedFromSSD() {
         let lookup = ramHitLookup()
-        let resolved = SnapshotResolution.Resolved(lookup: lookup, hydratedFromSSD: false)
+        let resolved = SnapshotResolution.Resolved(
+            lookup: lookup, hydratedFromSSD: false, hydrationSeconds: 0
+        )
         // A RAM hit aligns checkpoint planning against itself.
         #expect(resolved.alignmentLookup != nil)
         #expect(resolved.alignmentLookup?.snapshotTokenOffset == lookup.snapshotTokenOffset)
     }
 
     @Test func alignmentLookupIsNilForAnSSDHydratedHit() {
-        let resolved = SnapshotResolution.Resolved(lookup: ramHitLookup(), hydratedFromSSD: true)
+        let resolved = SnapshotResolution.Resolved(
+            lookup: ramHitLookup(), hydratedFromSSD: true, hydrationSeconds: 0
+        )
         // An SSD-hydrated hit must align against nothing: it matches the pre-carve
         // ordering that planned against the unhydrated `.ssdHit`, which never merged
         // an alignment branch-point. Flipping this rule would silently resume it.

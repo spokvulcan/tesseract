@@ -7,9 +7,10 @@
 //  **router**: it resolves the writer's global `snapshotID` callbacks to
 //  the owning `(node, tree)` and forwards them to the tree's transition
 //  methods. It is **not** a mutator of node state — that is the tree's
-//  job alone. The cross-partition `pendingRefsByID` map lives here
-//  because the writer's callback carries only a global ID and the tree is
-//  per-partition, so the index cannot live in any single tree.
+//  job alone. The cross-partition ref indexes (`pendingRefsByID`,
+//  `committedRefsByID`) live here because the writer's callback carries
+//  only a global ID and the tree is per-partition, so the index cannot
+//  live in any single tree.
 //
 //  **No selective write-through.** Every admission enqueues to SSD
 //  unconditionally; the writer runs the admission-time type-protected
@@ -59,6 +60,19 @@ final class TieredSnapshotStore: SnapshotStore {
         let tree: TokenRadixTree
     }
 
+    /// Link from a **committed** Snapshot Ref to its node, kept so the
+    /// SSD tier's eviction of a committed resident (`.evictedByLRU` /
+    /// `.hydrationFailure`) clears the tree's ref *eagerly* — eviction
+    /// scoring, **Snapshot Demotion**, and the recovered/terminal
+    /// telemetry all treat `node.state.ref != nil` as "backed", so a
+    /// stale ref misprices the node and skips its demotion. Weak on
+    /// both ends: the tree owns node lifetime, and a dead entry just
+    /// means the node is already gone — the clear no-ops.
+    private struct CommittedRefOwner {
+        weak var node: RadixTreeNode?
+        weak var tree: TokenRadixTree?
+    }
+
     // MARK: - Stored state
 
     private let ramTier: InMemorySnapshotTier
@@ -69,6 +83,7 @@ final class TieredSnapshotStore: SnapshotStore {
     /// never reassigned thereafter.
     private var ssdStore: SSDSnapshotStore?
     private var pendingRefsByID: [String: PendingRef] = [:]
+    private var committedRefsByID: [String: CommittedRefOwner] = [:]
 
     // MARK: - Init
 
@@ -185,6 +200,32 @@ final class TieredSnapshotStore: SnapshotStore {
         ssdStore?.registerPartition(meta, digest: key.partitionDigest)
     }
 
+    // MARK: - Survival Gate
+
+    /// The **Survival Gate** (PRD #82 slice #90): before an SSD write,
+    /// would the incoming chain survive the eviction its own admission
+    /// triggers? `true` when the SSD tier is disabled — there is no
+    /// write to gate, and the caller's `admitSnapshot` will no-op
+    /// anyway. `lastAccessAt` defaults to now (a fresh capture); a
+    /// **Snapshot Demotion** passes the node's real stale stamp, which
+    /// is what lets the gate catch cold demotions against warmer
+    /// chains.
+    func survivalGateAdmits(
+        snapshot: HybridCacheSnapshot,
+        payloadTotalBytes: Int,
+        lastAccessAt: TimeInterval? = nil,
+        scoringConfig: EvictionConfiguration
+    ) -> Bool {
+        guard let ssdStore else { return true }
+        return ssdStore.survivesAdmissionCut(
+            tokenOffset: snapshot.tokenOffset,
+            totalBytes: payloadTotalBytes,
+            checkpointType: snapshot.checkpointType,
+            lastAccessAt: lastAccessAt ?? Date().timeIntervalSinceReferenceDate,
+            scoring: scoringConfig
+        )
+    }
+
     // MARK: - SSD admission (state 1 → state 2)
 
     /// Build a descriptor from a captured snapshot's **domain inputs**,
@@ -225,21 +266,31 @@ final class TieredSnapshotStore: SnapshotStore {
         partitionKey: CachePartitionKey,
         pathFromRoot: [Int],
         snapshot: HybridCacheSnapshot,
-        payload: SnapshotPayload
+        payload: SnapshotPayload,
+        demotionLastAccessAt: TimeInterval? = nil,
+        scoringConfig: EvictionConfiguration = EvictionConfiguration()
     ) -> SnapshotRef? {
         guard let ssdStore else { return nil }
 
+        // A non-nil `demotionLastAccessAt` marks a **Snapshot Demotion**:
+        // the descriptor carries the node's real (stale) recency and the
+        // writer's commit must not re-stamp it — demoted bodies are the
+        // least valuable, and refreshing them would invert the SSD
+        // tier's recency signal on every pressure event.
         let descriptor = SnapshotLedger.makeDescriptor(
             partitionKey: partitionKey,
             pathFromRoot: pathFromRoot,
             snapshot: snapshot,
             payloadBytes: payload.totalBytes,
-            segmentBaseOffset: payload.extending?.baseOffset ?? 0
+            segmentBaseOffset: payload.extending?.baseOffset ?? 0,
+            lastAccessAt: demotionLastAccessAt
         )
 
         guard case .accepted(let ref) = ssdStore.tryEnqueue(
             payload: payload,
-            descriptor: descriptor
+            descriptor: descriptor,
+            refreshRecencyAtCommit: demotionLastAccessAt == nil,
+            scoringConfig: scoringConfig
         ) else {
             return nil
         }
@@ -264,7 +315,24 @@ final class TieredSnapshotStore: SnapshotStore {
     /// ancestor leaf obsolete. Safe for pending and committed refs.
     func deleteSnapshot(snapshotID: String) {
         pendingRefsByID.removeValue(forKey: snapshotID)
+        committedRefsByID.removeValue(forKey: snapshotID)
         ssdStore?.deleteSnapshot(snapshotID: snapshotID)
+    }
+
+    // MARK: - Warm-start restore
+
+    /// Reattach an SSD-resident committed ref to `node` (warm start).
+    /// Forwards to `tree.restoreCommittedRef` — the sole mutator — and
+    /// seeds `committedRefsByID`, so a later SSD-tier eviction of the
+    /// restored resident clears the tree's ref eagerly, exactly like a
+    /// ref that committed through the writer callback.
+    func restoreCommittedRef(
+        node: RadixTreeNode,
+        tree: TokenRadixTree,
+        ref: SnapshotRef
+    ) {
+        tree.restoreCommittedRef(node: node, ref: ref)
+        committedRefsByID[ref.snapshotID] = CommittedRefOwner(node: node, tree: tree)
     }
 
     // MARK: - Writer callbacks (MainActor-isolated)
@@ -316,6 +384,14 @@ final class TieredSnapshotStore: SnapshotStore {
                 "TieredSnapshotStore.markSnapshotRefCommitted: id=\(info.snapshotID) ignored "
                 + "(reason=\(String(describing: reason)))"
             )
+        } else {
+            // The ref is now committed on the node — index it so a later
+            // SSD-tier eviction of this resident clears the tree's ref
+            // eagerly (see `markSnapshotRefDropped`).
+            committedRefsByID[info.snapshotID] = CommittedRefOwner(
+                node: pending.node,
+                tree: pending.tree
+            )
         }
 
         // Even when the extension's own ref was superseded mid-window
@@ -343,6 +419,9 @@ final class TieredSnapshotStore: SnapshotStore {
         below node: RadixTreeNode,
         tree: TokenRadixTree
     ) {
+        // The fold consumed the base's manifest entry without a writer
+        // drop callback, so its committed-index entry is pruned here.
+        committedRefsByID.removeValue(forKey: baseID)
         var current = node.parent
         while let ancestor = current {
             if ancestor.state.refID == baseID {
@@ -374,26 +453,17 @@ final class TieredSnapshotStore: SnapshotStore {
     ///   has nothing left, so the tree self-heals (leaf → evict,
     ///   single-child → collapse, multi-child empty → retained junction).
     ///
-    /// Calls with an `id` that is not in the pending map are
-    /// legitimate and are ignored at debug level — the evicted-by-LRU
-    /// reason from the SSD-tier cut can land against a previously
-    /// committed resident whose node is no longer tracked here. The
-    /// stale ref on such a node self-cleans on the next lookup when
-    /// `loadSync` reports file-missing and the MainActor calls
-    /// `tree.clearCommittedSnapshotRefAfterHydrationFailure`.
+    /// Calls with an `id` that is not in the pending map are routed to
+    /// the committed index — the evicted-by-LRU reason from the SSD-tier
+    /// cut (and a `loadSync` hydration failure) lands against a
+    /// previously committed resident, whose tree ref must be cleared
+    /// *eagerly*: eviction scoring, **Snapshot Demotion**, and the
+    /// recovered/terminal telemetry all read `node.state.ref != nil` as
+    /// "backed", so a stale committed ref misprices the node, skips its
+    /// demotion, and miscounts a terminal loss as recovered.
     func markSnapshotRefDropped(id: String, reason: SSDDropReason) {
         guard let pending = pendingRefsByID.removeValue(forKey: id) else {
-            // Not in the pending map: this is a committed-resident drop
-            // (`.evictedByLRU` / `.hydrationFailure` for an ID that commit
-            // already removed). A logged no-op — the stale committed ref
-            // is cleared lazily on the next lookup, when `loadSync`
-            // reports file-missing and the MainActor calls
-            // `tree.clearCommittedSnapshotRefAfterHydrationFailure` with the node already in hand. Do not
-            // search the tree per drop callback.
-            Log.agent.debug(
-                "TieredSnapshotStore.markSnapshotRefDropped: id=\(id) not in pending map "
-                + "(reason=\(String(describing: reason)))"
-            )
+            clearCommittedResidentRef(id: id, reason: reason)
             return
         }
 
@@ -409,6 +479,27 @@ final class TieredSnapshotStore: SnapshotStore {
                 + "(reason=\(String(describing: dropReason)))"
             )
         }
+    }
+
+    /// Eagerly clear a committed resident's tree ref after the SSD tier
+    /// dropped its backing. A missing index entry, a dead weak owner, or
+    /// a node whose current ref ID no longer matches (a re-admission
+    /// superseded the ref mid-hop) are all legitimate no-ops: the ref
+    /// this drop names is already off the node. State 4 (body present)
+    /// settles to RAM-only; state 5 empties and the tree self-heals.
+    private func clearCommittedResidentRef(id: String, reason: SSDDropReason) {
+        guard let owner = committedRefsByID.removeValue(forKey: id),
+              let node = owner.node,
+              let tree = owner.tree,
+              node.state.refID == id
+        else {
+            Log.agent.debug(
+                "TieredSnapshotStore.markSnapshotRefDropped: id=\(id) not tracked "
+                + "(reason=\(String(describing: reason)))"
+            )
+            return
+        }
+        tree.clearCommittedSnapshotRefAfterBackingLoss(node: node)
     }
 
     // MARK: - Testing hooks

@@ -146,16 +146,20 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// descriptor: a fresh `snapshotID`, the sharded `fileRelativePath`
     /// derived from it, and the current `schemaVersion` stamp.
     ///
-    /// `createdAt` / `lastAccessAt` are stamped to now; `commit` re-stamps
-    /// `lastAccessAt` when the write lands so the first LRU cut sees fresh
-    /// recency. `nonisolated static` — pure construction, no ledger state,
+    /// `createdAt` is stamped to now. `lastAccessAt` defaults to now and
+    /// `commit` re-stamps it when the write lands so the first LRU cut sees
+    /// fresh recency — except for a **Snapshot Demotion**, which passes the
+    /// node's real (stale) `lastAccessAt` here and suppresses the commit
+    /// re-stamp, so demoted bodies never look hot to the SSD LRU.
+    /// `nonisolated static` — pure construction, no ledger state,
     /// callable from the MainActor front door without a hop.
     nonisolated static func makeDescriptor(
         partitionKey: CachePartitionKey,
         pathFromRoot: [Int],
         snapshot: HybridCacheSnapshot,
         payloadBytes: Int,
-        segmentBaseOffset: Int = 0
+        segmentBaseOffset: Int = 0,
+        lastAccessAt: TimeInterval? = nil
     ) -> PersistedSnapshotDescriptor {
         let snapshotID = UUID().uuidString
         let partitionDigest = partitionKey.partitionDigest
@@ -169,7 +173,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
             bytes: payloadBytes,
             segmentBaseOffset: segmentBaseOffset,
             createdAt: now,
-            lastAccessAt: now,
+            lastAccessAt: lastAccessAt ?? now,
             fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
                 snapshotID: snapshotID,
                 partitionDigest: partitionDigest
@@ -341,18 +345,25 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         scheduleManifestPersistLocked()
     }
 
-    // MARK: - Admission cut (type-protected LRU)
+    // MARK: - Admission cut (type-protected, terminal-loss utility)
 
-    /// Type-protected LRU cut, mirroring the asymmetric protection rule:
+    /// The type-protected admission cut, scored by terminal-loss
+    /// utility (ADR-0011). An SSD eviction is always a terminal loss —
+    /// the next hit pays a full re-prefill — so non-`.system` victims
+    /// fall in ascending `norm(recency) + α · norm(re-prefill seconds /
+    /// chain bytes)` order under the one shared α carried in `scoring`.
+    /// At `α = 0` (the default) the order is exactly the previous
+    /// type-protected LRU. The asymmetric protection rule is unchanged:
     ///
-    /// 1. Evict oldest non-`.system` residents one by one until the
+    /// 1. Evict non-`.system` residents in utility order until the
     ///    incoming entry fits.
     /// 2. If non-system is exhausted and budget is still too tight:
     ///    - `.system` incoming → fall through to evict oldest
-    ///      `.system` residents (lateral move; protection preserved
-    ///      across the set).
+    ///      `.system` residents (lateral move, recency-ordered;
+    ///      protection preserved across the set).
     ///    - non-system incoming → drop the incoming. Never evict
-    ///      `.system` residents to make room for lower-value types.
+    ///      `.system` residents to make room for lower-value types —
+    ///      hard protection, regardless of score.
     ///
     /// Returns the admit/drop decision plus the list of residents that
     /// were removed from the in-memory manifest, atomically under the
@@ -361,7 +372,8 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// evicted files and fires `onDrop(.evictedByLRU)` **outside** the
     /// lock.
     func admit(
-        _ descriptor: PersistedSnapshotDescriptor
+        _ descriptor: PersistedSnapshotDescriptor,
+        scoring config: EvictionConfiguration = EvictionConfiguration()
     ) -> (decision: AdmissionDecision, evicted: [EvictedResident]) {
         var evicted: [EvictedResident] = []
 
@@ -377,16 +389,20 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         }
 
         // Unrecognized wire strings are treated as non-system so they
-        // participate in normal LRU eviction and never bypass system
+        // participate in normal utility eviction and never bypass system
         // protection. Front-door validation rejects these already, so
         // this branch is only reached in tests.
         let incomingType = HybridCacheSnapshot.CheckpointType(
             wireString: descriptor.checkpointType
         ) ?? .leaf
 
-        // Pass 1 — evict oldest non-system residents under the lock.
-        evictOldestUnderLock(
-            matching: { $0 != .system },
+        // Pass 1 — evict non-system residents in terminal-loss utility
+        // order under the lock.
+        evictUnderLock(
+            order: terminalLossOrderedResidentsLocked(
+                matching: { $0 != .system },
+                config: config
+            ),
             until: spaceNeeded,
             into: &evicted
         )
@@ -399,8 +415,11 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         switch incomingType {
         case .system:
             // Lateral move: evict oldest system residents until fit.
-            evictOldestUnderLock(
-                matching: { $0 == .system },
+            // Recency-only on purpose — among same-type survival
+            // prefixes the utility refinement buys nothing, and the
+            // LRU order is the long-standing pinned behavior.
+            evictUnderLock(
+                order: sortedEligibleResidentsLocked(matching: { $0 == .system }),
                 until: spaceNeeded,
                 into: &evicted
             )
@@ -444,17 +463,16 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         return removeResidentUnderLock(snapshotID: victim.snapshotID)
     }
 
-    /// Walk the manifest's snapshots in ascending `lastAccessAt` order,
-    /// evicting each that matches the predicate and freeing its SSD
-    /// bytes until the requested room is available (or the eligible set
-    /// is exhausted). Every removed resident is appended to `evicted`.
-    /// Must be called with `lock` held.
-    private func evictOldestUnderLock(
-        matching predicate: (HybridCacheSnapshot.CheckpointType) -> Bool,
+    /// Walk `order` (worst victim first), evicting each entry and
+    /// freeing its SSD bytes until the requested room is available (or
+    /// the order is exhausted). Every removed resident is appended to
+    /// `evicted`. Must be called with `lock` held.
+    private func evictUnderLock(
+        order: [PersistedSnapshotDescriptor],
         until spaceNeeded: Int,
         into evicted: inout [EvictedResident]
     ) {
-        for victim in sortedEligibleResidentsLocked(matching: predicate) {
+        for victim in order {
             if currentSSDBytes + spaceNeeded <= budgetBytes {
                 return
             }
@@ -462,6 +480,126 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
                 evicted.append(resident)
             }
         }
+    }
+
+    /// Eligible residents in eviction order under terminal-loss
+    /// utility. Must be called with `lock` held.
+    private func terminalLossOrderedResidentsLocked(
+        matching predicate: (HybridCacheSnapshot.CheckpointType) -> Bool,
+        config: EvictionConfiguration
+    ) -> [PersistedSnapshotDescriptor] {
+        terminalLossOrder(
+            sortedEligibleResidentsLocked(matching: predicate),
+            config: config
+        )
+    }
+
+    /// Order descriptors worst-victim-first under terminal-loss
+    /// utility: ascending `norm(1/age) + α · norm(re-prefill seconds /
+    /// chain bytes)`. Re-prefill spans the *whole* chain — an SSD loss
+    /// re-prefills `[0, tokenOffset]` from scratch — and bytes are the
+    /// chain total (`totalBytes`), never per-segment values; both
+    /// inputs are already persisted (schema v8 carries `tokenOffset`,
+    /// `bytes`, and the inherited segments), so the cut needs no
+    /// manifest schema bump. The `α = 0` fast path returns the plain
+    /// LRU order — byte-identical to the pre-ADR-0011 cut. Pure
+    /// derivation over its inputs; shared by the cut and the
+    /// **Survival Gate** simulation.
+    private func terminalLossOrder(
+        _ candidates: [PersistedSnapshotDescriptor],
+        config: EvictionConfiguration
+    ) -> [PersistedSnapshotDescriptor] {
+        let lru = candidates.sorted {
+            ($0.lastAccessAt, $0.snapshotID) < ($1.lastAccessAt, $1.snapshotID)
+        }
+        guard config.alpha != 0, lru.count > 1 else { return lru }
+
+        let now = Date().timeIntervalSinceReferenceDate
+        let rawRecencies = lru.map {
+            EvictionPolicy.recencyWeight(ageSeconds: now - $0.lastAccessAt)
+        }
+        let terms = EvictionPolicy.blendedTerms(
+            rawRecencies: rawRecencies, alpha: config.alpha
+        ) {
+            lru.map { resident -> Double in
+                guard resident.totalBytes > 0 else { return 0 }
+                let rePrefillSeconds = EvictionPolicy.parentRelativeFlops(
+                    nodeOffset: resident.tokenOffset,
+                    parentOffset: 0,
+                    profile: config.flopProfile
+                ) / config.estimates.prefillFlopsPerSecond
+                return rePrefillSeconds / Double(resident.totalBytes)
+            }
+        }
+
+        return zip(lru, terms)
+            .map { resident, terms in
+                (resident: resident, utility: terms.utility)
+            }
+            .sorted {
+                ($0.utility, $0.resident.lastAccessAt, $0.resident.snapshotID)
+                    < ($1.utility, $1.resident.lastAccessAt, $1.resident.snapshotID)
+            }
+            .map(\.resident)
+    }
+
+    // MARK: - Survival Gate (PRD #82 slice #90)
+
+    /// The **Survival Gate** pre-check: would an incoming chain survive
+    /// the eviction its own admission triggers? Simulates the cut over
+    /// residents ∪ {incoming} — freeing room worst-utility-first — and
+    /// answers `false` exactly when the simulation picks the incoming
+    /// itself before enough room exists, i.e. when writing it would
+    /// only churn the SSD. Inert while the ledger is unfilled (an
+    /// unfilled ledger admits everything, keeping cold-start behavior
+    /// unchanged), and a `.system` incoming always passes — the cut's
+    /// lateral move owns that case and the survival prefix must never
+    /// gate itself out.
+    ///
+    /// One atomic read under the ledger lock. Pure — no effects; the
+    /// caller (the **Snapshot Admission** front doors in
+    /// `PrefixCacheManager`) decides what a `false` means: a demotion
+    /// terminal-drops, a non-end-of-turn leaf degrades to RAM-only with
+    /// supersession *preserve*, a checkpoint skips its write-through.
+    func survivesAdmissionCut(
+        tokenOffset: Int,
+        totalBytes: Int,
+        checkpointType: HybridCacheSnapshot.CheckpointType,
+        lastAccessAt: TimeInterval,
+        scoring config: EvictionConfiguration
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if currentSSDBytes + totalBytes <= budgetBytes { return true }
+        if checkpointType == .system { return true }
+
+        // Stand-in descriptor carrying exactly the fields scoring
+        // reads; the sentinel UUID cannot collide with a resident.
+        let incoming = PersistedSnapshotDescriptor(
+            snapshotID: UUID().uuidString,
+            partitionDigest: "",
+            pathFromRoot: [],
+            tokenOffset: tokenOffset,
+            checkpointType: checkpointType.wireString,
+            bytes: totalBytes,
+            createdAt: lastAccessAt,
+            lastAccessAt: lastAccessAt,
+            fileRelativePath: "",
+            schemaVersion: SnapshotManifestSchema.currentVersion
+        )
+
+        let pool = terminalLossOrder(
+            sortedEligibleResidentsLocked(matching: { $0 != .system }) + [incoming],
+            config: config
+        )
+        var simulatedBytes = currentSSDBytes
+        for victim in pool {
+            if simulatedBytes + totalBytes <= budgetBytes { return true }
+            if victim.snapshotID == incoming.snapshotID { return false }
+            simulatedBytes -= victim.totalBytes
+        }
+        return simulatedBytes + totalBytes <= budgetBytes
     }
 
     /// The subset of manifest descriptors whose parsed checkpoint type
@@ -518,7 +656,12 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// resident (a concurrent hydration failure removed it; the suffix
     /// cannot compose); the store then deletes the orphaned own file.
     /// On success the entry's `lastAccessAt` is stamped to commit time
-    /// so the first LRU cut sees fresh recency.
+    /// so the first LRU cut sees fresh recency — unless `refreshRecency`
+    /// is `false` (a **Snapshot Demotion**), in which case the
+    /// descriptor's own `lastAccessAt` is preserved: demoted bodies are
+    /// the *least* valuable, and re-stamping them would make every
+    /// pressure event invert the SSD tier's recency signal. Only
+    /// hydrations and extensions refresh (see `CONTEXT.md`).
     ///
     /// `consumingBase` is the **Leaf Extension Admission** fold: the
     /// base entry leaves the manifest (its files stay — they are the
@@ -527,7 +670,8 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// is double-counted or unowned.
     func commit(
         _ descriptor: PersistedSnapshotDescriptor,
-        consumingBase: String? = nil
+        consumingBase: String? = nil,
+        refreshRecency: Bool = true
     ) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -548,7 +692,9 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         }
 
         var fresh = descriptor
-        fresh.lastAccessAt = Date().timeIntervalSinceReferenceDate
+        if refreshRecency {
+            fresh.lastAccessAt = Date().timeIntervalSinceReferenceDate
+        }
 
         // Idempotent byte accounting: if this ID is already resident,
         // subtract its prior bytes before adding the fresh entry's, so a
@@ -697,16 +843,14 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     }
 
     /// Read-path accessor for `loadSync`: the resident's ordered chain
-    /// file URLs plus the per-segment expected offsets for composition
-    /// validation. `nil` when the ID is not resident (evicted between
+    /// file URLs (base-first, own file last — the order hydration
+    /// composes in). `nil` when the ID is not resident (evicted between
     /// the lookup and the hydration).
-    func chainForHydration(
-        id: String
-    ) -> (fileURLs: [URL], tokenOffset: Int)? {
+    func chainForHydration(id: String) -> [URL]? {
         lock.lock()
         defer { lock.unlock() }
         guard let descriptor = manifest.snapshots[id] else { return nil }
-        return (chainFileURLs(for: descriptor), descriptor.tokenOffset)
+        return chainFileURLs(for: descriptor)
     }
 }
 

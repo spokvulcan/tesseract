@@ -22,6 +22,11 @@ nonisolated enum SnapshotResolution {
     struct Resolved: Sendable {
         let lookup: PrefixCacheManager.LookupResult
         let hydratedFromSSD: Bool
+        /// Wall-clock seconds `loadSync` spent materializing the body
+        /// (`0` for RAM hits, misses, and failed hydrations — a failure
+        /// surfaces as a miss and its time is not a hydration cost a
+        /// future hit would pay). Feeds the per-completion trace record.
+        let hydrationSeconds: TimeInterval
 
         /// The lookup to align checkpoint planning against, or `nil` to skip the
         /// alignment merge. An SSD-hydrated hit aligns against nothing: the
@@ -52,7 +57,7 @@ nonisolated enum SnapshotResolution {
             if let id = initial.recordedHitSnapshotID {
                 diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: id))
             }
-            return Resolved(lookup: initial, hydratedFromSSD: false)
+            return Resolved(lookup: initial, hydratedFromSSD: false, hydrationSeconds: 0)
         }
 
         // Materialize the body from disk on this Metal-affine thread (ADR-0001).
@@ -79,16 +84,23 @@ nonisolated enum SnapshotResolution {
                     sharedPrefixLength: initial.sharedPrefixLength,
                     reason: .missNoSnapshotInPrefix
                 ),
-                hydratedFromSSD: true
+                hydratedFromSSD: true,
+                hydrationSeconds: 0
             )
         }
 
         diagnostics.log(PrefixCacheDiagnostics.SSDHitEvent(
             id: ctx.snapshotRef.snapshotID, hydrateMs: hydrateSeconds
         ))
+        let hydratedBytes = ctx.snapshotRef.bytesOnDisk
         await MainActor.run {
             ctx.ssdStore.recordHit(id: ctx.snapshotRef.snapshotID)
             prefixCache.promote(node: ctx.node, snapshot: hydrated, partitionKey: partitionKey)
+            // Fold the observed hydration into the rolling bytes/s
+            // estimate — a real measured operation, never a constant.
+            prefixCache.recordHydrationMeasurement(
+                bytes: hydratedBytes, seconds: hydrateSeconds
+            )
         }
         diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: ctx.snapshotRef.snapshotID))
 
@@ -104,7 +116,8 @@ nonisolated enum SnapshotResolution {
                     type: hydrated.checkpointType
                 )
             ),
-            hydratedFromSSD: true
+            hydratedFromSSD: true,
+            hydrationSeconds: hydrateSeconds
         )
     }
 }

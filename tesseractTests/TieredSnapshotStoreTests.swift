@@ -785,12 +785,14 @@ struct TieredSnapshotStoreTests {
         #expect(store.pendingRefCountForTesting == 0)
     }
 
-    /// A drop callback for a committed resident whose id is no longer in
-    /// the pending map (`.evictedByLRU` / `.hydrationFailure`) is a logged
-    /// no-op: it leaves the tree untouched. The stale committed ref is
-    /// cleared lazily through `tree.clearCommittedSnapshotRefAfterHydrationFailure`.
+    /// A drop callback for a committed resident (`.evictedByLRU` /
+    /// `.hydrationFailure` — the id left the pending map at commit)
+    /// clears the tree's ref **eagerly**: a body-less `ssdOnly` node
+    /// empties and self-heals out of the tree. Eviction scoring and
+    /// **Snapshot Demotion** read `ref != nil` as "backed", so the ref
+    /// must not outlive its SSD backing.
     @Test
-    func committedResidentDropIsLoggedNoOpThenClearedLazily() async {
+    func committedResidentDropEagerlyClearsSSDOnlyNode() async {
         let (root, store, tree, key) = makeFixture()
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
@@ -811,16 +813,139 @@ struct TieredSnapshotStoreTests {
         tree.dropBody(node: node)            // state 4 → 5 (ssdOnly)
         #expect(store.pendingRefCountForTesting == 0)
 
-        // Committed-resident drop: id is not in the pending map → no-op.
-        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .hydrationFailure)
-        #expect(node.state.ref != nil)       // tree untouched
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .evictedByLRU)
+        #expect(node.state.ref == nil)
+        #expect(node.parent == nil)          // self-healed out of the tree
+    }
+
+    /// Same eager clear for a committed node whose RAM body is still
+    /// resident (state 4): the ref drops, the body stays, and the node
+    /// settles to `ramOnly` — its next eviction scores as a terminal
+    /// re-prefill and demotes, instead of masquerading as hydratable.
+    @Test
+    func committedResidentDropSettlesBodiedNodeToRAMOnly() async {
+        let (root, store, tree, key) = makeFixture()
+        defer { cleanup(root) }
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
+
+        guard let ref = store.admitSnapshot(
+            node: node, tree: tree,
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
+        ) else {
+            Issue.record("admitSnapshot did not accept")
+            return
+        }
+
+        let committed = await waitUntil { node.state.committed }
+        #expect(committed)
+
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .evictedByLRU)
+        #expect(node.state.ref == nil)
+        #expect(node.state.body != nil)      // body untouched
+    }
+
+    /// A warm-start restored ref (which never passes through the writer's
+    /// commit callback) is tracked the same way: the SSD tier evicting
+    /// the restored resident clears the tree's ref eagerly.
+    @Test
+    func warmStartRestoredRefIsEagerlyClearedOnDrop() async {
+        let (root, store, tree, _) = makeFixture()
+        defer { cleanup(root) }
+
+        let node = tree.insertPath(tokens: [1, 2, 3])
+        let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: 3)
+        store.restoreCommittedRef(node: node, tree: tree, ref: ref)
         #expect(node.state.committed)
 
-        // Lazy clear on the next lookup (node supplied by the failing
-        // hydration) removes the stale ref and self-heals the leaf.
-        tree.clearCommittedSnapshotRefAfterHydrationFailure(node: node)
+        store.markSnapshotRefDropped(id: ref.snapshotID, reason: .evictedByLRU)
         #expect(node.state.ref == nil)
-        #expect(node.parent == nil)
+        #expect(node.parent == nil)          // self-healed out of the tree
+    }
+
+    /// A drop for a committed id that an explicit delete (supersession)
+    /// already pruned is a logged no-op — the newer ref on the node
+    /// survives untouched.
+    @Test
+    func committedResidentDropAfterExplicitDeleteIsNoOp() async {
+        let (root, store, tree, key) = makeFixture()
+        defer { cleanup(root) }
+        let node = insertWithBody(tree, tokens: [1, 2, 3])
+
+        guard let firstRef = store.admitSnapshot(
+            node: node, tree: tree,
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
+        ) else {
+            Issue.record("first admitSnapshot did not accept")
+            return
+        }
+        let committed = await waitUntil { node.state.committed }
+        #expect(committed)
+
+        // Re-admission supersedes firstRef: the router deletes its
+        // backing and prunes both indexes.
+        guard let secondRef = store.admitSnapshot(
+            node: node, tree: tree,
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
+        ) else {
+            Issue.record("second admitSnapshot did not accept")
+            return
+        }
+
+        // A late `.evictedByLRU` for the superseded id must not touch
+        // the node's live (newer) ref.
+        store.markSnapshotRefDropped(id: firstRef.snapshotID, reason: .evictedByLRU)
+        #expect(node.state.refID == secondRef.snapshotID)
+    }
+
+    /// End-to-end through the real writer: a later admission whose LRU
+    /// cut evicts a committed resident clears that resident's tree ref
+    /// via the `.evictedByLRU` callback — no hand-fired drops. The RAM
+    /// body stays; only the dead backing's ref goes.
+    @Test
+    func writerAdmissionCutEagerlyClearsEvictedResidentRef() async {
+        // Budget fits exactly one 1 KiB payload — the second admission's
+        // cut must evict the first (older, same type) to make room.
+        let (root, store, tree, key) = makeFixture(budgetBytes: 1_500)
+        defer { cleanup(root) }
+
+        let nodeA = insertWithBody(tree, tokens: [1, 2, 3])
+        guard store.admitSnapshot(
+            node: nodeA, tree: tree,
+            partitionKey: key,
+            pathFromRoot: [1, 2, 3],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
+        ) != nil else {
+            Issue.record("admitSnapshot A did not accept")
+            return
+        }
+        let committedA = await waitUntil { nodeA.state.committed }
+        #expect(committedA)
+
+        let nodeB = insertWithBody(tree, tokens: [9, 9, 9])
+        guard store.admitSnapshot(
+            node: nodeB, tree: tree,
+            partitionKey: key,
+            pathFromRoot: [9, 9, 9],
+            snapshot: makeSnapshot(),
+            payload: makePayload(bytes: 1_024)
+        ) != nil else {
+            Issue.record("admitSnapshot B did not accept")
+            return
+        }
+
+        let cleared = await waitUntil { nodeA.state.ref == nil }
+        #expect(cleared, "evicted resident's committed ref must clear eagerly")
+        #expect(nodeA.state.body != nil)     // RAM body untouched
     }
 
     // MARK: - Re-admission supersession (SSD-orphan bug fix)

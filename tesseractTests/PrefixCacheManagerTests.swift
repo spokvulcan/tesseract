@@ -1717,7 +1717,7 @@ struct PrefixCacheManagerTests {
         #expect(node.state.isEmpty)  // unchanged — body not attached
     }
 
-    /// `clearCommittedSnapshotRefAfterHydrationFailure` is forgiving for
+    /// `clearCommittedSnapshotRefAfterBackingLoss` is forgiving for
     /// the same reason: a node that left the committed/`ssdOnly` states
     /// before the failure hop is a logged no-op, not a process abort.
     @Test func clearCommittedSnapshotRefOnNonCommittedNodeIsForgivingNoOp() {
@@ -1730,7 +1730,7 @@ struct PrefixCacheManagerTests {
         // ramOnly (state 1): a RAM body, no ref — not committed/ssdOnly.
         tree.storeSnapshot(makeUniformSnapshot(offset: tokens.count, type: .leaf), on: node)
 
-        let effect = tree.clearCommittedSnapshotRefAfterHydrationFailure(node: node)
+        let effect = tree.clearCommittedSnapshotRefAfterBackingLoss(node: node)
 
         #expect(effect == .ignored(.notResident))
         #expect(node.state.body != nil)  // body untouched
