@@ -128,6 +128,55 @@ ledger work (those are the store's).
 > tear it. The store gets back the evicted residents and does the file deletes and
 > callbacks outside the lock.
 
+### SSD leaf extension
+
+**Snapshot Segment**:
+One on-disk file holding a token range of a persisted leaf — either a full
+snapshot from offset zero, or the suffix a later leaf added past its base.
+Per layer: sliceable attention state stores only the suffix range;
+non-sliceable state (recurrent, rotating, chunked) rides whole in every
+segment, last-segment-wins on hydration. Every segment has exactly one owner.
+_Avoid_: delta file, diff, chunk (collides with prefill chunks), partial
+snapshot.
+
+**Segment Chain**:
+The ordered **Snapshot Segment**s that together materialize one committed leaf
+snapshot — the unit the **Snapshot Ledger** admits, evicts, deletes, and
+hydrates. Bytes and budget are chain totals; hydration composes the chain back
+into one snapshot, and any broken link condemns the whole chain. One manifest
+entry owns the whole chain — there are no cross-entry references.
+_Avoid_: parent/child snapshots, snapshot lineage, delta chain.
+
+**Leaf Extension Admission**:
+A leaf **Snapshot Admission** whose SSD payload carries only the suffix past
+its base — the deepest SSD-backed ancestor leaf it supersedes. When accepted,
+supersession *transfers* the base's **Segment Chain** to the new leaf instead
+of deleting it, so a turn's SSD write scales with new tokens, not conversation
+length (#78). Worth-it-gated: a near-full suffix admits full instead. When the
+base disappears mid-flight the leaf degrades to RAM-only and the next turn
+self-heals with a full write.
+_Avoid_: delta admission (the design-phase working name), incremental write,
+suffix write-through.
+
+> **Flagged distinction — three supersession modes.** Superseding an ancestor
+> leaf now does one of three things to its SSD backing: **transfer** (a
+> **Leaf Extension Admission** took ownership of the chain), **delete** (a
+> full SSD write replaced it — the pre-extension behavior), or **preserve**
+> (a RAM-only leaf admission keeps the ancestor's SSD backing alive as the
+> best on-disk approximation for warm start). RAM bodies are dropped in all
+> three.
+
+**Example dialogue:**
+
+> **Dev:** Turn N+1 stores its leaf — what happens to turn N's gigabyte on
+> disk?
+> **Expert:** Nothing moves. The new leaf admits one suffix segment and takes
+> ownership of the old chain; the old leaf's *identity* dies (its node ref is
+> discarded) but its bytes live on as the new leaf's prefix.
+> **Dev:** And if the suffix write is dropped before it commits?
+> **Expert:** The base entry stays in the manifest — unreachable this session,
+> but warm start reattaches it, and the LRU cut reclaims it if nothing does.
+
 ### Image-aware prefix caching
 
 **Image Digest**:

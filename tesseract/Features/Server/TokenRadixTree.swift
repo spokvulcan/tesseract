@@ -122,6 +122,41 @@ final class TokenRadixTree {
         return (node: node, sharedPrefixLength: bestPrefixLength)
     }
 
+    /// The deepest strict-ancestor node on `tokens` whose state is a
+    /// `.leaf` carrying a live Snapshot Ref (pending or committed) — the
+    /// base a **Leaf Extension Admission** slices against. Strict: a
+    /// node at exactly `tokens.count` is the leaf being re-admitted,
+    /// never its own base. Read-only — no access-time bump, no
+    /// insertion. `nil` when no SSD-backed ancestor leaf exists on the
+    /// path (first leaf of a conversation, post-rewind divergence,
+    /// RAM-only history).
+    func deepestRefBearingLeaf(tokens: [Int]) -> SnapshotRef? {
+        var current = root
+        var pos = 0
+        var best: SnapshotRef?
+
+        while pos < tokens.count {
+            guard let child = current.children[tokens[pos]] else { break }
+
+            let edge = child.edgeTokens
+            var edgePos = 0
+            while edgePos < edge.count && pos < tokens.count && edge[edgePos] == tokens[pos] {
+                edgePos += 1
+                pos += 1
+            }
+
+            if edgePos < edge.count { break }
+            current = child
+            if pos < tokens.count,
+               child.state.checkpointType == .leaf,
+               let ref = child.state.ref {
+                best = ref
+            }
+        }
+
+        return best
+    }
+
     /// Returns how many leading tokens from `tokens` match the tree, regardless of
     /// whether any snapshot exists along the path. Useful for miss diagnostics.
     func findSharedPrefixLength(tokens: [Int]) -> Int {

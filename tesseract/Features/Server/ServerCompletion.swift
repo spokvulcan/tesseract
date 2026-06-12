@@ -634,7 +634,8 @@ nonisolated final class ServerCompletion {
                 for supersession in supersededLeaves {
                     diagnosticsContext.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
                         offset: supersession.offset,
-                        snapshotRefID: supersession.bodyDroppedSnapshotRefID
+                        snapshotRefID: supersession.bodyDroppedSnapshotRefID,
+                        mode: supersession.mode
                     ))
                 }
             }
@@ -1031,6 +1032,12 @@ nonisolated final class ServerCompletion {
                 //    guard above ensures no per-layer trimming is
                 //    needed before capture.
                 let ssdEnabled = mlxStart.ssdEnabled
+                let extensionBase = await Self.resolveExtensionBase(
+                    ssdEnabled: ssdEnabled,
+                    tokens: storedTokens,
+                    partitionKey: mlxStart.partitionKey,
+                    prefixCache: prefixCache
+                )
                 let (maybeLeaf, maybeLeafAdmission): (HybridCacheSnapshot?, SnapshotAdmission?) =
                     try await container.perform(
                         nonSendable: finalCache
@@ -1044,7 +1051,8 @@ nonisolated final class ServerCompletion {
                         }
                         let storage = Self.snapshotAdmissionStorage(
                             for: snap,
-                            ssdEnabled: ssdEnabled
+                            ssdEnabled: ssdEnabled,
+                            extending: extensionBase
                         )
                         let leafAdmission = SnapshotAdmission.leaf(
                             storedTokens: storedTokens,
@@ -1909,14 +1917,109 @@ nonisolated final class ServerCompletion {
         }
     }
 
+    /// Resolve the **Leaf Extension Admission** base for a leaf about
+    /// to be captured: one hop to the MainActor (radix tree + ledger),
+    /// made *before* entering the Metal-affine `container.perform` so
+    /// capture closures stay free of cross-actor hops. Every
+    /// leaf-capture path (direct, boundary, speculative) funnels
+    /// through here. `nil` when `ssdEnabled` is false — the leaf
+    /// admits full.
+    static func resolveExtensionBase(
+        ssdEnabled: Bool,
+        tokens: [Int],
+        partitionKey: CachePartitionKey,
+        prefixCache: PrefixCacheManager
+    ) async -> SnapshotExtension? {
+        guard ssdEnabled else { return nil }
+        return await MainActor.run {
+            prefixCache.extensionBase(tokens: tokens, partitionKey: partitionKey)
+        }
+    }
+
     /// Internal (not private): the **Speculative Canonical Prefill** executor
     /// derives its leaf admission storage through the same policy.
+    ///
+    /// `extending` carries the **Leaf Extension Admission** base (the
+    /// deepest SSD-backed ancestor leaf, resolved by
+    /// `PrefixCacheManager.extensionBase`); when the payload's sliceable
+    /// layers can carry just the suffix past it — and that suffix is
+    /// worth writing (see `extensionMaxSuffixFraction`) — the payload
+    /// admits as an extension. `nil` (every checkpoint, and leaves with
+    /// no usable base) admits full.
     static func snapshotAdmissionStorage(
         for snapshot: HybridCacheSnapshot,
-        ssdEnabled: Bool
+        ssdEnabled: Bool,
+        extending: SnapshotExtension? = nil
     ) -> SnapshotAdmission.Storage {
         guard ssdEnabled else { return .ramOnly }
-        return .ramAndSSD(extractSnapshotPayload(snapshot))
+        return .ramAndSSD(extractSnapshotPayload(snapshot, extending: extending))
+    }
+
+    /// Worth-it gate for a **Leaf Extension Admission**: when the
+    /// estimated suffix payload exceeds this fraction of the full
+    /// payload (a model whose layers are mostly non-sliceable, or a
+    /// near-root base), the leaf admits full — a "delta" that rivals
+    /// the full write buys chain complexity for nothing.
+    static let extensionMaxSuffixFraction = 0.9
+
+    /// Cache classes whose state arrays carry the token axis at dim −2
+    /// and slice cleanly per token range: `KVCacheSimple` trims its
+    /// state to `offset`, and `QuantizedKVCache` packs quantization
+    /// groups along the head dim (last axis), so a token-axis slice
+    /// never splits a group. Rotating (buffer order), chunked
+    /// (`startPosition`), and recurrent (whole-prefix state) classes
+    /// ride whole in every segment instead.
+    private static let suffixSliceableClassNames: Set<String> = [
+        "KVCache", "KVCacheSimple", "QuantizedKVCache",
+    ]
+
+    /// True when `layer`'s arrays provably cover `[0..snapshotOffset]`
+    /// along the token axis so a `(baseOffset..snapshotOffset]` slice is
+    /// exact. Defensive shape checks — a layer that fails them simply
+    /// rides whole.
+    private static func layerIsSuffixSliceable(
+        _ layer: HybridCacheSnapshot.LayerState,
+        snapshotOffset: Int
+    ) -> Bool {
+        guard suffixSliceableClassNames.contains(layer.className),
+              layer.offset == snapshotOffset,
+              !layer.state.isEmpty
+        else { return false }
+        return layer.state.allSatisfy { array in
+            array.ndim >= 3 && array.dim(-2) == snapshotOffset
+        }
+    }
+
+    /// The validated, worth-it extension for `snapshot`, or `nil` when
+    /// the payload should admit full. Pure metadata arithmetic — no
+    /// array bytes move here.
+    private static func validatedExtension(
+        _ extending: SnapshotExtension?,
+        for snapshot: HybridCacheSnapshot
+    ) -> SnapshotExtension? {
+        guard let extending,
+              extending.baseOffset > 0,
+              extending.baseOffset < snapshot.tokenOffset
+        else { return nil }
+
+        var fullBytes = 0
+        var suffixBytes = 0
+        let suffixFraction =
+            Double(snapshot.tokenOffset - extending.baseOffset)
+            / Double(snapshot.tokenOffset)
+        for layer in snapshot.layers {
+            let layerBytes = layer.state.reduce(0) { $0 + $1.nbytes }
+            fullBytes += layerBytes
+            if layerIsSuffixSliceable(layer, snapshotOffset: snapshot.tokenOffset) {
+                suffixBytes += Int(Double(layerBytes) * suffixFraction)
+            } else {
+                suffixBytes += layerBytes
+            }
+        }
+        guard fullBytes > 0,
+              Double(suffixBytes) <= extensionMaxSuffixFraction * Double(fullBytes)
+        else { return nil }
+        return extending
     }
 
     /// Shared admission tail for structured-leaf executors (the boundary
@@ -1980,7 +2083,8 @@ nonisolated final class ServerCompletion {
         for supersession in storeDiagnostics.supersededLeaves {
             diagnostics.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
                 offset: supersession.offset,
-                snapshotRefID: supersession.bodyDroppedSnapshotRefID
+                snapshotRefID: supersession.bodyDroppedSnapshotRefID,
+                mode: supersession.mode
             ))
         }
         let admissionEvicted = storeDiagnostics.evictions.contains { event in
@@ -2003,16 +2107,29 @@ nonisolated final class ServerCompletion {
         return true
     }
 
-    private static func extractSnapshotPayload(
-        _ snapshot: HybridCacheSnapshot
+    static func extractSnapshotPayload(
+        _ snapshot: HybridCacheSnapshot,
+        extending: SnapshotExtension? = nil
     ) -> SnapshotPayload {
+        let activeExtension = validatedExtension(extending, for: snapshot)
+
         var layers: [SnapshotPayload.LayerPayload] = []
         layers.reserveCapacity(snapshot.layers.count)
 
         for layer in snapshot.layers {
+            var suffixBaseOffset: Int?
+            var stateToExtract = layer.state
+            if let activeExtension,
+               layerIsSuffixSliceable(layer, snapshotOffset: snapshot.tokenOffset) {
+                suffixBaseOffset = activeExtension.baseOffset
+                stateToExtract = layer.state.map { array in
+                    array[.ellipsis, activeExtension.baseOffset..<snapshot.tokenOffset, 0...]
+                }
+            }
+
             var arrays: [SnapshotPayload.ArrayPayload] = []
-            arrays.reserveCapacity(layer.state.count)
-            for array in layer.state {
+            arrays.reserveCapacity(stateToExtract.count)
+            for array in stateToExtract {
                 let extracted = array.asData(access: .copy)
                 arrays.append(SnapshotPayload.ArrayPayload(
                     data: extracted.data,
@@ -2024,14 +2141,16 @@ nonisolated final class ServerCompletion {
                 className: layer.className,
                 state: arrays,
                 metaState: layer.metaState,
-                offset: layer.offset
+                offset: layer.offset,
+                suffixBaseOffset: suffixBaseOffset
             ))
         }
 
         return SnapshotPayload(
             tokenOffset: snapshot.tokenOffset,
             checkpointType: snapshot.checkpointType,
-            layers: layers
+            layers: layers,
+            extending: activeExtension
         )
     }
 
@@ -2279,6 +2398,13 @@ nonisolated final class ServerCompletion {
         // (it only emits `.fromBoundary` when `storedTokens.count > tokenOffset`).
         let boundaryOffset = boundarySnapshot.tokenOffset
 
+        let extensionBase = await Self.resolveExtensionBase(
+            ssdEnabled: ssdEnabled,
+            tokens: storedTokens,
+            partitionKey: partitionKey,
+            prefixCache: prefixCache
+        )
+
         do {
             return try await container.perform { context in
                 let restoredCache = try boundarySnapshot.restore()
@@ -2330,7 +2456,8 @@ nonisolated final class ServerCompletion {
                     storedTokens: storedTokens,
                     storage: Self.snapshotAdmissionStorage(
                         for: leaf,
-                        ssdEnabled: ssdEnabled
+                        ssdEnabled: ssdEnabled,
+                        extending: extensionBase
                     ),
                     partitionKey: partitionKey,
                     requestID: requestID,

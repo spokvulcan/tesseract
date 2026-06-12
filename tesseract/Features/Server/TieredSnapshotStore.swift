@@ -233,7 +233,8 @@ final class TieredSnapshotStore: SnapshotStore {
             partitionKey: partitionKey,
             pathFromRoot: pathFromRoot,
             snapshot: snapshot,
-            payloadBytes: payload.totalBytes
+            payloadBytes: payload.totalBytes,
+            segmentBaseOffset: payload.extending?.baseOffset ?? 0
         )
 
         guard case .accepted(let ref) = ssdStore.tryEnqueue(

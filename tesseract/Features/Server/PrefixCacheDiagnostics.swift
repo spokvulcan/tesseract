@@ -343,6 +343,12 @@ nonisolated enum PrefixCacheDiagnostics {
         case droppedWriterIOError
         case droppedInvalidCheckpointType
         case droppedUnregisteredPartition
+        /// Front door: a **Leaf Extension Admission** found its base
+        /// neither resident, queued, nor in flight.
+        case droppedExtensionBaseUnavailable
+        /// Writer: a pending extension lost its base before the
+        /// commit-time fold.
+        case droppedExtensionBaseLost
     }
 
     /// Reason an SSD-resident state-5 hydration failed. Mirrors the
@@ -352,6 +358,9 @@ nonisolated enum PrefixCacheDiagnostics {
     enum SSDMissReason: String, Sendable {
         case partitionNotInManifest
         case fingerprintMismatch
+        /// The resident's manifest entry vanished between the lookup
+        /// and the hydration (a concurrent eviction).
+        case notResident
         case readFailed
         case decodeFailed
     }
@@ -427,6 +436,11 @@ nonisolated enum PrefixCacheDiagnostics {
     struct LeafSupersessionEvent: Payload {
         let offset: Int
         let snapshotRefID: String?
+        /// What happened to the superseded leaf's SSD backing:
+        /// `transferred` (a **Leaf Extension Admission** took the
+        /// chain), `deleted` (a full write replaced it), or
+        /// `preserved` (a RAM-only admission kept it for warm start).
+        let mode: PrefixCacheManager.LeafSupersession.Mode
 
         let eventName = "leafSupersession"
 
@@ -434,6 +448,30 @@ nonisolated enum PrefixCacheDiagnostics {
             [
                 ("offset", "\(offset)"),
                 ("storageRefID", snapshotRefID ?? "nil"),
+                ("mode", mode.rawValue),
+            ]
+        }
+    }
+
+    /// One committed **Leaf Extension Admission**: the suffix landed and
+    /// the base's **Segment Chain** transferred. `suffixBytes` is what
+    /// actually hit the SSD this turn — the churn metric #78 tracks.
+    struct LeafExtensionCommitEvent: Payload {
+        let id: String
+        let baseID: String
+        let suffixBytes: Int
+        let chainBytes: Int
+        let chainSegments: Int
+
+        let eventName = "leafExtensionCommit"
+
+        var fields: [(String, String)] {
+            [
+                ("id", id),
+                ("baseID", baseID),
+                ("suffixBytes", "\(suffixBytes)"),
+                ("chainBytes", "\(chainBytes)"),
+                ("chainSegments", "\(chainSegments)"),
             ]
         }
     }
@@ -645,6 +683,7 @@ nonisolated enum PrefixCacheDiagnostics {
         case .exceedsBudget: return "exceedsBudget"
         case .diskFull: return "diskFull"
         case .writerIOError: return "writerIOError"
+        case .extensionBaseLost: return "extensionBaseLost"
         case .hydrationFailure: return "hydrationFailure"
         }
     }

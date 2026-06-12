@@ -71,12 +71,33 @@ nonisolated struct PlaceholderContainerHeader: Codable, Sendable {
         let className: String
         let metaState: [String]
         let offset: Int
+        /// Non-nil when this layer's blobs are a suffix slice starting
+        /// at this token offset (see `SnapshotPayload.LayerPayload
+        /// .suffixBaseOffset`). Absent for whole-state layers, so v8
+        /// full-snapshot headers stay byte-identical in shape to the
+        /// pre-extension layout.
+        let suffixBaseOffset: Int?
         let arrays: [ArrayEntry]
+
+        init(
+            className: String,
+            metaState: [String],
+            offset: Int,
+            suffixBaseOffset: Int? = nil,
+            arrays: [ArrayEntry]
+        ) {
+            self.className = className
+            self.metaState = metaState
+            self.offset = offset
+            self.suffixBaseOffset = suffixBaseOffset
+            self.arrays = arrays
+        }
 
         enum CodingKeys: String, CodingKey {
             case className = "class_name"
             case metaState = "meta_state"
             case offset
+            case suffixBaseOffset = "suffix_base_offset"
             case arrays
         }
     }
@@ -202,6 +223,7 @@ nonisolated func encodePlaceholderContainer(
             className: layer.className,
             metaState: layer.metaState,
             offset: layer.offset,
+            suffixBaseOffset: layer.suffixBaseOffset,
             arrays: arrayEntries
         ))
     }

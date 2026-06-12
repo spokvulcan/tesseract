@@ -63,7 +63,55 @@ nonisolated enum SnapshotManifestSchema {
     ///   `\0TA:` segment. Dense digests are unchanged, but v6 manifests are
     ///   wiped on first boot under v7 so no stale TriAttention partition
     ///   lingers (see docs/adr/0005).
-    static let currentVersion: Int = 7
+    /// - v8: **Segment Chain** support for **Leaf Extension Admission**
+    ///   (docs/adr/0010): descriptors gain `segmentBaseOffset` (the own
+    ///   file's slice start) and `inheritedSegments` (the chain transferred
+    ///   from superseded ancestor leaves), and per-layer container headers
+    ///   gain `suffix_base_offset`. v7 manifests are wiped on first boot
+    ///   under v8.
+    static let currentVersion: Int = 8
+}
+
+// MARK: - Segment chain (Codable, manifest.json + safetensors header)
+
+/// One inherited **Snapshot Segment** of a **Segment Chain**: a file an
+/// earlier leaf wrote, whose ownership a later **Leaf Extension
+/// Admission** transferred to the chain's head descriptor. The head's
+/// own file is described by the descriptor's `fileRelativePath` /
+/// `segmentBaseOffset` / `tokenOffset` / `bytes` fields, never
+/// duplicated here. Ordered shallow→deep; contiguity
+/// (`next.baseOffset == previous.tokenOffset`, first at 0) is the
+/// chain invariant hydration validates per layer.
+nonisolated struct SnapshotSegment: Codable, Sendable, Equatable {
+    /// Token offset this segment's sliceable layers start at.
+    /// 0 for a full segment (always true for the chain's first).
+    let baseOffset: Int
+
+    /// Token offset this segment covers up to — the offset the segment's
+    /// originating leaf was captured at.
+    let tokenOffset: Int
+
+    /// Relative path from the SSD root, same form as
+    /// `PersistedSnapshotDescriptor.fileRelativePath`.
+    let fileRelativePath: String
+
+    /// On-disk file size in bytes, counted into the chain total.
+    let bytes: Int
+}
+
+// MARK: - Leaf extension intent (in-memory, not Codable)
+
+/// The base a **Leaf Extension Admission** slices against: the deepest
+/// SSD-backed ancestor leaf on the new leaf's path. Resolved tree-side
+/// by `PrefixCacheManager.extensionBase`, carried on the
+/// `SnapshotPayload`, validated by the SSD front door, and consumed by
+/// the writer's commit-time chain fold.
+nonisolated struct SnapshotExtension: Sendable, Equatable {
+    /// `snapshotID` of the base leaf's manifest entry / pending write.
+    let baseSnapshotID: String
+
+    /// The base leaf's capture offset — where the suffix slice starts.
+    let baseOffset: Int
 }
 
 // MARK: - Persisted descriptor (Codable, manifest.json + safetensors header)
@@ -121,10 +169,23 @@ nonisolated struct PersistedSnapshotDescriptor: Codable, Sendable, Equatable {
     /// descriptor" by the warm-start path.
     let checkpointType: String
 
-    /// On-disk file size in bytes. Matches
-    /// `SnapshotRef.bytesOnDisk` and is the sole byte-budget
-    /// input for the writer's admission-time LRU cut.
+    /// On-disk size of the descriptor's **own** file in bytes. For a
+    /// chain head this is the newest segment only; budget accounting
+    /// and `SnapshotRef.bytesOnDisk` use `totalBytes` (own +
+    /// inherited), the value the writer's admission-time LRU cut frees.
     let bytes: Int
+
+    /// Token offset the own file's sliceable layers start at. 0 for a
+    /// full snapshot (every non-leaf descriptor); the base leaf's
+    /// capture offset for a **Leaf Extension Admission**.
+    let segmentBaseOffset: Int
+
+    /// The **Segment Chain** below the own file, ordered shallow→deep.
+    /// Empty for a single-file full snapshot. Populated by the writer's
+    /// commit-time fold (the base entry's chain plus the base's own
+    /// file), never at descriptor minting — the chain is only stable
+    /// once the base has settled.
+    let inheritedSegments: [SnapshotSegment]
 
     /// Seconds since Date's reference date (2001-01-01). Stable across
     /// restarts (unlike `ContinuousClock.Instant`) and suitable for
@@ -148,6 +209,90 @@ nonisolated struct PersistedSnapshotDescriptor: Codable, Sendable, Equatable {
     /// descriptors whose version differs from
     /// `SnapshotManifestSchema.currentVersion`.
     let schemaVersion: Int
+
+    init(
+        snapshotID: String,
+        partitionDigest: String,
+        pathFromRoot: [Int],
+        tokenOffset: Int,
+        checkpointType: String,
+        bytes: Int,
+        segmentBaseOffset: Int = 0,
+        inheritedSegments: [SnapshotSegment] = [],
+        createdAt: Double,
+        lastAccessAt: Double,
+        fileRelativePath: String,
+        schemaVersion: Int
+    ) {
+        self.snapshotID = snapshotID
+        self.partitionDigest = partitionDigest
+        self.pathFromRoot = pathFromRoot
+        self.tokenOffset = tokenOffset
+        self.checkpointType = checkpointType
+        self.bytes = bytes
+        self.segmentBaseOffset = segmentBaseOffset
+        self.inheritedSegments = inheritedSegments
+        self.createdAt = createdAt
+        self.lastAccessAt = lastAccessAt
+        self.fileRelativePath = fileRelativePath
+        self.schemaVersion = schemaVersion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case snapshotID, partitionDigest, pathFromRoot, tokenOffset
+        case checkpointType, bytes, segmentBaseOffset, inheritedSegments
+        case createdAt, lastAccessAt, fileRelativePath, schemaVersion
+    }
+
+    /// Decode with chain-field defaults so a pre-v8 manifest still
+    /// *decodes* cleanly and reaches the schema-version gate (backup +
+    /// fresh start) instead of detouring through the corrupt-manifest
+    /// rebuild.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.snapshotID = try container.decode(String.self, forKey: .snapshotID)
+        self.partitionDigest = try container.decode(String.self, forKey: .partitionDigest)
+        self.pathFromRoot = try container.decode([Int].self, forKey: .pathFromRoot)
+        self.tokenOffset = try container.decode(Int.self, forKey: .tokenOffset)
+        self.checkpointType = try container.decode(String.self, forKey: .checkpointType)
+        self.bytes = try container.decode(Int.self, forKey: .bytes)
+        self.segmentBaseOffset =
+            try container.decodeIfPresent(Int.self, forKey: .segmentBaseOffset) ?? 0
+        self.inheritedSegments =
+            try container.decodeIfPresent(
+                [SnapshotSegment].self, forKey: .inheritedSegments
+            ) ?? []
+        self.createdAt = try container.decode(Double.self, forKey: .createdAt)
+        self.lastAccessAt = try container.decode(Double.self, forKey: .lastAccessAt)
+        self.fileRelativePath = try container.decode(String.self, forKey: .fileRelativePath)
+        self.schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+    }
+
+    /// Chain-total byte count: the own file plus every inherited
+    /// segment. The single byte-budget input — `currentSSDBytes`, the
+    /// LRU cut, and `SnapshotRef.bytesOnDisk` all use this, never the
+    /// bare `bytes`.
+    var totalBytes: Int {
+        inheritedSegments.reduce(bytes) { $0 + $1.bytes }
+    }
+
+    /// Every file in the chain, shallow→deep, own file last. The unit
+    /// the store deletes when this descriptor leaves the manifest and
+    /// the read order `loadSync` composes in.
+    var chainFileRelativePaths: [String] {
+        inheritedSegments.map(\.fileRelativePath) + [fileRelativePath]
+    }
+
+    /// The own file's segment record, as a later extension would
+    /// inherit it.
+    var ownSegment: SnapshotSegment {
+        SnapshotSegment(
+            baseOffset: segmentBaseOffset,
+            tokenOffset: tokenOffset,
+            fileRelativePath: fileRelativePath,
+            bytes: bytes
+        )
+    }
 
     /// Single source of truth for the on-disk path layout
     /// (`partitions/{digest}/snapshots/{shardByte}/{id}.safetensors`,
@@ -383,6 +528,29 @@ nonisolated struct SnapshotPayload: Sendable {
         /// `HybridCacheSnapshot.LayerState.offset`. Mirrors the
         /// vendor's explicit-offset contract.
         let offset: Int
+
+        /// Non-nil when this layer's arrays hold only the suffix token
+        /// range `(suffixBaseOffset..offset]` along the token axis — a
+        /// **Leaf Extension Admission** sliced a sliceable class
+        /// (`KVCacheSimple` / `QuantizedKVCache`). `nil` means the
+        /// arrays are the layer's whole state (always for recurrent /
+        /// rotating / chunked classes, and for every non-extension
+        /// payload).
+        let suffixBaseOffset: Int?
+
+        init(
+            className: String,
+            state: [ArrayPayload],
+            metaState: [String],
+            offset: Int,
+            suffixBaseOffset: Int? = nil
+        ) {
+            self.className = className
+            self.state = state
+            self.metaState = metaState
+            self.offset = offset
+            self.suffixBaseOffset = suffixBaseOffset
+        }
     }
 
     /// The snapshot's absolute prompt token offset. Mirrors
@@ -396,6 +564,24 @@ nonisolated struct SnapshotPayload: Sendable {
     /// Per-layer extracted payloads, in the same order as the vendor
     /// snapshot's `layers` array.
     let layers: [LayerPayload]
+
+    /// Non-nil when this payload is a **Leaf Extension Admission**: the
+    /// sliceable layers carry only the suffix past `extending.baseOffset`
+    /// and the SSD front door must validate-and-transfer the base's
+    /// **Segment Chain**. `nil` for every full payload.
+    let extending: SnapshotExtension?
+
+    init(
+        tokenOffset: Int,
+        checkpointType: HybridCacheSnapshot.CheckpointType,
+        layers: [LayerPayload],
+        extending: SnapshotExtension? = nil
+    ) {
+        self.tokenOffset = tokenOffset
+        self.checkpointType = checkpointType
+        self.layers = layers
+        self.extending = extending
+    }
 
     /// Sum of every `state` array's byte count across every layer.
     /// The front-door `tryEnqueue` uses this to enforce

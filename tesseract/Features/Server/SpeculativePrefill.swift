@@ -411,6 +411,14 @@ nonisolated enum SpeculativeCanonicalPrefill {
         preempted: Bool
     ) async {
         let diagnostics = seed.diagnostics
+        // Preempted partial leaves are RAM-only and never consult the
+        // extension base.
+        let extensionBase = await ServerCompletion.resolveExtensionBase(
+            ssdEnabled: seed.ssdEnabled && !preempted,
+            tokens: storedTokens,
+            partitionKey: seed.partitionKey,
+            prefixCache: prefixCache
+        )
         await container.perform { _ in
             defer {
                 warm.cache = []
@@ -431,7 +439,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 ? .ramOnly
                 : ServerCompletion.snapshotAdmissionStorage(
                     for: leaf,
-                    ssdEnabled: seed.ssdEnabled
+                    ssdEnabled: seed.ssdEnabled,
+                    extending: extensionBase
                 )
             let survived = await ServerCompletion.admitStructuredLeaf(
                 leaf,
