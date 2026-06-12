@@ -58,7 +58,20 @@ final class PrefixCacheManager {
     /// bootstrapping; direct manager tests can omit the ID and use the
     /// `.unscoped` fallback.
     private var pendingBootstrapBoundary: PendingBootstrapBoundary?
+    /// The live RAM-tier budget — the **Pressure-Reactive Budget**'s
+    /// *current* value. Pressure events move it inside `budgetBand`;
+    /// tests and the E2E hooks may still set it directly (the band then
+    /// reasserts itself on the next pressure event).
     var memoryBudgetBytes: Int
+    /// The ceiling/current band the pressure events fold
+    /// (`PrefixCacheBudgetBand`). The floor is content-defined and
+    /// computed per event — see `budgetFloorBytes()`.
+    private(set) var budgetBand: PrefixCacheBudgetBand
+    /// Held strongly so the subscription lives exactly as long as this
+    /// cache: the handler captures `self` weakly, and dropping the
+    /// manager (model unload) deallocates the source, which cancels
+    /// delivery.
+    private let pressureSource: (any MemoryPressureSource)?
     /// Optional adaptive `alpha` tuner. Production caches attach one;
     /// test/replay caches pass `nil` to avoid recursive recording when
     /// the tuner itself spins up sandboxed caches during grid search.
@@ -71,16 +84,38 @@ final class PrefixCacheManager {
     /// tuning (**Eviction Configuration**).
     var evictionConfig: EvictionConfiguration
 
+    /// Lifetime telemetry counters for this cache: hit tokens served,
+    /// recovered-vs-terminal eviction outcomes, hydrations. Surfaced on
+    /// the telemetry snapshot; never consulted by any policy.
+    private(set) var cumulativeCounters = PromptCacheCumulativeCounters()
+
+    /// Extracts a write-through `SnapshotPayload` from a RAM body so
+    /// **Snapshot Demotion** can persist an unbacked eviction victim
+    /// before dropping it. Injected (production wires the **Server
+    /// Completion** module's extraction edge) because payload extraction
+    /// knows the safetensors shape, which is not this layer's business.
+    /// `nil` (tests, replay caches) disables demotion — every unbacked
+    /// drop is terminal, today's pre-demotion behavior.
+    private let demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)?
+
     init(
         memoryBudgetBytes: Int,
         evictionConfig: EvictionConfiguration = EvictionConfiguration(),
         alphaTuner: AlphaTuner? = nil,
-        tieredStore: TieredSnapshotStore? = nil
+        tieredStore: TieredSnapshotStore? = nil,
+        demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)? = nil,
+        pressureSource: (any MemoryPressureSource)? = nil
     ) {
         self.store = tieredStore ?? TieredSnapshotStore(ssdConfig: nil)
         self.memoryBudgetBytes = memoryBudgetBytes
+        self.budgetBand = PrefixCacheBudgetBand(ceilingBytes: memoryBudgetBytes)
         self.evictionConfig = evictionConfig
         self.alphaTuner = alphaTuner
+        self.demotionPayloadExtractor = demotionPayloadExtractor
+        self.pressureSource = pressureSource
+        pressureSource?.start { [weak self] level in
+            self?.applyMemoryPressure(level)
+        }
     }
 
     struct CacheStats: Sendable {
@@ -117,6 +152,13 @@ final class PrefixCacheManager {
         /// `ssdBodyDrop(id:)` diagnostic event for each non-nil
         /// entry. `nil` for plain RAM-only evictions.
         let bodyDroppedSnapshotRefID: String?
+
+        /// Recovered vs terminal — the one classification rule, shared
+        /// by the manager's cumulative counters and the per-request
+        /// tallies: a surviving ref means the node stays hittable (the
+        /// next hit pays hydration); a ref-less drop is a terminal loss
+        /// (the next hit pays full re-prefill).
+        nonisolated var isTerminal: Bool { bodyDroppedSnapshotRefID == nil }
 
         nonisolated init(
             strategy: Strategy,
@@ -190,6 +232,7 @@ final class PrefixCacheManager {
     }
 
     private struct EvictionCandidate {
+        let partitionKey: CachePartitionKey
         let tree: TokenRadixTree
         let node: RadixTreeNode
         let strategy: EvictionEvent.Strategy
@@ -305,6 +348,7 @@ final class PrefixCacheManager {
             // is eventually dropped to state 5. `noteLookupHit` returns
             // the bumped snapshot ID, or nil for non-committed states.
             let recordedHitID = store.noteLookupHit(on: node)
+            cumulativeCounters.hitTokens += snapshot.tokenOffset
             return LookupResult(
                 snapshot: snapshot,
                 partitionKey: partitionKey,
@@ -502,9 +546,10 @@ final class PrefixCacheManager {
             return (node, path)
         }
 
-        // Returns the accepted ref (nil when SSD is disabled or the
-        // front door rejected the enqueue), so the leaf case can derive
-        // its supersession policy from the actual admission outcome.
+        // Returns the accepted ref (nil when SSD is disabled, the
+        // Survival Gate skipped the write, or the front door rejected
+        // the enqueue), so the leaf case can derive its supersession
+        // policy from the actual admission outcome.
         @discardableResult
         func admitSSDEntry(
             _ entry: SnapshotAdmission.Entry,
@@ -514,15 +559,33 @@ final class PrefixCacheManager {
             guard case .ramAndSSD(let payload) = entry.storage else {
                 return nil
             }
+            // The Survival Gate: checkpoint write-throughs (and any
+            // leaf declared non-end-of-turn) only write if the chain
+            // would survive the cut its own admission triggers.
+            // End-of-turn leaves bypass — the just-finished leaf is
+            // the highest-reuse object in the system.
+            let bypassesGate = admission.kind == .leaf && admission.leafIsEndOfTurn
+            if !bypassesGate,
+               !store.survivalGateAdmits(
+                   snapshot: entry.snapshot,
+                   payloadTotalBytes: payload.totalBytes,
+                   scoringConfig: evictionConfig
+               ) {
+                cumulativeCounters.survivalGateSkips += 1
+                return nil
+            }
             // Hand the front door domain inputs; the ledger owns the
             // descriptor schema (`SnapshotLedger.makeDescriptor`).
+            // `scoringConfig` rides the write to the ledger's
+            // terminal-loss cut — the one shared α (ADR-0011).
             return store.admitSnapshot(
                 node: node,
                 tree: tree,
                 partitionKey: admission.partitionKey,
                 pathFromRoot: path,
                 snapshot: entry.snapshot,
-                payload: payload
+                payload: payload,
+                scoringConfig: evictionConfig
             )
         }
 
@@ -538,21 +601,28 @@ final class PrefixCacheManager {
             let stored = storeRAMEntry(entry)
             // The supersession walk and the SSD enqueue need opposite
             // orders depending on the payload:
-            // - **Leaf Extension Admission**: enqueue FIRST — the front
-            //   door must validate-and-shield the base while its backing
-            //   is untouched, and the walk's transfer-vs-preserve choice
-            //   depends on whether the enqueue was accepted.
-            // - Full SSD write (and RAM-only): supersede FIRST, so the
-            //   doomed ancestor backings free their budget before the
-            //   writer's admission cut sizes up the incoming write — a
-            //   near-full tier would otherwise evict an unrelated
-            //   resident that didn't need to go.
+            // - **Leaf Extension Admission** and gated (non-end-of-turn)
+            //   full writes: enqueue FIRST — the front door must
+            //   validate (and, for extensions, shield the base) while
+            //   the backings are untouched, and the walk's policy is
+            //   read off whether the enqueue was accepted. An accepted
+            //   extension transfers the base's backing; an accepted full
+            //   write replaces history; any rejection (gate skip,
+            //   budget, back-pressure) preserves the ancestor backing as
+            //   the warm-start fallback and the next turn's extension
+            //   base.
+            // - End-of-turn full SSD write (and RAM-only): supersede
+            //   FIRST, so the doomed ancestor backings free their budget
+            //   before the writer's admission cut sizes up the incoming
+            //   write — a near-full tier would otherwise evict an
+            //   unrelated resident that didn't need to go.
             if case .ramAndSSD(let payload) = entry.storage,
-               let extending = payload.extending {
+               payload.extending != nil || !admission.leafIsEndOfTurn {
                 let acceptedRef = admitSSDEntry(entry, node: stored.node, path: stored.path)
-                let policy: LeafSupersessionPolicy = acceptedRef != nil
-                    ? .transferBacking(baseID: extending.baseSnapshotID)
-                    : .preserveBackings
+                let policy: LeafSupersessionPolicy = acceptedRef == nil
+                    ? .preserveBackings
+                    : payload.extending.map { .transferBacking(baseID: $0.baseSnapshotID) }
+                        ?? .deleteBackings
                 supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
                     for: stored.node,
                     in: tree,
@@ -569,7 +639,9 @@ final class PrefixCacheManager {
                     // write declares the ancestor history replaced; the
                     // rare rejection (oversized payload, unregistered
                     // partition) costs the warm-start fallback, never
-                    // correctness.
+                    // correctness. (End-of-turn leaves bypass the
+                    // Survival Gate, so a gate skip can never be the
+                    // rejection here.)
                     policy = .deleteBackings
                 }
                 supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
@@ -766,7 +838,13 @@ final class PrefixCacheManager {
                 "PrefixCacheManager.promote: hydrate ignored — node left ssdOnly before "
                 + "the promote hop (reason=\(String(describing: reason)))"
             )
+            return
         }
+        // SSD hit materialized: the hydration count and the restored
+        // offset land in the lifetime counters here (not at lookup)
+        // so a failed hydration never inflates them.
+        cumulativeCounters.hydrations += 1
+        cumulativeCounters.hitTokens += snapshot.tokenOffset
     }
 
     /// Clear a state-5 node's ref after a hydration failure (file missing
@@ -996,6 +1074,68 @@ final class PrefixCacheManager {
         return result
     }
 
+    // MARK: - Pressure-Reactive Budget
+
+    /// Fold one OS memory-pressure event into the budget band and act
+    /// on it: a shrink drains down to the new current budget with the
+    /// **Budget Floor** protected (every drop demoting via **Snapshot
+    /// Demotion** where backing is available); a regrowth just raises
+    /// the budget — the cache refills naturally on subsequent
+    /// admissions. Invoked by the injected `MemoryPressureSource`;
+    /// callable directly by tests through the in-memory peer or
+    /// as-is.
+    func applyMemoryPressure(_ level: MemoryPressureLevel) {
+        let floor = floorContents().bytes
+        let previous = budgetBand.currentBytes
+        budgetBand = budgetBand.folding(level, floorBytes: floor)
+        guard budgetBand.currentBytes != previous else { return }
+        memoryBudgetBytes = budgetBand.currentBytes
+        if budgetBand.currentBytes < previous {
+            evictToFitBudget(respectingFloor: true)
+        }
+    }
+
+    /// The **Budget Floor** in bytes: what it costs to keep the floor
+    /// contents resident right now. Content-defined and recomputed per
+    /// pressure event, never a stored constant.
+    func budgetFloorBytes() -> Int {
+        floorContents().bytes
+    }
+
+    /// The floor's membership and cost in one walk: every `.system`
+    /// body (the cross-conversation chains every tree is built on) plus
+    /// the single most-recently-extended `.leaf` body across all
+    /// partitions (the snapshot that buys the next turn's near-instant
+    /// TTFT). Deliberately minimal and dumb — a last-resort survival
+    /// set, never the protection mechanism (ADR-0011).
+    private func floorContents() -> (nodes: Set<ObjectIdentifier>, bytes: Int) {
+        var nodes: Set<ObjectIdentifier> = []
+        var bytes = 0
+        var freshestLeaf: RadixTreeNode?
+        for (_, tree) in store.orderedPartitions() {
+            for node in tree.allSnapshotNodes() {
+                guard let body = node.state.body else { continue }
+                switch body.checkpointType {
+                case .system:
+                    nodes.insert(ObjectIdentifier(node))
+                    bytes += body.memoryBytes
+                case .leaf:
+                    if freshestLeaf == nil
+                        || node.lastAccessTime > freshestLeaf!.lastAccessTime {
+                        freshestLeaf = node
+                    }
+                case .branchPoint:
+                    break
+                }
+            }
+        }
+        if let freshestLeaf, let body = freshestLeaf.state.body {
+            nodes.insert(ObjectIdentifier(freshestLeaf))
+            bytes += body.memoryBytes
+        }
+        return (nodes, bytes)
+    }
+
     // MARK: - Eviction
 
     /// Drop snapshots until `totalSnapshotBytes <= memoryBudgetBytes`. Uses
@@ -1003,29 +1143,51 @@ final class PrefixCacheManager {
     /// falls back to oldest-first when only multi-child branch snapshots
     /// remain.
     ///
+    /// **Snapshot Demotion** is the first response to every shrink: an
+    /// unbacked victim is persisted to SSD (when the tier and the payload
+    /// extractor are available) *before* its RAM body drops, so the loss
+    /// is recovered — the next hit pays a hydration, not a re-prefill.
+    /// Terminal drop is the fallback when SSD backing is unavailable.
+    ///
     /// `preferredPartitionKey` — the partition currently writing (i.e.,
     /// the request that triggered this drain). Eviction prefers to drop
     /// snapshots from this partition first, exhausting its eligible set
     /// before touching other partitions. When `nil`, behaves globally
     /// (Marconi default).
+    ///
+    /// `respectingFloor` — `true` only for pressure-driven drains: the
+    /// **Budget Floor** members (`.system` bodies + the single
+    /// most-recently-extended leaf) are never victims, so a critical
+    /// shrink stops at the survival set. Ordinary admission drains and
+    /// the zero-budget test/E2E drains keep the unconditional semantics.
     @discardableResult
     func evictToFitBudget(
         requestID: UUID? = nil,
-        preferredPartitionKey: CachePartitionKey? = nil
+        preferredPartitionKey: CachePartitionKey? = nil,
+        respectingFloor: Bool = false
     ) -> [EvictionEvent] {
         // Pin a single clock reading and a single sorted tree order so all
         // iterations in one drain share the same recency anchor and
         // tie-break ordering.
         let now: ContinuousClock.Instant = .now
-        let orderedTrees = store.orderedPartitions().map(\.tree)
-        let preferredTree = preferredPartitionKey.flatMap { store.tree(for: $0) }
+        let orderedPartitions = store.orderedPartitions()
+        let preferred = preferredPartitionKey.flatMap { key in
+            store.tree(for: key).map { (key: key, tree: $0) }
+        }
+        let protected = respectingFloor ? floorContents().nodes : []
         var events: [EvictionEvent] = []
         while totalSnapshotBytes > memoryBudgetBytes {
             guard let candidate = findEvictionCandidate(
                 now: now,
-                orderedTrees: orderedTrees,
-                preferredTree: preferredTree
+                orderedPartitions: orderedPartitions,
+                preferred: preferred,
+                protected: protected
             ) else { break }
+
+            // Demote-don't-drop: give an unbacked victim an SSD pending
+            // ref before the body drop so the drop settles recoverable
+            // (state 1 → 2 → 3) instead of terminal (state 1 → removed).
+            demoteBeforeDrop(candidate, now: now)
 
             // One chokepoint: `dropBody` reconciles the budget, carries
             // out the eviction telemetry inputs, and self-heals the
@@ -1043,7 +1205,7 @@ final class PrefixCacheManager {
             guard let droppedType = result.droppedCheckpointType else {
                 preconditionFailure("dropBody returned no checkpoint type for a body-bearing node")
             }
-            events.append(EvictionEvent(
+            let event = EvictionEvent(
                 strategy: candidate.strategy,
                 offset: offset,
                 checkpointType: droppedType,
@@ -1054,7 +1216,13 @@ final class PrefixCacheManager {
                 normalizedFlopEfficiency: candidate.score?.normalizedFlopEfficiency,
                 utility: candidate.score?.utility,
                 bodyDroppedSnapshotRefID: result.refID
-            ))
+            )
+            if event.isTerminal {
+                cumulativeCounters.terminalEvictions += 1
+            } else {
+                cumulativeCounters.recoveredEvictions += 1
+            }
+            events.append(event)
         }
         // Mark the first request that ever triggered eviction. The
         // actual inventory snapshot is deferred until `recordRequest`,
@@ -1121,6 +1289,8 @@ final class PrefixCacheManager {
         return PromptCacheTelemetrySnapshot(
             capturedAt: now,
             memoryBudgetBytes: memoryBudgetBytes,
+            budgetCeilingBytes: budgetBand.ceilingBytes,
+            budgetFloorBytes: budgetFloorBytes(),
             residentSnapshotBytes: cacheStats.totalSnapshotBytes,
             partitionCount: cacheStats.partitionCount,
             totalNodeCount: cacheStats.totalNodeCount,
@@ -1128,11 +1298,97 @@ final class PrefixCacheManager {
             snapshotsByType: snapshotsByType,
             ssd: store.ssdDiagnosticsSnapshot(),
             tuner: tuner,
+            counters: cumulativeCounters,
+            estimates: evictionConfig.estimates,
             trees: trees
         )
     }
 
+    /// Test-only: zero the lifetime counters so a scenario can assert
+    /// deltas from a known baseline.
+    func cumulativeCountersResetForTesting() {
+        cumulativeCounters = PromptCacheCumulativeCounters()
+    }
+
+    // MARK: - Measured-seconds estimators
+
+    /// Fold one observed prefill into the rolling FLOPs/s estimate the
+    /// **Eviction Configuration** carries. Called by the **Server
+    /// Completion** module after each real chunked prefill.
+    func recordPrefillMeasurement(flops: Double, seconds: Double) {
+        evictionConfig.estimates = evictionConfig.estimates
+            .recordingPrefill(flops: flops, seconds: seconds)
+    }
+
+    /// Fold one observed SSD hydration into the rolling bytes/s
+    /// estimate. Called by **Snapshot Resolution** after a successful
+    /// `loadSync`.
+    func recordHydrationMeasurement(bytes: Int, seconds: Double) {
+        evictionConfig.estimates = evictionConfig.estimates
+            .recordingHydration(bytes: bytes, seconds: seconds)
+    }
+
     // MARK: - Private
+
+    /// **Snapshot Demotion**: persist an unbacked eviction victim to SSD
+    /// so the imminent body drop is recovered instead of terminal. A
+    /// no-op — leaving the drop terminal, today's pre-demotion behavior —
+    /// when the victim already has a ref, the SSD tier is disabled, no
+    /// payload extractor was injected, or the partition cannot write to
+    /// SSD (no model fingerprint).
+    ///
+    /// The enqueued descriptor carries the node's real recency converted
+    /// to wall clock, and the writer's commit will not re-stamp it — the
+    /// flagged invariant that a demotion never refreshes ledger recency.
+    /// The front door may still reject the write (budget, back-pressure);
+    /// then no ref attaches and the drop settles terminal, which is the
+    /// honest outcome.
+    private func demoteBeforeDrop(
+        _ candidate: EvictionCandidate,
+        now: ContinuousClock.Instant
+    ) {
+        guard candidate.node.state.ref == nil,
+              store.isSSDEnabled,
+              let demotionPayloadExtractor,
+              candidate.partitionKey.modelFingerprint != nil,
+              let snapshot = candidate.node.state.body
+        else { return }
+
+        registerSSDPartitionIfNeeded(for: candidate.partitionKey)
+        let ageSeconds = (now - candidate.node.lastAccessTime).seconds
+        let lastAccessAt = Date().timeIntervalSinceReferenceDate - ageSeconds
+
+        // The Survival Gate: a cold demotion that would not survive the
+        // SSD cut its own admission triggers skips the write entirely —
+        // churning warmer chains off the tier to store a colder one is
+        // a pure loss. The drop then settles terminal, which is the
+        // honest outcome. The gate scores the node's real (stale)
+        // recency, the same stamp the descriptor would carry. It runs
+        // *before* payload extraction: a demotion payload is always the
+        // full body, so its byte count is `memoryBytes` — gating on that
+        // spares a rejected victim the body-sized tensor copy.
+        guard store.survivalGateAdmits(
+            snapshot: snapshot,
+            payloadTotalBytes: snapshot.memoryBytes,
+            lastAccessAt: lastAccessAt,
+            scoringConfig: evictionConfig
+        ) else {
+            cumulativeCounters.survivalGateSkips += 1
+            return
+        }
+        guard let payload = demotionPayloadExtractor(snapshot) else { return }
+
+        store.admitSnapshot(
+            node: candidate.node,
+            tree: candidate.tree,
+            partitionKey: candidate.partitionKey,
+            pathFromRoot: candidate.tree.pathToNode(candidate.node),
+            snapshot: snapshot,
+            payload: payload,
+            demotionLastAccessAt: lastAccessAt,
+            scoringConfig: evictionConfig
+        )
+    }
 
     /// Pick one snapshot to evict from the supplied (already-sorted) trees.
     ///
@@ -1156,17 +1412,25 @@ final class PrefixCacheManager {
     ///    holds in degenerate cases like a zero-budget drain.
     private func findEvictionCandidate(
         now: ContinuousClock.Instant,
-        orderedTrees: [TokenRadixTree],
-        preferredTree: TokenRadixTree? = nil
+        orderedPartitions: [(key: CachePartitionKey, tree: TokenRadixTree)],
+        preferred: (key: CachePartitionKey, tree: TokenRadixTree)? = nil,
+        protected: Set<ObjectIdentifier> = []
     ) -> EvictionCandidate? {
+        func unprotected(_ nodes: [RadixTreeNode]) -> [RadixTreeNode] {
+            protected.isEmpty
+                ? nodes
+                : nodes.filter { !protected.contains(ObjectIdentifier($0)) }
+        }
+
         // 1. Preferred utility — writing-partition-first.
-        if let preferredTree {
-            let preferredCandidates = preferredTree.eligibleEvictionNodes()
+        if let preferred {
+            let preferredCandidates = unprotected(preferred.tree.eligibleEvictionNodes())
             if let victim = EvictionPolicy.selectVictim(
                 candidates: preferredCandidates, now: now, config: evictionConfig
             ) {
                 return EvictionCandidate(
-                    tree: preferredTree,
+                    partitionKey: preferred.key,
+                    tree: preferred.tree,
                     node: victim.node,
                     strategy: .utility,
                     score: victim.score
@@ -1175,21 +1439,22 @@ final class PrefixCacheManager {
         }
 
         // 2. Global utility — spill to other partitions.
-        var nodeToTree: [ObjectIdentifier: TokenRadixTree] = [:]
+        var partitionByNode: [ObjectIdentifier: (key: CachePartitionKey, tree: TokenRadixTree)] = [:]
         var candidates: [RadixTreeNode] = []
-        for tree in orderedTrees where tree !== preferredTree {
-            for node in tree.eligibleEvictionNodes() {
-                nodeToTree[ObjectIdentifier(node)] = tree
+        for partition in orderedPartitions where partition.tree !== preferred?.tree {
+            for node in unprotected(partition.tree.eligibleEvictionNodes()) {
+                partitionByNode[ObjectIdentifier(node)] = partition
                 candidates.append(node)
             }
         }
         if let victim = EvictionPolicy.selectVictim(
                candidates: candidates, now: now, config: evictionConfig
            ),
-           let tree = nodeToTree[ObjectIdentifier(victim.node)]
+           let partition = partitionByNode[ObjectIdentifier(victim.node)]
         {
             return EvictionCandidate(
-                tree: tree,
+                partitionKey: partition.key,
+                tree: partition.tree,
                 node: victim.node,
                 strategy: .utility,
                 score: victim.score
@@ -1197,13 +1462,14 @@ final class PrefixCacheManager {
         }
 
         // 3. Preferred fallback — oldest snapshot in the writing partition.
-        if let preferredTree,
-           let oldest = preferredTree.allSnapshotNodes().min(
+        if let preferred,
+           let oldest = unprotected(preferred.tree.allSnapshotNodes()).min(
                by: { $0.lastAccessTime < $1.lastAccessTime }
            )
         {
             return EvictionCandidate(
-                tree: preferredTree,
+                partitionKey: preferred.key,
+                tree: preferred.tree,
                 node: oldest,
                 strategy: .fallback,
                 score: nil
@@ -1211,13 +1477,17 @@ final class PrefixCacheManager {
         }
 
         // 4. Global fallback — oldest snapshot anywhere.
-        return orderedTrees
+        return orderedPartitions
             .lazy
-            .flatMap { tree in tree.allSnapshotNodes().lazy.map { (tree: tree, node: $0) } }
+            .flatMap { partition in
+                unprotected(partition.tree.allSnapshotNodes())
+                    .lazy.map { (partition: partition, node: $0) }
+            }
             .min(by: { $0.node.lastAccessTime < $1.node.lastAccessTime })
             .map { candidate in
                 EvictionCandidate(
-                    tree: candidate.tree,
+                    partitionKey: candidate.partition.key,
+                    tree: candidate.partition.tree,
                     node: candidate.node,
                     strategy: .fallback,
                     score: nil

@@ -55,6 +55,11 @@ regressions the correctness runner can't see.
 Benchmark-shaped siblings (informational, not gates):
 `scripts/dev.sh prefill-step-benchmark` and `scripts/dev.sh paroquant-vlm-smoke`.
 
+`scripts/dev.sh trace-replay` is the odd one out: it needs **no loaded
+model**. It replays the Completion Trace Log corpus through the offline
+LRU-baseline harness (`TraceReplayHarness`, PRD #82 slice #85) and writes
+the report to `benchmark/trace-replay/latest.log`.
+
 ## Gotchas
 
 - `-only-testing` filters must target **suite** granularity. A method-granularity
@@ -64,5 +69,8 @@ Benchmark-shaped siblings (informational, not gates):
   the `.xcresult` bundle:
   `xcrun xcresulttool get test-results tests --path <bundle>.xcresult`.
 - Known flake (not a regression):
-  `WarmStartTests/warmStartRebuildsFromDirectoryWalkAfterCorruption` can fail when
-  co-bundled with `PrefixCacheManagerTests` in one test run; it passes solo.
+  `WarmStartTests/warmStartRebuildsFromDirectoryWalkAfterCorruption` can fail in
+  any run (solo included). The window: `SnapshotLedger.persistNow` clears
+  `manifestDirty` under the lock but writes the manifest file after unlocking,
+  so the test's `flushManifestForTesting` can no-op while the debounce task's
+  write is still in flight and the `fileExists` check lands first.

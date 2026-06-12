@@ -108,12 +108,29 @@ _Avoid_: body-removable, resident snapshot.
 The in-memory authority over the SSD prefix-cache tier — which snapshots are
 resident, the byte budget, recency, and the durability of that record
 (`manifest.json` + `_meta.json`, including the corrupt-manifest rebuild and the
-type-protected LRU cut, which runs atomically inside `admit`). Lock-based and
+type-protected utility cut — terminal-loss **Recovery Cost** scoring under the
+shared `alpha`, `.system` chains hard-protected — which runs atomically inside
+`admit`). Lock-based and
 `nonisolated`, never an actor — it is reached from the off-MainActor `loadSync`
 (ADR-0001). It returns *what changed*; `SSDSnapshotStore` (the writer queue plus
 `.safetensors` body I/O) performs the effects outside any lock.
 _Avoid_: Snapshot Manifest Store, manifest-as-cold-path-only, eviction effects as
 ledger work (those are the store's).
+
+**Survival Gate**:
+The SSD admission pre-check derived from the cut itself: an incoming chain is
+written only if its terminal-loss utility would survive the eviction its own
+admission triggers — otherwise the write is skipped (a demotion terminal-drops;
+a leaf stays RAM-only with supersession *preserve*). Bites only under budget
+contention; an unfilled ledger admits everything. End-of-turn leaf admissions
+bypass the gate — the just-finished leaf is the highest-reuse object in the
+system and its extension write is suffix-sized.
+_Avoid_: judicious admission (the paper mechanism this derives, not copies),
+admission policy (vague), write filter.
+
+> **Flagged ambiguity — "gate".** The **Survival Gate** decides whether an SSD
+> write happens at all; the **Leaf Extension Admission** worth-it gate decides
+> the *shape* of a write that is already happening (suffix vs full). Say which.
 
 > **Flagged ambiguity — Snapshot Ledger vs SSDSnapshotStore.** The Ledger is the
 > in-memory authority plus manifest durability; `SSDSnapshotStore` is the writer
@@ -859,26 +876,93 @@ capability grab-bag (it is the load-time, directory-derived facts only).
 > to score with. The fallback lives once, in the identity's construction, instead
 > of `??` defaults at call sites.
 
+### Cache memory budget
+
+**Pressure-Reactive Budget**:
+The RAM-tier byte budget as a band, not a constant: a load-time auto-sized
+ceiling, a current value pushed down by OS memory-pressure events and regrown
+with hysteresis when pressure clears, never below the **Budget Floor**. The
+cache is greedy when RAM is idle, polite when it is contested.
+_Avoid_: static budget, memoryBudgetBytes-as-constant, cache size limit.
+
+**Budget Floor**:
+The lower bound of the **Pressure-Reactive Budget**: enough RAM to keep the
+`.system` chains and the *single* most-recently-extended leaf resident — the
+snapshots that buy the next turn's near-instant TTFT. Content-defined, not a
+fixed byte count, and deliberately minimal and dumb: a last-resort survival
+set at critical pressure, never the protection mechanism (protecting the tall
+main-agent leaf against subagent churn is the eviction score's job).
+_Avoid_: minimum cache size, reserved bytes, fixed floor, per-partition floor,
+workload heuristics in the floor.
+
+**Snapshot Demotion**:
+Moving a snapshot's body out of RAM while keeping it recoverable: persist to
+SSD if not already backed, then drop the RAM body — trading a future
+re-prefill for a far cheaper hydration. The first response to *any* RAM-tier
+shrink — pressure events and ordinary evict-to-fit alike; outright dropping
+is the fallback when SSD backing is unavailable.
+_Avoid_: spill, flush, evict-to-SSD, eviction (terminal — a demotion is
+recoverable).
+
+> **Flagged invariant — demotion never refreshes recency.** A demotion write
+> must not touch the ledger's `lastAccessAt`: demoted bodies are the *least*
+> valuable, and refreshing them would make every pressure event invert the
+> SSD tier's recency signal. Only hydrations and extensions refresh.
+
+> **Flagged ambiguity — "budget".** The **Pressure-Reactive Budget** is the
+> RAM-tier band; the **Snapshot Ledger** keeps its own SSD byte budget (a user
+> setting, static). Unqualified near the cache, say which tier.
+
+> **Flagged distinction — demotion vs eviction vs preserve.** **Snapshot
+> Demotion** removes a RAM body but keeps the snapshot hittable via SSD;
+> *eviction* is terminal loss (RAM drop without backing, or the SSD-tier cut);
+> supersession *preserve* keeps an ancestor's SSD backing after a RAM-only
+> leaf admission. All three drop RAM bodies; they differ in what survives.
+
 ### Eviction tuning
+
+**Recovery Cost**:
+What the next hit pays if a snapshot leaves a tier — the tier-aware F in
+eviction scoring. Hydration cost for an SSD-backed RAM body (a **Snapshot
+Demotion** is recoverable); re-prefill FLOPs where loss is terminal — an
+unbacked RAM drop or the SSD-tier cut. Denominated in seconds via rolling
+measured device estimates (prefill FLOPs/s, hydration bytes/s) — never guessed
+constants — so hydration and re-prefill compare in one unit. Replaces the
+single-tier Marconi reading of F as the FLOPs a snapshot embodies.
+_Avoid_: FLOP savings (the embodied-FLOPs reading), flops-per-byte
+(unqualified — density flattens for backed bodies), parentRelativeFlops (one
+ingredient, not the concept).
+
+> **Flagged consequence — where α earns its keep.** Among SSD-backed RAM
+> bodies, recovery cost per byte is a constant, so the density term goes flat
+> and demotion ordering degenerates to recency (LRU — correctly). The α-blend
+> only changes outcomes where loss is terminal: the SSD-tier cut and unbacked
+> RAM eviction.
 
 **Eviction Configuration**:
 The `(flopProfile, alpha)` pair the prefix cache scores eviction against — the
 single mutable cell, owned by `PrefixCacheManager`. `flopProfile` is set once from
-**Model Identity** when the cache is built; `alpha` starts at `0` (LRU within the
-eligible set) and is adapted at runtime by the **AlphaTuner**. `EvictionPolicy`
+**Model Identity** when the cache is built; `alpha` starts from the persisted
+per-model-fingerprint value (an offline-trace-seeded default on first run) and
+keeps adapting at runtime via the **AlphaTuner**. `EvictionPolicy`
 stays a pure-function namespace taking the configuration **by value**, so every
 scorer gets a snapshot it cannot alias.
 _Avoid_: `EvictionPolicy.modelProfile` / `.alpha` (retired statics), eviction
-settings (not a user **Setting**), model profile as a global.
+settings (not a user **Setting**), model profile as a global, alpha-starts-at-zero
+(the retired cold-start).
 
 **AlphaTuner inversion**:
 The **AlphaTuner** is constructed with the production `flopProfile`; each
-grid-search replay builds a sandbox cache carrying its own candidate `alpha` (no
+grid-search replay builds a sandbox carrying its own candidate `alpha` (no
 shared mutable register), and the tuned winner returns through
-`recordRequest(...) -> Double?` for the manager to assign. The tuner never holds a
-back-reference to the manager.
+`recordRequest(...) -> Double?` for the manager to assign — damped, never a
+jump. The tuner never holds a back-reference to the manager. Tuning is
+continuous (a sliding window retuned on terminal-eviction pressure, not a
+one-shot bootstrap) and the result is persisted per model fingerprint, so
+sessions inherit instead of relearning — on a single-user Mac, persistence
+does the work that traffic volume does in the cloud.
 _Avoid_: writing a global alpha, tuner→manager callbacks or weak back-references,
-continuous retuning (out of scope).
+one-shot bootstrap / first-eviction phase machine (the retired lifecycle).
 
 > **Flagged ambiguity — "profile" vs "config".** The **flop profile** is the
 > immutable per-architecture cost model; the **Eviction Configuration** is the

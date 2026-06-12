@@ -21,6 +21,19 @@ struct PromptCacheKPIStrip: View {
         return Double(snapshot.residentSnapshotBytes) / Double(snapshot.memoryBudgetBytes)
     }
 
+    /// RAM tile detail: utilization, plus the **Pressure-Reactive
+    /// Budget** ceiling whenever pressure has squeezed the current
+    /// budget below it — the band is invisible while the cache is
+    /// unpressured.
+    private var ramDetail: String {
+        let percent = PromptCacheFormatting.percent(memoryRatio)
+        guard let snapshot,
+              snapshot.budgetCeilingBytes > 0,
+              snapshot.memoryBudgetBytes < snapshot.budgetCeilingBytes
+        else { return percent }
+        return "\(percent) · ceiling \(PromptCacheFormatting.bytes(snapshot.budgetCeilingBytes))"
+    }
+
     private var ssdDetail: String {
         guard let snapshot, snapshot.ssd.enabled else { return "disabled" }
         if snapshot.ssd.pendingCount > 0 {
@@ -51,7 +64,7 @@ struct PromptCacheKPIStrip: View {
                     used: snapshot?.residentSnapshotBytes ?? 0,
                     budget: snapshot?.memoryBudgetBytes ?? 0
                 ),
-                detail: PromptCacheFormatting.percent(memoryRatio),
+                detail: ramDetail,
                 symbol: "memorychip",
                 tint: memoryRatio > 0.9 ? .red : .blue
             ),
@@ -114,7 +127,49 @@ struct PromptCacheKPIStrip: View {
                 symbol: "dial.medium",
                 tint: .pink
             ),
+            PromptCacheMetricTile(
+                title: "Cache Wins",
+                value: PromptCacheFormatting.compactNumber(
+                    snapshot?.counters.hitTokens ?? 0
+                ),
+                detail: "\(snapshot?.counters.hydrations ?? 0) hydrations",
+                symbol: "bolt.badge.checkmark",
+                tint: .green
+            ),
+            PromptCacheMetricTile(
+                title: "Losses",
+                value: "\(snapshot?.counters.recoveredEvictions ?? 0)"
+                    + "/\(snapshot?.counters.terminalEvictions ?? 0)",
+                detail: "recovered/terminal",
+                symbol: "arrow.down.to.line.compact",
+                tint: .red
+            ),
+            PromptCacheMetricTile(
+                title: "Device",
+                value: deviceEstimatesValue,
+                detail: deviceEstimatesDetail,
+                symbol: "gauge.with.needle",
+                tint: .brown
+            ),
         ]
+    }
+
+    private var deviceEstimatesValue: String {
+        guard let estimates = snapshot?.estimates else { return "—" }
+        return String(
+            format: "%.1f TFLOP/s", estimates.prefillFlopsPerSecond / 1e12
+        )
+    }
+
+    private var deviceEstimatesDetail: String {
+        guard let estimates = snapshot?.estimates else { return "no data" }
+        let bandwidth = String(
+            format: "SSD %.1f GB/s", estimates.hydrationBytesPerSecond / 1e9
+        )
+        guard estimates.prefillSampleCount > 0 || estimates.hydrationSampleCount > 0 else {
+            return bandwidth + " · defaults"
+        }
+        return bandwidth
     }
 
     private var tunerValue: String {

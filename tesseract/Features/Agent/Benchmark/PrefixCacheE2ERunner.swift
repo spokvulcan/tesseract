@@ -1005,6 +1005,70 @@ final class PrefixCacheE2ERunner {
                 detail: "cachedTokens=\(requestX3.cachedTokens) expected > 0 (new user, same system)"
             ))
 
+            // ── Step Y: Snapshot Demotion (PRD #82 slice #87) ──
+            // Shrink the RAM budget to force every resident body out of
+            // RAM. With the SSD tier on, every drop must settle
+            // recoverable — Snapshot Demotion for unbacked bodies, plain
+            // body drop for write-through-backed ones — never terminal.
+            // The follow-up continuation request then hits at depth
+            // again, served by hydration instead of re-prefill.
+            log("\n── Step Y: Snapshot Demotion (budget shrink → hydration re-hit) ──")
+            let preShrink = await ssdEngine.llmActor.promptCacheTelemetrySnapshot()
+            let priorBudget = preShrink?.memoryBudgetBytes ?? ssdConfig.budgetBytes
+            let preCounters = preShrink?.counters ?? PromptCacheCumulativeCounters()
+            log("  pre-shrink residentBytes=\(preShrink?.residentSnapshotBytes ?? 0) "
+                + "budget=\(priorBudget) recovered=\(preCounters.recoveredEvictions) "
+                + "terminal=\(preCounters.terminalEvictions)")
+
+            await ssdEngine.llmActor.setPrefixCacheBudgetBytes(1)
+            // Drain demotion writes and let the writer's MainActor commit
+            // callbacks land (state 3 → 5) so the re-hit below sees
+            // committed, hydratable refs.
+            await ssdEngine.llmActor.flushPrefixCache()
+            try? await Task.sleep(for: .milliseconds(200))
+            await ssdEngine.llmActor.setPrefixCacheBudgetBytes(priorBudget)
+
+            let postShrink = await ssdEngine.llmActor.promptCacheTelemetrySnapshot()
+            let postCounters = postShrink?.counters ?? PromptCacheCumulativeCounters()
+            let recoveredDelta = postCounters.recoveredEvictions - preCounters.recoveredEvictions
+            let terminalDelta = postCounters.terminalEvictions - preCounters.terminalEvictions
+            log("  post-shrink residentBytes=\(postShrink?.residentSnapshotBytes ?? 0) "
+                + "recoveredΔ=\(recoveredDelta) terminalΔ=\(terminalDelta)")
+            checks.append(CheckResult(
+                name: "requestY_budget_shrink_demotes_not_destroys",
+                passed: recoveredDelta > 0 && terminalDelta == 0,
+                detail: "recoveredΔ=\(recoveredDelta) (expected > 0), "
+                    + "terminalΔ=\(terminalDelta) (expected 0 — every drop SSD-recoverable)"
+            ))
+
+            let demotionContinuation: [BenchmarkMessage] = continuationMessages + [
+                .assistant(
+                    content: requestX2.assistantText,
+                    reasoning: requestX2.assistantReasoning
+                ),
+                .user("show the first ten lines of the largest file"),
+            ]
+            let requestY = try await runRequest(
+                engine: ssdEngine,
+                modelID: modelID,
+                systemPrompt: systemPrompt,
+                messages: demotionContinuation,
+                toolSpecs: toolSpecs,
+                parameters: params
+            )
+            let postY = await ssdEngine.llmActor.promptCacheTelemetrySnapshot()
+            let hydrationsDelta = (postY?.counters.hydrations ?? 0) - postCounters.hydrations
+            log("  Y cachedTokens=\(requestY.cachedTokens) "
+                + "ttft=\(String(format: "%.3f", requestY.ttftSeconds))s "
+                + "hydrationsΔ=\(hydrationsDelta)")
+            checks.append(CheckResult(
+                name: "requestY_hydration_restores_at_depth",
+                passed: requestY.cachedTokens > stablePrefixBaseline && hydrationsDelta > 0,
+                detail: "cachedTokens=\(requestY.cachedTokens) expected > "
+                    + "stable-prefix baseline=\(stablePrefixBaseline), "
+                    + "hydrationsΔ=\(hydrationsDelta) expected > 0 (served from SSD)"
+            ))
+
             log("  Unloading SSD engine…")
             await tearDownSSDEngine()
 

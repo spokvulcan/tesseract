@@ -53,6 +53,10 @@ struct TesseractApp: App {
             Self.runHarness("ParoQuant VLM smoke") {
                 try await ParoQuantVLMSmokeRunner(runner: BenchmarkRunner()).run()
             }
+        } else if args.contains("--trace-replay") {
+            Self.runHarness("Trace replay") {
+                try await TraceReplayRunner(arguments: args).run()
+            }
         }
     }
 

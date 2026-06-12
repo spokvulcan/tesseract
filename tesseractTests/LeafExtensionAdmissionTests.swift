@@ -86,25 +86,8 @@ private func makePayload(
     tokenOffset: Int,
     extending: SnapshotExtension? = nil
 ) -> SnapshotPayload {
-    SnapshotPayload(
-        tokenOffset: tokenOffset,
-        checkpointType: .leaf,
-        layers: [
-            SnapshotPayload.LayerPayload(
-                className: "KVCache",
-                state: [
-                    SnapshotPayload.ArrayPayload(
-                        data: Data(repeating: 0xAB, count: bytes),
-                        dtype: "bfloat16",
-                        shape: [1, bytes]
-                    )
-                ],
-                metaState: ["meta"],
-                offset: tokenOffset,
-                suffixBaseOffset: extending?.baseOffset
-            )
-        ],
-        extending: extending
+    PrefixCacheTestFixtures.makeLeafPayload(
+        bytes: bytes, tokenOffset: tokenOffset, extending: extending
     )
 }
 
@@ -369,8 +352,7 @@ struct LeafExtensionLedgerTests {
         #expect(ledger.transferringBaseIDsForTesting().isEmpty)
 
         let chain = try #require(ledger.chainForHydration(id: "head"))
-        #expect(chain.tokenOffset == 9)
-        #expect(chain.fileURLs.map(\.lastPathComponent) == [
+        #expect(chain.map(\.lastPathComponent) == [
             "base.safetensors", "head.safetensors",
         ])
 
@@ -577,7 +559,7 @@ struct LeafExtensionStoreTests {
         defer { cleanup(root) }
         // Hold the writer at its prelude so both items stay observably
         // queued; the gate releases it for the final drain.
-        let gate = Gate()
+        let gate = DrainGate()
         let store = makeStoreWithPartition(
             config: config,
             writerDrainPreludeForTesting: { await gate.wait() }
@@ -609,37 +591,13 @@ struct LeafExtensionStoreTests {
         #expect(store.transferringBaseIDsForTesting().isEmpty)
         #expect(store.pendingCountForTesting() == 1)
 
-        gate.open()
+        await gate.open()
         await store.flushAsync()
 
         // The base commits alone, un-superseded.
         #expect(store.residentDescriptorForTesting(id: "base") != nil)
         #expect(store.residentDescriptorForTesting(id: "head") == nil)
         #expect(store.currentSSDBytesForTesting() == 800)
-    }
-
-    /// Async latch for holding the writer loop at its test prelude.
-    nonisolated final class Gate: @unchecked Sendable {
-        private let lock = NSLock()
-        private var isOpen = false
-
-        func open() {
-            lock.lock()
-            isOpen = true
-            lock.unlock()
-        }
-
-        private func check() -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return isOpen
-        }
-
-        func wait() async {
-            while !check() {
-                try? await Task.sleep(for: .milliseconds(5))
-            }
-        }
     }
 
     @Test func hydrationComposesChainAcrossSegments() async throws {
@@ -807,20 +765,13 @@ struct LeafExtensionSupersessionPolicyTests {
     )
 
     private func makeFixture(ssdBudgetBytes: Int = 1_000_000) -> Fixture {
-        let root = makeScratchDir()
-        let config = SSDPrefixCacheConfig(
-            enabled: true,
-            rootURL: root,
-            budgetBytes: ssdBudgetBytes,
-            maxPendingBytes: 10_000_000
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: "leaf-extension-admission",
+            ramBudgetBytes: 10_000_000,
+            ssdBudgetBytes: ssdBudgetBytes
         )
-        let store = TieredSnapshotStore(ssdConfig: config)
         let key = makePartitionKey()
         store.registerPartition(makePartitionMeta(), for: key)
-        let manager = PrefixCacheManager(
-            memoryBudgetBytes: 10_000_000,
-            tieredStore: store
-        )
         return (root, manager, store, key)
     }
 

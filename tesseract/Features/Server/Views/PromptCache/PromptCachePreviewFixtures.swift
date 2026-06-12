@@ -132,6 +132,8 @@ enum PromptCachePreviewFixtures {
         PromptCacheTelemetrySnapshot(
             capturedAt: Date(),
             memoryBudgetBytes: 256 * 1024 * 1024,
+            budgetCeilingBytes: 512 * 1024 * 1024,
+            budgetFloorBytes: 48 * 1024 * 1024,
             residentSnapshotBytes: ramBytes,
             partitionCount: 1,
             totalNodeCount: tree.nodeCount,
@@ -153,6 +155,18 @@ enum PromptCachePreviewFixtures {
                 alpha: 0.3,
                 bootstrapProgress: 4,
                 bootstrapTarget: 12
+            ),
+            counters: PromptCacheCumulativeCounters(
+                hitTokens: 184_320,
+                recoveredEvictions: 7,
+                terminalEvictions: 2,
+                hydrations: 5
+            ),
+            estimates: MeasuredSecondsEstimates(
+                prefillFlopsPerSecond: 1.8e12,
+                hydrationBytesPerSecond: 2.1e9,
+                prefillSampleCount: 12,
+                hydrationSampleCount: 5
             ),
             trees: [tree]
         )

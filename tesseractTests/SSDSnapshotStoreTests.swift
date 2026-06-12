@@ -947,39 +947,6 @@ struct SSDSnapshotStoreTests {
         }
     }
 
-    /// Test-only gate for pausing the detached writer until a test
-    /// has finished building the pending-queue state it wants to
-    /// assert against.
-    private actor DrainGate {
-        private var isOpen = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
-
-        func wait() async {
-            if isOpen {
-                return
-            }
-
-            await withCheckedContinuation { continuation in
-                if isOpen {
-                    continuation.resume()
-                    return
-                }
-                waiters.append(continuation)
-            }
-        }
-
-        func open() {
-            if isOpen {
-                return
-            }
-            isOpen = true
-            let currentWaiters = waiters
-            waiters.removeAll()
-
-            currentWaiters.forEach { $0.resume() }
-        }
-    }
-
     /// Install a sink for the duration of a single test. Returns the
     /// sink so the test can inspect its captured lines, and a closure
     /// the test must defer-call to remove the sink from the registry.

@@ -267,14 +267,45 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         writerTask?.cancel()
     }
 
+    /// The **Survival Gate** pre-check, forwarded to the **Snapshot
+    /// Ledger** (which owns the cut this simulates). Pure read — see
+    /// `SnapshotLedger.survivesAdmissionCut`. `nonisolated` like
+    /// `tryEnqueue`, so the MainActor front doors call it without a
+    /// hop.
+    func survivesAdmissionCut(
+        tokenOffset: Int,
+        totalBytes: Int,
+        checkpointType: HybridCacheSnapshot.CheckpointType,
+        lastAccessAt: TimeInterval,
+        scoring config: EvictionConfiguration
+    ) -> Bool {
+        ledger.survivesAdmissionCut(
+            tokenOffset: tokenOffset,
+            totalBytes: totalBytes,
+            checkpointType: checkpointType,
+            lastAccessAt: lastAccessAt,
+            scoring: config
+        )
+    }
+
     /// Synchronous front-door admission. Acquires the lock, enforces
     /// the `maxPendingBytes` byte budget via drop-oldest-pending,
     /// pushes the item onto the writer's pending queue, and wakes
     /// the writer. Never suspends and never crosses an actor
     /// boundary — safe to call from inside a MainActor closure.
+    ///
+    /// `refreshRecencyAtCommit: false` marks a **Snapshot Demotion**:
+    /// the writer's commit preserves the descriptor's own (stale)
+    /// `lastAccessAt` instead of re-stamping it.
+    ///
+    /// `scoringConfig` rides the queue to the ledger's admission cut —
+    /// see `PendingWrite.scoringConfig`. The default (α = 0) keeps the
+    /// cut at plain type-protected LRU.
     func tryEnqueue(
         payload: SnapshotPayload,
-        descriptor: PersistedSnapshotDescriptor
+        descriptor: PersistedSnapshotDescriptor,
+        refreshRecencyAtCommit: Bool = true,
+        scoringConfig: EvictionConfiguration = EvictionConfiguration()
     ) -> TryEnqueueResult {
         // Parse the wire-format checkpoint type before taking the lock;
         // no sense holding the lock for a parse that can fail.
@@ -370,7 +401,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         pending.append(PendingWrite(
             payload: payload,
             descriptor: descriptor,
-            extendingBaseID: extendingBaseID
+            extendingBaseID: extendingBaseID,
+            refreshRecencyAtCommit: refreshRecencyAtCommit,
+            scoringConfig: scoringConfig
         ))
         pendingBytes += payloadBytes
 
@@ -599,7 +632,10 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         //    decision and a list of committed residents it evicted to
         //    make room, under its own lock. File deletion and `onDrop`
         //    callbacks happen here, outside that lock.
-        let (admission, evicted) = ledger.admit(item.descriptor)
+        let (admission, evicted) = ledger.admit(
+            item.descriptor,
+            scoring: item.scoringConfig
+        )
         // Each evicted resident gets its own admission-cut event
         // before the file delete + drop callback fire. The pair
         // (`ssdEvictAtAdmission` + `storageRefDropCallback(...,
@@ -717,7 +753,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         //    tombstone self-veto or a lost base — drop the own file
         //    (inherited files still belong to the surviving base entry,
         //    or were already deleted with it).
-        guard ledger.commit(descriptorToWrite, consumingBase: item.extendingBaseID) else {
+        guard ledger.commit(
+            descriptorToWrite,
+            consumingBase: item.extendingBaseID,
+            refreshRecency: item.refreshRecencyAtCommit
+        ) else {
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
             releasePendingBytes(item.payload.totalBytes)
             return
@@ -993,6 +1033,17 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         /// chain the commit folds and whose LRU shield every terminal
         /// path must release.
         let extendingBaseID: String?
+        /// `false` for a **Snapshot Demotion**: the commit must keep
+        /// the descriptor's stale `lastAccessAt` instead of re-stamping
+        /// it, so demoted bodies never look hot to the SSD LRU.
+        let refreshRecencyAtCommit: Bool
+        /// The **Eviction Configuration** snapshot taken at enqueue time
+        /// (MainActor) — the shared α, FLOP profile, and measured
+        /// estimates the ledger's terminal-loss cut scores with. Carried
+        /// by value because the cut runs on the writer thread, where the
+        /// manager's live configuration is unreachable; millisecond
+        /// staleness is irrelevant to a damped α.
+        let scoringConfig: EvictionConfiguration
     }
 }
 
@@ -1061,7 +1112,7 @@ extension SSDSnapshotStore {
         // ordinary full snapshot, several for an extension-built leaf.
         // A missing entry means the resident was evicted between the
         // lookup and this hydration.
-        guard let chain = ledger.chainForHydration(id: snapshotRef.snapshotID) else {
+        guard let chainURLs = ledger.chainForHydration(id: snapshotRef.snapshotID) else {
             return failLoad(
                 snapshotRef,
                 reason: .notResident,
@@ -1074,8 +1125,8 @@ extension SSDSnapshotStore {
         // `.mappedIfSafe` lets the kernel page in on demand so
         // ~200 MiB snapshots do not spike peak RSS during hydration.
         var segmentData: [Data] = []
-        segmentData.reserveCapacity(chain.fileURLs.count)
-        for url in chain.fileURLs {
+        segmentData.reserveCapacity(chainURLs.count)
+        for url in chainURLs {
             do {
                 segmentData.append(try Data(contentsOf: url, options: .mappedIfSafe))
             } catch {
@@ -1216,15 +1267,11 @@ extension SSDSnapshotStore {
             }
 
             let lastLayerHeader = parsed[contributors.last!].header.layers[layerIndex]
-            guard contributors.dropFirst().allSatisfy({
+            guard contributors.allSatisfy({
                 let layer = parsed[$0].header.layers[layerIndex]
                 return layer.className == lastLayerHeader.className
                     && layer.arrays.count == lastLayerHeader.arrays.count
-            }), parsed[contributors[0]].header.layers[layerIndex].className
-                == lastLayerHeader.className,
-                parsed[contributors[0]].header.layers[layerIndex].arrays.count
-                == lastLayerHeader.arrays.count
-            else {
+            }) else {
                 throw SSDLoadError.segmentMismatch(
                     "class or array-slot mismatch at layer \(layerIndex)"
                 )

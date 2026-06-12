@@ -750,16 +750,11 @@ final class TokenRadixTree {
 
     private static func telemetryPathHash(_ tokens: [Int]) -> String {
         guard !tokens.isEmpty else { return "root" }
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        var hash = TraceBlockDigest.fnvOffsetBasis
         for token in tokens {
-            var value = UInt64(bitPattern: Int64(token))
-            for _ in 0..<8 {
-                hash ^= value & 0xff
-                hash &*= 0x0000_0100_0000_01b3
-                value >>= 8
-            }
+            TraceBlockDigest.fold(token: token, into: &hash)
         }
-        return String(format: "%016llx", hash)
+        return TraceBlockDigest.hexDigest(hash)
     }
 }
 

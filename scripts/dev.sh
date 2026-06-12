@@ -265,6 +265,12 @@ cmd_paroquant_vlm_smoke() {
     _run_loaded_model_check --paroquant-vlm-smoke paroquant-vlm-smoke
 }
 
+cmd_trace_replay() {
+    # No loaded model needed — replays the Completion Trace Log corpus
+    # (PRD #82, slice #85) through the offline LRU-baseline harness.
+    _run_loaded_model_check --trace-replay trace-replay
+}
+
 cmd_archive() {
     local archive_path="$PROJECT_DIR/build/Tesseract.xcarchive"
     echo "Archiving tesseract for App Store (arm64 only)..."
@@ -365,6 +371,7 @@ usage() {
     echo "  hybrid-cache-correctness Build + run Task 2.2 logit-equivalence harness (mid-prefill restore bitwise check)"
     echo "  prefill-step-benchmark   Build + run Task 3.2 prefill-step-size benchmark sweep"
     echo "  paroquant-vlm-smoke      Build + run VLM load smoke for PARO models (PR #164 C5 gate)"
+    echo "  trace-replay             Build + run offline trace-replay harness (PRD #82 slice #85; no model needed)"
     echo "  archive     Create release archive for App Store submission"
     echo "  resolve     Resolve SPM package dependencies"
     echo "  clean       Clean build artifacts and derived data"
@@ -383,6 +390,7 @@ case "${1:-}" in
     hybrid-cache-correctness) cmd_hybrid_cache_correctness ;;
     prefill-step-benchmark)   cmd_prefill_step_benchmark ;;
     paroquant-vlm-smoke)      cmd_paroquant_vlm_smoke ;;
+    trace-replay)             cmd_trace_replay ;;
     archive)     cmd_archive ;;
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;

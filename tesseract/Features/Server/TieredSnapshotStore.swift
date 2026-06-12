@@ -185,6 +185,32 @@ final class TieredSnapshotStore: SnapshotStore {
         ssdStore?.registerPartition(meta, digest: key.partitionDigest)
     }
 
+    // MARK: - Survival Gate
+
+    /// The **Survival Gate** (PRD #82 slice #90): before an SSD write,
+    /// would the incoming chain survive the eviction its own admission
+    /// triggers? `true` when the SSD tier is disabled — there is no
+    /// write to gate, and the caller's `admitSnapshot` will no-op
+    /// anyway. `lastAccessAt` defaults to now (a fresh capture); a
+    /// **Snapshot Demotion** passes the node's real stale stamp, which
+    /// is what lets the gate catch cold demotions against warmer
+    /// chains.
+    func survivalGateAdmits(
+        snapshot: HybridCacheSnapshot,
+        payloadTotalBytes: Int,
+        lastAccessAt: TimeInterval? = nil,
+        scoringConfig: EvictionConfiguration
+    ) -> Bool {
+        guard let ssdStore else { return true }
+        return ssdStore.survivesAdmissionCut(
+            tokenOffset: snapshot.tokenOffset,
+            totalBytes: payloadTotalBytes,
+            checkpointType: snapshot.checkpointType,
+            lastAccessAt: lastAccessAt ?? Date().timeIntervalSinceReferenceDate,
+            scoring: scoringConfig
+        )
+    }
+
     // MARK: - SSD admission (state 1 → state 2)
 
     /// Build a descriptor from a captured snapshot's **domain inputs**,
@@ -225,21 +251,31 @@ final class TieredSnapshotStore: SnapshotStore {
         partitionKey: CachePartitionKey,
         pathFromRoot: [Int],
         snapshot: HybridCacheSnapshot,
-        payload: SnapshotPayload
+        payload: SnapshotPayload,
+        demotionLastAccessAt: TimeInterval? = nil,
+        scoringConfig: EvictionConfiguration = EvictionConfiguration()
     ) -> SnapshotRef? {
         guard let ssdStore else { return nil }
 
+        // A non-nil `demotionLastAccessAt` marks a **Snapshot Demotion**:
+        // the descriptor carries the node's real (stale) recency and the
+        // writer's commit must not re-stamp it — demoted bodies are the
+        // least valuable, and refreshing them would invert the SSD
+        // tier's recency signal on every pressure event.
         let descriptor = SnapshotLedger.makeDescriptor(
             partitionKey: partitionKey,
             pathFromRoot: pathFromRoot,
             snapshot: snapshot,
             payloadBytes: payload.totalBytes,
-            segmentBaseOffset: payload.extending?.baseOffset ?? 0
+            segmentBaseOffset: payload.extending?.baseOffset ?? 0,
+            lastAccessAt: demotionLastAccessAt
         )
 
         guard case .accepted(let ref) = ssdStore.tryEnqueue(
             payload: payload,
-            descriptor: descriptor
+            descriptor: descriptor,
+            refreshRecencyAtCommit: demotionLastAccessAt == nil,
+            scoringConfig: scoringConfig
         ) else {
             return nil
         }

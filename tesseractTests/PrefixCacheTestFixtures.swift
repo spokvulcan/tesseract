@@ -49,6 +49,87 @@ enum PrefixCacheTestFixtures {
         )
     }
 
+    /// Single-layer leaf payload whose one KV array carries `bytes` raw
+    /// bytes; `extending` marks it as a suffix segment past the base.
+    /// For tests that only need the payload's byte accounting, never
+    /// its tensor content. `nonisolated` — pure value construction,
+    /// callable from the nonisolated store-level suites.
+    nonisolated static func makeLeafPayload(
+        bytes: Int,
+        tokenOffset: Int = 10,
+        extending: SnapshotExtension? = nil
+    ) -> SnapshotPayload {
+        SnapshotPayload(
+            tokenOffset: tokenOffset,
+            checkpointType: .leaf,
+            layers: [
+                SnapshotPayload.LayerPayload(
+                    className: "KVCache",
+                    state: [
+                        SnapshotPayload.ArrayPayload(
+                            data: Data(repeating: 0xAB, count: bytes),
+                            dtype: "bfloat16",
+                            shape: [1, bytes]
+                        )
+                    ],
+                    metaState: ["meta"],
+                    offset: tokenOffset,
+                    suffixBaseOffset: extending?.baseOffset
+                )
+            ],
+            extending: extending
+        )
+    }
+
+    /// Scratch-rooted SSD-enabled `TieredSnapshotStore` +
+    /// `PrefixCacheManager` pair. The caller owns the returned root and
+    /// should `defer`-delete it; partitions are registered by the
+    /// caller (each suite uses its own key).
+    static func makeSSDBackedManager(
+        label: String,
+        ramBudgetBytes: Int,
+        ssdBudgetBytes: Int = 10_000_000,
+        demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)? = nil
+    ) -> (manager: PrefixCacheManager, store: TieredSnapshotStore, root: URL) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(label)-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let store = TieredSnapshotStore(ssdConfig: SSDPrefixCacheConfig(
+            enabled: true,
+            rootURL: root,
+            budgetBytes: ssdBudgetBytes,
+            maxPendingBytes: 10_000_000
+        ))
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: ramBudgetBytes,
+            tieredStore: store,
+            demotionPayloadExtractor: demotionPayloadExtractor
+        )
+        return (manager, store, root)
+    }
+
+    /// Admit a uniform-size RAM leaf at `tokens`. The shared shorthand
+    /// for "one conversation turn landed" across the eviction /
+    /// demotion / pressure / counters suites.
+    @discardableResult
+    static func admitUniformLeaf(
+        _ manager: PrefixCacheManager,
+        tokens: [Int],
+        partitionKey: CachePartitionKey,
+        storage: SnapshotAdmission.Storage = .ramOnly,
+        endOfTurn: Bool = true,
+        requestID: UUID? = nil
+    ) -> PrefixCacheManager.StoreDiagnostics {
+        manager.admit(SnapshotAdmission.leaf(
+            storedTokens: tokens,
+            snapshot: makeUniformSnapshot(offset: tokens.count, type: .leaf),
+            storage: storage,
+            partitionKey: partitionKey,
+            requestID: requestID,
+            endOfTurn: endOfTurn
+        )!)
+    }
+
     /// Build a leaf-only `AlphaTuner.RequestRecord` (no mid-prefill
     /// captures). Used by `AlphaTunerTests` state-machine tests where
     /// the snapshot mix doesn't matter.
@@ -69,6 +150,39 @@ enum PrefixCacheTestFixtures {
                 bytes: leafBytes
             )
         )
+    }
+}
+
+/// Test-only gate for pausing `SSDSnapshotStore`'s detached writer (via
+/// `writerDrainPreludeForTesting`) until a test has finished building
+/// the pending-queue state it wants to assert against.
+actor DrainGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            if isOpen {
+                continuation.resume()
+                return
+            }
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        if isOpen {
+            return
+        }
+        isOpen = true
+        let currentWaiters = waiters
+        waiters.removeAll()
+
+        currentWaiters.forEach { $0.resume() }
     }
 }
 

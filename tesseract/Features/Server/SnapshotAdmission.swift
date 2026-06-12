@@ -106,6 +106,15 @@ nonisolated struct SnapshotAdmission: Sendable {
     let kind: Kind
     let partitionKey: CachePartitionKey
     let requestID: UUID?
+    /// **Survival Gate** bypass (meaningful for `.leaf` only): an
+    /// end-of-turn leaf — the extraction edge's canonical leaf and the
+    /// speculative canonical leaf alike — is the highest-reuse object
+    /// in the system and always writes through without the gate's
+    /// pre-check. Every production leaf admission today is end-of-turn,
+    /// so this defaults `true`; a future non-end-of-turn leaf write
+    /// passes `false` and accepts gating (RAM-only degrade with
+    /// supersession *preserve* on rejection).
+    let leafIsEndOfTurn: Bool
 
     nonisolated var snapshots: [HybridCacheSnapshot] {
         entries.map(\.snapshot)
@@ -116,13 +125,15 @@ nonisolated struct SnapshotAdmission: Sendable {
         entries: NonEmpty<Entry>,
         kind: Kind,
         partitionKey: CachePartitionKey,
-        requestID: UUID?
+        requestID: UUID?,
+        leafIsEndOfTurn: Bool = true
     ) {
         self.fullPromptTokens = fullPromptTokens
         self.entries = entries
         self.kind = kind
         self.partitionKey = partitionKey
         self.requestID = requestID
+        self.leafIsEndOfTurn = leafIsEndOfTurn
     }
 
     nonisolated static func checkpoints(
@@ -161,7 +172,8 @@ nonisolated struct SnapshotAdmission: Sendable {
         snapshot: HybridCacheSnapshot,
         storage: Storage,
         partitionKey: CachePartitionKey,
-        requestID: UUID? = nil
+        requestID: UUID? = nil,
+        endOfTurn: Bool = true
     ) -> SnapshotAdmission? {
         guard let path = SnapshotAdmissionPath.validatingLeaf(
             offset: snapshot.tokenOffset,
@@ -178,7 +190,8 @@ nonisolated struct SnapshotAdmission: Sendable {
             entries: NonEmpty(first: entry),
             kind: .leaf,
             partitionKey: partitionKey,
-            requestID: requestID
+            requestID: requestID,
+            leafIsEndOfTurn: endOfTurn
         )
     }
 }

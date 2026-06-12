@@ -39,6 +39,12 @@ private nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let lookupMs: TimeInterval
     let restoreMs: TimeInterval
     let prefillMs: TimeInterval
+    /// Seconds `loadSync` spent materializing an SSD-resident body for
+    /// this request (`0` for RAM hits and misses). Feeds the
+    /// per-completion trace record.
+    let hydrationSeconds: TimeInterval
+    /// True when the restored snapshot was hydrated from the SSD tier.
+    let restoredFromSSD: Bool
     /// Total prompt tokens (full conversation, ignoring slicing).
     let promptTokenCount: Int
     /// Number of leading tokens skipped because the cache already covered them.
@@ -205,6 +211,13 @@ nonisolated final class ServerCompletion {
     /// awaits aborts instead of handing a live generation into model state
     /// that is being torn down.
     private var drainGeneration = 0
+
+    /// Durable per-completion trace log (PRD #82, slice #83): every
+    /// finished cache-aware completion appends one
+    /// `CompletionTraceRecord` — the replay corpus for the offline
+    /// harness and, later, the rebuilt tuner's window food. Owned here
+    /// (not per cache) so the corpus spans model loads.
+    private let completionTraceLog = CompletionTraceLog()
 
     /// The background **Speculative Canonical Prefill** task — at most one.
     /// Scheduled only when the module is quiescent (no active completion, no
@@ -509,6 +522,7 @@ nonisolated final class ServerCompletion {
         // boxing the whole drive closure is safe for the same reason
         // `mlxStartBox` is.
         let mlxStartBox = UnsafeSendableBox(mlxStart)
+        let traceLog = completionTraceLog
         let driveBox = UnsafeSendableBox<() async -> Void>({
             await Self.driveCompletion(
                 mlxStartBox: mlxStartBox,
@@ -518,6 +532,7 @@ nonisolated final class ServerCompletion {
                 requestID: requestID,
                 loadedModelWeightBytes: loadedModelWeightBytes,
                 prefixCache: prefixCache,
+                traceLog: traceLog,
                 startsInsideThinkBlock: startsInsideThinkBlock,
                 safeguardConfig: safeguardConfig,
                 loopCancel: loopCancel,
@@ -575,6 +590,7 @@ nonisolated final class ServerCompletion {
         requestID: UUID,
         loadedModelWeightBytes: Int64,
         prefixCache: PrefixCacheManager,
+        traceLog: CompletionTraceLog,
         startsInsideThinkBlock: Bool,
         safeguardConfig: ThinkingRepetitionDetector.Config,
         loopCancel: LateBoundCancel,
@@ -593,6 +609,10 @@ nonisolated final class ServerCompletion {
         // Set only when a canonical leaf landed: the **Speculative Canonical
         // Prefill** seed handed to the post-finish hook (issue #76).
         var speculativeSeed: SpeculativeCanonicalPrefill.Seed?
+        // Per-request eviction tallies for the trace record: terminal =
+        // body lost outright, recovered = a Snapshot Ref survived the drop.
+        var terminalEvictionTally = 0
+        var recoveredEvictionTally = 0
 
         drive: do {
             func handle(_ event: AgentGeneration) {
@@ -613,6 +633,11 @@ nonisolated final class ServerCompletion {
 
             func logEvictions(_ evictions: [PrefixCacheManager.EvictionEvent]) {
                 for event in evictions {
+                    if event.isTerminal {
+                        terminalEvictionTally += 1
+                    } else {
+                        recoveredEvictionTally += 1
+                    }
                     diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
                     // Body-drop with live Snapshot Ref → pending body-dropped
                     // or state 4→5 transition. Surface a separate
@@ -1139,7 +1164,7 @@ nonisolated final class ServerCompletion {
             let leafCapture = leafStoreForTuner
             let unkeyed = mlxStart.unkeyedReason != nil
             let keyPath = mlxStart.keySpace.keyPath
-            let (finalStats, finalBudgetBytes) = await MainActor.run {
+            let (finalStats, finalBudgetBytes, finalEstimates) = await MainActor.run {
                 // Unkeyed Completions stay out of the tuner's workload trace —
                 // they never participated in the cache this trace models.
                 if !unkeyed {
@@ -1151,7 +1176,11 @@ nonisolated final class ServerCompletion {
                         requestID: requestID
                     )
                 }
-                return (prefixCache.stats, prefixCache.memoryBudgetBytes)
+                return (
+                    prefixCache.stats,
+                    prefixCache.memoryBudgetBytes,
+                    prefixCache.evictionConfig.estimates
+                )
             }
             diagnosticsContext.log(PrefixCacheDiagnostics.MemoryEvent(
                 stats: finalStats,
@@ -1161,6 +1190,58 @@ nonisolated final class ServerCompletion {
                 peakMlxBytes: Int64(clamping: Memory.peakMemory),
                 mlxCacheLimitBytes: Int64(clamping: Memory.cacheLimit)
             ))
+
+            // Per-completion trace record (PRD #82, slice #83): one line in
+            // the replay corpus for every finished cache-aware completion.
+            // Unkeyed Completions return nil from `make`; requests whose
+            // stream closed without an `.info` event have no TTFT and emit
+            // nothing — same condition as the live `ttft` event.
+            if let completionInfo = outcome.completionInfo {
+                let restoredOffset: Int = {
+                    if case .hit(let offset, _, _) = mlxStart.lookupReason {
+                        return offset
+                    }
+                    return 0
+                }()
+                let record = CompletionTraceRecord.make(
+                    timestamp: Date().timeIntervalSinceReferenceDate,
+                    requestID: requestID,
+                    modelID: diagnosticsContext.modelID,
+                    partitionDigest: mlxStart.partitionKey.partitionDigest,
+                    unkeyedReason: mlxStart.unkeyedReason,
+                    keyPath: keyPath,
+                    admittedCheckpoints: capturedSnapshots.map { snap in
+                        TraceAdmittedSnapshot(
+                            offset: snap.tokenOffset,
+                            bytes: snap.memoryBytes,
+                            checkpointType: snap.checkpointType.wireString
+                        )
+                    },
+                    admittedLeaf: leafCapture.map { leaf in
+                        TraceAdmittedSnapshot(
+                            offset: leaf.storedTokens.count,
+                            bytes: leaf.bytes,
+                            checkpointType: HybridCacheSnapshot.CheckpointType.leaf.wireString
+                        )
+                    },
+                    ramBudgetBytes: finalBudgetBytes,
+                    restoredOffset: restoredOffset,
+                    restoredFromSSD: mlxStart.restoredFromSSD,
+                    hitTokens: mlxStart.skippedPrefillTokens,
+                    sharedPrefixLength: mlxStart.sharedPrefixLength,
+                    lookupSeconds: mlxStart.lookupMs,
+                    restoreSeconds: mlxStart.restoreMs,
+                    hydrationSeconds: mlxStart.hydrationSeconds,
+                    prefillSeconds: mlxStart.prefillMs,
+                    residualPromptSeconds: completionInfo.promptTime,
+                    terminalEvictionCount: terminalEvictionTally,
+                    recoveredEvictionCount: recoveredEvictionTally,
+                    deviceEstimates: finalEstimates
+                )
+                if let record {
+                    traceLog.append(record)
+                }
+            }
 
             continuation.finish()
         } catch is CancellationError {
@@ -1215,6 +1296,7 @@ nonisolated final class ServerCompletion {
         let promptStartsThinking = self.promptStartsThinking
         let modelFingerprint = self.modelFingerprint
         let imageKeying = self.modelIdentity?.imageKeying
+        let flopProfile = self.modelIdentity?.flopProfile ?? .fallback
         let ssdEnabled = self.ssdConfig?.enabled == true
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
@@ -1595,6 +1677,22 @@ nonisolated final class ServerCompletion {
                 prefillMs: prefillMs * 1000
             )))
 
+            // Fold the observed prefill into the rolling FLOPs/s estimate
+            // (slice #84) — a real measured operation on this device.
+            // Tiny residuals are timer noise, not throughput signal.
+            if newTokensToPrefill >= 64, prefillMs > 0 {
+                let prefillFlops = EvictionPolicy.parentRelativeFlops(
+                    nodeOffset: fullTokenCount,
+                    parentOffset: skippedTokens,
+                    profile: flopProfile
+                )
+                await MainActor.run {
+                    prefixCache.recordPrefillMeasurement(
+                        flops: prefillFlops, seconds: prefillMs
+                    )
+                }
+            }
+
             // 10. Split the driver's snapshots into stored checkpoints vs the
             // request-local transient boundary helpers, then extract payloads
             // inside this `container.perform` so `MLXArray.asData()` runs on
@@ -1653,6 +1751,8 @@ nonisolated final class ServerCompletion {
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
                 prefillMs: prefillMs,
+                hydrationSeconds: resolved.hydrationSeconds,
+                restoredFromSSD: resolved.hydratedFromSSD,
                 promptTokenCount: fullTokenCount,
                 skippedPrefillTokens: skippedTokens,
                 lookupReason: lookupResult.reason,
@@ -1744,6 +1844,8 @@ nonisolated final class ServerCompletion {
             lookupMs: 0,
             restoreMs: 0,
             prefillMs: prefillMs,
+            hydrationSeconds: 0,
+            restoredFromSSD: false,
             promptTokenCount: fullTokenCount,
             skippedPrefillTokens: 0,
             lookupReason: .missNoEntries,
@@ -1805,7 +1907,19 @@ nonisolated final class ServerCompletion {
                 memoryBudgetBytes: budget,
                 evictionConfig: EvictionConfiguration(flopProfile: flopProfile),
                 alphaTuner: AlphaTuner(flopProfile: flopProfile),
-                tieredStore: tieredStore
+                tieredStore: tieredStore,
+                // Snapshot Demotion's write-through extraction. Snapshot
+                // arrays are deep copies (`HybridCacheSnapshot.capture`),
+                // so extracting on MainActor here matches the AlphaTuner
+                // replay precedent rather than the container.perform rule
+                // for live model state.
+                demotionPayloadExtractor: { snapshot in
+                    Self.extractSnapshotPayload(snapshot)
+                },
+                // The Pressure-Reactive Budget's event feed. The manager
+                // holds the adapter strongly, so a model unload (which
+                // drops the cache) cancels the OS dispatch source too.
+                pressureSource: DispatchMemoryPressureSource()
             )
         }
         if ssdConfigSnapshot?.enabled == true, let fingerprint {

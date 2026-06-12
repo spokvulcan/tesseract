@@ -74,6 +74,8 @@ struct SnapshotLedgerTests {
         bytes: Int = 1000,
         lastAccessAt: Double = 0,
         pathFromRoot: [Int] = [1, 2, 3],
+        tokenOffset: Int? = nil,
+        inheritedSegments: [SnapshotSegment] = [],
         schemaVersion: Int = SnapshotManifestSchema.currentVersion,
         checkpointTypeOverride: String? = nil
     ) -> PersistedSnapshotDescriptor {
@@ -82,9 +84,10 @@ struct SnapshotLedgerTests {
             snapshotID: id,
             partitionDigest: digest,
             pathFromRoot: pathFromRoot,
-            tokenOffset: pathFromRoot.count,
+            tokenOffset: tokenOffset ?? pathFromRoot.count,
             checkpointType: checkpointTypeOverride ?? type.wireString,
             bytes: bytes,
+            inheritedSegments: inheritedSegments,
             createdAt: 100_000,
             lastAccessAt: lastAccessAt,
             fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
@@ -707,5 +710,126 @@ struct SnapshotLedgerTests {
             payloadBytes: 4096
         )
         #expect(descriptor.snapshotID != other.snapshotID)
+    }
+
+    // MARK: - Terminal-loss cut scoring (PRD #82 slice #89)
+
+    /// At `α = 0` (the construction default) the cut is byte-identical
+    /// to the pre-ADR-0011 type-protected LRU: the stalest non-system
+    /// resident goes first, no matter how tall its chain is.
+    @Test
+    func cutAtAlphaZeroIsPlainLRU() {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+        let ledger = makeLedgerWithPartition(budgetBytes: 2_500, root: root)
+        let now = Date().timeIntervalSinceReferenceDate
+
+        let tallStale = makeDescriptor(
+            id: "tall-stale", bytes: 1_000,
+            lastAccessAt: now - 3_600, tokenOffset: 50_000
+        )
+        let shortFresh = makeDescriptor(
+            id: "short-fresh", bytes: 1_000,
+            lastAccessAt: now - 1, tokenOffset: 100
+        )
+        ledger.seedDescriptorForTesting(tallStale)
+        ledger.seedDescriptorForTesting(shortFresh)
+
+        let (decision, evicted) = ledger.admit(makeDescriptor(bytes: 1_000))
+        #expect(decision == .admit)
+        #expect(evicted.map(\.snapshotID) == ["tall-stale"])
+    }
+
+    /// At `α > 0` terminal-loss utility takes over: the stale chain
+    /// whose re-prefill seconds per byte dwarf the fresh short one's is
+    /// shielded, and the cut victimizes the cheap-to-recreate resident
+    /// instead — the exact inversion of the LRU pick above.
+    @Test
+    func cutAtPositiveAlphaShieldsExpensiveChains() {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+        let ledger = makeLedgerWithPartition(budgetBytes: 2_500, root: root)
+        let now = Date().timeIntervalSinceReferenceDate
+
+        let tallStale = makeDescriptor(
+            id: "tall-stale", bytes: 1_000,
+            lastAccessAt: now - 3_600, tokenOffset: 50_000
+        )
+        let shortFresh = makeDescriptor(
+            id: "short-fresh", bytes: 1_000,
+            lastAccessAt: now - 1, tokenOffset: 100
+        )
+        ledger.seedDescriptorForTesting(tallStale)
+        ledger.seedDescriptorForTesting(shortFresh)
+
+        let (decision, evicted) = ledger.admit(
+            makeDescriptor(bytes: 1_000),
+            scoring: EvictionConfiguration(alpha: 2.0)
+        )
+        #expect(decision == .admit)
+        #expect(evicted.map(\.snapshotID) == ["short-fresh"])
+        #expect(ledger.residentDescriptorForTesting(id: "tall-stale") != nil)
+    }
+
+    /// The density denominator is the **Segment Chain** total, never
+    /// the head's own file. Two residents with identical offsets and
+    /// recency: the chain head whose inherited segments make its total
+    /// large has the *lower* re-prefill density and is the victim —
+    /// scoring the own-file bytes instead would invert the pick.
+    @Test
+    func cutScoresChainTotalsNotOwnSegmentBytes() {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+        let ledger = makeLedgerWithPartition(budgetBytes: 14_500, root: root)
+        let now = Date().timeIntervalSinceReferenceDate
+
+        let singleFile = makeDescriptor(
+            id: "single-file", bytes: 4_000,
+            lastAccessAt: now - 60, tokenOffset: 8_000
+        )
+        let chainHead = makeDescriptor(
+            id: "chain-head", bytes: 1_000,
+            lastAccessAt: now - 60, tokenOffset: 8_000,
+            inheritedSegments: [SnapshotSegment(
+                baseOffset: 0,
+                tokenOffset: 6_000,
+                fileRelativePath: "partitions/\(testDigest)/snapshots/0/base.safetensors",
+                bytes: 9_000
+            )]
+        )
+        ledger.seedDescriptorForTesting(singleFile)
+        ledger.seedDescriptorForTesting(chainHead)
+
+        let (decision, evicted) = ledger.admit(
+            makeDescriptor(bytes: 1_000),
+            scoring: EvictionConfiguration(alpha: 2.0)
+        )
+        #expect(decision == .admit)
+        #expect(evicted.map(\.snapshotID) == ["chain-head"])
+    }
+
+    /// Hard protection is score-proof: a `.system` resident with the
+    /// worst conceivable utility (ancient AND cheap per byte) still
+    /// wins against a non-system incoming at `α > 0` — the incoming
+    /// drops.
+    @Test
+    func systemChainsAreNeverCutRegardlessOfScore() {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+        let ledger = makeLedgerWithPartition(budgetBytes: 1_500, root: root)
+        let now = Date().timeIntervalSinceReferenceDate
+
+        ledger.seedDescriptorForTesting(makeDescriptor(
+            id: "system-chain", type: .system, bytes: 1_000,
+            lastAccessAt: now - 86_400, tokenOffset: 100
+        ))
+
+        let (decision, evicted) = ledger.admit(
+            makeDescriptor(bytes: 1_000, tokenOffset: 50_000),
+            scoring: EvictionConfiguration(alpha: 5.0)
+        )
+        #expect(decision == .drop(.systemProtectionWins))
+        #expect(evicted.isEmpty)
+        #expect(ledger.residentDescriptorForTesting(id: "system-chain") != nil)
     }
 }

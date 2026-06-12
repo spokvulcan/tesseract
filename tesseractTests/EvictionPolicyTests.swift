@@ -5,7 +5,9 @@ import Testing
 
 @testable import Tesseract_Agent
 
-/// Tests for the Marconi-style FLOP-aware eviction policy.
+/// Tests for the recovery-cost eviction policy (ADR-0011): Marconi's
+/// utility blend with tier-aware F — hydration seconds for SSD-backed
+/// bodies, re-prefill seconds for terminal losses.
 ///
 /// Scoring is a pure function of the **Eviction Configuration** passed by
 /// value, so the suite carries no ambient global state and needs neither
@@ -68,6 +70,33 @@ struct EvictionPolicyTests {
         type: HybridCacheSnapshot.CheckpointType = .system
     ) -> HybridCacheSnapshot {
         PrefixCacheTestFixtures.makeUniformSnapshot(offset: offset, type: type)
+    }
+
+    /// An SSD-backed variant of `makeNode`: same synthetic body, state
+    /// driven to `.committed(body, ref)`. `bytesOnDisk` defaults to the
+    /// body's RAM bytes so a set of backed nodes shares one disk-to-RAM
+    /// ratio — the configuration under which ADR-0011 predicts the
+    /// density term flattens.
+    private func makeBackedNode(
+        tokenOffset: Int,
+        snapshotBytesTarget: Int = 4096,
+        accessAge: Duration = .zero,
+        bytesOnDisk: Int? = nil
+    ) -> RadixTreeNode {
+        let node = makeNode(
+            tokenOffset: tokenOffset,
+            snapshotBytesTarget: snapshotBytesTarget,
+            accessAge: accessAge
+        )
+        let body = node.state.body!
+        node.state = .committed(body, SnapshotRef(
+            snapshotID: UUID().uuidString,
+            partitionDigest: "deadbeef",
+            tokenOffset: tokenOffset,
+            checkpointType: body.checkpointType,
+            bytesOnDisk: bytesOnDisk ?? body.memoryBytes
+        ))
+        return node
     }
 
     // MARK: - Tests
@@ -366,6 +395,108 @@ struct EvictionPolicyTests {
             ObjectIdentifier(s2),
             ObjectIdentifier(s3),
         ])
+    }
+
+    // MARK: - Recovery Cost (ADR-0011)
+
+    /// ADR-0011's designed degeneration: when every candidate is
+    /// SSD-backed at the same disk-to-RAM ratio, recovery cost per byte
+    /// is constant, the density term carries no signal, and ordering
+    /// collapses to pure recency — the stale FLOP-giant is the victim
+    /// exactly as LRU would pick, no matter how large `alpha` is. Under
+    /// the retired F/B scoring this test fails: the giant's FLOP density
+    /// would have protected it even though re-creating it costs only a
+    /// hydration.
+    @Test func backedBodiesDegenerateToRecencyOrdering() {
+        let tallStale = makeBackedNode(
+            tokenOffset: 76_800, snapshotBytesTarget: 200 * 1024,
+            accessAge: .seconds(60)
+        )
+        let shortFresh = makeBackedNode(
+            tokenOffset: 500, snapshotBytesTarget: 4 * 1024,
+            accessAge: .milliseconds(100)
+        )
+
+        let victim = EvictionPolicy.selectVictim(
+            candidates: [tallStale, shortFresh],
+            config: EvictionConfiguration(alpha: 2.0)
+        )
+        #expect(victim?.node === tallStale)
+    }
+
+    /// Terminal loss outranks a backed giant: an unbacked body's
+    /// re-prefill seconds per byte dwarf any backed body's hydration
+    /// seconds per byte, so at `alpha > 0` the blend evicts the fresher
+    /// backed giant and shields the older unbacked body — the one
+    /// eviction would actually destroy. At `alpha = 0` pure recency
+    /// picks the opposite victim, which is exactly the case the blend
+    /// exists to override.
+    @Test func terminalLossOutranksBackedGiant() {
+        func makePair() -> (backed: RadixTreeNode, unbacked: RadixTreeNode) {
+            (
+                backed: makeBackedNode(
+                    tokenOffset: 76_800, snapshotBytesTarget: 200 * 1024,
+                    accessAge: .milliseconds(100)
+                ),
+                unbacked: makeNode(
+                    tokenOffset: 25_000, snapshotBytesTarget: 60 * 1024,
+                    accessAge: .seconds(30)
+                )
+            )
+        }
+
+        let blended = makePair()
+        let blendedVictim = EvictionPolicy.selectVictim(
+            candidates: [blended.backed, blended.unbacked],
+            config: EvictionConfiguration(alpha: 2.0)
+        )
+        #expect(blendedVictim?.node === blended.backed)
+
+        let lru = makePair()
+        let lruVictim = EvictionPolicy.selectVictim(
+            candidates: [lru.backed, lru.unbacked],
+            config: EvictionConfiguration(alpha: 0.0)
+        )
+        #expect(lruVictim?.node === lru.unbacked)
+    }
+
+    /// Recovery cost is denominated in seconds by the configuration's
+    /// measured estimates — the same candidates flip victims when the
+    /// estimates say the SSD is glacial. Pins that `computeScores` reads
+    /// `config.estimates` rather than baked-in constants.
+    @Test func measuredEstimatesSteerTheBlend() {
+        let now: ContinuousClock.Instant = .now
+
+        func makePair() -> [RadixTreeNode] {
+            let backed = makeBackedNode(tokenOffset: 4096)
+            let unbacked = makeNode(tokenOffset: 256)
+            // Equal recency: min-max degenerates the recency term to a
+            // tie, so the victim is decided by density alone.
+            backed.lastAccessTime = now
+            unbacked.lastAccessTime = now
+            return [backed, unbacked]
+        }
+
+        // Default estimates: hydration is ~instant next to re-prefill,
+        // so the backed body is the cheap victim.
+        let fast = makePair()
+        let fastVictim = EvictionPolicy.selectVictim(
+            candidates: fast, now: now,
+            config: EvictionConfiguration(alpha: 1.0)
+        )
+        #expect(fastVictim?.node === fast[0])
+
+        // A measured glacial SSD (0.1 B/s) makes hydrating the backed
+        // body cost more per byte than re-prefilling the unbacked one.
+        let slow = makePair()
+        let slowVictim = EvictionPolicy.selectVictim(
+            candidates: slow, now: now,
+            config: EvictionConfiguration(
+                alpha: 1.0,
+                estimates: MeasuredSecondsEstimates(hydrationBytesPerSecond: 0.1)
+            )
+        )
+        #expect(slowVictim?.node === slow[1])
     }
 
     /// The injected **Eviction Configuration** steers eviction end-to-end

@@ -241,6 +241,29 @@ nonisolated struct PromptCacheSSDSnapshot: Codable, Equatable, Sendable {
     )
 }
 
+/// Lifetime counters the `PrefixCacheManager` accumulates across its own
+/// life (one model load): what the cache bought (hit tokens, hydrations)
+/// and what eviction cost (recovered vs terminal body losses). Lives on
+/// the telemetry *snapshot* — unlike the event-derived aggregate, these
+/// never lose history to the event-buffer cap.
+nonisolated struct PromptCacheCumulativeCounters: Codable, Equatable, Sendable {
+    /// Prefill tokens served from cache: restored offsets summed over
+    /// RAM hits and successful SSD hydrations.
+    var hitTokens: Int = 0
+    /// RAM bodies dropped whose node stayed hittable via a surviving
+    /// **Snapshot Ref** (SSD-backed drops; **Snapshot Demotion**s).
+    var recoveredEvictions: Int = 0
+    /// RAM bodies dropped outright — the next hit pays full re-prefill.
+    var terminalEvictions: Int = 0
+    /// State-5 bodies rebuilt from the SSD tier (`ssdOnly` → `committed`).
+    var hydrations: Int = 0
+    /// SSD writes skipped by the **Survival Gate** — incoming chains
+    /// that would not have survived the eviction their own admission
+    /// triggers (a demotion that terminal-dropped instead, a checkpoint
+    /// write-through that stayed RAM-only).
+    var survivalGateSkips: Int = 0
+}
+
 /// Eviction-tuner state surfaced to the UI: the `AlphaTuner` phase plus the
 /// alpha the **Eviction Configuration** is currently scoring with. `alpha`
 /// is live even while the tuner is still waiting (0.0 = pure-recency LRU).
@@ -260,7 +283,14 @@ nonisolated struct PromptCacheTunerSnapshot: Codable, Equatable, Sendable {
 
 nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
     let capturedAt: Date
+    /// The **Pressure-Reactive Budget**'s *current* value — the live
+    /// RAM-tier budget the eviction loop enforces.
     let memoryBudgetBytes: Int
+    /// The band around `memoryBudgetBytes`: the load-time auto-sized
+    /// ceiling and the content-defined **Budget Floor** as computed at
+    /// capture time.
+    let budgetCeilingBytes: Int
+    let budgetFloorBytes: Int
     let residentSnapshotBytes: Int
     let partitionCount: Int
     let totalNodeCount: Int
@@ -268,11 +298,15 @@ nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
     let snapshotsByType: [String: Int]
     let ssd: PromptCacheSSDSnapshot
     let tuner: PromptCacheTunerSnapshot
+    let counters: PromptCacheCumulativeCounters
+    let estimates: MeasuredSecondsEstimates
     let trees: [PromptCacheTreeSnapshot]
 
     static let empty = PromptCacheTelemetrySnapshot(
         capturedAt: Date(),
         memoryBudgetBytes: 0,
+        budgetCeilingBytes: 0,
+        budgetFloorBytes: 0,
         residentSnapshotBytes: 0,
         partitionCount: 0,
         totalNodeCount: 0,
@@ -280,6 +314,8 @@ nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
         snapshotsByType: [:],
         ssd: .disabled,
         tuner: .unavailable,
+        counters: PromptCacheCumulativeCounters(),
+        estimates: MeasuredSecondsEstimates(),
         trees: []
     )
 }
