@@ -60,6 +60,10 @@ nonisolated enum SSDLoadError: Error {
     case truncatedBlob
     /// A header array's `dtype` string has no MLX dtype mapping.
     case unknownDType(String)
+    /// A **Segment Chain** failed composition validation: layer counts,
+    /// suffix contiguity, slot counts, dtypes, or token-axis extents
+    /// disagree across segments. The whole chain is condemned.
+    case segmentMismatch(String)
 }
 
 // MARK: - Front door outcome types
@@ -93,6 +97,12 @@ nonisolated enum TryEnqueueResult: Sendable, Equatable {
     /// `registerPartition(_:digest:)` for each distinct partition
     /// before enqueuing any snapshot with that digest.
     case rejectedUnregisteredPartition
+
+    /// The payload is a **Leaf Extension Admission** but its base is
+    /// neither resident, queued, nor in the writer's hands — the suffix
+    /// can never compose. The caller treats the leaf as RAM-only; the
+    /// next turn self-heals with a full write.
+    case rejectedExtensionBaseUnavailable
 }
 
 /// Why a pending or resident item was dropped. Fed into the
@@ -130,11 +140,35 @@ nonisolated enum SSDDropReason: Sendable, Equatable {
     /// failure, serialization error, other Foundation error).
     case writerIOError
 
+    /// A pending **Leaf Extension Admission** lost its base before the
+    /// commit-time fold (the base's own write dropped, or a hydration
+    /// failure removed it) — the suffix can never compose, so the item
+    /// is dropped and its file (if written) deleted.
+    case extensionBaseLost
+
     /// `loadSync` could not materialize a resident back into RAM
     /// (file missing, fingerprint mismatch, placeholder decode
     /// error). The descriptor was removed from the manifest and the
     /// file deleted before the callback fired.
     case hydrationFailure
+}
+
+/// Payload of the writer's commit callback. Beyond the committed
+/// snapshot's ID it carries the two facts only the writer's durable
+/// commit can produce, so the tree-side router never has to guess:
+/// - `consumedBaseID`: the base entry a **Leaf Extension Admission**'s
+///   fold consumed (`nil` for full writes). The router discards the
+///   base's now-stale tree ref *here* — not at admission — so a writer
+///   drop leaves the base reachable (the transfer degrades to
+///   `preserved`).
+/// - `chainBytesOnDisk`: the committed entry's whole-chain byte count
+///   (`PersistedSnapshotDescriptor.totalBytes`), refreshed onto the
+///   live ref so in-session telemetry matches what a warm start would
+///   restore.
+nonisolated struct SSDCommitInfo: Sendable, Equatable {
+    let snapshotID: String
+    let consumedBaseID: String?
+    let chainBytesOnDisk: Int
 }
 
 // MARK: - SSDSnapshotStore
@@ -165,6 +199,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     private let queueLock = NSLock()
     private var pending: [PendingWrite] = []
     private var pendingBytes: Int = 0
+    /// The snapshot ID the writer is currently processing — popped from
+    /// `pending` but not yet committed or dropped. An extension whose
+    /// base is in the writer's hands is still valid (FIFO settles the
+    /// base first), so the front-door base check must see this window.
+    private var inFlightSnapshotID: String?
     /// Continuations waiting for the writer to finish its current
     /// `drainPending` iteration. `flushAsync()` registers one per
     /// call and the writer resumes them all after each drain cycle
@@ -179,7 +218,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
     // MARK: - Callbacks (immutable after init)
 
-    private let onCommit: @Sendable (String) -> Void
+    private let onCommit: @Sendable (SSDCommitInfo) -> Void
     private let onDrop: @Sendable (String, SSDDropReason) -> Void
     private let writerDrainPreludeForTesting: (@Sendable () async -> Void)?
 
@@ -188,7 +227,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     init(
         config: SSDPrefixCacheConfig,
         manifestDebounce: Duration = .milliseconds(500),
-        onCommit: @escaping @Sendable (String) -> Void = { _ in },
+        onCommit: @escaping @Sendable (SSDCommitInfo) -> Void = { _ in },
         onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in },
         writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
     ) {
@@ -282,7 +321,34 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             return .rejectedUnregisteredPartition
         }
 
-        var droppedItems: [(id: String, bytes: Int)] = []
+        // Leaf extension: the base must still be reachable — resident
+        // in the manifest, queued, or in the writer's hands (FIFO
+        // settles it before this item). `beginExtensionTransfer`
+        // shields a resident base from the LRU cut for the pending
+        // window; every terminal writer path releases the shield. The
+        // queue-lock check runs first and releases before the ledger
+        // call — the two locks never nest.
+        let extendingBaseID = payload.extending?.baseSnapshotID
+        if let extendingBaseID {
+            queueLock.lock()
+            let baseIsQueuedOrInFlight =
+                inFlightSnapshotID == extendingBaseID
+                || pending.contains { $0.descriptor.snapshotID == extendingBaseID }
+            queueLock.unlock()
+            guard ledger.beginExtensionTransfer(
+                baseID: extendingBaseID,
+                baseIsQueuedOrInFlight: baseIsQueuedOrInFlight
+            ) else {
+                PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
+                    id: descriptor.snapshotID,
+                    bytes: payloadBytes,
+                    outcome: .droppedExtensionBaseUnavailable
+                ))
+                return .rejectedExtensionBaseUnavailable
+            }
+        }
+
+        var droppedItems: [(id: String, bytes: Int, extendingBaseID: String?)] = []
 
         queueLock.lock()
 
@@ -294,17 +360,26 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
               let oldest = pending.first {
             pending.removeFirst()
             pendingBytes -= oldest.payload.totalBytes
-            droppedItems.append(
-                (id: oldest.descriptor.snapshotID, bytes: oldest.payload.totalBytes)
-            )
+            droppedItems.append((
+                id: oldest.descriptor.snapshotID,
+                bytes: oldest.payload.totalBytes,
+                extendingBaseID: oldest.extendingBaseID
+            ))
         }
 
-        pending.append(PendingWrite(payload: payload, descriptor: descriptor))
+        pending.append(PendingWrite(
+            payload: payload,
+            descriptor: descriptor,
+            extendingBaseID: extendingBaseID
+        ))
         pendingBytes += payloadBytes
 
         queueLock.unlock()
 
         for item in droppedItems {
+            if let baseID = item.extendingBaseID {
+                ledger.releaseExtensionTransfer(baseID: baseID)
+            }
             // Both events fire per bumped item: the admission outcome
             // (`droppedByteBudget` is the terminal verdict for that
             // earlier `tryEnqueue` call), and the lifecycle callback
@@ -447,6 +522,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             pendingBytes -= removed.payload.totalBytes
             if pendingBytes < 0 { pendingBytes = 0 }
             queueLock.unlock()
+            if let baseID = removed.extendingBaseID {
+                ledger.releaseExtensionTransfer(baseID: baseID)
+            }
             return
         }
         queueLock.unlock()
@@ -455,9 +533,10 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         // atomically removes a committed resident (returning it for file
         // deletion) or tombstones an in-flight write so its later
         // `commit` self-vetoes. The queue lock is released first — the
-        // two locks never nest.
+        // two locks never nest. A chain head's removal deletes every
+        // segment file it owns.
         if let resident = ledger.removeOrTombstone(id: snapshotID) {
-            try? FileManager.default.removeItem(at: resident.fileURL)
+            deleteChainFiles(resident.fileURLs)
         }
     }
 
@@ -498,12 +577,20 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     private func popNextPending() -> PendingWrite? {
         queueLock.lock()
         defer { queueLock.unlock() }
-        guard !pending.isEmpty else { return nil }
-        return pending.removeFirst()
+        guard !pending.isEmpty else {
+            inFlightSnapshotID = nil
+            return nil
+        }
+        let item = pending.removeFirst()
+        inFlightSnapshotID = item.descriptor.snapshotID
+        return item
     }
 
     private func processPendingItem(_ item: PendingWrite) async {
         if ledger.consumeTombstone(id: item.descriptor.snapshotID) {
+            if let baseID = item.extendingBaseID {
+                ledger.releaseExtensionTransfer(baseID: baseID)
+            }
             releasePendingBytes(item.payload.totalBytes)
             return
         }
@@ -529,17 +616,47 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         }
         finalizeEvictions(evicted)
 
-        switch admission {
-        case .admit:
-            break
-        case .drop(let reason):
+        // Writer-drop helper local to this item: every terminal drop
+        // path must release the base's LRU shield exactly once.
+        func dropItem(reason: SSDDropReason) {
+            if let baseID = item.extendingBaseID {
+                ledger.releaseExtensionTransfer(baseID: baseID)
+            }
             releasePendingBytes(item.payload.totalBytes)
             emitWriterDrop(
                 id: item.descriptor.snapshotID,
                 bytes: item.payload.totalBytes,
                 reason: reason
             )
+        }
+
+        switch admission {
+        case .admit:
+            break
+        case .drop(let reason):
+            dropItem(reason: reason)
             return
+        }
+
+        // 1b. Leaf extension: fold the base's chain into the descriptor
+        //     *before* the write so the embedded per-file header carries
+        //     the true chain. The base entry stays authoritative in the
+        //     manifest until the commit below — a crash inside this
+        //     window warm-starts at the base offset. FIFO has already
+        //     settled the base (committed or dropped); a missing base
+        //     here means its own write failed, so the suffix is dropped.
+        let descriptorToWrite: PersistedSnapshotDescriptor
+        if let baseID = item.extendingBaseID {
+            guard let folded = ledger.prepareFoldedDescriptor(
+                item.descriptor,
+                baseID: baseID
+            ) else {
+                dropItem(reason: .extensionBaseLost)
+                return
+            }
+            descriptorToWrite = folded
+        } else {
+            descriptorToWrite = item.descriptor
         }
 
         // 2. Write the payload atomically (temp + fsync + rename).
@@ -547,9 +664,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         //    victim is also cleaned up outside the lock. Any other
         //    error drops the incoming and fires the drop callback.
         do {
-            try writePayload(item.payload, descriptor: item.descriptor)
+            try writePayload(item.payload, descriptor: descriptorToWrite)
         } catch WriteError.diskFull {
-            if let retryVictim = ledger.retryAfterDiskFull(item.descriptor) {
+            if let retryVictim = ledger.retryAfterDiskFull(descriptorToWrite) {
                 PrefixCacheDiagnostics.logSystem(
                     PrefixCacheDiagnostics.SSDEvictAtAdmissionEvent(
                         victimID: retryVictim.snapshotID,
@@ -558,18 +675,13 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 )
                 finalizeEvictions([retryVictim])
                 do {
-                    try writePayload(item.payload, descriptor: item.descriptor)
+                    try writePayload(item.payload, descriptor: descriptorToWrite)
                 } catch {
                     Log.agent.error(
                         "SSD writer diskFull retry failed for \(item.descriptor.snapshotID): "
                         + "\(String(describing: error))"
                     )
-                    releasePendingBytes(item.payload.totalBytes)
-                    emitWriterDrop(
-                        id: item.descriptor.snapshotID,
-                        bytes: item.payload.totalBytes,
-                        reason: .diskFull
-                    )
+                    dropItem(reason: .diskFull)
                     return
                 }
             } else {
@@ -577,12 +689,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                     "SSD writer diskFull and no eviction victim available for "
                     + "\(item.descriptor.snapshotID)"
                 )
-                releasePendingBytes(item.payload.totalBytes)
-                emitWriterDrop(
-                    id: item.descriptor.snapshotID,
-                    bytes: item.payload.totalBytes,
-                    reason: .diskFull
-                )
+                dropItem(reason: .diskFull)
                 return
             }
         } catch {
@@ -590,16 +697,14 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 "SSD writer I/O failure for \(item.descriptor.snapshotID): "
                 + "\(String(describing: error))"
             )
-            releasePendingBytes(item.payload.totalBytes)
-            emitWriterDrop(
-                id: item.descriptor.snapshotID,
-                bytes: item.payload.totalBytes,
-                reason: .writerIOError
-            )
+            dropItem(reason: .writerIOError)
             return
         }
 
         if ledger.consumeTombstone(id: item.descriptor.snapshotID) {
+            if let baseID = item.extendingBaseID {
+                ledger.releaseExtensionTransfer(baseID: baseID)
+            }
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
             releasePendingBytes(item.payload.totalBytes)
             return
@@ -607,9 +712,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
 
         // 3. Write succeeded: register the descriptor in the ledger,
         //    release the pending byte budget, and fire the commit
-        //    callback. A `false` here is the tombstone self-veto (the
-        //    snapshot was deleted while in flight) — drop the file.
-        guard ledger.commit(item.descriptor) else {
+        //    callback. For an extension the commit consumes the base
+        //    entry atomically (the chain fold). A `false` here is the
+        //    tombstone self-veto or a lost base — drop the own file
+        //    (inherited files still belong to the surviving base entry,
+        //    or were already deleted with it).
+        guard ledger.commit(descriptorToWrite, consumingBase: item.extendingBaseID) else {
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
             releasePendingBytes(item.payload.totalBytes)
             return
@@ -620,10 +728,25 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             bytes: item.descriptor.bytes,
             outcome: .accepted
         ))
+        if let baseID = item.extendingBaseID {
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.LeafExtensionCommitEvent(
+                    id: item.descriptor.snapshotID,
+                    baseID: baseID,
+                    suffixBytes: descriptorToWrite.bytes,
+                    chainBytes: descriptorToWrite.totalBytes,
+                    chainSegments: descriptorToWrite.inheritedSegments.count + 1
+                )
+            )
+        }
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.SnapshotRefCommitEvent(id: item.descriptor.snapshotID)
         )
-        onCommit(item.descriptor.snapshotID)
+        onCommit(SSDCommitInfo(
+            snapshotID: item.descriptor.snapshotID,
+            consumedBaseID: item.extendingBaseID,
+            chainBytesOnDisk: descriptorToWrite.totalBytes
+        ))
     }
 
     /// Centralized writer-drop emission: terminal `ssdAdmit` outcome
@@ -644,6 +767,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         case .exceedsBudget: outcome = .droppedExceedsBudget
         case .diskFull: outcome = .droppedDiskFull
         case .writerIOError: outcome = .droppedWriterIOError
+        case .extensionBaseLost: outcome = .droppedExtensionBaseLost
         case .backpressureOldest, .evictedByLRU, .hydrationFailure:
             // These reasons never originate from `processPendingItem`
             // — front-door, eviction loop, and hydration paths fire
@@ -674,7 +798,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     /// synchronous `tryEnqueue` path never pays for filesystem I/O.
     private func finalizeEvictions(_ evicted: [EvictedResident]) {
         for resident in evicted {
-            deleteResidentFile(resident.fileURL)
+            for url in resident.fileURLs {
+                deleteResidentFile(url)
+            }
             PrefixCacheDiagnostics.logSystem(
                 PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                     id: resident.snapshotID,
@@ -692,6 +818,17 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             Log.agent.warning(
                 "SSD eviction failed to remove \(url.path): \(String(describing: error))"
             )
+        }
+    }
+
+    /// Best-effort removal of a chain's on-disk segment files
+    /// (explicit delete, hydration-failure sweep). Silent (`try?`) by
+    /// design — a file already gone means a racing path beat us to it;
+    /// contrast `deleteResidentFile`, whose eviction caller wants the
+    /// warning.
+    private func deleteChainFiles(_ urls: [URL]) {
+        for url in urls {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 
@@ -852,6 +989,10 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     private struct PendingWrite: Sendable {
         let payload: SnapshotPayload
         let descriptor: PersistedSnapshotDescriptor
+        /// Non-nil for a **Leaf Extension Admission**: the base whose
+        /// chain the commit folds and whose LRU shield every terminal
+        /// path must release.
+        let extendingBaseID: String?
     }
 }
 
@@ -916,28 +1057,42 @@ extension SSDSnapshotStore {
             )
         }
 
-        // Read the file directly; let `Data(contentsOf:)` surface
-        // missing / permission / IO errors via one catch site.
-        // `.mappedIfSafe` lets the kernel page in on demand so
-        // ~200 MiB snapshots do not spike peak RSS during hydration.
-        let url = fileURL(forSnapshotRef: snapshotRef)
-        let fileData: Data
-        do {
-            fileData = try Data(contentsOf: url, options: .mappedIfSafe)
-        } catch {
+        // Resolve the resident's **Segment Chain** — one URL for an
+        // ordinary full snapshot, several for an extension-built leaf.
+        // A missing entry means the resident was evicted between the
+        // lookup and this hydration.
+        guard let chain = ledger.chainForHydration(id: snapshotRef.snapshotID) else {
             return failLoad(
                 snapshotRef,
-                reason: .readFailed,
-                "read failed error=\(error)"
+                reason: .notResident,
+                "chain lookup failed — resident evicted before hydration"
             )
         }
 
-        // Decode the placeholder container, reconstructing MLXArrays
+        // Read every segment file; let `Data(contentsOf:)` surface
+        // missing / permission / IO errors via one catch site.
+        // `.mappedIfSafe` lets the kernel page in on demand so
+        // ~200 MiB snapshots do not spike peak RSS during hydration.
+        var segmentData: [Data] = []
+        segmentData.reserveCapacity(chain.fileURLs.count)
+        for url in chain.fileURLs {
+            do {
+                segmentData.append(try Data(contentsOf: url, options: .mappedIfSafe))
+            } catch {
+                return failLoad(
+                    snapshotRef,
+                    reason: .readFailed,
+                    "read failed error=\(error)"
+                )
+            }
+        }
+
+        // Decode and compose the chain, reconstructing MLXArrays
         // from raw payload bytes inside the caller's Metal-affine
         // context.
         do {
-            return try decodePlaceholderContainer(
-                fileData,
+            return try decodeSegmentChain(
+                segmentData,
                 tokenOffset: snapshotRef.tokenOffset,
                 checkpointType: snapshotRef.checkpointType
             )
@@ -973,22 +1128,14 @@ extension SSDSnapshotStore {
         return nil
     }
 
-    private nonisolated func fileURL(
-        forSnapshotRef ref: SnapshotRef
-    ) -> URL {
-        fileURL(
-            snapshotID: ref.snapshotID,
-            partitionDigest: ref.partitionDigest
-        )
-    }
-
-    /// Remove the descriptor from the manifest, delete the on-disk
-    /// file, and fire `onDrop` with `.hydrationFailure`. Called from
-    /// every `loadSync` error path so the node's Snapshot Ref gets
-    /// cleared and subsequent lookups miss cleanly.
+    /// Remove the descriptor from the manifest, delete every on-disk
+    /// segment file of its chain, and fire `onDrop` with
+    /// `.hydrationFailure`. Called from every `loadSync` error path so
+    /// the node's Snapshot Ref gets cleared and subsequent lookups miss
+    /// cleanly.
     private nonisolated func dropHydrationFailure(id: String) {
         if let evicted = ledger.remove(id: id) {
-            try? FileManager.default.removeItem(at: evicted.fileURL)
+            deleteChainFiles(evicted.fileURLs)
         }
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
@@ -999,59 +1146,117 @@ extension SSDSnapshotStore {
         onDrop(id, .hydrationFailure)
     }
 
-    /// Decode a placeholder-container file into a `HybridCacheSnapshot`.
-    /// Must run inside `container.perform` — constructing MLXArrays
-    /// from `Data` is Metal-affine.
+    /// Decode a **Segment Chain** (ordered shallow→deep, own file last)
+    /// into one composed `HybridCacheSnapshot`. Must run inside
+    /// `container.perform` — constructing MLXArrays from `Data` is
+    /// Metal-affine.
     ///
-    /// The placeholder header carries per-array `byte_offset` /
-    /// `byte_size` pairs relative to the blob section that follows
-    /// the header. We slice those bytes out and feed them to
-    /// `MLXArray(_:_:dtype:)` — a convenience initializer that
-    /// owns a fresh backing allocation without going through a
-    /// safetensors round-trip.
-    private nonisolated func decodePlaceholderContainer(
-        _ data: Data,
+    /// Composition is per layer, shallow→deep: a whole-state layer
+    /// entry *resets* the fold (last whole copy wins — the recurrent /
+    /// rotating / chunked classes), a suffix entry *appends* its token
+    /// range. Only contributing segments are materialized, and layers
+    /// compose one at a time, so peak transient RAM stays around one
+    /// snapshot plus one layer. Any cross-segment disagreement (layer
+    /// counts, suffix contiguity, slot counts, dtypes, token-axis
+    /// extents) throws `SSDLoadError.segmentMismatch`, condemning the
+    /// chain via the caller's failure path.
+    private nonisolated func decodeSegmentChain(
+        _ segments: [Data],
         tokenOffset: Int,
         checkpointType: HybridCacheSnapshot.CheckpointType
     ) throws -> HybridCacheSnapshot {
-        let (header, blobsStart) = try PlaceholderContainerHeader.parse(from: data)
+        guard !segments.isEmpty else {
+            throw SSDLoadError.segmentMismatch("empty chain")
+        }
+
+        var parsed: [(header: PlaceholderContainerHeader, blobsStart: Int, data: Data)] = []
+        parsed.reserveCapacity(segments.count)
+        for data in segments {
+            let (header, blobsStart) = try PlaceholderContainerHeader.parse(from: data)
+            parsed.append((header, blobsStart, data))
+        }
+
+        let layerCount = parsed[0].header.layers.count
+        guard parsed.allSatisfy({ $0.header.layers.count == layerCount }) else {
+            throw SSDLoadError.segmentMismatch("layer count varies across segments")
+        }
 
         var totalBytes = 0
         var snapshotLayers: [HybridCacheSnapshot.LayerState] = []
-        snapshotLayers.reserveCapacity(header.layers.count)
+        snapshotLayers.reserveCapacity(layerCount)
 
-        for layerHeader in header.layers {
-            var stateArrays: [MLXArray] = []
-            stateArrays.reserveCapacity(layerHeader.arrays.count)
-            for arrayHeader in layerHeader.arrays {
-                guard let dtype = ServerCompletion.dtypeFromWireString(arrayHeader.dtype) else {
-                    throw SSDLoadError.unknownDType(arrayHeader.dtype)
+        for layerIndex in 0..<layerCount {
+            // Pass 1 — headers only: which segments contribute, with
+            // contiguity validated against each segment's capture offset.
+            var contributors: [Int] = []
+            var covered = 0
+            for (segmentIndex, segment) in parsed.enumerated() {
+                let layerHeader = segment.header.layers[layerIndex]
+                let segmentOffset = segment.header.descriptor.tokenOffset
+                if let suffixBase = layerHeader.suffixBaseOffset {
+                    guard !contributors.isEmpty, suffixBase == covered else {
+                        throw SSDLoadError.segmentMismatch(
+                            "suffix base \(suffixBase) does not continue covered "
+                            + "offset \(covered) at layer \(layerIndex)"
+                        )
+                    }
+                    let expectedTokens = segmentOffset - suffixBase
+                    guard layerHeader.arrays.allSatisfy({
+                        $0.shape.count >= 3 && $0.shape[$0.shape.count - 2] == expectedTokens
+                    }) else {
+                        throw SSDLoadError.segmentMismatch(
+                            "suffix extent mismatch at layer \(layerIndex)"
+                        )
+                    }
+                    contributors.append(segmentIndex)
+                } else {
+                    contributors = [segmentIndex]
                 }
-                // `byteOffset` / `byteSize` are `Int`s JSON-decoded from
-                // the untrusted header — guard non-negativity and use
-                // checked adds so a corrupt or hostile pair throws the
-                // recoverable `.truncatedBlob` miss instead of trapping
-                // the `Int` arithmetic or the `Data` subscript below.
-                guard arrayHeader.byteOffset >= 0, arrayHeader.byteSize >= 0 else {
-                    throw SSDLoadError.truncatedBlob
-                }
-                let (sliceStart, startOverflow) =
-                    blobsStart.addingReportingOverflow(arrayHeader.byteOffset)
-                let (sliceEnd, endOverflow) =
-                    sliceStart.addingReportingOverflow(arrayHeader.byteSize)
-                guard !startOverflow, !endOverflow, sliceEnd <= data.count else {
-                    throw SSDLoadError.truncatedBlob
-                }
-                let blob = data[sliceStart..<sliceEnd]
-                stateArrays.append(MLXArray(blob, arrayHeader.shape, dtype: dtype))
-                totalBytes += arrayHeader.byteSize
+                covered = segmentOffset
+            }
+
+            let lastLayerHeader = parsed[contributors.last!].header.layers[layerIndex]
+            guard contributors.dropFirst().allSatisfy({
+                let layer = parsed[$0].header.layers[layerIndex]
+                return layer.className == lastLayerHeader.className
+                    && layer.arrays.count == lastLayerHeader.arrays.count
+            }), parsed[contributors[0]].header.layers[layerIndex].className
+                == lastLayerHeader.className,
+                parsed[contributors[0]].header.layers[layerIndex].arrays.count
+                == lastLayerHeader.arrays.count
+            else {
+                throw SSDLoadError.segmentMismatch(
+                    "class or array-slot mismatch at layer \(layerIndex)"
+                )
+            }
+
+            // Pass 2 — materialize contributors and concatenate suffix
+            // pieces along the token axis (dim −2).
+            var pieces: [[MLXArray]] = []
+            pieces.reserveCapacity(contributors.count)
+            for segmentIndex in contributors {
+                let segment = parsed[segmentIndex]
+                let arrays = try materializeLayerArrays(
+                    segment.header.layers[layerIndex],
+                    blobsStart: segment.blobsStart,
+                    data: segment.data,
+                    totalBytes: &totalBytes
+                )
+                pieces.append(arrays)
+            }
+            let slotCount = pieces[0].count
+            let merged: [MLXArray] = (0..<slotCount).map { slot in
+                let slotPieces = pieces.map { $0[slot] }
+                return slotPieces.count == 1
+                    ? slotPieces[0]
+                    : concatenated(slotPieces, axis: -2)
             }
 
             snapshotLayers.append(HybridCacheSnapshot.LayerState(
-                className: layerHeader.className,
-                state: stateArrays,
-                metaState: layerHeader.metaState,
-                offset: layerHeader.offset
+                className: lastLayerHeader.className,
+                state: merged,
+                metaState: lastLayerHeader.metaState,
+                offset: lastLayerHeader.offset
             ))
         }
 
@@ -1062,6 +1267,46 @@ extension SSDSnapshotStore {
             memoryBytes: totalBytes,
             createdAt: .now
         )
+    }
+
+    /// Materialize one layer's blob slices into MLXArrays. The header
+    /// carries per-array `byte_offset` / `byte_size` pairs relative to
+    /// the blob section; we slice those bytes out and feed them to
+    /// `MLXArray(_:_:dtype:)` — a convenience initializer that owns a
+    /// fresh backing allocation without going through a safetensors
+    /// round-trip.
+    private nonisolated func materializeLayerArrays(
+        _ layerHeader: PlaceholderContainerHeader.Layer,
+        blobsStart: Int,
+        data: Data,
+        totalBytes: inout Int
+    ) throws -> [MLXArray] {
+        var stateArrays: [MLXArray] = []
+        stateArrays.reserveCapacity(layerHeader.arrays.count)
+        for arrayHeader in layerHeader.arrays {
+            guard let dtype = ServerCompletion.dtypeFromWireString(arrayHeader.dtype) else {
+                throw SSDLoadError.unknownDType(arrayHeader.dtype)
+            }
+            // `byteOffset` / `byteSize` are `Int`s JSON-decoded from
+            // the untrusted header — guard non-negativity and use
+            // checked adds so a corrupt or hostile pair throws the
+            // recoverable `.truncatedBlob` miss instead of trapping
+            // the `Int` arithmetic or the `Data` subscript below.
+            guard arrayHeader.byteOffset >= 0, arrayHeader.byteSize >= 0 else {
+                throw SSDLoadError.truncatedBlob
+            }
+            let (sliceStart, startOverflow) =
+                blobsStart.addingReportingOverflow(arrayHeader.byteOffset)
+            let (sliceEnd, endOverflow) =
+                sliceStart.addingReportingOverflow(arrayHeader.byteSize)
+            guard !startOverflow, !endOverflow, sliceEnd <= data.count else {
+                throw SSDLoadError.truncatedBlob
+            }
+            let blob = data[sliceStart..<sliceEnd]
+            stateArrays.append(MLXArray(blob, arrayHeader.shape, dtype: dtype))
+            totalBytes += arrayHeader.byteSize
+        }
+        return stateArrays
     }
 
 }
@@ -1111,6 +1356,19 @@ extension SSDSnapshotStore {
     /// anything. Used by the `recordHit` regression test.
     nonisolated func lastAccessAtForTesting(id: String) -> Double {
         ledger.lastAccessAtForTesting(id: id)
+    }
+
+    /// Read a resident's full descriptor (chain fields included). Used
+    /// by the leaf-extension fold tests.
+    nonisolated func residentDescriptorForTesting(id: String) -> PersistedSnapshotDescriptor? {
+        ledger.residentDescriptorForTesting(id: id)
+    }
+
+    /// The set of base IDs currently shielded by a pending extension
+    /// transfer. Empty when no extension is in flight — the leaf-extension
+    /// tests assert every terminal writer path releases its shield.
+    nonisolated func transferringBaseIDsForTesting() -> Set<String> {
+        ledger.transferringBaseIDsForTesting()
     }
 }
 

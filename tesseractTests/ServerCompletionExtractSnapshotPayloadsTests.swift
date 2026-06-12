@@ -382,13 +382,21 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
             source.contains("private static func captureStructuredLeafFromBoundary("),
             "Structured leaf helper must exist so direct-tool and canonical-user modes share one leaf admission path"
         )
+        // Since the speculative-canonical-prefill carve (#80) only the
+        // direct leaf path constructs its admission inline; the boundary
+        // helper and the speculative executor both route through
+        // `admitStructuredLeaf`, which owns its own construction.
         #expect(
-            source.components(separatedBy: "let leafAdmission = SnapshotAdmission.leaf(").count - 1 == 2,
-            "Both production leaf paths must construct leaf Snapshot Admission values"
+            source.components(separatedBy: "let leafAdmission = SnapshotAdmission.leaf(").count - 1 == 1,
+            "The direct leaf path must construct its leaf Snapshot Admission value inline"
         )
         #expect(
-            source.components(separatedBy: "prefixCache.admit(leafAdmission)").count - 1 == 2,
-            "Both production leaf paths must mutate the cache through admit"
+            source.components(separatedBy: "prefixCache.admit(leafAdmission)").count - 1 == 1,
+            "The direct leaf path must mutate the cache through admit"
+        )
+        #expect(
+            source.components(separatedBy: "await Self.admitStructuredLeaf(").count - 1 == 1,
+            "The boundary capture path must route through the shared admitStructuredLeaf helper"
         )
         #expect(
             !source.contains("leafPayload: strippedLeafPayload"),

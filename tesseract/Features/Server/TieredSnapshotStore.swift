@@ -89,9 +89,9 @@ final class TieredSnapshotStore: SnapshotStore {
         // state — the writer task itself is not MainActor-isolated.
         self.ssdStore = SSDSnapshotStore(
             config: ssdConfig,
-            onCommit: { [weak self] id in
+            onCommit: { [weak self] info in
                 Task { @MainActor [weak self] in
-                    self?.markSnapshotRefCommitted(id: id)
+                    self?.markSnapshotRefCommitted(info)
                 }
             },
             onDrop: { [weak self] id, reason in
@@ -233,7 +233,8 @@ final class TieredSnapshotStore: SnapshotStore {
             partitionKey: partitionKey,
             pathFromRoot: pathFromRoot,
             snapshot: snapshot,
-            payloadBytes: payload.totalBytes
+            payloadBytes: payload.totalBytes,
+            segmentBaseOffset: payload.extending?.baseOffset ?? 0
         )
 
         guard case .accepted(let ref) = ssdStore.tryEnqueue(
@@ -275,14 +276,28 @@ final class TieredSnapshotStore: SnapshotStore {
     /// - State 3 (body absent, pending ref) → state 5 (body absent,
     ///   committed ref). Subsequent lookups can hydrate from SSD.
     ///
+    /// The committed ref's `bytesOnDisk` is refreshed with the writer's
+    /// `chainBytesOnDisk` — after an extension fold the entry owns its
+    /// whole **Segment Chain**, so live telemetry must match what a
+    /// warm start would restore.
+    ///
+    /// For a **Leaf Extension Admission** (`consumedBaseID != nil`),
+    /// this is also where the ownership transfer lands on the tree:
+    /// the fold consumed the base's manifest entry, so the base's tree
+    /// ref — kept live through the pending window as the warm-start
+    /// fallback — is discarded here. A writer *drop* never reaches
+    /// this path, leaving the base reachable (the transfer degrades to
+    /// `preserved`).
+    ///
     /// Misses (id not in the pending map) are logged at debug and
     /// otherwise ignored — the node was already evicted via the
     /// drop-on-back-pressure path or the writer fired a duplicate
     /// commit for an ID that never actually landed.
-    func markSnapshotRefCommitted(id: String) {
-        guard let pending = pendingRefsByID.removeValue(forKey: id) else {
+    func markSnapshotRefCommitted(_ info: SSDCommitInfo) {
+        guard let pending = pendingRefsByID.removeValue(forKey: info.snapshotID) else {
             Log.agent.debug(
-                "TieredSnapshotStore.markSnapshotRefCommitted: id=\(id) not in pending map"
+                "TieredSnapshotStore.markSnapshotRefCommitted: id=\(info.snapshotID) "
+                + "not in pending map"
             )
             return
         }
@@ -291,13 +306,55 @@ final class TieredSnapshotStore: SnapshotStore {
         // `.ignored(reason)` here (a later admission superseded the ref,
         // or the node already committed) is logged and not recovered —
         // the newer ref wins.
-        let effect = pending.tree.commitRef(node: pending.node, expectedID: id)
+        let effect = pending.tree.commitRef(
+            node: pending.node,
+            expectedID: info.snapshotID,
+            bytesOnDisk: info.chainBytesOnDisk
+        )
         if case .ignored(let reason) = effect {
             Log.agent.debug(
-                "TieredSnapshotStore.markSnapshotRefCommitted: id=\(id) ignored "
+                "TieredSnapshotStore.markSnapshotRefCommitted: id=\(info.snapshotID) ignored "
                 + "(reason=\(String(describing: reason)))"
             )
         }
+
+        // Even when the extension's own ref was superseded mid-window
+        // (`.ignored` above), the fold is durable and the base entry is
+        // gone — discard the base's tree ref unconditionally so no
+        // stale committed ref lingers until a failed hydration.
+        if let baseID = info.consumedBaseID {
+            discardConsumedBaseRef(
+                baseID: baseID,
+                below: pending.node,
+                tree: pending.tree
+            )
+        }
+    }
+
+    /// Find the ancestor node still carrying the consumed base's ref
+    /// and discard it through the tree's explicit-delete seam. The base
+    /// is a strict ancestor of the extension's node by construction
+    /// (same token path, shorter offset); ref-bearing nodes keep their
+    /// identity across path compression, so the parent walk finds it.
+    /// Not finding it is legitimate — an explicit delete or hydration
+    /// failure already cleared the node mid-window — and a no-op.
+    private func discardConsumedBaseRef(
+        baseID: String,
+        below node: RadixTreeNode,
+        tree: TokenRadixTree
+    ) {
+        var current = node.parent
+        while let ancestor = current {
+            if ancestor.state.refID == baseID {
+                tree.discardSnapshotRefAfterExplicitDelete(node: ancestor)
+                return
+            }
+            current = ancestor.parent
+        }
+        Log.agent.debug(
+            "TieredSnapshotStore.discardConsumedBaseRef: base=\(baseID) "
+            + "not on the ancestor path (already cleared)"
+        )
     }
 
     /// Writer drop callback. Three legitimate call paths reach here:

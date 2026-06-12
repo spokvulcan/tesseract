@@ -105,7 +105,7 @@ struct SSDSnapshotStoreTests {
     private func makeStoreWithPartition(
         config: SSDPrefixCacheConfig,
         manifestDebounce: Duration = .milliseconds(20),
-        onCommit: @escaping @Sendable (String) -> Void = { _ in },
+        onCommit: @escaping @Sendable (SSDCommitInfo) -> Void = { _ in },
         onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in }
     ) -> SSDSnapshotStore {
         let store = SSDSnapshotStore(
@@ -138,11 +138,11 @@ struct SSDSnapshotStoreTests {
             return _dropped
         }
 
-        var onCommit: @Sendable (String) -> Void {
-            { [weak self] id in
+        var onCommit: @Sendable (SSDCommitInfo) -> Void {
+            { [weak self] info in
                 guard let self else { return }
                 self.lock.lock()
-                self._committed.append(id)
+                self._committed.append(info.snapshotID)
                 self.lock.unlock()
             }
         }

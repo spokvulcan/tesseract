@@ -460,8 +460,10 @@ struct PrefixCacheManagerTests {
         #expect(ancestorResult.snapshot == nil)
     }
 
-    /// Supersession must also clear state-5 ancestor leaves whose RAM body was
-    /// already dropped but whose committed SSD Snapshot Ref still pins the path.
+    /// A RAM-only descendant supersedes a state-5 ancestor leaf but
+    /// **preserves** its committed SSD Snapshot Ref (ADR-0010): the new
+    /// leaf has no SSD copy, so the ancestor stays the warm-start
+    /// fallback and the next turn's extension base.
     @Test func descendantLeafSupersedesSSDBackedAncestorLeaf() {
         let tieredStore = TieredSnapshotStore(ssdConfig: nil)
         let mgr = PrefixCacheManager(
@@ -503,7 +505,10 @@ struct PrefixCacheManagerTests {
         #expect(diagnostics.supersededLeaves.count == 1)
         #expect(diagnostics.supersededLeaves[0].offset == ancestorTokens.count)
         #expect(diagnostics.supersededLeaves[0].bodyDroppedSnapshotRefID == ancestorRef.snapshotID)
-        #expect(ancestorNode.state.ref == nil)
+        #expect(diagnostics.supersededLeaves[0].mode == .preserved)
+        // The ref (and so the state-5 node) survives — only a full SSD
+        // re-write or an extension transfer may take the backing.
+        #expect(ancestorNode.state.refID == ancestorRef.snapshotID)
         #expect(mgr.stats.snapshotCount == 1)
 
         let ancestorResult = mgr.lookup(tokens: ancestorTokens, partitionKey: defaultKey)

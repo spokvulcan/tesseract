@@ -67,13 +67,14 @@ struct SnapshotManifestTests {
     // MARK: - Schema version
 
     @Test
-    func schemaVersionIsSeven() {
+    func schemaVersionIsEight() {
         // Bumping invalidates every existing manifest. Pinned so an
-        // accidental bump trips this test. v7 removes TriAttention from
-        // the app: `PartitionMeta` no longer carries a TriAttention
-        // identity and `partitionDigest` drops its TriAttention branch.
+        // accidental bump trips this test. v8 adds **Segment Chain**
+        // support for **Leaf Extension Admission** (docs/adr/0010):
+        // descriptors carry `segmentBaseOffset` + `inheritedSegments`,
+        // per-layer container headers carry `suffix_base_offset`.
         // It is the on-disk schema all current-build writes produce.
-        #expect(SnapshotManifestSchema.currentVersion == 7)
+        #expect(SnapshotManifestSchema.currentVersion == 8)
     }
 
     @Test
@@ -152,12 +153,38 @@ struct SnapshotManifestTests {
             "tokenOffset",
             "checkpointType",
             "bytes",
+            "segmentBaseOffset",
+            "inheritedSegments",
             "createdAt",
             "lastAccessAt",
             "fileRelativePath",
             "schemaVersion",
         ]
         #expect(Set(wire.keys) == expectedKeys)
+    }
+
+    @Test
+    func persistedSnapshotDescriptorDecodesWithoutChainFields() throws {
+        // A pre-v8 descriptor (no `segmentBaseOffset` / `inheritedSegments`)
+        // must still *decode* — with full-snapshot defaults — so a v7
+        // manifest reaches the schema-version gate (backup + fresh
+        // start) instead of detouring through the corrupt-manifest
+        // rebuild path.
+        let original = makeDescriptor()
+        let data = try JSONEncoder().encode(original)
+        var wire = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        wire.removeValue(forKey: "segmentBaseOffset")
+        wire.removeValue(forKey: "inheritedSegments")
+        let stripped = try JSONSerialization.data(withJSONObject: wire)
+
+        let decoded = try JSONDecoder().decode(
+            PersistedSnapshotDescriptor.self, from: stripped
+        )
+        #expect(decoded.segmentBaseOffset == 0)
+        #expect(decoded.inheritedSegments.isEmpty)
+        #expect(decoded.totalBytes == decoded.bytes)
     }
 
     // MARK: - PartitionMeta round-trip

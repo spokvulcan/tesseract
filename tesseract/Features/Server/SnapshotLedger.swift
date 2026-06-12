@@ -65,14 +65,15 @@ nonisolated struct WarmStartOutcome: Sendable {
 // MARK: - Evicted resident
 
 /// A committed resident the ledger removed from the in-memory manifest
-/// but whose on-disk file has not yet been deleted and whose `onDrop`
+/// but whose on-disk files have not yet been deleted and whose `onDrop`
 /// callback has not yet fired. The store finalizes these effects
-/// (file delete + callback + diagnostics) *outside* any lock. Carrying
-/// the `fileURL` here lets the store delete without recomputing the
-/// sharded path.
+/// (file deletes + callback + diagnostics) *outside* any lock. Carrying
+/// the `fileURLs` here lets the store delete without recomputing the
+/// sharded paths — one URL per **Snapshot Segment** of the resident's
+/// chain (a single element for ordinary full snapshots).
 nonisolated struct EvictedResident: Sendable {
     let snapshotID: String
-    let fileURL: URL
+    let fileURLs: [URL]
 }
 
 // MARK: - Admission decision
@@ -116,6 +117,14 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// leaf never lands in the manifest after its node was cleaned up.
     private var deletedInFlightSnapshotIDs: Set<String> = []
 
+    /// Base snapshot IDs a pending **Leaf Extension Admission** will
+    /// fold at commit. While an ID is in this set the LRU cut must not
+    /// pick it as a victim — the cut would orphan the in-flight suffix.
+    /// Inserted by `beginExtensionTransfer` (the front door), removed by
+    /// `commit(_:consumingBase:)` or `releaseExtensionTransfer` (every
+    /// writer drop / tombstone path).
+    private var transferringBaseIDs: Set<String> = []
+
     init(rootURL: URL, budgetBytes: Int, manifestDebounce: Duration) {
         self.rootURL = rootURL
         self.budgetBytes = budgetBytes
@@ -145,7 +154,8 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         partitionKey: CachePartitionKey,
         pathFromRoot: [Int],
         snapshot: HybridCacheSnapshot,
-        payloadBytes: Int
+        payloadBytes: Int,
+        segmentBaseOffset: Int = 0
     ) -> PersistedSnapshotDescriptor {
         let snapshotID = UUID().uuidString
         let partitionDigest = partitionKey.partitionDigest
@@ -157,6 +167,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
             tokenOffset: snapshot.tokenOffset,
             checkpointType: snapshot.checkpointType.wireString,
             bytes: payloadBytes,
+            segmentBaseOffset: segmentBaseOffset,
             createdAt: now,
             lastAccessAt: now,
             fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
@@ -164,6 +175,73 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
                 partitionDigest: partitionDigest
             ),
             schemaVersion: SnapshotManifestSchema.currentVersion
+        )
+    }
+
+    // MARK: - Leaf extension transfer protocol
+
+    /// Front-door validation for a **Leaf Extension Admission**: shield
+    /// the base from the LRU cut for the pending window. Returns `false`
+    /// when the base is neither resident nor — per the caller's own
+    /// queue check — queued/in-flight, in which case the extension must
+    /// be rejected (its suffix payload cannot compose without the base).
+    /// The caller (`SSDSnapshotStore.tryEnqueue`) checks its pending
+    /// queue under the queue lock *before* this call; the two locks
+    /// never nest.
+    func beginExtensionTransfer(
+        baseID: String,
+        baseIsQueuedOrInFlight: Bool
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard manifest.snapshots[baseID] != nil || baseIsQueuedOrInFlight else {
+            return false
+        }
+        transferringBaseIDs.insert(baseID)
+        return true
+    }
+
+    /// Release the LRU shield on `baseID` without folding — every
+    /// writer path that terminates a pending extension short of commit
+    /// (back-pressure drop, tombstone, write failure, fold failure)
+    /// must call this exactly once.
+    func releaseExtensionTransfer(baseID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        transferringBaseIDs.remove(baseID)
+    }
+
+    /// Fold the base's **Segment Chain** into a pending extension's
+    /// descriptor: inherited = base's inherited + base's own file. Run
+    /// by the writer *before* `writePayload` so the embedded per-file
+    /// header carries the true chain. Pure read — the base entry stays
+    /// authoritative in the manifest until `commit(_:consumingBase:)`,
+    /// which is what makes a crash inside the window warm-start at the
+    /// base offset instead of losing the conversation. Returns `nil`
+    /// when the base is gone or its offset disagrees with the slice
+    /// boundary (the suffix cannot compose) — the caller drops the item.
+    func prepareFoldedDescriptor(
+        _ descriptor: PersistedSnapshotDescriptor,
+        baseID: String
+    ) -> PersistedSnapshotDescriptor? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let base = manifest.snapshots[baseID],
+              base.tokenOffset == descriptor.segmentBaseOffset
+        else { return nil }
+        return PersistedSnapshotDescriptor(
+            snapshotID: descriptor.snapshotID,
+            partitionDigest: descriptor.partitionDigest,
+            pathFromRoot: descriptor.pathFromRoot,
+            tokenOffset: descriptor.tokenOffset,
+            checkpointType: descriptor.checkpointType,
+            bytes: descriptor.bytes,
+            segmentBaseOffset: descriptor.segmentBaseOffset,
+            inheritedSegments: base.inheritedSegments + [base.ownSegment],
+            createdAt: descriptor.createdAt,
+            lastAccessAt: descriptor.lastAccessAt,
+            fileRelativePath: descriptor.fileRelativePath,
+            schemaVersion: descriptor.schemaVersion
         )
     }
 
@@ -290,7 +368,10 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        let spaceNeeded = descriptor.bytes
+        // For a pending extension this is the own-file bytes only —
+        // the inherited chain is still counted under the (shielded)
+        // base entry, so the net post-fold growth is exactly this.
+        let spaceNeeded = descriptor.totalBytes
         if currentSSDBytes + spaceNeeded <= budgetBytes {
             return (.admit, evicted)
         }
@@ -387,12 +468,17 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// satisfies `predicate`, sorted by `lastAccessAt` ascending (oldest
     /// first). Descriptors whose wire checkpoint type fails to parse are
     /// dropped — they shouldn't exist in practice and are not eviction
-    /// candidates. Must be called with `lock` held.
+    /// candidates. Bases shielded by a pending extension transfer are
+    /// excluded — evicting one would orphan the in-flight suffix. Must
+    /// be called with `lock` held.
     private func sortedEligibleResidentsLocked(
         matching predicate: (HybridCacheSnapshot.CheckpointType) -> Bool
     ) -> [PersistedSnapshotDescriptor] {
         manifest.snapshots.values
             .filter { descriptor in
+                guard !transferringBaseIDs.contains(descriptor.snapshotID) else {
+                    return false
+                }
                 guard
                     let checkpointType = HybridCacheSnapshot.CheckpointType(
                         wireString: descriptor.checkpointType
@@ -403,23 +489,23 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
             .sorted { ($0.lastAccessAt, $0.snapshotID) < ($1.lastAccessAt, $1.snapshotID) }
     }
 
-    /// Drop the manifest entry, decrement the SSD byte count, and return
-    /// an `EvictedResident` carrying the file URL so the store can
-    /// delete it outside the lock. Returns `nil` when the snapshotID is
-    /// not in the manifest. Schedules the debounced persist so
-    /// eviction-only paths still write the updated manifest without
-    /// waiting for an unrelated subsequent mutation. Must be called with
-    /// `lock` held.
+    /// Drop the manifest entry, decrement the SSD byte count by the
+    /// chain total, and return an `EvictedResident` carrying every
+    /// segment file URL so the store can delete them outside the lock.
+    /// Returns `nil` when the snapshotID is not in the manifest.
+    /// Schedules the debounced persist so eviction-only paths still
+    /// write the updated manifest without waiting for an unrelated
+    /// subsequent mutation. Must be called with `lock` held.
     private func removeResidentUnderLock(snapshotID: String) -> EvictedResident? {
         guard let descriptor = manifest.snapshots.removeValue(forKey: snapshotID) else {
             return nil
         }
-        currentSSDBytes -= descriptor.bytes
+        currentSSDBytes -= descriptor.totalBytes
         manifestDirty = true
         scheduleManifestPersistLocked()
         return EvictedResident(
             snapshotID: descriptor.snapshotID,
-            fileURL: fileURL(for: descriptor)
+            fileURLs: chainFileURLs(for: descriptor)
         )
     }
 
@@ -428,15 +514,37 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// Insert a freshly written descriptor as a committed resident.
     /// Returns `false` — vetoing the commit — when a prior
     /// `removeOrTombstone` tombstoned this ID while the write was in
-    /// flight; the store then deletes the orphaned file. On success the
-    /// entry's `lastAccessAt` is stamped to commit time so the first LRU
-    /// cut sees fresh recency.
-    func commit(_ descriptor: PersistedSnapshotDescriptor) -> Bool {
+    /// flight, or when `consumingBase` names a base that is no longer
+    /// resident (a concurrent hydration failure removed it; the suffix
+    /// cannot compose); the store then deletes the orphaned own file.
+    /// On success the entry's `lastAccessAt` is stamped to commit time
+    /// so the first LRU cut sees fresh recency.
+    ///
+    /// `consumingBase` is the **Leaf Extension Admission** fold: the
+    /// base entry leaves the manifest (its files stay — they are the
+    /// new entry's inherited segments) and its LRU shield is released,
+    /// atomically with the insert, so no instant exists where the chain
+    /// is double-counted or unowned.
+    func commit(
+        _ descriptor: PersistedSnapshotDescriptor,
+        consumingBase: String? = nil
+    ) -> Bool {
         lock.lock()
         defer { lock.unlock() }
 
         if deletedInFlightSnapshotIDs.remove(descriptor.snapshotID) != nil {
+            if let consumingBase {
+                transferringBaseIDs.remove(consumingBase)
+            }
             return false
+        }
+
+        if let consumingBase {
+            transferringBaseIDs.remove(consumingBase)
+            guard let base = manifest.snapshots.removeValue(forKey: consumingBase) else {
+                return false
+            }
+            currentSSDBytes -= base.totalBytes
         }
 
         var fresh = descriptor
@@ -449,10 +557,10 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         // each fresh UUID once, so this is defensive against future
         // re-commit paths, not a live correction.
         if let prior = manifest.snapshots[descriptor.snapshotID] {
-            currentSSDBytes -= prior.bytes
+            currentSSDBytes -= prior.totalBytes
         }
         manifest.snapshots[descriptor.snapshotID] = fresh
-        currentSSDBytes += descriptor.bytes
+        currentSSDBytes += descriptor.totalBytes
         manifestDirty = true
         scheduleManifestPersistLocked()
         return true
@@ -572,12 +680,33 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// descriptor's persisted `fileRelativePath` rather than recomputing
     /// the shard layout. The path is stamped once at write time (via
     /// `PersistedSnapshotDescriptor.relativeFilePath`) and carried in the
-    /// manifest, so an `EvictedResident.fileURL` the ledger hands back
-    /// always names the file the store wrote — and the sharding rule has
+    /// manifest, so the `EvictedResident.fileURLs` the ledger hands back
+    /// always name the files the store wrote — and the sharding rule has
     /// a single source of truth instead of a recomputation that could
     /// silently diverge from the stored field.
     private func fileURL(for descriptor: PersistedSnapshotDescriptor) -> URL {
         rootURL.appendingPathComponent(descriptor.fileRelativePath)
+    }
+
+    /// Every segment file of the descriptor's chain, shallow→deep, own
+    /// file last — the order `loadSync` composes in and the set a
+    /// removal deletes. Must not require the lock (pure derivation from
+    /// the descriptor value).
+    private func chainFileURLs(for descriptor: PersistedSnapshotDescriptor) -> [URL] {
+        descriptor.chainFileRelativePaths.map(rootURL.appendingPathComponent)
+    }
+
+    /// Read-path accessor for `loadSync`: the resident's ordered chain
+    /// file URLs plus the per-segment expected offsets for composition
+    /// validation. `nil` when the ID is not resident (evicted between
+    /// the lookup and the hydration).
+    func chainForHydration(
+        id: String
+    ) -> (fileURLs: [URL], tokenOffset: Int)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let descriptor = manifest.snapshots[id] else { return nil }
+        return (chainFileURLs(for: descriptor), descriptor.tokenOffset)
     }
 }
 
@@ -701,8 +830,15 @@ extension SnapshotLedger {
         }
 
         var rebuilt = SnapshotManifest.empty()
-        var recoveredDescriptors = 0
         var orphanedFiles: [URL] = []
+        /// Every `.safetensors` file seen, keyed by root-relative path
+        /// — including files whose header failed to decode, so chain
+        /// integrity checks see them as present and a head referencing
+        /// one survives the rebuild (its hydration fails lazily and
+        /// cleans up the whole chain then).
+        var walkedFiles: [String: URL] = [:]
+        /// Files whose embedded descriptor decoded cleanly.
+        var candidates: [PersistedSnapshotDescriptor] = []
 
         for digest in partitionNames {
             let partitionDir = partitionsDir.appendingPathComponent(digest)
@@ -733,22 +869,51 @@ extension SnapshotLedger {
                 ) else { continue }
                 for name in fileNames where name.hasSuffix(".safetensors") {
                     let fileURL = shardDir.appendingPathComponent(name)
+                    let relativePath = "partitions/\(digest)/snapshots/\(shard)/\(name)"
+                    walkedFiles[relativePath] = fileURL
                     guard let descriptor = extractDescriptorFromFile(fileURL),
                           descriptor.partitionDigest == digest
-                    else {
-                        orphanedFiles.append(fileURL)
-                        continue
-                    }
-                    rebuilt.snapshots[descriptor.snapshotID] = descriptor
-                    recoveredDescriptors += 1
+                    else { continue }
+                    candidates.append(descriptor)
                 }
             }
+        }
+
+        // Chain-head resolution. A file's embedded descriptor carries the
+        // full chain known at write time and the chain below a segment
+        // never changes, so the deepest descriptor of each chain — the
+        // **head**: one no other candidate lists as inherited — describes
+        // the whole chain accurately. A crash between an extension's file
+        // write and the manifest persist leaves both the base's and the
+        // extension's descriptors on disk; the base loses its entry here
+        // (its file survives as the extension's inherited segment), which
+        // is exactly the post-crash state the commit-time fold would have
+        // produced.
+        let inheritedPaths = Set(
+            candidates.flatMap { $0.inheritedSegments.map(\.fileRelativePath) }
+        )
+        var keptPaths = Set<String>()
+        for descriptor in candidates
+        where !inheritedPaths.contains(descriptor.fileRelativePath) {
+            guard descriptor.inheritedSegments.allSatisfy({
+                walkedFiles[$0.fileRelativePath] != nil
+            }) else {
+                // Broken chain — a missing inherited file means the head
+                // can never compose. Drop the entry; its own file falls
+                // out via the keep-set sweep below.
+                continue
+            }
+            rebuilt.snapshots[descriptor.snapshotID] = descriptor
+            keptPaths.formUnion(descriptor.chainFileRelativePaths)
+        }
+        for (relativePath, url) in walkedFiles where !keptPaths.contains(relativePath) {
+            orphanedFiles.append(url)
         }
 
         Log.agent.info(
             "SnapshotLedger rebuild: recovered "
             + "partitions=\(rebuilt.partitions.count) "
-            + "descriptors=\(recoveredDescriptors) "
+            + "descriptors=\(rebuilt.snapshots.count) "
             + "orphanedFiles=\(orphanedFiles.count)"
         )
 
@@ -807,7 +972,7 @@ extension SnapshotLedger {
             // Same rationale as the `PartitionMeta` filter above.
             guard desc.schemaVersion == SnapshotManifestSchema.currentVersion else {
                 deadDescriptorFiles.append(
-                    fileURL(for: desc)
+                    contentsOf: chainFileURLs(for: desc)
                 )
                 continue
             }
@@ -819,7 +984,7 @@ extension SnapshotLedger {
                 wireString: desc.checkpointType
             ) != nil else {
                 deadDescriptorFiles.append(
-                    fileURL(for: desc)
+                    contentsOf: chainFileURLs(for: desc)
                 )
                 continue
             }
@@ -827,7 +992,7 @@ extension SnapshotLedger {
             descriptorsByDigest[desc.partitionDigest, default: []].append(desc)
         }
 
-        let seedBytes = restored.snapshots.values.reduce(0) { $0 + $1.bytes }
+        let seedBytes = restored.snapshots.values.reduce(0) { $0 + $1.totalBytes }
 
         lock.lock()
         self.manifest = restored
@@ -941,10 +1106,26 @@ extension SnapshotLedger {
             "seedDescriptorForTesting: partition not registered"
         )
         if let previous = manifest.snapshots[descriptor.snapshotID] {
-            currentSSDBytes -= previous.bytes
+            currentSSDBytes -= previous.totalBytes
         }
         manifest.snapshots[descriptor.snapshotID] = descriptor
-        currentSSDBytes += descriptor.bytes
+        currentSSDBytes += descriptor.totalBytes
+    }
+
+    /// Read a resident descriptor without mutating anything. Used by
+    /// the extension-transfer tests to assert the commit-time fold.
+    nonisolated func residentDescriptorForTesting(id: String) -> PersistedSnapshotDescriptor? {
+        lock.lock()
+        defer { lock.unlock() }
+        return manifest.snapshots[id]
+    }
+
+    /// The currently shielded extension bases. Tests assert the shield
+    /// is released on every terminal writer path.
+    nonisolated func transferringBaseIDsForTesting() -> Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return transferringBaseIDs
     }
 
     /// Read a descriptor's current `lastAccessAt` without mutating

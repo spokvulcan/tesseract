@@ -189,7 +189,7 @@ struct SnapshotLedgerTests {
 
         let evicted = ledger.remove(id: a.snapshotID)
         #expect(evicted?.snapshotID == a.snapshotID)
-        #expect(evicted?.fileURL == root.appendingPathComponent(a.fileRelativePath))
+        #expect(evicted?.fileURLs == [root.appendingPathComponent(a.fileRelativePath)])
         #expect(ledger.currentSSDBytesForTesting() == 2500)
         #expect(ledger.residencyStats().snapshotCount == 1)
 
@@ -374,7 +374,7 @@ struct SnapshotLedgerTests {
 
         let evicted = ledger.removeOrTombstone(id: d.snapshotID)
         #expect(evicted?.snapshotID == d.snapshotID)
-        #expect(evicted?.fileURL == root.appendingPathComponent(d.fileRelativePath))
+        #expect(evicted?.fileURLs == [root.appendingPathComponent(d.fileRelativePath)])
         #expect(ledger.currentSSDBytesForTesting() == 0)
         #expect(ledger.residencyStats().snapshotCount == 0)
     }

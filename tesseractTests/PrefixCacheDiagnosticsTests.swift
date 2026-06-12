@@ -208,17 +208,32 @@ struct PrefixCacheDiagnosticsTests {
     @Test func leafSupersessionKeepsRefIDWireField() {
         let withRef = PrefixCacheDiagnostics.LeafSupersessionEvent(
             offset: 512,
-            snapshotRefID: "snap-old"
+            snapshotRefID: "snap-old",
+            mode: .transferred
         )
         let withoutRef = PrefixCacheDiagnostics.LeafSupersessionEvent(
             offset: 256,
-            snapshotRefID: nil
+            snapshotRefID: nil,
+            mode: .deleted
         )
 
         #expect(context.render(withRef) ==
-            "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=512 storageRefID=snap-old")
+            "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=512 storageRefID=snap-old mode=transferred")
         #expect(context.render(withoutRef) ==
-            "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=256 storageRefID=nil")
+            "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=256 storageRefID=nil mode=deleted")
+    }
+
+    @Test func leafExtensionCommitRendersChainShape() {
+        let event = PrefixCacheDiagnostics.LeafExtensionCommitEvent(
+            id: "snap-new",
+            baseID: "snap-base",
+            suffixBytes: 1_024,
+            chainBytes: 8_192,
+            chainSegments: 3
+        )
+
+        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
+            "event=leafExtensionCommit id=snap-new baseID=snap-base suffixBytes=1024 chainBytes=8192 chainSegments=3")
     }
 
     @Test func ssdRecordHitCarriesIDOnly() {
@@ -244,6 +259,7 @@ struct PrefixCacheDiagnosticsTests {
             .diskFull,
             .writerIOError,
             .hydrationFailure,
+            .extensionBaseLost,
         ] {
             let event = PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                 id: "snap-8",

@@ -150,8 +150,43 @@ final class PrefixCacheManager {
     }
 
     struct LeafSupersession: Sendable {
+        /// What happened to the superseded leaf's SSD backing. See
+        /// `CONTEXT.md` → SSD leaf extension (three supersession modes).
+        enum Mode: String, Sendable {
+            /// A **Leaf Extension Admission** is taking ownership of
+            /// the backing's **Segment Chain**. The transfer completes
+            /// at the writer's commit, where the node ref is discarded
+            /// (`TieredSnapshotStore.markSnapshotRefCommitted`); until
+            /// then — and permanently, if the writer drops the
+            /// extension — the backing behaves as `preserved`.
+            case transferred
+            /// The backing (or the whole node, when it had none) was
+            /// deleted — a full SSD write replaced it.
+            case deleted
+            /// The backing was kept (body dropped, ref retained) — the
+            /// new leaf has no SSD copy, so the ancestor remains the
+            /// warm-start fallback and the next extension base.
+            case preserved
+        }
+
         let offset: Int
         let bodyDroppedSnapshotRefID: String?
+        let mode: Mode
+    }
+
+    /// How `supersedeAncestorLeaves` treats the SSD backings of the
+    /// ancestor leaves a fresh leaf admission supersedes.
+    private enum LeafSupersessionPolicy {
+        /// Full SSD write accepted — ancestor backings are replaced.
+        case deleteBackings
+        /// **Leaf Extension Admission** accepted — the matching base
+        /// transfers its chain; any other (stale) SSD-backed ancestor
+        /// is deleted.
+        case transferBacking(baseID: String)
+        /// The new leaf has no SSD copy (RAM-only admission, or the
+        /// enqueue was rejected) — ancestor backings stay reachable as
+        /// the warm-start fallback and the next turn's extension base.
+        case preserveBackings
     }
 
     private struct EvictionCandidate {
@@ -467,17 +502,21 @@ final class PrefixCacheManager {
             return (node, path)
         }
 
+        // Returns the accepted ref (nil when SSD is disabled or the
+        // front door rejected the enqueue), so the leaf case can derive
+        // its supersession policy from the actual admission outcome.
+        @discardableResult
         func admitSSDEntry(
             _ entry: SnapshotAdmission.Entry,
             node: RadixTreeNode,
             path: [Int]
-        ) {
+        ) -> SnapshotRef? {
             guard case .ramAndSSD(let payload) = entry.storage else {
-                return
+                return nil
             }
             // Hand the front door domain inputs; the ledger owns the
             // descriptor schema (`SnapshotLedger.makeDescriptor`).
-            store.admitSnapshot(
+            return store.admitSnapshot(
                 node: node,
                 tree: tree,
                 partitionKey: admission.partitionKey,
@@ -497,11 +536,49 @@ final class PrefixCacheManager {
         case .leaf:
             let entry = admission.entries.first
             let stored = storeRAMEntry(entry)
-            supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
-                for: stored.node,
-                in: tree
-            ))
-            admitSSDEntry(entry, node: stored.node, path: stored.path)
+            // The supersession walk and the SSD enqueue need opposite
+            // orders depending on the payload:
+            // - **Leaf Extension Admission**: enqueue FIRST — the front
+            //   door must validate-and-shield the base while its backing
+            //   is untouched, and the walk's transfer-vs-preserve choice
+            //   depends on whether the enqueue was accepted.
+            // - Full SSD write (and RAM-only): supersede FIRST, so the
+            //   doomed ancestor backings free their budget before the
+            //   writer's admission cut sizes up the incoming write — a
+            //   near-full tier would otherwise evict an unrelated
+            //   resident that didn't need to go.
+            if case .ramAndSSD(let payload) = entry.storage,
+               let extending = payload.extending {
+                let acceptedRef = admitSSDEntry(entry, node: stored.node, path: stored.path)
+                let policy: LeafSupersessionPolicy = acceptedRef != nil
+                    ? .transferBacking(baseID: extending.baseSnapshotID)
+                    : .preserveBackings
+                supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
+                    for: stored.node,
+                    in: tree,
+                    policy: policy
+                ))
+            } else {
+                let policy: LeafSupersessionPolicy
+                switch entry.storage {
+                case .ramOnly:
+                    policy = .preserveBackings
+                case .ramAndSSD:
+                    // Unconditional delete, even if the enqueue below is
+                    // then rejected — the pre-extension behavior. A full
+                    // write declares the ancestor history replaced; the
+                    // rare rejection (oversized payload, unregistered
+                    // partition) costs the warm-start fallback, never
+                    // correctness.
+                    policy = .deleteBackings
+                }
+                supersededLeaves.append(contentsOf: supersedeAncestorLeaves(
+                    for: stored.node,
+                    in: tree,
+                    policy: policy
+                ))
+                admitSSDEntry(entry, node: stored.node, path: stored.path)
+            }
         }
 
         let evictions = evictToFitBudget(
@@ -517,7 +594,8 @@ final class PrefixCacheManager {
 
     private func supersedeAncestorLeaves(
         for node: RadixTreeNode,
-        in tree: TokenRadixTree
+        in tree: TokenRadixTree,
+        policy: LeafSupersessionPolicy
     ) -> [LeafSupersession] {
         var current = node.parent
         var superseded: [LeafSupersession] = []
@@ -532,15 +610,39 @@ final class PrefixCacheManager {
 
             let offset = state.tokenOffset ?? 0
             let snapshotRefID = state.refID
+            var mode: LeafSupersession.Mode = .deleted
 
-            // Fully remove the superseded leaf through the tree (sole
-            // mutator). Delete the SSD backing first so discarding the ref
-            // cannot orphan a file + manifest entry, then drop any RAM
-            // body. Both tree wrappers are strict, so call each only when
-            // the captured state says the transition is applicable.
+            // The tree is the sole mutator; both wrappers are strict, so
+            // call each only when the captured state says the transition
+            // is applicable. What happens to the SSD backing rides the
+            // policy:
+            // - transfer: the matching base's chain will belong to the
+            //   new leaf once the writer's fold commits. Until then the
+            //   base ref stays live — it is the warm-start fallback and
+            //   the hit target for the whole pending window, and the
+            //   writer can still drop the extension (budget cut, I/O
+            //   failure). `TieredSnapshotStore.markSnapshotRefCommitted`
+            //   discards the ref when the fold is durable; a writer
+            //   drop leaves it intact (the transfer degrades to
+            //   `preserved`). Discarding here would strand the base:
+            //   manifest-resident but tree-unreachable.
+            // - preserve: keep the ref (and so the node) — the new leaf
+            //   has no SSD copy, so the ancestor stays the warm-start
+            //   fallback and the next turn's extension base.
+            // - delete: the pre-extension behavior — delete the SSD
+            //   backing first so discarding the ref cannot orphan a
+            //   file + manifest entry.
             if let snapshotRefID {
-                store.deleteSnapshot(snapshotID: snapshotRefID)
-                tree.discardSnapshotRefAfterExplicitDelete(node: ancestor)
+                switch policy {
+                case .transferBacking(let baseID) where snapshotRefID == baseID:
+                    mode = .transferred
+                case .preserveBackings:
+                    mode = .preserved
+                default:
+                    store.deleteSnapshot(snapshotID: snapshotRefID)
+                    tree.discardSnapshotRefAfterExplicitDelete(node: ancestor)
+                    mode = .deleted
+                }
             }
             if state.hasResidentBody {
                 tree.dropBody(node: ancestor)
@@ -548,12 +650,33 @@ final class PrefixCacheManager {
 
             superseded.append(LeafSupersession(
                 offset: offset,
-                bodyDroppedSnapshotRefID: snapshotRefID
+                bodyDroppedSnapshotRefID: snapshotRefID,
+                mode: mode
             ))
             current = nextAncestor
         }
 
         return superseded
+    }
+
+    /// The base a **Leaf Extension Admission** for `tokens` would slice
+    /// against: the deepest SSD-backed strict-ancestor leaf on the
+    /// path. Read-only — the SSD front door re-validates (and shields)
+    /// the base at enqueue, so a stale answer degrades to a rejected
+    /// enqueue, never a broken chain. `nil` when SSD is disabled or no
+    /// such ancestor exists (then the leaf admits full).
+    func extensionBase(
+        tokens: [Int],
+        partitionKey: CachePartitionKey
+    ) -> SnapshotExtension? {
+        guard store.isSSDEnabled,
+              let tree = store.tree(for: partitionKey),
+              let ref = tree.deepestRefBearingLeaf(tokens: tokens)
+        else { return nil }
+        return SnapshotExtension(
+            baseSnapshotID: ref.snapshotID,
+            baseOffset: ref.tokenOffset
+        )
     }
 
     /// Reseed a snapshot at `path` with an explicit `lastAccessTime`.
@@ -733,7 +856,7 @@ final class PrefixCacheManager {
                     partitionDigest: descriptor.partitionDigest,
                     tokenOffset: descriptor.tokenOffset,
                     checkpointType: checkpointType,
-                    bytesOnDisk: descriptor.bytes
+                    bytesOnDisk: descriptor.totalBytes
                 )
                 restoreSnapshotRef(
                     path: descriptor.pathFromRoot,
