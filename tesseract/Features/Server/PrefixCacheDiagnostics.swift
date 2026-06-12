@@ -163,6 +163,35 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// One admitted **Speculative Canonical Prefill** pass: the background
+    /// re-prefill of the **Think-Strip Rewind** span after a stop-finish
+    /// answer (ADR-0009). Logged on every admission — full target or the
+    /// partial progress of a preempted pass (`preempted=true`); passes that
+    /// admit nothing surface as `skip` events with `stage=speculativePrefill`.
+    struct SpeculativePrefillEvent: Payload {
+        let targetOffset: Int
+        let boundaryOffset: Int
+        let prefilledTokens: Int
+        let prefillSeconds: TimeInterval
+        let rewindSpanTokens: Int
+        /// `true` when this admission is the partial progress of a preempted
+        /// pass (capture-on-preempt) rather than the full planned target.
+        let preempted: Bool
+
+        let eventName = "speculativePrefill"
+
+        var fields: [(String, String)] {
+            [
+                ("targetOffset", "\(targetOffset)"),
+                ("boundaryOffset", "\(boundaryOffset)"),
+                ("prefilledTokens", "\(prefilledTokens)"),
+                ("prefillMs", PrefixCacheDiagnostics.milliseconds(prefillSeconds)),
+                ("rewindSpanTokens", "\(rewindSpanTokens)"),
+                ("preempted", "\(preempted)"),
+            ]
+        }
+    }
+
     struct EvictionEvent: Payload {
         let strategy: PrefixCacheManager.EvictionEvent.Strategy
         let offset: Int

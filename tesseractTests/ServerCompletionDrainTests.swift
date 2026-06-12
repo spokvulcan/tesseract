@@ -114,6 +114,66 @@ struct ServerCompletionDrainTests {
         await unloadTask.value
         #expect(await unloadFinished.get())
     }
+
+    // MARK: - Speculative prefill drain contract (ADR-0009)
+
+    /// A task that parks until cancelled, recording that it observed the
+    /// cancel — the unit stand-in for a speculative pass mid-chunk-loop.
+    private func parkedUntilCancelled(_ observedCancel: AsyncFlag) -> Task<Void, Never> {
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            await observedCancel.set()
+        }
+    }
+
+    @Test
+    func unloadCancelsAndAwaitsTheSpeculativePrefill() async {
+        let actor = LLMActor()
+        let observedCancel = AsyncFlag()
+        await actor.registerSpeculativePrefillForTesting(
+            parkedUntilCancelled(observedCancel), id: UUID()
+        )
+
+        await actor.unloadModel()
+
+        // The drain awaited the task, so by the time unload returns the task
+        // has fully finished — and it finished because it was cancelled.
+        #expect(await observedCancel.get())
+    }
+
+    @Test
+    func staleSpeculativeFinishDoesNotDropANewerSlot() async {
+        let actor = LLMActor()
+        let observedCancel = AsyncFlag()
+        await actor.registerSpeculativePrefillForTesting(
+            parkedUntilCancelled(observedCancel), id: UUID()
+        )
+
+        // A finisher for some other (older) pass must not clear the slot:
+        // unload must still find, cancel, and await the registered task.
+        await actor.clearFinishedSpeculativeServerPrefill(UUID())
+        await actor.unloadModel()
+
+        #expect(await observedCancel.get())
+    }
+
+    @Test
+    func preemptAwaitsTheSpeculativePrefillSettle() async {
+        let actor = LLMActor()
+        let observedCancel = AsyncFlag()
+        await actor.registerSpeculativePrefillForTesting(
+            parkedUntilCancelled(observedCancel), id: UUID()
+        )
+
+        await actor.preemptServerSpeculativePrefill()
+
+        // The preempting entry's wait covers the pass's settle: by the time
+        // the preempt returns, the task has fully finished — and it finished
+        // because it was cancelled, not because it was abandoned mid-flight.
+        #expect(await observedCancel.get())
+    }
 }
 
 /// Controllable fake for the registered completion handle: counts cancels,
