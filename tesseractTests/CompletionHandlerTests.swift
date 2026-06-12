@@ -467,12 +467,12 @@ struct ModelSelectionTests {
 
     private static let qwen4 = "qwen3.5-4b-paro"
     private static let qwen9 = "qwen3.5-9b-paro"
-    private static let agentIDs = [qwen4, qwen9, "qwen3.5-4b"]
+    private static let agentIDs = [qwen4, qwen9, "qwen3.6-27b"]
 
     private static let downloadedStatuses: [String: ModelStatus] = [
         qwen4: .downloaded(sizeOnDisk: 1),
         qwen9: .downloaded(sizeOnDisk: 1),
-        "qwen3.5-4b": .downloaded(sizeOnDisk: 1),
+        "qwen3.6-27b": .downloaded(sizeOnDisk: 1),
     ]
 
     @Test func resolvesNilToUseSettings() {
@@ -529,7 +529,7 @@ struct ModelSelectionTests {
         let statuses: [String: ModelStatus] = [
             Self.qwen4: .downloaded(sizeOnDisk: 1),
             Self.qwen9: .notDownloaded,
-            "qwen3.5-4b": .downloaded(sizeOnDisk: 1),
+            "qwen3.6-27b": .downloaded(sizeOnDisk: 1),
         ]
         #expect(
             CompletionHandler.resolveModelSelection(

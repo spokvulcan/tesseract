@@ -13,15 +13,16 @@ import MLXLMCommon
 @MainActor
 struct ModelDefinitionCatalogTests {
 
-    @Test func includesQwen35_27BParoInAgentCatalog() async throws {
-        guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.5-27b-paro" }) else {
-            Issue.record("Missing qwen3.5-27b-paro model definition")
+    @Test func includesQwen36_27BParoInAgentCatalog() async throws {
+        guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.6-27b-paro" }) else {
+            Issue.record("Missing qwen3.6-27b-paro model definition")
             return
         }
 
-        #expect(model.displayName == "Qwen3.5-27B PARO")
+        #expect(model.displayName == "Qwen3.6-27B PARO")
         #expect(model.category == .agent)
-        #expect(model.repoID == "z-lab/Qwen3.5-27B-PARO")
+        #expect(model.repoID == "z-lab/Qwen3.6-27B-PARO")
+        #expect(model.cacheSubdirectory == "z-lab_Qwen3.6-27B-PARO")
         #expect(model.requiredExtension == "safetensors")
         #expect(
             ModelDefinition.byCategory()

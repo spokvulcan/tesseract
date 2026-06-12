@@ -57,10 +57,10 @@ struct OpenCodeSetupScriptTests {
     @Test func summaryListsModelsWithModalityAndDefault() {
         let script = OpenCodeSetupScript.render(snapshot: snapshot())
 
-        #expect(script.contains("qwen3.5-27b-paro"))
+        #expect(script.contains("qwen3.6-27b-paro"))
         #expect(script.contains("vision"))
         #expect(script.contains("262k"))
-        #expect(script.contains("Default model -> tesseract/qwen3.5-27b-paro"))
+        #expect(script.contains("Default model -> tesseract/qwen3.6-27b-paro"))
     }
 
     @Test func emptySnapshotHintsAtDownloadingInsteadOfDefault() {
@@ -86,13 +86,13 @@ struct OpenCodeSetupScriptTests {
             port: port,
             models: [
                 IntegrationSnapshot.Model(
-                    id: "qwen3.5-27b-paro",
-                    displayName: "Qwen3.5-27B PARO",
+                    id: "qwen3.6-27b-paro",
+                    displayName: "Qwen3.6-27B PARO",
                     visionCapable: true,
                     contextLength: 262_144
                 )
             ],
-            defaultModelID: "qwen3.5-27b-paro"
+            defaultModelID: "qwen3.6-27b-paro"
         )
     }
 }

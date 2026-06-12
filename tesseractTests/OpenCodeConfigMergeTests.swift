@@ -18,7 +18,7 @@ struct OpenCodeConfigMergeTests {
         let root = try parse(output.configData)
         #expect(output.replacedCorruptInput == false)
         #expect(root["$schema"] as? String == "https://opencode.ai/config.json")
-        #expect(root["model"] as? String == "tesseract/qwen3.5-27b-paro")
+        #expect(root["model"] as? String == "tesseract/qwen3.6-27b-paro")
         let tesseract = try providerBlock(root)
         #expect(tesseract["npm"] as? String == "@ai-sdk/openai-compatible")
         #expect(tesseract["name"] as? String == "Tesseract")
@@ -75,7 +75,7 @@ struct OpenCodeConfigMergeTests {
         #expect(tesseract["handTunedKey"] == nil)
         let models = tesseract["models"] as? [String: Any]
         #expect(models?["deleted-model"] == nil)
-        #expect(models?["qwen3.5-27b-paro"] != nil)
+        #expect(models?["qwen3.6-27b-paro"] != nil)
     }
 
     @Test func mergeIsIdempotent() throws {
@@ -109,7 +109,7 @@ struct OpenCodeConfigMergeTests {
         #expect(output.replacedCorruptInput == false)
         let root = try parse(output.configData)
         #expect((root["mcp"] as? [String: Any])?.keys.contains("pencil") == true)
-        #expect(root["model"] as? String == "tesseract/qwen3.5-27b-paro")
+        #expect(root["model"] as? String == "tesseract/qwen3.6-27b-paro")
     }
 
     @Test func commentMarkersInsideStringsAreNotComments() throws {
@@ -164,12 +164,12 @@ struct OpenCodeConfigMergeTests {
     @Test func visionModelAdvertisesImageInputAndAttachment() throws {
         let output = OpenCodeConfigMerge.merge(existingConfig: nil, snapshot: snapshot())
 
-        let entry = try modelEntry(output.configData, id: "qwen3.5-27b-paro")
+        let entry = try modelEntry(output.configData, id: "qwen3.6-27b-paro")
         #expect(entry["attachment"] as? Bool == true)
         let modalities = entry["modalities"] as? [String: Any]
         #expect(modalities?["input"] as? [String] == ["text", "image"])
         #expect(modalities?["output"] as? [String] == ["text"])
-        #expect(entry["name"] as? String == "Qwen3.5-27B PARO (Tesseract)")
+        #expect(entry["name"] as? String == "Qwen3.6-27B PARO (Tesseract)")
     }
 
     @Test func textModelIsTextOnlyWithoutAttachment() throws {
@@ -184,7 +184,7 @@ struct OpenCodeConfigMergeTests {
     @Test func limitsCarryTheContextLength() throws {
         let output = OpenCodeConfigMerge.merge(existingConfig: nil, snapshot: snapshot())
 
-        let entry = try modelEntry(output.configData, id: "qwen3.5-27b-paro")
+        let entry = try modelEntry(output.configData, id: "qwen3.6-27b-paro")
         let limit = entry["limit"] as? [String: Any]
         #expect(limit?["context"] as? Int == 262_144)
         #expect(limit?["output"] as? Int == 262_144)
@@ -198,7 +198,7 @@ struct OpenCodeConfigMergeTests {
         let output = OpenCodeConfigMerge.merge(existingConfig: existing, snapshot: snapshot())
 
         let root = try parse(output.configData)
-        #expect(root["model"] as? String == "tesseract/qwen3.5-27b-paro")
+        #expect(root["model"] as? String == "tesseract/qwen3.6-27b-paro")
     }
 
     @Test func emptySnapshotPreservesExistingDefault() throws {
@@ -218,8 +218,8 @@ struct OpenCodeConfigMergeTests {
             port: port,
             models: [
                 IntegrationSnapshot.Model(
-                    id: "qwen3.5-27b-paro",
-                    displayName: "Qwen3.5-27B PARO",
+                    id: "qwen3.6-27b-paro",
+                    displayName: "Qwen3.6-27B PARO",
                     visionCapable: true,
                     contextLength: 262_144
                 ),
@@ -230,7 +230,7 @@ struct OpenCodeConfigMergeTests {
                     contextLength: 262_144
                 ),
             ],
-            defaultModelID: "qwen3.5-27b-paro"
+            defaultModelID: "qwen3.6-27b-paro"
         )
     }
 
