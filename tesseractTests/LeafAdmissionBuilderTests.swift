@@ -98,6 +98,104 @@ import MLXLMCommon
         #expect(prefix == nil)
     }
 
+    // MARK: - futureSharedPrefix — the speculative canonical target path
+
+    @Test func futureSharedPrefixEndsAtTheNextUserTurnHeader() throws {
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(role: .user, content: "question"),
+            HTTPPrefixCacheMessage(role: .assistant, content: "answer"),
+        ])
+        let future = try LeafAdmissionBuilder.futureSharedPrefix(
+            storedConversation: stored,
+            toolSpecs: nil,
+            tokenizer: tokenizer,
+            keySpace: .identity()
+        )
+        // The two probe contents diverge at their first character, so the
+        // shared path is the stored render plus exactly the next user turn's
+        // header — no probe content can leak into it.
+        let header = tokenizer.encode(text: "<|im_start|>user\n", addSpecialTokens: false)
+        #expect(try future?.get() == (try render(stored)) + header)
+    }
+
+    @Test func futureSharedPrefixCoversTheThinkStripRewindSpan() throws {
+        // A thinking template keeps the assistant's <think> in the stored
+        // render (it is after the last real user message) and strips it the
+        // moment any new user message lands — the Think-Strip Rewind.
+        let strippingTokenizer = FakeChatMLTokenizer(stripsThinkBeforeLastUser: true)
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(role: .user, content: "question"),
+            HTTPPrefixCacheMessage(
+                role: .assistant, content: "<think>long reasoning</think>\nanswer"
+            ),
+        ])
+
+        let canonical = try #require(try LeafAdmissionBuilder.reusablePrefix(
+            continuation: .userTurn,
+            storedConversation: stored,
+            toolSpecs: nil,
+            tokenizer: strippingTokenizer,
+            keySpace: .identity()
+        )?.get())
+        let future = try #require(try LeafAdmissionBuilder.futureSharedPrefix(
+            storedConversation: stored,
+            toolSpecs: nil,
+            tokenizer: strippingTokenizer,
+            keySpace: .identity()
+        )?.get())
+
+        // The canonical leaf path stops at the strip divergence (the start of
+        // the assistant's think block); the future shared path runs through
+        // the whole think-stripped render plus the next user turn's header —
+        // the rewind span between them is what the speculative pass prefills.
+        #expect(canonical.count < future.count)
+        #expect(Array(future[0..<canonical.count]) == canonical)
+
+        let strippedRender = try strippingTokenizer.applyChatTemplate(
+            messages: conversation(messages: [
+                HTTPPrefixCacheMessage(role: .user, content: "question"),
+                HTTPPrefixCacheMessage(role: .assistant, content: "answer"),
+            ]).promptMessages,
+            tools: nil,
+            additionalContext: ["add_generation_prompt": false]
+        )
+        let header = strippingTokenizer.encode(
+            text: "<|im_start|>user\n", addSpecialTokens: false
+        )
+        #expect(future == strippedRender + header)
+    }
+
+    @Test func futureSharedPrefixStopsAtItsCooperativeCheckWhenCancelled() async {
+        // The probe body is synchronous render work — a preemption reaches it
+        // only through its cooperative checks (the speculative pass cancels
+        // its probe task on cancellation; `discard()`ed seeds do the same).
+        // Without them, the preempting request would wait out the full probe.
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(role: .user, content: "question"),
+            HTTPPrefixCacheMessage(role: .assistant, content: "answer"),
+        ])
+        let tokenizer = self.tokenizer
+
+        let observedCancellation = await Task.detached { () -> Bool in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                _ = try LeafAdmissionBuilder.futureSharedPrefix(
+                    storedConversation: stored,
+                    toolSpecs: nil,
+                    tokenizer: tokenizer,
+                    keySpace: .identity()
+                )
+                return false
+            } catch is CancellationError {
+                return true
+            } catch {
+                return false
+            }
+        }.value
+
+        #expect(observedCancellation)
+    }
+
     // MARK: - plan() — the GPU-free leaf-capture routing decision
 
     /// A boundary snapshot with a controllable `tokenOffset` for routing tests —

@@ -17,6 +17,13 @@ import MLXLMCommon
 struct FakeChatMLTokenizer: Tokenizer {
     var promptStartsThinking = true
 
+    /// Mirrors the PARO think-strip: when set, assistant turns that precede a
+    /// later user message render with their `<think>…</think>` block removed
+    /// — the template keeps thinks only in the span after the last user
+    /// message. Off by default so the existing tokenizer-affine suites keep
+    /// byte-identical renders.
+    var stripsThinkBeforeLastUser = false
+
     func encode(text: String, addSpecialTokens: Bool) -> [Int] {
         Array(text.utf8).map(Int.init)
     }
@@ -50,7 +57,8 @@ struct FakeChatMLTokenizer: Tokenizer {
         // tokens; pure-string contents produce byte-identical renders to the
         // previous string-concatenation implementation.
         var tokens: [Int] = []
-        for message in messages {
+        let lastUserIndex = messages.lastIndex { ($0["role"] as? String) == "user" }
+        for (index, message) in messages.enumerated() {
             let role = message["role"] as? String ?? ""
             tokens += encode(text: "<|im_start|>\(role)\n", addSpecialTokens: false)
             if let parts = message["content"] as? [[String: any Sendable]] {
@@ -62,7 +70,13 @@ struct FakeChatMLTokenizer: Tokenizer {
                     }
                 }
             } else {
-                tokens += encode(text: message["content"] as? String ?? "", addSpecialTokens: false)
+                var content = message["content"] as? String ?? ""
+                if stripsThinkBeforeLastUser,
+                   role == "assistant",
+                   let lastUserIndex, index < lastUserIndex {
+                    content = Self.strippingThink(content)
+                }
+                tokens += encode(text: content, addSpecialTokens: false)
             }
             tokens += encode(text: "<|im_end|>\n", addSpecialTokens: false)
         }
@@ -81,6 +95,19 @@ struct FakeChatMLTokenizer: Tokenizer {
 
     static func generationPrompt(thinking: Bool) -> String {
         thinking ? "<|im_start|>assistant\n<think>\n" : "<|im_start|>assistant\n"
+    }
+
+    /// Remove one `<think>…</think>` block (plus a trailing newline) from an
+    /// assistant turn, the way thinking templates rewrite history once a
+    /// later user message exists.
+    private static func strippingThink(_ content: String) -> String {
+        guard let start = content.range(of: "<think>"),
+              let end = content.range(of: "</think>")
+        else { return content }
+        var stripped = content
+        stripped.removeSubrange(start.lowerBound..<end.upperBound)
+        if stripped.hasPrefix("\n") { stripped.removeFirst() }
+        return stripped
     }
 
     /// A **Cache Key Space** over a synthetic prepared sequence — one

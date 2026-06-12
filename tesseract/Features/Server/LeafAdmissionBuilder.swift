@@ -130,6 +130,65 @@ nonisolated enum LeafAdmissionBuilder {
         return keySpace.translate(renderTokens: Array(continuationTokens[0..<common]))
     }
 
+    /// The second user probe for `futureSharedPrefix`. Diverges from
+    /// `Continuation.userTurn`'s content at the *first* character: the common
+    /// prefix of the two probe renders must stop inside the user-turn header,
+    /// before any content token. A shared leading character would leak probe
+    /// content into the "shared" path and admit a leaf no real user message
+    /// could ever walk to.
+    static let divergentUserProbeMessage: [String: any Sendable] = [
+        "role": Chat.Message.Role.user.rawValue,
+        "content": "Zqxv_strip_probe",
+    ]
+
+    /// The token path the *next* request will share regardless of what the
+    /// user types: the longest common prefix between two single-user-turn
+    /// continuation renders whose probe contents diverge at the first
+    /// character. A thinking template strips the post-last-user `<think>`
+    /// span identically in both renders — exactly as it will for the real
+    /// next user message — so the shared prefix runs through the whole
+    /// think-stripped conversation and the next user turn's header, ending
+    /// where that message's content would begin.
+    ///
+    /// This is the **Speculative Canonical Prefill** target path
+    /// (CONTEXT.md): everything in it past the canonical leaf is the
+    /// **Think-Strip Rewind** span a background pass can re-prefill while the
+    /// GPU is idle. Same render/key-space contract and failure channels as
+    /// `reusablePrefix`: render space in, key space out; `nil` when the two
+    /// renders never converge or never diverge (no distinct boundary).
+    ///
+    /// Cooperatively cancellable: the speculative pass cancels its probe on
+    /// preemption (and discarded seeds cancel it on the floor), and the
+    /// checks here bound the abandoned work to one render+tokenize — without
+    /// them a cancel would be a no-op against this synchronous body, and the
+    /// preempting request would wait out the full remaining probe.
+    static func futureSharedPrefix(
+        storedConversation: HTTPPrefixCacheConversation,
+        toolSpecs: [ToolSpec]?,
+        tokenizer: any Tokenizer,
+        keySpace: CacheKeySpace
+    ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
+        try Task.checkCancellation()
+        let baseMessages = storedConversation.promptMessages
+        let firstRender = try tokenizer.applyChatTemplate(
+            messages: baseMessages + [Continuation.userTurn.probeMessage],
+            tools: toolSpecs,
+            additionalContext: ["add_generation_prompt": false]
+        )
+        try Task.checkCancellation()
+        let secondRender = try tokenizer.applyChatTemplate(
+            messages: baseMessages + [divergentUserProbeMessage],
+            tools: toolSpecs,
+            additionalContext: ["add_generation_prompt": false]
+        )
+
+        let common = zip(firstRender, secondRender).prefix { $0 == $1 }.count
+        guard common > 0, common < firstRender.count, common < secondRender.count else {
+            return nil
+        }
+        return keySpace.translate(renderTokens: Array(firstRender[0..<common]))
+    }
+
     /// `reusablePrefix` with its three failure channels — tokenization throw,
     /// probe divergence (`nil`), translation failure — folded into the one
     /// `LeafSkipReason` vocabulary both boundary modes speak.

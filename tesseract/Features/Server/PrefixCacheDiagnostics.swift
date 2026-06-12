@@ -163,6 +163,35 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// One admitted **Speculative Canonical Prefill** pass: the background
+    /// re-prefill of the **Think-Strip Rewind** span after a stop-finish
+    /// answer (ADR-0009). Logged on every admission — full target or the
+    /// partial progress of a preempted pass (`preempted=true`); passes that
+    /// admit nothing surface as `skip` events with `stage=speculativePrefill`.
+    struct SpeculativePrefillEvent: Payload {
+        let targetOffset: Int
+        let boundaryOffset: Int
+        let prefilledTokens: Int
+        let prefillSeconds: TimeInterval
+        let rewindSpanTokens: Int
+        /// `true` when this admission is the partial progress of a preempted
+        /// pass (capture-on-preempt) rather than the full planned target.
+        let preempted: Bool
+
+        let eventName = "speculativePrefill"
+
+        var fields: [(String, String)] {
+            [
+                ("targetOffset", "\(targetOffset)"),
+                ("boundaryOffset", "\(boundaryOffset)"),
+                ("prefilledTokens", "\(prefilledTokens)"),
+                ("prefillMs", PrefixCacheDiagnostics.milliseconds(prefillSeconds)),
+                ("rewindSpanTokens", "\(rewindSpanTokens)"),
+                ("preempted", "\(preempted)"),
+            ]
+        }
+    }
+
     struct EvictionEvent: Payload {
         let strategy: PrefixCacheManager.EvictionEvent.Strategy
         let offset: Int
@@ -215,24 +244,29 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// Per-request prompt-latency breakdown. On the cache-aware path the
+    /// orchestrator prefills *outside* the MLX generation loop, so the
+    /// loop's own prompt time (`residualPromptMs`) covers only the residual
+    /// tokens it saw — TTFT is therefore the sum of the stages, not any
+    /// single library-reported number.
     struct TTFTEvent: Payload {
         let lookupMs: TimeInterval
         let restoreMs: TimeInterval
         let prefillMs: TimeInterval
-        let firstTokenMs: TimeInterval
-        let totalPromptMs: TimeInterval
+        let residualPromptMs: TimeInterval
+        let ttftMs: TimeInterval
 
         init(
             lookupMs: TimeInterval,
             restoreMs: TimeInterval,
             prefillMs: TimeInterval,
-            totalPromptMs: TimeInterval
+            residualPromptMs: TimeInterval
         ) {
             self.lookupMs = lookupMs
             self.restoreMs = restoreMs
             self.prefillMs = prefillMs
-            self.totalPromptMs = totalPromptMs
-            self.firstTokenMs = max(0, totalPromptMs - prefillMs)
+            self.residualPromptMs = residualPromptMs
+            self.ttftMs = lookupMs + restoreMs + prefillMs + residualPromptMs
         }
 
         let eventName = "ttft"
@@ -242,8 +276,8 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("lookupMs", PrefixCacheDiagnostics.milliseconds(lookupMs)),
                 ("restoreMs", PrefixCacheDiagnostics.milliseconds(restoreMs)),
                 ("prefillMs", PrefixCacheDiagnostics.milliseconds(prefillMs)),
-                ("firstTokenMs", PrefixCacheDiagnostics.milliseconds(firstTokenMs)),
-                ("totalPromptMs", PrefixCacheDiagnostics.milliseconds(totalPromptMs)),
+                ("residualPromptMs", PrefixCacheDiagnostics.milliseconds(residualPromptMs)),
+                ("ttftMs", PrefixCacheDiagnostics.milliseconds(ttftMs)),
             ]
         }
     }

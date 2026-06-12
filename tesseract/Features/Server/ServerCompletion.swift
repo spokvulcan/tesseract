@@ -206,6 +206,17 @@ nonisolated final class ServerCompletion {
     /// that is being torn down.
     private var drainGeneration = 0
 
+    /// The background **Speculative Canonical Prefill** task — at most one.
+    /// Scheduled only when the module is quiescent (no active completion, no
+    /// in-flight start), cancelled-and-awaited by every new generation entry,
+    /// and drained the same way on unload. The task observes cancellation
+    /// between prefill chunks and then settles — admitting partial progress
+    /// past the capture threshold as a RAM-only leaf the preempting request
+    /// restores instead of re-prefilling — so a preempting generation
+    /// acquires the container actor within ~one chunk plus at most one
+    /// capture, and never races past an admission it should have hit.
+    private var speculativePrefill: (id: UUID, task: Task<Void, Never>)?
+
     // MARK: - Install / lifecycle
 
     /// Single install site for per-load snapshot state. Called from the
@@ -258,13 +269,15 @@ nonisolated final class ServerCompletion {
     /// an await cannot slip past the teardown.
     func drainActiveCompletion(on actor: isolated LLMActor) async {
         drainGeneration += 1
-        while inflightStartCount > 0 || activeCompletion != nil {
+        while inflightStartCount > 0 || activeCompletion != nil || speculativePrefill != nil {
             if let active = activeCompletion {
                 active.handle.cancel()
                 await active.handle.waitForCompletion()
                 if activeCompletion?.id == active.id {
                     activeCompletion = nil
                 }
+            } else if speculativePrefill != nil {
+                await preemptSpeculativePrefill(on: actor)
             } else {
                 await withCheckedContinuation { continuation in
                     inflightStartWaiters.append(continuation)
@@ -292,6 +305,80 @@ nonisolated final class ServerCompletion {
         activeCompletion = (id: id, handle: handle)
     }
 
+    // MARK: - Speculative Canonical Prefill lifecycle
+
+    /// Schedule the background **Speculative Canonical Prefill** for the turn
+    /// that just finished (issue #76, ADR-0009). Skips unless the module is
+    /// quiescent and no drain ran since the originating `start` — a newer
+    /// generation or a teardown always wins; this pass is strictly droppable.
+    func scheduleSpeculativePrefill(
+        seed: SpeculativeCanonicalPrefill.Seed,
+        container: ModelContainer,
+        entryDrainGeneration: Int,
+        on actor: isolated LLMActor
+    ) async {
+        // Settle any previous occupant before the quiescence check — the
+        // await-everywhere preemption invariant makes a live occupant
+        // unreachable here, but the settle suspends, so the guard must run
+        // after it to observe any start or drain that interleaved.
+        await preemptSpeculativePrefill(on: actor)
+        guard drainGeneration == entryDrainGeneration,
+              inflightStartCount == 0,
+              activeCompletion == nil,
+              let prefixCache = _prefixCache
+        else {
+            seed.discard()
+            seed.diagnostics.logSkip(stage: "speculativePrefill", reason: "not-idle")
+            return
+        }
+        let id = UUID()
+        let actorRef = actor
+        let task = Task {
+            await SpeculativeCanonicalPrefill.run(
+                seed: seed,
+                container: container,
+                prefixCache: prefixCache
+            )
+            await actorRef.clearFinishedSpeculativeServerPrefill(id)
+        }
+        speculativePrefill = (id: id, task: task)
+    }
+
+    /// Cancel-and-await any background speculative prefill. `start` calls
+    /// this at entry so its lookup sees the settled pass's partial-leaf
+    /// admission; generation entries that bypass `start` (the standard
+    /// non-cache-aware path) call it through the actor so they never queue
+    /// behind background chunks. The wait is bounded by ~one chunk plus at
+    /// most one RAM-only capture; the slot is cleared only after the awaited
+    /// task has fully finished (same reentrancy contract as the drain).
+    func preemptSpeculativePrefill(on actor: isolated LLMActor) async {
+        guard let speculative = speculativePrefill else { return }
+        speculative.task.cancel()
+        await speculative.task.value
+        if speculativePrefill?.id == speculative.id {
+            speculativePrefill = nil
+        }
+    }
+
+    /// Natural-finish hook from the speculative task: drop the slot once the
+    /// pass has fully finished. Keyed by ID so a newer scheduled pass is
+    /// never dropped by a stale finisher.
+    func clearFinishedSpeculativePrefill(_ id: UUID, on actor: isolated LLMActor) {
+        if speculativePrefill?.id == id {
+            speculativePrefill = nil
+        }
+    }
+
+    /// Test-only: occupy the speculative slot with an arbitrary task so the
+    /// unit suite can pin the drain/preempt contract without a model load.
+    func registerSpeculativePrefillForTesting(
+        _ task: Task<Void, Never>,
+        id: UUID,
+        on actor: isolated LLMActor
+    ) {
+        speculativePrefill = (id: id, task: task)
+    }
+
     // MARK: - Cache-aware completion
 
     /// Start the HTTP text-based prefix-cache path for `/v1/chat/completions`.
@@ -309,6 +396,14 @@ nonisolated final class ServerCompletion {
         progressHandler: ServerInferenceProgressHandler? = nil
     ) async throws -> HTTPServerGenerationStart {
         Memory.cacheLimit = LLMActor.Defaults.cacheLimitMB * 1024 * 1024
+
+        // A new generation always preempts the background speculative pass —
+        // interactive work owns the GPU. Cancel-and-await: the pass settles
+        // (admitting partial progress as a RAM-only leaf) before this request
+        // proceeds, so the lookup below sees that admission instead of racing
+        // past it and re-prefilling the same span. Bounded by ~one chunk plus
+        // at most one capture; reentrancy keeps the actor free meanwhile.
+        await preemptSpeculativePrefill(on: actor)
 
         // The heavy restore/prefill phase below suspends before the handle is
         // registered. Track the start so a concurrent drain (the unload
@@ -428,7 +523,13 @@ nonisolated final class ServerCompletion {
                 loopCancel: loopCancel,
                 continuationStarter: continuationStarter,
                 continuation: continuation,
-                finishHook: { await actorRef.clearFinishedServerCompletion(requestID) }
+                finishHook: { await actorRef.clearFinishedServerCompletion(requestID) },
+                scheduleSpeculative: { seed in
+                    await actorRef.scheduleServerSpeculativePrefill(
+                        seed: seed,
+                        entryDrainGeneration: entryDrainGeneration
+                    )
+                }
             )
         })
         let task = Task {
@@ -479,7 +580,8 @@ nonisolated final class ServerCompletion {
         loopCancel: LateBoundCancel,
         continuationStarter: @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
         continuation: AsyncThrowingStream<AgentGeneration, Error>.Continuation,
-        finishHook: @escaping @Sendable () async -> Void
+        finishHook: @escaping @Sendable () async -> Void,
+        scheduleSpeculative: @escaping @Sendable (SpeculativeCanonicalPrefill.Seed) async -> Void
     ) async {
         let mlxStart = mlxStartBox.value
         let diagnosticsContext = mlxStart.diagnosticsContext
@@ -488,6 +590,9 @@ nonisolated final class ServerCompletion {
         // streaming spine itself lives in `GenerationStreamLoop`.
         var accumulator = GenerationAccumulator()
         var toolCalls: [HTTPPrefixCacheToolCall] = []
+        // Set only when a canonical leaf landed: the **Speculative Canonical
+        // Prefill** seed handed to the post-finish hook (issue #76).
+        var speculativeSeed: SpeculativeCanonicalPrefill.Seed?
 
         drive: do {
             func handle(_ event: AgentGeneration) {
@@ -586,7 +691,7 @@ nonisolated final class ServerCompletion {
                     lookupMs: mlxStart.lookupMs,
                     restoreMs: mlxStart.restoreMs,
                     prefillMs: mlxStart.prefillMs,
-                    totalPromptMs: completionInfo.promptTime
+                    residualPromptMs: completionInfo.promptTime
                 ))
                 Log.agent.info(
                     "Generation complete — \(completionInfo.generationTokenCount) tokens, "
@@ -811,6 +916,26 @@ nonisolated final class ServerCompletion {
                             positionAnchorRopeDelta = delta
                         }
                         let stages = Self.leafStages(for: boundaryMode)
+                        // Seed the **Speculative Canonical Prefill** before
+                        // the GPU-side boundary store: the seed spawns the
+                        // future-path probe immediately, so its CPU
+                        // render+tokenize overlaps the store (#76's earlier
+                        // start). Kept only if the leaf store below succeeds.
+                        let pendingSeed: SpeculativeCanonicalPrefill.Seed? =
+                            boundaryMode == .canonical
+                            ? SpeculativeCanonicalPrefill.makeSeed(
+                                storedConversation: storedConversation,
+                                toolSpecs: canonicalTools,
+                                tokenizer: leafTokenizer,
+                                keySpace: mlxStart.keySpace,
+                                partitionKey: mlxStart.partitionKey,
+                                prefillStepSize: mlxStart.prefillStepSize,
+                                ssdEnabled: mlxStart.ssdEnabled,
+                                seedsPositionAnchor: mlxStart.seedsPositionAnchor,
+                                canonicalLeafOffset: boundaryStoredTokens.count,
+                                diagnostics: diagnosticsContext
+                            )
+                            : nil
                         leafStoreForTuner = await Self.captureStructuredLeafFromBoundary(
                             container: container,
                             storedTokens: boundaryStoredTokens,
@@ -828,6 +953,16 @@ nonisolated final class ServerCompletion {
                             admissionStage: stages.admission,
                             captureSource: stages.source
                         )
+                        // A stored canonical leaf still ends at the
+                        // think-strip divergence; everything past it would
+                        // re-prefill interactively on the next user message —
+                        // hand the seed to the post-finish hook so the pass
+                        // can extend the leaf while the GPU is idle (#76).
+                        if leafStoreForTuner != nil {
+                            speculativeSeed = pendingSeed
+                        } else {
+                            pendingSeed?.discard()
+                        }
                         break leafBlock
                     }
                 }
@@ -1029,6 +1164,12 @@ nonisolated final class ServerCompletion {
         }
 
         await finishHook()
+        // After the registry slot is released: hand the speculative seed to
+        // the actor, which schedules it only if the module is still quiescent
+        // (a newer start, or a drain since this request entered, wins).
+        if let speculativeSeed {
+            await scheduleSpeculative(speculativeSeed)
+        }
     }
 
     /// Build the lower-level MLX generation pipeline using the radix-tree prefix cache.
@@ -1768,12 +1909,98 @@ nonisolated final class ServerCompletion {
         }
     }
 
-    private static func snapshotAdmissionStorage(
+    /// Internal (not private): the **Speculative Canonical Prefill** executor
+    /// derives its leaf admission storage through the same policy.
+    static func snapshotAdmissionStorage(
         for snapshot: HybridCacheSnapshot,
         ssdEnabled: Bool
     ) -> SnapshotAdmission.Storage {
         guard ssdEnabled else { return .ramOnly }
         return .ramAndSSD(extractSnapshotPayload(snapshot))
+    }
+
+    /// Shared admission tail for structured-leaf executors (the boundary
+    /// leaf store and the **Speculative Canonical Prefill**): wrap a
+    /// captured leaf in a leaf admission, log the capture, admit on
+    /// MainActor, fan out the eviction/supersession diagnostics, and report
+    /// whether the admission survived its own eviction pass. Same
+    /// Metal-affinity contract as `extractCheckpointAdmissionCandidates`:
+    /// call from inside ``ModelContainer/perform(_:)``.
+    static func admitStructuredLeaf(
+        _ leaf: HybridCacheSnapshot,
+        storedTokens: [Int],
+        storage: SnapshotAdmission.Storage,
+        partitionKey: CachePartitionKey,
+        requestID: UUID,
+        prefixCache: PrefixCacheManager,
+        diagnostics: PrefixCacheDiagnostics.Context,
+        admissionStage: String,
+        captureSource: String
+    ) async -> Bool {
+        guard let admission = SnapshotAdmission.leaf(
+            storedTokens: storedTokens,
+            snapshot: leaf,
+            storage: storage,
+            partitionKey: partitionKey,
+            requestID: requestID
+        ) else {
+            diagnostics.logSkip(
+                stage: admissionStage,
+                reason: "invalid-path",
+                extraFields: [
+                    ("offset", "\(leaf.tokenOffset)"),
+                    ("storedLen", "\(storedTokens.count)"),
+                ]
+            )
+            return false
+        }
+
+        diagnostics.log(PrefixCacheDiagnostics.CaptureEvent(
+            offset: leaf.tokenOffset,
+            checkpointType: leaf.checkpointType,
+            bytes: leaf.memoryBytes,
+            duringPrefill: false,
+            source: captureSource
+        ))
+
+        // Coalesce admit + stats read in one MainActor hop; the post-store
+        // budget/total snapshot feeds the capturedThenEvicted diagnostic
+        // without another hop.
+        let (storeDiagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
+            await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
+                let d = prefixCache.admit(admission)
+                return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
+            }
+        for event in storeDiagnostics.evictions {
+            diagnostics.log(PrefixCacheDiagnostics.EvictionEvent(event))
+            if let id = event.bodyDroppedSnapshotRefID {
+                diagnostics.log(PrefixCacheDiagnostics.SSDBodyDropEvent(id: id))
+            }
+        }
+        for supersession in storeDiagnostics.supersededLeaves {
+            diagnostics.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
+                offset: supersession.offset,
+                snapshotRefID: supersession.bodyDroppedSnapshotRefID
+            ))
+        }
+        let admissionEvicted = storeDiagnostics.evictions.contains { event in
+            event.offset == leaf.tokenOffset && event.checkpointType == .leaf
+        }
+        if admissionEvicted {
+            diagnostics.logSkip(
+                stage: admissionStage,
+                reason: "capturedThenEvicted",
+                level: .warning,
+                extraFields: [
+                    ("offset", "\(leaf.tokenOffset)"),
+                    ("bytes", "\(leaf.memoryBytes)"),
+                    ("budgetBytes", "\(postStoreBudgetBytes)"),
+                    ("snapshotBytesAfter", "\(postStoreSnapshotBytes)"),
+                ]
+            )
+            return false
+        }
+        return true
     }
 
     private static func extractSnapshotPayload(
@@ -2091,37 +2318,6 @@ nonisolated final class ServerCompletion {
                     )
                     return nil
                 }
-
-                let storage = Self.snapshotAdmissionStorage(
-                    for: leaf,
-                    ssdEnabled: ssdEnabled
-                )
-                let leafAdmission = SnapshotAdmission.leaf(
-                    storedTokens: storedTokens,
-                    snapshot: leaf,
-                    storage: storage,
-                    partitionKey: partitionKey,
-                    requestID: requestID
-                )
-                guard let leafAdmission else {
-                    diagnosticsContext.logSkip(
-                        stage: admissionStage,
-                        reason: "invalid-path",
-                        extraFields: [
-                            ("offset", "\(leaf.tokenOffset)"),
-                            ("storedLen", "\(storedTokens.count)"),
-                        ]
-                    )
-                    return nil
-                }
-
-                diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
-                    offset: leaf.tokenOffset,
-                    checkpointType: leaf.checkpointType,
-                    bytes: leaf.memoryBytes,
-                    duringPrefill: false,
-                    source: captureSource
-                ))
                 Log.agent.info(
                     "\(captureSource) captured — offset=\(leaf.tokenOffset) "
                     + "residualTokens=\(residual.count) "
@@ -2129,46 +2325,22 @@ nonisolated final class ServerCompletion {
                     + "storedLen=\(storedTokens.count)"
                 )
 
-                let (diagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
-                    await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
-                        let d = prefixCache.admit(leafAdmission)
-                        return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
-                    }
-                for event in diagnostics.evictions {
-                    diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
-                    if let id = event.bodyDroppedSnapshotRefID {
-                        diagnosticsContext.log(
-                            PrefixCacheDiagnostics.SSDBodyDropEvent(id: id)
-                        )
-                    }
-                }
-                for supersession in diagnostics.supersededLeaves {
-                    diagnosticsContext.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
-                        offset: supersession.offset,
-                        snapshotRefID: supersession.bodyDroppedSnapshotRefID
-                    ))
-                }
-                let admissionEvicted = diagnostics.evictions.contains { event in
-                    event.offset == leaf.tokenOffset
-                        && event.checkpointType == .leaf
-                }
-                if admissionEvicted {
-                    diagnosticsContext.logSkip(
-                        stage: admissionStage,
-                        reason: "capturedThenEvicted",
-                        level: .warning,
-                        extraFields: [
-                            ("offset", "\(leaf.tokenOffset)"),
-                            ("bytes", "\(leaf.memoryBytes)"),
-                            ("budgetBytes", "\(postStoreBudgetBytes)"),
-                            ("snapshotBytesAfter", "\(postStoreSnapshotBytes)"),
-                        ]
-                    )
-                    Memory.clearCache()
-                    return nil
-                }
-
+                let survived = await Self.admitStructuredLeaf(
+                    leaf,
+                    storedTokens: storedTokens,
+                    storage: Self.snapshotAdmissionStorage(
+                        for: leaf,
+                        ssdEnabled: ssdEnabled
+                    ),
+                    partitionKey: partitionKey,
+                    requestID: requestID,
+                    prefixCache: prefixCache,
+                    diagnostics: diagnosticsContext,
+                    admissionStage: admissionStage,
+                    captureSource: captureSource
+                )
                 Memory.clearCache()
+                guard survived else { return nil }
                 return AlphaTuner.LeafStore(
                     storedTokens: storedTokens,
                     bytes: leaf.memoryBytes

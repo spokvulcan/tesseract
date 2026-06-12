@@ -209,6 +209,14 @@ actor LLMActor {
 
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
 
+        // The standard path bypasses `ServerCompletion.start`, so it preempts
+        // the background speculative prefill itself — otherwise its first
+        // `container.perform` could queue behind background chunks. Awaited:
+        // the pass settles (bounded by ~one chunk plus one capture) so its
+        // partial-leaf admission lands before this generation touches the
+        // container, preserved for future cache-aware requests.
+        await preemptServerSpeculativePrefill()
+
         let genParams = Self.makeGenerateParameters(from: parameters)
         // Canonicalize once so the loop-handler sees the same dict iteration
         // order the tokenizer uses for the prompt. Type-aware tool-call
@@ -532,6 +540,38 @@ actor LLMActor {
         serverCompletion?.clearFinishedCompletion(requestID, on: self)
     }
 
+    /// Schedule the post-answer **Speculative Canonical Prefill** for the
+    /// server completion that just finished (issue #76, ADR-0009). No-ops
+    /// when the model unloaded or the module decides it is no longer idle.
+    func scheduleServerSpeculativePrefill(
+        seed: SpeculativeCanonicalPrefill.Seed,
+        entryDrainGeneration: Int
+    ) async {
+        guard let container = modelContainer, let serverCompletion else {
+            seed.discard()
+            return
+        }
+        await serverCompletion.scheduleSpeculativePrefill(
+            seed: seed,
+            container: container,
+            entryDrainGeneration: entryDrainGeneration,
+            on: self
+        )
+    }
+
+    /// Preempt (cancel-and-await) the background speculative prefill: the
+    /// standard raw path calls this at entry, and the drain suite pins the
+    /// settle handshake through it. No-ops when no pass is live.
+    func preemptServerSpeculativePrefill() async {
+        await serverCompletion?.preemptSpeculativePrefill(on: self)
+    }
+
+    /// Natural-finish hook from the speculative prefill task: drop its slot
+    /// once the pass has fully finished.
+    func clearFinishedSpeculativeServerPrefill(_ id: UUID) {
+        serverCompletion?.clearFinishedSpeculativePrefill(id, on: self)
+    }
+
     /// Frees unreferenced MLX buffers between tool rounds.
     func clearMemoryCache() {
         Memory.clearCache()
@@ -811,6 +851,18 @@ actor LLMActor {
             handle, id: id, on: self
         )
     }
+
+    /// Test-only: occupy the speculative-prefill slot so the unit suite can
+    /// exercise its drain contract without a loaded model.
+    func registerSpeculativePrefillForTesting(
+        _ task: Task<Void, Never>,
+        id: UUID
+    ) {
+        ensureServerCompletion().registerSpeculativePrefillForTesting(
+            task, id: id, on: self
+        )
+    }
+
 }
 
 extension LLMActor: ServerCompletionStarting {}

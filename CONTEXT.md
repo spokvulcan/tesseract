@@ -229,6 +229,24 @@ _Avoid_: leaf store mode as the whole story (mode is one input), the builder own
 capture or `admit` (model-affine, actor-side), a capture port (the builder returns
 a decision; the actor executes Metal).
 
+**Think-Strip Rewind**:
+The prefix invalidation a thinking template causes when a new real user message
+arrives: the template strips the `<think>` blocks it had kept in every assistant
+turn since the previous user query, so the next request's token path diverges at
+that span's first assistant turn and everything past it must re-prefill. The
+canonical-leaf probe bounds the rewind to that divergence point; it does not
+remove it.
+_Avoid_: cache miss after tools (the felt symptom, not the mechanism), template
+drift (the render is deterministic, not drifting), client mutation.
+
+**Speculative Canonical Prefill**:
+The post-turn countermeasure to the **Think-Strip Rewind**: after a final
+(non-tool) answer, re-prefill the full think-stripped render of the completed
+span in the background and store that leaf, so the next user turn restores at
+full depth instead of the rewind point.
+_Avoid_: cache warming (this targets one known future path, not general
+pre-population), background generation (it prefills, never decodes).
+
 > **Flagged ambiguity — "plan": prefill plan vs checkpoint plan.** The **Prefill
 > Plan** is the whole pre-prefill value; the *checkpoint plan* is one field inside
 > it. Say "prefill plan" vs "checkpoint plan".
