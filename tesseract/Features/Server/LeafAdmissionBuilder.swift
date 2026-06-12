@@ -156,18 +156,26 @@ nonisolated enum LeafAdmissionBuilder {
     /// GPU is idle. Same render/key-space contract and failure channels as
     /// `reusablePrefix`: render space in, key space out; `nil` when the two
     /// renders never converge or never diverge (no distinct boundary).
+    ///
+    /// Cooperatively cancellable: the speculative pass cancels its probe on
+    /// preemption (and discarded seeds cancel it on the floor), and the
+    /// checks here bound the abandoned work to one render+tokenize — without
+    /// them a cancel would be a no-op against this synchronous body, and the
+    /// preempting request would wait out the full remaining probe.
     static func futureSharedPrefix(
         storedConversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace
     ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
+        try Task.checkCancellation()
         let baseMessages = storedConversation.promptMessages
         let firstRender = try tokenizer.applyChatTemplate(
             messages: baseMessages + [Continuation.userTurn.probeMessage],
             tools: toolSpecs,
             additionalContext: ["add_generation_prompt": false]
         )
+        try Task.checkCancellation()
         let secondRender = try tokenizer.applyChatTemplate(
             messages: baseMessages + [divergentUserProbeMessage],
             tools: toolSpecs,

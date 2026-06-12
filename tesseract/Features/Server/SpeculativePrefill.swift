@@ -67,14 +67,21 @@ nonisolated enum SpeculativeCanonicalPrefill {
         /// drift into a second source of truth for the path.
         let futureSharedPrefixProbe:
             Task<Result<[Int], CacheKeySpace.TranslationFailure>?, any Error>
+
+        /// Cancel the probe when this seed will never be scheduled (failed
+        /// leaf store, not-idle schedule, unloaded model) — the builder's
+        /// cooperative checks stop its remaining render work.
+        func discard() {
+            futureSharedPrefixProbe.cancel()
+        }
     }
 
     /// Build a seed for the turn that just planned a canonical leaf,
     /// spawning the future-shared-path probe immediately. Call *before* the
     /// GPU-side leaf store begins so the CPU render+tokenize overlaps it
     /// (#76's earlier start) — the pass then spends none of its human-paced
-    /// window on its own stage 1. Discarding the seed (failed leaf store,
-    /// not-idle schedule) just lets the short-lived probe run out unobserved.
+    /// window on its own stage 1. A seed that will never be scheduled should
+    /// be `discard()`ed so the probe stops at its next cooperative check.
     static func makeSeed(
         storedConversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
@@ -149,10 +156,19 @@ nonisolated enum SpeculativeCanonicalPrefill {
 
         // 1. GPU-free: the future shared token path (probe-pair LCP),
         //    computed by the drive task concurrently with the canonical
-        //    leaf's GPU-side store — here it is only awaited.
+        //    leaf's GPU-side store — usually finished before this pass is
+        //    even scheduled. `Task.value` is not a cancellation point for
+        //    the waiter, and the preempting entry awaits this pass, so a
+        //    preemption must be forwarded to the probe explicitly — its
+        //    cooperative checks then end the wait within one render.
         let futurePrefix: [Int]
         do {
-            switch try await seed.futureSharedPrefixProbe.value {
+            let probed = try await withTaskCancellationHandler {
+                try await seed.futureSharedPrefixProbe.value
+            } onCancel: {
+                seed.futureSharedPrefixProbe.cancel()
+            }
+            switch probed {
             case .none:
                 diagnostics.logSkip(stage: "speculativePrefill", reason: "probe-divergence")
                 return
@@ -166,6 +182,9 @@ nonisolated enum SpeculativeCanonicalPrefill {
             case .some(.success(let translated)):
                 futurePrefix = translated
             }
+        } catch is CancellationError {
+            logPreempted(diagnostics, prefilledTokens: 0, residualTokens: 0)
+            return
         } catch {
             diagnostics.logSkip(
                 stage: "speculativePrefill",

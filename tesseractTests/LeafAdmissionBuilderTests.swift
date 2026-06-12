@@ -165,6 +165,37 @@ import MLXLMCommon
         #expect(future == strippedRender + header)
     }
 
+    @Test func futureSharedPrefixStopsAtItsCooperativeCheckWhenCancelled() async {
+        // The probe body is synchronous render work — a preemption reaches it
+        // only through its cooperative checks (the speculative pass cancels
+        // its probe task on cancellation; `discard()`ed seeds do the same).
+        // Without them, the preempting request would wait out the full probe.
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(role: .user, content: "question"),
+            HTTPPrefixCacheMessage(role: .assistant, content: "answer"),
+        ])
+        let tokenizer = self.tokenizer
+
+        let observedCancellation = await Task.detached { () -> Bool in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                _ = try LeafAdmissionBuilder.futureSharedPrefix(
+                    storedConversation: stored,
+                    toolSpecs: nil,
+                    tokenizer: tokenizer,
+                    keySpace: .identity()
+                )
+                return false
+            } catch is CancellationError {
+                return true
+            } catch {
+                return false
+            }
+        }.value
+
+        #expect(observedCancellation)
+    }
+
     // MARK: - plan() — the GPU-free leaf-capture routing decision
 
     /// A boundary snapshot with a controllable `tokenOffset` for routing tests —

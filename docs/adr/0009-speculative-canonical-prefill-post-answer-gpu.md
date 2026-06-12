@@ -35,7 +35,11 @@ Guardrails, in priority order:
   cancellation between `container.perform` hops with a synchronous per-chunk
   `eval`, then settles (below), so a preempting request acquires the container
   actor within ~one chunk plus at most one RAM-only capture. Unload drains it
-  the same way.
+  the same way. A pass preempted while still awaiting its probe forwards the
+  cancellation to the probe task explicitly — `Task.value` is not a
+  cancellation point for the waiter, and the probe body is synchronous render
+  work — so its cooperative checks end the wait within one render; seeds that
+  are never scheduled cancel their probe the same way.
 - **Preempted progress is kept, not recomputed.** A preempted pass settles by
   admitting its partial progress as a leaf when it has prefilled at least
   2,048 tokens (below that, the capture would rival the re-prefill it saves —

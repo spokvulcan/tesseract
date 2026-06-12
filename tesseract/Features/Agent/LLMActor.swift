@@ -547,7 +547,10 @@ actor LLMActor {
         seed: SpeculativeCanonicalPrefill.Seed,
         entryDrainGeneration: Int
     ) async {
-        guard let container = modelContainer, let serverCompletion else { return }
+        guard let container = modelContainer, let serverCompletion else {
+            seed.discard()
+            return
+        }
         await serverCompletion.scheduleSpeculativePrefill(
             seed: seed,
             container: container,

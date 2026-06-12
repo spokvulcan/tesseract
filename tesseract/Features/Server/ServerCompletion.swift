@@ -327,6 +327,7 @@ nonisolated final class ServerCompletion {
               activeCompletion == nil,
               let prefixCache = _prefixCache
         else {
+            seed.discard()
             seed.diagnostics.logSkip(stage: "speculativePrefill", reason: "not-idle")
             return
         }
@@ -959,6 +960,8 @@ nonisolated final class ServerCompletion {
                         // can extend the leaf while the GPU is idle (#76).
                         if leafStoreForTuner != nil {
                             speculativeSeed = pendingSeed
+                        } else {
+                            pendingSeed?.discard()
                         }
                         break leafBlock
                     }
