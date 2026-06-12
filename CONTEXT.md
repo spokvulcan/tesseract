@@ -185,6 +185,18 @@ suffix write-through.
 > best on-disk approximation for warm start). RAM bodies are dropped in all
 > three.
 
+**Chain-Prefix Restore**:
+Hydrating only the leading **Snapshot Segment**s of a **Segment Chain**, up to
+a historical leaf boundary, recreating a superseded ancestor's snapshot without
+its identity. The chain keeps exactly one owner — the restore point is a
+tree-side reference resolving through the owning entry, never a second manifest
+entry — so every offset where a leaf was once extended stays a restore point
+for divergent futures (a **Think-Strip Rewind**, a client-side history edit) at
+zero extra bytes on disk.
+_Avoid_: partial hydration (suggests arbitrary offsets; restore points are
+segment boundaries only), chain split, sub-snapshot, cross-entry reference
+(the invariant above still holds).
+
 **Example dialogue:**
 
 > **Dev:** Turn N+1 stores its leaf — what happens to turn N's gigabyte on
@@ -309,13 +321,45 @@ remove it.
 _Avoid_: cache miss after tools (the felt symptom, not the mechanism), template
 drift (the render is deterministic, not drifting), client mutation.
 
+**Tool Stretch**:
+The span of assistant turns and tool results since the last real user message —
+the region a thinking template renders with its `<think>` blocks kept, and
+exactly the span a **Think-Strip Rewind** re-renders when the next user message
+arrives. The longer the stretch, the larger the rewind it is exposed to.
+_Avoid_: agentic loop (client-side vocabulary), tool session, turn (a stretch
+spans many turns).
+
+**Stretch Abandonment**:
+The event that a **Tool Stretch**'s continuation never arrives: the client
+aborts the in-flight stream, or no follow-up request lands within a short idle
+window after a tool-calls finish. It signals that the next request is likely a
+real user message — an incoming **Think-Strip Rewind** — and seeds
+**Speculative Canonical Prefill** so the rewind's re-prefill runs before that
+message arrives. Only completed messages enter the speculated path; a
+half-generated turn never does.
+_Avoid_: cancellation invalidating the cache (the felt symptom; nothing is
+invalidated), interrupt handling (UI vocabulary), abandoned request (the
+stretch is abandoned, not one request).
+
 **Speculative Canonical Prefill**:
 The post-turn countermeasure to the **Think-Strip Rewind**: after a final
-(non-tool) answer, re-prefill the full think-stripped render of the completed
-span in the background and store that leaf, so the next user turn restores at
-full depth instead of the rewind point.
+(non-tool) answer or a **Stretch Abandonment**, re-prefill the full
+think-stripped render of the completed span in the background and store that
+leaf, so the next user turn restores at full depth instead of the rewind point.
 _Avoid_: cache warming (this targets one known future path, not general
 pre-population), background generation (it prefills, never decodes).
+
+**Preserve-Thinking Render**:
+An opt-in render mode for templates that natively declare it (a template
+context flag) keeping `<think>` blocks in every assistant turn, so the render
+is append-stable across new user messages and the **Think-Strip Rewind**
+cannot occur. The flag is part of the template context and therefore of the
+cache partition — toggling it moves the conversation to a fresh partition —
+and retained reasoning permanently occupies context. With it on, **Speculative
+Canonical Prefill** has nothing to speculate and self-skips.
+_Avoid_: think retention hack (vendor-sanctioned where the template declares
+it), template patching (vendor templates are never edited), global setting
+(per-model).
 
 > **Flagged ambiguity — "plan": prefill plan vs checkpoint plan.** The **Prefill
 > Plan** is the whole pre-prefill value; the *checkpoint plan* is one field inside
