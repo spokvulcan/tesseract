@@ -467,6 +467,12 @@ final class SettingsManager {
         prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.default
         prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.default
         prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.default
+        // Dynamic per-model keys are minted on demand and aren't in the static
+        // enumeration above; sweep their prefix so a reset truly clears them. A
+        // stale `preserveThinkingRender.<modelID> = true` would otherwise keep
+        // that model in a non-canonical cache partition after a "clean" reset.
+        store.removeAll(withPrefix: SettingsCatalogue.preserveThinkingRenderKeyPrefix)
+        preserveThinkingRenderRevision += 1
         // hasCompletedOnboarding is intentionally omitted — see the doc comment.
     }
 

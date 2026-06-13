@@ -251,8 +251,19 @@ nonisolated struct RewindTelemetry: Codable, Sendable, Equatable {
     /// floor is where the restore actually resolved.
     static func make(sharedPrefixLength: Int, restoredOffset: Int) -> RewindTelemetry? {
         guard restoredOffset > 0 else { return nil }
+        // The restore floor must never land deeper than the divergence — a
+        // floor at-or-below the fork is the whole point of Chain-Prefix
+        // Restore. Record the *true* divergence (don't clamp it up to the
+        // floor, which would report a `rewindSize == 0` clean non-rewind and
+        // erase the anomaly from the roll-up); the `assert` makes an overshoot
+        // loud in debug/CI while `rewindSize`'s own `max(0,…)` keeps release
+        // safe.
+        assert(
+            restoredOffset <= sharedPrefixLength,
+            "restore floor \(restoredOffset) overshoots divergence \(sharedPrefixLength)"
+        )
         return RewindTelemetry(
-            divergenceOffset: max(sharedPrefixLength, restoredOffset),
+            divergenceOffset: sharedPrefixLength,
             restoreFloor: restoredOffset
         )
     }

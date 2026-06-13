@@ -75,7 +75,14 @@ nonisolated enum OpenAI {
         }
 
         init(from decoder: Decoder) throws {
-            let values = try [String: AnyCodableValue](from: decoder)
+            // A non-object value (`true`, a string, a number, an array) is not
+            // kwargs we model — decode leniently to no flags rather than
+            // throwing `typeMismatch`, which would 400 the whole completion
+            // (see the type doc above: a value we don't model never 400s).
+            guard let values = try? [String: AnyCodableValue](from: decoder) else {
+                self.booleanFlags = [:]
+                return
+            }
             self.booleanFlags = values.compactMapValues(\.boolValue)
         }
 

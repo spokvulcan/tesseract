@@ -61,6 +61,46 @@ struct PromptCacheTelemetryStoreTests {
         #expect(aggregate.evictionCount == 1)
     }
 
+    @Test func aggregateCreditsRewindFromProductionRewrittenChainPrefixHit() {
+        // In production a chain-prefix hit's reason is rewritten to "hit"
+        // before the lookup event is logged, so the rewind signal rides the
+        // explicit `chainPrefixRestore` field, not the reason. The floor
+        // (snapshotOffset) sitting below the divergence (sharedPrefixLength) is
+        // a served Think-Strip Rewind (issue #101). Before the fix this branch
+        // keyed on `reason == "chainPrefixHit"`, which production never emits,
+        // so the KPI stayed permanently 0.
+        let events = [
+            event("lookup", fields: [
+                ("reason", "hit"),
+                ("hydratedFromSSD", "true"),
+                ("chainPrefixRestore", "true"),
+                ("sharedPrefixLength", "900"),
+                ("snapshotOffset", "640"),
+                ("promptTokens", "1000"),
+                ("skippedPrefillTokens", "640"),
+            ]),
+            // A restore that landed exactly at the divergence is a hit, not a
+            // rewind — it must not inflate the count.
+            event("lookup", fields: [
+                ("reason", "hit"),
+                ("hydratedFromSSD", "true"),
+                ("chainPrefixRestore", "true"),
+                ("sharedPrefixLength", "512"),
+                ("snapshotOffset", "512"),
+                ("promptTokens", "600"),
+                ("skippedPrefillTokens", "512"),
+            ]),
+        ]
+
+        let aggregate = PromptCacheTelemetryAggregate.from(events: events)
+
+        #expect(aggregate.rewindEventCount == 1)
+        #expect(aggregate.rewindTokens == 260)
+        // Both are SSD-tier hits despite the reason being rewritten to "hit".
+        #expect(aggregate.ssdHitCount == 2)
+        #expect(aggregate.hitCount == 0)
+    }
+
     @Test func recordForTestingBoundsEventAndSampleBuffers() {
         let store = PromptCacheTelemetryStore(registerDiagnosticsSink: false)
         let events = (0..<(PromptCacheTelemetryStore.maxEvents + 5)).map { index in

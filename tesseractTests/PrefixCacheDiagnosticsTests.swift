@@ -26,7 +26,7 @@ struct PrefixCacheDiagnosticsTests {
         )
 
         #expect(context.render(event) ==
-            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=hit promptTokens=1024 sharedPrefixLength=900 snapshotOffset=768 checkpointType=system skippedPrefillTokens=768 newTokensToPrefill=256 lookupMs=12.000 restoreMs=3.000 plannedCheckpoints=[900:branchPoint]")
+            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=hit promptTokens=1024 sharedPrefixLength=900 snapshotOffset=768 checkpointType=system skippedPrefillTokens=768 newTokensToPrefill=256 lookupMs=12.000 restoreMs=3.000 plannedCheckpoints=[900:branchPoint] hydratedFromSSD=false chainPrefixRestore=false")
     }
 
     @Test func lookupMissRendersTreeDepthAndNilSnapshotFields() {
@@ -42,7 +42,7 @@ struct PrefixCacheDiagnosticsTests {
         )
 
         #expect(context.render(event) ==
-            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=missNoSnapshotInPrefix promptTokens=700 sharedPrefixLength=128 snapshotOffset=nil checkpointType=nil skippedPrefillTokens=0 newTokensToPrefill=700 lookupMs=4.000 restoreMs=0.000 plannedCheckpoints=[]")
+            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=missNoSnapshotInPrefix promptTokens=700 sharedPrefixLength=128 snapshotOffset=nil checkpointType=nil skippedPrefillTokens=0 newTokensToPrefill=700 lookupMs=4.000 restoreMs=0.000 plannedCheckpoints=[] hydratedFromSSD=false chainPrefixRestore=false")
     }
 
     @Test func captureDistinguishesPrefillAndLeafSources() {
@@ -337,7 +337,7 @@ struct PrefixCacheDiagnosticsTests {
         )
         let rendered = context.render(lookup)
         #expect(rendered ==
-            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=hit promptTokens=1024 sharedPrefixLength=900 snapshotOffset=768 checkpointType=system skippedPrefillTokens=768 newTokensToPrefill=256 lookupMs=12.000 restoreMs=3.000 plannedCheckpoints=[900:branchPoint]")
+            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=hit promptTokens=1024 sharedPrefixLength=900 snapshotOffset=768 checkpointType=system skippedPrefillTokens=768 newTokensToPrefill=256 lookupMs=12.000 restoreMs=3.000 plannedCheckpoints=[900:branchPoint] hydratedFromSSD=false chainPrefixRestore=false")
 
         let runID = UUID()
         let localContext = PrefixCacheDiagnostics.Context(

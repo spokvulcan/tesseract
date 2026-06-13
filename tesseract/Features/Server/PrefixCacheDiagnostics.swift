@@ -72,6 +72,14 @@ nonisolated enum PrefixCacheDiagnostics {
         let lookupMs: TimeInterval
         let restoreMs: TimeInterval
         let plannedCheckpoints: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
+        /// Resolution rewrites a hydrated `.ssdHit`/`.chainPrefixHit` to `.hit`
+        /// before this event is logged (SnapshotResolution.hydratedHit), so the
+        /// hit *kind* and the Think-Strip Rewind marker must travel as explicit
+        /// fields, not in `reason`. The aggregate keys off these in production
+        /// (where `reason` is always `"hit"`); the raw reasons still appear on
+        /// the no-fingerprint replay path, so the aggregate honors both.
+        let hydratedFromSSD: Bool
+        let chainPrefixRestore: Bool
 
         init(
             reason: PrefixCacheManager.LookupReason,
@@ -81,7 +89,9 @@ nonisolated enum PrefixCacheDiagnostics {
             newTokensToPrefill: Int,
             lookupMs: TimeInterval,
             restoreMs: TimeInterval,
-            plannedCheckpoints: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
+            plannedCheckpoints: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)],
+            hydratedFromSSD: Bool = false,
+            chainPrefixRestore: Bool = false
         ) {
             switch reason {
             case .hit(let snapshotOffset, _, let type):
@@ -113,6 +123,8 @@ nonisolated enum PrefixCacheDiagnostics {
             self.lookupMs = lookupMs
             self.restoreMs = restoreMs
             self.plannedCheckpoints = plannedCheckpoints
+            self.hydratedFromSSD = hydratedFromSSD
+            self.chainPrefixRestore = chainPrefixRestore
         }
 
         let eventName = "lookup"
@@ -129,6 +141,8 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("lookupMs", PrefixCacheDiagnostics.milliseconds(lookupMs)),
                 ("restoreMs", PrefixCacheDiagnostics.milliseconds(restoreMs)),
                 ("plannedCheckpoints", PrefixCacheDiagnostics.checkpointList(plannedCheckpoints)),
+                ("hydratedFromSSD", hydratedFromSSD ? "true" : "false"),
+                ("chainPrefixRestore", chainPrefixRestore ? "true" : "false"),
             ]
         }
     }

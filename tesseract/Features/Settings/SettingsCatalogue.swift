@@ -74,8 +74,12 @@ enum SettingsCatalogue {
     /// surfaces the toggle only for models whose template declares the flag
     /// (`ModelIdentity.declaredTemplateFlags`). The one dynamic-key setting in
     /// the catalogue — a fixed-key declaration cannot enumerate model IDs.
+    /// Shared key prefix for the dynamic per-model keys, so `resetToDefaults`
+    /// can sweep them without re-deriving the literal.
+    static let preserveThinkingRenderKeyPrefix = "preserveThinkingRender."
+
     static func preserveThinkingRender(modelID: String) -> Setting<Bool> {
-        Setting.bool("preserveThinkingRender." + modelID, default: false)
+        Setting.bool(preserveThinkingRenderKeyPrefix + modelID, default: false)
     }
 
     // MARK: - Server

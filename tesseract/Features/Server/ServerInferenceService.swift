@@ -115,7 +115,9 @@ final class ServerInferenceService {
     }
 
     /// The managed arm for chat input — shared by the `.standard` route and
-    /// the **Completion Route**'s standard-with-reason fallback.
+    /// the **Completion Route**'s standard-with-reason fallback. Threads the
+    /// request's render context through so opt-in flags (`preserve_thinking`)
+    /// survive the standard path, not just the cache-aware arm.
     private func startStandardChat(
         _ chat: ServerInferenceRequest.ChatInput,
         parameters: AgentGenerateParameters,
@@ -126,6 +128,7 @@ final class ServerInferenceService {
             messages: chat.messages,
             toolSpecs: chat.toolSpecs,
             parameters: parameters,
+            renderContext: chat.templateRenderContext,
             progressHandler: chat.progressHandler
         )
         return ServerInferenceStart(start, modelState: modelState)

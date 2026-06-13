@@ -46,4 +46,11 @@ final class InMemorySettingsStore: SettingsStore {
         }
         writes.append(key)
     }
+
+    func removeAll(withPrefix prefix: String) {
+        for key in storage.keys.filter({ $0.hasPrefix(prefix) }) {
+            storage.removeValue(forKey: key)
+            writes.append(key)
+        }
+    }
 }

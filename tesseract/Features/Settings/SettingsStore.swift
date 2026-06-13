@@ -22,6 +22,12 @@ protocol SettingsStore {
     func set<V>(_ value: V, for key: String)
     /// Writing `nil` removes the key (so a later read returns the default).
     func setOptional(_ value: String?, for key: String)
+    /// Remove every key beginning with `prefix`. The escape hatch for the
+    /// catalogue's dynamic, minted-on-demand keys (e.g. per-model toggles),
+    /// which a static enumeration in `resetToDefaults` cannot reach. Moves
+    /// bytes only — it never learns what a setting means. A no-op when no key
+    /// matches.
+    func removeAll(withPrefix prefix: String)
 }
 
 /// The single immutable declaration of one persisted setting — its key, its one

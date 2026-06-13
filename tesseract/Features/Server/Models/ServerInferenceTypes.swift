@@ -124,14 +124,16 @@ nonisolated struct ServerInferenceRequest: Sendable {
         let messages: [LLMMessage]
         let toolSpecs: [ToolSpec]?
         let prefixCacheInput: PrefixCacheInput?
+        /// Stored, not derived from `prefixCacheInput` — the render context must
+        /// survive when the conversation is nil (any non-text/image turn, which
+        /// the **Completion Route** sends down the `.standard` arm). Deriving it
+        /// from the cache input dropped `preserve_thinking` exactly there,
+        /// rendering a vision model's think blocks stripped against the request.
+        let templateRenderContext: TemplateRenderContext
         let progressHandler: ServerInferenceProgressHandler?
 
         var prefixCacheConversation: HTTPPrefixCacheConversation? {
             prefixCacheInput?.conversation
-        }
-
-        var templateRenderContext: TemplateRenderContext {
-            prefixCacheInput?.renderContext ?? .canonical
         }
 
         init(
@@ -145,6 +147,7 @@ nonisolated struct ServerInferenceRequest: Sendable {
             self.systemPrompt = systemPrompt
             self.messages = messages
             self.toolSpecs = toolSpecs
+            self.templateRenderContext = templateRenderContext
             self.prefixCacheInput = prefixCacheConversation.map {
                 PrefixCacheInput(conversation: $0, renderContext: templateRenderContext)
             }
@@ -200,6 +203,7 @@ protocol ManagedInferenceStarting: AnyObject {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext,
         progressHandler: ServerInferenceProgressHandler?
     ) throws -> HTTPServerGenerationStart
 }

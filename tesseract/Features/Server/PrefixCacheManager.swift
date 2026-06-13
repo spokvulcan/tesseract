@@ -881,7 +881,6 @@ final class PrefixCacheManager {
         var prefixBytes = 0
         var points: [ChainPrefixRestorePoint] = []
         for segment in descriptor.inheritedSegments {
-            prefixBytes += segment.bytes
             guard segment.tokenOffset > 0,
                   segment.tokenOffset < descriptor.tokenOffset,
                   segment.tokenOffset <= descriptor.pathFromRoot.count
@@ -895,6 +894,10 @@ final class PrefixCacheManager {
                 )
                 continue
             }
+            // Accumulate only past the guard — a skipped (inconsistent) segment
+            // must not inflate `prefixBytes` for the valid restore points that
+            // follow, which would over-price their recovery cost in eviction.
+            prefixBytes += segment.bytes
             points.append(
                 ChainPrefixRestorePoint(
                     ownerSnapshotID: descriptor.snapshotID,

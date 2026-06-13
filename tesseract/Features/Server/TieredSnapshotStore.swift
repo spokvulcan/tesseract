@@ -477,11 +477,24 @@ final class TieredSnapshotStore: SnapshotStore {
         var current = node.parent
         while let ancestor = current {
             if ancestor.state.refID == baseID {
+                // If this node already carried a point (a fresh leaf re-occupied
+                // the boundary after an earlier conversion, then was itself
+                // consumed), the overwrite below re-owns it — orphaning its
+                // entry in the *prior* owner's dependents bucket. Drop that
+                // entry first, so the prior owner's death doesn't trip over a
+                // stale no-op entry that no longer matches its node's owner.
+                if let priorOwner = ancestor.chainPrefixRestorePoint?.ownerSnapshotID,
+                   priorOwner != newOwnerID {
+                    chainPrefixDependentsByOwnerID[priorOwner]?.removeAll {
+                        $0.node === ancestor
+                    }
+                }
                 tree.convertConsumedBaseToChainPrefixRestorePoint(
                     node: ancestor, ownerSnapshotID: newOwnerID
                 )
                 chainPrefixDependentsByOwnerID[newOwnerID, default: []]
                     .append(CommittedRefOwner(node: ancestor, tree: tree))
+                trimChainPrefixRestorePoints(ownerID: newOwnerID)
                 return
             }
             current = ancestor.parent
@@ -492,32 +505,36 @@ final class TieredSnapshotStore: SnapshotStore {
         )
     }
 
-    /// Warm start's reconstruction arm (ADR-0012, issue #99): re-attach
-    /// a **Chain-Prefix Restore** point recovered from a restored chain
-    /// head's inherited segments and index it for owner-death clearing —
-    /// the same dependents channel the fold-time conversion feeds. The
-    /// first point at a path wins, and a node already backed in its own
-    /// right is skipped: a point there could only duplicate the
-    /// cheaper direct hit.
-    func restoreChainPrefixRestorePoint(
-        point: ChainPrefixRestorePoint,
-        path: [Int],
-        partitionKey: CachePartitionKey
-    ) {
-        let tree = getOrCreateTree(for: partitionKey)
-        let node = tree.insertPath(tokens: path)
-        guard node.chainPrefixRestorePoint == nil, case .empty = node.state else {
-            Log.agent.debug(
-                "TieredSnapshotStore.restoreChainPrefixRestorePoint: node at "
-                + "boundary=\(point.boundaryOffset) already "
-                + "\(node.chainPrefixRestorePoint != nil ? "pointed" : node.state.label) "
-                + "— keeping the first owner"
-            )
-            return
+    /// Upper bound on **Chain-Prefix Restore** points retained per chain.
+    /// Each fold mints one new point and re-owns every prior spine point
+    /// forward to the new head — which never dies — so without a cap a
+    /// multi-hundred-turn session pins one radix node per turn forever,
+    /// inflating `nodeCount` and every tree walk (issue #101 follow-up).
+    /// Generous enough that realistic sessions never reach it; a backstop
+    /// against unbounded growth, not a tuning knob.
+    private static let maxRestorePointsPerChain = 256
+
+    /// Keep the deepest `maxRestorePointsPerChain` restore points for a chain
+    /// and clear the shallowest. The shallowest points are the oldest, least
+    /// valuable rewind floors — dropping one only costs a deeper re-prefill on
+    /// the rare interrupt that rewinds that far back, never correctness. Also
+    /// sweeps entries whose node was already reclaimed (dead weak ref).
+    private func trimChainPrefixRestorePoints(ownerID: String) {
+        guard var dependents = chainPrefixDependentsByOwnerID[ownerID],
+              dependents.count > Self.maxRestorePointsPerChain
+        else { return }
+        // Deepest boundary first; a dead/cleared node sorts last (offset -1).
+        dependents.sort {
+            ($0.node?.chainPrefixRestorePoint?.boundaryOffset ?? -1)
+                > ($1.node?.chainPrefixRestorePoint?.boundaryOffset ?? -1)
         }
-        tree.attachChainPrefixRestorePoint(node: node, point: point)
-        chainPrefixDependentsByOwnerID[point.ownerSnapshotID, default: []]
-            .append(CommittedRefOwner(node: node, tree: tree))
+        for owner in dependents[Self.maxRestorePointsPerChain...] {
+            if let node = owner.node, let tree = owner.tree {
+                tree.clearChainPrefixRestorePoint(node: node)
+            }
+        }
+        chainPrefixDependentsByOwnerID[ownerID] =
+            Array(dependents.prefix(Self.maxRestorePointsPerChain))
     }
 
     /// Batch form for one restored chain head. Splits every inherited

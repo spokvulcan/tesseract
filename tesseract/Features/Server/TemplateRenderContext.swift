@@ -43,6 +43,14 @@ nonisolated struct TemplateRenderContext: Sendable, Hashable {
     /// (`digest of "{}"`) when no flag is set — so canonical requests keep
     /// their existing conversation identity and on-disk partitions.
     var digest: String {
+        // The canonical (no-flags) case is the majority of traffic and is hit
+        // at least twice per request (partition key + the `PrefixCacheInput`
+        // precondition, which runs in release). Its digest is the compile-time
+        // constant `digest of "{}"`, so skip the dict-build + JSON-encode +
+        // SHA256 entirely.
+        guard !flags.isEmpty else {
+            return HTTPPrefixCacheConversation.defaultTemplateContextDigest
+        }
         let object = Dictionary(uniqueKeysWithValues: flags.map { flag in
             (flag.rawValue, JSONValue.bool(true))
         })

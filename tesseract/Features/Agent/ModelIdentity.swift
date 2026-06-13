@@ -131,7 +131,43 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         chatTemplate: String?
     ) -> Set<TemplateRenderFlag> {
         guard let chatTemplate else { return [] }
-        return Set(TemplateRenderFlag.allCases.filter { chatTemplate.contains($0.rawValue) })
+        // A flag is declared only when the template *references the variable*,
+        // not merely mentions the string. Strip Jinja comments so a flag named
+        // only in `{# … #}` doesn't count, then require an identifier-boundary
+        // match so a longer name (`preserve_thinking_default`) isn't a false
+        // positive. A bare `contains` over-declares the capability and forks a
+        // zero-reuse cache partition for a render the template never branches on.
+        let scannable = stripJinjaComments(chatTemplate)
+        return Set(TemplateRenderFlag.allCases.filter {
+            referencesIdentifier($0.rawValue, in: scannable)
+        })
+    }
+
+    /// Remove `{# … #}` Jinja comment blocks (non-greedy, spanning newlines)
+    /// so a flag mentioned only in a comment is not read as a declaration.
+    private static func stripJinjaComments(_ template: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: "\\{#.*?#\\}", options: [.dotMatchesLineSeparators]
+        ) else { return template }
+        let range = NSRange(template.startIndex..., in: template)
+        return regex.stringByReplacingMatches(
+            in: template, range: range, withTemplate: " "
+        )
+    }
+
+    /// Whole-identifier match: `name` not flanked by another identifier
+    /// character, so it matches `{% if preserve_thinking %}` but not the
+    /// longer identifier `preserve_thinking_default`.
+    private static func referencesIdentifier(_ name: String, in text: String) -> Bool {
+        let pattern = "(?<![A-Za-z0-9_])"
+            + NSRegularExpression.escapedPattern(for: name)
+            + "(?![A-Za-z0-9_])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text.contains(name)
+        }
+        return regex.firstMatch(
+            in: text, range: NSRange(text.startIndex..., in: text)
+        ) != nil
     }
 
     /// Qwen3.5 hybrid profile from `config.json` (the VLM variant nests

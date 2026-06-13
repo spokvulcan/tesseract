@@ -227,10 +227,22 @@ final class AgentEngine {
 
     /// Build a `UserInput` from a system prompt, messages, and optional raw tool specs.
     /// Extracted for testability — callers can verify tool specs are forwarded without a loaded model.
-    static func buildUserInput(systemPrompt: String, messages: [LLMMessage], toolSpecs: [ToolSpec]?) -> UserInput {
+    /// The render context's opt-in flags (`preserve_thinking`) ride into the
+    /// template render as `additionalContext`, so the standard chat path honors
+    /// them exactly as the cache-aware path does.
+    static func buildUserInput(
+        systemPrompt: String,
+        messages: [LLMMessage],
+        toolSpecs: [ToolSpec]?,
+        renderContext: TemplateRenderContext = .canonical
+    ) -> UserInput {
         var chatMessages = [Chat.Message.system(systemPrompt)]
         chatMessages.append(contentsOf: toLLMCommonMessages(messages))
-        return UserInput(chat: chatMessages, tools: toolSpecs)
+        return UserInput(
+            chat: chatMessages,
+            tools: toolSpecs,
+            additionalContext: renderContext.additionalContext()
+        )
     }
 
     /// Formats a system prompt + tools through the chat template, returning the raw ChatML string and token count.
@@ -506,12 +518,14 @@ extension AgentEngine: ManagedInferenceStarting {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext = .canonical,
         progressHandler: ServerInferenceProgressHandler?
     ) throws -> HTTPServerGenerationStart {
         let input = Self.buildUserInput(
             systemPrompt: systemPrompt,
             messages: messages,
-            toolSpecs: toolSpecs
+            toolSpecs: toolSpecs,
+            renderContext: renderContext
         )
         return try startManagedGeneration(
             input: input,

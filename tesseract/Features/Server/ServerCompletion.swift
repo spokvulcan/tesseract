@@ -1299,7 +1299,17 @@ nonisolated final class ServerCompletion {
         // written to SSD. A drain-driven cancel is also Task.isCancelled
         // here; the scheduler's drain-generation guard discards the seed
         // then, so teardown never runs a pass.
-        if speculativeSeed == nil, Task.isCancelled, !renderContext.preservesThinking {
+        // An Unkeyed Completion never participates in the cache (by contract),
+        // and a seed with no last-user boundary would build a spine from
+        // offset 0 — wasted render/tokenize + scheduler churn the downstream
+        // `boundary.tokenOffset > 0` resolve guard discards anyway. Gate the
+        // arm on the same keyed-with-boundary preconditions the stop-finish
+        // seed path already requires.
+        if speculativeSeed == nil,
+           Task.isCancelled,
+           mlxStart.unkeyedReason == nil,
+           mlxStart.transientLastUserBoundarySnapshot != nil,
+           !renderContext.preservesThinking {
             let abortTokenizer = await container.perform { $0.tokenizer }
             speculativeSeed = SpeculativeCanonicalPrefill.makeSeed(
                 storedConversation: conversation,
@@ -1634,7 +1644,9 @@ nonisolated final class ServerCompletion {
                 newTokensToPrefill: newTokensToPrefill,
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
-                plannedCheckpoints: prefillPlan.checkpointsToCapture
+                plannedCheckpoints: prefillPlan.checkpointsToCapture,
+                hydratedFromSSD: resolved.hydratedFromSSD,
+                chainPrefixRestore: resolved.wasChainPrefixRestore
             ))
 
             // 8. Fold the plan's checkpoints plus the transient boundary

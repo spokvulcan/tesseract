@@ -59,4 +59,13 @@ struct UserDefaultsSettingsStore: SettingsStore {
             defaults.removeObject(forKey: key)
         }
     }
+
+    func removeAll(withPrefix prefix: String) {
+        // `dictionaryRepresentation` snapshots the keys, so removing while
+        // iterating the filtered copy is safe. Global-domain keys never carry
+        // our app-specific prefixes, so the sweep stays scoped to our settings.
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
+            defaults.removeObject(forKey: key)
+        }
+    }
 }
