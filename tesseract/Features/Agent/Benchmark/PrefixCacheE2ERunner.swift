@@ -1260,6 +1260,88 @@ final class PrefixCacheE2ERunner {
             detail: "cachedTokens=\(requestZ5.cachedTokens) expected 0 — "
                 + "digest-keyed pseudo-tokens diverge at the image run"
         ))
+
+        // ── Step Z6: Image-add turn reuses a warm text prefix (PRD #104) ──
+        // The phase-2 reversal of the ADR-0007 phase-1 cut: an image-add turn
+        // that *follows* a warm text prefix must restore that prefix and
+        // continue THROUGH the new image — not serve cold. Under phase 1 this
+        // request reported `cachedTokens == 0`; under phase 2 it must report
+        // `> 0`, and (crash-safety) the continuation through the image is
+        // chunked, so an oversized image prefix no longer OOMs. This is the
+        // headline regression gate for the whole PRD.
+        log("\n── Step Z6: Image-add turn reuses a warm text prefix (PRD #104) ──")
+        log("  Reloading to clear the prefix cache…")
+        try await reloadEngine(engine, modelDir: modelDir, visionMode: true)
+
+        let textTurnPrompt = "In two sentences, explain why deterministic fixtures matter for caching."
+        log("\n── Step Z6a: Text turn (warms the text prefix) ──")
+        let requestZ6a = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            userMessage: textTurnPrompt,
+            toolSpecs: [],
+            parameters: params
+        )
+        log("  cachedTokens=\(requestZ6a.cachedTokens) generatedChars=\(requestZ6a.generatedText.count)")
+
+        // The image-add turn extends Z6a's conversation: the cached text leaf
+        // (system + user1 + assistant1) sits entirely below the new image, so
+        // the restore lands below the image's minimum warm offset and the
+        // continuation runs through the image — the phase-2 path in
+        // `ServerCompletion`'s `.restore` arm.
+        let imageAddMessages: [BenchmarkMessage] = [
+            .user(textTurnPrompt),
+            .assistant(content: requestZ6a.assistantText, reasoning: requestZ6a.assistantReasoning),
+            .user(imagePrompt, images: [imageA]),
+        ]
+        log("\n── Step Z6b: Image-add turn (warm continuation through the image) ──")
+        let requestZ6b = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: imageAddMessages,
+            toolSpecs: [],
+            parameters: params
+        )
+        log("  cachedTokens=\(requestZ6b.cachedTokens) ttft=\(String(format: "%.3f", requestZ6b.ttftSeconds))s "
+            + "generatedChars=\(requestZ6b.generatedText.count)")
+        checks.append(CheckResult(
+            name: "requestZ6b_image_add_reuses_text_prefix",
+            passed: requestZ6b.cachedTokens > 0,
+            detail: "cachedTokens=\(requestZ6b.cachedTokens) expected > 0 — phase 2 restores the warm "
+                + "text prefix and continues through the new image (phase 1 served this cold at 0)"
+        ))
+
+        log("\n── Step Z6c: Warm-vs-cold equivalence for the image-add turn ──")
+        log("  Reloading to clear the prefix cache…")
+        try await reloadEngine(engine, modelDir: modelDir, visionMode: true)
+        let requestZ6cold = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: imageAddMessages,
+            toolSpecs: [],
+            parameters: params
+        )
+        log("  cold cachedTokens=\(requestZ6cold.cachedTokens) (expected 0) "
+            + "generatedChars=\(requestZ6cold.generatedText.count)")
+        checks.append(CheckResult(
+            name: "requestZ6_cold_after_reload",
+            passed: requestZ6cold.cachedTokens == 0,
+            detail: "cachedTokens=\(requestZ6cold.cachedTokens) expected 0 after reload"
+        ))
+        let imageAddEquivalence = Self.checkGreedyOutputEquivalence(
+            requestZ6b.generatedText,
+            requestZ6cold.generatedText,
+            labelA: "warm",
+            labelB: "cold"
+        )
+        checks.append(CheckResult(
+            name: "image_add_warm_output_equivalence",
+            passed: imageAddEquivalence.passed,
+            detail: imageAddEquivalence.detail
+        ))
     }
 
     /// Long shared user-message prefix (~80 tokens) for the branch-point

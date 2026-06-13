@@ -1,5 +1,6 @@
 import CoreImage
 import Foundation
+import Metal
 import MLX
 import MLXLMCommon
 import Tokenizers
@@ -134,6 +135,68 @@ nonisolated enum HTTPLeafStoreMode: String, Sendable {
     case directToolLeaf
     case canonicalUserLeaf
     case directLeaf
+}
+
+nonisolated enum VisionPrefixMemoryGuard {
+    struct Rejection: Equatable, Sendable {
+        let prefixTokens: Int
+        let estimatedBytes: UInt64
+        let maxBufferBytes: UInt64
+
+        var message: String {
+            "vision prefill is too large: \(prefixTokens) image-prefix tokens would allocate "
+                + "\(Self.formatBytes(estimatedBytes)) for one Qwen3.5/Qwen3.6 full-attention "
+                + "score matrix, above this Mac's Metal buffer limit of "
+                + "\(Self.formatBytes(maxBufferBytes))"
+        }
+
+        private static func formatBytes(_ bytes: UInt64) -> String {
+            if bytes == UInt64.max { return "more than \(UInt64.max) bytes" }
+            let gib = Double(bytes) / 1_073_741_824.0
+            return String(format: "%.2f GiB", gib)
+        }
+    }
+
+    static func rejection(
+        prefixTokens: Int,
+        profile: ModelIdentity.FullAttentionScratchProfile?,
+        maxBufferBytes: UInt64
+    ) -> Rejection? {
+        guard let profile else { return nil }
+        let estimatedBytes = profile.scoreMatrixBytes(sequenceLength: prefixTokens) ?? UInt64.max
+        guard estimatedBytes > maxBufferBytes else { return nil }
+        return Rejection(
+            prefixTokens: prefixTokens,
+            estimatedBytes: estimatedBytes,
+            maxBufferBytes: maxBufferBytes
+        )
+    }
+
+    /// The windowed-continuation backstop (ADR-0007 phase 2). The chunked
+    /// forward's peak full-attention scratch is `[heads, windowSize,
+    /// contextTokens]` — one query window over the whole `[0, contextTokens)`
+    /// span — not the single-shot `[heads, L, L]`. So a long image span that
+    /// would have tripped the single-shot guard now passes: this fires only when
+    /// even one bounded window cannot fit, which is effectively unreachable for
+    /// real inputs (hence "rarely-fired backstop").
+    static func chunkedRejection(
+        windowSize: Int,
+        contextTokens: Int,
+        profile: ModelIdentity.FullAttentionScratchProfile?,
+        maxBufferBytes: UInt64
+    ) -> Rejection? {
+        guard let profile else { return nil }
+        let query = min(max(1, windowSize), max(1, contextTokens))
+        let estimatedBytes =
+            profile.scoreMatrixBytes(queryLength: query, contextLength: contextTokens)
+            ?? UInt64.max
+        guard estimatedBytes > maxBufferBytes else { return nil }
+        return Rejection(
+            prefixTokens: contextTokens,
+            estimatedBytes: estimatedBytes,
+            maxBufferBytes: maxBufferBytes
+        )
+    }
 }
 
 /// **Server Completion** — the deep module owning one cache-aware HTTP
@@ -1375,6 +1438,7 @@ nonisolated final class ServerCompletion {
         let modelFingerprint = self.modelFingerprint
         let imageKeying = self.modelIdentity?.imageKeying
         let flopProfile = self.modelIdentity?.flopProfile ?? .fallback
+        let fullAttentionScratchProfile = self.modelIdentity?.fullAttentionScratchProfile
         let ssdEnabled = self.ssdConfig?.enabled == true
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
@@ -1463,6 +1527,24 @@ nonisolated final class ServerCompletion {
                     diagnosticsContext: diagnosticsContext,
                     progressHandler: progressHandler
                 )
+            }
+            // Grid instrumentation (ADR-0007 phase 2): the processed image grid
+            // is the ground truth for the M-RoPE span and the pad-run length the
+            // Cache Key Path expands. Logging it cheaply catches the deferred
+            // "one screenshot → ~43,500 pad tokens" anomaly with real numbers if
+            // it recurs — the chunked continuation already makes such an image
+            // non-fatal, so this is observe-only, not a gate.
+            if let frames = fullInput.image?.frames, !frames.isEmpty {
+                let merge = imageKeying?.spatialMergeSize ?? 1
+                let mergeArea = max(1, merge * merge)
+                for (index, frame) in frames.enumerated() {
+                    let (t, h, w) = frame.values
+                    Log.image.debug(
+                        "vision grid #\(index): t=\(t) h=\(h) w=\(w) "
+                            + "patches=\(frame.product) padRun=\(frame.product / mergeArea) "
+                            + "merge=\(merge)"
+                    )
+                }
             }
             // The recognized vision container mis-positions M-RoPE on any
             // nil-state warm forward — text-only restores included — so the
@@ -1569,55 +1651,101 @@ nonisolated final class ServerCompletion {
             let inputForGeneration: LMInput
             let cacheToUse: [any KVCache]?
             let restoreMs: TimeInterval
-            /// Offset already covered when the executor starts (restore offset
-            /// or the vendor-prepared image prefix; 0 on a text-only cold run).
+            /// Offset already covered when the (text-tail) executor starts: the
+            /// restore offset on an image-free warm restore, the end of the
+            /// vendor-continued image span (`minimumWarmOffset`) on an
+            /// image-bearing plan, or 0 on a text-only cold run.
             let executionBaseOffset: Int
-            /// Image-prefix input the prefill phase vendor-prepares before the
-            /// chunked tail; nil except on a cold image-bearing plan.
+            /// The image-bearing span `[restore, minimumWarmOffset)` the vendor
+            /// continuation forwards (chunked) before the text tail; nil unless
+            /// the plan carries an image in the remainder.
             var imagePrefixInput: LMInput? = nil
-            /// State the first executor chunk forwards with (Position Anchor
-            /// on a warm restore; the vendor prepare fills it on a cold
-            /// image-bearing plan).
+            /// Position Anchor seeded into the *text* executor on an image-free
+            /// warm restore (the continuation path seeds its own anchor, below).
             var executorInitialState: LMOutput.State? = nil
+            /// Position Anchor seeded into the vendor continuation — the rope
+            /// delta of the images cached before the restore offset (nil ⇒ 0,
+            /// the crash-safe cold-from-zero image prefill).
+            var imageContinuationAnchor: LMOutput.State? = nil
+
+            // Build the image-bearing span `[restoreOffset, minimumWarmOffset)`
+            // carrying only the images whose runs fall in it — those fully
+            // before `restoreOffset` are already in the restored cache, so their
+            // pixels must not be re-fed (the **Cache Key Space** selects them by
+            // index, and the pre-merge `THW.product` rows are skipped from the
+            // concatenated pixel tensor). nil for an image-free remainder.
+            func imageSpan(from restoreOffset: Int) -> LMInput? {
+                let prefixEnd = keySpace.minimumWarmOffset
+                guard restoreOffset < prefixEnd,
+                    let remainderRange = keySpace.remainderImageIndices(from: restoreOffset),
+                    !remainderRange.isEmpty,
+                    let image = fullInput.image,
+                    let allFrames = image.frames
+                else { return nil }
+                let spanTokens = fullInput.text.tokens[0..., restoreOffset ..< prefixEnd]
+                let spanFrames = Array(allFrames[remainderRange])
+                let skipPatches = allFrames[..<remainderRange.lowerBound]
+                    .reduce(0) { $0 + $1.product }
+                let spanPixels =
+                    skipPatches == 0 ? image.pixels : image.pixels[skipPatches..., 0...]
+                return LMInput(
+                    text: LMInput.Text(tokens: spanTokens, mask: nil),
+                    image: LMInput.ProcessedImage(pixels: spanPixels, frames: spanFrames)
+                )
+            }
 
             switch prefillPlan.restore {
             case .restore(let cacheOffset, let anchorDelta):
-                // Suffix-only prefill is safe: layers are restored via
-                // `HybridCacheSnapshot` with their absolute logical offset
-                // intact, and each layer's own `makeMask` recreates the right
-                // causal mask for the suffix tokens.
-                let slicedTokens: MLXArray
-                if tokenNDim <= 1 {
-                    slicedTokens = fullInput.text.tokens[cacheOffset...]
-                } else {
-                    slicedTokens = fullInput.text.tokens[0..., cacheOffset...]
-                }
-                // Drop the mask — the remainder is image-free by the planner's
-                // warm-offset clamp, and downstream code recreates attention
-                // masks from the cache offset.
-                inputForGeneration = LMInput(text: LMInput.Text(tokens: slicedTokens, mask: nil))
                 let (restoredCache, measuredRestoreMs) = measure {
                     lookupResult.restoreCache()
                 }
                 cacheToUse = restoredCache
                 restoreMs = measuredRestoreMs
-                executionBaseOffset = cacheOffset
-                if seedsPositionAnchor {
-                    executorInitialState = PositionAnchor.seededState(ropeDelta: anchorDelta)
+                if !keySpace.isIdentity,
+                    cacheOffset < keySpace.minimumWarmOffset,
+                    let span = imageSpan(from: cacheOffset)
+                {
+                    // Warm restore *below* a new image (ADR-0007 phase 2):
+                    // continue through the image span chunked, anchored at the
+                    // restored prefix's Position Anchor, then the text tail.
+                    let prefixEnd = keySpace.minimumWarmOffset
+                    imagePrefixInput = span
+                    inputForGeneration = LMInput(
+                        text: LMInput.Text(
+                            tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
+                    executionBaseOffset = prefixEnd
+                    if seedsPositionAnchor {
+                        imageContinuationAnchor = PositionAnchor.seededState(ropeDelta: anchorDelta)
+                    }
+                } else {
+                    // Image-free remainder: suffix-only prefill. Layers restore
+                    // with their absolute logical offset intact, and each
+                    // layer's `makeMask` recreates the suffix's causal mask.
+                    let slicedTokens: MLXArray =
+                        tokenNDim <= 1
+                        ? fullInput.text.tokens[cacheOffset...]
+                        : fullInput.text.tokens[0..., cacheOffset...]
+                    inputForGeneration = LMInput(
+                        text: LMInput.Text(tokens: slicedTokens, mask: nil))
+                    executionBaseOffset = cacheOffset
+                    if seedsPositionAnchor {
+                        executorInitialState = PositionAnchor.seededState(ropeDelta: anchorDelta)
+                    }
                 }
             case .cold where !keySpace.isIdentity:
+                // No valid restore: cold image prefill, but driven through the
+                // same windowed continuation (anchored at zero) so even the
+                // fallback is crash-safe.
                 let prefixEnd = keySpace.minimumWarmOffset
-                imagePrefixInput = LMInput(
-                    text: LMInput.Text(
-                        tokens: fullInput.text.tokens[0..., ..<prefixEnd], mask: nil
-                    ),
-                    image: fullInput.image
-                )
+                imagePrefixInput =
+                    imageSpan(from: 0)
+                    ?? LMInput(
+                        text: LMInput.Text(
+                            tokens: fullInput.text.tokens[0..., ..<prefixEnd], mask: nil),
+                        image: fullInput.image)
                 inputForGeneration = LMInput(
                     text: LMInput.Text(
-                        tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil
-                    )
-                )
+                        tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
                 cacheToUse = nil
                 restoreMs = 0
                 executionBaseOffset = prefixEnd
@@ -1688,74 +1816,115 @@ nonisolated final class ServerCompletion {
             let prefillMs: TimeInterval
             do {
                 (prefillResult, prefillMs) = try measure {
-                    var initialState = executorInitialState
-                    var prefixSnapshots: [HybridCacheSnapshot] = []
-                    if let imagePrefixInput {
-                        // Cold image prefix: one vendor prepare carries the pixels
-                        // through the vision tower with M-RoPE correct by
-                        // construction, and its returned state anchors the chunked
-                        // text tail. `.tokens` is unreachable — a non-identity key
-                        // space implies the recognized vision container, whose
-                        // `prepare` is single-shot.
-                        guard case .logits(let prepared) = try context.model.prepare(
-                            imagePrefixInput, cache: liveCache, windowSize: genParams.prefillStepSize
-                        ) else {
-                            throw AgentEngineError.generationFailed(
-                                "vision container returned .tokens from prepare"
-                            )
-                        }
-                        initialState = prepared.state
-                        // A checkpoint at exactly the prefix end is capturable here
-                        // (the executor's relative-checkpoint loop only captures
-                        // strictly past its base) — capture needs materialized
-                        // arrays, so only that branch pays a blocking eval; the
-                        // common case dispatches the vision-tower work async so
-                        // the CPU can build the text tail's first chunk graph
-                        // while the GPU runs the prefix (the PrefillExecutor
-                        // pipelining pattern).
-                        if let type = allCheckpoints[executionBaseOffset] {
-                            eval(liveCache)
-                            if let snap = HybridCacheSnapshot.capture(
-                                cache: liveCache, offset: executionBaseOffset, type: type
+                    try MLXCheckedEvaluation.withErrors { error in
+                        var initialState = executorInitialState
+                        var prefixSnapshots: [HybridCacheSnapshot] = []
+                        if let imagePrefixInput {
+                            // Crash-safe by construction: the continuation chunks
+                            // the forward, so the peak full-attention scratch is
+                            // bounded to `[heads, window, executionBaseOffset]`,
+                            // not the single-shot `[heads, L, L]`. The guard is now
+                            // a rarely-fired backstop against a genuinely
+                            // impossible single window (effectively unreachable).
+                            if let rejection = VisionPrefixMemoryGuard.chunkedRejection(
+                                windowSize: genParams.prefillStepSize,
+                                contextTokens: executionBaseOffset,
+                                profile: fullAttentionScratchProfile,
+                                maxBufferBytes: Self.currentMaxMetalBufferBytes()
                             ) {
-                                prefixSnapshots.append(snap)
+                                diagnosticsContext.logSkip(
+                                    stage: "prefill",
+                                    reason: "vision-prefix-too-large",
+                                    level: .warning,
+                                    extraFields: [
+                                        ("prefixTokens", "\(rejection.prefixTokens)"),
+                                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
+                                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
+                                    ]
+                                )
+                                throw AgentEngineError.generationFailed(rejection.message)
                             }
-                        } else {
-                            asyncEval(liveCache)
+
+                            // Warm/cold image span (ADR-0007 phase 2): the windowed
+                            // continuation runs the vision tower once, positions the
+                            // new image from the restored Position Anchor
+                            // (`imageContinuationAnchor`; nil ⇒ anchored at zero, a
+                            // crash-safe cold prefill), and chunks the forward so the
+                            // scratch is bounded. Its returned state anchors the
+                            // chunked text tail. A non-identity key space implies the
+                            // recognized vision container, which conforms to
+                            // `WindowedVisionContinuation`.
+                            guard let continuation = context.model as? WindowedVisionContinuation
+                            else {
+                                throw AgentEngineError.generationFailed(
+                                    "loaded model does not support windowed vision continuation"
+                                )
+                            }
+                            guard case .logits(let prepared) = try continuation.prepareContinuation(
+                                imagePrefixInput,
+                                cache: liveCache,
+                                state: imageContinuationAnchor,
+                                windowSize: genParams.prefillStepSize
+                            ) else {
+                                throw AgentEngineError.generationFailed(
+                                    "vision container returned .tokens from prepareContinuation"
+                                )
+                            }
+                            try error.check()
+                            initialState = prepared.state
+                            // A checkpoint at exactly the prefix end is capturable here
+                            // (the executor's relative-checkpoint loop only captures
+                            // strictly past its base) — capture needs materialized
+                            // arrays, so only that branch pays the capture cost.
+                            // The previous async scheduling path let MLX errors
+                            // escape Swift's scoped handler and terminate the app.
+                            // Keep this crash-sensitive image prefix on checked
+                            // synchronous evaluation so failures become throws.
+                            if let type = allCheckpoints[executionBaseOffset] {
+                                try MLXCheckedEvaluation.eval(liveCache)
+                                if let snap = HybridCacheSnapshot.capture(
+                                    cache: liveCache, offset: executionBaseOffset, type: type
+                                ) {
+                                    prefixSnapshots.append(snap)
+                                }
+                            } else {
+                                try MLXCheckedEvaluation.eval(liveCache)
+                            }
                         }
+                        let warmed = try PrefillExecutor.run(
+                            model: context.model,
+                            text: inputForGeneration.text,
+                            cache: liveCache,
+                            checkpoints: allCheckpoints,
+                            checkpointBaseOffset: executionBaseOffset,
+                            prefillStepSize: genParams.prefillStepSize,
+                            initialState: initialState
+                        )
+                        try error.check()
+                        maybeQuantizeKVCache(
+                            cache: &liveCache,
+                            kvBits: genParams.kvBits,
+                            kvGroupSize: genParams.kvGroupSize,
+                            quantizedKVStart: genParams.quantizedKVStart
+                        )
+                        var iteratorParams = genParams
+                        iteratorParams.kvBits = nil
+                        // The iterator seeds any configured penalty processors with
+                        // the full suffix — its own input is only the final prompt
+                        // token, which would otherwise be the entire
+                        // repetition/presence/frequency context. It threads the last
+                        // prefill chunk's state through the prime forward and every
+                        // decode step (PRD #72 — upstream's iterator drops it).
+                        let iterator = StateThreadedTokenIterator(
+                            remainder: warmed.remainder,
+                            fullText: inputForGeneration.text,
+                            model: context.model,
+                            cache: liveCache,
+                            state: warmed.state,
+                            parameters: iteratorParams
+                        )
+                        return (iterator: iterator, snapshots: prefixSnapshots + warmed.snapshots)
                     }
-                    let warmed = try PrefillExecutor.run(
-                        model: context.model,
-                        text: inputForGeneration.text,
-                        cache: liveCache,
-                        checkpoints: allCheckpoints,
-                        checkpointBaseOffset: executionBaseOffset,
-                        prefillStepSize: genParams.prefillStepSize,
-                        initialState: initialState
-                    )
-                    maybeQuantizeKVCache(
-                        cache: &liveCache,
-                        kvBits: genParams.kvBits,
-                        kvGroupSize: genParams.kvGroupSize,
-                        quantizedKVStart: genParams.quantizedKVStart
-                    )
-                    var iteratorParams = genParams
-                    iteratorParams.kvBits = nil
-                    // The iterator seeds any configured penalty processors with
-                    // the full suffix — its own input is only the final prompt
-                    // token, which would otherwise be the entire
-                    // repetition/presence/frequency context. It threads the last
-                    // prefill chunk's state through the prime forward and every
-                    // decode step (PRD #72 — upstream's iterator drops it).
-                    let iterator = StateThreadedTokenIterator(
-                        remainder: warmed.remainder,
-                        fullText: inputForGeneration.text,
-                        model: context.model,
-                        cache: liveCache,
-                        state: warmed.state,
-                        parameters: iteratorParams
-                    )
-                    return (iterator: iterator, snapshots: prefixSnapshots + warmed.snapshots)
                 }
             } catch is CancellationError {
                 // **Salvage-on-cancel** (issue #97): the client is gone and
@@ -2439,6 +2608,13 @@ nonisolated final class ServerCompletion {
         case "float64": return .float64
         default: return nil
         }
+    }
+
+    private static func currentMaxMetalBufferBytes() -> UInt64 {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            return UInt64.max
+        }
+        return UInt64(device.maxBufferLength)
     }
 
     // MARK: - Leaf store helpers

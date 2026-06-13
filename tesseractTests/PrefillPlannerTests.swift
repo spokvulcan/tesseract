@@ -161,9 +161,10 @@ import MLXLMCommon
         ).get()
     }
 
-    @Test func hitBelowTheImageWarmOffsetDegradesToCold() throws {
-        // Image run [10, 26): a snapshot at 12 would leave image tokens in the
-        // remainder, which cannot be forwarded warm — the plan runs cold.
+    @Test func hitSplittingTheImageRunDegradesToCold() throws {
+        // Image run [10, 26): a snapshot at 12 splits the run — a corrupt
+        // boundary (`positionAnchorDelta` is nil there), so the plan still runs
+        // cold under phase 2 (the run-split guard, not the warm-offset clamp).
         let keySpace = try imageKeySpace(runRange: 10 ..< 26, positionSpan: 8, totalTokens: 60)
         let plan = PrefillPlanner.plan(
             boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
@@ -172,11 +173,39 @@ import MLXLMCommon
             promptTokenCount: 60,
             keySpace: keySpace
         )
-        guard case .cold = plan.restore else { Issue.record("expected cold below warm offset"); return }
-        // The cold image plan also drops checkpoints inside the vendor-prepared
-        // image prefix [0, 26) — they are uncapturable there.
+        guard case .cold = plan.restore else { Issue.record("expected cold for a run-splitting offset"); return }
+        // The cold image plan also drops checkpoints inside the image prefix
+        // [0, 26) — they are uncapturable there.
         #expect(offsets(plan.checkpointsToCapture) == [40])
         #expect(plan.minimumWarmOffset == 26)
+    }
+
+    @Test func hitBelowTheImageRunRestoresAndContinuesThroughIt() throws {
+        // Phase 2 (ADR-0007): a snapshot at 8 — below the image run [10, 26) and
+        // at a clean boundary — now restores and continues *through* the image,
+        // instead of degrading to cold under the old `>= minimumWarmOffset`
+        // clamp. The anchor delta is 0 (no image fully cached before 8).
+        let keySpace = try imageKeySpace(runRange: 10 ..< 26, positionSpan: 8, totalTokens: 60)
+        let plan = PrefillPlanner.plan(
+            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
+            lookupResult: hit(snapshot(offset: 8), promptTokenCount: 60),
+            checkpointPlan: [
+                (offset: 8, type: .system),
+                (offset: 20, type: .branchPoint),
+                (offset: 40, type: .branchPoint),
+            ],
+            promptTokenCount: 60,
+            keySpace: keySpace
+        )
+        guard case .restore(let cacheOffset, let anchorDelta) = plan.restore else {
+            Issue.record("expected restore below the image run"); return
+        }
+        #expect(cacheOffset == 8)
+        #expect(anchorDelta == 0)
+        // Checkpoints inside the continued image span [8, 26) are uncapturable
+        // (8 is the restore base, 20 is mid-span); only the text tail past
+        // minimumWarmOffset survives.
+        #expect(offsets(plan.checkpointsToCapture) == [40])
     }
 
     @Test func hitAtOrPastTheImageWarmOffsetRestoresWithItsAnchorDelta() throws {

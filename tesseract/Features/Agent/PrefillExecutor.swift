@@ -58,9 +58,9 @@ nonisolated enum PrefillExecutor {
         // generation) inputs are already batched; `LMOutput.State` threads
         // from each chunk into the next (Qwen3.5-VLM carries its RoPE deltas
         // there — without it every chunk after the first restarts positions
-        // at 0), and `asyncEval` lets the CPU build chunk N+1's graph while
-        // the GPU evaluates chunk N. Checkpoint captures synchronize
-        // explicitly before copying.
+        // at 0). Checked evaluation keeps MLX runtime failures on this path
+        // as Swift throws instead of process-fatal handler dispatches.
+        // Checkpoint captures synchronize explicitly before copying.
         //
         // Cancellation is observed before every chunk (issue #97): a client
         // abort mid-prefill stops within one chunk instead of running the
@@ -74,7 +74,7 @@ nonisolated enum PrefillExecutor {
             let chunk = ndim >= 2 ? y[0..., ..<chunkSize] : y[.newAxis, ..<chunkSize]
             let output = model(chunk, cache: cache.isEmpty ? nil : cache, state: chunkState)
             chunkState = output.state
-            asyncEval(cache)
+            try MLXCheckedEvaluation.eval(cache)
             y = ndim >= 2 ? y[0..., chunkSize...] : y[chunkSize...]
         }
 
@@ -105,7 +105,7 @@ nonisolated enum PrefillExecutor {
         // Flush the pipelined chunks and release the prefill's scratch
         // buffers (the fork cleared the MLX buffer pool after prefill too) —
         // long cold prefills otherwise accumulate per-chunk allocations.
-        eval(cache)
+        try MLXCheckedEvaluation.eval(cache)
         Memory.clearCache()
 
         return Output(snapshots: snapshots, remainder: y, state: chunkState)

@@ -129,6 +129,7 @@ final class ParoQuantVLMSmokeRunner {
         // Shared fixtures. One deterministic image, one image-bearing prompt
         // (image up front, agent-attachment shape), one text-only prompt.
         let image = BenchmarkHarness.deterministicImage(width: 256, height: 256, seed: 17)
+        let image2 = BenchmarkHarness.deterministicImage(width: 256, height: 256, seed: 41)
         let imageInput = try await prepareImageInput(context: context, image: image)
         let textTokens = BenchmarkHarness.promptTokens(targetTokens: 1536, tokenizer: context.tokenizer)
         logs.append("image prompt: \(imageInput.text.tokens.dim(-1)) tokens")
@@ -172,6 +173,13 @@ final class ParoQuantVLMSmokeRunner {
         }
         await runCheck("naiveImageRemainderPrepareDiverges") {
             try await naiveImageRemainderPrepare(context: context, vlm: vlm, image: image)
+        }
+        await runCheck("imageRemainderContinuationMatches") {
+            try await imageRemainderContinuationMatches(context: context, vlm: vlm, image: image)
+        }
+        await runCheck("stackedImageRemainderContinuationMatches") {
+            try await stackedImageRemainderContinuationMatches(
+                context: context, vlm: vlm, image1: image, image2: image2)
         }
 
         return TestRunResult(logs: logs, checks: checks)
@@ -537,6 +545,270 @@ final class ParoQuantVLMSmokeRunner {
             diff > 0,
             "maxAbsDiff=\(diff) (expected > 0: prepare cannot anchor at the restore offset)",
             ["  prompt=\(tokens.count) tokens, restore K=\(k), visionStart=\(visionStart)"]
+        )
+    }
+
+    /// The phase-2 positive that inverts `naiveImageRemainderPrepare`: the same
+    /// long-text-prefix-then-image prompt, but the image-bearing remainder is
+    /// continued through the **windowed `prepareContinuation`** with the restore
+    /// offset's Position Anchor seeded (rope delta 0 — the prefix is text).
+    /// Three frozen facts, together proving warm image continuation is correct:
+    ///
+    /// 1. **Bitwise vs shape-matched** — the restored continuation reproduces
+    ///    the restore-free continuation (same prefill + same chunked
+    ///    continuation, no capture/restore round trip) bit-for-bit, isolating
+    ///    snapshot restore fidelity and chunk determinism.
+    /// 2. **Argmax vs production-cold** — it lands the same top token as the
+    ///    single-shot cold `prepare` over the whole prefix, proving the
+    ///    offset-aware M-RoPE image positions are correct, not merely
+    ///    self-consistent. (Bitwise against single-shot cold is impossible — the
+    ///    chunk shapes differ; see `chunkShapeNoiseControl`.)
+    /// 3. **Resumed anchor** — the continuation's returned state carries the
+    ///    rope delta the post-image text tail resumes with, equal to the
+    ///    app-side reconstruction from the image grids (Σ max(t,h/m,w/m) −
+    ///    t·h·w/m²) that `prepareStateCarriesRopeDelta` pins for cold prepare.
+    ///
+    /// A diverging bitwise diff, a cold-mismatched argmax, or a wrong resumed
+    /// delta falsifies ADR-0007 phase 2 and the swap in `ServerCompletion`.
+    nonisolated private static func imageRemainderContinuationMatches(
+        context: ModelContext,
+        vlm: Qwen35,
+        image: CIImage
+    ) async throws -> (passed: Bool, detail: String, lines: [String]) {
+        // Identical prompt shape to the `…Diverges` negative: long text prefix,
+        // then the image — the HTTP debug-flow shape.
+        let filler = BenchmarkHarness.promptText(targetTokens: 900, tokenizer: context.tokenizer)
+        let chat: [Chat.Message] = [
+            .system("You are a meticulous visual analyst. Context notes: " + filler),
+            .user(
+                "Describe the attached image: dominant colors, gradients, any structure.",
+                images: [.ciImage(image)]
+            ),
+        ]
+        let prepared = try await context.processor.prepare(input: UserInput(chat: chat))
+        let tokens = LLMActor.extractTokenSequence(prepared.text.tokens)
+
+        guard let visionStart = tokens.firstIndex(of: vlm.config.visionStartTokenId), visionStart > 64 else {
+            return (false, "no vision start token (or image not in remainder) — prompt shape wrong", [])
+        }
+        let k = visionStart - 8  // clean text boundary below the image run
+
+        // Production-cold reference (argmax target): single-shot prepare over
+        // the whole [0, last) prefix, image included.
+        let (coldLogits, _) = try coldLastLogits(context: context, input: prepared)
+
+        // Continue the image-bearing remainder [k, last) through the windowed
+        // continuation, the image-free prefix's anchor (delta 0) seeded.
+        // `restore` toggles only the capture/restore round trip; the prefill
+        // shape, chunk shape, and anchor are otherwise identical, so the two
+        // runs can differ only by restore fidelity.
+        func continueRemainder(restore: Bool) throws -> (logits: MLXArray, state: LMOutput.State?) {
+            let cache = context.model.newCache(parameters: nil)
+            try prefill(context: context, tokens: Array(tokens.prefix(k)), cache: cache)
+
+            let working: [any KVCache]
+            if restore {
+                guard let snap = HybridCacheSnapshot.capture(cache: cache, offset: k, type: .system) else {
+                    throw ParoQuantVLMSmokeError.unexpectedPrepareResult
+                }
+                working = try snap.restore()
+            } else {
+                eval(cache)
+                working = cache
+            }
+
+            var anchor = LMOutput.State()
+            anchor[ropeDeltasKey] = MLXArray([Int32(0)])  // [0, k) is text → delta 0
+
+            let remainder = Array(tokens[k ..< (tokens.count - 1)])
+            let remainderArr = MLXArray(remainder.map { Int32($0) }).expandedDimensions(axis: 0)
+            let remainderInput = LMInput(
+                text: .init(tokens: remainderArr, mask: ones(like: remainderArr).asType(.int8)),
+                image: prepared.image
+            )
+            guard case .logits(let out) = try vlm.prepareContinuation(
+                remainderInput, cache: working, state: anchor, windowSize: 512
+            ) else {
+                throw ParoQuantVLMSmokeError.unexpectedPrepareResult
+            }
+            eval(working)
+            let (logits, _) = lastTokenLogits(
+                model: context.model, token: tokens[tokens.count - 1], cache: working, state: out.state
+            )
+            return (logits, out.state)
+        }
+
+        let reference = try continueRemainder(restore: false)
+        let warm = try continueRemainder(restore: true)
+
+        let bitwiseDiff = BenchmarkHarness.maxAbsDiff(reference.logits, warm.logits)
+        let argmaxWarm = warm.logits.argMax().item(Int32.self)
+        let argmaxCold = coldLogits.argMax().item(Int32.self)
+
+        // Resumed anchor: the post-image text tail's rope delta, reconstructed
+        // from the image grids exactly as production does.
+        let merge = vlm.config.visionConfiguration.spatialMergeSize
+        var computed = 0
+        for frame in prepared.image?.frames ?? [] {
+            let (t, h, w) = frame.values
+            computed += max(t, max(h / merge, w / merge)) - (t * h * w) / (merge * merge)
+        }
+        var harvested: [Int] = []
+        if let state = warm.state, let deltas = state[ropeDeltasKey] {
+            eval(deltas)
+            harvested = deltas.asArray(Int32.self).map(Int.init)
+        }
+
+        let passed = bitwiseDiff <= bitwiseTolerance && argmaxWarm == argmaxCold && harvested == [computed]
+        return (
+            passed,
+            "bitwiseVsShapeMatched=\(bitwiseDiff) (expected 0); "
+                + "argmax warm=\(argmaxWarm) cold=\(argmaxCold) (expected equal); "
+                + "resumedDelta=\(harvested) computedFromGrids=\(computed)",
+            [
+                "  prompt=\(tokens.count) tokens, restore K=\(k), visionStart=\(visionStart)",
+                "  merge=\(merge) frames=\((prepared.image?.frames ?? []).map(\.values).map { [$0.0, $0.1, $0.2] })",
+            ]
+        )
+    }
+
+    /// The **stacked-image** continuation — the riskiest position path, and the
+    /// one `imageRemainderContinuationMatches` (anchor delta 0, single image)
+    /// does not reach. Two images: the first is *cached* (so the anchor delta is
+    /// non-zero — the whole reason the Position Anchor exists), the second lands
+    /// in the continued remainder. This exercises the two genuinely-new pieces
+    /// of logic together:
+    ///
+    /// 1. **Non-zero anchor** — `prepareContinuation` positions the second
+    ///    image's diverging t/h/w indices from `cacheOffset + image1Delta`, not
+    ///    zero and not `cacheOffset` alone.
+    /// 2. **Pixel-row skipping** — only the *second* image's pixel patches are
+    ///    fed (the first image's `THW.product` rows are sliced off, exactly as
+    ///    `ServerCompletion.imageSpan` does for already-cached images). A
+    ///    misaligned skip silently feeds the wrong patches.
+    ///
+    /// Same three frozen facts as the single-image case: bitwise vs a
+    /// shape-matched restore-free continuation, argmax vs single-shot cold over
+    /// *both* images, and the resumed anchor equal to the *sum* of both image
+    /// deltas. A wrong skip or a wrong anchor diverges the argmax from cold.
+    nonisolated private static func stackedImageRemainderContinuationMatches(
+        context: ModelContext,
+        vlm: Qwen35,
+        image1: CIImage,
+        image2: CIImage
+    ) async throws -> (passed: Bool, detail: String, lines: [String]) {
+        let chat: [Chat.Message] = [
+            .system("You are a meticulous visual analyst."),
+            .user(
+                "Compare these two images: dominant colors, gradients, and any structure they share.",
+                images: [.ciImage(image1), .ciImage(image2)]
+            ),
+        ]
+        let prepared = try await context.processor.prepare(input: UserInput(chat: chat))
+        let tokens = LLMActor.extractTokenSequence(prepared.text.tokens)
+
+        var visionStarts: [Int] = []
+        for (i, t) in tokens.enumerated() where t == vlm.config.visionStartTokenId {
+            visionStarts.append(i)
+        }
+        guard visionStarts.count >= 2,
+            let pixels = prepared.image?.pixels,
+            let frames = prepared.image?.frames, frames.count == 2
+        else {
+            return (
+                false,
+                "expected 2 images / 2 vision starts; got \(visionStarts.count) starts, "
+                    + "\(prepared.image?.frames?.count ?? 0) frames",
+                []
+            )
+        }
+        // Restore boundary = the second image's <|vision_start|>: image 1 (and
+        // any inter-image text) is fully below it, image 2 fully at/above it.
+        let k = visionStarts[1]
+        let merge = vlm.config.visionConfiguration.spatialMergeSize
+        func gridDelta(_ frame: THW) -> Int {
+            let (t, h, w) = frame.values
+            return max(t, max(h / merge, w / merge)) - (t * h * w) / (merge * merge)
+        }
+        let image1Delta = gridDelta(frames[0])
+        let totalDelta = image1Delta + gridDelta(frames[1])
+        let image1Patches = frames[0].product  // pixel rows belonging to image 1
+
+        // Production-cold reference (argmax target): single-shot prepare over
+        // the whole [0, last) prefix with BOTH images.
+        let (coldLogits, _) = try coldLastLogits(context: context, input: prepared)
+
+        // Prefill [0, k) with image 1's vision features (so the cache holds the
+        // image, not raw pad-token embeddings), restore optionally, then
+        // continue [k, last) through image 2 with image 1's anchor seeded and
+        // only image 2's pixels fed.
+        func continueStacked(restore: Bool) throws -> (logits: MLXArray, state: LMOutput.State?) {
+            let cache = context.model.newCache(parameters: nil)
+            let prefixTokens = sliced2D(prepared.text.tokens, to: k)
+            let prefixInput = LMInput(
+                text: .init(tokens: prefixTokens, mask: ones(like: prefixTokens).asType(.int8)),
+                image: LMInput.ProcessedImage(pixels: pixels[0 ..< image1Patches, 0...], frames: [frames[0]])
+            )
+            guard case .logits = try context.model.prepare(prefixInput, cache: cache, windowSize: nil) else {
+                throw ParoQuantVLMSmokeError.unexpectedPrepareResult
+            }
+
+            let working: [any KVCache]
+            if restore {
+                guard let snap = HybridCacheSnapshot.capture(cache: cache, offset: k, type: .system) else {
+                    throw ParoQuantVLMSmokeError.unexpectedPrepareResult
+                }
+                working = try snap.restore()
+            } else {
+                eval(cache)
+                working = cache
+            }
+
+            var anchor = LMOutput.State()
+            anchor[ropeDeltasKey] = MLXArray([Int32(image1Delta)])  // image 1 is cached
+
+            let remainder = Array(tokens[k ..< (tokens.count - 1)])
+            let remainderArr = MLXArray(remainder.map { Int32($0) }).expandedDimensions(axis: 0)
+            let remainderInput = LMInput(
+                text: .init(tokens: remainderArr, mask: ones(like: remainderArr).asType(.int8)),
+                // Skip image 1's patch rows — only image 2's pixels are new.
+                image: LMInput.ProcessedImage(pixels: pixels[image1Patches..., 0...], frames: [frames[1]])
+            )
+            guard case .logits(let out) = try vlm.prepareContinuation(
+                remainderInput, cache: working, state: anchor, windowSize: 512
+            ) else {
+                throw ParoQuantVLMSmokeError.unexpectedPrepareResult
+            }
+            eval(working)
+            let (logits, _) = lastTokenLogits(
+                model: context.model, token: tokens[tokens.count - 1], cache: working, state: out.state
+            )
+            return (logits, out.state)
+        }
+
+        let reference = try continueStacked(restore: false)
+        let warm = try continueStacked(restore: true)
+
+        let bitwiseDiff = BenchmarkHarness.maxAbsDiff(reference.logits, warm.logits)
+        let argmaxWarm = warm.logits.argMax().item(Int32.self)
+        let argmaxCold = coldLogits.argMax().item(Int32.self)
+        var harvested: [Int] = []
+        if let state = warm.state, let deltas = state[ropeDeltasKey] {
+            eval(deltas)
+            harvested = deltas.asArray(Int32.self).map(Int.init)
+        }
+
+        let passed = bitwiseDiff <= bitwiseTolerance && argmaxWarm == argmaxCold && harvested == [totalDelta]
+        return (
+            passed,
+            "bitwiseVsShapeMatched=\(bitwiseDiff) (expected 0); "
+                + "argmax warm=\(argmaxWarm) cold=\(argmaxCold) (expected equal); "
+                + "resumedDelta=\(harvested) sumOfImageDeltas=\(totalDelta)",
+            [
+                "  prompt=\(tokens.count) tokens, restore K=\(k) (image-2 vision start), "
+                    + "image1Patches=\(image1Patches) image1Delta=\(image1Delta)",
+                "  frames=\(frames.map(\.values).map { [$0.0, $0.1, $0.2] }) merge=\(merge)",
+            ]
         )
     }
 

@@ -258,7 +258,11 @@ the restore offset plus the rope delta accumulated by the cached prefix.
 Reconstructed per request by the **Cache Key Space** from its image table
 (per cached image: position span minus run length) — zero for an image-free
 prefix, never persisted, seeded into the model state ahead of the first
-warm forward. Vision-container-only; the text container needs no anchor.
+warm forward. Phase 2 (ADR-0007) extends the anchor to also position a *new*
+image that lands in the restored remainder: the continuation computes that
+image's diverging t/h/w positions *from* the anchor instead of resetting to
+zero, so an image-add turn restores warm rather than serving cold.
+Vision-container-only; the text container needs no anchor.
 _Avoid_: rope delta (the vendor-internal ingredient, not the concept), position
 offset (collides with cache/token offsets), mrope state.
 

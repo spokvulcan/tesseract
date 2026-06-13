@@ -1,4 +1,11 @@
 [submodule "Vendor/mlx-swift-lm"]
 	path = Vendor/mlx-swift-lm
-	url = git@github.com:ml-explore/mlx-swift-lm.git
-	branch = main
+	# Tracks the spokvulcan fork so an in-flight vendor change can ship in the
+	# pin while it is upstreamed in parallel (ADR-0006, amended). The fork
+	# mirrors ml-explore/mlx-swift-lm on `main`; feature branches carry the
+	# pinned commits until they merge upstream.
+	url = git@github.com:spokvulcan/mlx-swift-lm.git
+	# The pinned commit rides this feature branch until it merges upstream;
+	# `--remote` must track it, not the fork's `main` (which mirrors upstream
+	# and would revert the pin). Re-point to `main` once the change lands.
+	branch = feat/warm-image-continuation
