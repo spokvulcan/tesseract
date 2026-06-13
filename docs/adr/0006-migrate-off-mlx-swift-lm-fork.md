@@ -70,3 +70,39 @@ is kept as a staging ground for future upstream PRs.
   simplifications.
 - **Drop the prefix-cache features and use upstream's plain prompt cache.**
   Rejected outright: the tiered radix cache is product priority #2.
+
+## Amended (2026-06-13): the vendor is the frontier-experimentation surface
+
+The original framing ("machinery moves app-side; it is possible *only because*
+public API exposes everything") read, in practice, as "never touch the vendored
+model." That is **not** the intent and is hereby narrowed. The submodule is
+vendored precisely so we can experiment at the frontier of on-device inference —
+this is not a stable library that already provides everything we need. The
+operating rule is:
+
+- **Prefer vanilla.** If a capability is reachable through public API, do it
+  app-side (as the cache machinery already does).
+- **Change the vendor freely when public API does not suffice, or when a vendor
+  change is more performant / more ergonomic / more correct** — with one
+  constraint: the change must be **general and upstreamable** (a capability or
+  fix any consumer of `mlx-swift-lm` would want), shaped from the start as an
+  upstream PR. We open the PR, keep the change in the submodule pin meanwhile,
+  and re-converge on vanilla once merged.
+- **Not allowed:** Tesseract-specific hacks that only make sense inside this app.
+  Those still belong app-side.
+
+This supersedes the "only public API" reading and refines the "upstream-first as
+prerequisite" rejection above: vendor changes no longer *block* on the merge —
+they ship in the pin and upstream in parallel.
+
+First instance: **warm image-remainder continuation** (ADR-0007 phase 2). It
+needs a general `Qwen35.prepareContinuation` (warm cache + position offset + new
+images) and an **offset-aware `getRopeIndex`** (`positionOffset` parameter; today
+hardwired to start at 0) — both clean upstream contributions. A latent general
+bug surfaced alongside: `Qwen3VLProcessorConfiguration` ignores the new-style
+`size.{longest_edge,shortest_edge}` keys (decodes only legacy
+`min_pixels`/`max_pixels`), wrong for every Qwen3-VL model on the new config
+format — also upstreamed. This revises the "Accepted costs" bullet above
+("single-shot `prepare()` for the remainder on the warmed cache"), which
+ADR-0007's spike already falsified and replaced with cold image-add turns; phase
+2 replaces *that* with a chunked, offset-anchored continuation.

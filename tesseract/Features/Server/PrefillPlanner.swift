@@ -194,15 +194,20 @@ nonisolated enum PrefillPlanner {
     /// boundaries into the **Prefill Plan**. Pure: a hit inside the prompt
     /// becomes a suffix restore; everything else runs cold.
     ///
-    /// On an image-bearing request the **Cache Key Space** narrows the plan
-    /// (ADR-0007 spike results):
-    /// - a hit is usable only when the remainder is image-free
-    ///   (`offset ≥ minimumWarmOffset`) — image runs cannot be forwarded warm,
-    ///   so lower hits degrade to cold;
-    /// - on a cold plan, checkpoints inside the vendor-prepared image prefix
-    ///   `[0, minimumWarmOffset)` are uncapturable (one-shot prepare, and
-    ///   Mamba state cannot be rewound) and are dropped here;
-    /// - a usable restore carries its **Position Anchor** rope delta.
+    /// On an image-bearing request the **Cache Key Space** shapes the plan
+    /// (ADR-0007 phase 2 — warm image-remainder continuation):
+    /// - a hit *below* the last image run is now usable: the deepest valid
+    ///   snapshot is restored and the remainder is continued *through* the
+    ///   image, chunked. The `minimumWarmOffset` clamp survives only as the
+    ///   no-valid-restore fallback (the cold `else`);
+    /// - the sole restore guard is `positionAnchorDelta(upTo:) != nil`, which
+    ///   rejects an offset that splits a placeholder run (a corrupt boundary);
+    /// - a usable restore carries its **Position Anchor** rope delta;
+    /// - checkpoints inside the continued image span
+    ///   `[cacheOffset, minimumWarmOffset)` (and, on a cold plan, the
+    ///   image prefix `[0, minimumWarmOffset)`) stay uncapturable — the span is
+    ///   forwarded atomically and Mamba state cannot be rewound — so they are
+    ///   dropped here; only the span's end boundary and the text tail capture.
     static func plan(
         boundaries: PrefillBoundaries,
         lookupResult: PrefixCacheManager.LookupResult,
@@ -216,12 +221,17 @@ nonisolated enum PrefillPlanner {
         if let snapshot = lookupResult.snapshot,
            snapshot.tokenOffset > 0,
            snapshot.tokenOffset < promptTokenCount,
-           snapshot.tokenOffset >= minimumWarmOffset,
            let anchorDelta = keySpace.positionAnchorDelta(upTo: snapshot.tokenOffset) {
             let cacheOffset = snapshot.tokenOffset
             restore = .restore(cacheOffset: cacheOffset, anchorDelta: anchorDelta)
-            // Only capture checkpoints in the SUFFIX the snapshot doesn't cover.
-            checkpointsToCapture = checkpointPlan.filter { $0.offset > cacheOffset }
+            // Capture in the suffix the snapshot doesn't cover, minus the
+            // continued image span: `> cacheOffset` (past the restore) and
+            // `>= minimumWarmOffset` (past the atomically-forwarded image).
+            // For a text-only or image-already-cached restore the second clause
+            // is implied, so this matches the old `> cacheOffset` behavior.
+            checkpointsToCapture = checkpointPlan.filter {
+                $0.offset > cacheOffset && $0.offset >= minimumWarmOffset
+            }
         } else {
             restore = .cold
             checkpointsToCapture = checkpointPlan.filter { $0.offset >= minimumWarmOffset }

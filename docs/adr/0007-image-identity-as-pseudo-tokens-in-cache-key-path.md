@@ -190,3 +190,90 @@ to rare fallback paths:
 - **Extending the vendored processor API** to report image-token spans:
   re-diverges the vendor tree that ADR-0006 just un-forked, for something
   derivable app-side.
+
+## Phase 2 (2026-06-13): warm continuation *through* a new image
+
+Phase 1's cut — *"image-add turns serve cold… the lookup clamps hits so that
+image runs never land in the remainder"* — is the direct cause of two
+production failures with `qwen3.6-27b-paro`:
+
+1. **It never reuses the cache on an image turn.** OpenCode puts the image in
+   the newest message, so `minimumWarmOffset` (end of the last image run) sits
+   ~20 tokens from the prompt end every time; the prior-turn snapshot is always
+   below it, so `PrefillPlanner` (the `snapshot.tokenOffset >= minimumWarmOffset`
+   guard) forces **cold** on every image turn.
+2. **Cold means one single-shot full-attention pass over the whole prefix.**
+   `Qwen35.prepare` ignores `windowSize` (param is literally `windowSize _:`),
+   so `[0, minimumWarmOffset)` goes through in one pass. The hybrid model's
+   full-attention layers (`full_attention_interval=4`, 16 of 64 layers,
+   `num_attention_heads=24`) each allocate a `[24, L, L]` bf16 scratch =
+   `24·L²·2` bytes. **Crash cliff ≈ L=25,000 tokens** (30 GB Metal buffer
+   limit): a 14 K image turn survives but takes ~98 s and peaks ~42 GB; a 31 K
+   coding session + image → 47.9 GB → SIGTRAP; the first crash's 55 K →
+   147 GB, matching the MLX error to the byte.
+
+The phase-1 spike concluded *"single-shot remainder prepare on the warmed cache
+is not viable… no public-API workaround exists."* **That is correct but was
+read too broadly.** It tested only (a) the existing `prepare()` (hardcoded nil
+state) and (b) zero-vendor-change tricks (seeding `qwen35.ropeDeltas` → flat
+`arange+offset+delta` positions, right for a *text* remainder, wrong for a
+*new image's* diverging t/h/w positions). It never tested a method that injects
+offset-aware **image** positions, because that needs a vendor change — which
+phase 1 was avoiding. Two further phase-1 premises also relax on inspection:
+the GatedDeltaNet (Mamba) recurrent state is **position-free and restore-able**
+(`MambaCache.copy()` / `state` are public; restore-and-continue from a snapshot
+is exact — only *rewind*, i.e. subtracting tokens, is impossible, and we never
+rewind); and the full-attention KV cache is already offset-aware.
+
+**Decision.** Image-add turns restore the deepest valid prior snapshot at offset
+`P` and continue *through* the new image, chunked. Per ADR-0006's amended vendor
+stance (general + upstreamable), the new surface lives in the vendored model:
+
+- **A windowed `Qwen35.prepareContinuation`** (warm cache + remainder tokens +
+  remainder image frames/pixels) that honors `windowSize` and loops chunks over
+  `[P, end)` internally — crash-safe by construction (scratch bounded to
+  `[24, chunk, L]`), and a generally useful "prepare that doesn't OOM on long
+  image prompts." Decode stays app-owned (state threaded end-to-end, as today).
+- **An offset-aware `getRopeIndex`** — the one genuinely new bit of math: a third
+  position branch for *pixels present **and** warm cache*, computing the new
+  image's diverging t/h/w positions from the seeded **Position Anchor**
+  (cache offset + reconstructed rope delta) instead of resetting to zero
+  (`Qwen35.swift:799-802`). No new "position offset" scalar — it reuses the
+  Position Anchor already seeded for text remainders.
+- App side is small: relax the `PrefillPlanner` guard to allow `P` below the
+  image, pass the remainder's image frames to the continuation, keep the
+  post-image text tail on the existing app-driven `PrefillExecutor`, capture the
+  end-of-prefill leaf as today. The **Cache Key Path** and SSD format are
+  unchanged, so no snapshot invalidation.
+
+This supersedes the phase-1 "image-add serves cold" capture shape and the
+`minimumWarmOffset` hit-clamp (which becomes a fallback for when no valid
+restore exists, not the default).
+
+**Distinguished from the rejected "extend vendored processor API":** that
+rejection was about *reporting image-token spans* — derivable app-side. Running
+the vision tower, the embedding merge, and an offset-positioned forward is **not**
+derivable app-side (the members are `private`/`fileprivate` and need the
+weights). And keeping the position/merge math vendor-side honors the
+"re-implementing patch-count math app-side" rejection above — a wrong N still
+corrupts every offset past the image.
+
+**Validation ladder (gates merge, ADR-0007 style — a wrong position is silent):**
+warm-continuation output argmax-stable vs production-cold **and** bitwise vs a
+shape-matched reference (chunk-shape FP noise is real per the phase-1 spike);
+**replay of the captured real OpenCode requests** (`http-completions/`) warm vs
+cold; frozen-fact harness checks for the new vendor surface (offset-image
+positions, continuation state) so vendor drift fails loudly; an image hit-rate
+workload confirming image turns now restore instead of going cold.
+
+**Folded-in general fix (upstreamed):** `Qwen3VLProcessorConfiguration` decodes
+only legacy `min_pixels`/`max_pixels` and ignores the new-style
+`size.{longest_edge,shortest_edge}` keys the Qwen3.6 PARO config ships, silently
+falling back to defaults — wrong for every Qwen3-VL model on the new format.
+
+**Deferred, not chased:** a separate anomaly where one 2000×1159 screenshot
+expanded to ~43,500 pad tokens (vs the provable ~2,268) on a first-turn request
+— the processor math cannot produce it, so it needs runtime ground truth, not
+more static reading. Cheap instrumentation only (log actual `imageGridTHW` +
+pad-run length at prepare); the chunked continuation makes even a 43 K-pad image
+non-fatal, so it no longer gates anything.

@@ -250,11 +250,33 @@ nonisolated struct CacheKeySpace: Sendable {
         return delta
     }
 
-    /// The smallest restore offset whose remainder is image-free. Hits below
-    /// this would put an image run in the remainder, which cannot be forwarded
-    /// warm (ADR-0007 spike results) — the request serves cold instead.
+    /// The smallest restore offset whose remainder is image-free. Below it the
+    /// remainder contains an image run; phase 1 forced such hits cold, phase 2
+    /// (ADR-0007) continues warm *through* the image instead. It remains the
+    /// boundary between the vendor-continued image span and the app-chunked
+    /// text tail, and the cold fallback's image-prefix end.
     var minimumWarmOffset: Int {
         imageTable.last?.runRange.upperBound ?? 0
+    }
+
+    /// The indices (into the request's image list, prompt order) of the images
+    /// whose runs fall at or beyond `offset` — exactly the images a warm
+    /// continuation from `offset` must re-run through the vision tower (those
+    /// fully before `offset` are already in the restored cache). `nil` when
+    /// `offset` splits a run (no valid restore there, mirroring
+    /// `positionAnchorDelta`). An empty range means every image precedes
+    /// `offset` (an image-free remainder — the ordinary text restore).
+    func remainderImageIndices(from offset: Int) -> Range<Int>? {
+        for (index, entry) in imageTable.enumerated() {
+            if entry.runRange.upperBound <= offset {
+                continue  // fully cached before the restore offset
+            }
+            if entry.runRange.lowerBound < offset {
+                return nil  // offset splits this run
+            }
+            return index ..< imageTable.count  // first image at or beyond offset
+        }
+        return imageTable.count ..< imageTable.count  // all images precede offset
     }
 
     // MARK: - Geometry

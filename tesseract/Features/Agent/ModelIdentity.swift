@@ -37,16 +37,30 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         let attentionHeads: Int
         let bytesPerElement: Int
 
+        /// Single-shot full-attention scratch: `[heads, L, L]` — the bound a
+        /// vendor `prepare` over `L` tokens allocates in one pass (the OOM
+        /// source ADR-0007 phase 2 replaces).
         func scoreMatrixBytes(sequenceLength: Int) -> UInt64? {
-            guard sequenceLength >= 0, attentionHeads > 0, bytesPerElement > 0 else {
+            scoreMatrixBytes(queryLength: sequenceLength, contextLength: sequenceLength)
+        }
+
+        /// Chunked full-attention scratch: `[heads, query, context]` — `query`
+        /// tokens (one continuation window) attending over `context` KV slots.
+        /// The windowed continuation (ADR-0007 phase 2) honors this bound, so a
+        /// long image span estimates `heads·window·L`, linear in `L`, instead of
+        /// the single-shot `heads·L²`.
+        func scoreMatrixBytes(queryLength: Int, contextLength: Int) -> UInt64? {
+            guard queryLength >= 0, contextLength >= 0, attentionHeads > 0, bytesPerElement > 0
+            else {
                 return nil
             }
-            let length = UInt64(sequenceLength)
+            let query = UInt64(queryLength)
+            let context = UInt64(contextLength)
             let heads = UInt64(attentionHeads)
             let bytes = UInt64(bytesPerElement)
-            let lengthSquared = length.multipliedReportingOverflow(by: length)
-            guard !lengthSquared.overflow else { return nil }
-            let withHeads = lengthSquared.partialValue.multipliedReportingOverflow(by: heads)
+            let area = query.multipliedReportingOverflow(by: context)
+            guard !area.overflow else { return nil }
+            let withHeads = area.partialValue.multipliedReportingOverflow(by: heads)
             guard !withHeads.overflow else { return nil }
             let total = withHeads.partialValue.multipliedReportingOverflow(by: bytes)
             guard !total.overflow else { return nil }

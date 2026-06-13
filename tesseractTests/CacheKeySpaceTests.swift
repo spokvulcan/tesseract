@@ -377,6 +377,39 @@ struct CacheKeySpaceTests {
         #expect(space.minimumWarmOffset == space.imageTable[1].runRange.upperBound)
     }
 
+    /// The continuation must receive exactly the images whose runs fall at or
+    /// beyond the restore offset (ADR-0007 phase 2) — those before it are
+    /// already in the restored cache.
+    @Test func remainderImageIndicesSelectsImagesAtOrBeyondOffset() throws {
+        let space = try CacheKeySpace.make(
+            preparedTokens: Self.prompt(runLengths: [4, 6]),
+            images: [
+                .init(digest: Self.digest("a"), positionSpan: 2),
+                .init(digest: Self.digest("b"), positionSpan: 3),
+            ],
+            placeholderIdentity: Self.identity
+        ).get()
+        let run0 = space.imageTable[0].runRange
+        let run1 = space.imageTable[1].runRange
+
+        // Below / at the first run: both images are in the remainder.
+        #expect(space.remainderImageIndices(from: 0) == 0 ..< 2)
+        #expect(space.remainderImageIndices(from: run0.lowerBound) == 0 ..< 2)
+        // At the boundary after the first image: only the second.
+        #expect(space.remainderImageIndices(from: run0.upperBound) == 1 ..< 2)
+        #expect(space.remainderImageIndices(from: run1.lowerBound) == 1 ..< 2)
+        // Past the last image: empty (an image-free remainder).
+        #expect(space.remainderImageIndices(from: run1.upperBound) == 2 ..< 2)
+        // Splitting a run: nil — no valid restore there.
+        #expect(space.remainderImageIndices(from: run0.lowerBound + 1) == nil)
+        #expect(space.remainderImageIndices(from: run1.upperBound - 1) == nil)
+    }
+
+    @Test func remainderImageIndicesIsEmptyForTextOnly() {
+        let space = CacheKeySpace.identity(keyPath: [1, 2, 3])
+        #expect(space.remainderImageIndices(from: 0) == 0 ..< 0)
+    }
+
     /// Pinned against the model's harvested rope delta by the VLM spike
     /// harness: a 256×256 image → 16×16 patch grid, merge 2 → span 8,
     /// run 64, delta −56.
