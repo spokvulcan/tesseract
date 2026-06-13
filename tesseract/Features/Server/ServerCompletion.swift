@@ -992,6 +992,7 @@ nonisolated final class ServerCompletion {
                                         ? boundaryStoredTokens.count
                                         : mlxStart.transientLastUserBoundarySnapshot?
                                             .tokenOffset ?? 0,
+                                    renderContext: renderContext,
                                     idleDelay: plan.idleDelay,
                                     ramOnlySpine: plan.ramOnlySpine,
                                     diagnostics: diagnosticsContext
@@ -1099,7 +1100,7 @@ nonisolated final class ServerCompletion {
                     prefixCache: prefixCache
                 )
                 let (maybeLeaf, maybeLeafAdmission): (HybridCacheSnapshot?, SnapshotAdmission?) =
-                    try await container.perform(
+                    await container.perform(
                         nonSendable: finalCache
                     ) { _, cache in
                         guard let snap = HybridCacheSnapshot.capture(
@@ -1322,6 +1323,7 @@ nonisolated final class ServerCompletion {
                 seedsPositionAnchor: mlxStart.seedsPositionAnchor,
                 canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
                     .tokenOffset ?? 0,
+                renderContext: renderContext,
                 ramOnlySpine: true,
                 diagnostics: diagnosticsContext
             )

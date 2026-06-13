@@ -749,6 +749,17 @@ final class PrefixCacheManager {
             // - preserve: keep the ref (and so the node) — the new leaf
             //   has no SSD copy, so the ancestor stays the warm-start
             //   fallback and the next turn's extension base.
+            // - shielded: a *different* still-pending extension folds this
+            //   ancestor as its base, so it sits in the LRU shield set.
+            //   Reclaiming it now would strand that suffix — the writer's
+            //   fold reads the base from the manifest, misses, and drops
+            //   the whole owner chain (and any leaf extending *this*
+            //   admission) with `extensionBaseLost`, collapsing the durable
+            //   SSD floor to RAM-only under rapid tool-stretch traffic.
+            //   Preserve it; the depending extension's own commit folds it
+            //   in (discarding this ref via `markSnapshotRefCommitted`), or
+            //   its drop leaves it resident as the fallback — the same
+            //   shield the LRU cut already honors.
             // - delete: the pre-extension behavior — delete the SSD
             //   backing first so discarding the ref cannot orphan a
             //   file + manifest entry.
@@ -757,6 +768,8 @@ final class PrefixCacheManager {
                 case .transferBacking(let baseID) where snapshotRefID == baseID:
                     mode = .transferred
                 case .preserveBackings:
+                    mode = .preserved
+                case _ where store.isTransferringBase(snapshotRefID):
                     mode = .preserved
                 default:
                     store.deleteSnapshot(snapshotID: snapshotRefID)

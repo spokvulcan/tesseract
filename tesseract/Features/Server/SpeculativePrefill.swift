@@ -112,6 +112,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
         ssdEnabled: Bool,
         seedsPositionAnchor: Bool,
         canonicalLeafOffset: Int,
+        renderContext: TemplateRenderContext = .canonical,
         idleDelay: Duration = .zero,
         ramOnlySpine: Bool = false,
         diagnostics: PrefixCacheDiagnostics.Context
@@ -121,7 +122,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 storedConversation: storedConversation,
                 toolSpecs: toolSpecs,
                 tokenizer: tokenizer,
-                keySpace: keySpace
+                keySpace: keySpace,
+                renderContext: renderContext
             )
         }
         return Seed(

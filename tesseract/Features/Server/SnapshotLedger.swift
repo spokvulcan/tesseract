@@ -215,6 +215,18 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         transferringBaseIDs.remove(baseID)
     }
 
+    /// Whether `baseID` is currently shielded by a pending **Leaf
+    /// Extension Admission** — its fold has neither committed nor dropped.
+    /// The LRU cut already excludes this set; the manager's explicit
+    /// supersession-delete path consults it through the same lock so it
+    /// never reclaims a base a still-in-flight fold elsewhere on the tree
+    /// will consume.
+    func isTransferringBase(_ baseID: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return transferringBaseIDs.contains(baseID)
+    }
+
     /// Fold the base's **Segment Chain** into a pending extension's
     /// descriptor: inherited = base's inherited + base's own file. Run
     /// by the writer *before* `writePayload` so the embedded per-file

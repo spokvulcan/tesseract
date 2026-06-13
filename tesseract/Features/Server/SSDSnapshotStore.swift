@@ -575,6 +575,13 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         }
     }
 
+    /// Whether `snapshotID` is a base currently shielded by a pending
+    /// **Leaf Extension Admission**. Forwards to the ledger's authoritative
+    /// shield set — the same one the LRU cut already excludes.
+    func isTransferringBase(_ snapshotID: String) -> Bool {
+        ledger.isTransferringBase(snapshotID)
+    }
+
     // MARK: - Writer loop
 
     private func writerLoop() async {

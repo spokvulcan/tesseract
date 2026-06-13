@@ -170,20 +170,31 @@ nonisolated enum LeafAdmissionBuilder {
         storedConversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         tokenizer: any Tokenizer,
-        keySpace: CacheKeySpace
+        keySpace: CacheKeySpace,
+        renderContext: TemplateRenderContext = .canonical
     ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
         try Task.checkCancellation()
         let baseMessages = storedConversation.promptMessages
+        // Render under the request's flags, exactly as `reusablePrefix`
+        // does. The seed is keyed under a render-context-dependent
+        // partition, so its probe path must render under the same flags —
+        // otherwise the spine lands in a partition the real next turn never
+        // walks. (`preserve_thinking` disables speculation today, so the
+        // canonical default is what currently runs; this keeps the two in
+        // step for the next flag that does not.)
+        let probeContext = renderContext.additionalContext(
+            merging: ["add_generation_prompt": false]
+        )
         let firstRender = try tokenizer.applyChatTemplate(
             messages: baseMessages + [Continuation.userTurn.probeMessage],
             tools: toolSpecs,
-            additionalContext: ["add_generation_prompt": false]
+            additionalContext: probeContext
         )
         try Task.checkCancellation()
         let secondRender = try tokenizer.applyChatTemplate(
             messages: baseMessages + [divergentUserProbeMessage],
             tools: toolSpecs,
-            additionalContext: ["add_generation_prompt": false]
+            additionalContext: probeContext
         )
 
         let common = zip(firstRender, secondRender).prefix { $0 == $1 }.count

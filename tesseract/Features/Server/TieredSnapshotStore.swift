@@ -100,7 +100,15 @@ final class TieredSnapshotStore: SnapshotStore {
     /// RAM-only store that behaves identically to a bare
     /// `InMemorySnapshotTier` — every `admitSnapshot` call returns
     /// `nil`, and the writer callbacks never fire.
-    init(ssdConfig: SSDPrefixCacheConfig? = nil) {
+    /// `writerDrainPreludeForTesting` forwards to the SSD tier's writer
+    /// gate — test-only, nil in production. It lets a manager-level test
+    /// hold a write pending (e.g. to keep an extension base shielded
+    /// across a second admission) deterministically, mirroring the hook
+    /// `SSDSnapshotStore.init` already exposes.
+    init(
+        ssdConfig: SSDPrefixCacheConfig? = nil,
+        writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
+    ) {
         self.ramTier = InMemorySnapshotTier()
         self.ssdStore = nil
 
@@ -121,7 +129,8 @@ final class TieredSnapshotStore: SnapshotStore {
                 Task { @MainActor [weak self] in
                     self?.markSnapshotRefDropped(id: id, reason: reason)
                 }
-            }
+            },
+            writerDrainPreludeForTesting: writerDrainPreludeForTesting
         )
     }
 
@@ -338,6 +347,15 @@ final class TieredSnapshotStore: SnapshotStore {
         committedRefsByID.removeValue(forKey: snapshotID)
         clearChainPrefixDependents(ownerID: snapshotID)
         ssdStore?.deleteSnapshot(snapshotID: snapshotID)
+    }
+
+    /// Whether `snapshotID` is a base currently shielded by a pending
+    /// **Leaf Extension Admission**. The manager's supersession walk
+    /// consults this before reclaiming an ancestor backing, so it never
+    /// strands an in-flight fold that still depends on it. `false` when
+    /// SSD is disabled — no extensions, so no shield.
+    func isTransferringBase(_ snapshotID: String) -> Bool {
+        ssdStore?.isTransferringBase(snapshotID) ?? false
     }
 
     // MARK: - Warm-start restore

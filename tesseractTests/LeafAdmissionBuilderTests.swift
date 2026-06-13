@@ -196,6 +196,43 @@ import MLXLMCommon
         #expect(observedCancellation)
     }
 
+    @Test func futureSharedPrefixRendersUnderTheRequestsThinkingFlag() throws {
+        // The probe must render under the request's flags, not a hard-coded
+        // canonical context. A stored assistant <think> block sits before the
+        // probe's appended user turn, so a canonical render strips it
+        // (Think-Strip Rewind) while a Preserve-Thinking render keeps it — the
+        // two future spines must therefore diverge. A hard-coded canonical
+        // context (the bug) made them identical, so a non-canonical request's
+        // seed would key a spine the real next turn never walks. (PR #102
+        // review finding #2.)
+        let thinkingTokenizer = FakeParoThinkingTokenizer()
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(role: .user, content: "question"),
+            HTTPPrefixCacheMessage(
+                role: .assistant, content: "<think>long reasoning</think>\nanswer"
+            ),
+        ])
+
+        let canonicalFuture = try #require(try LeafAdmissionBuilder.futureSharedPrefix(
+            storedConversation: stored,
+            toolSpecs: nil,
+            tokenizer: thinkingTokenizer,
+            keySpace: .identity()
+        )?.get())
+        let preservedFuture = try #require(try LeafAdmissionBuilder.futureSharedPrefix(
+            storedConversation: stored,
+            toolSpecs: nil,
+            tokenizer: thinkingTokenizer,
+            keySpace: .identity(),
+            renderContext: TemplateRenderContext(flags: [.preserveThinking])
+        )?.get())
+
+        // Preserve-Thinking keeps the stored turn's reasoning span that the
+        // canonical render strips — so the speculative spine is strictly longer.
+        #expect(canonicalFuture != preservedFuture)
+        #expect(preservedFuture.count > canonicalFuture.count)
+    }
+
     // MARK: - plan() — the GPU-free leaf-capture routing decision
 
     /// A boundary snapshot with a controllable `tokenOffset` for routing tests —
