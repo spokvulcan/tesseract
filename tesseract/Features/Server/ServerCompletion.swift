@@ -1688,74 +1688,78 @@ nonisolated final class ServerCompletion {
             let prefillMs: TimeInterval
             do {
                 (prefillResult, prefillMs) = try measure {
-                    var initialState = executorInitialState
-                    var prefixSnapshots: [HybridCacheSnapshot] = []
-                    if let imagePrefixInput {
-                        // Cold image prefix: one vendor prepare carries the pixels
-                        // through the vision tower with M-RoPE correct by
-                        // construction, and its returned state anchors the chunked
-                        // text tail. `.tokens` is unreachable — a non-identity key
-                        // space implies the recognized vision container, whose
-                        // `prepare` is single-shot.
-                        guard case .logits(let prepared) = try context.model.prepare(
-                            imagePrefixInput, cache: liveCache, windowSize: genParams.prefillStepSize
-                        ) else {
-                            throw AgentEngineError.generationFailed(
-                                "vision container returned .tokens from prepare"
-                            )
-                        }
-                        initialState = prepared.state
-                        // A checkpoint at exactly the prefix end is capturable here
-                        // (the executor's relative-checkpoint loop only captures
-                        // strictly past its base) — capture needs materialized
-                        // arrays, so only that branch pays a blocking eval; the
-                        // common case dispatches the vision-tower work async so
-                        // the CPU can build the text tail's first chunk graph
-                        // while the GPU runs the prefix (the PrefillExecutor
-                        // pipelining pattern).
-                        if let type = allCheckpoints[executionBaseOffset] {
-                            eval(liveCache)
-                            if let snap = HybridCacheSnapshot.capture(
-                                cache: liveCache, offset: executionBaseOffset, type: type
-                            ) {
-                                prefixSnapshots.append(snap)
+                    try MLXCheckedEvaluation.withErrors { error in
+                        var initialState = executorInitialState
+                        var prefixSnapshots: [HybridCacheSnapshot] = []
+                        if let imagePrefixInput {
+                            // Cold image prefix: one vendor prepare carries the pixels
+                            // through the vision tower with M-RoPE correct by
+                            // construction, and its returned state anchors the chunked
+                            // text tail. `.tokens` is unreachable — a non-identity key
+                            // space implies the recognized vision container, whose
+                            // `prepare` is single-shot.
+                            guard case .logits(let prepared) = try context.model.prepare(
+                                imagePrefixInput, cache: liveCache, windowSize: genParams.prefillStepSize
+                            ) else {
+                                throw AgentEngineError.generationFailed(
+                                    "vision container returned .tokens from prepare"
+                                )
                             }
-                        } else {
-                            asyncEval(liveCache)
+                            try error.check()
+                            initialState = prepared.state
+                            // A checkpoint at exactly the prefix end is capturable here
+                            // (the executor's relative-checkpoint loop only captures
+                            // strictly past its base) — capture needs materialized
+                            // arrays, so only that branch pays the capture cost.
+                            // The previous async scheduling path let MLX errors
+                            // escape Swift's scoped handler and terminate the app.
+                            // Keep this crash-sensitive image prefix on checked
+                            // synchronous evaluation so failures become throws.
+                            if let type = allCheckpoints[executionBaseOffset] {
+                                try MLXCheckedEvaluation.eval(liveCache)
+                                if let snap = HybridCacheSnapshot.capture(
+                                    cache: liveCache, offset: executionBaseOffset, type: type
+                                ) {
+                                    prefixSnapshots.append(snap)
+                                }
+                            } else {
+                                try MLXCheckedEvaluation.eval(liveCache)
+                            }
                         }
+                        let warmed = try PrefillExecutor.run(
+                            model: context.model,
+                            text: inputForGeneration.text,
+                            cache: liveCache,
+                            checkpoints: allCheckpoints,
+                            checkpointBaseOffset: executionBaseOffset,
+                            prefillStepSize: genParams.prefillStepSize,
+                            initialState: initialState
+                        )
+                        try error.check()
+                        maybeQuantizeKVCache(
+                            cache: &liveCache,
+                            kvBits: genParams.kvBits,
+                            kvGroupSize: genParams.kvGroupSize,
+                            quantizedKVStart: genParams.quantizedKVStart
+                        )
+                        var iteratorParams = genParams
+                        iteratorParams.kvBits = nil
+                        // The iterator seeds any configured penalty processors with
+                        // the full suffix — its own input is only the final prompt
+                        // token, which would otherwise be the entire
+                        // repetition/presence/frequency context. It threads the last
+                        // prefill chunk's state through the prime forward and every
+                        // decode step (PRD #72 — upstream's iterator drops it).
+                        let iterator = StateThreadedTokenIterator(
+                            remainder: warmed.remainder,
+                            fullText: inputForGeneration.text,
+                            model: context.model,
+                            cache: liveCache,
+                            state: warmed.state,
+                            parameters: iteratorParams
+                        )
+                        return (iterator: iterator, snapshots: prefixSnapshots + warmed.snapshots)
                     }
-                    let warmed = try PrefillExecutor.run(
-                        model: context.model,
-                        text: inputForGeneration.text,
-                        cache: liveCache,
-                        checkpoints: allCheckpoints,
-                        checkpointBaseOffset: executionBaseOffset,
-                        prefillStepSize: genParams.prefillStepSize,
-                        initialState: initialState
-                    )
-                    maybeQuantizeKVCache(
-                        cache: &liveCache,
-                        kvBits: genParams.kvBits,
-                        kvGroupSize: genParams.kvGroupSize,
-                        quantizedKVStart: genParams.quantizedKVStart
-                    )
-                    var iteratorParams = genParams
-                    iteratorParams.kvBits = nil
-                    // The iterator seeds any configured penalty processors with
-                    // the full suffix — its own input is only the final prompt
-                    // token, which would otherwise be the entire
-                    // repetition/presence/frequency context. It threads the last
-                    // prefill chunk's state through the prime forward and every
-                    // decode step (PRD #72 — upstream's iterator drops it).
-                    let iterator = StateThreadedTokenIterator(
-                        remainder: warmed.remainder,
-                        fullText: inputForGeneration.text,
-                        model: context.model,
-                        cache: liveCache,
-                        state: warmed.state,
-                        parameters: iteratorParams
-                    )
-                    return (iterator: iterator, snapshots: prefixSnapshots + warmed.snapshots)
                 }
             } catch is CancellationError {
                 // **Salvage-on-cancel** (issue #97): the client is gone and
