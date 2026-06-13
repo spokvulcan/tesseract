@@ -161,6 +161,36 @@ struct RecordingSettingsSection: View {
     @State private var isRecordingHotkey = false
     @State private var isRecordingTTSHotkey = false
     @State private var isRecordingAgentHotkey = false
+    @State private var selectedAgentModelDeclaresPreserveThinking = false
+
+    private var selectedAgentModelStatus: ModelStatus {
+        container.modelDownloadManager.statuses[settings.selectedAgentModelID] ?? .notDownloaded
+    }
+
+    private func refreshSelectedAgentModelCapabilities() {
+        guard case .downloaded = selectedAgentModelStatus,
+              let directory = container.modelDownloadManager.modelPath(
+                  for: settings.selectedAgentModelID
+              )
+        else {
+            selectedAgentModelDeclaresPreserveThinking = false
+            return
+        }
+        // `ModelIdentity(directory:)` reads chat_template.jinja + config.json
+        // from disk; keep that off the MainActor (ADR-0001) so opening or
+        // switching the settings pane can't stutter on a slow/large model dir.
+        // Publish back only while the same model is still selected, so a slow
+        // read for a since-deselected model can't clobber a newer answer.
+        let modelID = settings.selectedAgentModelID
+        Task {
+            let declares = await Task.detached {
+                ModelIdentity(directory: directory)
+                    .declaredTemplateFlags.contains(.preserveThinking)
+            }.value
+            guard settings.selectedAgentModelID == modelID else { return }
+            selectedAgentModelDeclaresPreserveThinking = declares
+        }
+    }
 
     var body: some View {
         @Bindable var settings = settings
@@ -313,6 +343,25 @@ struct RecordingSettingsSection: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+
+                    if selectedAgentModelDeclaresPreserveThinking {
+                        Toggle("Preserve Thinking in Prompts", isOn: Binding(
+                            get: {
+                                settings.preserveThinkingRender(
+                                    modelID: settings.selectedAgentModelID
+                                )
+                            },
+                            set: {
+                                settings.setPreserveThinkingRender(
+                                    $0, modelID: settings.selectedAgentModelID
+                                )
+                            }
+                        ))
+                        Text("Keeps each turn's thinking in the prompt so follow-up requests reuse the cache instead of re-reading the conversation. Uses more context window. Applies to new conversations.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
 
@@ -388,6 +437,15 @@ struct RecordingSettingsSection: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            refreshSelectedAgentModelCapabilities()
+        }
+        .onChange(of: settings.selectedAgentModelID) {
+            refreshSelectedAgentModelCapabilities()
+        }
+        .onChange(of: selectedAgentModelStatus) {
+            refreshSelectedAgentModelCapabilities()
+        }
 
         .navigationTitle("Preferences")
     }

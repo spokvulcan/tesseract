@@ -261,11 +261,16 @@ enum EvictionPolicy {
                 // back. Any surviving ref (pending or committed) means the body
                 // drop is recovered — `evictToFitBudget` classifies outcomes by
                 // the same predicate — so the cost is hydrating the on-disk
-                // bytes. No ref means terminal loss: re-prefilling the node's
-                // parent-relative span from scratch.
+                // bytes. A **Chain-Prefix Restore** point (ADR-0012) is also
+                // recovered: hydrating the owning chain's leading segments.
+                // No backing at all means terminal loss: re-prefilling the
+                // node's parent-relative span from scratch.
                 let recoverySeconds: Double
                 if node.state.ref != nil {
                     recoverySeconds = Double(node.state.storageBytes)
+                        / config.estimates.hydrationBytesPerSecond
+                } else if let point = node.chainPrefixRestorePoint {
+                    recoverySeconds = Double(point.prefixBytes)
                         / config.estimates.hydrationBytesPerSecond
                 } else {
                     let parentOffset = node.parent?.tokenOffset ?? 0

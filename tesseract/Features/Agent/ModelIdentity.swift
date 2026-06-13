@@ -47,6 +47,14 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// generation-prompt section.
     let promptStartsThinking: Bool
 
+    /// The opt-in render flags the chat template natively declares — the
+    /// subset of `TemplateRenderContext`'s known flags the template text
+    /// actually references (issue #98). The capability gate for the
+    /// **Preserve-Thinking Render**: introspection, never model name, so a
+    /// future template that adds `preserve_thinking` needs no code change
+    /// and Qwen3.5-PARO (which lacks it) is naturally excluded.
+    let declaredTemplateFlags: Set<TemplateRenderFlag>
+
     /// FLOP/state-size profile the eviction policy scores against. **Total**:
     /// a non-Qwen3.5 or unparseable config yields `ModelFlopProfile.fallback`,
     /// never `nil`, so the single consumer (`EvictionPolicy`) never handles an
@@ -80,6 +88,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         self.isMoE = modelType == "qwen3_5_moe"
         self.toolCallFormat = Self.interpretToolCallFormat(modelType: modelType)
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
+        self.declaredTemplateFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
         self.imageKeying = Self.interpretImageKeying(configJSON: configJSON)
     }
@@ -112,6 +121,53 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
               let genPromptRange = chatTemplate.range(of: "add_generation_prompt")
         else { return false }
         return chatTemplate[genPromptRange.upperBound...].contains("<think>")
+    }
+
+    /// A flag is "declared" when the template text references it — Jinja
+    /// templates read their kwargs by name, so a flag the text never mentions
+    /// cannot change the render. Only known flags are probed; arbitrary
+    /// kwargs never become capabilities.
+    private static func interpretDeclaredTemplateFlags(
+        chatTemplate: String?
+    ) -> Set<TemplateRenderFlag> {
+        guard let chatTemplate else { return [] }
+        // A flag is declared only when the template *references the variable*,
+        // not merely mentions the string. Strip Jinja comments so a flag named
+        // only in `{# … #}` doesn't count, then require an identifier-boundary
+        // match so a longer name (`preserve_thinking_default`) isn't a false
+        // positive. A bare `contains` over-declares the capability and forks a
+        // zero-reuse cache partition for a render the template never branches on.
+        let scannable = stripJinjaComments(chatTemplate)
+        return Set(TemplateRenderFlag.allCases.filter {
+            referencesIdentifier($0.rawValue, in: scannable)
+        })
+    }
+
+    /// Remove `{# … #}` Jinja comment blocks (non-greedy, spanning newlines)
+    /// so a flag mentioned only in a comment is not read as a declaration.
+    private static func stripJinjaComments(_ template: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: "\\{#.*?#\\}", options: [.dotMatchesLineSeparators]
+        ) else { return template }
+        let range = NSRange(template.startIndex..., in: template)
+        return regex.stringByReplacingMatches(
+            in: template, range: range, withTemplate: " "
+        )
+    }
+
+    /// Whole-identifier match: `name` not flanked by another identifier
+    /// character, so it matches `{% if preserve_thinking %}` but not the
+    /// longer identifier `preserve_thinking_default`.
+    private static func referencesIdentifier(_ name: String, in text: String) -> Bool {
+        let pattern = "(?<![A-Za-z0-9_])"
+            + NSRegularExpression.escapedPattern(for: name)
+            + "(?![A-Za-z0-9_])"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text.contains(name)
+        }
+        return regex.firstMatch(
+            in: text, range: NSRange(text.startIndex..., in: text)
+        ) != nil
     }
 
     /// Qwen3.5 hybrid profile from `config.json` (the VLM variant nests

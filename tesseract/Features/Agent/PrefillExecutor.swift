@@ -61,8 +61,16 @@ nonisolated enum PrefillExecutor {
         // at 0), and `asyncEval` lets the CPU build chunk N+1's graph while
         // the GPU evaluates chunk N. Checkpoint captures synchronize
         // explicitly before copying.
+        //
+        // Cancellation is observed before every chunk (issue #97): a client
+        // abort mid-prefill stops within one chunk instead of running the
+        // remaining prompt to the end. The cache keeps every completed
+        // chunk — left un-evaluated (the last chunks may still be
+        // pipelined), so a catcher that wants the partial state must
+        // `eval(cache)` before reading it (**Salvage-on-cancel**).
         var chunkState: LMOutput.State? = initialState
-        func forward(_ chunkSize: Int) {
+        func forward(_ chunkSize: Int) throws {
+            try Task.checkCancellation()
             let chunk = ndim >= 2 ? y[0..., ..<chunkSize] : y[.newAxis, ..<chunkSize]
             let output = model(chunk, cache: cache.isEmpty ? nil : cache, state: chunkState)
             chunkState = output.state
@@ -91,7 +99,7 @@ nonisolated enum PrefillExecutor {
         // final chunk, keeping back the iterator's prime token if requested.
         let tail = (total - keepBack) - consumed
         if tail > 0 {
-            forward(tail)
+            try forward(tail)
         }
 
         // Flush the pipelined chunks and release the prefill's scratch

@@ -557,6 +557,7 @@ private final class StubManagedInferenceEngine: ManagedInferenceStarting {
         let toolSpecCount: Int
         let progressHandlerForwarded: Bool
         let parameters: AgentGenerateParameters
+        var renderContext: TemplateRenderContext = .canonical
     }
 
     var calls: [Call] = []
@@ -584,6 +585,7 @@ private final class StubManagedInferenceEngine: ManagedInferenceStarting {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext,
         progressHandler: ServerInferenceProgressHandler?
     ) throws -> HTTPServerGenerationStart {
         calls.append(.init(
@@ -593,7 +595,8 @@ private final class StubManagedInferenceEngine: ManagedInferenceStarting {
             messageCount: messages.count,
             toolSpecCount: toolSpecs?.count ?? 0,
             progressHandlerForwarded: progressHandler != nil,
-            parameters: parameters
+            parameters: parameters,
+            renderContext: renderContext
         ))
         return chatStart
     }
@@ -608,6 +611,7 @@ private final class StubServerCompletionStarter: ServerCompletionStarting {
         let toolSpecCount: Int
         let progressHandlerForwarded: Bool
         let parameters: AgentGenerateParameters
+        let renderContext: TemplateRenderContext
     }
 
     var calls: [Call] = []
@@ -625,6 +629,7 @@ private final class StubServerCompletionStarter: ServerCompletionStarting {
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext,
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart {
         calls.append(.init(
@@ -632,7 +637,8 @@ private final class StubServerCompletionStarter: ServerCompletionStarting {
             conversation: conversation,
             toolSpecCount: toolSpecs?.count ?? 0,
             progressHandlerForwarded: progressHandler != nil,
-            parameters: parameters
+            parameters: parameters,
+            renderContext: renderContext
         ))
         if let error {
             throw error

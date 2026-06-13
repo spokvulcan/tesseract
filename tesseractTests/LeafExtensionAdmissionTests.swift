@@ -745,6 +745,30 @@ struct LeafExtensionStoreTests {
 
 // MARK: - 4. Manager: supersession policy + extension-base resolution
 
+/// Re-closable writer gate. Unlike the one-shot `DrainGate`, it can be
+/// paused *after* an initial drain, so a committed base can be kept
+/// shielded across a later admission. The SSD writer's prelude awaits
+/// `gate()`; `pause()` / `resume()` toggle whether that blocks.
+private actor WriterPauseGate {
+    private var paused = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func pause() { paused = true }
+
+    func resume() {
+        paused = false
+        let resumed = waiters
+        waiters.removeAll()
+        resumed.forEach { $0.resume() }
+    }
+
+    /// Called from the writer prelude on each drain cycle.
+    func gate() async {
+        guard paused else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
 @MainActor
 struct LeafExtensionSupersessionPolicyTests {
 
@@ -764,11 +788,15 @@ struct LeafExtensionSupersessionPolicyTests {
         key: CachePartitionKey
     )
 
-    private func makeFixture(ssdBudgetBytes: Int = 1_000_000) -> Fixture {
+    private func makeFixture(
+        ssdBudgetBytes: Int = 1_000_000,
+        writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
+    ) -> Fixture {
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
             label: "leaf-extension-admission",
             ramBudgetBytes: 10_000_000,
-            ssdBudgetBytes: ssdBudgetBytes
+            ssdBudgetBytes: ssdBudgetBytes,
+            writerDrainPreludeForTesting: writerDrainPreludeForTesting
         )
         let key = makePartitionKey()
         store.registerPartition(makePartitionMeta(), for: key)
@@ -991,5 +1019,95 @@ struct LeafExtensionSupersessionPolicyTests {
             tokens: Array(1...12), partitionKey: fixture.key
         ))
         #expect(nextBase.baseSnapshotID == baseID)
+    }
+
+    /// Rapid tool-stretch, three leaves deep: committed base B, a
+    /// still-pending extension A folding B, then a second extension C
+    /// folding A — admitted *inside* A's pending window. C's supersession
+    /// walks B as a non-base ancestor; the pre-fix default-delete path
+    /// reclaimed it even though A's fold still needs it, so A then dropped
+    /// `extensionBaseLost`, C dropped with it, and the durable SSD floor
+    /// collapsed to RAM-only. B must instead be preserved while shielded,
+    /// and the whole chain must land once the writer drains. (PR #102
+    /// review finding #1.)
+    @Test func pendingExtensionShieldsCommittedBaseFromDeeperSupersession() async throws {
+        let pause = WriterPauseGate()
+        let fixture = makeFixture(
+            writerDrainPreludeForTesting: { await pause.gate() }
+        )
+        defer { cleanup(fixture.root) }
+        let ssdStore = try #require(fixture.store.ssdStoreForTesting)
+
+        // B: a committed SSD-backed base leaf. Park the writer idle, then
+        // pause it so the extensions below stay pending across C. The
+        // partition tree is created lazily by this first admission.
+        let baseID = try await admitCommittedAncestor(fixture, tokens: Array(1...5))
+        let tree = try #require(fixture.store.tree(for: fixture.key))
+        await ssdStore.flushAsync()
+        await pause.pause()
+
+        // A: extension of B (offset 5 → 8), enqueued but unwritten — B is
+        // now shielded for A's pending window.
+        let admitA = try #require(SnapshotAdmission.leaf(
+            storedTokens: Array(1...8),
+            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
+            storage: .ramAndSSD(makePayload(
+                bytes: 256, tokenOffset: 8,
+                extending: SnapshotExtension(baseSnapshotID: baseID, baseOffset: 5)
+            )),
+            partitionKey: fixture.key,
+            requestID: UUID()
+        ))
+        let diagA = fixture.manager.admit(admitA)
+        #expect(diagA.supersededLeaves.first?.mode == .transferred)
+        #expect(ssdStore.transferringBaseIDsForTesting().contains(baseID))
+        let aID = try #require(
+            tree.deepestRefBearingLeaf(tokens: Array(1...8) + [999])?.snapshotID
+        )
+
+        // C: extension of the still-pending A (offset 8 → 11), admitted
+        // inside A's window. Its supersession visits A (its base → transfer)
+        // and B (a non-base ancestor that A's fold still depends on).
+        let admitC = try #require(SnapshotAdmission.leaf(
+            storedTokens: Array(1...11),
+            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 11, type: .leaf),
+            storage: .ramAndSSD(makePayload(
+                bytes: 256, tokenOffset: 11,
+                extending: SnapshotExtension(baseSnapshotID: aID, baseOffset: 8)
+            )),
+            partitionKey: fixture.key,
+            requestID: UUID()
+        ))
+        let diagC = fixture.manager.admit(admitC)
+
+        // A still transfers; the shielded base B is preserved, not deleted.
+        #expect(diagC.supersededLeaves.contains {
+            $0.bodyDroppedSnapshotRefID == aID && $0.mode == .transferred
+        })
+        #expect(diagC.supersededLeaves.contains {
+            $0.bodyDroppedSnapshotRefID == baseID && $0.mode == .preserved
+        })
+        // The smoking gun: B's backing survives C's admission.
+        #expect(ssdStore.residentDescriptorForTesting(id: baseID) != nil)
+
+        // Release the writer: A folds B, then (FIFO) C folds A.
+        await pause.resume()
+        await ssdStore.flushAsync()
+        let settled = await waitUntil {
+            ssdStore.transferringBaseIDsForTesting().isEmpty
+                && fixture.store.pendingRefCountForTesting == 0
+        }
+        #expect(settled, "writer never settled the two folds")
+
+        // Both bases consumed into C; C is the sole resident chain head,
+        // owning all three segment files (B's, A's, and its own).
+        #expect(ssdStore.residentDescriptorForTesting(id: baseID) == nil)
+        #expect(ssdStore.residentDescriptorForTesting(id: aID) == nil)
+        let headRef = try #require(
+            tree.deepestRefBearingLeaf(tokens: Array(1...11) + [999])
+        )
+        let head = try #require(ssdStore.residentDescriptorForTesting(id: headRef.snapshotID))
+        #expect(head.inheritedSegments.count == 2)
+        #expect(head.segmentBaseOffset == 8)
     }
 }

@@ -347,6 +347,23 @@ nonisolated final class ServerCompletion {
         let id = UUID()
         let actorRef = actor
         let task = Task {
+            // **Stretch Abandonment**'s idle window (issue #100): a timer-
+            // triggered seed sleeps before touching the GPU. A follow-up
+            // request preempts (cancel-and-await) the sleeping task, so a
+            // tool result landing inside the window costs nothing — the
+            // pass never starts and the seed's probe is discarded.
+            if seed.idleDelay > .zero {
+                try? await Task.sleep(for: seed.idleDelay)
+                guard !Task.isCancelled else {
+                    seed.discard()
+                    seed.diagnostics.logSkip(
+                        stage: "speculativePrefill",
+                        reason: "follow-up-within-idle-window"
+                    )
+                    await actorRef.clearFinishedSpeculativeServerPrefill(id)
+                    return
+                }
+            }
             await SpeculativeCanonicalPrefill.run(
                 seed: seed,
                 container: container,
@@ -406,6 +423,7 @@ nonisolated final class ServerCompletion {
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext = .canonical,
         progressHandler: ServerInferenceProgressHandler? = nil
     ) async throws -> HTTPServerGenerationStart {
         Memory.cacheLimit = LLMActor.Defaults.cacheLimitMB * 1024 * 1024
@@ -451,6 +469,7 @@ nonisolated final class ServerCompletion {
             parameters: genParams,
             toolSpecs: canonicalTools,
             prefixCache: prefixCache,
+            renderContext: renderContext,
             progressHandler: progressHandler
         )
 
@@ -532,6 +551,7 @@ nonisolated final class ServerCompletion {
                 requestID: requestID,
                 loadedModelWeightBytes: loadedModelWeightBytes,
                 prefixCache: prefixCache,
+                renderContext: renderContext,
                 traceLog: traceLog,
                 startsInsideThinkBlock: startsInsideThinkBlock,
                 safeguardConfig: safeguardConfig,
@@ -590,6 +610,7 @@ nonisolated final class ServerCompletion {
         requestID: UUID,
         loadedModelWeightBytes: Int64,
         prefixCache: PrefixCacheManager,
+        renderContext: TemplateRenderContext,
         traceLog: CompletionTraceLog,
         startsInsideThinkBlock: Bool,
         safeguardConfig: ThinkingRepetitionDetector.Config,
@@ -834,7 +855,8 @@ nonisolated final class ServerCompletion {
                 guard let storedRenderTokens = await Self.measureStoredTokenSequence(
                     container: container,
                     conversation: storedConversation,
-                    toolSpecs: canonicalTools
+                    toolSpecs: canonicalTools,
+                    renderContext: renderContext
                 ) else {
                     diagnosticsContext.logSkip(
                         stage: "leafStore",
@@ -893,6 +915,7 @@ nonisolated final class ServerCompletion {
                         transientBoundary: transientBoundary,
                         tokenizer: leafTokenizer,
                         keySpace: mlxStart.keySpace,
+                        renderContext: renderContext,
                         resolveBoundary: { tokens in
                             // Drive Snapshot Resolution inside `container.perform`
                             // so the SSD `loadSync` stays off-MainActor (ADR-0001).
@@ -947,21 +970,34 @@ nonisolated final class ServerCompletion {
                         // future-path probe immediately, so its CPU
                         // render+tokenize overlaps the store (#76's earlier
                         // start). Kept only if the leaf store below succeeds.
+                        // The worth-it floor differs by trigger: a canonical
+                        // leaf IS the strip floor; a tool stretch measures
+                        // its rewind span from the last-user boundary.
+                        let seedPlan = Self.speculativeSeedPlan(
+                            boundaryMode: boundaryMode,
+                            renderContext: renderContext
+                        )
                         let pendingSeed: SpeculativeCanonicalPrefill.Seed? =
-                            boundaryMode == .canonical
-                            ? SpeculativeCanonicalPrefill.makeSeed(
-                                storedConversation: storedConversation,
-                                toolSpecs: canonicalTools,
-                                tokenizer: leafTokenizer,
-                                keySpace: mlxStart.keySpace,
-                                partitionKey: mlxStart.partitionKey,
-                                prefillStepSize: mlxStart.prefillStepSize,
-                                ssdEnabled: mlxStart.ssdEnabled,
-                                seedsPositionAnchor: mlxStart.seedsPositionAnchor,
-                                canonicalLeafOffset: boundaryStoredTokens.count,
-                                diagnostics: diagnosticsContext
-                            )
-                            : nil
+                            seedPlan.map { plan in
+                                SpeculativeCanonicalPrefill.makeSeed(
+                                    storedConversation: storedConversation,
+                                    toolSpecs: canonicalTools,
+                                    tokenizer: leafTokenizer,
+                                    keySpace: mlxStart.keySpace,
+                                    partitionKey: mlxStart.partitionKey,
+                                    prefillStepSize: mlxStart.prefillStepSize,
+                                    ssdEnabled: mlxStart.ssdEnabled,
+                                    seedsPositionAnchor: mlxStart.seedsPositionAnchor,
+                                    canonicalLeafOffset: boundaryMode == .canonical
+                                        ? boundaryStoredTokens.count
+                                        : mlxStart.transientLastUserBoundarySnapshot?
+                                            .tokenOffset ?? 0,
+                                    renderContext: renderContext,
+                                    idleDelay: plan.idleDelay,
+                                    ramOnlySpine: plan.ramOnlySpine,
+                                    diagnostics: diagnosticsContext
+                                )
+                            }
                         leafStoreForTuner = await Self.captureStructuredLeafFromBoundary(
                             container: container,
                             storedTokens: boundaryStoredTokens,
@@ -1064,7 +1100,7 @@ nonisolated final class ServerCompletion {
                     prefixCache: prefixCache
                 )
                 let (maybeLeaf, maybeLeafAdmission): (HybridCacheSnapshot?, SnapshotAdmission?) =
-                    try await container.perform(
+                    await container.perform(
                         nonSendable: finalCache
                     ) { _, cache in
                         guard let snap = HybridCacheSnapshot.capture(
@@ -1236,7 +1272,11 @@ nonisolated final class ServerCompletion {
                     residualPromptSeconds: completionInfo.promptTime,
                     terminalEvictionCount: terminalEvictionTally,
                     recoveredEvictionCount: recoveredEvictionTally,
-                    deviceEstimates: finalEstimates
+                    deviceEstimates: finalEstimates,
+                    rewind: RewindTelemetry.make(
+                        sharedPrefixLength: mlxStart.sharedPrefixLength,
+                        restoredOffset: restoredOffset
+                    )
                 )
                 if let record {
                     traceLog.append(record)
@@ -1250,6 +1290,43 @@ nonisolated final class ServerCompletion {
             continuation.finish(throwing: AgentEngineError.generationFailed(
                 error.localizedDescription
             ))
+        }
+
+        // **Stretch Abandonment**, abort arm (issue #100): a client abort or
+        // disconnect mid-generation seeds the canonical pass immediately
+        // from the request's *completed* messages — the half-generated
+        // assistant turn never enters the speculated path. RAM-only spine:
+        // if the client merely reconnects and continues, nothing was
+        // written to SSD. A drain-driven cancel is also Task.isCancelled
+        // here; the scheduler's drain-generation guard discards the seed
+        // then, so teardown never runs a pass.
+        // An Unkeyed Completion never participates in the cache (by contract),
+        // and a seed with no last-user boundary would build a spine from
+        // offset 0 — wasted render/tokenize + scheduler churn the downstream
+        // `boundary.tokenOffset > 0` resolve guard discards anyway. Gate the
+        // arm on the same keyed-with-boundary preconditions the stop-finish
+        // seed path already requires.
+        if speculativeSeed == nil,
+           Task.isCancelled,
+           mlxStart.unkeyedReason == nil,
+           mlxStart.transientLastUserBoundarySnapshot != nil,
+           !renderContext.preservesThinking {
+            let abortTokenizer = await container.perform { $0.tokenizer }
+            speculativeSeed = SpeculativeCanonicalPrefill.makeSeed(
+                storedConversation: conversation,
+                toolSpecs: canonicalTools,
+                tokenizer: abortTokenizer,
+                keySpace: mlxStart.keySpace,
+                partitionKey: mlxStart.partitionKey,
+                prefillStepSize: mlxStart.prefillStepSize,
+                ssdEnabled: mlxStart.ssdEnabled,
+                seedsPositionAnchor: mlxStart.seedsPositionAnchor,
+                canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
+                    .tokenOffset ?? 0,
+                renderContext: renderContext,
+                ramOnlySpine: true,
+                diagnostics: diagnosticsContext
+            )
         }
 
         await finishHook()
@@ -1282,6 +1359,7 @@ nonisolated final class ServerCompletion {
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         prefixCache: PrefixCacheManager,
+        renderContext: TemplateRenderContext = .canonical,
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPPrefixCacheGeneration {
         // Canonicalize tools once so the stable-prefix detector and the real
@@ -1329,7 +1407,8 @@ nonisolated final class ServerCompletion {
                 input: UserInput(
                     messages: conversation.promptMessages,
                     images: userInputImages,
-                    tools: canonicalTools
+                    tools: canonicalTools,
+                    additionalContext: renderContext.additionalContext()
                 )
             )
             // Sequence length is always the LAST dim. For LLM models tokens are
@@ -1343,12 +1422,15 @@ nonisolated final class ServerCompletion {
             // 3. Build the global Marconi partition key for this model
             //    configuration. Cross-session sharing is intentional:
             //    identical prompts under the same model config should
-            //    reuse the same radix tree.
+            //    reuse the same radix tree. The conversation's template-
+            //    context digest separates render modes (issue #98) — it is
+            //    the same digest the handler derived from `renderContext`.
             let partitionKey = CachePartitionKey(
                 modelID: modelID,
                 kvBits: parameters.kvBits,
                 kvGroupSize: parameters.kvGroupSize,
-                modelFingerprint: modelFingerprint
+                modelFingerprint: modelFingerprint,
+                templateContextDigest: conversation.templateContextDigest
             )
 
             // 3b. Build the request's **Cache Key Space** from the prepared
@@ -1399,7 +1481,8 @@ nonisolated final class ServerCompletion {
                 toolSpecs: canonicalTools,
                 promptStartsThinking: promptStartsThinking,
                 tokenizer: context.tokenizer,
-                keySpace: keySpace
+                keySpace: keySpace,
+                renderContext: renderContext
             )
             if let failure = boundaries.lastUserTranslationFailure {
                 diagnosticsContext.logSkip(
@@ -1563,7 +1646,9 @@ nonisolated final class ServerCompletion {
                 newTokensToPrefill: newTokensToPrefill,
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
-                plannedCheckpoints: prefillPlan.checkpointsToCapture
+                plannedCheckpoints: prefillPlan.checkpointsToCapture,
+                hydratedFromSSD: resolved.hydratedFromSSD,
+                chainPrefixRestore: resolved.wasChainPrefixRestore
             ))
 
             // 8. Fold the plan's checkpoints plus the transient boundary
@@ -1599,75 +1684,98 @@ nonisolated final class ServerCompletion {
                 prefillMs: nil
             )))
             var liveCache = cacheToUse ?? context.model.newCache(parameters: genParams)
-            let (prefillResult, prefillMs) = try measure {
-                var initialState = executorInitialState
-                var prefixSnapshots: [HybridCacheSnapshot] = []
-                if let imagePrefixInput {
-                    // Cold image prefix: one vendor prepare carries the pixels
-                    // through the vision tower with M-RoPE correct by
-                    // construction, and its returned state anchors the chunked
-                    // text tail. `.tokens` is unreachable — a non-identity key
-                    // space implies the recognized vision container, whose
-                    // `prepare` is single-shot.
-                    guard case .logits(let prepared) = try context.model.prepare(
-                        imagePrefixInput, cache: liveCache, windowSize: genParams.prefillStepSize
-                    ) else {
-                        throw AgentEngineError.generationFailed(
-                            "vision container returned .tokens from prepare"
-                        )
-                    }
-                    initialState = prepared.state
-                    // A checkpoint at exactly the prefix end is capturable here
-                    // (the executor's relative-checkpoint loop only captures
-                    // strictly past its base) — capture needs materialized
-                    // arrays, so only that branch pays a blocking eval; the
-                    // common case dispatches the vision-tower work async so
-                    // the CPU can build the text tail's first chunk graph
-                    // while the GPU runs the prefix (the PrefillExecutor
-                    // pipelining pattern).
-                    if let type = allCheckpoints[executionBaseOffset] {
-                        eval(liveCache)
-                        if let snap = HybridCacheSnapshot.capture(
-                            cache: liveCache, offset: executionBaseOffset, type: type
-                        ) {
-                            prefixSnapshots.append(snap)
+            let prefillResult: (iterator: StateThreadedTokenIterator, snapshots: [HybridCacheSnapshot])
+            let prefillMs: TimeInterval
+            do {
+                (prefillResult, prefillMs) = try measure {
+                    var initialState = executorInitialState
+                    var prefixSnapshots: [HybridCacheSnapshot] = []
+                    if let imagePrefixInput {
+                        // Cold image prefix: one vendor prepare carries the pixels
+                        // through the vision tower with M-RoPE correct by
+                        // construction, and its returned state anchors the chunked
+                        // text tail. `.tokens` is unreachable — a non-identity key
+                        // space implies the recognized vision container, whose
+                        // `prepare` is single-shot.
+                        guard case .logits(let prepared) = try context.model.prepare(
+                            imagePrefixInput, cache: liveCache, windowSize: genParams.prefillStepSize
+                        ) else {
+                            throw AgentEngineError.generationFailed(
+                                "vision container returned .tokens from prepare"
+                            )
                         }
-                    } else {
-                        asyncEval(liveCache)
+                        initialState = prepared.state
+                        // A checkpoint at exactly the prefix end is capturable here
+                        // (the executor's relative-checkpoint loop only captures
+                        // strictly past its base) — capture needs materialized
+                        // arrays, so only that branch pays a blocking eval; the
+                        // common case dispatches the vision-tower work async so
+                        // the CPU can build the text tail's first chunk graph
+                        // while the GPU runs the prefix (the PrefillExecutor
+                        // pipelining pattern).
+                        if let type = allCheckpoints[executionBaseOffset] {
+                            eval(liveCache)
+                            if let snap = HybridCacheSnapshot.capture(
+                                cache: liveCache, offset: executionBaseOffset, type: type
+                            ) {
+                                prefixSnapshots.append(snap)
+                            }
+                        } else {
+                            asyncEval(liveCache)
+                        }
                     }
+                    let warmed = try PrefillExecutor.run(
+                        model: context.model,
+                        text: inputForGeneration.text,
+                        cache: liveCache,
+                        checkpoints: allCheckpoints,
+                        checkpointBaseOffset: executionBaseOffset,
+                        prefillStepSize: genParams.prefillStepSize,
+                        initialState: initialState
+                    )
+                    maybeQuantizeKVCache(
+                        cache: &liveCache,
+                        kvBits: genParams.kvBits,
+                        kvGroupSize: genParams.kvGroupSize,
+                        quantizedKVStart: genParams.quantizedKVStart
+                    )
+                    var iteratorParams = genParams
+                    iteratorParams.kvBits = nil
+                    // The iterator seeds any configured penalty processors with
+                    // the full suffix — its own input is only the final prompt
+                    // token, which would otherwise be the entire
+                    // repetition/presence/frequency context. It threads the last
+                    // prefill chunk's state through the prime forward and every
+                    // decode step (PRD #72 — upstream's iterator drops it).
+                    let iterator = StateThreadedTokenIterator(
+                        remainder: warmed.remainder,
+                        fullText: inputForGeneration.text,
+                        model: context.model,
+                        cache: liveCache,
+                        state: warmed.state,
+                        parameters: iteratorParams
+                    )
+                    return (iterator: iterator, snapshots: prefixSnapshots + warmed.snapshots)
                 }
-                let warmed = try PrefillExecutor.run(
-                    model: context.model,
-                    text: inputForGeneration.text,
+            } catch is CancellationError {
+                // **Salvage-on-cancel** (issue #97): the client is gone and
+                // the GPU just went idle at a chunk boundary — keep the
+                // progress instead of discarding it. RAM-only, after the
+                // cancellation landed, so the cancel path's perceived
+                // latency is unchanged; a re-sent request (or an
+                // abort-seeded speculative pass) resumes from the salvaged
+                // offset instead of the restore floor.
+                await Self.salvageCancelledPrefill(
                     cache: liveCache,
-                    checkpoints: allCheckpoints,
-                    checkpointBaseOffset: executionBaseOffset,
-                    prefillStepSize: genParams.prefillStepSize,
-                    initialState: initialState
+                    keySpace: keySpace,
+                    restoreBaseOffset: executionBaseOffset,
+                    partitionKey: partitionKey,
+                    requestID: requestID,
+                    prefixCache: prefixCache,
+                    diagnostics: diagnosticsContext
                 )
-                maybeQuantizeKVCache(
-                    cache: &liveCache,
-                    kvBits: genParams.kvBits,
-                    kvGroupSize: genParams.kvGroupSize,
-                    quantizedKVStart: genParams.quantizedKVStart
-                )
-                var iteratorParams = genParams
-                iteratorParams.kvBits = nil
-                // The iterator seeds any configured penalty processors with
-                // the full suffix — its own input is only the final prompt
-                // token, which would otherwise be the entire
-                // repetition/presence/frequency context. It threads the last
-                // prefill chunk's state through the prime forward and every
-                // decode step (PRD #72 — upstream's iterator drops it).
-                let iterator = StateThreadedTokenIterator(
-                    remainder: warmed.remainder,
-                    fullText: inputForGeneration.text,
-                    model: context.model,
-                    cache: liveCache,
-                    state: warmed.state,
-                    parameters: iteratorParams
-                )
-                return (iterator: iterator, snapshots: prefixSnapshots + warmed.snapshots)
+                Memory.clearCache()
+                throw CancellationError()
             }
             let iterator = prefillResult.iterator
             await progressHandler?(.prefillFinished(.init(
@@ -2453,6 +2561,39 @@ nonisolated final class ServerCompletion {
         )
     }
 
+    /// How a finished turn seeds the **Speculative Canonical Prefill** —
+    /// the trigger table (issues #76, #100):
+    /// - A canonical-user boundary (stop-finish answer) seeds immediately,
+    ///   durable — the original #76 trigger.
+    /// - A tool-call boundary arms **Stretch Abandonment**'s timer: the
+    ///   pass starts only if no follow-up request lands inside the idle
+    ///   window, and its spine admits RAM-only so a false alarm (the tool
+    ///   result arrives) costs zero SSD writes (ADR-0009).
+    /// - Under the **Preserve-Thinking Render** (issue #98) nothing seeds:
+    ///   the render is append-stable, so the canonical future path equals
+    ///   the live path and there is no Think-Strip Rewind span to
+    ///   pre-prefill.
+    struct SpeculativeSeedPlan: Equatable {
+        let idleDelay: Duration
+        let ramOnlySpine: Bool
+    }
+
+    static func speculativeSeedPlan(
+        boundaryMode: BoundaryLeafMode,
+        renderContext: TemplateRenderContext
+    ) -> SpeculativeSeedPlan? {
+        guard !renderContext.preservesThinking else { return nil }
+        switch boundaryMode {
+        case .canonical:
+            return SpeculativeSeedPlan(idleDelay: .zero, ramOnlySpine: false)
+        case .directTool:
+            return SpeculativeSeedPlan(
+                idleDelay: SpeculativeCanonicalPrefill.stretchAbandonmentIdleWindow,
+                ramOnlySpine: true
+            )
+        }
+    }
+
     /// Re-tokenize the stored conversation (prompt + generated response) and return
     /// the flat token sequence. The HTTP prefix cache uses raw prompt messages here
     /// so assistant `reasoning_content` and `tool_calls` survive template rendering.
@@ -2461,14 +2602,17 @@ nonisolated final class ServerCompletion {
     private static func measureStoredTokenSequence(
         container: ModelContainer,
         conversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?
+        toolSpecs: [ToolSpec]?,
+        renderContext: TemplateRenderContext = .canonical
     ) async -> [Int]? {
         do {
             return try await container.perform { context in
                 try context.tokenizer.applyChatTemplate(
                     messages: conversation.promptMessages,
                     tools: toolSpecs,
-                    additionalContext: ["add_generation_prompt": false]
+                    additionalContext: renderContext.additionalContext(
+                        merging: ["add_generation_prompt": false]
+                    )
                 )
             }
         } catch {
@@ -2595,6 +2739,117 @@ nonisolated final class ServerCompletion {
                 extraFields: [("error", error.localizedDescription)]
             )
             return nil
+        }
+    }
+
+    // MARK: - Salvage-on-cancel (issue #97)
+
+    /// The offset a cancelled foreground prefill may admit its progress
+    /// at, or `nil` when the progress is below the capture threshold
+    /// (shared with speculative preempt capture), the cache reports an
+    /// offset past the key path (mid-flight inconsistency — never admit),
+    /// or the offset sits inside the image prefix (unanchorable).
+    /// Pure — unit-tested directly.
+    static func salvageableOffset(
+        cacheOffset: Int,
+        restoreBaseOffset: Int,
+        keyPathCount: Int,
+        minimumWarmOffset: Int
+    ) -> Int? {
+        guard cacheOffset - restoreBaseOffset
+                >= SpeculativeCanonicalPrefill.minimumPreemptCaptureTokens,
+              cacheOffset > 0,
+              cacheOffset <= keyPathCount,
+              cacheOffset >= minimumWarmOffset
+        else { return nil }
+        return cacheOffset
+    }
+
+    /// **Salvage-on-cancel** (PRD #94, issue #97): a client cancel or
+    /// disconnect interrupted the foreground prefill between chunks —
+    /// capture the cache at the last completed chunk boundary and admit
+    /// it RAM-only, so a re-sent request or an abort-seeded speculative
+    /// pass resumes there instead of the restore floor. Runs after the
+    /// cancellation landed (the GPU is already idle, nobody is waiting on
+    /// this request) inside the same Metal-affine scope as the prefill.
+    /// RAM-only by design: the imminent retry supersedes this leaf with
+    /// its own SSD-backed one, so the payload extraction and disk churn
+    /// are both skipped — the same economics as speculative preempt
+    /// capture. Below the progress threshold nothing is admitted, leaving
+    /// the cancellation contract (no leaf, no trace record) unchanged.
+    static func salvageCancelledPrefill(
+        cache: [any KVCache],
+        keySpace: CacheKeySpace,
+        restoreBaseOffset: Int,
+        partitionKey: CachePartitionKey,
+        requestID: UUID,
+        prefixCache: PrefixCacheManager,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) async {
+        let reportedOffset = httpPrefixCacheReportedTokenCount(cache)
+        guard salvageableOffset(
+            cacheOffset: reportedOffset,
+            restoreBaseOffset: restoreBaseOffset,
+            keyPathCount: keySpace.keyPath.count,
+            minimumWarmOffset: keySpace.minimumWarmOffset
+        ) != nil else {
+            diagnostics.logSkip(
+                stage: "salvageOnCancel",
+                reason: "below-progress-threshold",
+                extraFields: [
+                    ("cacheOffset", "\(reportedOffset)"),
+                    ("restoreBase", "\(restoreBaseOffset)"),
+                ]
+            )
+            return
+        }
+
+        // Settle the pipelined chunks only after the cheap offset check
+        // proves the cancel progressed far enough to be worth capturing.
+        eval(cache)
+        let settledOffset = httpPrefixCacheReportedTokenCount(cache)
+        guard let offset = salvageableOffset(
+            cacheOffset: settledOffset,
+            restoreBaseOffset: restoreBaseOffset,
+            keyPathCount: keySpace.keyPath.count,
+            minimumWarmOffset: keySpace.minimumWarmOffset
+        ) else {
+            diagnostics.logSkip(
+                stage: "salvageOnCancel",
+                reason: "settled-offset-not-salvageable",
+                extraFields: [
+                    ("cacheOffset", "\(settledOffset)"),
+                    ("restoreBase", "\(restoreBaseOffset)"),
+                ]
+            )
+            return
+        }
+        guard let leaf = HybridCacheSnapshot.capture(
+            cache: cache, offset: offset, type: .leaf
+        ) else {
+            diagnostics.logSkip(
+                stage: "salvageOnCancel",
+                reason: "unsupported-cache-type"
+            )
+            return
+        }
+        let survived = await admitStructuredLeaf(
+            leaf,
+            storedTokens: Array(keySpace.keyPath[0..<offset]),
+            storage: .ramOnly,
+            partitionKey: partitionKey,
+            requestID: requestID,
+            prefixCache: prefixCache,
+            diagnostics: diagnostics,
+            admissionStage: "salvageOnCancel",
+            captureSource: "cancelledPrefillSalvage"
+        )
+        if survived {
+            Log.agent.info(
+                "Salvage-on-cancel admitted — offset=\(offset) "
+                + "restoreBase=\(restoreBaseOffset) "
+                + "salvagedTokens=\(offset - restoreBaseOffset)"
+            )
         }
     }
 }

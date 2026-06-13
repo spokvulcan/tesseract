@@ -51,6 +51,12 @@ final class AgentEngine {
     /// Whether the loaded model's template starts generation inside a `<think>` block.
     private(set) var promptStartsThinking = false
 
+    /// The loaded model's template-declared render flags
+    /// (`ModelIdentity.declaredTemplateFlags`) — cached at load like
+    /// `promptStartsThinking` so the server dispatcher can read it
+    /// synchronously on the MainActor (issue #98). Empty when unloaded.
+    private(set) var declaredTemplateFlags: Set<TemplateRenderFlag> = []
+
     /// The shared inference actor. Created by the composition root and
     /// injected so the server dispatcher can reach the same actor (ADR-0006);
     /// benchmarks and unit tests rely on the `init` default instead.
@@ -146,6 +152,7 @@ final class AgentEngine {
 
             agentTokenizer = tokenizer
             promptStartsThinking = startsThinking
+            declaredTemplateFlags = await llmActor.loadedDeclaredTemplateFlags()
             isModelLoaded = true
             loadingStatus = ""
             Log.agent.info("Model loaded — promptStartsThinking=\(promptStartsThinking)")
@@ -220,10 +227,22 @@ final class AgentEngine {
 
     /// Build a `UserInput` from a system prompt, messages, and optional raw tool specs.
     /// Extracted for testability — callers can verify tool specs are forwarded without a loaded model.
-    static func buildUserInput(systemPrompt: String, messages: [LLMMessage], toolSpecs: [ToolSpec]?) -> UserInput {
+    /// The render context's opt-in flags (`preserve_thinking`) ride into the
+    /// template render as `additionalContext`, so the standard chat path honors
+    /// them exactly as the cache-aware path does.
+    static func buildUserInput(
+        systemPrompt: String,
+        messages: [LLMMessage],
+        toolSpecs: [ToolSpec]?,
+        renderContext: TemplateRenderContext = .canonical
+    ) -> UserInput {
         var chatMessages = [Chat.Message.system(systemPrompt)]
         chatMessages.append(contentsOf: toLLMCommonMessages(messages))
-        return UserInput(chat: chatMessages, tools: toolSpecs)
+        return UserInput(
+            chat: chatMessages,
+            tools: toolSpecs,
+            additionalContext: renderContext.additionalContext()
+        )
     }
 
     /// Formats a system prompt + tools through the chat template, returning the raw ChatML string and token count.
@@ -286,6 +305,7 @@ final class AgentEngine {
         cancelGeneration()
         agentTokenizer = nil
         promptStartsThinking = false
+        declaredTemplateFlags = []
         isModelLoaded = false
         loadingStatus = ""
         unloadTask = Task { [llmActor] in
@@ -498,12 +518,14 @@ extension AgentEngine: ManagedInferenceStarting {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext = .canonical,
         progressHandler: ServerInferenceProgressHandler?
     ) throws -> HTTPServerGenerationStart {
         let input = Self.buildUserInput(
             systemPrompt: systemPrompt,
             messages: messages,
-            toolSpecs: toolSpecs
+            toolSpecs: toolSpecs,
+            renderContext: renderContext
         )
         return try startManagedGeneration(
             input: input,

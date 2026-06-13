@@ -350,13 +350,21 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
     /// top-level manifest.
     let schemaVersion: Int
 
+    /// The partition key's `templateContextDigest` when non-canonical
+    /// (issue #98); `nil` for the canonical render. Optional-with-nil
+    /// keeps every pre-existing `_meta.json` decodable — no schema bump —
+    /// while letting warm start reconstruct a render-flagged partition's
+    /// exact key (the on-disk digest check would otherwise drop it).
+    let templateContextDigest: String?
+
     init(
         modelID: String,
         modelFingerprint: String,
         kvBits: Int?,
         kvGroupSize: Int,
         createdAt: Double,
-        schemaVersion: Int
+        schemaVersion: Int,
+        templateContextDigest: String? = nil
     ) {
         self.modelID = modelID
         self.modelFingerprint = modelFingerprint
@@ -364,6 +372,7 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         self.kvGroupSize = kvGroupSize
         self.createdAt = createdAt
         self.schemaVersion = schemaVersion
+        self.templateContextDigest = templateContextDigest
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -373,6 +382,7 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         case kvGroupSize
         case createdAt
         case schemaVersion
+        case templateContextDigest
     }
 
     init(from decoder: Decoder) throws {
@@ -383,6 +393,9 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         self.kvGroupSize = try container.decode(Int.self, forKey: .kvGroupSize)
         self.createdAt = try container.decode(Double.self, forKey: .createdAt)
         self.schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        self.templateContextDigest = try container.decodeIfPresent(
+            String.self, forKey: .templateContextDigest
+        )
     }
 }
 
@@ -482,6 +495,85 @@ nonisolated struct SnapshotRef: Sendable, Equatable {
             tokenOffset: tokenOffset,
             checkpointType: checkpointType,
             bytesOnDisk: bytes
+        )
+    }
+}
+
+// MARK: - Chain-prefix restore point (in-memory, tree-side; ADR-0012)
+
+/// A **Chain-Prefix Restore** point: a tree-side reference into another
+/// entry's **Segment Chain**, left on a node whose own leaf entry a
+/// **Leaf Extension Admission** consumed at writer commit. The consumed
+/// base's *identity* is gone from the manifest, but its bytes survive as
+/// the owner chain's leading segments, tiled at exactly this node's
+/// boundary — hydration composes only the segments covering
+/// `[0..boundaryOffset]` (`SSDSnapshotStore.loadSyncPrefix`).
+///
+/// Deliberately not a manifest entry and not `Codable`: ADR-0010's
+/// single-owner invariant holds (no cross-entry references, no
+/// refcounting), and eviction/deletion still operate on whole chains.
+/// When the owning chain dies, dependent points are cleared eagerly
+/// through the same backing-loss plumbing that clears committed refs.
+/// Warm start re-derives points from chain descriptors (issue #99).
+nonisolated struct ChainPrefixRestorePoint: Sendable, Equatable {
+    /// `snapshotID` of the live chain-head manifest entry whose inherited
+    /// segments cover `[0..boundaryOffset]`. Re-owned in place when a
+    /// later fold consumes that head in turn.
+    let ownerSnapshotID: String
+
+    /// The historical leaf boundary this point restores at — the consumed
+    /// base's capture offset. Equals the pointed node's `tokenOffset` by
+    /// construction.
+    let boundaryOffset: Int
+
+    /// Chain-total bytes of the leading segments covering the boundary —
+    /// the consumed base's `bytesOnDisk`. The ADR-0011 recovery-cost
+    /// input: a chain-prefix-backed node prices as hydration of these
+    /// bytes, not re-prefill FLOPs.
+    let prefixBytes: Int
+
+    /// The consumed base's checkpoint type — what a hit at this point
+    /// restores as.
+    let checkpointType: HybridCacheSnapshot.CheckpointType
+
+    /// Mirrors the consumed base's `partitionDigest`, so prefix hydration
+    /// can run the same fingerprint gate as `loadSync`.
+    let partitionDigest: String
+
+    /// Build the point a fold leaves behind: `consumedBase` is the base's
+    /// tree ref at the moment its manifest entry was consumed, when its
+    /// `bytesOnDisk` is exactly the leading-segment total.
+    init(ownerSnapshotID: String, consumedBase: SnapshotRef) {
+        self.ownerSnapshotID = ownerSnapshotID
+        self.boundaryOffset = consumedBase.tokenOffset
+        self.prefixBytes = consumedBase.bytesOnDisk
+        self.checkpointType = consumedBase.checkpointType
+        self.partitionDigest = consumedBase.partitionDigest
+    }
+
+    init(
+        ownerSnapshotID: String,
+        boundaryOffset: Int,
+        prefixBytes: Int,
+        checkpointType: HybridCacheSnapshot.CheckpointType,
+        partitionDigest: String
+    ) {
+        self.ownerSnapshotID = ownerSnapshotID
+        self.boundaryOffset = boundaryOffset
+        self.prefixBytes = prefixBytes
+        self.checkpointType = checkpointType
+        self.partitionDigest = partitionDigest
+    }
+
+    /// Copy owned by a different chain head — the transitive re-point
+    /// applied when a later fold consumes this point's current owner.
+    func settingOwner(_ newOwnerID: String) -> ChainPrefixRestorePoint {
+        ChainPrefixRestorePoint(
+            ownerSnapshotID: newOwnerID,
+            boundaryOffset: boundaryOffset,
+            prefixBytes: prefixBytes,
+            checkpointType: checkpointType,
+            partitionDigest: partitionDigest
         )
     }
 }
@@ -634,7 +726,12 @@ extension CachePartitionKey {
     ///
     /// **Canonicalization.** Concatenates the four base fields in fixed
     /// order (`modelID`, `kvBits`, `kvGroupSize`, `modelFingerprint`)
-    /// separated by a single null byte (`\0`). Nullable fields
+    /// separated by a single null byte (`\0`). A non-canonical
+    /// `templateContextDigest` (issue #98) appends a fifth `\0`-separated
+    /// field with a `T` presence tag; the canonical digest appends
+    /// **nothing**, so every partition persisted before the field existed
+    /// keeps its exact directory name. The two forms cannot collide: the
+    /// four-field form never contains a fifth separator. Nullable fields
     /// (`kvBits`, `modelFingerprint`) use a presence tag: `"N"` for `nil`,
     /// `"S"` followed by the value for `Some`. The tag is load-
     /// bearing — a bare sentinel string like `"none"` would
@@ -651,8 +748,11 @@ extension CachePartitionKey {
     nonisolated var partitionDigest: String {
         let kvBitsField = kvBits.map { "S\($0)" } ?? "N"
         let fingerprintField = modelFingerprint.map { "S" + $0 } ?? "N"
-        let canonical =
+        var canonical =
             "\(modelID)\0\(kvBitsField)\0\(kvGroupSize)\0\(fingerprintField)"
+        if templateContextDigest != HTTPPrefixCacheConversation.defaultTemplateContextDigest {
+            canonical += "\0T\(templateContextDigest)"
+        }
 
         // FNV-1a 32-bit: offset_basis = 0x811c9dc5, prime = 0x01000193.
         var hash: UInt32 = 0x811c_9dc5

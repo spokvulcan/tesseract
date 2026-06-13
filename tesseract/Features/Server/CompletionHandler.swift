@@ -285,9 +285,22 @@ struct CompletionHandler: Sendable {
             modelID: modelState.modelID,
             visionMode: modelState.visionMode
         )
+        // Resolve the render context once (issue #98): request kwargs win,
+        // the per-model setting is the fallback, and only template-declared
+        // flags participate. The conversation digest and the render kwargs
+        // both derive from this one value, so they can never disagree.
+        let appEnabledFlags: Set<TemplateRenderFlag> =
+            settings.preserveThinkingRender(modelID: modelState.modelID)
+            ? [.preserveThinking] : []
+        let renderContext = TemplateRenderContext.resolve(
+            requestKwargs: request.chat_template_kwargs?.booleanFlags,
+            appEnabledFlags: appEnabledFlags,
+            declaredFlags: modelState.declaredTemplateFlags
+        )
         let normalized = MessageConverter.normalizeRequest(
             repairedRequest.messages,
-            tools: request.tools
+            tools: request.tools,
+            templateContextDigest: renderContext.digest
         )
         let (systemPrompt, messages) = (normalized.systemPrompt, normalized.messages)
         let toolSpecs = MessageConverter.convertToolDefinitions(request.tools)
@@ -321,6 +334,7 @@ struct CompletionHandler: Sendable {
                     messages: messages,
                     toolSpecs: toolSpecs,
                     prefixCacheConversation: prefixCacheConversation,
+                    templateRenderContext: renderContext,
                     progressHandler: Self.makeProgressHandler(
                         activityLog: activityLog,
                         logHandle: logHandle

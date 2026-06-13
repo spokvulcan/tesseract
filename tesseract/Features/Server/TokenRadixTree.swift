@@ -11,6 +11,13 @@ final class RadixTreeNode {
     /// transition methods (the sole mutator), never assigned from
     /// outside the tree. See `SnapshotState`.
     var state: SnapshotState
+    /// **Chain-Prefix Restore** point (ADR-0012): set when a **Leaf
+    /// Extension Admission** consumed this node's leaf entry at writer
+    /// commit, keeping the boundary restorable from the owning chain's
+    /// leading segments. Orthogonal to `state` — a backing channel the
+    /// node holds *in addition to* whatever its own lifecycle says.
+    /// Mutated **only** by `TokenRadixTree`, same discipline as `state`.
+    var chainPrefixRestorePoint: ChainPrefixRestorePoint?
     /// Cumulative token count from root to the end of this node's edge.
     var tokenOffset: Int
     var lastAccessTime: ContinuousClock.Instant
@@ -83,10 +90,14 @@ final class TokenRadixTree {
 
         // RAM body → always hittable (`hasResidentBody`). A committed SSD
         // ref (`isHittable` adds state 5) is hittable only when the caller
-        // opts in, since it hydrates on demand. Pending refs are never
-        // hittable. Both predicates live on `SnapshotState`.
+        // opts in, since it hydrates on demand — and so is a
+        // **Chain-Prefix Restore** point (ADR-0012), which hydrates from
+        // the owning chain's leading segments. Pending refs are never
+        // hittable.
         func isHittable(_ node: RadixTreeNode) -> Bool {
-            includeSnapshotRefs ? node.state.isHittable : node.state.hasResidentBody
+            includeSnapshotRefs
+                ? node.state.isHittable || node.chainPrefixRestorePoint != nil
+                : node.state.hasResidentBody
         }
 
         // Root can have a snapshot (e.g. empty-prefix checkpoint)
@@ -231,6 +242,63 @@ final class TokenRadixTree {
             }
         }
         return current
+    }
+
+    /// Ensure nodes exist at multiple prefix offsets of one token path,
+    /// walking the compressed tree once after inserting the full path.
+    /// Used by warm-start chain-prefix reconstruction so a chain with many
+    /// inherited segments does not rebuild every prefix from the root.
+    @discardableResult
+    func ensurePrefixNodes(
+        tokens: [Int],
+        offsets: [Int]
+    ) -> [Int: RadixTreeNode] {
+        let targets = Array(Set(offsets.filter { $0 >= 0 && $0 <= tokens.count })).sorted()
+        guard !targets.isEmpty else { return [:] }
+
+        insertPath(tokens: tokens)
+
+        var result: [Int: RadixTreeNode] = [:]
+        var current = root
+        var pos = 0
+        var targetIndex = 0
+
+        while targetIndex < targets.count, targets[targetIndex] == 0 {
+            result[0] = root
+            targetIndex += 1
+        }
+
+        while targetIndex < targets.count {
+            let target = targets[targetIndex]
+            if target == pos {
+                result[target] = current
+                targetIndex += 1
+                continue
+            }
+
+            guard pos < tokens.count,
+                  let child = current.children[tokens[pos]]
+            else { break }
+
+            let edgeEnd = pos + child.edgeTokens.count
+            if target < edgeEnd {
+                splitEdge(parent: current, child: child, at: target - pos)
+                let splitNode = current.children[tokens[pos]]!
+                current = splitNode
+                pos = target
+                result[target] = splitNode
+                targetIndex += 1
+            } else {
+                current = child
+                pos = edgeEnd
+                if target == pos {
+                    result[target] = current
+                    targetIndex += 1
+                }
+            }
+        }
+
+        return result
     }
 
     /// Attach (or replace) a RAM body on a node. Use the node returned by
@@ -406,6 +474,77 @@ final class TokenRadixTree {
         commit(next, on: node, from: old)
     }
 
+    // MARK: - Chain-prefix restore points (ADR-0012)
+
+    /// The fold's ownership conversion: a **Leaf Extension Admission**
+    /// consumed this node's manifest entry at writer commit, so the
+    /// node's own ref is discarded — but instead of going dark, the node
+    /// keeps a **Chain-Prefix Restore** point into the new owner's chain,
+    /// whose leading segments are exactly the consumed entry's bytes.
+    /// Strict: the node must currently be ref-bearing (the caller matched
+    /// `refID` to the consumed base). The node is *kept* even when the
+    /// discard empties its state — the point keeps it addressable.
+    @discardableResult
+    func convertConsumedBaseToChainPrefixRestorePoint(
+        node: RadixTreeNode,
+        ownerSnapshotID: String
+    ) -> ChainPrefixRestorePoint {
+        guard let baseRef = node.state.ref else {
+            preconditionFailure(
+                "convertConsumedBaseToChainPrefixRestorePoint requires a ref-bearing node; "
+                + "node was \(node.state.label)"
+            )
+        }
+        let point = ChainPrefixRestorePoint(
+            ownerSnapshotID: ownerSnapshotID, consumedBase: baseRef
+        )
+        node.chainPrefixRestorePoint = point
+        let old = node.state
+        let (next, _) = old.discardingRefAfterExplicitDelete()
+        commit(next, on: node, from: old)
+        // No self-heal on `.becameEmpty`: the restore point keeps the
+        // boundary reachable, which is the entire purpose of the
+        // conversion (`selfHeal` would refuse anyway — belt and braces).
+        return point
+    }
+
+    /// Warm start's reconstruction arm (issue #99): attach a restore
+    /// point recovered from a restored chain head's inherited-segment
+    /// descriptors to the empty node at its boundary. Unlike the fold's
+    /// conversion there is no ref to discard — the base's manifest entry
+    /// died with the fold before the restart. Strict: the caller checks
+    /// the node is point-less and empty first.
+    func attachChainPrefixRestorePoint(
+        node: RadixTreeNode,
+        point: ChainPrefixRestorePoint
+    ) {
+        precondition(
+            node.chainPrefixRestorePoint == nil,
+            "attachChainPrefixRestorePoint requires a point-less node"
+        )
+        node.chainPrefixRestorePoint = point
+    }
+
+    /// Re-own a restore point in place after a later fold consumed its
+    /// current owner: the new head inherits the old owner's whole chain,
+    /// so every boundary the old owner covered stays covered. No-op for
+    /// a point-less node (the index entry outlived a cleared point).
+    func reownChainPrefixRestorePoint(node: RadixTreeNode, to newOwnerID: String) {
+        guard let point = node.chainPrefixRestorePoint else { return }
+        node.chainPrefixRestorePoint = point.settingOwner(newOwnerID)
+    }
+
+    /// Clear a restore point after its owning chain died (explicit
+    /// delete, SSD LRU cut, hydration failure) — the same eager
+    /// backing-loss semantics as `clearCommittedSnapshotRefAfterBackingLoss`.
+    /// Forgiving: clearing a point-less node is a no-op. Self-heals when
+    /// the node has nothing else left.
+    func clearChainPrefixRestorePoint(node: RadixTreeNode) {
+        guard node.chainPrefixRestorePoint != nil else { return }
+        node.chainPrefixRestorePoint = nil
+        if node.state.isEmpty { selfHeal(node) }
+    }
+
     // MARK: - Mutation chokepoint internals
 
     /// Install `next` on `node` and reconcile the RAM byte/count budgets
@@ -426,8 +565,11 @@ final class TokenRadixTree {
     /// (`node.state == .empty`, so `canEvictNode` holds and removing the
     /// node cannot orphan an SSD ref). Leaf → detach + sweep empty
     /// ancestors; single-child → collapse; multi-child empty node → stays
-    /// as a structural junction.
+    /// as a structural junction. A node holding a **Chain-Prefix
+    /// Restore** point is never healed away — its state is empty but the
+    /// boundary it addresses is still backed by the owning chain.
     private func selfHeal(_ node: RadixTreeNode) {
+        guard node.chainPrefixRestorePoint == nil else { return }
         if node.isLeaf {
             detachEmptyLeaf(node)
         } else if node.childCount == 1 {

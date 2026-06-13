@@ -44,6 +44,14 @@ nonisolated enum SpeculativeCanonicalPrefill {
     /// guaranteed net win (2,048 tokens re-prefill interactively in ~2.5 s).
     static let minimumPreemptCaptureTokens = 2_048
 
+    /// **Stretch Abandonment**'s timer trigger (issue #100): a tool-calls
+    /// finish with no follow-up request inside this window looks abandoned
+    /// and seeds the canonical pass. Long enough that an agent loop's
+    /// next tool-result request lands well inside it (those arrive in
+    /// milliseconds-to-seconds), short enough to leave most of a human
+    /// typing pause as speculation runway.
+    static let stretchAbandonmentIdleWindow: Duration = .seconds(5)
+
     /// Everything the background pass needs, captured from the originating
     /// request's post-generation context. Built by the drive task only after
     /// the canonical leaf was admitted — that leaf is the restore base this
@@ -58,6 +66,18 @@ nonisolated enum SpeculativeCanonicalPrefill {
         /// worth-it threshold and the diagnostics' rewind-span field; the
         /// actual restore boundary is re-resolved against the live tree.
         let canonicalLeafOffset: Int
+        /// How long the scheduled pass waits before touching the GPU.
+        /// `.zero` for the stop-finish and abort triggers; the
+        /// **Stretch Abandonment** idle window for a tool-calls finish —
+        /// a follow-up request inside the window preempts the sleeping
+        /// pass before it does any work (issue #100).
+        let idleDelay: Duration
+        /// `true` for abandonment-triggered passes (issue #100): the
+        /// speculated spine admits RAM-only (ADR-0009 durability), so a
+        /// false alarm — the tool result arrives after all — costs zero
+        /// SSD writes. The rewind landing persists the branch via the
+        /// existing self-heal full write.
+        let ramOnlySpine: Bool
         /// The originating request's diagnostics context, reused so the
         /// speculative events correlate with the turn that scheduled them.
         let diagnostics: PrefixCacheDiagnostics.Context
@@ -92,6 +112,9 @@ nonisolated enum SpeculativeCanonicalPrefill {
         ssdEnabled: Bool,
         seedsPositionAnchor: Bool,
         canonicalLeafOffset: Int,
+        renderContext: TemplateRenderContext = .canonical,
+        idleDelay: Duration = .zero,
+        ramOnlySpine: Bool = false,
         diagnostics: PrefixCacheDiagnostics.Context
     ) -> Seed {
         let probe = Task.detached {
@@ -99,7 +122,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 storedConversation: storedConversation,
                 toolSpecs: toolSpecs,
                 tokenizer: tokenizer,
-                keySpace: keySpace
+                keySpace: keySpace,
+                renderContext: renderContext
             )
         }
         return Seed(
@@ -109,6 +133,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
             ssdEnabled: ssdEnabled,
             seedsPositionAnchor: seedsPositionAnchor,
             canonicalLeafOffset: canonicalLeafOffset,
+            idleDelay: idleDelay,
+            ramOnlySpine: ramOnlySpine,
             diagnostics: diagnostics,
             futureSharedPrefixProbe: probe
         )
@@ -411,10 +437,10 @@ nonisolated enum SpeculativeCanonicalPrefill {
         preempted: Bool
     ) async {
         let diagnostics = seed.diagnostics
-        // Preempted partial leaves are RAM-only and never consult the
-        // extension base.
+        // Preempted partial leaves and abandonment spines are RAM-only
+        // and never consult the extension base.
         let extensionBase = await ServerCompletion.resolveExtensionBase(
-            ssdEnabled: seed.ssdEnabled && !preempted,
+            ssdEnabled: seed.ssdEnabled && !preempted && !seed.ramOnlySpine,
             tokens: storedTokens,
             partitionKey: seed.partitionKey,
             prefixCache: prefixCache
@@ -435,7 +461,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 )
                 return
             }
-            let storage: SnapshotAdmission.Storage = preempted
+            let storage: SnapshotAdmission.Storage = preempted || seed.ramOnlySpine
                 ? .ramOnly
                 : ServerCompletion.snapshotAdmissionStorage(
                     for: leaf,

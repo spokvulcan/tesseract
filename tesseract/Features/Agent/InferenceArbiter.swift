@@ -69,6 +69,10 @@ final class InferenceArbiter: InferenceArbitrating {
     /// Thin accessor over `loadedLLMState` — retained for existing call sites.
     var loadedLLMModelID: String? { loadedLLMState?.modelID }
 
+    /// Template-declared render flags of the loaded `.llm` model (issue #98).
+    /// Empty when nothing is loaded.
+    var loadedDeclaredTemplateFlags: Set<TemplateRenderFlag> { agentEngine.declaredTemplateFlags }
+
     /// The GPU mutual-exclusion lease — FIFO queue, atomic handoff, cancellation
     /// protocol. Owned and tested as its own module (`GPULeaseQueueTests`); the
     /// arbiter composes it with model loading.

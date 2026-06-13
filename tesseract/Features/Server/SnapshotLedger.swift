@@ -215,6 +215,18 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         transferringBaseIDs.remove(baseID)
     }
 
+    /// Whether `baseID` is currently shielded by a pending **Leaf
+    /// Extension Admission** — its fold has neither committed nor dropped.
+    /// The LRU cut already excludes this set; the manager's explicit
+    /// supersession-delete path consults it through the same lock so it
+    /// never reclaims a base a still-in-flight fold elsewhere on the tree
+    /// will consume.
+    func isTransferringBase(_ baseID: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return transferringBaseIDs.contains(baseID)
+    }
+
     /// Fold the base's **Segment Chain** into a pending extension's
     /// descriptor: inherited = base's inherited + base's own file. Run
     /// by the writer *before* `writePayload` so the embedded per-file
@@ -851,6 +863,24 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         defer { lock.unlock() }
         guard let descriptor = manifest.snapshots[id] else { return nil }
         return chainFileURLs(for: descriptor)
+    }
+
+    /// Read-path accessor for `loadSyncPrefix` (**Chain-Prefix Restore**,
+    /// ADR-0012): the leading inherited segments of `ownerID`'s chain
+    /// covering `[0..boundaryOffset]`, in compose order. Restore points
+    /// sit only on the segment grid — `boundaryOffset` must be exactly a
+    /// consumed leaf's capture offset, so the last leading segment must
+    /// end at it. `nil` when the owner left the manifest (evicted between
+    /// the lookup and the hydration) or the boundary is off the grid
+    /// (a stale point against a re-shaped chain) — both degrade to a
+    /// clean miss, never a wrong-extent compose.
+    func chainPrefixForHydration(ownerID: String, boundaryOffset: Int) -> [URL]? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let descriptor = manifest.snapshots[ownerID] else { return nil }
+        let leading = descriptor.inheritedSegments.prefix { $0.tokenOffset <= boundaryOffset }
+        guard leading.last?.tokenOffset == boundaryOffset else { return nil }
+        return leading.map { rootURL.appendingPathComponent($0.fileRelativePath) }
     }
 }
 

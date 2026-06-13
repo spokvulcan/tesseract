@@ -36,6 +36,54 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests
 ```
 
+## Canonical-echo fidelity gate (corpus mode)
+
+`CanonicalEchoFidelityTests` runs with the suites above (fake tokenizer, no
+extra setup). The corpus gate — `CanonicalEchoFidelityCorpusTests` — replays a
+recorded session corpus (the `HTTPRequestLogger` request JSONs) through the
+real normalization + reasoning-repair + probe machinery with a real model
+tokenizer, and fails on any boundary whose derived leaf/speculation path is
+not a token-identical prefix of the next request's render (PRD #94). It is
+opt-in via environment because the corpus contains user project content and
+lives outside the repo:
+
+```bash
+TEST_RUNNER_TESSERACT_FIDELITY_CORPUS="$HOME/projects/tesseract-traces/<corpus>" \
+TEST_RUNNER_TESSERACT_FIDELITY_MODEL="$HOME/Library/Containers/app.tesseract.agent/Data/Library/Application Support/models/<model-dir>" \
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -only-testing:tesseractTests/CanonicalEchoFidelityCorpusTests \
+  -parallel-testing-enabled NO
+```
+
+The corpus directory must contain `http-completions/*-request.json`
+recordings; the model directory must hold the tokenizer files (tokenizer
++ tokenizer config + chat template JSONs, as shipped on disk). Without
+both variables the test is skipped (`.enabled(if:)`), so it is safe in CI.
+Note the `TEST_RUNNER_` prefix — plain environment variables do not reach the
+test host process. Per-boundary verdicts print to the test log; mismatches
+include decoded windows around the fork.
+
+## Interrupt-readiness acceptance (corpus + live drill)
+
+`IncidentReplayAcceptanceTests` (PRD #94) is the regression net for the
+Think-Strip Rewind cliff. It reuses `TEST_RUNNER_TESSERACT_FIDELITY_CORPUS`
+and reads the archived `trace-2026-06-12.jsonl` completion-trace log from the
+same corpus directory; without it the suite is skipped. It asserts the restore
+floor never overshoots the divergence and that the replay is deterministic, so
+steady-state hit rate and token reuse move only when behaviour does. The
+replay report (`TraceReplayHarness`) and the live prompt-cache dashboard both
+surface the rewind roll-up — event count and re-prefill size — so a future
+regression shows up in telemetry without reproducing an incident.
+
+The live drill is `scripts/interrupt-drill.sh`: it reproduces the incident
+shape against a running server (tool stretch → abort → idle past the
+abandonment window → steering message) and measures post-interrupt TTFT
+against the 5 s bar (the incident recorded 92.8 s). The `--double` variant
+also aborts the recovery prefill and re-sends, asserting the retry resumes
+from the salvage rather than restarting from the floor. The server must be
+running with the prefix cache enabled and the incident model loaded; the
+drill's request bodies live in the incident corpus, outside the repo.
+
 ## Loaded-model verification
 
 Not unit tests — these run against a real model.

@@ -89,17 +89,21 @@ enum PrefixCacheTestFixtures {
         label: String,
         ramBudgetBytes: Int,
         ssdBudgetBytes: Int = 10_000_000,
-        demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)? = nil
+        demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)? = nil,
+        writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
     ) -> (manager: PrefixCacheManager, store: TieredSnapshotStore, root: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(label)-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let store = TieredSnapshotStore(ssdConfig: SSDPrefixCacheConfig(
-            enabled: true,
-            rootURL: root,
-            budgetBytes: ssdBudgetBytes,
-            maxPendingBytes: 10_000_000
-        ))
+        let store = TieredSnapshotStore(
+            ssdConfig: SSDPrefixCacheConfig(
+                enabled: true,
+                rootURL: root,
+                budgetBytes: ssdBudgetBytes,
+                maxPendingBytes: 10_000_000
+            ),
+            writerDrainPreludeForTesting: writerDrainPreludeForTesting
+        )
         let manager = PrefixCacheManager(
             memoryBudgetBytes: ramBudgetBytes,
             tieredStore: store,
