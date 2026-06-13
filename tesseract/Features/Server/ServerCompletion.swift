@@ -1,5 +1,6 @@
 import CoreImage
 import Foundation
+import Metal
 import MLX
 import MLXLMCommon
 import Tokenizers
@@ -134,6 +135,42 @@ nonisolated enum HTTPLeafStoreMode: String, Sendable {
     case directToolLeaf
     case canonicalUserLeaf
     case directLeaf
+}
+
+nonisolated enum VisionPrefixMemoryGuard {
+    struct Rejection: Equatable, Sendable {
+        let prefixTokens: Int
+        let estimatedBytes: UInt64
+        let maxBufferBytes: UInt64
+
+        var message: String {
+            "vision prefill is too large: \(prefixTokens) image-prefix tokens would allocate "
+                + "\(Self.formatBytes(estimatedBytes)) for one Qwen3.5/Qwen3.6 full-attention "
+                + "score matrix, above this Mac's Metal buffer limit of "
+                + "\(Self.formatBytes(maxBufferBytes))"
+        }
+
+        private static func formatBytes(_ bytes: UInt64) -> String {
+            if bytes == UInt64.max { return "more than \(UInt64.max) bytes" }
+            let gib = Double(bytes) / 1_073_741_824.0
+            return String(format: "%.2f GiB", gib)
+        }
+    }
+
+    static func rejection(
+        prefixTokens: Int,
+        profile: ModelIdentity.FullAttentionScratchProfile?,
+        maxBufferBytes: UInt64
+    ) -> Rejection? {
+        guard let profile else { return nil }
+        let estimatedBytes = profile.scoreMatrixBytes(sequenceLength: prefixTokens) ?? UInt64.max
+        guard estimatedBytes > maxBufferBytes else { return nil }
+        return Rejection(
+            prefixTokens: prefixTokens,
+            estimatedBytes: estimatedBytes,
+            maxBufferBytes: maxBufferBytes
+        )
+    }
 }
 
 /// **Server Completion** — the deep module owning one cache-aware HTTP
@@ -1375,6 +1412,7 @@ nonisolated final class ServerCompletion {
         let modelFingerprint = self.modelFingerprint
         let imageKeying = self.modelIdentity?.imageKeying
         let flopProfile = self.modelIdentity?.flopProfile ?? .fallback
+        let fullAttentionScratchProfile = self.modelIdentity?.fullAttentionScratchProfile
         let ssdEnabled = self.ssdConfig?.enabled == true
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
@@ -1692,6 +1730,25 @@ nonisolated final class ServerCompletion {
                         var initialState = executorInitialState
                         var prefixSnapshots: [HybridCacheSnapshot] = []
                         if let imagePrefixInput {
+                            let prefixTokens = imagePrefixInput.text.tokens.dim(-1)
+                            if let rejection = VisionPrefixMemoryGuard.rejection(
+                                prefixTokens: prefixTokens,
+                                profile: fullAttentionScratchProfile,
+                                maxBufferBytes: Self.currentMaxMetalBufferBytes()
+                            ) {
+                                diagnosticsContext.logSkip(
+                                    stage: "prefill",
+                                    reason: "vision-prefix-too-large",
+                                    level: .warning,
+                                    extraFields: [
+                                        ("prefixTokens", "\(rejection.prefixTokens)"),
+                                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
+                                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
+                                    ]
+                                )
+                                throw AgentEngineError.generationFailed(rejection.message)
+                            }
+
                             // Cold image prefix: one vendor prepare carries the pixels
                             // through the vision tower with M-RoPE correct by
                             // construction, and its returned state anchors the chunked
@@ -2443,6 +2500,13 @@ nonisolated final class ServerCompletion {
         case "float64": return .float64
         default: return nil
         }
+    }
+
+    private static func currentMaxMetalBufferBytes() -> UInt64 {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            return UInt64.max
+        }
+        return UInt64(device.maxBufferLength)
     }
 
     // MARK: - Leaf store helpers

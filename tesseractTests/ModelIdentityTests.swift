@@ -181,6 +181,7 @@ struct ModelIdentityTests {
         #expect(identity.toolCallFormat == nil)
         #expect(identity.promptStartsThinking == false)
         #expect(identity.flopProfile == .qwen35_4B_PARO)
+        #expect(identity.fullAttentionScratchProfile == nil)
     }
 
     /// Two identities built from equal inputs compare equal — one comparison
@@ -191,6 +192,63 @@ struct ModelIdentityTests {
         let other = ModelIdentity(configJSON: ["model_type": "llama"], chatTemplate: nil)
         #expect(a == b)
         #expect(a != other)
+    }
+
+    // MARK: - Full-attention scratch profile
+
+    /// Qwen3.6 PARO exposes full-attention geometry under `text_config`; the
+    /// memory guard needs exactly these fields to preflight Qwen35 VLM prepare.
+    @Test func fullAttentionScratchProfileReadsNestedQwen36Fields() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5",
+                "text_config": [
+                    "num_attention_heads": 24,
+                    "full_attention_interval": 4,
+                    "dtype": "bfloat16",
+                ],
+            ],
+            chatTemplate: nil
+        )
+
+        #expect(identity.fullAttentionScratchProfile == ModelIdentity.FullAttentionScratchProfile(
+            attentionHeads: 24,
+            bytesPerElement: 2
+        ))
+    }
+
+    /// LLM-only layouts keep the same fields at top level; fp32 activations double
+    /// the preflight bytes.
+    @Test func fullAttentionScratchProfileReadsTopLevelDType() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5",
+                "num_attention_heads": 16,
+                "full_attention_interval": 4,
+                "dtype": "float32",
+            ],
+            chatTemplate: nil
+        )
+
+        #expect(identity.fullAttentionScratchProfile == ModelIdentity.FullAttentionScratchProfile(
+            attentionHeads: 16,
+            bytesPerElement: 4
+        ))
+    }
+
+    /// Non-Qwen3.5 families are not guarded by Qwen35-specific scratch math.
+    @Test func fullAttentionScratchProfileIsNilOffQwen35Family() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen2_vl",
+                "num_attention_heads": 16,
+                "full_attention_interval": 4,
+                "dtype": "bfloat16",
+            ],
+            chatTemplate: nil
+        )
+
+        #expect(identity.fullAttentionScratchProfile == nil)
     }
 
     // MARK: - Image keying

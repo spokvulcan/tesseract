@@ -30,6 +30,30 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         let spatialMergeSize: Int
     }
 
+    /// Scratch-buffer geometry for Qwen3.5/Qwen3.6 full-attention layers.
+    /// Used as a preflight guard before the VLM `prepare` path asks Metal for
+    /// the `[batch, heads, L, L]` attention score matrix.
+    struct FullAttentionScratchProfile: Sendable, Equatable {
+        let attentionHeads: Int
+        let bytesPerElement: Int
+
+        func scoreMatrixBytes(sequenceLength: Int) -> UInt64? {
+            guard sequenceLength >= 0, attentionHeads > 0, bytesPerElement > 0 else {
+                return nil
+            }
+            let length = UInt64(sequenceLength)
+            let heads = UInt64(attentionHeads)
+            let bytes = UInt64(bytesPerElement)
+            let lengthSquared = length.multipliedReportingOverflow(by: length)
+            guard !lengthSquared.overflow else { return nil }
+            let withHeads = lengthSquared.partialValue.multipliedReportingOverflow(by: heads)
+            guard !withHeads.overflow else { return nil }
+            let total = withHeads.partialValue.multipliedReportingOverflow(by: bytes)
+            guard !total.overflow else { return nil }
+            return total.partialValue
+        }
+    }
+
     /// Chat-template tool-call format. `nil` means "no override — use the
     /// vendor JSON default." Qwen3.5 uses XML function syntax
     /// (`<function=name>…</function>` inside `<tool_call>`).
@@ -61,6 +85,10 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// absent profile.
     let flopProfile: ModelFlopProfile
 
+    /// Per-layer full-attention scratch geometry, when the loaded architecture
+    /// exposes it. `nil` for unrecognized/non-full-attention models.
+    let fullAttentionScratchProfile: FullAttentionScratchProfile?
+
     /// Image-keying facts for the Qwen3.5 vision variant; `nil` for text-only
     /// models and unrecognized families.
     let imageKeying: ImageKeying?
@@ -90,6 +118,9 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
         self.declaredTemplateFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
+        self.fullAttentionScratchProfile = Self.interpretFullAttentionScratchProfile(
+            configJSON: configJSON
+        )
         self.imageKeying = Self.interpretImageKeying(configJSON: configJSON)
     }
 
@@ -196,6 +227,39 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             linearKeyHeadDim: linearKeyHeadDim,
             fullAttentionInterval: fullAttentionInterval
         )
+    }
+
+    private static func interpretFullAttentionScratchProfile(
+        configJSON: [String: Any]?
+    ) -> FullAttentionScratchProfile? {
+        guard let root = configJSON,
+              let topModelType = root["model_type"] as? String,
+              topModelType.hasPrefix("qwen3_5")
+        else { return nil }
+
+        let textConfig = (root["text_config"] as? [String: Any]) ?? root
+        guard let attentionHeads = textConfig["num_attention_heads"] as? Int,
+              attentionHeads > 0,
+              textConfig["full_attention_interval"] as? Int != nil
+        else { return nil }
+
+        return FullAttentionScratchProfile(
+            attentionHeads: attentionHeads,
+            bytesPerElement: bytesPerElement(forActivationDType: textConfig["dtype"] as? String)
+        )
+    }
+
+    private static func bytesPerElement(forActivationDType dtype: String?) -> Int {
+        switch dtype?.lowercased() {
+        case "float32", "fp32":
+            return 4
+        case "float64", "fp64":
+            return 8
+        case "float16", "fp16", "bfloat16", "bf16":
+            return 2
+        default:
+            return 2
+        }
     }
 
     /// Image keying exists only for the Qwen3.5 vision variant — the family the
