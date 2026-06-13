@@ -97,6 +97,14 @@ nonisolated struct PromptCacheTelemetryAggregate: Codable, Equatable, Sendable {
     var averagePrefillMs: Double = 0
     var averageTTFTMs: Double = 0
     var restoredCheckpointCounts: [String: Int] = [:]
+    /// **Rewind telemetry** (issue #101): lookups whose restore floor sat
+    /// below where the request diverged from the cached path — a
+    /// **Think-Strip Rewind** that the **Chain-Prefix Restore** floor
+    /// served instead of re-prefilling to zero. The token sum is the
+    /// re-prefill those rewinds saved versus the strip floor; a rising
+    /// count or deepening size is the regression signal.
+    var rewindEventCount: Int = 0
+    var rewindTokens: Int = 0
 
     var hitRate: Double {
         guard lookupCount > 0 else { return 0 }
@@ -122,10 +130,23 @@ nonisolated struct PromptCacheTelemetryAggregate: Codable, Equatable, Sendable {
                 let reason = event.field("reason") ?? ""
                 if reason == "hit" {
                     aggregate.hitCount += 1
-                } else if reason == "ssdHit" {
+                } else if reason == "ssdHit" || reason == "chainPrefixHit" {
+                    // A chain-prefix hit (ADR-0012) is an SSD-tier hit:
+                    // the body hydrates from the owning chain's leading
+                    // segments.
                     aggregate.ssdHitCount += 1
                 } else {
                     aggregate.missCount += 1
+                }
+                // A chain-prefix hit IS a served Think-Strip Rewind: the
+                // restore landed at the floor below the request's
+                // divergence (issue #101).
+                if reason == "chainPrefixHit",
+                   let shared = event.intField("sharedPrefixLength"),
+                   let floor = event.intField("snapshotOffset"),
+                   shared > floor {
+                    aggregate.rewindEventCount += 1
+                    aggregate.rewindTokens += shared - floor
                 }
                 aggregate.promptTokens += event.intField("promptTokens") ?? 0
                 aggregate.cachedTokens += event.intField("skippedPrefillTokens") ?? 0

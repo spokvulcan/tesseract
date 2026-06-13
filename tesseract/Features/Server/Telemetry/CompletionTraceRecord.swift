@@ -153,6 +153,14 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
     /// used (slice #84). `nil` on records written before slice #84.
     let deviceEstimates: MeasuredSecondsEstimates?
 
+    /// **Rewind telemetry** (PRD #94, issue #101): exposes a
+    /// **Think-Strip Rewind** in the trace so a regression is visible
+    /// without reproducing the incident. `nil` for a cold miss (no
+    /// restore to measure against) and for records written before the
+    /// field existed — an additive optional, so the schema version does
+    /// not change and the pre-#94 incident corpus still replays.
+    let rewind: RewindTelemetry?
+
     /// Assemble a record for one finished cache-aware completion, or
     /// `nil` for requests that must produce none: any **Unkeyed
     /// Completion** (zero cache participation — no replay signal).
@@ -178,7 +186,8 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
         residualPromptSeconds: Double,
         terminalEvictionCount: Int,
         recoveredEvictionCount: Int,
-        deviceEstimates: MeasuredSecondsEstimates?
+        deviceEstimates: MeasuredSecondsEstimates?,
+        rewind: RewindTelemetry? = nil
     ) -> CompletionTraceRecord? {
         guard unkeyedReason == nil else { return nil }
         return CompletionTraceRecord(
@@ -204,7 +213,47 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
                 + residualPromptSeconds,
             terminalEvictionCount: terminalEvictionCount,
             recoveredEvictionCount: recoveredEvictionCount,
-            deviceEstimates: deviceEstimates
+            deviceEstimates: deviceEstimates,
+            rewind: rewind
+        )
+    }
+}
+
+// MARK: - Rewind telemetry
+
+/// The three numbers that turn a **Think-Strip Rewind** into a visible
+/// trace signal (PRD #94, issue #101). The **divergence offset** is how
+/// far the request shared the deepest cached path before it forked; the
+/// **restore floor** is where the restore actually landed — for an
+/// interrupt, a **Chain-Prefix Restore** point at-or-below the
+/// divergence. Their gap is the **rewind size**: the re-prefill the
+/// rewind forced, which before #96 fell all the way to the strip floor
+/// and after it stops at the deepest restorable boundary.
+nonisolated struct RewindTelemetry: Codable, Sendable, Equatable {
+    let divergenceOffset: Int
+    let restoreFloor: Int
+
+    init(divergenceOffset: Int, restoreFloor: Int) {
+        self.divergenceOffset = divergenceOffset
+        self.restoreFloor = restoreFloor
+    }
+
+    /// Tokens the restore did not cover below the divergence — `0` when
+    /// the restore landed exactly at the divergence (no rewind).
+    var rewindSize: Int { max(0, divergenceOffset - restoreFloor) }
+
+    /// True when the floor sits below the divergence: a rewind occurred.
+    var isRewind: Bool { rewindSize > 0 }
+
+    /// Derive from a finished completion's lookup outcome. `nil` for a
+    /// cold miss (no restore floor to anchor). The divergence is the
+    /// token-level shared prefix the request reached into the tree; the
+    /// floor is where the restore actually resolved.
+    static func make(sharedPrefixLength: Int, restoredOffset: Int) -> RewindTelemetry? {
+        guard restoredOffset > 0 else { return nil }
+        return RewindTelemetry(
+            divergenceOffset: max(sharedPrefixLength, restoredOffset),
+            restoreFloor: restoredOffset
         )
     }
 }

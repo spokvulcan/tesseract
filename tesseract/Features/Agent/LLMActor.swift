@@ -450,6 +450,7 @@ actor LLMActor {
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext = .canonical,
         progressHandler: ServerInferenceProgressHandler? = nil
     ) async throws -> HTTPServerGenerationStart {
         guard let container = modelContainer else {
@@ -462,8 +463,16 @@ actor LLMActor {
             conversation: conversation,
             toolSpecs: toolSpecs,
             parameters: parameters,
+            renderContext: renderContext,
             progressHandler: progressHandler
         )
+    }
+
+    /// Template-declared render flags of the loaded model (issue #98), read
+    /// from the **Server Completion** module's load-time identity snapshot.
+    /// Empty before a load installs one.
+    func loadedDeclaredTemplateFlags() -> Set<TemplateRenderFlag> {
+        serverCompletion?.modelIdentity?.declaredTemplateFlags ?? []
     }
 
     /// Renders messages and tools through the Jinja chat template, returning the exact

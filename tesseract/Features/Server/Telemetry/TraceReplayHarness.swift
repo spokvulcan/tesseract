@@ -50,6 +50,17 @@ nonisolated enum TraceReplayHarness {
         let recoveredEvictions: Int
         let ssdRestores: Int
         let totalHydrationSeconds: Double
+        /// **Rewind telemetry** roll-up (issue #101): how often a
+        /// **Think-Strip Rewind** landed in this corpus and how deep the
+        /// re-prefill ran. `rewindEvents` counts records whose restore
+        /// floor sat below the divergence; the percentiles are over those
+        /// records' rewind sizes. The dashboard surfaces these so a
+        /// regression shows up as a rising rewind count or size without
+        /// reproducing an incident.
+        let rewindEvents: Int
+        let rewindSizeP50Tokens: Int
+        let rewindSizeP95Tokens: Int
+        let maxRewindSizeTokens: Int
     }
 
     /// What the pure-LRU RAM-only baseline would have paid on the same
@@ -110,6 +121,11 @@ nonisolated enum TraceReplayHarness {
 
         let observedTTFTs = records.map(\.ttftSeconds).sorted()
         let sortedProxies = proxies.sorted()
+        let rewindSizes = records
+            .compactMap(\.rewind)
+            .filter(\.isRewind)
+            .map(\.rewindSize)
+            .sorted()
         return Report(
             recordCount: records.count,
             blockSize: TraceBlockDigest.blockSize,
@@ -120,7 +136,11 @@ nonisolated enum TraceReplayHarness {
                 terminalEvictions: records.reduce(0) { $0 + $1.terminalEvictionCount },
                 recoveredEvictions: records.reduce(0) { $0 + $1.recoveredEvictionCount },
                 ssdRestores: records.count(where: \.restoredFromSSD),
-                totalHydrationSeconds: records.reduce(0) { $0 + $1.hydrationSeconds }
+                totalHydrationSeconds: records.reduce(0) { $0 + $1.hydrationSeconds },
+                rewindEvents: rewindSizes.count,
+                rewindSizeP50Tokens: intPercentile(rewindSizes, 0.50),
+                rewindSizeP95Tokens: intPercentile(rewindSizes, 0.95),
+                maxRewindSizeTokens: rewindSizes.last ?? 0
             ),
             simulatedLRU: SimulatedLRUMetrics(
                 ttftProxyP50Seconds: percentile(sortedProxies, 0.50),
@@ -145,6 +165,8 @@ nonisolated enum TraceReplayHarness {
         · hit tokens \(o.totalHitTokens) · evictions \(o.terminalEvictions) terminal \
         / \(o.recoveredEvictions) recovered · ssd restores \(o.ssdRestores) \
         · hydration \(seconds(o.totalHydrationSeconds))
+        rewinds       events \(o.rewindEvents) · size p50 \(o.rewindSizeP50Tokens) \
+        · p95 \(o.rewindSizeP95Tokens) · max \(o.maxRewindSizeTokens) tokens
         simulated LRU ttft-proxy p50 \(seconds(s.ttftProxyP50Seconds)) \
         · p95 \(seconds(s.ttftProxyP95Seconds)) · hit tokens \(s.totalHitTokens) \
         · hit requests \(s.hitRequestCount)/\(report.recordCount) \
@@ -160,9 +182,20 @@ nonisolated enum TraceReplayHarness {
     /// Nearest-rank percentile over an ascending-sorted sample; `0` for
     /// an empty sample.
     private static func percentile(_ sorted: [Double], _ q: Double) -> Double {
-        guard !sorted.isEmpty else { return 0 }
-        let rank = Int((q * Double(sorted.count)).rounded(.up))
-        return sorted[max(0, min(sorted.count - 1, rank - 1))]
+        guard let index = percentileIndex(count: sorted.count, q) else { return 0 }
+        return sorted[index]
+    }
+
+    /// Nearest-rank percentile over an ascending-sorted integer sample.
+    private static func intPercentile(_ sorted: [Int], _ q: Double) -> Int {
+        guard let index = percentileIndex(count: sorted.count, q) else { return 0 }
+        return sorted[index]
+    }
+
+    private static func percentileIndex(count: Int, _ q: Double) -> Int? {
+        guard count > 0 else { return nil }
+        let rank = Int((q * Double(count)).rounded(.up))
+        return max(0, min(count - 1, rank - 1))
     }
 
     // MARK: - Simulated RAM tier (pure-LRU baseline)

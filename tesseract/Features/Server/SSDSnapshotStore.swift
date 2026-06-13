@@ -1158,6 +1158,109 @@ extension SSDSnapshotStore {
         }
     }
 
+    /// Synchronously materialize a **Chain-Prefix Restore** point
+    /// (ADR-0012): compose only the owning chain's leading segments
+    /// covering `[0..point.boundaryOffset]` into a snapshot at the
+    /// boundary. Same Metal-affinity contract as `loadSync` — must run
+    /// inside `container.perform`. Strictly less work than a full-chain
+    /// hydration: fewer files read, fewer arrays materialized, and the
+    /// non-sliceable layers take the last *included* segment's copy —
+    /// the recurrent state exactly as of the boundary, written at that
+    /// historical leaf's own admission.
+    ///
+    /// Failure split, deliberate:
+    /// - Owner gone / boundary off the segment grid / fingerprint or
+    ///   partition gate: the *point* is stale, the chain (if any) may be
+    ///   fine — return `nil` without touching the owner. The caller
+    ///   clears the restore point; the next lookup degrades shallower.
+    /// - Read / decode failure: the leading segments are shared with the
+    ///   full chain, so the owner's own hydration would fail the same
+    ///   way — condemn the whole chain (`dropHydrationFailure`), which
+    ///   fires `onDrop(.hydrationFailure)` and eagerly clears the
+    ///   owner's tree ref *and* its dependent restore points.
+    nonisolated func loadSyncPrefix(
+        point: ChainPrefixRestorePoint,
+        expectedFingerprint: String
+    ) -> HybridCacheSnapshot? {
+        func missPoint(
+            _ reason: PrefixCacheDiagnostics.SSDMissReason,
+            _ message: @autoclosure () -> String
+        ) -> HybridCacheSnapshot? {
+            Log.agent.error(
+                "SSDSnapshotStore.loadSyncPrefix: \(message()) "
+                + "owner=\(point.ownerSnapshotID.prefix(8)) boundary=\(point.boundaryOffset)"
+            )
+            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDMissEvent(
+                id: point.ownerSnapshotID,
+                reason: reason
+            ))
+            return nil
+        }
+
+        let partitionFingerprint = ledger.partitionFingerprint(
+            digest: point.partitionDigest
+        )
+        guard let partitionFingerprint else {
+            return missPoint(
+                .partitionNotInManifest,
+                "partition not in manifest digest=\(point.partitionDigest)"
+            )
+        }
+        guard partitionFingerprint == expectedFingerprint else {
+            return missPoint(
+                .fingerprintMismatch,
+                "fingerprint mismatch partition=\(partitionFingerprint.prefix(8)) "
+                + "expected=\(expectedFingerprint.prefix(8))"
+            )
+        }
+
+        guard let prefixURLs = ledger.chainPrefixForHydration(
+            ownerID: point.ownerSnapshotID,
+            boundaryOffset: point.boundaryOffset
+        ) else {
+            return missPoint(
+                .notResident,
+                "owner gone or boundary off the segment grid"
+            )
+        }
+
+        var segmentData: [Data] = []
+        segmentData.reserveCapacity(prefixURLs.count)
+        for url in prefixURLs {
+            do {
+                segmentData.append(try Data(contentsOf: url, options: .mappedIfSafe))
+            } catch {
+                Log.agent.error(
+                    "SSDSnapshotStore.loadSyncPrefix: read failed error=\(error) "
+                    + "owner=\(point.ownerSnapshotID.prefix(8)) — condemning the chain"
+                )
+                PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDMissEvent(
+                    id: point.ownerSnapshotID, reason: .readFailed
+                ))
+                dropHydrationFailure(id: point.ownerSnapshotID)
+                return nil
+            }
+        }
+
+        do {
+            return try decodeSegmentChain(
+                segmentData,
+                tokenOffset: point.boundaryOffset,
+                checkpointType: point.checkpointType
+            )
+        } catch {
+            Log.agent.error(
+                "SSDSnapshotStore.loadSyncPrefix: decode failed error=\(error) "
+                + "owner=\(point.ownerSnapshotID.prefix(8)) — condemning the chain"
+            )
+            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDMissEvent(
+                id: point.ownerSnapshotID, reason: .decodeFailed
+            ))
+            dropHydrationFailure(id: point.ownerSnapshotID)
+            return nil
+        }
+    }
+
     /// Shared terminal branch for every `loadSync` failure path.
     /// Logs the `message`, emits an `ssdMiss(id:reason:)` diagnostic
     /// event so operators can correlate the hydration miss with the

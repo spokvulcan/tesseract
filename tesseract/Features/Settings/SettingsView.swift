@@ -161,6 +161,25 @@ struct RecordingSettingsSection: View {
     @State private var isRecordingHotkey = false
     @State private var isRecordingTTSHotkey = false
     @State private var isRecordingAgentHotkey = false
+    @State private var selectedAgentModelDeclaresPreserveThinking = false
+
+    private var selectedAgentModelStatus: ModelStatus {
+        container.modelDownloadManager.statuses[settings.selectedAgentModelID] ?? .notDownloaded
+    }
+
+    private func refreshSelectedAgentModelCapabilities() {
+        guard case .downloaded = selectedAgentModelStatus,
+              let directory = container.modelDownloadManager.modelPath(
+                  for: settings.selectedAgentModelID
+              )
+        else {
+            selectedAgentModelDeclaresPreserveThinking = false
+            return
+        }
+        selectedAgentModelDeclaresPreserveThinking =
+            ModelIdentity(directory: directory).declaredTemplateFlags
+            .contains(.preserveThinking)
+    }
 
     var body: some View {
         @Bindable var settings = settings
@@ -313,6 +332,25 @@ struct RecordingSettingsSection: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+
+                    if selectedAgentModelDeclaresPreserveThinking {
+                        Toggle("Preserve Thinking in Prompts", isOn: Binding(
+                            get: {
+                                settings.preserveThinkingRender(
+                                    modelID: settings.selectedAgentModelID
+                                )
+                            },
+                            set: {
+                                settings.setPreserveThinkingRender(
+                                    $0, modelID: settings.selectedAgentModelID
+                                )
+                            }
+                        ))
+                        Text("Keeps each turn's thinking in the prompt so follow-up requests reuse the cache instead of re-reading the conversation. Uses more context window. Applies to new conversations.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
 
@@ -388,6 +426,15 @@ struct RecordingSettingsSection: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            refreshSelectedAgentModelCapabilities()
+        }
+        .onChange(of: settings.selectedAgentModelID) {
+            refreshSelectedAgentModelCapabilities()
+        }
+        .onChange(of: selectedAgentModelStatus) {
+            refreshSelectedAgentModelCapabilities()
+        }
 
         .navigationTitle("Preferences")
     }

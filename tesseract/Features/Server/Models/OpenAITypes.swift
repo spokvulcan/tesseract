@@ -33,6 +33,11 @@ nonisolated enum OpenAI {
         /// Tesseract vendor extension: controls the thinking-loop safeguard.
         /// Non-standard — clients that don't know about it can omit it.
         var thinking_safeguard: ThinkingSafeguard?
+        /// Per-request chat-template kwargs (issue #98), e.g.
+        /// `{"preserve_thinking": true}`. Only boolean flags the loaded
+        /// template declares are honored — everything else is ignored
+        /// without erroring the request (see `TemplateRenderContext`).
+        var chat_template_kwargs: ChatTemplateKwargs?
 
         nonisolated var effectiveMaxTokens: Int? {
             max_completion_tokens ?? max_tokens
@@ -55,6 +60,28 @@ nonisolated enum OpenAI {
         var max_line_repeats: Int?
         /// Text injected after the safe prefix when the safeguard fires.
         var injection_message: String?
+    }
+
+    /// Lenient carrier for `chat_template_kwargs`: keeps the boolean flags
+    /// and silently drops values of any other JSON type, so a client sending
+    /// kwargs we don't model (strings, numbers, objects) never 400s the
+    /// request. The allowlisting against template-declared flags happens
+    /// later, in `TemplateRenderContext.resolve`.
+    struct ChatTemplateKwargs: Codable, Sendable, Equatable {
+        let booleanFlags: [String: Bool]
+
+        init(booleanFlags: [String: Bool]) {
+            self.booleanFlags = booleanFlags
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try [String: AnyCodableValue](from: decoder)
+            self.booleanFlags = values.compactMapValues(\.boolValue)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            try booleanFlags.encode(to: encoder)
+        }
     }
 
     enum StopSequence: Codable, Sendable {

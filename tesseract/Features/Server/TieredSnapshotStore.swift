@@ -84,6 +84,14 @@ final class TieredSnapshotStore: SnapshotStore {
     private var ssdStore: SSDSnapshotStore?
     private var pendingRefsByID: [String: PendingRef] = [:]
     private var committedRefsByID: [String: CommittedRefOwner] = [:]
+    /// Owner chain head → the nodes holding **Chain-Prefix Restore**
+    /// points into its chain (ADR-0012). The eager-clear counterpart of
+    /// `committedRefsByID` for the chain-side backing channel: when the
+    /// owner dies (explicit delete, LRU cut, hydration failure) its
+    /// dependent points are cleared through the same plumbing; when a
+    /// later fold consumes the owner, they re-own transitively. Weak on
+    /// both ends, same rationale as `CommittedRefOwner`.
+    private var chainPrefixDependentsByOwnerID: [String: [CommittedRefOwner]] = [:]
 
     // MARK: - Init
 
@@ -168,6 +176,16 @@ final class TieredSnapshotStore: SnapshotStore {
     func makeSSDHitContext(ref: SnapshotRef, node: RadixTreeNode) -> SSDHitContext? {
         guard let ssdStore else { return nil }
         return SSDHitContext(snapshotRef: ref, ssdStore: ssdStore, node: node)
+    }
+
+    /// Build the off-main hydration context for a **Chain-Prefix
+    /// Restore** hit (ADR-0012), or `nil` when the SSD tier is disabled.
+    /// Same shape and isolation contract as `makeSSDHitContext`.
+    func makeChainPrefixHitContext(
+        point: ChainPrefixRestorePoint, node: RadixTreeNode
+    ) -> ChainPrefixHitContext? {
+        guard let ssdStore else { return nil }
+        return ChainPrefixHitContext(point: point, ssdStore: ssdStore, node: node)
     }
 
     // MARK: - SSD lifecycle
@@ -313,9 +331,12 @@ final class TieredSnapshotStore: SnapshotStore {
     /// Remove a snapshot's SSD backing immediately. Used by leaf
     /// supersession when a newly stored descendant leaf makes an older
     /// ancestor leaf obsolete. Safe for pending and committed refs.
+    /// Deleting a chain head also clears every restore point into its
+    /// chain — the files are about to be unlinked.
     func deleteSnapshot(snapshotID: String) {
         pendingRefsByID.removeValue(forKey: snapshotID)
         committedRefsByID.removeValue(forKey: snapshotID)
+        clearChainPrefixDependents(ownerID: snapshotID)
         ssdStore?.deleteSnapshot(snapshotID: snapshotID)
     }
 
@@ -396,44 +417,172 @@ final class TieredSnapshotStore: SnapshotStore {
 
         // Even when the extension's own ref was superseded mid-window
         // (`.ignored` above), the fold is durable and the base entry is
-        // gone — discard the base's tree ref unconditionally so no
+        // gone — convert the base's tree ref unconditionally so no
         // stale committed ref lingers until a failed hydration.
         if let baseID = info.consumedBaseID {
-            discardConsumedBaseRef(
+            convertConsumedBaseRef(
                 baseID: baseID,
+                newOwnerID: info.snapshotID,
                 below: pending.node,
                 tree: pending.tree
             )
         }
     }
 
-    /// Find the ancestor node still carrying the consumed base's ref
-    /// and discard it through the tree's explicit-delete seam. The base
-    /// is a strict ancestor of the extension's node by construction
-    /// (same token path, shorter offset); ref-bearing nodes keep their
-    /// identity across path compression, so the parent walk finds it.
-    /// Not finding it is legitimate — an explicit delete or hydration
-    /// failure already cleared the node mid-window — and a no-op.
-    private func discardConsumedBaseRef(
+    /// The fold's tree-side ownership conversion (ADR-0012). Find the
+    /// ancestor node still carrying the consumed base's ref and convert
+    /// it into a **Chain-Prefix Restore** point owned by the new chain
+    /// head — the base's bytes live on as the head's leading segments,
+    /// so the boundary stays restorable instead of going dark. Points
+    /// previously owned by the base re-own transitively: the head
+    /// inherited the base's whole chain, so every boundary it covered
+    /// stays covered.
+    ///
+    /// The base is a strict ancestor of the extension's node by
+    /// construction (same token path, shorter offset); ref-bearing nodes
+    /// keep their identity across path compression, so the parent walk
+    /// finds it. Not finding it is legitimate — an explicit delete or
+    /// hydration failure already cleared the node mid-window — and a
+    /// no-op.
+    private func convertConsumedBaseRef(
         baseID: String,
+        newOwnerID: String,
         below node: RadixTreeNode,
         tree: TokenRadixTree
     ) {
         // The fold consumed the base's manifest entry without a writer
         // drop callback, so its committed-index entry is pruned here.
         committedRefsByID.removeValue(forKey: baseID)
+
+        // Transitive re-point: boundaries that resolved through the
+        // base's chain now resolve through the new head's.
+        if let dependents = chainPrefixDependentsByOwnerID.removeValue(forKey: baseID) {
+            var reowned: [CommittedRefOwner] = []
+            for dependent in dependents {
+                guard let dependentNode = dependent.node,
+                      let dependentTree = dependent.tree,
+                      dependentNode.chainPrefixRestorePoint?.ownerSnapshotID == baseID
+                else { continue }
+                dependentTree.reownChainPrefixRestorePoint(
+                    node: dependentNode, to: newOwnerID
+                )
+                reowned.append(dependent)
+            }
+            if !reowned.isEmpty {
+                chainPrefixDependentsByOwnerID[newOwnerID, default: []]
+                    .append(contentsOf: reowned)
+            }
+        }
+
         var current = node.parent
         while let ancestor = current {
             if ancestor.state.refID == baseID {
-                tree.discardSnapshotRefAfterExplicitDelete(node: ancestor)
+                tree.convertConsumedBaseToChainPrefixRestorePoint(
+                    node: ancestor, ownerSnapshotID: newOwnerID
+                )
+                chainPrefixDependentsByOwnerID[newOwnerID, default: []]
+                    .append(CommittedRefOwner(node: ancestor, tree: tree))
                 return
             }
             current = ancestor.parent
         }
         Log.agent.debug(
-            "TieredSnapshotStore.discardConsumedBaseRef: base=\(baseID) "
+            "TieredSnapshotStore.convertConsumedBaseRef: base=\(baseID) "
             + "not on the ancestor path (already cleared)"
         )
+    }
+
+    /// Warm start's reconstruction arm (ADR-0012, issue #99): re-attach
+    /// a **Chain-Prefix Restore** point recovered from a restored chain
+    /// head's inherited segments and index it for owner-death clearing —
+    /// the same dependents channel the fold-time conversion feeds. The
+    /// first point at a path wins, and a node already backed in its own
+    /// right is skipped: a point there could only duplicate the
+    /// cheaper direct hit.
+    func restoreChainPrefixRestorePoint(
+        point: ChainPrefixRestorePoint,
+        path: [Int],
+        partitionKey: CachePartitionKey
+    ) {
+        let tree = getOrCreateTree(for: partitionKey)
+        let node = tree.insertPath(tokens: path)
+        guard node.chainPrefixRestorePoint == nil, case .empty = node.state else {
+            Log.agent.debug(
+                "TieredSnapshotStore.restoreChainPrefixRestorePoint: node at "
+                + "boundary=\(point.boundaryOffset) already "
+                + "\(node.chainPrefixRestorePoint != nil ? "pointed" : node.state.label) "
+                + "— keeping the first owner"
+            )
+            return
+        }
+        tree.attachChainPrefixRestorePoint(node: node, point: point)
+        chainPrefixDependentsByOwnerID[point.ownerSnapshotID, default: []]
+            .append(CommittedRefOwner(node: node, tree: tree))
+    }
+
+    /// Batch form for one restored chain head. Splits every inherited
+    /// boundary in one tree walk, then attaches points only to empty,
+    /// point-less nodes so direct snapshot refs still win.
+    func restoreChainPrefixRestorePoints(
+        points: [ChainPrefixRestorePoint],
+        ownerPath: [Int],
+        partitionKey: CachePartitionKey
+    ) {
+        let tree = getOrCreateTree(for: partitionKey)
+        let nodesByOffset = tree.ensurePrefixNodes(
+            tokens: ownerPath,
+            offsets: points.map(\.boundaryOffset)
+        )
+        for point in points {
+            guard let node = nodesByOffset[point.boundaryOffset],
+                  node.chainPrefixRestorePoint == nil,
+                  case .empty = node.state
+            else {
+                Log.agent.debug(
+                    "TieredSnapshotStore.restoreChainPrefixRestorePoints: node at "
+                    + "boundary=\(point.boundaryOffset) already backed — keeping direct owner"
+                )
+                continue
+            }
+            tree.attachChainPrefixRestorePoint(node: node, point: point)
+            chainPrefixDependentsByOwnerID[point.ownerSnapshotID, default: []]
+                .append(CommittedRefOwner(node: node, tree: tree))
+        }
+    }
+
+    /// Eagerly clear every **Chain-Prefix Restore** point into a dead
+    /// chain — the dependents' counterpart of `clearCommittedResidentRef`.
+    /// Dead weak owners and points that already re-owned elsewhere are
+    /// legitimate no-ops.
+    private func clearChainPrefixDependents(ownerID: String) {
+        guard let dependents = chainPrefixDependentsByOwnerID.removeValue(forKey: ownerID)
+        else { return }
+        for dependent in dependents {
+            guard let node = dependent.node,
+                  let tree = dependent.tree,
+                  node.chainPrefixRestorePoint?.ownerSnapshotID == ownerID
+            else { continue }
+            tree.clearChainPrefixRestorePoint(node: node)
+        }
+    }
+
+    /// Clear one restore point and prune its owner index entry. Used by
+    /// point-local hydration failures where the owning chain may still be
+    /// valid and should not have all dependents cleared.
+    func clearChainPrefixRestorePoint(node: RadixTreeNode, tree: TokenRadixTree) {
+        guard let ownerID = node.chainPrefixRestorePoint?.ownerSnapshotID else { return }
+        if var dependents = chainPrefixDependentsByOwnerID[ownerID] {
+            dependents.removeAll { dependent in
+                guard let dependentNode = dependent.node else { return true }
+                return dependentNode === node
+            }
+            if dependents.isEmpty {
+                chainPrefixDependentsByOwnerID.removeValue(forKey: ownerID)
+            } else {
+                chainPrefixDependentsByOwnerID[ownerID] = dependents
+            }
+        }
+        tree.clearChainPrefixRestorePoint(node: node)
     }
 
     /// Writer drop callback. Three legitimate call paths reach here:
@@ -487,7 +636,10 @@ final class TieredSnapshotStore: SnapshotStore {
     /// superseded the ref mid-hop) are all legitimate no-ops: the ref
     /// this drop names is already off the node. State 4 (body present)
     /// settles to RAM-only; state 5 empties and the tree self-heals.
+    /// A dead chain head's dependent restore points clear with it —
+    /// the same eager backing-loss semantics, on the chain-side channel.
     private func clearCommittedResidentRef(id: String, reason: SSDDropReason) {
+        clearChainPrefixDependents(ownerID: id)
         guard let owner = committedRefsByID.removeValue(forKey: id),
               let node = owner.node,
               let tree = owner.tree,
@@ -538,6 +690,19 @@ final class TieredSnapshotStore: SnapshotStore {
 /// see `docs/adr/0001-ssd-hydration-handle-stays-off-main.md`.
 struct SSDHitContext: @unchecked Sendable {
     let snapshotRef: SnapshotRef
+    let ssdStore: SSDSnapshotStore
+    let node: RadixTreeNode
+}
+
+// MARK: - ChainPrefixHitContext
+
+/// Handle that lets `LLMActor` hydrate a **Chain-Prefix Restore** hit
+/// (ADR-0012) off the MainActor — the chain-side sibling of
+/// `SSDHitContext`, with the identical isolation contract: the node is
+/// MainActor-owned, only the value-type `point` is read off-main, and
+/// the caller hops back to MainActor to promote or clear.
+struct ChainPrefixHitContext: @unchecked Sendable {
+    let point: ChainPrefixRestorePoint
     let ssdStore: SSDSnapshotStore
     let node: RadixTreeNode
 }

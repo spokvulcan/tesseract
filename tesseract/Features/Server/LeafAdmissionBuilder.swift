@@ -109,18 +109,22 @@ nonisolated enum LeafAdmissionBuilder {
         storedConversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         tokenizer: any Tokenizer,
-        keySpace: CacheKeySpace
+        keySpace: CacheKeySpace,
+        renderContext: TemplateRenderContext = .canonical
     ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
         let baseMessages = storedConversation.promptMessages
+        let probeContext = renderContext.additionalContext(
+            merging: ["add_generation_prompt": false]
+        )
         let storedTokens = try tokenizer.applyChatTemplate(
             messages: baseMessages,
             tools: toolSpecs,
-            additionalContext: ["add_generation_prompt": false]
+            additionalContext: probeContext
         )
         let continuationTokens = try tokenizer.applyChatTemplate(
             messages: baseMessages + [continuation.probeMessage],
             tools: toolSpecs,
-            additionalContext: ["add_generation_prompt": false]
+            additionalContext: probeContext
         )
 
         let common = zip(storedTokens, continuationTokens).prefix { $0 == $1 }.count
@@ -202,7 +206,8 @@ nonisolated enum LeafAdmissionBuilder {
         storedConversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         tokenizer: any Tokenizer,
-        keySpace: CacheKeySpace
+        keySpace: CacheKeySpace,
+        renderContext: TemplateRenderContext
     ) -> Probe {
         let probe: Result<[Int], CacheKeySpace.TranslationFailure>?
         do {
@@ -211,7 +216,8 @@ nonisolated enum LeafAdmissionBuilder {
                 storedConversation: storedConversation,
                 toolSpecs: toolSpecs,
                 tokenizer: tokenizer,
-                keySpace: keySpace
+                keySpace: keySpace,
+                renderContext: renderContext
             )
         } catch {
             return .skip(.tokenizationFailed(error: error.localizedDescription))
@@ -244,6 +250,7 @@ nonisolated enum LeafAdmissionBuilder {
         transientBoundary: HybridCacheSnapshot?,
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
+        renderContext: TemplateRenderContext = .canonical,
         resolveBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot?
     ) async -> LeafCapturePlan {
         switch mode {
@@ -260,7 +267,8 @@ nonisolated enum LeafAdmissionBuilder {
                 storedConversation: storedConversation,
                 toolSpecs: toolSpecs,
                 tokenizer: tokenizer,
-                keySpace: keySpace
+                keySpace: keySpace,
+                renderContext: renderContext
             ) {
             case .tokens(let translated): toolTokens = translated
             case .skip(let reason): return .skip(reason: reason)
@@ -292,7 +300,8 @@ nonisolated enum LeafAdmissionBuilder {
                 storedConversation: storedConversation,
                 toolSpecs: toolSpecs,
                 tokenizer: tokenizer,
-                keySpace: keySpace
+                keySpace: keySpace,
+                renderContext: renderContext
             ) {
             case .tokens(let translated): canonicalTokens = translated
             case .skip(let reason): return .skip(reason: reason)

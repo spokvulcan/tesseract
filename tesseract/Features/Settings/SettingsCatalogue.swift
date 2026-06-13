@@ -69,6 +69,15 @@ enum SettingsCatalogue {
     static let webAccessEnabled = Setting.bool("webAccessEnabled", default: true)
     static let visionModeEnabled = Setting.bool("visionModeEnabled", default: false)
 
+    /// Per-model opt-in for the **Preserve-Thinking Render** (issue #98).
+    /// Keyed by model ID because the capability is per chat template; the UI
+    /// surfaces the toggle only for models whose template declares the flag
+    /// (`ModelIdentity.declaredTemplateFlags`). The one dynamic-key setting in
+    /// the catalogue — a fixed-key declaration cannot enumerate model IDs.
+    static func preserveThinkingRender(modelID: String) -> Setting<Bool> {
+        Setting.bool("preserveThinkingRender." + modelID, default: false)
+    }
+
     // MARK: - Server
 
     static let isServerEnabled = Setting.bool("isServerEnabled", default: false)

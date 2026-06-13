@@ -30,6 +30,21 @@ nonisolated enum ServerInferenceProgressEvent: Sendable, Equatable {
 nonisolated struct ServerInferenceModelState: Sendable, Equatable {
     let modelID: String
     let visionMode: Bool
+    /// The loaded model's template-declared render flags
+    /// (`ModelIdentity.declaredTemplateFlags`) — the completion handler's
+    /// allowlist for `chat_template_kwargs` and the per-model
+    /// **Preserve-Thinking Render** setting (issue #98).
+    let declaredTemplateFlags: Set<TemplateRenderFlag>
+
+    init(
+        modelID: String,
+        visionMode: Bool,
+        declaredTemplateFlags: Set<TemplateRenderFlag> = []
+    ) {
+        self.modelID = modelID
+        self.visionMode = visionMode
+        self.declaredTemplateFlags = declaredTemplateFlags
+    }
 
     static let unavailable = ServerInferenceModelState(
         modelID: "",
@@ -88,23 +103,51 @@ nonisolated struct ServerInferenceRequest: Sendable {
     }
 
     nonisolated struct ChatInput: Sendable {
+        nonisolated struct PrefixCacheInput: Sendable {
+            let conversation: HTTPPrefixCacheConversation
+            let renderContext: TemplateRenderContext
+
+            init(
+                conversation: HTTPPrefixCacheConversation,
+                renderContext: TemplateRenderContext
+            ) {
+                precondition(
+                    conversation.templateContextDigest == renderContext.digest,
+                    "prefix-cache conversation digest must match render context"
+                )
+                self.conversation = conversation
+                self.renderContext = renderContext
+            }
+        }
+
         let systemPrompt: String
         let messages: [LLMMessage]
         let toolSpecs: [ToolSpec]?
-        let prefixCacheConversation: HTTPPrefixCacheConversation?
+        let prefixCacheInput: PrefixCacheInput?
         let progressHandler: ServerInferenceProgressHandler?
+
+        var prefixCacheConversation: HTTPPrefixCacheConversation? {
+            prefixCacheInput?.conversation
+        }
+
+        var templateRenderContext: TemplateRenderContext {
+            prefixCacheInput?.renderContext ?? .canonical
+        }
 
         init(
             systemPrompt: String,
             messages: [LLMMessage],
             toolSpecs: [ToolSpec]?,
             prefixCacheConversation: HTTPPrefixCacheConversation?,
+            templateRenderContext: TemplateRenderContext = .canonical,
             progressHandler: ServerInferenceProgressHandler? = nil
         ) {
             self.systemPrompt = systemPrompt
             self.messages = messages
             self.toolSpecs = toolSpecs
-            self.prefixCacheConversation = prefixCacheConversation
+            self.prefixCacheInput = prefixCacheConversation.map {
+                PrefixCacheInput(conversation: $0, renderContext: templateRenderContext)
+            }
             self.progressHandler = progressHandler
         }
     }
@@ -135,6 +178,7 @@ nonisolated protocol ServerCompletionStarting: AnyObject, Sendable {
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext,
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart
 }

@@ -47,6 +47,14 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// generation-prompt section.
     let promptStartsThinking: Bool
 
+    /// The opt-in render flags the chat template natively declares — the
+    /// subset of `TemplateRenderContext`'s known flags the template text
+    /// actually references (issue #98). The capability gate for the
+    /// **Preserve-Thinking Render**: introspection, never model name, so a
+    /// future template that adds `preserve_thinking` needs no code change
+    /// and Qwen3.5-PARO (which lacks it) is naturally excluded.
+    let declaredTemplateFlags: Set<TemplateRenderFlag>
+
     /// FLOP/state-size profile the eviction policy scores against. **Total**:
     /// a non-Qwen3.5 or unparseable config yields `ModelFlopProfile.fallback`,
     /// never `nil`, so the single consumer (`EvictionPolicy`) never handles an
@@ -80,6 +88,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         self.isMoE = modelType == "qwen3_5_moe"
         self.toolCallFormat = Self.interpretToolCallFormat(modelType: modelType)
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
+        self.declaredTemplateFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
         self.imageKeying = Self.interpretImageKeying(configJSON: configJSON)
     }
@@ -112,6 +121,17 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
               let genPromptRange = chatTemplate.range(of: "add_generation_prompt")
         else { return false }
         return chatTemplate[genPromptRange.upperBound...].contains("<think>")
+    }
+
+    /// A flag is "declared" when the template text references it — Jinja
+    /// templates read their kwargs by name, so a flag the text never mentions
+    /// cannot change the render. Only known flags are probed; arbitrary
+    /// kwargs never become capabilities.
+    private static func interpretDeclaredTemplateFlags(
+        chatTemplate: String?
+    ) -> Set<TemplateRenderFlag> {
+        guard let chatTemplate else { return [] }
+        return Set(TemplateRenderFlag.allCases.filter { chatTemplate.contains($0.rawValue) })
     }
 
     /// Qwen3.5 hybrid profile from `config.json` (the VLM variant nests

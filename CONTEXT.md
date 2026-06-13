@@ -349,6 +349,17 @@ leaf, so the next user turn restores at full depth instead of the rewind point.
 _Avoid_: cache warming (this targets one known future path, not general
 pre-population), background generation (it prefills, never decodes).
 
+**Rewind Telemetry**:
+The three numbers that make a **Think-Strip Rewind** observable without
+reproducing it: the *divergence offset* (how far the request shared the
+deepest cached path before forking), the *restore floor* (where the restore
+actually landed — a **Chain-Prefix Restore** point at-or-below the divergence),
+and their gap, the *rewind size* (the re-prefill the rewind forced). Carried
+per request in the **Completion Trace Log** and rolled up on the prompt-cache
+dashboard, so a regression shows as a rising rewind count or size.
+_Avoid_: cache miss (a rewind is a partial hit at a deeper-than-zero floor),
+latency spike (the symptom, not the measured cause).
+
 **Preserve-Thinking Render**:
 An opt-in render mode for templates that natively declare it (a template
 context flag) keeping `<think>` blocks in every assistant turn, so the render

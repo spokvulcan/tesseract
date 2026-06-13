@@ -26,7 +26,8 @@ final class ServerInferenceService {
             arbiter.loadedLLMState.map {
                 ServerInferenceModelState(
                     modelID: $0.modelID,
-                    visionMode: $0.visionMode
+                    visionMode: $0.visionMode,
+                    declaredTemplateFlags: arbiter.loadedDeclaredTemplateFlags
                 )
             }
         }
@@ -90,6 +91,7 @@ final class ServerInferenceService {
                         conversation: conversation,
                         toolSpecs: chat.toolSpecs,
                         parameters: request.parameters,
+                        renderContext: chat.templateRenderContext,
                         progressHandler: chat.progressHandler
                     )
                     Log.server.info(

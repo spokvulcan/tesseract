@@ -266,6 +266,27 @@ final class SettingsManager {
         didSet { SettingsCatalogue.visionModeEnabled.write(visionModeEnabled, to: store) }
     }
 
+    // MARK: - Preserve-Thinking Render (issue #98)
+
+    /// Per-model **Preserve-Thinking Render** opt-in. Method-based rather
+    /// than a stored facade property because the key is dynamic (one per
+    /// model ID); reads/writes go straight through to the store. The
+    /// `preserveThinkingRenderRevision` counter gives SwiftUI something to
+    /// observe so a toggle bound through these methods re-renders.
+    private(set) var preserveThinkingRenderRevision = 0
+
+    func preserveThinkingRender(modelID: String) -> Bool {
+        _ = preserveThinkingRenderRevision
+        return SettingsCatalogue.preserveThinkingRender(modelID: modelID).load(from: store)
+    }
+
+    func setPreserveThinkingRender(_ enabled: Bool, modelID: String) {
+        let setting = SettingsCatalogue.preserveThinkingRender(modelID: modelID)
+        guard setting.load(from: store) != enabled else { return }
+        setting.write(enabled, to: store)
+        preserveThinkingRenderRevision += 1
+    }
+
     // MARK: - Server Settings
 
     var isServerEnabled: Bool {

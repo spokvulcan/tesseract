@@ -51,6 +51,12 @@ final class AgentEngine {
     /// Whether the loaded model's template starts generation inside a `<think>` block.
     private(set) var promptStartsThinking = false
 
+    /// The loaded model's template-declared render flags
+    /// (`ModelIdentity.declaredTemplateFlags`) — cached at load like
+    /// `promptStartsThinking` so the server dispatcher can read it
+    /// synchronously on the MainActor (issue #98). Empty when unloaded.
+    private(set) var declaredTemplateFlags: Set<TemplateRenderFlag> = []
+
     /// The shared inference actor. Created by the composition root and
     /// injected so the server dispatcher can reach the same actor (ADR-0006);
     /// benchmarks and unit tests rely on the `init` default instead.
@@ -146,6 +152,7 @@ final class AgentEngine {
 
             agentTokenizer = tokenizer
             promptStartsThinking = startsThinking
+            declaredTemplateFlags = await llmActor.loadedDeclaredTemplateFlags()
             isModelLoaded = true
             loadingStatus = ""
             Log.agent.info("Model loaded — promptStartsThinking=\(promptStartsThinking)")
@@ -286,6 +293,7 @@ final class AgentEngine {
         cancelGeneration()
         agentTokenizer = nil
         promptStartsThinking = false
+        declaredTemplateFlags = []
         isModelLoaded = false
         loadingStatus = ""
         unloadTask = Task { [llmActor] in

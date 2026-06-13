@@ -3,12 +3,17 @@ import MLXLMCommon
 
 /// Partition key for isolating radix trees by runtime configuration.
 ///
-/// Tool/template digests are intentionally NOT part of the partition key:
+/// Tool/system digests are intentionally NOT part of the partition key:
 /// different tools/context → different tokens → different radix paths →
-/// naturally isolated within one partition.
+/// naturally isolated within one partition. The **template-context digest**
+/// is the one deliberate exception (issue #98): render-mode flags like the
+/// **Preserve-Thinking Render** change how *the same* conversation renders
+/// from the first assistant turn on, and the canonical-leaf machinery
+/// assumes one render mode per partition — so toggling a flag lands in a
+/// fresh partition and mixed renders never share one.
 ///
 /// `Comparable` so partition iteration can produce a deterministic order
-/// (modelID → kvBits → kvGroupSize → modelFingerprint)
+/// (modelID → kvBits → kvGroupSize → modelFingerprint → templateContextDigest)
 /// for stable tie-break behavior in eviction.
 nonisolated struct CachePartitionKey: Hashable, Sendable, Comparable {
     let modelID: String
@@ -19,22 +24,34 @@ nonisolated struct CachePartitionKey: Hashable, Sendable, Comparable {
     /// under the same `modelID` cannot surface stale persisted snapshots.
     /// `nil` for RAM-only test fixtures.
     let modelFingerprint: String?
+    /// The request's `TemplateRenderContext.digest` (issue #98). Defaults to
+    /// the canonical render's digest so every existing call site — and every
+    /// partition persisted before the field existed — keeps its identity.
+    let templateContextDigest: String
 
     nonisolated init(
         modelID: String,
         kvBits: Int?,
         kvGroupSize: Int,
-        modelFingerprint: String? = nil
+        modelFingerprint: String? = nil,
+        templateContextDigest: String = HTTPPrefixCacheConversation.defaultTemplateContextDigest
     ) {
         self.modelID = modelID
         self.kvBits = kvBits
         self.kvGroupSize = kvGroupSize
         self.modelFingerprint = modelFingerprint
+        self.templateContextDigest = templateContextDigest
     }
 
     static func < (lhs: CachePartitionKey, rhs: CachePartitionKey) -> Bool {
-        let lhsHead = (lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize, lhs.modelFingerprint ?? "")
-        let rhsHead = (rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize, rhs.modelFingerprint ?? "")
+        let lhsHead = (
+            lhs.modelID, lhs.kvBits ?? -1, lhs.kvGroupSize,
+            lhs.modelFingerprint ?? "", lhs.templateContextDigest
+        )
+        let rhsHead = (
+            rhs.modelID, rhs.kvBits ?? -1, rhs.kvGroupSize,
+            rhs.modelFingerprint ?? "", rhs.templateContextDigest
+        )
         return lhsHead < rhsHead
     }
 }
@@ -153,12 +170,20 @@ final class PrefixCacheManager {
         /// entry. `nil` for plain RAM-only evictions.
         let bodyDroppedSnapshotRefID: String?
 
+        /// Non-nil when the ref-less victim node carried a **Chain-Prefix
+        /// Restore** point (ADR-0012): the owning chain's head ID. The
+        /// node stays reachable and re-hydrates from the chain's leading
+        /// segments, so the drop is recovered, not terminal.
+        let chainPrefixOwnerID: String?
+
         /// Recovered vs terminal — the one classification rule, shared
         /// by the manager's cumulative counters and the per-request
-        /// tallies: a surviving ref means the node stays hittable (the
-        /// next hit pays hydration); a ref-less drop is a terminal loss
-        /// (the next hit pays full re-prefill).
-        nonisolated var isTerminal: Bool { bodyDroppedSnapshotRefID == nil }
+        /// tallies: a surviving ref or chain-prefix point means the node
+        /// stays hittable (the next hit pays hydration); a backing-less
+        /// drop is a terminal loss (the next hit pays full re-prefill).
+        nonisolated var isTerminal: Bool {
+            bodyDroppedSnapshotRefID == nil && chainPrefixOwnerID == nil
+        }
 
         nonisolated init(
             strategy: Strategy,
@@ -170,7 +195,8 @@ final class PrefixCacheManager {
             normalizedRecency: Double?,
             normalizedFlopEfficiency: Double?,
             utility: Double?,
-            bodyDroppedSnapshotRefID: String? = nil
+            bodyDroppedSnapshotRefID: String? = nil,
+            chainPrefixOwnerID: String? = nil
         ) {
             self.strategy = strategy
             self.offset = offset
@@ -182,6 +208,7 @@ final class PrefixCacheManager {
             self.normalizedFlopEfficiency = normalizedFlopEfficiency
             self.utility = utility
             self.bodyDroppedSnapshotRefID = bodyDroppedSnapshotRefID
+            self.chainPrefixOwnerID = chainPrefixOwnerID
         }
     }
 
@@ -299,6 +326,11 @@ final class PrefixCacheManager {
         /// `container.perform`, then promotes the node back to state 4
         /// on MainActor.
         case ssdHit(SSDHitContext)
+        /// Body absent, no own ref, but a **Chain-Prefix Restore** point
+        /// (ADR-0012). LLMActor hydrates via `ssdStore.loadSyncPrefix(...)`
+        /// inside `container.perform` — composing only the owning chain's
+        /// leading segments — then promotes the body on MainActor.
+        case chainPrefixHit(ChainPrefixHitContext)
         case missNoEntries
         case missNoSnapshotInPrefix
 
@@ -308,6 +340,8 @@ final class PrefixCacheManager {
                 "hit(\(type) at \(offset)/\(total))"
             case .ssdHit(let ctx):
                 "ssdHit(\(ctx.snapshotRef.checkpointType) at \(ctx.snapshotRef.tokenOffset), id=\(ctx.snapshotRef.snapshotID.prefix(8)))"
+            case .chainPrefixHit(let ctx):
+                "chainPrefixHit(\(ctx.point.checkpointType) at \(ctx.point.boundaryOffset), owner=\(ctx.point.ownerSnapshotID.prefix(8)))"
             case .missNoEntries:
                 "miss(no entries)"
             case .missNoSnapshotInPrefix:
@@ -364,26 +398,40 @@ final class PrefixCacheManager {
         }
 
         // State 5 — body absent, committed ref present. We reach here only
-        // after the body branch returned, so the node is body-less; the
-        // only body-less *hittable* state `findBestSnapshot` returns is
-        // `.ssdOnly` (pending refs are filtered out), so the pattern match
-        // is total for this branch. `makeSSDHitContext` returns non-nil
-        // because the ref could only have been assigned through the
-        // admission path, which requires the SSD tier to be enabled.
-        guard case .ssdOnly(let ref) = node.state,
-              let context = store.makeSSDHitContext(ref: ref, node: node) else {
+        // after the body branch returned, so the node is body-less.
+        // `makeSSDHitContext` returns non-nil because the ref could only
+        // have been assigned through the admission path, which requires
+        // the SSD tier to be enabled.
+        if case .ssdOnly(let ref) = node.state,
+           let context = store.makeSSDHitContext(ref: ref, node: node) {
             return LookupResult(
-                snapshot: nil, partitionKey: partitionKey,
-                snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
-                reason: .missNoSnapshotInPrefix
+                snapshot: nil,
+                partitionKey: partitionKey,
+                snapshotTokenOffset: ref.tokenOffset,
+                sharedPrefixLength: treeMatchDepth,
+                reason: .ssdHit(context)
             )
         }
+
+        // Body-less, no own committed ref — the remaining hittable channel
+        // is a **Chain-Prefix Restore** point (ADR-0012): the boundary is
+        // backed by the owning chain's leading segments. An own ref always
+        // wins over a point (checked above); both hydrate on demand.
+        if let point = node.chainPrefixRestorePoint,
+           let context = store.makeChainPrefixHitContext(point: point, node: node) {
+            return LookupResult(
+                snapshot: nil,
+                partitionKey: partitionKey,
+                snapshotTokenOffset: point.boundaryOffset,
+                sharedPrefixLength: treeMatchDepth,
+                reason: .chainPrefixHit(context)
+            )
+        }
+
         return LookupResult(
-            snapshot: nil,
-            partitionKey: partitionKey,
-            snapshotTokenOffset: ref.tokenOffset,
-            sharedPrefixLength: treeMatchDepth,
-            reason: .ssdHit(context)
+            snapshot: nil, partitionKey: partitionKey,
+            snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
+            reason: .missNoSnapshotInPrefix
         )
     }
 
@@ -788,12 +836,17 @@ final class PrefixCacheManager {
     /// manifest + `currentSSDBytes`, so without this the loser's file and
     /// manifest entry would linger, never hittable, inflating the SSD
     /// budget until an unrelated LRU cut happened to evict it.
+    /// Returns whether the ref landed on the tree — `false` means the
+    /// collision path dropped (and reclaimed) the descriptor, so the
+    /// caller must not build anything else on it (issue #99: no restore
+    /// points for a dropped owner).
+    @discardableResult
     func restoreSnapshotRef(
         path: [Int],
         snapshotRef: SnapshotRef,
         partitionKey: CachePartitionKey,
         lastAccessTime: ContinuousClock.Instant
-    ) {
+    ) -> Bool {
         let tree = store.getOrCreateTree(for: partitionKey)
         let node = tree.insertPath(tokens: path)
         guard case .empty = node.state else {
@@ -804,10 +857,59 @@ final class PrefixCacheManager {
                 + "reclaiming the dropped descriptor's SSD backing"
             )
             store.deleteSnapshot(snapshotID: snapshotRef.snapshotID)
-            return
+            return false
         }
         store.restoreCommittedRef(node: node, tree: tree, ref: snapshotRef)
         node.lastAccessTime = lastAccessTime
+        return true
+    }
+
+    /// Reconstruct the **Chain-Prefix Restore** points of one restored
+    /// chain head (ADR-0012, issue #99): every inherited-segment boundary
+    /// was a historical leaf extent the commit-time fold consumed, so each
+    /// gets a point owned by the head — the restore floor survives the
+    /// restart. `prefixBytes` accumulates the shallow→deep segment sizes,
+    /// matching the consumed base's chain total the in-session conversion
+    /// records. Both warm-start paths (manifest load and directory-walk
+    /// rebuild) arrive here with already-validated descriptors; condemned
+    /// chains never reach this point.
+    private func restoreChainPrefixRestorePoints(
+        descriptor: PersistedSnapshotDescriptor,
+        checkpointType: HybridCacheSnapshot.CheckpointType,
+        partitionKey: CachePartitionKey
+    ) {
+        var prefixBytes = 0
+        var points: [ChainPrefixRestorePoint] = []
+        for segment in descriptor.inheritedSegments {
+            prefixBytes += segment.bytes
+            guard segment.tokenOffset > 0,
+                  segment.tokenOffset < descriptor.tokenOffset,
+                  segment.tokenOffset <= descriptor.pathFromRoot.count
+            else {
+                Log.agent.warning(
+                    "PrefixCacheManager warmStart: skipping restore point at "
+                    + "inconsistent boundary=\(segment.tokenOffset) "
+                    + "(chain extent=\(descriptor.tokenOffset), "
+                    + "path=\(descriptor.pathFromRoot.count)) "
+                    + "owner=\(descriptor.snapshotID.prefix(8))"
+                )
+                continue
+            }
+            points.append(
+                ChainPrefixRestorePoint(
+                    ownerSnapshotID: descriptor.snapshotID,
+                    boundaryOffset: segment.tokenOffset,
+                    prefixBytes: prefixBytes,
+                    checkpointType: checkpointType,
+                    partitionDigest: descriptor.partitionDigest
+                )
+            )
+        }
+        store.restoreChainPrefixRestorePoints(
+            points: points,
+            ownerPath: descriptor.pathFromRoot,
+            partitionKey: partitionKey
+        )
     }
 
     // MARK: - SSD hydration
@@ -875,6 +977,44 @@ final class PrefixCacheManager {
         }
     }
 
+    /// Attach a freshly composed chain-prefix body (ADR-0012) to the
+    /// pointed node. The chain-side sibling of `promote`: the node holds
+    /// no own ref (its backing is borrowed from the owner chain's leading
+    /// segments), so this stores the body through `storeSnapshot` rather
+    /// than the `hydrate` transition, and the restore point stays — still
+    /// valid for re-hydration after the next body eviction. Forgiving: a
+    /// body that appeared in the off-main window wins.
+    func promoteChainPrefix(
+        node: RadixTreeNode,
+        snapshot: HybridCacheSnapshot,
+        partitionKey: CachePartitionKey
+    ) {
+        guard let tree = store.tree(for: partitionKey) else { return }
+        guard node.state.body == nil else {
+            Log.agent.debug(
+                "PrefixCacheManager.promoteChainPrefix: node grew a body before the "
+                + "promote hop (state=\(node.state.label)) — keeping the newer body"
+            )
+            return
+        }
+        tree.storeSnapshot(snapshot, on: node)
+        cumulativeCounters.hydrations += 1
+        cumulativeCounters.hitTokens += snapshot.tokenOffset
+    }
+
+    /// Clear a **Chain-Prefix Restore** point after its hydration failed
+    /// (owner evicted mid-window, boundary off the segment grid, broken
+    /// leading segment). Subsequent lookups degrade to the next-shallower
+    /// backing instead of re-attempting a broken compose. The tree
+    /// self-heals when the point was all the node had left.
+    func clearChainPrefixRestorePointAfterHydrationFailure(
+        node: RadixTreeNode,
+        partitionKey: CachePartitionKey
+    ) {
+        guard let tree = store.tree(for: partitionKey) else { return }
+        store.clearChainPrefixRestorePoint(node: node, tree: tree)
+    }
+
     // MARK: - Warm start
 
     /// Restore the radix-tree structure from the SSD manifest so
@@ -913,7 +1053,9 @@ final class PrefixCacheManager {
                 modelID: partition.meta.modelID,
                 kvBits: partition.meta.kvBits,
                 kvGroupSize: partition.meta.kvGroupSize,
-                modelFingerprint: partition.meta.modelFingerprint
+                modelFingerprint: partition.meta.modelFingerprint,
+                templateContextDigest: partition.meta.templateContextDigest
+                    ?? HTTPPrefixCacheConversation.defaultTemplateContextDigest
             )
             // The reconstructed key must match the on-disk digest. A mismatch
             // signals a corrupted/inconsistent meta sidecar — drop the
@@ -938,11 +1080,17 @@ final class PrefixCacheManager {
                     checkpointType: checkpointType,
                     bytesOnDisk: descriptor.totalBytes
                 )
-                restoreSnapshotRef(
+                let landed = restoreSnapshotRef(
                     path: descriptor.pathFromRoot,
                     snapshotRef: ref,
                     partitionKey: partitionKey,
                     lastAccessTime: now
+                )
+                guard landed, !descriptor.inheritedSegments.isEmpty else { continue }
+                restoreChainPrefixRestorePoints(
+                    descriptor: descriptor,
+                    checkpointType: checkpointType,
+                    partitionKey: partitionKey
                 )
             }
         }
@@ -996,7 +1144,10 @@ final class PrefixCacheManager {
             kvBits: partitionKey.kvBits,
             kvGroupSize: partitionKey.kvGroupSize,
             createdAt: Date().timeIntervalSinceReferenceDate,
-            schemaVersion: SnapshotManifestSchema.currentVersion
+            schemaVersion: SnapshotManifestSchema.currentVersion,
+            templateContextDigest: partitionKey.templateContextDigest
+                == HTTPPrefixCacheConversation.defaultTemplateContextDigest
+                ? nil : partitionKey.templateContextDigest
         )
         store.registerPartition(meta, for: partitionKey)
     }
@@ -1217,7 +1368,10 @@ final class PrefixCacheManager {
                 normalizedRecency: candidate.score?.normalizedRecency,
                 normalizedFlopEfficiency: candidate.score?.normalizedFlopEfficiency,
                 utility: candidate.score?.utility,
-                bodyDroppedSnapshotRefID: result.refID
+                bodyDroppedSnapshotRefID: result.refID,
+                chainPrefixOwnerID: result.refID == nil
+                    ? candidate.node.chainPrefixRestorePoint?.ownerSnapshotID
+                    : nil
             )
             if event.isTerminal {
                 cumulativeCounters.terminalEvictions += 1
@@ -1349,7 +1503,12 @@ final class PrefixCacheManager {
         _ candidate: EvictionCandidate,
         now: ContinuousClock.Instant
     ) {
+        // A chain-prefix-backed node (ADR-0012) skips demotion outright:
+        // its bytes already exist on SSD as the owning chain's leading
+        // segments, and writing a duplicate copy is exactly the write
+        // amplification the restore-point design rejected.
         guard candidate.node.state.ref == nil,
+              candidate.node.chainPrefixRestorePoint == nil,
               store.isSSDEnabled,
               let demotionPayloadExtractor,
               candidate.partitionKey.modelFingerprint != nil,

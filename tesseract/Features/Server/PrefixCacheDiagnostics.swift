@@ -92,6 +92,10 @@ nonisolated enum PrefixCacheDiagnostics {
                 self.reason = "ssdHit"
                 self.snapshotOffset = ctx.snapshotRef.tokenOffset
                 self.checkpointType = ctx.snapshotRef.checkpointType
+            case .chainPrefixHit(let ctx):
+                self.reason = "chainPrefixHit"
+                self.snapshotOffset = ctx.point.boundaryOffset
+                self.checkpointType = ctx.point.checkpointType
             case .missNoEntries:
                 self.reason = "missNoEntries"
                 self.snapshotOffset = nil

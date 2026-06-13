@@ -126,12 +126,14 @@ nonisolated enum PrefillPlanner {
         toolSpecs: [ToolSpec]?,
         promptStartsThinking: Bool,
         tokenizer: any Tokenizer,
-        keySpace: CacheKeySpace
+        keySpace: CacheKeySpace,
+        renderContext: TemplateRenderContext = .canonical
     ) throws -> PrefillBoundaries {
         let fullTokens = keySpace.keyPath
         let stablePrefixOffset = try StablePrefixDetector.detect(
             systemPrompt: conversation.systemPrompt,
             toolSpecs: toolSpecs,
+            additionalContext: renderContext.additionalContext(),
             fullTokens: fullTokens,
             tokenizer: tokenizer
         )
@@ -165,7 +167,9 @@ nonisolated enum PrefillPlanner {
             let renderTokens = try tokenizer.applyChatTemplate(
                 messages: userPrefixConversation.promptMessages,
                 tools: toolSpecs,
-                additionalContext: ["add_generation_prompt": false]
+                additionalContext: renderContext.additionalContext(
+                    merging: ["add_generation_prompt": false]
+                )
             )
             switch keySpace.translatedLength(renderTokens: renderTokens) {
             case .success(let keyLength):

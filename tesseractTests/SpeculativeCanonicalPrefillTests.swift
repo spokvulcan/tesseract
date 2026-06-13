@@ -108,4 +108,34 @@ struct SpeculativeCanonicalPrefillTests {
 
         #expect(offset == nil)
     }
+
+    // MARK: - Stretch Abandonment trigger table (issue #100)
+
+    @Test func stopFinishSeedsImmediatelyAndDurably() {
+        let plan = ServerCompletion.speculativeSeedPlan(
+            boundaryMode: .canonical, renderContext: .canonical
+        )
+        #expect(plan?.idleDelay == .zero)
+        #expect(plan?.ramOnlySpine == false)
+    }
+
+    @Test func toolStretchArmsTheIdleTimerAndStaysRamOnly() {
+        let plan = ServerCompletion.speculativeSeedPlan(
+            boundaryMode: .directTool, renderContext: .canonical
+        )
+        #expect(plan?.idleDelay == SpeculativeCanonicalPrefill.stretchAbandonmentIdleWindow)
+        #expect(plan?.ramOnlySpine == true)
+    }
+
+    @Test func preserveThinkingDisablesEveryTrigger() {
+        let preserve = TemplateRenderContext(
+            flags: [.preserveThinking]
+        )
+        #expect(ServerCompletion.speculativeSeedPlan(
+            boundaryMode: .canonical, renderContext: preserve
+        ) == nil)
+        #expect(ServerCompletion.speculativeSeedPlan(
+            boundaryMode: .directTool, renderContext: preserve
+        ) == nil)
+    }
 }

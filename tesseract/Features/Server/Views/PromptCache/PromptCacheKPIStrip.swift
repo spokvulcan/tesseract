@@ -145,6 +145,13 @@ struct PromptCacheKPIStrip: View {
                 tint: .red
             ),
             PromptCacheMetricTile(
+                title: "Rewinds",
+                value: "\(aggregate.rewindEventCount)",
+                detail: rewindDetail,
+                symbol: "arrow.uturn.backward.circle",
+                tint: aggregate.rewindEventCount > 0 ? .orange : .secondary
+            ),
+            PromptCacheMetricTile(
                 title: "Device",
                 value: deviceEstimatesValue,
                 detail: deviceEstimatesDetail,
@@ -152,6 +159,13 @@ struct PromptCacheKPIStrip: View {
                 tint: .brown
             ),
         ]
+    }
+
+    /// Rewind tile detail: the re-prefill the **Chain-Prefix Restore**
+    /// floor saved versus rewinding to the strip floor (issue #101).
+    private var rewindDetail: String {
+        guard aggregate.rewindEventCount > 0 else { return "none" }
+        return "\(PromptCacheFormatting.compactNumber(aggregate.rewindTokens)) tokens floored"
     }
 
     private var deviceEstimatesValue: String {

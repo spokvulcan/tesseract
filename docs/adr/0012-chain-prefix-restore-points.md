@@ -97,6 +97,10 @@ lookup must consider chain-prefix points alongside owned refs when
 resolving the deepest usable snapshot; hydration gains a compose-prefix
 path (read fewer segments than the chain holds — strictly less work
 than a full-chain hydration); and the floor guarantee is only as good
-as canonical-render fidelity — a render that drifts a few tokens past a
-boundary (observed: 33 tokens at an answer tail in the incident corpus)
-makes the boundary unusable, so the fidelity gate ships first.
+as canonical-render fidelity — a render that drifts even a few tokens
+past a boundary makes the boundary unusable, so the fidelity gate ships
+first. (The "33-token drift" suspected at decision time was later
+root-caused as cross-lineage arithmetic, not a render bug: the gate's
+corpus replay found every stop-answer and tool-continuation boundary
+byte-faithful, and the interrupt boundaries faithful on their rewind
+floor and speculation spine — see issue #95.)

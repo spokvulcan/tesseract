@@ -33,7 +33,8 @@ struct TraceReplayHarnessTests {
         hydrationSeconds: Double = 0,
         terminal: Int = 0,
         recovered: Int = 0,
-        estimates: MeasuredSecondsEstimates? = MeasuredSecondsEstimates()
+        estimates: MeasuredSecondsEstimates? = MeasuredSecondsEstimates(),
+        rewind: RewindTelemetry? = nil
     ) -> CompletionTraceRecord {
         CompletionTraceRecord(
             timestamp: 700_000_000,
@@ -57,7 +58,8 @@ struct TraceReplayHarnessTests {
             ttftSeconds: ttftSeconds,
             terminalEvictionCount: terminal,
             recoveredEvictionCount: recovered,
-            deviceEstimates: estimates
+            deviceEstimates: estimates,
+            rewind: rewind
         )
     }
 
@@ -98,10 +100,12 @@ struct TraceReplayHarnessTests {
         #expect(report.simulatedLRU.evictionCount == 4)
         #expect(report.simulatedLRU.evictedBytes == 18000)
 
+        #expect(report.observed.rewindEvents == 0)
         #expect(TraceReplayHarness.renderText(report) == """
         Trace Replay — LRU baseline (PRD #82, slice #85)
         records: 6 · block size: 256 tokens
         observed      ttft p50 0.6000s · p95 1.1000s · hit tokens 4000 · evictions 2 terminal / 2 recovered · ssd restores 2 · hydration 0.5600s
+        rewinds       events 0 · size p50 0 · p95 0 · max 0 tokens
         simulated LRU ttft-proxy p50 3.9020s · p95 11.8633s · hit tokens 3072 · hit requests 2/6 · evictions 4 (all terminal — RAM-only baseline) · evicted bytes 18000
         """)
     }
@@ -111,6 +115,72 @@ struct TraceReplayHarnessTests {
         let first = TraceReplayHarness.replay(records: records)
         let second = TraceReplayHarness.replay(records: records)
         #expect(first == second)
+    }
+
+    // MARK: - Rewind telemetry (issue #101)
+
+    /// `RewindTelemetry.make` records a rewind only when the restore
+    /// floor sits below the divergence, and never on a cold miss.
+    @Test func rewindTelemetryDerivationFromLookupOutcome() {
+        // The incident shape: divergence deep into the abandoned stretch,
+        // floor at the restore base far below it.
+        let rewind = RewindTelemetry.make(sharedPrefixLength: 87_495, restoredOffset: 41_897)
+        #expect(rewind?.divergenceOffset == 87_495)
+        #expect(rewind?.restoreFloor == 41_897)
+        #expect(rewind?.rewindSize == 87_495 - 41_897)
+        #expect(rewind?.isRewind == true)
+
+        // A direct deep hit at the divergence: no rewind.
+        let flat = RewindTelemetry.make(sharedPrefixLength: 5_000, restoredOffset: 5_000)
+        #expect(flat?.isRewind == false)
+        #expect(flat?.rewindSize == 0)
+
+        // Cold miss: nothing to measure.
+        #expect(RewindTelemetry.make(sharedPrefixLength: 5_000, restoredOffset: 0) == nil)
+    }
+
+    /// The harness rolls rewind events up over the corpus — the
+    /// dashboard-facing regression signal. Non-rewind and rewind-less
+    /// records are excluded from the percentile sample.
+    @Test func replayAggregatesRewindEvents() {
+        let records = [
+            makeRecord(
+                digests: digestChain("a", 4), promptTokenCount: 1100,
+                rewind: RewindTelemetry(divergenceOffset: 1000, restoreFloor: 200)
+            ),
+            makeRecord(
+                digests: digestChain("b", 4), promptTokenCount: 1100,
+                rewind: RewindTelemetry(divergenceOffset: 1000, restoreFloor: 600)
+            ),
+            makeRecord(  // not a rewind — excluded
+                digests: digestChain("c", 4), promptTokenCount: 1100,
+                rewind: RewindTelemetry(divergenceOffset: 800, restoreFloor: 800)
+            ),
+            makeRecord(digests: digestChain("d", 4), promptTokenCount: 1100),  // no telemetry
+        ]
+        let report = TraceReplayHarness.replay(records: records)
+        #expect(report.observed.rewindEvents == 2)
+        #expect(report.observed.maxRewindSizeTokens == 800)
+        #expect(report.observed.rewindSizeP95Tokens == 800)
+        #expect(report.observed.rewindSizeP50Tokens == 400)
+    }
+
+    /// A pre-#94 record (no `rewind` key) still decodes — the schema is
+    /// unchanged, the field is additive-optional.
+    @Test func legacyRecordWithoutRewindStillDecodes() throws {
+        let legacyJSON = """
+        {"timestamp":700000000,"requestID":"\(UUID().uuidString)","modelID":"m",
+         "partitionDigest":"p","promptTokenCount":10,"prefixBlockDigests":[],
+         "admittedCheckpoints":[],"ramBudgetBytes":1000,"restoredOffset":0,
+         "restoredFromSSD":false,"hitTokens":0,"sharedPrefixLength":0,
+         "lookupSeconds":0,"restoreSeconds":0,"hydrationSeconds":0,
+         "prefillSeconds":0,"residualPromptSeconds":0,"ttftSeconds":0,
+         "terminalEvictionCount":0,"recoveredEvictionCount":0}
+        """
+        let decoded = try JSONDecoder().decode(
+            CompletionTraceRecord.self, from: Data(legacyJSON.utf8)
+        )
+        #expect(decoded.rewind == nil)
     }
 
     // MARK: - Hit credit

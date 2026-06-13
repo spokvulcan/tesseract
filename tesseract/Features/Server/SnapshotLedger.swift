@@ -852,6 +852,24 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         guard let descriptor = manifest.snapshots[id] else { return nil }
         return chainFileURLs(for: descriptor)
     }
+
+    /// Read-path accessor for `loadSyncPrefix` (**Chain-Prefix Restore**,
+    /// ADR-0012): the leading inherited segments of `ownerID`'s chain
+    /// covering `[0..boundaryOffset]`, in compose order. Restore points
+    /// sit only on the segment grid — `boundaryOffset` must be exactly a
+    /// consumed leaf's capture offset, so the last leading segment must
+    /// end at it. `nil` when the owner left the manifest (evicted between
+    /// the lookup and the hydration) or the boundary is off the grid
+    /// (a stale point against a re-shaped chain) — both degrade to a
+    /// clean miss, never a wrong-extent compose.
+    func chainPrefixForHydration(ownerID: String, boundaryOffset: Int) -> [URL]? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let descriptor = manifest.snapshots[ownerID] else { return nil }
+        let leading = descriptor.inheritedSegments.prefix { $0.tokenOffset <= boundaryOffset }
+        guard leading.last?.tokenOffset == boundaryOffset else { return nil }
+        return leading.map { rootURL.appendingPathComponent($0.fileRelativePath) }
+    }
 }
 
 // MARK: - Warm start (manifest load + corrupt-manifest rebuild)
