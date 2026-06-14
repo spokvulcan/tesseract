@@ -42,6 +42,15 @@ weighing decisions:
 - **Never use `print()`** — use the `Log` enum (`Core/Logging.swift`).
 - **Commits:** follow Conventional Commits.
 
+## Subagents & workflows
+
+- **Model: Opus-tier, always.** Spawn subagents (Agent tool) and workflow
+  agents on an Opus-level model (currently `opus` / Opus 4.8) or higher;
+  never downgrade to sonnet/haiku to save cost.
+- **Thinking effort: flexible.** Scale reasoning to the task — low/medium
+  for genuinely easy work; high (or max) for hard tasks and implementation
+  work.
+
 ## Docs (read before touching the area)
 
 - Architecture → `ARCHITECTURE.md`
