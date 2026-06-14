@@ -17,12 +17,25 @@
 
 /// How a lease chooses the `.llm` slot's vision mode (ADR-0008).
 nonisolated enum LLMVisionRequirement: Sendable, Equatable {
-    /// Chat UI and background agents: vision follows the user's toggle.
+    /// Chat UI and background agents: load vision when the user's global
+    /// "Use vision models when available" opt-out is on *and* the model is
+    /// capable. Opting out forces the text-only container.
     case fromSettings
     /// HTTP server path: vision whenever the target model is capable, so a
     /// generated client config that advertises image input is always honored —
-    /// the chat toggle cannot silently break a configured client.
+    /// the global opt-out cannot silently break a configured client.
     case visionIfCapable
+
+    /// Resolve to a concrete "load the vision container?" decision. Pure so the
+    /// policy is unit-tested without the arbiter: `.fromSettings` honors the
+    /// global opt-out *and* capability; `.visionIfCapable` ignores the opt-out
+    /// (ADR-0008) and follows capability alone.
+    nonisolated func wantsVision(useVisionWhenAvailable: Bool, isVisionCapable: Bool) -> Bool {
+        switch self {
+        case .fromSettings: useVisionWhenAvailable && isVisionCapable
+        case .visionIfCapable: isVisionCapable
+        }
+    }
 }
 
 /// Scoped exclusive GPU access with the required model loaded: waits FIFO-fair

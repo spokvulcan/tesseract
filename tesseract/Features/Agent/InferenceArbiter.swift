@@ -146,10 +146,11 @@ final class InferenceArbiter: InferenceArbitrating {
     /// model ID is `llmModelIDOverride` when the caller passed one (HTTP
     /// requests honoring `request.model`), otherwise the user's
     /// `settingsManager.selectedAgentModelID` (chat UI, background agents).
-    /// Vision mode follows `llmVision` (ADR-0008): chat callers track the
-    /// user's toggle; HTTP callers demand vision whenever the target model is
-    /// capable. Satisfaction upgrades but never downgrades — a loaded vision
-    /// container also serves text-only demands.
+    /// Vision mode follows `llmVision` (ADR-0008): chat callers honor the
+    /// global vision opt-out (`.fromSettings`); HTTP callers demand vision
+    /// whenever the target model is capable (`.visionIfCapable`). Satisfaction
+    /// upgrades but never downgrades — a loaded vision container also serves
+    /// text-only demands.
     private func ensureLoaded(
         _ slot: ModelSlot,
         llmModelIDOverride: String? = nil,
@@ -158,10 +159,10 @@ final class InferenceArbiter: InferenceArbitrating {
         switch slot {
         case .llm:
             let targetModelID = llmModelIDOverride ?? settingsManager.selectedAgentModelID
-            let desiredVision = switch llmVision {
-            case .fromSettings: settingsManager.visionModeEnabled
-            case .visionIfCapable: visionCapability.isVisionCapable(targetModelID)
-            }
+            let desiredVision = llmVision.wantsVision(
+                useVisionWhenAvailable: settingsManager.useVisionWhenAvailable,
+                isVisionCapable: visionCapability.isVisionCapable(targetModelID)
+            )
             let desired = LoadedLLMState(
                 modelID: targetModelID,
                 visionMode: desiredVision

@@ -370,6 +370,23 @@ struct ToolCallRowView: View, Equatable {
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                         }
+
+                        if !data.resultImages.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Images")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.tertiary)
+                                    .textCase(.uppercase)
+
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(data.resultImages) { attachment in
+                                            AsyncImageAttachmentView(attachment: attachment)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     .padding(.trailing, 14)
                     .padding(.bottom, 8)
@@ -456,9 +473,13 @@ struct TurnHeaderView: View, Equatable {
 
 // MARK: - Async Image Attachment
 
-/// Decodes image data off the main thread to avoid blocking scroll.
+/// Decodes image data off the main thread to avoid blocking scroll. Clicking
+/// opens the image full size in Quick Look (slice #114), navigable across the
+/// whole conversation; the temp file is pre-warmed on decode so opening is
+/// near-instant.
 struct AsyncImageAttachmentView: View {
     let attachment: ImageAttachment
+    @Environment(AgentCoordinator.self) private var coordinator
     @State private var nsImage: NSImage?
 
     var body: some View {
@@ -475,11 +496,16 @@ struct AsyncImageAttachmentView: View {
         }
         .frame(maxWidth: 200, maxHeight: 200)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture { coordinator.openQuickLook(clicked: attachment.id) }
+        .help("Click to view full size")
         .task(id: attachment.id) {
             let data = attachment.data
             nsImage = await Task.detached {
                 NSImage(data: data)
             }.value
+            // Pre-warm the Quick Look temp file so the click opens instantly.
+            coordinator.prewarmImagePreview(attachment)
         }
     }
 }

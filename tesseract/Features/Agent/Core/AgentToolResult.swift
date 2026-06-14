@@ -50,6 +50,48 @@ extension [ContentBlock] {
     nonisolated var textContent: String {
         compactMap { if case .text(let t) = $0 { t } else { nil } }.joined(separator: "\n")
     }
+
+    /// Extracts all `.image` blocks as `ImageAttachment`s (slice #116), so
+    /// tool-result images survive the transcript projection and join the Quick
+    /// Look navigable set. `namespace` is the owning `ToolResultMessage.id`.
+    ///
+    /// The attachment `id` identifies the image **occurrence** — its position in
+    /// a specific tool result — not its content: `namespace` (the stable
+    /// tool-result id) folded with the block index. This is **load-bearing**:
+    /// `ToolResultMessage` stores raw `ContentBlock`s with no per-image id, and
+    /// this projection is recomputed both when the transcript builds the row
+    /// *and* again inside `conversationImages()`. Quick Look matches the clicked
+    /// id against that re-derived set, so the id must be (a) stable across calls
+    /// — a fresh `UUID()` per call would never match, and would churn row
+    /// identity on every streaming patch (defeating the `ToolCallRow` Equatable
+    /// short-circuit and re-running the `.task(id:)` image decode) — and (b)
+    /// unique per occurrence, so clicking the second of two byte-identical
+    /// screenshots (same bytes, *different* tool results) opens that one, not
+    /// the first. Occurrence identity gives both; deriving from the content
+    /// digest gave only (a) and collided across results.
+    nonisolated func imageAttachments(namespace: UUID) -> [ImageAttachment] {
+        enumerated().compactMap { index, block in
+            guard case .image(let data, let mimeType) = block else { return nil }
+            return ImageAttachment(
+                id: Self.occurrenceID(namespace: namespace, index: index),
+                data: data, mimeType: mimeType
+            )
+        }
+    }
+
+    /// A reproducible UUID for an image occurrence: the tool-result `namespace`
+    /// id with the block index XORed into its trailing bytes. Stable (both inputs
+    /// are stable) and unique per (tool result, position), so re-projections
+    /// match and distinct occurrences — even byte-identical ones — stay distinct.
+    nonisolated private static func occurrenceID(namespace: UUID, index: Int) -> UUID {
+        let idx = UInt32(truncatingIfNeeded: index)
+        var u = namespace.uuid   // uuid_t — XOR the index into its trailing bytes
+        u.12 ^= UInt8(truncatingIfNeeded: idx)
+        u.13 ^= UInt8(truncatingIfNeeded: idx >> 8)
+        u.14 ^= UInt8(truncatingIfNeeded: idx >> 16)
+        u.15 ^= UInt8(truncatingIfNeeded: idx >> 24)
+        return UUID(uuid: u)
+    }
 }
 
 // MARK: - AgentToolResult

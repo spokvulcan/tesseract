@@ -26,6 +26,15 @@ struct BenchmarkConfig {
     /// fails to emit a stop token and generates thousands of tokens per round.
     let maxTokensPerRound: Int
 
+    /// When true, the prefill-step benchmark loads the VLM (vision) container instead
+    /// of the text-only LLM container — used to measure the residual text-prefill gap
+    /// between the two containers on the same model. Parsed from `--bench-vision`.
+    let visionMode: Bool
+
+    /// Optional override for the prefill-step benchmark's step-size sweep. Parsed from
+    /// `--bench-prefill-steps "2048,4096"`. nil = the runner's default sweep.
+    let prefillStepSizesOverride: [Int]?
+
     /// Parameter configurations to sweep over, seeded from the model's recommended defaults.
     var parameterConfigs: [AgentGenerateParameters] {
         let base = AgentGenerateParameters.forModel(resolvedModelID)
@@ -140,6 +149,16 @@ struct BenchmarkConfig {
             return 2048
         }()
 
+        let visionMode = args.contains("--bench-vision")
+
+        let prefillStepSizesOverride: [Int]? = {
+            if let idx = args.firstIndex(of: "--bench-prefill-steps"), idx + 1 < args.count {
+                let parsed = args[idx + 1].split(separator: ",").compactMap { Int($0) }
+                return parsed.isEmpty ? nil : parsed
+            }
+            return nil
+        }()
+
         return BenchmarkConfig(
             sweep: sweep,
             scenarioIDs: scenarioIDs,
@@ -147,7 +166,9 @@ struct BenchmarkConfig {
             modelDir: modelDir,
             modelID: modelID,
             promptProfile: promptProfile,
-            maxTokensPerRound: maxTokensPerRound
+            maxTokensPerRound: maxTokensPerRound,
+            visionMode: visionMode,
+            prefillStepSizesOverride: prefillStepSizesOverride
         )
     }
 }

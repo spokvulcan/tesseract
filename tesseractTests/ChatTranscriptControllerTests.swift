@@ -138,6 +138,70 @@ struct ChatTranscriptControllerTests {
         #expect(answer.hasStepsAbove == true)
     }
 
+    /// A tool result carrying an `.image` block surfaces it as `resultImages` on
+    /// the projected tool row (slice #116), alongside its text — previously the
+    /// image was dropped by `projectTurn`.
+    @Test func toolResultImageBlockSurvivesProjectionIntoResultImages() {
+        let user = UserMessage(content: "Screenshot the page")
+        let call = ToolCallInfo(id: "tc1", name: "screenshot", argumentsJSON: "{}")
+        let asst1 = AssistantMessage(content: "", toolCalls: [call])
+        let result = ToolResultMessage(
+            toolCallId: "tc1", toolName: "screenshot",
+            content: [.text("captured"), .image(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")],
+            isError: false
+        )
+        let asst2 = AssistantMessage(content: "Done")
+        let messages: [any AgentMessageProtocol] = [user, asst1, result, asst2]
+
+        let controller = ChatTranscriptController()
+        controller.rebuild(messages: messages, stream: nil, isGenerating: false)
+        controller.toggleTurnExpanded(user.id, messages: messages, stream: nil, isGenerating: false)
+        let rows = controller.rows
+
+        guard case .toolCall(let tool) = rows[2].kind else {
+            Issue.record("row 2 not a tool call: \(rows[2].kind)"); return
+        }
+        #expect(tool.resultContent == "captured")
+        #expect(tool.resultImages.count == 1)
+        #expect(tool.resultImages.first?.mimeType == "image/png")
+        #expect(tool.resultImages.first?.data == ImageTestFixtures.tinyPNGData)
+    }
+
+    /// Regression: tool-result image attachment ids identify the *occurrence* —
+    /// (tool-result, position) — not the content. The transcript builds the
+    /// row's attachments once and `conversationImages()` re-derives them again;
+    /// Quick Look matches the clicked id against that re-derived set. So the id
+    /// must be (a) stable across calls under the same tool-result id — a random
+    /// `UUID()` per call left tool-result images un-clickable — and (b) unique
+    /// per occurrence, including byte-identical images in *different* results, so
+    /// clicking the second of two identical screenshots opens that one.
+    @Test func toolResultImageAttachmentIDsIdentifyOccurrenceNotContent() {
+        let pngA = ImageTestFixtures.tinyPNGData
+        let pngB = pngA + Data([0xFF])
+        let blocks: [ContentBlock] = [
+            .image(data: pngA, mimeType: "image/png"),   // index 0
+            .text("between"),
+            .image(data: pngA, mimeType: "image/png"),   // index 2 — same bytes
+            .image(data: pngB, mimeType: "image/png"),   // index 3
+        ]
+        let ns1 = UUID()
+        let ns2 = UUID()
+
+        // Stable across independent projections under the same tool-result id.
+        #expect(blocks.imageAttachments(namespace: ns1).map(\.id)
+                == blocks.imageAttachments(namespace: ns1).map(\.id))
+
+        // Every position distinct within a result, even byte-identical images.
+        let ids1 = blocks.imageAttachments(namespace: ns1).map(\.id)
+        #expect(ids1.count == 3)
+        #expect(Set(ids1).count == 3)
+
+        // Different tool result ⇒ disjoint ids, so byte-identical images across
+        // results never collide (the bug this fix closes).
+        let ids2 = blocks.imageAttachments(namespace: ns2).map(\.id)
+        #expect(Set(ids1).isDisjoint(with: Set(ids2)))
+    }
+
     @Test func intermediateTextIsDistinctFromFinalAnswer() {
         let user = UserMessage(content: "Do it")
         let call = ToolCallInfo(id: "tc1", name: "ls", argumentsJSON: #"{"path":"/tmp"}"#)

@@ -30,6 +30,7 @@ nonisolated struct ChatRow: Identifiable, Equatable, Sendable {
             ChatRow(id: id, kind: .toolCall(ToolCallRow(
                 displayTitle: d.displayTitle, iconName: d.iconName,
                 argumentsFormatted: d.argumentsFormatted, resultContent: d.resultContent,
+                resultImages: d.resultImages,
                 isError: d.isError, isLast: isLast,
                 isDetailExpanded: d.isDetailExpanded, filePath: d.filePath)))
         case .toolText(let d):
@@ -64,6 +65,9 @@ nonisolated struct ToolCallRow: Equatable, Sendable {
     let iconName: String
     let argumentsFormatted: String
     let resultContent: String?
+    /// Images returned by the tool (e.g. a screenshot), clickable into Quick
+    /// Look (slice #116). Equality is id-based via `ImageAttachment`.
+    let resultImages: [ImageAttachment]
     let isError: Bool
     let isLast: Bool
     let isDetailExpanded: Bool
@@ -72,6 +76,7 @@ nonisolated struct ToolCallRow: Equatable, Sendable {
     func togglingDetail() -> ToolCallRow {
         ToolCallRow(displayTitle: displayTitle, iconName: iconName,
                     argumentsFormatted: argumentsFormatted, resultContent: resultContent,
+                    resultImages: resultImages,
                     isError: isError, isLast: isLast, isDetailExpanded: !isDetailExpanded,
                     filePath: filePath)
     }

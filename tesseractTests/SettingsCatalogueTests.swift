@@ -40,5 +40,9 @@ struct SettingsCatalogueTests {
         #expect(SettingsCatalogue.playSounds.load(from: store) == true)
         #expect(SettingsCatalogue.webAccessEnabled.load(from: store) == true)
         #expect(SettingsCatalogue.prefixCacheSSDEnabled.load(from: store) == true)
+        // Vision-by-default (ADR-0013, PRD #112): the global opt-out defaults
+        // on, so vision-capable models load their image-aware container from a
+        // fresh install.
+        #expect(SettingsCatalogue.useVisionWhenAvailable.load(from: store) == true)
     }
 }

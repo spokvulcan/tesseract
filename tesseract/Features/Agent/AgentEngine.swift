@@ -121,9 +121,11 @@ final class AgentEngine {
     /// - Parameters:
     ///   - directory: Local path containing model weights, config, and tokenizer files
     ///     (as downloaded by ``ModelDownloadManager``).
-    ///   - visionMode: When `true`, loads the VLM variant of ParoQuant models (supports
-    ///     image attachments but has slower prefill). When `false`, loads the LLM variant
-    ///     with fast chunked prefill. Ignored for non-ParoQuant models.
+    ///   - visionMode: When `true`, loads the VLM variant of ParoQuant models (adds
+    ///     image support). Text prefill measures on par with the LLM variant (the
+    ///     retired "slower prefill" claim — ADR-0013); the only standing cost is the
+    ///     resident vision tower. When `false`, loads the LLM variant. Ignored for
+    ///     non-ParoQuant models.
     func loadModel(
         from directory: URL,
         visionMode: Bool

@@ -118,6 +118,44 @@ struct AgentRunControllerTests {
         #expect(run.isGenerating == false)
     }
 
+    // MARK: - Vision requirement on the send path (ADR-0013)
+
+    /// With "Use vision models when available" on (the default), the chat send
+    /// path demands the vision container for any vision-capable model —
+    /// `.visionIfCapable` — so attaching an image just works with no toggle and
+    /// no re-prefill. Asserted at the **Inference Arbitrating** seam.
+    @Test func runUnderLeaseRequestsVisionIfCapableWhenSettingOn() async throws {
+        let agent = makeAgent()
+        let peer = InMemoryInferenceArbiter()
+        let settings = SettingsManager(store: InMemorySettingsStore())
+        #expect(settings.useVisionWhenAvailable == true)   // default on
+        let run = AgentRunController(
+            agent: agent, arbiter: peer, settings: settings, reportError: { _ in }
+        )
+
+        run.runUnderLease { }
+        try await waitUntilIdle(run)
+
+        #expect(peer.leaseCalls == [.init(slot: .llm, llmVision: .visionIfCapable)])
+    }
+
+    /// With the vision opt-out off, the send path falls back to `.fromSettings`
+    /// (→ the text-only container), so opting out truly forces text-only for chat.
+    @Test func runUnderLeaseFallsBackToFromSettingsWhenVisionOptedOut() async throws {
+        let agent = makeAgent()
+        let peer = InMemoryInferenceArbiter()
+        let settings = SettingsManager(store: InMemorySettingsStore())
+        settings.useVisionWhenAvailable = false
+        let run = AgentRunController(
+            agent: agent, arbiter: peer, settings: settings, reportError: { _ in }
+        )
+
+        run.runUnderLease { }
+        try await waitUntilIdle(run)
+
+        #expect(peer.leaseCalls == [.init(slot: .llm, llmVision: .fromSettings)])
+    }
+
     /// With the arbiter present and its model load failing, the lease throws
     /// before the body — so a `/compact`-shaped body never reaches `summarize`,
     /// `isGenerating` resets, and the failure surfaces through `reportError`.

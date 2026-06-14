@@ -11,7 +11,7 @@ override it" — for the HTTP path only.
 
 The trigger: generated client configs (the **Config Merge**) advertise image
 input per model. A config snapshot cannot track a runtime toggle: with
-`visionModeEnabled` off, a client that was told the model accepts images sends
+`useVisionWhenAvailable` off, a client that was told the model accepts images sends
 them into a text-variant load and they silently go nowhere — the same failure
 class observed with OpenCode on 2026-06-11, then on the client side. So
 capability advertising is static (from `vision_config` in the model's own

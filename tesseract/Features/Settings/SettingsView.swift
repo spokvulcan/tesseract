@@ -382,6 +382,14 @@ struct RecordingSettingsSection: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Vision") {
+                Toggle("Use vision models when available", isOn: $settings.useVisionWhenAvailable)
+                Text("When on, a vision-capable model loads its image-aware container so you can attach images in chat. Prefill speed is unchanged — vision only keeps a small vision tower resident (~1 GB). Turn off to load the faster, text-only container instead; a model already loaded with vision keeps it until the next reload.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Dictation Model") {
                 let speechModels = ModelDefinition.all.filter { $0.category == .speechToText }
                 let downloadedSpeechModels = speechModels.filter { model in
