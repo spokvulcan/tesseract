@@ -1,0 +1,36 @@
+# Local-only pre-commit gate for Tesseract Agent.
+# Runs on staged Swift files before every commit. No CI enforcement yet.
+#
+#   Install once per clone:   pre-commit install
+#   Run against everything:   pre-commit run --all-files
+#   Skip once (escape hatch): git commit --no-verify
+#
+# Tools resolve from the local environment (not pinned mirror repos), so a
+# `brew upgrade swiftlint` or an Xcode/toolchain update is picked up with no
+# config change:
+#   - swift-format : the active toolchain build via `xcrun` (matches the
+#                    compiler, so it always parses what the build accepts)
+#   - swiftlint    : Homebrew
+#
+# swift-format runs in --in-place mode: it formats the staged file and, if it
+# changed anything, pre-commit aborts the commit so you can review and re-stage.
+# To make it report-only instead, swap `format --in-place` for `lint --strict`.
+minimum_pre_commit_version: "3.0.0"
+repos:
+  - repo: local
+    hooks:
+      - id: swift-format
+        name: swift-format (format staged Swift)
+        entry: xcrun swift-format format --in-place --parallel --configuration .swift-format
+        language: system
+        types: [swift]
+        exclude: '^(Vendor/|.*/\.build/)'
+        require_serial: true
+
+      - id: swiftlint
+        name: SwiftLint (lint staged Swift)
+        entry: swiftlint lint --quiet --config .swiftlint.yml
+        language: system
+        types: [swift]
+        exclude: '^(Vendor/|.*/\.build/)'
+        require_serial: true

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "lineLength": 100,
+  "indentation": { "spaces": 4 },
+  "tabWidth": 4,
+  "maximumBlankLines": 1,
+  "respectsExistingLineBreaks": true,
+  "lineBreakBeforeEachArgument": false,
+  "lineBreakBeforeControlFlowKeywords": false,
+  "indentConditionalCompilationBlocks": false,
+  "rules": {
+    "AllPublicDeclarationsHaveDocumentation": false,
+    "AlwaysUseLowerCamelCase": false,
+    "NeverUseImplicitlyUnwrappedOptionals": false,
+    "NoBlockComments": false
+  }
+}
