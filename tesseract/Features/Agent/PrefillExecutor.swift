@@ -27,6 +27,26 @@ nonisolated enum PrefillExecutor {
         let state: LMOutput.State?
     }
 
+    /// How each prefilled chunk's KV cache is realized.
+    enum EvalPolicy {
+        /// `asyncEval` per chunk — the CPU builds chunk N+1's graph while the
+        /// GPU evaluates chunk N (the CPU/GPU overlap that keeps long-prompt
+        /// TTFT down). An MLX runtime failure during a chunk fires on an MLX
+        /// worker thread, *outside* the task-local `withError` scope, so it
+        /// would reach MLX's process-fatal handler instead of becoming a Swift
+        /// throw. Safe on this driver's normal input — image-free token chunks
+        /// whose full-attention scratch is bounded to `[heads, chunk, L]` over a
+        /// modest context — for which an allocation failure is not reachable.
+        case pipelined
+        /// Checked synchronous eval per chunk — every chunk fully evaluates on
+        /// the calling thread inside a `withError` scope, so an MLX runtime
+        /// failure surfaces as a Swift throw. Costs the CPU/GPU overlap; use
+        /// when the cache already holds a large image, so the per-chunk
+        /// `[heads, chunk, L]` score matrix is large enough that an allocation
+        /// failure is worth catching as an error rather than crashing on.
+        case checkedSynchronous
+    }
+
     /// Chunk-prefill `text` into `cache`.
     ///
     /// - Parameters:
@@ -47,7 +67,8 @@ nonisolated enum PrefillExecutor {
         checkpointBaseOffset: Int = 0,
         prefillStepSize: Int,
         consumeAll: Bool = false,
-        initialState: LMOutput.State? = nil
+        initialState: LMOutput.State? = nil,
+        evalPolicy: EvalPolicy = .pipelined
     ) throws -> Output {
         let ndim = text.tokens.ndim
         let total = text.tokens.dim(-1)
@@ -58,9 +79,16 @@ nonisolated enum PrefillExecutor {
         // generation) inputs are already batched; `LMOutput.State` threads
         // from each chunk into the next (Qwen3.5-VLM carries its RoPE deltas
         // there — without it every chunk after the first restarts positions
-        // at 0). Checked evaluation keeps MLX runtime failures on this path
-        // as Swift throws instead of process-fatal handler dispatches.
-        // Checkpoint captures synchronize explicitly before copying.
+        // at 0). `evalPolicy` chooses per-chunk realization: `.pipelined`
+        // `asyncEval`s so the CPU builds chunk N+1's graph while the GPU
+        // evaluates chunk N (the default — this driver only ever forwards
+        // image-free token chunks, whose bounded `[heads, chunk, L]` scratch
+        // cannot realistically fail to allocate); `.checkedSynchronous`
+        // evaluates each chunk on the calling thread inside a `withError` scope
+        // so an MLX failure throws instead of crashing (the image-text-tail
+        // caller, whose cache already holds a large image). Either way the final
+        // flush below is a checked synchronous eval. Checkpoint captures
+        // synchronize explicitly before copying.
         //
         // Cancellation is observed before every chunk (issue #97): a client
         // abort mid-prefill stops within one chunk instead of running the
@@ -74,7 +102,10 @@ nonisolated enum PrefillExecutor {
             let chunk = ndim >= 2 ? y[0..., ..<chunkSize] : y[.newAxis, ..<chunkSize]
             let output = model(chunk, cache: cache.isEmpty ? nil : cache, state: chunkState)
             chunkState = output.state
-            try MLXCheckedEvaluation.eval(cache)
+            switch evalPolicy {
+            case .pipelined: asyncEval(cache)
+            case .checkedSynchronous: try MLXCheckedEvaluation.eval(cache)
+            }
             y = ndim >= 2 ? y[0..., chunkSize...] : y[chunkSize...]
         }
 
