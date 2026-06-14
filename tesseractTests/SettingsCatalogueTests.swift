@@ -22,7 +22,9 @@ struct SettingsCatalogueTests {
         // in register/reset, with 20 GiB winning at runtime. Now declared once.
         let store = InMemorySettingsStore()
         #expect(SettingsCatalogue.prefixCacheSSDBudgetBytes.default == 20 * 1024 * 1024 * 1024)
-        #expect(SettingsCatalogue.prefixCacheSSDBudgetBytes.load(from: store) == 20 * 1024 * 1024 * 1024)
+        #expect(
+            SettingsCatalogue.prefixCacheSSDBudgetBytes.load(from: store) == 20 * 1024 * 1024 * 1024
+        )
     }
 
     @Test

@@ -245,15 +245,16 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         self.onDrop = onDrop
         self.writerDrainPreludeForTesting = writerDrainPreludeForTesting
 
-        let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let (stream, continuation) = AsyncStream<Void>.makeStream(
+            bufferingPolicy: .bufferingNewest(1))
         self.wakeupStream = stream
         self.wakeupContinuation = continuation
         self.writerTask = nil
 
         Log.agent.info(
             "SSDSnapshotStore init root=\(config.rootURL.path) "
-            + "budgetBytes=\(config.budgetBytes) "
-            + "maxPendingBytes=\(config.maxPendingBytes)"
+                + "budgetBytes=\(config.budgetBytes) "
+                + "maxPendingBytes=\(config.maxPendingBytes)"
         )
 
         // Task is started after self is fully initialized; it
@@ -316,11 +317,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 wireString: descriptor.checkpointType
             )
         else {
-            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
-                id: descriptor.snapshotID,
-                bytes: descriptor.bytes,
-                outcome: .droppedInvalidCheckpointType
-            ))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDAdmitEvent(
+                    id: descriptor.snapshotID,
+                    bytes: descriptor.bytes,
+                    outcome: .droppedInvalidCheckpointType
+                ))
             return .rejectedInvalidCheckpointType
         }
 
@@ -329,11 +331,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         // A single payload larger than the cap cannot be queued at
         // all; no amount of back-pressure eviction can create room.
         if payloadBytes > maxPendingBytes {
-            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
-                id: descriptor.snapshotID,
-                bytes: payloadBytes,
-                outcome: .droppedTooLargeForBudget
-            ))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDAdmitEvent(
+                    id: descriptor.snapshotID,
+                    bytes: payloadBytes,
+                    outcome: .droppedTooLargeForBudget
+                ))
             return .rejectedTooLargeForBudget
         }
 
@@ -346,11 +349,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         // entry. The ledger check runs before the queue lock — the two
         // locks never nest.
         guard ledger.hasPartition(digest: descriptor.partitionDigest) else {
-            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
-                id: descriptor.snapshotID,
-                bytes: payloadBytes,
-                outcome: .droppedUnregisteredPartition
-            ))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDAdmitEvent(
+                    id: descriptor.snapshotID,
+                    bytes: payloadBytes,
+                    outcome: .droppedUnregisteredPartition
+                ))
             return .rejectedUnregisteredPartition
         }
 
@@ -368,15 +372,18 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 inFlightSnapshotID == extendingBaseID
                 || pending.contains { $0.descriptor.snapshotID == extendingBaseID }
             queueLock.unlock()
-            guard ledger.beginExtensionTransfer(
-                baseID: extendingBaseID,
-                baseIsQueuedOrInFlight: baseIsQueuedOrInFlight
-            ) else {
-                PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
-                    id: descriptor.snapshotID,
-                    bytes: payloadBytes,
-                    outcome: .droppedExtensionBaseUnavailable
-                ))
+            guard
+                ledger.beginExtensionTransfer(
+                    baseID: extendingBaseID,
+                    baseIsQueuedOrInFlight: baseIsQueuedOrInFlight
+                )
+            else {
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.SSDAdmitEvent(
+                        id: descriptor.snapshotID,
+                        bytes: payloadBytes,
+                        outcome: .droppedExtensionBaseUnavailable
+                    ))
                 return .rejectedExtensionBaseUnavailable
             }
         }
@@ -390,23 +397,26 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         // releasing the lock so the callback body can take other
         // locks without risking a deadlock.
         while pendingBytes + payloadBytes > maxPendingBytes,
-              let oldest = pending.first {
+            let oldest = pending.first
+        {
             pending.removeFirst()
             pendingBytes -= oldest.payload.totalBytes
-            droppedItems.append((
-                id: oldest.descriptor.snapshotID,
-                bytes: oldest.payload.totalBytes,
-                extendingBaseID: oldest.extendingBaseID
-            ))
+            droppedItems.append(
+                (
+                    id: oldest.descriptor.snapshotID,
+                    bytes: oldest.payload.totalBytes,
+                    extendingBaseID: oldest.extendingBaseID
+                ))
         }
 
-        pending.append(PendingWrite(
-            payload: payload,
-            descriptor: descriptor,
-            extendingBaseID: extendingBaseID,
-            refreshRecencyAtCommit: refreshRecencyAtCommit,
-            scoringConfig: scoringConfig
-        ))
+        pending.append(
+            PendingWrite(
+                payload: payload,
+                descriptor: descriptor,
+                extendingBaseID: extendingBaseID,
+                refreshRecencyAtCommit: refreshRecencyAtCommit,
+                scoringConfig: scoringConfig
+            ))
         pendingBytes += payloadBytes
 
         queueLock.unlock()
@@ -420,11 +430,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             // earlier `tryEnqueue` call), and the lifecycle callback
             // (`storageRefDropCallback`, the stable telemetry name, so
             // the radix node sees its pending ref cleared).
-            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
-                id: item.id,
-                bytes: item.bytes,
-                outcome: .droppedByteBudget
-            ))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDAdmitEvent(
+                    id: item.id,
+                    bytes: item.bytes,
+                    outcome: .droppedByteBudget
+                ))
             PrefixCacheDiagnostics.logSystem(
                 PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                     id: item.id,
@@ -552,7 +563,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
     /// `consumeTombstone` pre-write skip and `commit` self-veto drop it.
     func deleteSnapshot(snapshotID: String) {
         queueLock.lock()
-        if let pendingIndex = pending.firstIndex(where: { $0.descriptor.snapshotID == snapshotID }) {
+        if let pendingIndex = pending.firstIndex(where: { $0.descriptor.snapshotID == snapshotID })
+        {
             let removed = pending.remove(at: pendingIndex)
             pendingBytes -= removed.payload.totalBytes
             if pendingBytes < 0 { pendingBytes = 0 }
@@ -692,10 +704,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         //     here means its own write failed, so the suffix is dropped.
         let descriptorToWrite: PersistedSnapshotDescriptor
         if let baseID = item.extendingBaseID {
-            guard let folded = ledger.prepareFoldedDescriptor(
-                item.descriptor,
-                baseID: baseID
-            ) else {
+            guard
+                let folded = ledger.prepareFoldedDescriptor(
+                    item.descriptor,
+                    baseID: baseID
+                )
+            else {
                 dropItem(reason: .extensionBaseLost)
                 return
             }
@@ -724,7 +738,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
                 } catch {
                     Log.agent.error(
                         "SSD writer diskFull retry failed for \(item.descriptor.snapshotID): "
-                        + "\(String(describing: error))"
+                            + "\(String(describing: error))"
                     )
                     dropItem(reason: .diskFull)
                     return
@@ -732,7 +746,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             } else {
                 Log.agent.error(
                     "SSD writer diskFull and no eviction victim available for "
-                    + "\(item.descriptor.snapshotID)"
+                        + "\(item.descriptor.snapshotID)"
                 )
                 dropItem(reason: .diskFull)
                 return
@@ -740,7 +754,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         } catch {
             Log.agent.error(
                 "SSD writer I/O failure for \(item.descriptor.snapshotID): "
-                + "\(String(describing: error))"
+                    + "\(String(describing: error))"
             )
             dropItem(reason: .writerIOError)
             return
@@ -762,21 +776,24 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         //    tombstone self-veto or a lost base — drop the own file
         //    (inherited files still belong to the surviving base entry,
         //    or were already deleted with it).
-        guard ledger.commit(
-            descriptorToWrite,
-            consumingBase: item.extendingBaseID,
-            refreshRecency: item.refreshRecencyAtCommit
-        ) else {
+        guard
+            ledger.commit(
+                descriptorToWrite,
+                consumingBase: item.extendingBaseID,
+                refreshRecency: item.refreshRecencyAtCommit
+            )
+        else {
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
             releasePendingBytes(item.payload.totalBytes)
             return
         }
         releasePendingBytes(item.payload.totalBytes)
-        PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
-            id: item.descriptor.snapshotID,
-            bytes: item.descriptor.bytes,
-            outcome: .accepted
-        ))
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.SSDAdmitEvent(
+                id: item.descriptor.snapshotID,
+                bytes: item.descriptor.bytes,
+                outcome: .accepted
+            ))
         if let baseID = item.extendingBaseID {
             PrefixCacheDiagnostics.logSystem(
                 PrefixCacheDiagnostics.LeafExtensionCommitEvent(
@@ -791,11 +808,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.SnapshotRefCommitEvent(id: item.descriptor.snapshotID)
         )
-        onCommit(SSDCommitInfo(
-            snapshotID: item.descriptor.snapshotID,
-            consumedBaseID: item.extendingBaseID,
-            chainBytesOnDisk: descriptorToWrite.totalBytes
-        ))
+        onCommit(
+            SSDCommitInfo(
+                snapshotID: item.descriptor.snapshotID,
+                consumedBaseID: item.extendingBaseID,
+                chainBytesOnDisk: descriptorToWrite.totalBytes
+            ))
     }
 
     /// Centralized writer-drop emission: terminal `ssdAdmit` outcome
@@ -827,11 +845,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
             )
             outcome = .droppedWriterIOError
         }
-        PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDAdmitEvent(
-            id: id,
-            bytes: bytes,
-            outcome: outcome
-        ))
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.SSDAdmitEvent(
+                id: id,
+                bytes: bytes,
+                outcome: outcome
+            ))
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                 id: id,
@@ -981,7 +1000,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable {
         }
 
         if nsError.domain == NSCocoaErrorDomain,
-           nsError.code == NSFileWriteOutOfSpaceError {
+            nsError.code == NSFileWriteOutOfSpaceError
+        {
             return .diskFull
         }
 
@@ -1113,7 +1133,7 @@ extension SSDSnapshotStore {
                 snapshotRef,
                 reason: .fingerprintMismatch,
                 "fingerprint mismatch partition=\(partitionFingerprint.prefix(8)) "
-                + "expected=\(expectedFingerprint.prefix(8))"
+                    + "expected=\(expectedFingerprint.prefix(8))"
             )
         }
 
@@ -1195,12 +1215,13 @@ extension SSDSnapshotStore {
         ) -> HybridCacheSnapshot? {
             Log.agent.error(
                 "SSDSnapshotStore.loadSyncPrefix: \(message()) "
-                + "owner=\(point.ownerSnapshotID.prefix(8)) boundary=\(point.boundaryOffset)"
+                    + "owner=\(point.ownerSnapshotID.prefix(8)) boundary=\(point.boundaryOffset)"
             )
-            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDMissEvent(
-                id: point.ownerSnapshotID,
-                reason: reason
-            ))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDMissEvent(
+                    id: point.ownerSnapshotID,
+                    reason: reason
+                ))
             return nil
         }
 
@@ -1217,14 +1238,16 @@ extension SSDSnapshotStore {
             return missPoint(
                 .fingerprintMismatch,
                 "fingerprint mismatch partition=\(partitionFingerprint.prefix(8)) "
-                + "expected=\(expectedFingerprint.prefix(8))"
+                    + "expected=\(expectedFingerprint.prefix(8))"
             )
         }
 
-        guard let prefixURLs = ledger.chainPrefixForHydration(
-            ownerID: point.ownerSnapshotID,
-            boundaryOffset: point.boundaryOffset
-        ) else {
+        guard
+            let prefixURLs = ledger.chainPrefixForHydration(
+                ownerID: point.ownerSnapshotID,
+                boundaryOffset: point.boundaryOffset
+            )
+        else {
             return missPoint(
                 .notResident,
                 "owner gone or boundary off the segment grid"
@@ -1239,11 +1262,12 @@ extension SSDSnapshotStore {
             } catch {
                 Log.agent.error(
                     "SSDSnapshotStore.loadSyncPrefix: read failed error=\(error) "
-                    + "owner=\(point.ownerSnapshotID.prefix(8)) — condemning the chain"
+                        + "owner=\(point.ownerSnapshotID.prefix(8)) — condemning the chain"
                 )
-                PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDMissEvent(
-                    id: point.ownerSnapshotID, reason: .readFailed
-                ))
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.SSDMissEvent(
+                        id: point.ownerSnapshotID, reason: .readFailed
+                    ))
                 dropHydrationFailure(id: point.ownerSnapshotID)
                 return nil
             }
@@ -1258,11 +1282,12 @@ extension SSDSnapshotStore {
         } catch {
             Log.agent.error(
                 "SSDSnapshotStore.loadSyncPrefix: decode failed error=\(error) "
-                + "owner=\(point.ownerSnapshotID.prefix(8)) — condemning the chain"
+                    + "owner=\(point.ownerSnapshotID.prefix(8)) — condemning the chain"
             )
-            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDMissEvent(
-                id: point.ownerSnapshotID, reason: .decodeFailed
-            ))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDMissEvent(
+                    id: point.ownerSnapshotID, reason: .decodeFailed
+                ))
             dropHydrationFailure(id: point.ownerSnapshotID)
             return nil
         }
@@ -1281,12 +1306,13 @@ extension SSDSnapshotStore {
     ) -> HybridCacheSnapshot? {
         Log.agent.error(
             "SSDSnapshotStore.loadSync: \(message()) "
-            + "id=\(ref.snapshotID.prefix(8))"
+                + "id=\(ref.snapshotID.prefix(8))"
         )
-        PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDMissEvent(
-            id: ref.snapshotID,
-            reason: reason
-        ))
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.SSDMissEvent(
+                id: ref.snapshotID,
+                reason: reason
+            ))
         dropHydrationFailure(id: ref.snapshotID)
         return nil
     }
@@ -1360,13 +1386,15 @@ extension SSDSnapshotStore {
                     guard !contributors.isEmpty, suffixBase == covered else {
                         throw SSDLoadError.segmentMismatch(
                             "suffix base \(suffixBase) does not continue covered "
-                            + "offset \(covered) at layer \(layerIndex)"
+                                + "offset \(covered) at layer \(layerIndex)"
                         )
                     }
                     let expectedTokens = segmentOffset - suffixBase
-                    guard layerHeader.arrays.allSatisfy({
-                        $0.shape.count >= 3 && $0.shape[$0.shape.count - 2] == expectedTokens
-                    }) else {
+                    guard
+                        layerHeader.arrays.allSatisfy({
+                            $0.shape.count >= 3 && $0.shape[$0.shape.count - 2] == expectedTokens
+                        })
+                    else {
                         throw SSDLoadError.segmentMismatch(
                             "suffix extent mismatch at layer \(layerIndex)"
                         )
@@ -1379,11 +1407,13 @@ extension SSDSnapshotStore {
             }
 
             let lastLayerHeader = parsed[contributors.last!].header.layers[layerIndex]
-            guard contributors.allSatisfy({
-                let layer = parsed[$0].header.layers[layerIndex]
-                return layer.className == lastLayerHeader.className
-                    && layer.arrays.count == lastLayerHeader.arrays.count
-            }) else {
+            guard
+                contributors.allSatisfy({
+                    let layer = parsed[$0].header.layers[layerIndex]
+                    return layer.className == lastLayerHeader.className
+                        && layer.arrays.count == lastLayerHeader.arrays.count
+                })
+            else {
                 throw SSDLoadError.segmentMismatch(
                     "class or array-slot mismatch at layer \(layerIndex)"
                 )
@@ -1411,12 +1441,13 @@ extension SSDSnapshotStore {
                     : concatenated(slotPieces, axis: -2)
             }
 
-            snapshotLayers.append(HybridCacheSnapshot.LayerState(
-                className: lastLayerHeader.className,
-                state: merged,
-                metaState: lastLayerHeader.metaState,
-                offset: lastLayerHeader.offset
-            ))
+            snapshotLayers.append(
+                HybridCacheSnapshot.LayerState(
+                    className: lastLayerHeader.className,
+                    state: merged,
+                    metaState: lastLayerHeader.metaState,
+                    offset: lastLayerHeader.offset
+                ))
         }
 
         return HybridCacheSnapshot(

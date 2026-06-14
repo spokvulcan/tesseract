@@ -220,7 +220,8 @@ nonisolated struct HTTPPrefixCacheMessage: Hashable, Sendable {
         // shape the vendored message generators emit — so the chat template
         // places each image inside its own turn. Text-only messages keep the
         // string form: the text path's render stays byte-identical.
-        let promptContent: any Sendable = images.isEmpty
+        let promptContent: any Sendable =
+            images.isEmpty
             ? content
             : images.map { _ in ["type": "image"] as [String: any Sendable] }
                 + [["type": "text", "text": content] as [String: any Sendable]]
@@ -285,7 +286,9 @@ nonisolated struct HTTPPrefixCacheConversation: Hashable, Sendable {
         )
     }
 
-    func appendingAssistant(_ assistantMessage: HTTPPrefixCacheMessage) -> HTTPPrefixCacheConversation {
+    func appendingAssistant(_ assistantMessage: HTTPPrefixCacheMessage)
+        -> HTTPPrefixCacheConversation
+    {
         HTTPPrefixCacheConversation(
             systemPrompt: systemPrompt,
             messages: messages + [assistantMessage],
@@ -305,10 +308,11 @@ nonisolated struct HTTPPrefixCacheConversation: Hashable, Sendable {
     var promptMessages: [[String: any Sendable]] {
         var promptMessages: [[String: any Sendable]] = []
         if let systemPrompt {
-            promptMessages.append(httpPrefixCachePromptMessage(
-                role: .system,
-                content: systemPrompt
-            ))
+            promptMessages.append(
+                httpPrefixCachePromptMessage(
+                    role: .system,
+                    content: systemPrompt
+                ))
         }
 
         promptMessages.append(contentsOf: messages.map(\.promptMessage))
@@ -359,7 +363,8 @@ nonisolated func reconstructAssistantPromptContent(
 
     if let reasoning, !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         let thinkBlock = "<think>\n\(reasoning)\n</think>"
-        promptContent = promptContent.isEmpty
+        promptContent =
+            promptContent.isEmpty
             ? thinkBlock
             : thinkBlock + "\n" + promptContent
     }
@@ -393,7 +398,8 @@ nonisolated func encodeCanonicalHTTPPrefixCacheJSONValue(_ value: JSONValue) -> 
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     guard let data = try? encoder.encode(value),
-          let json = String(data: data, encoding: .utf8) else {
+        let json = String(data: data, encoding: .utf8)
+    else {
         return "{}"
     }
     return json

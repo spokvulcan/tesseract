@@ -61,9 +61,11 @@ struct StorageSummaryView: View {
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Storage: \(ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Storage: \(ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file))"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 Text(storageURL.path)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)

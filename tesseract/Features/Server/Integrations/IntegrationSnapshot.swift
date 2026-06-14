@@ -48,11 +48,13 @@ nonisolated enum IntegrationSnapshotBuilder {
         port: Int,
         modelDirectory: (String) -> URL?
     ) -> IntegrationSnapshot {
-        let models: [IntegrationSnapshot.Model] = definitions
+        let models: [IntegrationSnapshot.Model] =
+            definitions
             .filter { $0.category == .agent }
             .compactMap { definition in
                 guard case .downloaded = statuses[definition.id] else { return nil }
-                let visionCapable = modelDirectory(definition.id)
+                let visionCapable =
+                    modelDirectory(definition.id)
                     .map(ModelVisionCapability.isVisionCapable(directory:)) ?? false
                 return IntegrationSnapshot.Model(
                     id: definition.id,
@@ -61,7 +63,8 @@ nonisolated enum IntegrationSnapshotBuilder {
                     contextLength: contextLength
                 )
             }
-        let defaultModelID = models.contains { $0.id == selectedAgentModelID }
+        let defaultModelID =
+            models.contains { $0.id == selectedAgentModelID }
             ? selectedAgentModelID
             : models.first?.id
         return IntegrationSnapshot(

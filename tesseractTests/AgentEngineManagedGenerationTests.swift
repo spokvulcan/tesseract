@@ -41,13 +41,15 @@ struct AgentEngineManagedGenerationTests {
         let engine = AgentEngine()
         let (rawStream, rawContinuation) = AsyncStream<RawGeneration>.makeStream()
         rawContinuation.yield(.chunk("hello"))
-        rawContinuation.yield(.info(GenerateCompletionInfo(
-            promptTokenCount: 4,
-            generationTokenCount: 2,
-            promptTime: 0.1,
-            generationTime: 0.2,
-            stopReason: .stop
-        )))
+        rawContinuation.yield(
+            .info(
+                GenerateCompletionInfo(
+                    promptTokenCount: 4,
+                    generationTokenCount: 2,
+                    promptTime: 0.1,
+                    generationTime: 0.2,
+                    stopReason: .stop
+                )))
         rawContinuation.finish()
 
         let start = engine.wrapManagedGeneration {
@@ -63,7 +65,8 @@ struct AgentEngineManagedGenerationTests {
         }
         #expect(texts == ["hello"])
         guard case .info = events.last else {
-            Issue.record("expected `.info` to be the terminal event, got \(String(describing: events.last))")
+            Issue.record(
+                "expected `.info` to be the terminal event, got \(String(describing: events.last))")
             return
         }
         #expect(engine.isGenerating == false)

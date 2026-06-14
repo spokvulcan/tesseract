@@ -65,9 +65,11 @@ final class DispatchMemoryPressureSource: MemoryPressureSource {
             guard let source, !source.isCancelled else { return }
             let event = source.data
             let level: MemoryPressureLevel =
-                event.contains(.critical) ? .critical
-                : event.contains(.warning) ? .warning
-                : .normal
+                event.contains(.critical)
+                ? .critical
+                : event.contains(.warning)
+                    ? .warning
+                    : .normal
             // The handler runs on the main queue by construction.
             MainActor.assumeIsolated { handler(level) }
         }

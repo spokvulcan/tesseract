@@ -52,7 +52,7 @@ struct RecordingWaveHUD: View {
                                 colors: [
                                     Color.white.opacity(0.45),
                                     Color.white.opacity(0.12),
-                                    Color.white.opacity(0.35)
+                                    Color.white.opacity(0.35),
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -91,7 +91,8 @@ private struct LiquidWaveCanvas: View {
         Canvas { context, size in
             let amplitude = baseAmplitude + (maxAmplitude * level)
             let primary = wavePath(size: size, phase: phase, amplitude: amplitude, frequency: 2.0)
-            let secondary = wavePath(size: size, phase: phase * 1.4 + 1.2, amplitude: amplitude * 0.6, frequency: 2.6)
+            let secondary = wavePath(
+                size: size, phase: phase * 1.4 + 1.2, amplitude: amplitude * 0.6, frequency: 2.6)
 
             context.addFilter(.blur(radius: 0.2))
 
@@ -104,7 +105,7 @@ private struct LiquidWaveCanvas: View {
                     Gradient(colors: [
                         Color.white.opacity(0.85),
                         Color.cyan.opacity(0.8),
-                        Color.blue.opacity(0.7)
+                        Color.blue.opacity(0.7),
                     ]),
                     startPoint: gradientStart,
                     endPoint: gradientEnd
@@ -118,7 +119,7 @@ private struct LiquidWaveCanvas: View {
                     Gradient(colors: [
                         Color.white.opacity(0.6),
                         Color.teal.opacity(0.55),
-                        Color.blue.opacity(0.5)
+                        Color.blue.opacity(0.5),
                     ]),
                     startPoint: gradientStart,
                     endPoint: gradientEnd
@@ -129,7 +130,9 @@ private struct LiquidWaveCanvas: View {
         .blendMode(.plusLighter)
     }
 
-    private func wavePath(size: CGSize, phase: CGFloat, amplitude: CGFloat, frequency: CGFloat) -> Path {
+    private func wavePath(size: CGSize, phase: CGFloat, amplitude: CGFloat, frequency: CGFloat)
+        -> Path
+    {
         var path = Path()
         let midY = size.height * 0.5
         let width = size.width

@@ -17,48 +17,52 @@ struct AgentConversationBuilderTests {
     // MARK: - Role mapping
 
     @Test func textHistoryMapsRolesAndSystemPrompt() throws {
-        let conversation = try #require(AgentConversationBuilder.conversation(
-            systemPrompt: "You are helpful.",
-            messages: [
-                .user(content: "Hello"),
-                .assistant(content: "Hi there", toolCalls: nil),
-                .user(content: "How are you?"),
-            ],
-            toolSpecs: nil
-        ))
+        let conversation = try #require(
+            AgentConversationBuilder.conversation(
+                systemPrompt: "You are helpful.",
+                messages: [
+                    .user(content: "Hello"),
+                    .assistant(content: "Hi there", toolCalls: nil),
+                    .user(content: "How are you?"),
+                ],
+                toolSpecs: nil
+            ))
 
         #expect(conversation.systemPrompt == "You are helpful.")
         #expect(conversation.messages.map(\.role) == [.user, .assistant, .user])
         #expect(conversation.messages.map(\.content) == ["Hello", "Hi there", "How are you?"])
-        #expect(conversation.toolDefinitionsDigest
-            == HTTPPrefixCacheConversation.emptyToolDefinitionsDigest)
+        #expect(
+            conversation.toolDefinitionsDigest
+                == HTTPPrefixCacheConversation.emptyToolDefinitionsDigest)
     }
 
     @Test func midConversationSystemMessageKeepsItsPlace() throws {
-        let conversation = try #require(AgentConversationBuilder.conversation(
-            systemPrompt: "System",
-            messages: [
-                .user(content: "Hello"),
-                .system(content: "Mode switched"),
-                .user(content: "Continue"),
-            ],
-            toolSpecs: nil
-        ))
+        let conversation = try #require(
+            AgentConversationBuilder.conversation(
+                systemPrompt: "System",
+                messages: [
+                    .user(content: "Hello"),
+                    .system(content: "Mode switched"),
+                    .user(content: "Continue"),
+                ],
+                toolSpecs: nil
+            ))
 
         #expect(conversation.messages.map(\.role) == [.user, .system, .user])
         #expect(conversation.messages[1].content == "Mode switched")
     }
 
     @Test func reasoningIsCarriedOnAssistantTurns() throws {
-        let conversation = try #require(AgentConversationBuilder.conversation(
-            systemPrompt: "System",
-            messages: [
-                .user(content: "Question"),
-                .assistant(content: "Answer", reasoning: "thought about it", toolCalls: nil),
-                .user(content: "Follow-up"),
-            ],
-            toolSpecs: nil
-        ))
+        let conversation = try #require(
+            AgentConversationBuilder.conversation(
+                systemPrompt: "System",
+                messages: [
+                    .user(content: "Question"),
+                    .assistant(content: "Answer", reasoning: "thought about it", toolCalls: nil),
+                    .user(content: "Follow-up"),
+                ],
+                toolSpecs: nil
+            ))
 
         #expect(conversation.messages[1].reasoning == "thought about it")
     }
@@ -68,15 +72,19 @@ struct AgentConversationBuilderTests {
     /// Identity is exact-byte SHA-256 of the attachment data — the same digest
     /// the HTTP edge computes, so a re-sent image keys the same prefix.
     @Test func imageAttachmentCarriesItsByteDigest() throws {
-        let conversation = try #require(AgentConversationBuilder.conversation(
-            systemPrompt: "System",
-            messages: [
-                .user(content: "What is in this image?", images: [
-                    ImageAttachment(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")
-                ]),
-            ],
-            toolSpecs: nil
-        ))
+        let conversation = try #require(
+            AgentConversationBuilder.conversation(
+                systemPrompt: "System",
+                messages: [
+                    .user(
+                        content: "What is in this image?",
+                        images: [
+                            ImageAttachment(
+                                data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")
+                        ])
+                ],
+                toolSpecs: nil
+            ))
 
         let image = try #require(conversation.messages.first?.images.first)
         #expect(image.digest == ImageDigest(imageBytes: ImageTestFixtures.tinyPNGData))
@@ -92,9 +100,12 @@ struct AgentConversationBuilderTests {
                 messages: [
                     // `ImageAttachment.id` is a fresh UUID per value — it must
                     // not leak into the conversation identity.
-                    .user(content: "Look", images: [
-                        ImageAttachment(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")
-                    ]),
+                    .user(
+                        content: "Look",
+                        images: [
+                            ImageAttachment(
+                                data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")
+                        ])
                 ],
                 toolSpecs: nil
             )
@@ -112,9 +123,12 @@ struct AgentConversationBuilderTests {
         let conversation = AgentConversationBuilder.conversation(
             systemPrompt: "System",
             messages: [
-                .user(content: "Look", images: [
-                    ImageAttachment(data: Data([0x89, 0x50, 0x4E, 0x47]), mimeType: "image/png")
-                ]),
+                .user(
+                    content: "Look",
+                    images: [
+                        ImageAttachment(
+                            data: Data([0x89, 0x50, 0x4E, 0x47]), mimeType: "image/png")
+                    ])
             ],
             toolSpecs: nil
         )
@@ -125,27 +139,31 @@ struct AgentConversationBuilderTests {
     // MARK: - Tool turns
 
     @Test func toolCallTurnsMapWithCanonicalizedArgumentsAndDroppedIds() throws {
-        let conversation = try #require(AgentConversationBuilder.conversation(
-            systemPrompt: "System",
-            messages: [
-                .user(content: "Read the file"),
-                .assistant(content: "Let me read it", toolCalls: [
-                    ToolCallInfo(
-                        id: "call_1",
-                        name: "read",
-                        argumentsJSON: #"{"path":   "/tmp/a.txt"}"#
-                    )
-                ]),
-                .toolResult(toolCallId: "call_1", content: "file contents"),
-                .user(content: "Thanks"),
-            ],
-            toolSpecs: nil
-        ))
+        let conversation = try #require(
+            AgentConversationBuilder.conversation(
+                systemPrompt: "System",
+                messages: [
+                    .user(content: "Read the file"),
+                    .assistant(
+                        content: "Let me read it",
+                        toolCalls: [
+                            ToolCallInfo(
+                                id: "call_1",
+                                name: "read",
+                                argumentsJSON: #"{"path":   "/tmp/a.txt"}"#
+                            )
+                        ]),
+                    .toolResult(toolCallId: "call_1", content: "file contents"),
+                    .user(content: "Thanks"),
+                ],
+                toolSpecs: nil
+            ))
 
         let assistant = conversation.messages[1]
-        #expect(assistant.toolCalls == [
-            HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path": "/tmp/a.txt"}"#)
-        ])
+        #expect(
+            assistant.toolCalls == [
+                HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path": "/tmp/a.txt"}"#)
+            ])
         let toolResult = conversation.messages[2]
         #expect(toolResult.role == .tool)
         #expect(toolResult.content == "file contents")
@@ -161,41 +179,52 @@ struct AgentConversationBuilderTests {
         let argumentsJSON = #"{"path": "/tmp/a.txt"}"#
         let httpMessages: [OpenAI.ChatMessage] = [
             .init(role: .system, content: .text("You are helpful.")),
-            .init(role: .user, content: .parts([
-                .init(type: .text, text: "What is in this image?"),
-                .init(
-                    type: .image_url,
-                    image_url: .init(url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")
-                ),
-            ])),
+            .init(
+                role: .user,
+                content: .parts([
+                    .init(type: .text, text: "What is in this image?"),
+                    .init(
+                        type: .image_url,
+                        image_url: .init(
+                            url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")
+                    ),
+                ])),
             .init(
                 role: .assistant,
                 content: .text("Let me read the file"),
-                tool_calls: [.init(
-                    id: "call_1",
-                    type: "function",
-                    function: .init(name: "read", arguments: argumentsJSON)
-                )]
+                tool_calls: [
+                    .init(
+                        id: "call_1",
+                        type: "function",
+                        function: .init(name: "read", arguments: argumentsJSON)
+                    )
+                ]
             ),
             .init(role: .tool, content: .text("file contents"), tool_call_id: "call_1"),
             .init(role: .user, content: .text("Thanks — summarize it.")),
         ]
         let httpConversation = try #require(MessageConverter.normalizeConversation(httpMessages))
 
-        let agentConversation = try #require(AgentConversationBuilder.conversation(
-            systemPrompt: "You are helpful.",
-            messages: [
-                .user(content: "What is in this image?", images: [
-                    ImageAttachment(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")
-                ]),
-                .assistant(content: "Let me read the file", toolCalls: [
-                    ToolCallInfo(id: "call_1", name: "read", argumentsJSON: argumentsJSON)
-                ]),
-                .toolResult(toolCallId: "call_1", content: "file contents"),
-                .user(content: "Thanks — summarize it."),
-            ],
-            toolSpecs: nil
-        ))
+        let agentConversation = try #require(
+            AgentConversationBuilder.conversation(
+                systemPrompt: "You are helpful.",
+                messages: [
+                    .user(
+                        content: "What is in this image?",
+                        images: [
+                            ImageAttachment(
+                                data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")
+                        ]),
+                    .assistant(
+                        content: "Let me read the file",
+                        toolCalls: [
+                            ToolCallInfo(id: "call_1", name: "read", argumentsJSON: argumentsJSON)
+                        ]),
+                    .toolResult(toolCallId: "call_1", content: "file contents"),
+                    .user(content: "Thanks — summarize it."),
+                ],
+                toolSpecs: nil
+            ))
 
         #expect(agentConversation == httpConversation)
     }
@@ -206,17 +235,22 @@ struct AgentConversationBuilderTests {
     /// same on every call (session replay stays continuous turn over turn),
     /// and present-vs-absent tools are distinguished.
     @Test func toolSpecsDigestIsStablePerAdapterAndDistinguishesEmpty() throws {
-        let specs: [ToolSpec] = [[
-            "type": "function",
-            "function": ["name": "read", "description": "Read a file"] as [String: any Sendable],
-        ]]
+        let specs: [ToolSpec] = [
+            [
+                "type": "function",
+                "function": ["name": "read", "description": "Read a file"]
+                    as [String: any Sendable],
+            ]
+        ]
 
         func digest(_ toolSpecs: [ToolSpec]?) throws -> String {
-            try #require(AgentConversationBuilder.conversation(
-                systemPrompt: "System",
-                messages: [.user(content: "Hello")],
-                toolSpecs: toolSpecs
-            )).toolDefinitionsDigest
+            try #require(
+                AgentConversationBuilder.conversation(
+                    systemPrompt: "System",
+                    messages: [.user(content: "Hello")],
+                    toolSpecs: toolSpecs
+                )
+            ).toolDefinitionsDigest
         }
 
         #expect(try digest(specs) == digest(specs))

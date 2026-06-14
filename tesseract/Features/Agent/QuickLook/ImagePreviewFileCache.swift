@@ -29,7 +29,8 @@ nonisolated final class DiskImagePreviewFileSystem: ImagePreviewFileSystem {
         try data.write(to: url, options: .atomic)
     }
     func contentsOfDirectory(at url: URL) -> [URL] {
-        (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
+        (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil))
+            ?? []
     }
     func removeItem(at url: URL) throws {
         try FileManager.default.removeItem(at: url)
@@ -70,7 +71,8 @@ final class ImagePreviewFileCache {
     @discardableResult
     func url(for attachment: ImageAttachment) throws -> URL {
         let digest = ImageDigest(imageBytes: attachment.data).hexString
-        let url = root
+        let url =
+            root
             .appendingPathComponent(digest, isDirectory: false)
             .appendingPathExtension(Self.fileExtension(forMIME: attachment.mimeType))
         if !fs.fileExists(at: url) {

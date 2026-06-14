@@ -48,9 +48,11 @@ enum DictationError: LocalizedError, Sendable {
     var recoverySuggestion: String? {
         switch self {
         case .microphonePermissionDenied:
-            return "Open System Settings > Privacy & Security > Microphone and enable access for this app."
+            return
+                "Open System Settings > Privacy & Security > Microphone and enable access for this app."
         case .accessibilityPermissionDenied:
-            return "Open System Settings > Privacy & Security > Accessibility and enable access for this app."
+            return
+                "Open System Settings > Privacy & Security > Accessibility and enable access for this app."
         case .modelNotLoaded, .modelNotDownloaded:
             return "Go to Settings > Model and download a transcription model."
         case .audioCaptureFailed:

@@ -38,7 +38,9 @@ import MLXLMCommon
         )
     }
 
-    private func snapshot(offset: Int, type: HybridCacheSnapshot.CheckpointType = .system) -> HybridCacheSnapshot {
+    private func snapshot(offset: Int, type: HybridCacheSnapshot.CheckpointType = .system)
+        -> HybridCacheSnapshot
+    {
         let kv = KVCacheSimple()
         kv.state = [
             MLXArray.zeros([1, 1, max(offset, 1), 64]),
@@ -47,13 +49,17 @@ import MLXLMCommon
         return HybridCacheSnapshot.capture(cache: [kv], offset: offset, type: type)!
     }
 
-    private func hit(_ snapshot: HybridCacheSnapshot, promptTokenCount: Int) -> PrefixCacheManager.LookupResult {
+    private func hit(_ snapshot: HybridCacheSnapshot, promptTokenCount: Int)
+        -> PrefixCacheManager.LookupResult
+    {
         PrefixCacheManager.LookupResult(
             snapshot: snapshot,
             partitionKey: key,
             snapshotTokenOffset: snapshot.tokenOffset,
             sharedPrefixLength: snapshot.tokenOffset,
-            reason: .hit(snapshotOffset: snapshot.tokenOffset, totalTokens: promptTokenCount, type: snapshot.checkpointType)
+            reason: .hit(
+                snapshotOffset: snapshot.tokenOffset, totalTokens: promptTokenCount,
+                type: snapshot.checkpointType)
         )
     }
 
@@ -67,7 +73,8 @@ import MLXLMCommon
         )
     }
 
-    private func offsets(_ plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]) -> [Int] {
+    private func offsets(_ plan: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]) -> [Int]
+    {
         plan.map(\.offset)
     }
 
@@ -75,7 +82,8 @@ import MLXLMCommon
 
     @Test func missPlansAColdPrefillCoveringNothing() {
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
             lookupResult: miss,
             checkpointPlan: [(offset: 8, type: .system), (offset: 20, type: .branchPoint)],
             promptTokenCount: 40,
@@ -90,13 +98,16 @@ import MLXLMCommon
     @Test func hitInsideThePromptPlansASuffixRestore() {
         let snap = snapshot(offset: 12)
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
             lookupResult: hit(snap, promptTokenCount: 40),
             checkpointPlan: [(offset: 8, type: .system)],
             promptTokenCount: 40,
             keySpace: .identity()
         )
-        guard case .restore(let cacheOffset, _) = plan.restore else { Issue.record("expected restore"); return }
+        guard case .restore(let cacheOffset, _) = plan.restore else {
+            Issue.record("expected restore"); return
+        }
         #expect(cacheOffset == 12)
         // prefillBaseOffset collapses the old skippedTokens / checkpointBaseOffset pair.
         #expect(plan.prefillBaseOffset == 12)
@@ -104,7 +115,8 @@ import MLXLMCommon
 
     @Test func hitAtOffsetZeroFallsBackToCold() {
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: nil, lastMessageOffset: nil, lastUserOffset: nil),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: nil, lastMessageOffset: nil, lastUserOffset: nil),
             lookupResult: hit(snapshot(offset: 0), promptTokenCount: 40),
             checkpointPlan: [],
             promptTokenCount: 40,
@@ -118,20 +130,27 @@ import MLXLMCommon
         // A snapshot covering the entire prompt has no suffix to prefill; the
         // existing behavior runs cold rather than restoring a zero-length tail.
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: nil, lastMessageOffset: nil, lastUserOffset: nil),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: nil, lastMessageOffset: nil, lastUserOffset: nil),
             lookupResult: hit(snapshot(offset: 40), promptTokenCount: 40),
             checkpointPlan: [],
             promptTokenCount: 40,
             keySpace: .identity()
         )
-        guard case .cold = plan.restore else { Issue.record("expected cold at prompt length"); return }
+        guard case .cold = plan.restore else {
+            Issue.record("expected cold at prompt length"); return
+        }
     }
 
     @Test func suffixFilterDropsCheckpointsAlreadyCoveredByTheRestore() {
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
             lookupResult: hit(snapshot(offset: 12), promptTokenCount: 40),
-            checkpointPlan: [(offset: 8, type: .system), (offset: 12, type: .branchPoint), (offset: 28, type: .branchPoint)],
+            checkpointPlan: [
+                (offset: 8, type: .system), (offset: 12, type: .branchPoint),
+                (offset: 28, type: .branchPoint),
+            ],
             promptTokenCount: 40,
             keySpace: .identity()
         )
@@ -153,10 +172,12 @@ import MLXLMCommon
         for index in runRange { prepared[index] = pad }
         return try CacheKeySpace.make(
             preparedTokens: prepared,
-            images: [CacheKeySpace.RequestImage(
-                digest: #require(ImageDigest(rawDigest: Data(repeating: 0xAB, count: 32))),
-                positionSpan: positionSpan
-            )],
+            images: [
+                CacheKeySpace.RequestImage(
+                    digest: #require(ImageDigest(rawDigest: Data(repeating: 0xAB, count: 32))),
+                    positionSpan: positionSpan
+                )
+            ],
             placeholderIdentity: ImagePlaceholderIdentity(imagePadTokenId: pad)
         ).get()
     }
@@ -165,15 +186,18 @@ import MLXLMCommon
         // Image run [10, 26): a snapshot at 12 splits the run — a corrupt
         // boundary (`positionAnchorDelta` is nil there), so the plan still runs
         // cold under phase 2 (the run-split guard, not the warm-offset clamp).
-        let keySpace = try imageKeySpace(runRange: 10 ..< 26, positionSpan: 8, totalTokens: 60)
+        let keySpace = try imageKeySpace(runRange: 10..<26, positionSpan: 8, totalTokens: 60)
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
             lookupResult: hit(snapshot(offset: 12), promptTokenCount: 60),
             checkpointPlan: [(offset: 8, type: .system), (offset: 40, type: .branchPoint)],
             promptTokenCount: 60,
             keySpace: keySpace
         )
-        guard case .cold = plan.restore else { Issue.record("expected cold for a run-splitting offset"); return }
+        guard case .cold = plan.restore else {
+            Issue.record("expected cold for a run-splitting offset"); return
+        }
         // The cold image plan also drops checkpoints inside the image prefix
         // [0, 26) — they are uncapturable there.
         #expect(offsets(plan.checkpointsToCapture) == [40])
@@ -185,9 +209,10 @@ import MLXLMCommon
         // at a clean boundary — now restores and continues *through* the image,
         // instead of degrading to cold under the old `>= minimumWarmOffset`
         // clamp. The anchor delta is 0 (no image fully cached before 8).
-        let keySpace = try imageKeySpace(runRange: 10 ..< 26, positionSpan: 8, totalTokens: 60)
+        let keySpace = try imageKeySpace(runRange: 10..<26, positionSpan: 8, totalTokens: 60)
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
             lookupResult: hit(snapshot(offset: 8), promptTokenCount: 60),
             checkpointPlan: [
                 (offset: 8, type: .system),
@@ -210,9 +235,10 @@ import MLXLMCommon
 
     @Test func hitAtOrPastTheImageWarmOffsetRestoresWithItsAnchorDelta() throws {
         // positionSpan 8 over a 16-token run: delta = 8 − 16 = −8.
-        let keySpace = try imageKeySpace(runRange: 10 ..< 26, positionSpan: 8, totalTokens: 60)
+        let keySpace = try imageKeySpace(runRange: 10..<26, positionSpan: 8, totalTokens: 60)
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: 8, lastMessageOffset: nil, lastUserOffset: nil),
             lookupResult: hit(snapshot(offset: 30), promptTokenCount: 60),
             checkpointPlan: [],
             promptTokenCount: 60,
@@ -228,9 +254,10 @@ import MLXLMCommon
     @Test func transientOffsetsInsideTheImagePrefixAreDropped() throws {
         // lastUser inside the image prefix is uncapturable on the cold image
         // plan; lastMessage past the warm offset survives.
-        let keySpace = try imageKeySpace(runRange: 10 ..< 26, positionSpan: 8, totalTokens: 60)
+        let keySpace = try imageKeySpace(runRange: 10..<26, positionSpan: 8, totalTokens: 60)
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: nil, lastMessageOffset: 30, lastUserOffset: 8),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: nil, lastMessageOffset: 30, lastUserOffset: 8),
             lookupResult: miss,
             checkpointPlan: [],
             promptTokenCount: 60,
@@ -243,7 +270,8 @@ import MLXLMCommon
 
     @Test func transientOffsetsSurviveWhenPastBaseInsidePromptAndNotAlreadyPlanned() {
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: 30, lastUserOffset: 18),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: 8, lastMessageOffset: 30, lastUserOffset: 18),
             lookupResult: miss,
             checkpointPlan: [(offset: 8, type: .system)],
             promptTokenCount: 40,
@@ -254,7 +282,8 @@ import MLXLMCommon
 
     @Test func transientOffsetIsDroppedWhenItDuplicatesAPlannedCheckpoint() {
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: 20, lastUserOffset: nil),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: 8, lastMessageOffset: 20, lastUserOffset: nil),
             lookupResult: miss,
             checkpointPlan: [(offset: 8, type: .system), (offset: 20, type: .branchPoint)],
             promptTokenCount: 40,
@@ -267,7 +296,8 @@ import MLXLMCommon
         // lastUser at/under the restore base is already cached; lastMessage at
         // or past the prompt length is out of range.
         let plan = PrefillPlanner.plan(
-            boundaries: PrefillBoundaries(stablePrefixOffset: 8, lastMessageOffset: 40, lastUserOffset: 12),
+            boundaries: PrefillBoundaries(
+                stablePrefixOffset: 8, lastMessageOffset: 40, lastUserOffset: 12),
             lookupResult: hit(snapshot(offset: 12), promptTokenCount: 40),
             checkpointPlan: [],
             promptTokenCount: 40,
@@ -280,7 +310,9 @@ import MLXLMCommon
 
     @Test func detectsStablePrefixAtTheSystemPlusToolsBoundary() throws {
         let tokenizer = FakeChatMLTokenizer()
-        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "hello there")])
+        let conv = conversation(messages: [
+            HTTPPrefixCacheMessage(role: .user, content: "hello there")
+        ])
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
         let boundaries = try PrefillPlanner.detectBoundaries(
@@ -299,7 +331,8 @@ import MLXLMCommon
 
     @Test func emptySystemPromptHasNoStablePrefix() throws {
         let tokenizer = FakeChatMLTokenizer()
-        let conv = conversation(systemPrompt: "", messages: [HTTPPrefixCacheMessage(role: .user, content: "hi")])
+        let conv = conversation(
+            systemPrompt: "", messages: [HTTPPrefixCacheMessage(role: .user, content: "hi")])
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
         let boundaries = try PrefillPlanner.detectBoundaries(
@@ -317,7 +350,8 @@ import MLXLMCommon
     @Test func lastMessageOffsetSubtractsTheThinkingGenerationPrompt() throws {
         var tokenizer = FakeChatMLTokenizer()
         tokenizer.promptStartsThinking = true
-        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")])
+        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")]
+        )
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
         let boundaries = try PrefillPlanner.detectBoundaries(
@@ -335,7 +369,8 @@ import MLXLMCommon
     @Test func lastMessageOffsetUsesTheNonThinkingPromptWhenNotThinking() throws {
         var tokenizer = FakeChatMLTokenizer()
         tokenizer.promptStartsThinking = false
-        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")])
+        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")]
+        )
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
         let boundaries = try PrefillPlanner.detectBoundaries(
@@ -355,7 +390,8 @@ import MLXLMCommon
         // is non-thinking ⇒ the suffix won't match ⇒ no last-message boundary.
         var tokenizer = FakeChatMLTokenizer()
         tokenizer.promptStartsThinking = true
-        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")])
+        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")]
+        )
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
         let boundaries = try PrefillPlanner.detectBoundaries(
@@ -388,7 +424,8 @@ import MLXLMCommon
 
         // The re-render stops after the user turn — it excludes the trailing
         // assistant message that the full tokenization includes.
-        let upToUser = "<|im_start|>system\n\(Self.system)<|im_end|>\n"
+        let upToUser =
+            "<|im_start|>system\n\(Self.system)<|im_end|>\n"
             + "<|im_start|>user\nfirst question<|im_end|>\n"
         #expect(boundaries.lastUserOffset == upToUser.utf8.count)
         let lastMessage = try #require(boundaries.lastMessageOffset)
@@ -397,7 +434,9 @@ import MLXLMCommon
 
     @Test func lastUserOffsetIsNilWithoutAUserMessage() throws {
         let tokenizer = FakeChatMLTokenizer()
-        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .assistant, content: "system-initiated")])
+        let conv = conversation(messages: [
+            HTTPPrefixCacheMessage(role: .assistant, content: "system-initiated")
+        ])
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
         let boundaries = try PrefillPlanner.detectBoundaries(
@@ -492,8 +531,9 @@ import MLXLMCommon
         )
 
         #expect(boundaries.lastUserOffset == nil)
-        #expect(boundaries.lastUserTranslationFailure
-            == .placeholderOccurrencesExceedImages(occurrences: 2, images: 1))
+        #expect(
+            boundaries.lastUserTranslationFailure
+                == .placeholderOccurrencesExceedImages(occurrences: 2, images: 1))
         // Only the last-user boundary drops — the others keep working.
         #expect(boundaries.stablePrefixOffset != nil)
         #expect(boundaries.lastMessageOffset != nil)

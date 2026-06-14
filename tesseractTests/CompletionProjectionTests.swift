@@ -174,12 +174,14 @@ struct CompletionProjectionTests {
         var never = GenerationAccumulator()
         never.ingest(.text("a"))
         var opened = GenerationAccumulator()
-        opened.ingest(.thinkStart)   // thinking == ""
+        opened.ingest(.thinkStart)  // thinking == ""
         opened.ingest(.text("a"))
 
         let info = GenerationFixtures.info(generationTokenCount: 1)
-        let p1 = CompletionProjection(accumulator: never, info: info, maxTokens: 256, completionID: "n")
-        let p2 = CompletionProjection(accumulator: opened, info: info, maxTokens: 256, completionID: "o")
+        let p1 = CompletionProjection(
+            accumulator: never, info: info, maxTokens: 256, completionID: "n")
+        let p2 = CompletionProjection(
+            accumulator: opened, info: info, maxTokens: 256, completionID: "o")
 
         #expect(p1.thinkingContent == "")
         #expect(p2.thinkingContent == "")
@@ -199,8 +201,10 @@ struct CompletionProjectionTests {
         quiet.ingest(.text("done"))
 
         let info = GenerationFixtures.info(generationTokenCount: 3)
-        let firedP = CompletionProjection(accumulator: fired, info: info, maxTokens: 256, completionID: "f")
-        let quietP = CompletionProjection(accumulator: quiet, info: info, maxTokens: 256, completionID: "q")
+        let firedP = CompletionProjection(
+            accumulator: fired, info: info, maxTokens: 256, completionID: "f")
+        let quietP = CompletionProjection(
+            accumulator: quiet, info: info, maxTokens: 256, completionID: "q")
 
         #expect(firedP.safeguardReport?.safe_prefix_chars == "Step 1.".count)
         #expect(quietP.safeguardReport == nil)

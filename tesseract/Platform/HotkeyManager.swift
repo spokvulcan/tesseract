@@ -21,7 +21,8 @@ final class HotkeyManager: ObservableObject {
         didSet {
             // Keep backward compat: updating currentHotkey updates the "dictation" registration
             if var reg = registrations["dictation"] {
-                reg = HotkeyRegistration(id: "dictation", combo: currentHotkey, onDown: reg.onDown, onUp: reg.onUp)
+                reg = HotkeyRegistration(
+                    id: "dictation", combo: currentHotkey, onDown: reg.onDown, onUp: reg.onUp)
                 registrations["dictation"] = reg
             }
         }
@@ -61,7 +62,9 @@ final class HotkeyManager: ObservableObject {
 
     // MARK: - Multi-Hotkey Registration
 
-    func registerHotkey(id: String, combo: KeyCombo, onDown: @escaping () -> Void, onUp: (() -> Void)? = nil) {
+    func registerHotkey(
+        id: String, combo: KeyCombo, onDown: @escaping () -> Void, onUp: (() -> Void)? = nil
+    ) {
         registrations[id] = HotkeyRegistration(id: id, combo: combo, onDown: onDown, onUp: onUp)
     }
 
@@ -105,9 +108,9 @@ final class HotkeyManager: ObservableObject {
     // MARK: - CGEventTap Implementation
 
     private func startEventTap() {
-        let eventMask = (1 << CGEventType.keyDown.rawValue) |
-                        (1 << CGEventType.keyUp.rawValue) |
-                        (1 << CGEventType.flagsChanged.rawValue)
+        let eventMask =
+            (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+            | (1 << CGEventType.flagsChanged.rawValue)
 
         // Store self pointer for callback
         let refcon = Unmanaged.passUnretained(self).toOpaque()
@@ -141,14 +144,17 @@ final class HotkeyManager: ObservableObject {
                 if flags.contains(.maskShift) { modifiers.insert(.shift) }
                 if flags.contains(.maskSecondaryFn) { modifiers.insert(.function) }
 
-                let relevantMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
+                let relevantMods: NSEvent.ModifierFlags = [
+                    .command, .option, .control, .shift, .function,
+                ]
                 let currentRelevant = modifiers.intersection(relevantMods)
 
                 // Handle flagsChanged - check for released modifiers on pressed hotkeys
                 if type == .flagsChanged {
                     for id in manager.pressedHotkeys {
                         guard let reg = manager.registrations[id] else { continue }
-                        let hotkeyRelevant = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers).intersection(relevantMods)
+                        let hotkeyRelevant = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
+                            .intersection(relevantMods)
                         if !currentRelevant.contains(hotkeyRelevant) {
                             DispatchQueue.main.async {
                                 guard manager.pressedHotkeys.contains(id) else { return }
@@ -164,7 +170,8 @@ final class HotkeyManager: ObservableObject {
                 // For keyDown/keyUp, find matching registration(s)
                 var matched = false
                 for (id, reg) in manager.registrations {
-                    let hotkeyRelevant = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers).intersection(relevantMods)
+                    let hotkeyRelevant = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
+                        .intersection(relevantMods)
 
                     guard keyCode == reg.combo.keyCode else { continue }
 
@@ -264,7 +271,9 @@ final class HotkeyManager: ObservableObject {
 
     private func handleKeyEvent(_ event: NSEvent) {
         let keyCode = event.keyCode
-        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift, .function])
+        let modifiers = event.modifierFlags.intersection([
+            .command, .option, .control, .shift, .function,
+        ])
         let relevantMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
 
         // Check for releases on pressed hotkeys
@@ -313,7 +322,8 @@ final class HotkeyManager: ObservableObject {
             let relevantTargetModifiers = targetModifiers.intersection(relevantMods)
 
             guard keyCode == reg.combo.keyCode,
-                  modifiers.intersection(relevantMods) == relevantTargetModifiers else {
+                modifiers.intersection(relevantMods) == relevantTargetModifiers
+            else {
                 continue
             }
 
@@ -363,7 +373,9 @@ final class HotkeyManager: ObservableObject {
 
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
                 let keyCode = event.keyCode
-                let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift, .function])
+                let modifiers = event.modifierFlags.intersection([
+                    .command, .option, .control, .shift, .function,
+                ])
 
                 // Escape cancels recording
                 if keyCode == UInt16(kVK_Escape) {

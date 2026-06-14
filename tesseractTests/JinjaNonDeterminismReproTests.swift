@@ -60,7 +60,8 @@ struct JinjaNonDeterminismReproTests {
                                             "properties": [
                                                 "label": [
                                                     "type": "string",
-                                                    "description": "Display text (1-5 words, concise)",
+                                                    "description":
+                                                        "Display text (1-5 words, concise)",
                                                 ] as [String: any Sendable],
                                                 "description": [
                                                     "type": "string",
@@ -71,7 +72,7 @@ struct JinjaNonDeterminismReproTests {
                                     ] as [String: any Sendable],
                                 ] as [String: any Sendable],
                             ] as [String: any Sendable],
-                        ] as [String: any Sendable],
+                        ] as [String: any Sendable]
                     ] as [String: any Sendable],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],
@@ -207,36 +208,37 @@ struct JinjaNonDeterminismReproTests {
     @Test func productionFlowFromJSONThroughJinja() throws {
         // A realistic tool definition as JSON (what OpenCode sends).
         let toolJSON = #"""
-        {
-            "type": "function",
-            "function": {
-                "name": "question",
-                "description": "Use this tool when you need to ask the user a question.",
-                "parameters": {
-                    "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["questions"],
-                    "properties": {
-                        "questions": {
-                            "type": "array",
-                            "description": "Questions to ask",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["question", "header", "options"],
-                                "properties": {
-                                    "question": {"type": "string", "description": "Complete question"},
-                                    "header": {"type": "string", "description": "Very short label"},
-                                    "multiple": {"type": "boolean", "description": "Allow multiple choices"},
-                                    "options": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "required": ["label", "description"],
-                                            "properties": {
-                                                "label": {"type": "string"},
-                                                "description": {"type": "string"}
+            {
+                "type": "function",
+                "function": {
+                    "name": "question",
+                    "description": "Use this tool when you need to ask the user a question.",
+                    "parameters": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["questions"],
+                        "properties": {
+                            "questions": {
+                                "type": "array",
+                                "description": "Questions to ask",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["question", "header", "options"],
+                                    "properties": {
+                                        "question": {"type": "string", "description": "Complete question"},
+                                        "header": {"type": "string", "description": "Very short label"},
+                                        "multiple": {"type": "boolean", "description": "Allow multiple choices"},
+                                        "options": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "required": ["label", "description"],
+                                                "properties": {
+                                                    "label": {"type": "string"},
+                                                    "description": {"type": "string"}
+                                                }
                                             }
                                         }
                                     }
@@ -246,8 +248,7 @@ struct JinjaNonDeterminismReproTests {
                     }
                 }
             }
-        }
-        """#
+            """#
 
         var rawJSONOutputs: Set<String> = []
         var canonicalJSONOutputs: Set<String> = []
@@ -298,39 +299,40 @@ struct JinjaNonDeterminismReproTests {
     @Test func templateRenderWithTojsonIsDeterministic() throws {
         // A minimal template that mirrors the Qwen3.5 tools block render.
         let templateString = """
-        {% for tool in tools %}{{ tool | tojson }}
-        {% endfor %}
-        """
+            {% for tool in tools %}{{ tool | tojson }}
+            {% endfor %}
+            """
 
         let toolJSON = #"""
-        {
-            "type": "function",
-            "function": {
-                "name": "question",
-                "description": "Use this tool when you need to ask the user a question.",
-                "parameters": {
-                    "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["questions"],
-                    "properties": {
-                        "questions": {
-                            "type": "array",
-                            "description": "Questions to ask",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["question", "header", "options"],
-                                "properties": {
-                                    "question": {"type": "string"},
-                                    "header": {"type": "string"},
-                                    "options": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "object",
-                                            "properties": {
-                                                "label": {"type": "string"},
-                                                "description": {"type": "string"}
+            {
+                "type": "function",
+                "function": {
+                    "name": "question",
+                    "description": "Use this tool when you need to ask the user a question.",
+                    "parameters": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["questions"],
+                        "properties": {
+                            "questions": {
+                                "type": "array",
+                                "description": "Questions to ask",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["question", "header", "options"],
+                                    "properties": {
+                                        "question": {"type": "string"},
+                                        "header": {"type": "string"},
+                                        "options": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "label": {"type": "string"},
+                                                    "description": {"type": "string"}
+                                                }
                                             }
                                         }
                                     }
@@ -340,8 +342,7 @@ struct JinjaNonDeterminismReproTests {
                     }
                 }
             }
-        }
-        """#
+            """#
 
         let template = try Jinja.Template(templateString)
         var renderedOutputs: Set<String> = []
@@ -354,7 +355,7 @@ struct JinjaNonDeterminismReproTests {
 
             // Convert to Jinja context.
             let context: [String: Jinja.Value] = try [
-                "tools": .array(toolSpecs.map { try Jinja.Value(any: $0) }),
+                "tools": .array(toolSpecs.map { try Jinja.Value(any: $0) })
             ]
 
             // Render through the actual Jinja template.
@@ -374,22 +375,22 @@ struct JinjaNonDeterminismReproTests {
     /// produce deterministic output across invocations with the same input JSON?
     @Test func convertToolDefinitionsIsDeterministic() throws {
         let toolJSON = #"""
-        {
-            "type": "function",
-            "function": {
-                "name": "test",
-                "description": "A test tool",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "alpha": {"type": "string"},
-                        "zebra": {"type": "integer"},
-                        "mango": {"type": "boolean"}
+            {
+                "type": "function",
+                "function": {
+                    "name": "test",
+                    "description": "A test tool",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "alpha": {"type": "string"},
+                            "zebra": {"type": "integer"},
+                            "mango": {"type": "boolean"}
+                        }
                     }
                 }
             }
-        }
-        """#
+            """#
 
         var outputs: Set<String> = []
         for _ in 0..<20 {

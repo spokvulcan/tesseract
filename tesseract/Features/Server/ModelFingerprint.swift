@@ -33,7 +33,8 @@ enum ModelFingerprint {
             case .missingDirectory(let url):
                 return "Model directory does not exist: \(url.path)"
             case .unableToEnumerate(let url, let underlying):
-                return "Failed to enumerate model directory \(url.path): \(underlying.localizedDescription)"
+                return
+                    "Failed to enumerate model directory \(url.path): \(underlying.localizedDescription)"
             case .unreadableFile(let url, let underlying):
                 return "Failed to read model file \(url.path): \(underlying.localizedDescription)"
             }
@@ -53,7 +54,7 @@ enum ModelFingerprint {
         let fm = FileManager.default
         var isDirectory: ObjCBool = false
         guard fm.fileExists(atPath: modelDir.path, isDirectory: &isDirectory),
-              isDirectory.boolValue
+            isDirectory.boolValue
         else {
             throw Error.missingDirectory(modelDir)
         }
@@ -90,7 +91,8 @@ enum ModelFingerprint {
             hasher.update(data: Data([0x00]))
             hasher.update(data: withUnsafeBytes(of: entry.size.littleEndian) { Data($0) })
             hasher.update(data: Data([0x00]))
-            hasher.update(data: withUnsafeBytes(of: entry.mtimeNanoseconds.littleEndian) { Data($0) })
+            hasher.update(
+                data: withUnsafeBytes(of: entry.mtimeNanoseconds.littleEndian) { Data($0) })
             hasher.update(data: Data([0x0a]))
         }
 
@@ -117,7 +119,9 @@ enum ModelFingerprint {
         }
     }
 
-    nonisolated private static func collectSafetensorsEntries(in modelDir: URL) throws -> [SafetensorsEntry] {
+    nonisolated private static func collectSafetensorsEntries(in modelDir: URL) throws
+        -> [SafetensorsEntry]
+    {
         let fm = FileManager.default
         let contents: [URL]
         do {
@@ -137,7 +141,9 @@ enum ModelFingerprint {
         for url in safetensors {
             let values: URLResourceValues
             do {
-                values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                values = try url.resourceValues(forKeys: [
+                    .fileSizeKey, .contentModificationDateKey,
+                ])
             } catch {
                 throw Error.unreadableFile(url, underlying: error)
             }
@@ -148,11 +154,12 @@ enum ModelFingerprint {
             } else {
                 mtimeNs = 0
             }
-            entries.append(SafetensorsEntry(
-                name: url.lastPathComponent,
-                size: size,
-                mtimeNanoseconds: mtimeNs
-            ))
+            entries.append(
+                SafetensorsEntry(
+                    name: url.lastPathComponent,
+                    size: size,
+                    mtimeNanoseconds: mtimeNs
+                ))
         }
 
         entries.sort { $0.name < $1.name }

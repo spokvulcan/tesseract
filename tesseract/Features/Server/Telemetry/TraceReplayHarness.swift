@@ -121,7 +121,8 @@ nonisolated enum TraceReplayHarness {
 
         let observedTTFTs = records.map(\.ttftSeconds).sorted()
         let sortedProxies = proxies.sorted()
-        let rewindSizes = records
+        let rewindSizes =
+            records
             .compactMap(\.rewind)
             .filter(\.isRewind)
             .map(\.rewindSize)
@@ -159,20 +160,20 @@ nonisolated enum TraceReplayHarness {
         let o = report.observed
         let s = report.simulatedLRU
         return """
-        Trace Replay — LRU baseline (PRD #82, slice #85)
-        records: \(report.recordCount) · block size: \(report.blockSize) tokens
-        observed      ttft p50 \(seconds(o.ttftP50Seconds)) · p95 \(seconds(o.ttftP95Seconds)) \
-        · hit tokens \(o.totalHitTokens) · evictions \(o.terminalEvictions) terminal \
-        / \(o.recoveredEvictions) recovered · ssd restores \(o.ssdRestores) \
-        · hydration \(seconds(o.totalHydrationSeconds))
-        rewinds       events \(o.rewindEvents) · size p50 \(o.rewindSizeP50Tokens) \
-        · p95 \(o.rewindSizeP95Tokens) · max \(o.maxRewindSizeTokens) tokens
-        simulated LRU ttft-proxy p50 \(seconds(s.ttftProxyP50Seconds)) \
-        · p95 \(seconds(s.ttftProxyP95Seconds)) · hit tokens \(s.totalHitTokens) \
-        · hit requests \(s.hitRequestCount)/\(report.recordCount) \
-        · evictions \(s.evictionCount) (all terminal — RAM-only baseline) \
-        · evicted bytes \(s.evictedBytes)
-        """
+            Trace Replay — LRU baseline (PRD #82, slice #85)
+            records: \(report.recordCount) · block size: \(report.blockSize) tokens
+            observed      ttft p50 \(seconds(o.ttftP50Seconds)) · p95 \(seconds(o.ttftP95Seconds)) \
+            · hit tokens \(o.totalHitTokens) · evictions \(o.terminalEvictions) terminal \
+            / \(o.recoveredEvictions) recovered · ssd restores \(o.ssdRestores) \
+            · hydration \(seconds(o.totalHydrationSeconds))
+            rewinds       events \(o.rewindEvents) · size p50 \(o.rewindSizeP50Tokens) \
+            · p95 \(o.rewindSizeP95Tokens) · max \(o.maxRewindSizeTokens) tokens
+            simulated LRU ttft-proxy p50 \(seconds(s.ttftProxyP50Seconds)) \
+            · p95 \(seconds(s.ttftProxyP95Seconds)) · hit tokens \(s.totalHitTokens) \
+            · hit requests \(s.hitRequestCount)/\(report.recordCount) \
+            · evictions \(s.evictionCount) (all terminal — RAM-only baseline) \
+            · evicted bytes \(s.evictedBytes)
+            """
     }
 
     private static func seconds(_ value: Double) -> String {
@@ -227,13 +228,14 @@ nonisolated enum TraceReplayHarness {
             for index in snapshots.indices {
                 let candidate = snapshots[index]
                 guard candidate.partitionDigest == record.partitionDigest,
-                      !candidate.digests.isEmpty,
-                      record.prefixBlockDigests.starts(with: candidate.digests)
+                    !candidate.digests.isEmpty,
+                    record.prefixBlockDigests.starts(with: candidate.digests)
                 else { continue }
                 if let current = winner {
                     let best = snapshots[current]
                     if (candidate.digests.count, candidate.offset, candidate.order)
-                        > (best.digests.count, best.offset, best.order) {
+                        > (best.digests.count, best.offset, best.order)
+                    {
                         winner = index
                     }
                 } else {
@@ -258,7 +260,8 @@ nonisolated enum TraceReplayHarness {
             let digests = Array(
                 record.prefixBlockDigests.prefix(admitted.offset / TraceBlockDigest.blockSize)
             )
-            let isLeaf = admitted.checkpointType
+            let isLeaf =
+                admitted.checkpointType
                 == HybridCacheSnapshot.CheckpointType.leaf.wireString
             remove { existing in
                 existing.partitionDigest == record.partitionDigest
@@ -274,15 +277,16 @@ nonisolated enum TraceReplayHarness {
                         && digests.starts(with: existing.digests)
                 }
             }
-            snapshots.append(SimSnapshot(
-                partitionDigest: record.partitionDigest,
-                digests: digests,
-                offset: admitted.offset,
-                bytes: admitted.bytes,
-                isLeaf: isLeaf,
-                lastAccess: clock,
-                order: nextOrder
-            ))
+            snapshots.append(
+                SimSnapshot(
+                    partitionDigest: record.partitionDigest,
+                    digests: digests,
+                    offset: admitted.offset,
+                    bytes: admitted.bytes,
+                    isLeaf: isLeaf,
+                    lastAccess: clock,
+                    order: nextOrder
+                ))
             totalBytes += admitted.bytes
             nextOrder += 1
         }

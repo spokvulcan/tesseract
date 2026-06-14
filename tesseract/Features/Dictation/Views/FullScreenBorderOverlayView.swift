@@ -22,7 +22,7 @@ struct GlowEffect: View {
             }
         }
         .ignoresSafeArea()
-        .drawingGroup() // Rasterize to GPU texture for better performance
+        .drawingGroup()  // Rasterize to GPU texture for better performance
     }
 
     private func drawGlowBorder(context: GraphicsContext, size: CGSize, time: Double) {
@@ -166,8 +166,10 @@ struct FullScreenBorderOverlayView: View {
     var body: some View {
         ZStack {
             if shouldShow {
-                GlowEffect(audioLevel: CGFloat(overlayState.audioLevel), theme: overlayState.glowTheme)
-                    .opacity(isVisible ? 1 : 0)
+                GlowEffect(
+                    audioLevel: CGFloat(overlayState.audioLevel), theme: overlayState.glowTheme
+                )
+                .opacity(isVisible ? 1 : 0)
             }
         }
         .onChange(of: overlayState.dictationState) { _, newState in

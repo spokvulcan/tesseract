@@ -8,36 +8,44 @@ struct PromptCacheTelemetryStoreTests {
 
     @Test func aggregateComputesHitRateTokenReuseAndLatency() {
         let events = [
-            event("lookup", fields: [
-                ("reason", "hit"),
-                ("promptTokens", "100"),
-                ("skippedPrefillTokens", "80"),
-                ("checkpointType", "system"),
-                ("lookupMs", "10"),
-                ("restoreMs", "3"),
-            ]),
-            event("lookup", fields: [
-                ("reason", "ssdHit"),
-                ("promptTokens", "200"),
-                ("skippedPrefillTokens", "150"),
-                ("checkpointType", "leaf"),
-                ("lookupMs", "20"),
-                ("restoreMs", "8"),
-            ]),
-            event("lookup", fields: [
-                ("reason", "missNoSnapshotInPrefix"),
-                ("promptTokens", "50"),
-                ("skippedPrefillTokens", "0"),
-                ("checkpointType", "nil"),
-                ("lookupMs", "5"),
-                ("restoreMs", "0"),
-            ]),
-            event("ttft", fields: [
-                ("lookupMs", "15"),
-                ("restoreMs", "4"),
-                ("prefillMs", "44"),
-                ("ttftMs", "63"),
-            ]),
+            event(
+                "lookup",
+                fields: [
+                    ("reason", "hit"),
+                    ("promptTokens", "100"),
+                    ("skippedPrefillTokens", "80"),
+                    ("checkpointType", "system"),
+                    ("lookupMs", "10"),
+                    ("restoreMs", "3"),
+                ]),
+            event(
+                "lookup",
+                fields: [
+                    ("reason", "ssdHit"),
+                    ("promptTokens", "200"),
+                    ("skippedPrefillTokens", "150"),
+                    ("checkpointType", "leaf"),
+                    ("lookupMs", "20"),
+                    ("restoreMs", "8"),
+                ]),
+            event(
+                "lookup",
+                fields: [
+                    ("reason", "missNoSnapshotInPrefix"),
+                    ("promptTokens", "50"),
+                    ("skippedPrefillTokens", "0"),
+                    ("checkpointType", "nil"),
+                    ("lookupMs", "5"),
+                    ("restoreMs", "0"),
+                ]),
+            event(
+                "ttft",
+                fields: [
+                    ("lookupMs", "15"),
+                    ("restoreMs", "4"),
+                    ("prefillMs", "44"),
+                    ("ttftMs", "63"),
+                ]),
             event("ssdAdmit", fields: [("outcome", "droppedSystemProtectionWins")]),
             event("eviction", fields: [("freedBytes", "4096")]),
         ]
@@ -70,26 +78,30 @@ struct PromptCacheTelemetryStoreTests {
         // keyed on `reason == "chainPrefixHit"`, which production never emits,
         // so the KPI stayed permanently 0.
         let events = [
-            event("lookup", fields: [
-                ("reason", "hit"),
-                ("hydratedFromSSD", "true"),
-                ("chainPrefixRestore", "true"),
-                ("sharedPrefixLength", "900"),
-                ("snapshotOffset", "640"),
-                ("promptTokens", "1000"),
-                ("skippedPrefillTokens", "640"),
-            ]),
+            event(
+                "lookup",
+                fields: [
+                    ("reason", "hit"),
+                    ("hydratedFromSSD", "true"),
+                    ("chainPrefixRestore", "true"),
+                    ("sharedPrefixLength", "900"),
+                    ("snapshotOffset", "640"),
+                    ("promptTokens", "1000"),
+                    ("skippedPrefillTokens", "640"),
+                ]),
             // A restore that landed exactly at the divergence is a hit, not a
             // rewind — it must not inflate the count.
-            event("lookup", fields: [
-                ("reason", "hit"),
-                ("hydratedFromSSD", "true"),
-                ("chainPrefixRestore", "true"),
-                ("sharedPrefixLength", "512"),
-                ("snapshotOffset", "512"),
-                ("promptTokens", "600"),
-                ("skippedPrefillTokens", "512"),
-            ]),
+            event(
+                "lookup",
+                fields: [
+                    ("reason", "hit"),
+                    ("hydratedFromSSD", "true"),
+                    ("chainPrefixRestore", "true"),
+                    ("sharedPrefixLength", "512"),
+                    ("snapshotOffset", "512"),
+                    ("promptTokens", "600"),
+                    ("skippedPrefillTokens", "512"),
+                ]),
         ]
 
         let aggregate = PromptCacheTelemetryAggregate.from(events: events)
@@ -104,12 +116,14 @@ struct PromptCacheTelemetryStoreTests {
     @Test func recordForTestingBoundsEventAndSampleBuffers() {
         let store = PromptCacheTelemetryStore(registerDiagnosticsSink: false)
         let events = (0..<(PromptCacheTelemetryStore.maxEvents + 5)).map { index in
-            event("lookup", fields: [
-                ("index", "\(index)"),
-                ("reason", "missNoEntries"),
-                ("promptTokens", "1"),
-                ("skippedPrefillTokens", "0"),
-            ])
+            event(
+                "lookup",
+                fields: [
+                    ("index", "\(index)"),
+                    ("reason", "missNoEntries"),
+                    ("promptTokens", "1"),
+                    ("skippedPrefillTokens", "0"),
+                ])
         }
 
         store.recordForTesting(events)
@@ -125,11 +139,14 @@ struct PromptCacheTelemetryStoreTests {
         let requestID = UUID()
         store.toggleLiveUpdates()
 
-        PrefixCacheDiagnostics.forwardTelemetryEvent(event("lookup", requestID: requestID, fields: [
-            ("reason", "hit"),
-            ("promptTokens", "32"),
-            ("skippedPrefillTokens", "16"),
-        ]))
+        PrefixCacheDiagnostics.forwardTelemetryEvent(
+            event(
+                "lookup", requestID: requestID,
+                fields: [
+                    ("reason", "hit"),
+                    ("promptTokens", "32"),
+                    ("skippedPrefillTokens", "16"),
+                ]))
 
         try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(events(in: store, matching: requestID).isEmpty)
@@ -145,11 +162,13 @@ struct PromptCacheTelemetryStoreTests {
     @Test func exportJSONContainsSnapshotAggregateAndEvents() throws {
         let store = PromptCacheTelemetryStore(registerDiagnosticsSink: false)
         store.recordForTesting([
-            event("lookup", fields: [
-                ("reason", "hit"),
-                ("promptTokens", "10"),
-                ("skippedPrefillTokens", "7"),
-            ]),
+            event(
+                "lookup",
+                fields: [
+                    ("reason", "hit"),
+                    ("promptTokens", "10"),
+                    ("skippedPrefillTokens", "7"),
+                ])
         ])
 
         let data = try #require(store.exportJSONString().data(using: .utf8))
@@ -164,14 +183,18 @@ struct PromptCacheTelemetryStoreTests {
     }
 
     @Test func compactEventDisplaySummarizesRows() {
-        let lookup = event("lookup", fields: [
-            ("reason", "ssdHit"),
-            ("promptTokens", "128"),
-            ("skippedPrefillTokens", "96"),
-        ])
-        let eviction = event("eviction", fields: [
-            ("freedBytes", "1048576"),
-        ])
+        let lookup = event(
+            "lookup",
+            fields: [
+                ("reason", "ssdHit"),
+                ("promptTokens", "128"),
+                ("skippedPrefillTokens", "96"),
+            ])
+        let eviction = event(
+            "eviction",
+            fields: [
+                ("freedBytes", "1048576")
+            ])
 
         #expect(PromptCacheEventDisplay.symbol(for: lookup.eventName) == "magnifyingglass")
         #expect(PromptCacheEventDisplay.reason(for: lookup) == "ssdHit")

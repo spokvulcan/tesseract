@@ -188,7 +188,10 @@ struct WarmStartTests {
                 partitionKey: partitionKey
             )
             guard case .ssdHit(let ctx) = result.reason else {
-                #expect(Bool(false), "Expected .ssdHit for \(descriptor.pathFromRoot.count) tokens, got \(result.reason)")
+                #expect(
+                    Bool(false),
+                    "Expected .ssdHit for \(descriptor.pathFromRoot.count) tokens, got \(result.reason)"
+                )
                 continue
             }
             #expect(ctx.snapshotRef.snapshotID == descriptor.snapshotID)
@@ -272,7 +275,9 @@ struct WarmStartTests {
         if case .missNoEntries = invalidResult.reason {
             // expected
         } else {
-            #expect(Bool(false), "Expected missNoEntries for invalidated partition, got \(invalidResult.reason)")
+            #expect(
+                Bool(false),
+                "Expected missNoEntries for invalidated partition, got \(invalidResult.reason)")
         }
     }
 
@@ -327,7 +332,8 @@ struct WarmStartTests {
         )
         try writeManifest(staleManifest, rootURL: root)
 
-        let stalePartitionDir = root
+        let stalePartitionDir =
+            root
             .appendingPathComponent("partitions")
             .appendingPathComponent(digest)
         try FileManager.default.createDirectory(
@@ -340,13 +346,18 @@ struct WarmStartTests {
 
         #expect(ssdStore.currentSSDBytesForTesting() == 0)
         #expect(mgr.stats.partitionCount == 0)
-        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("manifest.json").path))
-        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("manifest.v2.bak").path))
-        #expect(await waitUntil {
+        #expect(
             !FileManager.default.fileExists(
-                atPath: root.appendingPathComponent("partitions").path
-            )
-        })
+                atPath: root.appendingPathComponent("manifest.json").path))
+        #expect(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("manifest.v2.bak").path))
+        #expect(
+            await waitUntil {
+                !FileManager.default.fileExists(
+                    atPath: root.appendingPathComponent("partitions").path
+                )
+            })
     }
 
     /// A corrupt manifest with no on-disk snapshots still works:
@@ -409,9 +420,11 @@ struct WarmStartTests {
             tokenOffset: 5,
             bytes: 256
         )
-        guard case .accepted = writerStore.tryEnqueue(
-            payload: payload, descriptor: descriptor
-        ) else {
+        guard
+            case .accepted = writerStore.tryEnqueue(
+                payload: payload, descriptor: descriptor
+            )
+        else {
             #expect(Bool(false), "tryEnqueue rejected")
             return
         }

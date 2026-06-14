@@ -140,9 +140,10 @@ nonisolated enum SnapshotResolution {
             return nil
         }
 
-        diagnostics.log(PrefixCacheDiagnostics.SSDHitEvent(
-            id: ctx.snapshotRef.snapshotID, hydrateMs: hydrateSeconds
-        ))
+        diagnostics.log(
+            PrefixCacheDiagnostics.SSDHitEvent(
+                id: ctx.snapshotRef.snapshotID, hydrateMs: hydrateSeconds
+            ))
         let hydratedBytes = ctx.snapshotRef.bytesOnDisk
         await MainActor.run {
             ctx.ssdStore.recordHit(id: ctx.snapshotRef.snapshotID)
@@ -192,9 +193,10 @@ nonisolated enum SnapshotResolution {
             return nil
         }
 
-        diagnostics.log(PrefixCacheDiagnostics.SSDHitEvent(
-            id: ctx.point.ownerSnapshotID, hydrateMs: hydrateSeconds
-        ))
+        diagnostics.log(
+            PrefixCacheDiagnostics.SSDHitEvent(
+                id: ctx.point.ownerSnapshotID, hydrateMs: hydrateSeconds
+            ))
         await MainActor.run {
             ctx.ssdStore.recordHit(id: ctx.point.ownerSnapshotID)
             prefixCache.promoteChainPrefix(

@@ -210,10 +210,10 @@ final class ServerGenerationLog {
         case .thinkTruncate(let safePrefix):
             flushPending(handle: handle)
             update(handle) { $0.replaceThinkingWithSafePrefix(safePrefix) }
-            // Suppress the scroll bump — the span just shrank from ~16K chars
-            // to safePrefix-size in a single tick, so an auto-scroll-to-bottom
-            // is meaningless and risks racing SwiftUI layout against stale
-            // ScrollView geometry.
+        // Suppress the scroll bump — the span just shrank from ~16K chars
+        // to safePrefix-size in a single tick, so an auto-scroll-to-bottom
+        // is meaningless and risks racing SwiftUI layout against stale
+        // ScrollView geometry.
         }
     }
 
@@ -271,7 +271,8 @@ final class ServerGenerationLog {
         guard !chunk.isEmpty else { return }
 
         if let pending = pendingAppends[handle.id] {
-            let otherBuffered = isThinking
+            let otherBuffered =
+                isThinking
                 ? !pending.pendingText.isEmpty
                 : !pending.pendingThinking.isEmpty
             if otherBuffered {
@@ -312,7 +313,8 @@ final class ServerGenerationLog {
         guard !delta.isEmpty || name != nil else { return }
 
         if let pending = pendingAppends[handle.id],
-           !pending.pendingText.isEmpty || !pending.pendingThinking.isEmpty {
+            !pending.pendingText.isEmpty || !pending.pendingThinking.isEmpty
+        {
             flushPending(handle: handle)
         }
 
@@ -368,7 +370,8 @@ final class ServerGenerationLog {
     private func throttledStreamingVersionBump() {
         let now = Date()
         if let last = lastStreamingVersionBumpAt,
-           now.timeIntervalSince(last) * 1000 < Self.streamingVersionThrottleMs {
+            now.timeIntervalSince(last) * 1000 < Self.streamingVersionThrottleMs
+        {
             return
         }
         lastStreamingVersionBumpAt = now
@@ -420,10 +423,10 @@ struct RequestTrace: Identifiable, Equatable {
         var id: UUID {
             switch self {
             case .text(let id, _),
-                 .thinking(let id, _),
-                 .toolCall(let id, _, _),
-                 .malformedToolCall(let id, _),
-                 .toolCallBuilding(let id, _, _):
+                .thinking(let id, _),
+                .toolCall(let id, _, _),
+                .malformedToolCall(let id, _),
+                .toolCallBuilding(let id, _, _):
                 return id
             }
         }
@@ -515,11 +518,12 @@ struct RequestTrace: Identifiable, Equatable {
     }
 
     mutating func appendToolCall(name: String, arguments: [String: JSONValue]) {
-        spans.append(.toolCall(
-            id: UUID(),
-            name: name,
-            argumentsJSON: ToolArgumentNormalizer.encode(arguments)
-        ))
+        spans.append(
+            .toolCall(
+                id: UUID(),
+                name: name,
+                argumentsJSON: ToolArgumentNormalizer.encode(arguments)
+            ))
     }
 
     mutating func appendMalformedToolCall(_ raw: String) {
@@ -540,11 +544,12 @@ struct RequestTrace: Identifiable, Equatable {
                 argumentsJSON: Self.cappedAppend(existingArgs, delta)
             )
         } else {
-            spans.append(.toolCallBuilding(
-                id: UUID(),
-                name: name ?? "",
-                argumentsJSON: Self.cappedAppend("", delta)
-            ))
+            spans.append(
+                .toolCallBuilding(
+                    id: UUID(),
+                    name: name ?? "",
+                    argumentsJSON: Self.cappedAppend("", delta)
+                ))
         }
     }
 

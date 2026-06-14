@@ -85,7 +85,7 @@ extension [ContentBlock] {
     /// match and distinct occurrences — even byte-identical ones — stay distinct.
     nonisolated private static func occurrenceID(namespace: UUID, index: Int) -> UUID {
         let idx = UInt32(truncatingIfNeeded: index)
-        var u = namespace.uuid   // uuid_t — XOR the index into its trailing bytes
+        var u = namespace.uuid  // uuid_t — XOR the index into its trailing bytes
         u.12 ^= UInt8(truncatingIfNeeded: idx)
         u.13 ^= UInt8(truncatingIfNeeded: idx >> 8)
         u.14 ^= UInt8(truncatingIfNeeded: idx >> 16)

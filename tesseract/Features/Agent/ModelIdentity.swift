@@ -145,7 +145,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     private static func loadConfigJSON(directory: URL) -> [String: Any]? {
         let configURL = directory.appendingPathComponent("config.json")
         guard let data = try? Data(contentsOf: configURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json
     }
@@ -163,7 +163,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// of the template.
     private static func interpretPromptStartsThinking(chatTemplate: String?) -> Bool {
         guard let chatTemplate,
-              let genPromptRange = chatTemplate.range(of: "add_generation_prompt")
+            let genPromptRange = chatTemplate.range(of: "add_generation_prompt")
         else { return false }
         return chatTemplate[genPromptRange.upperBound...].contains("<think>")
     }
@@ -183,17 +183,20 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         // positive. A bare `contains` over-declares the capability and forks a
         // zero-reuse cache partition for a render the template never branches on.
         let scannable = stripJinjaComments(chatTemplate)
-        return Set(TemplateRenderFlag.allCases.filter {
-            referencesIdentifier($0.rawValue, in: scannable)
-        })
+        return Set(
+            TemplateRenderFlag.allCases.filter {
+                referencesIdentifier($0.rawValue, in: scannable)
+            })
     }
 
     /// Remove `{# … #}` Jinja comment blocks (non-greedy, spanning newlines)
     /// so a flag mentioned only in a comment is not read as a declaration.
     private static func stripJinjaComments(_ template: String) -> String {
-        guard let regex = try? NSRegularExpression(
-            pattern: "\\{#.*?#\\}", options: [.dotMatchesLineSeparators]
-        ) else { return template }
+        guard
+            let regex = try? NSRegularExpression(
+                pattern: "\\{#.*?#\\}", options: [.dotMatchesLineSeparators]
+            )
+        else { return template }
         let range = NSRange(template.startIndex..., in: template)
         return regex.stringByReplacingMatches(
             in: template, range: range, withTemplate: " "
@@ -204,7 +207,8 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// character, so it matches `{% if preserve_thinking %}` but not the
     /// longer identifier `preserve_thinking_default`.
     private static func referencesIdentifier(_ name: String, in text: String) -> Bool {
-        let pattern = "(?<![A-Za-z0-9_])"
+        let pattern =
+            "(?<![A-Za-z0-9_])"
             + NSRegularExpression.escapedPattern(for: name)
             + "(?![A-Za-z0-9_])"
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
@@ -222,16 +226,16 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// parse-failure path and `LLMActor`'s pre-load path agree in one place.
     private static func interpretFlopProfile(configJSON: [String: Any]?) -> ModelFlopProfile {
         guard let root = configJSON,
-              let topModelType = root["model_type"] as? String,
-              topModelType.hasPrefix("qwen3_5")
+            let topModelType = root["model_type"] as? String,
+            topModelType.hasPrefix("qwen3_5")
         else { return .fallback }
 
         let textConfig = (root["text_config"] as? [String: Any]) ?? root
         guard let hiddenLayers = textConfig["num_hidden_layers"] as? Int,
-              let hiddenSize = textConfig["hidden_size"] as? Int,
-              let linearNumValueHeads = textConfig["linear_num_value_heads"] as? Int,
-              let linearKeyHeadDim = textConfig["linear_key_head_dim"] as? Int,
-              let fullAttentionInterval = textConfig["full_attention_interval"] as? Int
+            let hiddenSize = textConfig["hidden_size"] as? Int,
+            let linearNumValueHeads = textConfig["linear_num_value_heads"] as? Int,
+            let linearKeyHeadDim = textConfig["linear_key_head_dim"] as? Int,
+            let fullAttentionInterval = textConfig["full_attention_interval"] as? Int
         else { return .fallback }
 
         return .qwen35(
@@ -247,14 +251,14 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         configJSON: [String: Any]?
     ) -> FullAttentionScratchProfile? {
         guard let root = configJSON,
-              let topModelType = root["model_type"] as? String,
-              topModelType.hasPrefix("qwen3_5")
+            let topModelType = root["model_type"] as? String,
+            topModelType.hasPrefix("qwen3_5")
         else { return nil }
 
         let textConfig = (root["text_config"] as? [String: Any]) ?? root
         guard let attentionHeads = textConfig["num_attention_heads"] as? Int,
-              attentionHeads > 0,
-              textConfig["full_attention_interval"] as? Int != nil
+            attentionHeads > 0,
+            textConfig["full_attention_interval"] as? Int != nil
         else { return nil }
 
         return FullAttentionScratchProfile(
@@ -283,9 +287,9 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// config decode (`image_token_id` 248056, `spatial_merge_size` 2).
     private static func interpretImageKeying(configJSON: [String: Any]?) -> ImageKeying? {
         guard let root = configJSON,
-              let modelType = root["model_type"] as? String,
-              modelType.hasPrefix("qwen3_5"),
-              let visionConfig = root["vision_config"] as? [String: Any]
+            let modelType = root["model_type"] as? String,
+            modelType.hasPrefix("qwen3_5"),
+            let visionConfig = root["vision_config"] as? [String: Any]
         else { return nil }
 
         return ImageKeying(

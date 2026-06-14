@@ -57,7 +57,7 @@ nonisolated struct GenerationAccumulator: Sendable {
         case .malformedToolCall(let raw):
             malformedToolCallRaw += raw
         case .toolCallDelta, .info:
-            break   // caller concerns (live UI deltas, completion metrics)
+            break  // caller concerns (live UI deltas, completion metrics)
         }
     }
 }

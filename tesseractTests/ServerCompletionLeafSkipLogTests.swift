@@ -25,7 +25,8 @@ struct ServerCompletionLeafSkipLogTests {
     }
 
     @Test func canonicalStagePrefixMatchesTheDissolvedHelper() {
-        let log = ServerCompletion.leafSkipLog(for: .noResolvedBoundary(canonicalLen: 12), mode: .canonical)
+        let log = ServerCompletion.leafSkipLog(
+            for: .noResolvedBoundary(canonicalLen: 12), mode: .canonical)
         #expect(log.stage == "canonicalLeafStore")
         #expect(log.reason == "no-canonical-restore-boundary")
         #expect(log.level == .info)
@@ -35,7 +36,8 @@ struct ServerCompletionLeafSkipLogTests {
     // MARK: each reason's reason-string / level / fields
 
     @Test func tokenizationFailureIsPrefillThrewAtWarning() {
-        let log = ServerCompletion.leafSkipLog(for: .tokenizationFailed(error: "boom"), mode: .directTool)
+        let log = ServerCompletion.leafSkipLog(
+            for: .tokenizationFailed(error: "boom"), mode: .directTool)
         #expect(log.stage == "directToolLeafStore")
         #expect(log.reason == "prefill-threw")
         #expect(log.level == .warning)

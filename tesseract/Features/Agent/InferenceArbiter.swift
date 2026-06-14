@@ -136,7 +136,7 @@ final class InferenceArbiter: InferenceArbitrating {
     /// Independent of `isServerEnabled`: internal server-core use must work
     /// without the public HTTP listener enabled.
     func reloadLLMIfNeeded() async throws {
-        try await withExclusiveGPU(.llm) { }
+        try await withExclusiveGPU(.llm) {}
     }
 
     // MARK: - Model Management
@@ -204,7 +204,7 @@ final class InferenceArbiter: InferenceArbitrating {
                 throw AgentEngineError.modelNotLoaded
             }
             guard case .downloaded = modelDownloadManager.statuses[modelID],
-                  let path = modelDownloadManager.modelPath(for: modelID)
+                let path = modelDownloadManager.modelPath(for: modelID)
             else {
                 Log.general.error("InferenceArbiter: LLM model '\(modelID)' not downloaded")
                 // Specific error case so HTTP callers can surface 404
@@ -215,7 +215,7 @@ final class InferenceArbiter: InferenceArbitrating {
             }
             Log.general.info(
                 "InferenceArbiter: loading LLM model '\(modelID)' "
-                + "visionMode=\(visionMode)"
+                    + "visionMode=\(visionMode)"
             )
             try await agentEngine.loadModel(
                 from: path,

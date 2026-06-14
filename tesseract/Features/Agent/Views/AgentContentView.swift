@@ -51,7 +51,9 @@ struct AgentContentView: View {
                     }
 
                     VStack(spacing: 0) {
-                        if coordinator.commandPalette.showCommandPopup, !coordinator.commandPalette.commandFilteredResults.isEmpty {
+                        if coordinator.commandPalette.showCommandPopup,
+                            !coordinator.commandPalette.commandFilteredResults.isEmpty
+                        {
                             SlashCommandPopupView(
                                 commands: coordinator.commandPalette.commandFilteredResults,
                                 selectedIndex: coordinator.commandPalette.commandSelectedIndex,
@@ -67,7 +69,8 @@ struct AgentContentView: View {
                         AgentInputBarView(inputText: $inputText)
                     }
                 }
-                .animation(.easeOut(duration: 0.15), value: coordinator.commandPalette.showCommandPopup)
+                .animation(
+                    .easeOut(duration: 0.15), value: coordinator.commandPalette.showCommandPopup)
             }
         }
         .navigationTitle("Agent")
@@ -135,10 +138,14 @@ struct AgentContentView: View {
                 Button {
                     settings.agentAutoSpeak.toggle()
                 } label: {
-                    Image(systemName: settings.agentAutoSpeak ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    Image(
+                        systemName: settings.agentAutoSpeak
+                            ? "speaker.wave.2.fill" : "speaker.slash.fill")
                 }
-                .help(settings.agentAutoSpeak ? "Auto-speak responses (on)" : "Auto-speak responses (off)")
-                
+                .help(
+                    settings.agentAutoSpeak
+                        ? "Auto-speak responses (on)" : "Auto-speak responses (off)")
+
                 Button {
                     useMarkdown.toggle()
                 } label: {

@@ -151,9 +151,11 @@ enum EvictionPolicy {
         let N = profile.ssmStateDim
 
         let ssmTerm = Double(profile.ssmLayers) * flopSSM(length: delta, hidden: D, stateDim: N)
-        let attnTerm = Double(profile.attentionLayers)
+        let attnTerm =
+            Double(profile.attentionLayers)
             * (flopAttention(length: total, hidden: D) - flopAttention(length: parent, hidden: D))
-        let mlpTerm = Double(profile.mlpLayers)
+        let mlpTerm =
+            Double(profile.mlpLayers)
             * (flopMLP(length: total, hidden: D) - flopMLP(length: parent, hidden: D))
 
         return ssmTerm + attnTerm + mlpTerm
@@ -174,7 +176,8 @@ enum EvictionPolicy {
     }
 
     /// `F_ssm(L, D, N) = 12 * L * D^2 + 16 * L * D * N + 10 * L * D`
-    private nonisolated static func flopSSM(length L: Int, hidden D: Int, stateDim N: Int) -> Double {
+    private nonisolated static func flopSSM(length L: Int, hidden D: Int, stateDim N: Int) -> Double
+    {
         let Ld = Double(L)
         let Dd = Double(D)
         let Nd = Double(N)
@@ -192,8 +195,8 @@ enum EvictionPolicy {
             return Array(repeating: 1.0, count: values.count)
         }
         guard let minValue = values.min(),
-              let maxValue = values.max(),
-              minValue != maxValue
+            let maxValue = values.max(),
+            minValue != maxValue
         else {
             return Array(repeating: 1.0, count: values.count)
         }
@@ -267,18 +270,21 @@ enum EvictionPolicy {
                 // node's parent-relative span from scratch.
                 let recoverySeconds: Double
                 if node.state.ref != nil {
-                    recoverySeconds = Double(node.state.storageBytes)
+                    recoverySeconds =
+                        Double(node.state.storageBytes)
                         / config.estimates.hydrationBytesPerSecond
                 } else if let point = node.chainPrefixRestorePoint {
-                    recoverySeconds = Double(point.prefixBytes)
+                    recoverySeconds =
+                        Double(point.prefixBytes)
                         / config.estimates.hydrationBytesPerSecond
                 } else {
                     let parentOffset = node.parent?.tokenOffset ?? 0
-                    recoverySeconds = parentRelativeFlops(
-                        nodeOffset: node.tokenOffset,
-                        parentOffset: parentOffset,
-                        profile: config.flopProfile
-                    ) / config.estimates.prefillFlopsPerSecond
+                    recoverySeconds =
+                        parentRelativeFlops(
+                            nodeOffset: node.tokenOffset,
+                            parentOffset: parentOffset,
+                            profile: config.flopProfile
+                        ) / config.estimates.prefillFlopsPerSecond
                 }
                 return recoverySeconds / Double(snapshot.memoryBytes)
             }

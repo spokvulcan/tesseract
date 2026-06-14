@@ -86,8 +86,9 @@ struct MessageConverterTests {
                     OpenAI.ToolCall(
                         id: "call_abc123",
                         type: "function",
-                        function: OpenAI.FunctionCall(name: "read", arguments: #"{"path":"main.swift"}"#)
-                    ),
+                        function: OpenAI.FunctionCall(
+                            name: "read", arguments: #"{"path":"main.swift"}"#)
+                    )
                 ]
             ),
             .init(role: .tool, content: .text("file contents here"), tool_call_id: "call_abc123"),
@@ -137,7 +138,7 @@ struct MessageConverterTests {
 
     @Test func convertsAssistantWithNoToolCalls() {
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .assistant, content: .text("Just text")),
+            .init(role: .assistant, content: .text("Just text"))
         ]
 
         let (_, converted) = MessageConverter.convertMessages(messages)
@@ -157,9 +158,9 @@ struct MessageConverterTests {
                 role: .assistant,
                 content: .text(""),
                 tool_calls: [
-                    OpenAI.ToolCall(function: OpenAI.FunctionCall(name: "bash", arguments: "{}")),
+                    OpenAI.ToolCall(function: OpenAI.FunctionCall(name: "bash", arguments: "{}"))
                 ]
-            ),
+            )
         ]
 
         let (_, converted) = MessageConverter.convertMessages(messages)
@@ -202,7 +203,7 @@ struct MessageConverterTests {
                 role: .assistant,
                 content: .text("Final answer"),
                 reasoning_content: "Step-by-step"
-            ),
+            )
         ]
 
         let (_, converted) = MessageConverter.convertMessages(messages)
@@ -223,11 +224,15 @@ struct MessageConverterTests {
         let base64 = pngData.base64EncodedString()
 
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .user, content: .parts([
-                OpenAI.ContentPart(type: .text, text: "What is this?"),
-                OpenAI.ContentPart(type: .image_url, image_url: OpenAI.ImageURL(url: "data:image/png;base64,\(base64)")),
-                OpenAI.ContentPart(type: .text, text: "Describe it."),
-            ])),
+            .init(
+                role: .user,
+                content: .parts([
+                    OpenAI.ContentPart(type: .text, text: "What is this?"),
+                    OpenAI.ContentPart(
+                        type: .image_url,
+                        image_url: OpenAI.ImageURL(url: "data:image/png;base64,\(base64)")),
+                    OpenAI.ContentPart(type: .text, text: "Describe it."),
+                ]))
         ]
 
         let (_, converted) = MessageConverter.convertMessages(messages)
@@ -249,10 +254,12 @@ struct MessageConverterTests {
             .init(role: .user, content: .text("Hello")),
             .init(role: .assistant, content: .text("Hi there")),
             .init(role: .system, content: .text("Mid-system")),
-            .init(role: .user, content: .parts([
-                .init(type: .text, text: "Follow-up"),
-                .init(type: .text, text: "question"),
-            ])),
+            .init(
+                role: .user,
+                content: .parts([
+                    .init(type: .text, text: "Follow-up"),
+                    .init(type: .text, text: "question"),
+                ])),
         ]
 
         let conversation = MessageConverter.normalizeConversation(messages)
@@ -276,7 +283,7 @@ struct MessageConverterTests {
                         id: "call_1",
                         type: "function",
                         function: .init(name: "read", arguments: #"{"path":"main.swift"}"#)
-                    ),
+                    )
                 ],
                 reasoning_content: "I should read the relevant file first."
             ),
@@ -288,7 +295,9 @@ struct MessageConverterTests {
         #expect(history.count == 2)
         guard history.count == 2 else { return }
         #expect(history[1].role == .assistant)
-        #expect(history[1].content.contains("<think>\nI should read the relevant file first.\n</think>"))
+        #expect(
+            history[1].content.contains("<think>\nI should read the relevant file first.\n</think>")
+        )
         #expect(history[1].content.contains("I found the issue."))
         #expect(history[1].content.contains("<tool_call>\n<function=read>\n"))
         #expect(history[1].content.contains("<parameter=path>\nmain.swift\n</parameter>"))
@@ -321,7 +330,8 @@ struct MessageConverterTests {
         let assistant = try #require(promptMessages.last)
         #expect(assistant["role"] as? String == "assistant")
         #expect(assistant["content"] as? String == "I found the issue.")
-        #expect(assistant["reasoning_content"] as? String == "Need to inspect the relevant code first.")
+        #expect(
+            assistant["reasoning_content"] as? String == "Need to inspect the relevant code first.")
 
         let toolCalls = try #require(assistant["tool_calls"] as? [[String: any Sendable]])
         #expect(toolCalls.count == 1)
@@ -368,17 +378,24 @@ struct MessageConverterTests {
     /// the image bytes and their digests, in content order.
     @Test func imageUserMessageIsEligibleWithDigest() throws {
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .user, content: .parts([
-                .init(type: .text, text: "Look at this"),
-                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
-            ])),
+            .init(
+                role: .user,
+                content: .parts([
+                    .init(type: .text, text: "Look at this"),
+                    .init(
+                        type: .image_url,
+                        image_url: .init(
+                            url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
+                ]))
         ]
 
         let conversation = try #require(MessageConverter.normalizeConversation(messages))
         #expect(!conversation.images.isEmpty)
         #expect(conversation.images.count == 1)
         let image = try #require(conversation.messages.first?.images.first)
-        #expect(image.digest == ImageDigest(imageBytes: Data(base64Encoded: ImageTestFixtures.tinyPNGBase64)!))
+        #expect(
+            image.digest
+                == ImageDigest(imageBytes: Data(base64Encoded: ImageTestFixtures.tinyPNGBase64)!))
         #expect(conversation.messages.first?.content == "Look at this")
     }
 
@@ -386,10 +403,15 @@ struct MessageConverterTests {
     /// identity drives prefix matching, not per-request attachment ids.
     @Test func identicalImageBytesProduceEqualConversations() {
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .user, content: .parts([
-                .init(type: .text, text: "Look"),
-                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
-            ])),
+            .init(
+                role: .user,
+                content: .parts([
+                    .init(type: .text, text: "Look"),
+                    .init(
+                        type: .image_url,
+                        image_url: .init(
+                            url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
+                ]))
         ]
         let first = MessageConverter.normalizeConversation(messages)
         let second = MessageConverter.normalizeConversation(messages)
@@ -403,10 +425,13 @@ struct MessageConverterTests {
     @Test func undecodableImageDataBails() {
         let garbage = Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString()
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .user, content: .parts([
-                .init(type: .text, text: "Look"),
-                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(garbage)")),
-            ])),
+            .init(
+                role: .user,
+                content: .parts([
+                    .init(type: .text, text: "Look"),
+                    .init(
+                        type: .image_url, image_url: .init(url: "data:image/png;base64,\(garbage)")),
+                ]))
         ]
 
         #expect(MessageConverter.normalizeConversation(messages) == nil)
@@ -415,10 +440,12 @@ struct MessageConverterTests {
     /// Remote image URLs cannot be fetched offline — not cacheable, bail.
     @Test func remoteImageURLBails() {
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .user, content: .parts([
-                .init(type: .text, text: "Look"),
-                .init(type: .image_url, image_url: .init(url: "https://example.com/cat.png")),
-            ])),
+            .init(
+                role: .user,
+                content: .parts([
+                    .init(type: .text, text: "Look"),
+                    .init(type: .image_url, image_url: .init(url: "https://example.com/cat.png")),
+                ]))
         ]
 
         #expect(MessageConverter.normalizeConversation(messages) == nil)
@@ -429,10 +456,15 @@ struct MessageConverterTests {
     /// string form byte-identical.
     @Test func imageMessageRendersContentArray() throws {
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .user, content: .parts([
-                .init(type: .text, text: "Describe"),
-                .init(type: .image_url, image_url: .init(url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
-            ])),
+            .init(
+                role: .user,
+                content: .parts([
+                    .init(type: .text, text: "Describe"),
+                    .init(
+                        type: .image_url,
+                        image_url: .init(
+                            url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
+                ]))
         ]
         let conversation = try #require(MessageConverter.normalizeConversation(messages))
         let rendered = try #require(conversation.promptMessages.last)
@@ -455,7 +487,7 @@ struct MessageConverterTests {
                         id: "call_1",
                         type: "function",
                         function: .init(name: "bash", arguments: "{}")
-                    ),
+                    )
                 ],
                 reasoning_content: "Need to inspect the file first."
             ),
@@ -466,23 +498,25 @@ struct MessageConverterTests {
 
         #expect(conversation?.messages.count == 3)
         #expect(conversation?.messages[0] == .init(role: .user, content: "Hello"))
-        #expect(conversation?.messages[1] == .assistant(
-            content: "Calling a tool",
-            reasoning: "Need to inspect the file first.",
-            toolCalls: [HTTPPrefixCacheToolCall(name: "bash", argumentsJSON: "{}")]
-        ))
+        #expect(
+            conversation?.messages[1]
+                == .assistant(
+                    content: "Calling a tool",
+                    reasoning: "Need to inspect the file first.",
+                    toolCalls: [HTTPPrefixCacheToolCall(name: "bash", argumentsJSON: "{}")]
+                ))
         #expect(conversation?.messages[2] == .init(role: .tool, content: "tool output"))
     }
 
     @Test func prefixCacheEligibilityIncludesToolDefinitionDigest() {
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .user, content: .text("Hello")),
+            .init(role: .user, content: .text("Hello"))
         ]
         let tools: [OpenAI.ToolDefinition] = [
             .init(
                 type: "function",
                 function: .init(name: "read")
-            ),
+            )
         ]
 
         let eligibility = MessageConverter.analyzePrefixCacheEligibility(
@@ -490,7 +524,9 @@ struct MessageConverterTests {
             tools: tools
         )
 
-        #expect(eligibility.conversation?.toolDefinitionsDigest != HTTPPrefixCacheConversation.emptyToolDefinitionsDigest)
+        #expect(
+            eligibility.conversation?.toolDefinitionsDigest
+                != HTTPPrefixCacheConversation.emptyToolDefinitionsDigest)
     }
 
     @Test func prefixCacheEligibilityAllowsAssistantToolCalls() {
@@ -504,7 +540,7 @@ struct MessageConverterTests {
                         id: "call_1",
                         type: "function",
                         function: .init(name: "bash", arguments: "{}")
-                    ),
+                    )
                 ]
             ),
         ]
@@ -512,10 +548,12 @@ struct MessageConverterTests {
         let eligibility = MessageConverter.analyzePrefixCacheEligibility(messages)
 
         #expect(eligibility.conversation?.messages.count == 2)
-        #expect(eligibility.conversation?.messages[1] == .assistant(
-            content: "Calling a tool",
-            toolCalls: [HTTPPrefixCacheToolCall(name: "bash", argumentsJSON: "{}")]
-        ))
+        #expect(
+            eligibility.conversation?.messages[1]
+                == .assistant(
+                    content: "Calling a tool",
+                    toolCalls: [HTTPPrefixCacheToolCall(name: "bash", argumentsJSON: "{}")]
+                ))
     }
 
     @Test func textNormalizationAcceptsToolResults() {
@@ -579,12 +617,12 @@ struct MessageConverterTests {
                     parameters: .object([
                         "type": .string("object"),
                         "properties": .object([
-                            "command": .object(["type": .string("string")]),
+                            "command": .object(["type": .string("string")])
                         ]),
                         "required": .array([.string("command")]),
                     ])
                 )
-            ),
+            )
         ]
 
         let specs = MessageConverter.convertToolDefinitions(tools)
@@ -614,7 +652,7 @@ struct MessageConverterTests {
             OpenAI.ToolDefinition(
                 type: "function",
                 function: OpenAI.FunctionDefinition(name: "get_time")
-            ),
+            )
         ]
 
         let specs = MessageConverter.convertToolDefinitions(tools)
@@ -636,10 +674,14 @@ struct MessageConverterTests {
                 role: .assistant,
                 content: .text("I'll call both tools."),
                 tool_calls: [
-                    OpenAI.ToolCall(id: "call_A", type: "function",
-                        function: OpenAI.FunctionCall(name: "read", arguments: #"{"path":"a.txt"}"#)),
-                    OpenAI.ToolCall(id: "call_B", type: "function",
-                        function: OpenAI.FunctionCall(name: "read", arguments: #"{"path":"b.txt"}"#)),
+                    OpenAI.ToolCall(
+                        id: "call_A", type: "function",
+                        function: OpenAI.FunctionCall(name: "read", arguments: #"{"path":"a.txt"}"#)
+                    ),
+                    OpenAI.ToolCall(
+                        id: "call_B", type: "function",
+                        function: OpenAI.FunctionCall(name: "read", arguments: #"{"path":"b.txt"}"#)
+                    ),
                 ]
             ),
             // Client sends B's result before A's
@@ -672,9 +714,11 @@ struct MessageConverterTests {
                 role: .assistant,
                 content: .text(""),
                 tool_calls: [
-                    OpenAI.ToolCall(id: "call_1", type: "function",
+                    OpenAI.ToolCall(
+                        id: "call_1", type: "function",
                         function: OpenAI.FunctionCall(name: "bash", arguments: "{}")),
-                    OpenAI.ToolCall(id: "call_2", type: "function",
+                    OpenAI.ToolCall(
+                        id: "call_2", type: "function",
                         function: OpenAI.FunctionCall(name: "bash", arguments: "{}")),
                 ]
             ),
@@ -684,10 +728,16 @@ struct MessageConverterTests {
 
         let (_, converted) = MessageConverter.convertMessages(messages)
 
-        if case .toolResult(let id, _) = converted[2] { #expect(id == "call_1") }
-        else { Issue.record("Expected .toolResult at index 2") }
+        if case .toolResult(let id, _) = converted[2] {
+            #expect(id == "call_1")
+        } else {
+            Issue.record("Expected .toolResult at index 2")
+        }
 
-        if case .toolResult(let id, _) = converted[3] { #expect(id == "call_2") }
-        else { Issue.record("Expected .toolResult at index 3") }
+        if case .toolResult(let id, _) = converted[3] {
+            #expect(id == "call_2")
+        } else {
+            Issue.record("Expected .toolResult at index 3")
+        }
     }
 }

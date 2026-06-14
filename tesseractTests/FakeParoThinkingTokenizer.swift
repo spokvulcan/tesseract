@@ -81,8 +81,11 @@ struct FakeParoThinkingTokenizer: Tokenizer {
             case "tool":
                 let previousIsTool = index > 0 && (messages[index - 1]["role"] as? String) == "tool"
                 if !previousIsTool { rendered += "<|im_start|>user" }
-                rendered += "\n<tool_response>\n" + (message["content"] as? String ?? "") + "\n</tool_response>"
-                let nextIsTool = index + 1 < messages.count
+                rendered +=
+                    "\n<tool_response>\n" + (message["content"] as? String ?? "")
+                    + "\n</tool_response>"
+                let nextIsTool =
+                    index + 1 < messages.count
                     && (messages[index + 1]["role"] as? String) == "tool"
                 if !nextIsTool { rendered += "<|im_end|>\n" }
             case "assistant":
@@ -107,7 +110,8 @@ struct FakeParoThinkingTokenizer: Tokenizer {
                         rendered += "<tool_call>\n<function=\(name)>\n"
                         let arguments = function["arguments"] as? [String: any Sendable] ?? [:]
                         for key in arguments.keys.sorted() {
-                            rendered += "<parameter=\(key)>\n\(arguments[key].map { "\($0)" } ?? "")\n</parameter>\n"
+                            rendered +=
+                                "<parameter=\(key)>\n\(arguments[key].map { "\($0)" } ?? "")\n</parameter>\n"
                         }
                         rendered += "</function>\n</tool_call>"
                     }

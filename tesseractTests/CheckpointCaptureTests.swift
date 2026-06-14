@@ -46,7 +46,9 @@ struct CheckpointCaptureTests {
     ) throws -> (chunks: [Int], consumed: Int, snapshots: [HybridCacheSnapshot]) {
         let cache = cache ?? makeCache()
         let checkpoints = Dictionary(
-            uniqueKeysWithValues: checkpointAtOffsets.map { ($0, HybridCacheSnapshot.CheckpointType.system) }
+            uniqueKeysWithValues: checkpointAtOffsets.map {
+                ($0, HybridCacheSnapshot.CheckpointType.system)
+            }
         )
         var chunks: [Int] = []
         let (consumed, snapshots) = try HybridCacheSnapshot.chunkedPrefill(
@@ -103,7 +105,7 @@ struct CheckpointCaptureTests {
             checkpointAtOffsets: [300]
         )
         #expect(result.chunks[0] == 256)
-        #expect(result.chunks[1] == 44) // 300 - 256
+        #expect(result.chunks[1] == 44)  // 300 - 256
         #expect(result.snapshots.count == 1)
         #expect(result.snapshots[0].tokenOffset == 300)
     }
@@ -274,7 +276,7 @@ struct CheckpointCaptureTests {
             checkpointBaseOffset: 3000
         )
         #expect(result.snapshots.count == 1)
-        #expect(result.snapshots[0].tokenOffset == 4000) // absolute, not relative
+        #expect(result.snapshots[0].tokenOffset == 4000)  // absolute, not relative
     }
 
     // MARK: - 15. checkpointBeforeBaseOffsetIgnored
@@ -319,7 +321,7 @@ struct CheckpointCaptureTests {
         )
         #expect(result.snapshots.count == 1)
         #expect(result.snapshots[0].tokenOffset == 256)
-        #expect(result.chunks[0] == 256) // full-size chunk, checkpoint captured after
+        #expect(result.chunks[0] == 256)  // full-size chunk, checkpoint captured after
     }
 
     @Test func multipleCheckpointsInSameChunkRange() throws {
@@ -333,8 +335,8 @@ struct CheckpointCaptureTests {
         #expect(result.snapshots.count == 2)
         #expect(result.snapshots[0].tokenOffset == 100)
         #expect(result.snapshots[1].tokenOffset == 200)
-        #expect(result.chunks[0] == 100) // adjusted for first checkpoint
-        #expect(result.chunks[1] == 100) // adjusted for second checkpoint
+        #expect(result.chunks[0] == 100)  // adjusted for first checkpoint
+        #expect(result.chunks[1] == 100)  // adjusted for second checkpoint
     }
 
     @Test func snapshotHasCorrectCheckpointType() throws {
@@ -392,7 +394,9 @@ struct CheckpointCaptureTests {
                 checkpointAtOffsets: [150, 400, 900]
             )
             let chunkSum = result.chunks.reduce(0, +)
-            #expect(chunkSum == result.consumed, "total=\(total): chunk sum \(chunkSum) ≠ consumed \(result.consumed)")
+            #expect(
+                chunkSum == result.consumed,
+                "total=\(total): chunk sum \(chunkSum) ≠ consumed \(result.consumed)")
             #expect(result.consumed <= total, "total=\(total): consumed \(result.consumed) > total")
         }
     }
@@ -409,7 +413,8 @@ struct CheckpointCaptureTests {
             cache: cache
         ) { _ in }
 
-        let byOffset = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.tokenOffset, $0.checkpointType) })
+        let byOffset = Dictionary(
+            uniqueKeysWithValues: snapshots.map { ($0.tokenOffset, $0.checkpointType) })
         #expect(byOffset[200] == .system)
         #expect(byOffset[500] == .branchPoint)
     }

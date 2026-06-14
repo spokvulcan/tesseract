@@ -36,7 +36,8 @@ nonisolated enum WebFetchError: LocalizedError, Sendable {
 private nonisolated func validateURL(_ url: URL) throws {
     // Scheme: only http/https
     guard let scheme = url.scheme?.lowercased(),
-          scheme == "http" || scheme == "https" else {
+        scheme == "http" || scheme == "https"
+    else {
         throw WebFetchError.invalidURL
     }
 
@@ -81,7 +82,9 @@ private nonisolated func isPrivateAddress(_ host: String) -> Bool {
         }
     }
     // IPv6 private (fc00::/7 — starts with fc or fd)
-    if host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("[fc") || host.hasPrefix("[fd") {
+    if host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("[fc")
+        || host.hasPrefix("[fd")
+    {
         return true
     }
     // .local domains
@@ -115,10 +118,12 @@ private let fetchSession: URLSession = {
     return URLSession(configuration: config)
 }()
 
-private let maxResponseBytes = 5_000_000 // 5 MB
+private let maxResponseBytes = 5_000_000  // 5 MB
 
 /// Fetch a URL and return the HTML string + final URL after redirects.
-private func fetchHTML(url: URL, timeout: TimeInterval = 15) async throws -> (html: String, finalURL: URL) {
+private func fetchHTML(url: URL, timeout: TimeInterval = 15) async throws -> (
+    html: String, finalURL: URL
+) {
     var request = URLRequest(url: url)
     request.timeoutInterval = timeout
 
@@ -146,7 +151,7 @@ private func fetchHTML(url: URL, timeout: TimeInterval = 15) async throws -> (ht
     // Decode with charset from response, falling back to UTF-8 then Latin-1
     let html: String
     if let encoding = httpResponse.textEncodingName.flatMap({ encodingFromIANA($0) }),
-       let decoded = String(data: data, encoding: encoding)
+        let decoded = String(data: data, encoding: encoding)
     {
         html = decoded
     } else if let decoded = String(data: data, encoding: .utf8) {
@@ -176,8 +181,14 @@ private func encodingFromIANA(_ name: String) -> String.Encoding? {
     case "windows-1250", "cp1250": return .windowsCP1250
     case "euc-jp": return .japaneseEUC
     case "shift_jis", "shift-jis", "sjis": return .shiftJIS
-    case "euc-kr": return .init(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.EUC_KR.rawValue)))
-    case "gb2312", "gbk", "gb18030": return .init(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+    case "euc-kr":
+        return .init(
+            rawValue: CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.EUC_KR.rawValue)))
+    case "gb2312", "gbk", "gb18030":
+        return .init(
+            rawValue: CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
     default: return nil
     }
 }
@@ -205,7 +216,8 @@ nonisolated func createWebFetchTool() -> AgentToolDefinition {
     AgentToolDefinition(
         name: "web_fetch",
         label: "Fetch Web Page",
-        description: "Fetch a web page and extract its text content. Use this after web_search to read full page content from a URL, or to fetch documentation, articles, and other web pages.",
+        description:
+            "Fetch a web page and extract its text content. Use this after web_search to read full page content from a URL, or to fetch documentation, articles, and other web pages.",
         parameterSchema: JSONSchema(
             type: "object",
             properties: [

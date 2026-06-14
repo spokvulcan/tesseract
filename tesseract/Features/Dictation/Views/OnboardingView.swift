@@ -165,17 +165,27 @@ struct WelcomeStepContent: View {
                 .fontWeight(.bold)
                 .multilineTextAlignment(.center)
 
-            Text("On-device intelligence that keeps your data private.\nNothing ever leaves your Mac.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 20)
+            Text(
+                "On-device intelligence that keeps your data private.\nNothing ever leaves your Mac."
+            )
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 20)
 
             VStack(alignment: .leading, spacing: 16) {
-                FeatureRow(icon: "lock.shield", title: "100% Private", description: "All intelligence runs locally on your Mac")
-                FeatureRow(icon: "mic.fill", title: "Voice to Text", description: "Push-to-talk dictation in any app")
-                FeatureRow(icon: "speaker.wave.2", title: "Text to Speech", description: "Natural voice synthesis, entirely on-device")
-                FeatureRow(icon: "bolt", title: "Apple Silicon Optimized", description: "Built for your Mac's neural engine")
+                FeatureRow(
+                    icon: "lock.shield", title: "100% Private",
+                    description: "All intelligence runs locally on your Mac")
+                FeatureRow(
+                    icon: "mic.fill", title: "Voice to Text",
+                    description: "Push-to-talk dictation in any app")
+                FeatureRow(
+                    icon: "speaker.wave.2", title: "Text to Speech",
+                    description: "Natural voice synthesis, entirely on-device")
+                FeatureRow(
+                    icon: "bolt", title: "Apple Silicon Optimized",
+                    description: "Built for your Mac's neural engine")
             }
             .padding(.top, 12)
         }
@@ -234,11 +244,13 @@ struct LanguageSelectionStepContent: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("Select the language you'll primarily speak. This helps improve transcription accuracy.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 20)
+            Text(
+                "Select the language you'll primarily speak. This helps improve transcription accuracy."
+            )
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 20)
 
             CompactLanguagePickerView(selectedLanguage: $settings.language)
                 .padding(.horizontal, 20)
@@ -336,11 +348,13 @@ struct AccessibilityPermissionStepContent: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("Tesseract Agent needs Accessibility access to capture your hotkey without typing unwanted characters.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 20)
+            Text(
+                "Tesseract Agent needs Accessibility access to capture your hotkey without typing unwanted characters."
+            )
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 20)
 
             permissionContent
         }
@@ -365,11 +379,13 @@ struct AccessibilityPermissionStepContent: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
 
-                Text("Without Accessibility access, the hotkey may type characters while recording. You can skip this and configure it later.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
+                Text(
+                    "Without Accessibility access, the hotkey may type characters while recording. You can skip this and configure it later."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
             }
 
         case .requesting:
@@ -428,7 +444,8 @@ struct ReadyStepContent: View {
                 HotkeyHint(
                     icon: "keyboard",
                     title: "Push-to-Talk",
-                    description: "Press and hold \(settings.hotkey.displayString) to record, release to transcribe"
+                    description:
+                        "Press and hold \(settings.hotkey.displayString) to record, release to transcribe"
                 )
 
                 HotkeyHint(

@@ -50,7 +50,8 @@ struct SpeechCoordinatorTests {
         while !condition() {
             n += 1
             if n > attempts {
-                Issue.record("condition not met within \(attempts) yields", sourceLocation: sourceLocation)
+                Issue.record(
+                    "condition not met within \(attempts) yields", sourceLocation: sourceLocation)
                 throw WaitTimedOut()
             }
             await Task.yield()
@@ -311,7 +312,8 @@ struct SpeechCoordinatorTests {
             return false
         }
         #expect(durationUpdatesBeforeSwitch.count == 1)
-        if case .updateTotalDuration = surface.calls[switchIndex + 1] {} else {
+        if case .updateTotalDuration = surface.calls[switchIndex + 1] {
+        } else {
             Issue.record("expected the first post-switch call to be updateTotalDuration")
         }
 
@@ -350,7 +352,10 @@ struct SpeechCoordinatorTests {
         #expect(!surface.didSwitch)
         // The duration push is what actually advances the highlight — assert it reached
         // the surface, not just that show / markGenerationComplete bracketed it.
-        #expect(surface.calls.contains { if case .updateTotalDuration = $0 { return true }; return false })
+        #expect(
+            surface.calls.contains {
+                if case .updateTotalDuration = $0 { return true }; return false
+            })
     }
 
     // MARK: - C5c: single-shot streaming drives the surface through Segment Playback's `.single`
@@ -359,7 +364,8 @@ struct SpeechCoordinatorTests {
     func singleStreamingDrivesTheSurfaceShownWithForwardedOffsets() async throws {
         // streaming + one short segment routes through Segment Playback's `.single`
         // path (no boundary, no switch) — previously exercised only with notchOverlay: nil.
-        let synth = InMemorySpeechSynthesizer(samples: [0.1, 0.2, 0.3], sampleRate: 24_000, tokenOffsets: [0, 6])
+        let synth = InMemorySpeechSynthesizer(
+            samples: [0.1, 0.2, 0.3], sampleRate: 24_000, tokenOffsets: [0, 6])
         let engine = try await makeLoadedEngine(synth)
         let playback = InMemoryAudioPlayback()
         let surface = RecordingHighlightSurface()
@@ -383,7 +389,9 @@ struct SpeechCoordinatorTests {
 
         // The engine's token offsets are forwarded to the surface — the input the
         // recording peer now captures (previously dropped on the floor).
-        let shown = surface.calls.first { if case .show = $0 { return true }; return false }
+        let shown = surface.calls.first {
+            if case .show = $0 { return true }; return false
+        }
         guard case let .show(_, offsets)? = shown else {
             Issue.record("expected a show call")
             return
@@ -393,7 +401,10 @@ struct SpeechCoordinatorTests {
         // The running duration is pushed (what drives the highlight); and `.single`
         // leaves segment-completion to the caller's markGenerationComplete, so no
         // per-segment markSegmentComplete fires.
-        #expect(surface.calls.contains { if case .updateTotalDuration = $0 { return true }; return false })
+        #expect(
+            surface.calls.contains {
+                if case .updateTotalDuration = $0 { return true }; return false
+            })
         #expect(!surface.calls.contains(.markSegmentComplete))
     }
 
@@ -432,7 +443,7 @@ struct SpeechCoordinatorTests {
         // so resume() starts cleanly rather than racing a still-spinning generation.
         try await Task.sleep(for: .milliseconds(150))
         #expect(playback.finishStreamingCount == 0)
-        #expect(playback.appendedChunks.count == 2)   // segment 2 was NOT generated
+        #expect(playback.appendedChunks.count == 2)  // segment 2 was NOT generated
         #expect(playback.startStreamingCount == 1)
 
         // Resume picks up at the next segment as a fresh streaming session (its first

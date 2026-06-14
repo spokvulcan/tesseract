@@ -153,13 +153,15 @@ nonisolated enum TokenGenerationLoop {
                 }
             }
 
-            let resolvedStopReason: GenerateStopReason = stopReason ?? {
-                if Task.isCancelled { return .cancelled }
-                if let maxTokens = iterator.maxTokens, iterator.tokenCount >= maxTokens {
-                    return .length
-                }
-                return .cancelled
-            }()
+            let resolvedStopReason: GenerateStopReason =
+                stopReason
+                ?? {
+                    if Task.isCancelled { return .cancelled }
+                    if let maxTokens = iterator.maxTokens, iterator.tokenCount >= maxTokens {
+                        return .length
+                    }
+                    return .cancelled
+                }()
 
             let info = GenerateCompletionInfo(
                 promptTokenCount: promptTokenCount,
@@ -281,13 +283,16 @@ nonisolated enum TokenGenerationLoop {
             // Upstream's `.info` is authoritative (token counts, prompt
             // prefill time, stop reason). It is only missing when iteration
             // ended before the upstream stream finished — a cancellation.
-            _ = continuation.yield(.info(info ?? GenerateCompletionInfo(
-                promptTokenCount: promptTokenCount,
-                generationTokenCount: generatedTokens,
-                promptTime: 0,
-                generationTime: 0,
-                stopReason: .cancelled
-            )))
+            _ = continuation.yield(
+                .info(
+                    info
+                        ?? GenerateCompletionInfo(
+                            promptTokenCount: promptTokenCount,
+                            generationTokenCount: generatedTokens,
+                            promptTime: 0,
+                            generationTime: 0,
+                            stopReason: .cancelled
+                        )))
 
             // The upstream loop synchronizes the MLX stream before finishing.
             await generationTask?.value

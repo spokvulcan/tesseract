@@ -105,7 +105,7 @@ struct SpeechScrollView: View {
                     .init(color: .clear, location: 0),
                     .init(color: .white, location: 0.05),
                     .init(color: .white, location: 0.95),
-                    .init(color: .clear, location: 1.0)
+                    .init(color: .clear, location: 1.0),
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -169,11 +169,13 @@ struct WordFlowLayout: View {
     private func wordView(for index: Int, isNextWord: Bool) -> some View {
         let word = timeline.words[index]
         let charsIntoWord = highlightedCharCount - word.charOffset
-        let isFullyLit = timeline.litFraction(wordIndex: index, charCount: highlightedCharCount) >= 1.0
+        let isFullyLit =
+            timeline.litFraction(wordIndex: index, charCount: highlightedCharCount) >= 1.0
         let isCurrentWord = isNextWord || (charsIntoWord >= 0 && !isFullyLit)
 
         if word.isAnnotation {
-            let annotationColor: Color = isFullyLit
+            let annotationColor: Color =
+                isFullyLit
                 ? Color.white.opacity(0.5)
                 : Color.white.opacity(0.2)
 
@@ -196,7 +198,8 @@ struct WordFlowLayout: View {
             )
         }
 
-        let dimColor: Color = isCurrentWord
+        let dimColor: Color =
+            isCurrentWord
             ? highlightColor.opacity(0.6)
             : highlightColor
 
@@ -230,7 +233,8 @@ struct WordFlowLayout: View {
         let spaceWidth = (" " as NSString).size(withAttributes: [.font: font]).width
 
         for (index, word) in timeline.words.enumerated() {
-            let wordWidth = (word.text as NSString).size(withAttributes: [.font: font]).width + spaceWidth
+            let wordWidth =
+                (word.text as NSString).size(withAttributes: [.font: font]).width + spaceWidth
             if currentLineWidth + wordWidth > containerWidth && !lines[lines.count - 1].isEmpty {
                 lines.append([])
                 currentLineWidth = 0
@@ -269,7 +273,8 @@ final class ScrollWheelNSView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil && scrollMonitor == nil {
-            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) {
+                [weak self] event in
                 guard let self, let window = self.window else { return event }
                 if event.window == window {
                     let delta = event.scrollingDeltaY

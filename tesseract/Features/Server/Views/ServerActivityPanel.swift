@@ -13,7 +13,7 @@ struct ServerActivityPanel: View {
                 onSelect: { log.selectedTraceID = $0 },
                 onClear: clearTraces
             )
-                .frame(width: 220)
+            .frame(width: 220)
 
             Divider()
 
@@ -25,7 +25,9 @@ struct ServerActivityPanel: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(.background, in: RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
+        .background(
+            .background, in: RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
@@ -35,7 +37,8 @@ struct ServerActivityPanel: View {
 
     private var effectiveSelectedTraceID: UUID? {
         if let selectedTraceID = log.selectedTraceID,
-           log.traces.contains(where: { $0.id == selectedTraceID }) {
+            log.traces.contains(where: { $0.id == selectedTraceID })
+        {
             return selectedTraceID
         }
         return log.traces.last?.id
@@ -136,7 +139,7 @@ private struct RequestRailRow: View {
 
     private var fillStyle: AnyShapeStyle {
         if isSelected { return AnyShapeStyle(.selection) }
-        if isHovered  { return AnyShapeStyle(.quaternary) }
+        if isHovered { return AnyShapeStyle(.quaternary) }
         return AnyShapeStyle(Color.clear)
     }
 }
@@ -152,11 +155,13 @@ private struct EmptyDetailPlaceholder: View {
             Text("No request selected")
                 .font(.body)
                 .foregroundStyle(.secondary)
-            Text("Token-by-token generation appears here once a request arrives at /v1/chat/completions.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
+            Text(
+                "Token-by-token generation appears here once a request arrives at /v1/chat/completions."
+            )
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 360)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

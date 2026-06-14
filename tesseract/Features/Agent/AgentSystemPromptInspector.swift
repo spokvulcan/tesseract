@@ -29,15 +29,25 @@ final class AgentSystemPromptInspector {
 
     /// Read-only source of the current assembled prompt + active tools.
     private let promptSource: @MainActor () -> (systemPrompt: String, tools: [AgentToolDefinition])
-    private let formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))?
+    private let formatRawPrompt:
+        (
+            @MainActor (String, [AgentToolDefinition]?) async throws -> (
+                text: String, tokenCount: Int
+            )
+        )?
 
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
 
     // MARK: - Init
 
     init(
-        promptSource: @escaping @MainActor () -> (systemPrompt: String, tools: [AgentToolDefinition]),
-        formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))? = nil
+        promptSource:
+            @escaping @MainActor () -> (systemPrompt: String, tools: [AgentToolDefinition]),
+        formatRawPrompt: (
+            @MainActor (String, [AgentToolDefinition]?) async throws -> (
+                text: String, tokenCount: Int
+            )
+        )? = nil
     ) {
         self.promptSource = promptSource
         self.formatRawPrompt = formatRawPrompt
@@ -64,7 +74,9 @@ final class AgentSystemPromptInspector {
             do {
                 let result = try await formatRawPrompt(source.systemPrompt, source.tools)
                 guard !Task.isCancelled else { return }
-                Log.agent.info("fetchRawSystemPrompt — success, raw length=\(result.text.count), tokens=\(result.tokenCount)")
+                Log.agent.info(
+                    "fetchRawSystemPrompt — success, raw length=\(result.text.count), tokens=\(result.tokenCount)"
+                )
                 rawChatMLPrompt = result.text
                 systemPromptTokenCount = result.tokenCount
             } catch is CancellationError {

@@ -52,6 +52,8 @@ struct PromptCacheSelectionStatusView: View {
         .lineLimit(1)
         .padding(.horizontal, Theme.Spacing.sm)
         .padding(.vertical, 6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
     }
 }

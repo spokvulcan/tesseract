@@ -51,9 +51,10 @@ nonisolated struct TemplateRenderContext: Sendable, Hashable {
         guard !flags.isEmpty else {
             return HTTPPrefixCacheConversation.defaultTemplateContextDigest
         }
-        let object = Dictionary(uniqueKeysWithValues: flags.map { flag in
-            (flag.rawValue, JSONValue.bool(true))
-        })
+        let object = Dictionary(
+            uniqueKeysWithValues: flags.map { flag in
+                (flag.rawValue, JSONValue.bool(true))
+            })
         return httpPrefixCacheDigest(
             for: Data(encodeCanonicalHTTPPrefixCacheJSONObject(object).utf8)
         )

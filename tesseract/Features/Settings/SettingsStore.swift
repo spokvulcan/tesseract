@@ -64,40 +64,45 @@ struct Setting<Value> {
 
 extension Setting where Value == Bool {
     static func bool(_ key: String, default def: Bool) -> Setting<Bool> {
-        Setting(key: key, default: def,
-                load: { $0.bool(for: key, default: def) },
-                write: { value, store in store.set(value, for: key) })
+        Setting(
+            key: key, default: def,
+            load: { $0.bool(for: key, default: def) },
+            write: { value, store in store.set(value, for: key) })
     }
 }
 
 extension Setting where Value == Int {
     static func int(_ key: String, default def: Int) -> Setting<Int> {
-        Setting(key: key, default: def,
-                load: { $0.int(for: key, default: def) },
-                write: { value, store in store.set(value, for: key) })
+        Setting(
+            key: key, default: def,
+            load: { $0.int(for: key, default: def) },
+            write: { value, store in store.set(value, for: key) })
     }
 }
 
 extension Setting where Value == Double {
     static func double(_ key: String, default def: Double) -> Setting<Double> {
-        Setting(key: key, default: def,
-                load: { $0.double(for: key, default: def) },
-                write: { value, store in store.set(value, for: key) })
+        Setting(
+            key: key, default: def,
+            load: { $0.double(for: key, default: def) },
+            write: { value, store in store.set(value, for: key) })
     }
 }
 
 extension Setting where Value == String {
     static func string(_ key: String, default def: String) -> Setting<String> {
-        Setting(key: key, default: def,
-                load: { $0.string(for: key, default: def) },
-                write: { value, store in store.set(value, for: key) })
+        Setting(
+            key: key, default: def,
+            load: { $0.string(for: key, default: def) },
+            write: { value, store in store.set(value, for: key) })
     }
 }
 
 extension Setting where Value == String? {
     static func optionalString(_ key: String) -> Setting<String?> {
-        Setting(key: key, default: nil,
-                load: { $0.optionalString(for: key) },
-                write: { value, store in store.setOptional(value, for: key) })
+        Setting(
+            key: key, default: nil,
+            load: { $0.optionalString(for: key) },
+            write: { value, store in store.setOptional(value, for: key) })
     }
 }

@@ -7,7 +7,7 @@ import Foundation
 
 /// Overlay style options for the dictation visual feedback
 enum OverlayStyle: String, CaseIterable, Identifiable {
-    case pill              // Existing compact pill overlay
+    case pill  // Existing compact pill overlay
     case fullScreenBorder  // Full-screen Siri-style border
 
     var id: String { rawValue }

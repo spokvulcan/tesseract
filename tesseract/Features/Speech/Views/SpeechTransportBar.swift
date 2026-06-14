@@ -81,7 +81,9 @@ struct SpeechTransportBar: View {
         .tint(isActive ? .red : .accentColor)
         .controlSize(.large)
         .disabled(!isActive && !hasText)
-        .keyboardShortcut(isActive ? KeyboardShortcut(.escape) : KeyboardShortcut(.return, modifiers: .command))
+        .keyboardShortcut(
+            isActive ? KeyboardShortcut(.escape) : KeyboardShortcut(.return, modifiers: .command)
+        )
         .help(isActive ? "Stop speaking (Esc)" : "Speak text (⌘↩)")
         .glassEffectID("primary", in: glassNamespace)
     }
@@ -140,7 +142,8 @@ struct SpeechTransportBar: View {
         case .streaming:
             return Status(text: "Speaking", isPlaying: true)
         case .streamingLongForm(let segment, let total):
-            return Status(text: "Segment \(segment) of \(total)", isPlaying: true, progress: (segment, total))
+            return Status(
+                text: "Segment \(segment) of \(total)", isPlaying: true, progress: (segment, total))
         case .paused(let segment, let total):
             return Status(text: "Paused · \(segment) of \(total)", progress: (segment, total))
         case .playing:

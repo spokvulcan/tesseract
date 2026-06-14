@@ -236,8 +236,9 @@ nonisolated final class ThinkingRepetitionDetector {
         }
 
         if let maxStarterRepeats = config.maxStarterRepeats,
-           config.starterPrefixChars > 0,
-           normalized.count >= config.starterPrefixChars {
+            config.starterPrefixChars > 0,
+            normalized.count >= config.starterPrefixChars
+        {
             let starter = String(normalized.prefix(config.starterPrefixChars))
             if let decision = bumpAndCheck(
                 key: starter,

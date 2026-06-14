@@ -37,15 +37,16 @@ struct OpenCodeConfigMergeTests {
     // MARK: - Preservation & wholesale replacement
 
     @Test func foreignKeysAndProvidersSurviveUntouched() throws {
-        let existing = Data(#"""
-        {
-          "provider": {
-            "omlx": { "npm": "@ai-sdk/openai-compatible", "options": { "apiKey": "secret-k" } }
-          },
-          "mcp": { "pencil": { "enabled": true } },
-          "keybinds": { "leader": "ctrl+x" }
-        }
-        """#.utf8)
+        let existing = Data(
+            #"""
+            {
+              "provider": {
+                "omlx": { "npm": "@ai-sdk/openai-compatible", "options": { "apiKey": "secret-k" } }
+              },
+              "mcp": { "pencil": { "enabled": true } },
+              "keybinds": { "leader": "ctrl+x" }
+            }
+            """#.utf8)
 
         let output = OpenCodeConfigMerge.merge(existingConfig: existing, snapshot: snapshot())
 
@@ -58,16 +59,17 @@ struct OpenCodeConfigMergeTests {
     }
 
     @Test func tesseractBlockIsReplacedWholesale() throws {
-        let existing = Data(#"""
-        {
-          "provider": {
-            "tesseract": {
-              "handTunedKey": true,
-              "models": { "deleted-model": { "name": "stale" } }
+        let existing = Data(
+            #"""
+            {
+              "provider": {
+                "tesseract": {
+                  "handTunedKey": true,
+                  "models": { "deleted-model": { "name": "stale" } }
+                }
+              }
             }
-          }
-        }
-        """#.utf8)
+            """#.utf8)
 
         let output = OpenCodeConfigMerge.merge(existingConfig: existing, snapshot: snapshot())
 
@@ -92,17 +94,18 @@ struct OpenCodeConfigMergeTests {
     // MARK: - JSONC input (OpenCode parses every config file as JSONC)
 
     @Test func commentsAndTrailingCommasAreLegalInput() throws {
-        let existing = Data(#"""
-        {
-          // line comment
-          "mcp": {
-            /* block
-               comment */
-            "pencil": { "enabled": true },
-          },
-          "model": "omlx/some-model",
-        }
-        """#.utf8)
+        let existing = Data(
+            #"""
+            {
+              // line comment
+              "mcp": {
+                /* block
+                   comment */
+                "pencil": { "enabled": true },
+              },
+              "model": "omlx/some-model",
+            }
+            """#.utf8)
 
         let output = OpenCodeConfigMerge.merge(existingConfig: existing, snapshot: snapshot())
 
@@ -113,16 +116,17 @@ struct OpenCodeConfigMergeTests {
     }
 
     @Test func commentMarkersInsideStringsAreNotComments() throws {
-        let existing = Data(#"""
-        {
-          "provider": {
-            "omlx": {
-              "options": { "baseURL": "http://127.0.0.1:8000/v1" },
-              "note": "a /* literal */ value, trailing"
+        let existing = Data(
+            #"""
+            {
+              "provider": {
+                "omlx": {
+                  "options": { "baseURL": "http://127.0.0.1:8000/v1" },
+                  "note": "a /* literal */ value, trailing"
+                }
+              }
             }
-          }
-        }
-        """#.utf8)
+            """#.utf8)
 
         let output = OpenCodeConfigMerge.merge(existingConfig: existing, snapshot: snapshot())
 
@@ -131,8 +135,9 @@ struct OpenCodeConfigMergeTests {
             (try parse(output.configData)["provider"] as? [String: Any])?["omlx"]
                 as? [String: Any]
         )
-        #expect((omlx["options"] as? [String: Any])?["baseURL"] as? String
-            == "http://127.0.0.1:8000/v1")
+        #expect(
+            (omlx["options"] as? [String: Any])?["baseURL"] as? String
+                == "http://127.0.0.1:8000/v1")
         #expect(omlx["note"] as? String == "a /* literal */ value, trailing")
     }
 

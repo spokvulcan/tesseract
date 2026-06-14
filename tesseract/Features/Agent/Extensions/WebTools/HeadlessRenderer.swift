@@ -53,9 +53,11 @@ final class HeadlessRenderer {
                     try await Task.sleep(for: .milliseconds(1500))
 
                     // Extract fully rendered DOM
-                    guard let html = try await page.callJavaScript(
-                        "document.documentElement.outerHTML"
-                    ) as? String, !html.isEmpty else {
+                    guard
+                        let html = try await page.callJavaScript(
+                            "document.documentElement.outerHTML"
+                        ) as? String, !html.isEmpty
+                    else {
                         throw HeadlessRendererError.emptyResult
                     }
                     return html

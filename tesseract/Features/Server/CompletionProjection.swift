@@ -137,7 +137,8 @@ nonisolated struct CompletionProjection: Sendable {
         reasoning: String,
         malformedRaw: String
     ) -> FinishReasonDiagnostic.Classification {
-        let stopWithEmptyPayload = finishReason == .stop
+        let stopWithEmptyPayload =
+            finishReason == .stop
             && rawText.isEmpty
             && toolCallCount == 0
         if stopWithEmptyPayload && !reasoning.isEmpty {

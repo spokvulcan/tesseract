@@ -146,15 +146,18 @@ nonisolated struct SnapshotAdmission: Sendable {
         entries.reserveCapacity(candidates.count)
 
         for candidate in candidates {
-            guard let path = SnapshotAdmissionPath.validating(
-                offset: candidate.snapshot.tokenOffset,
-                fullPromptTokenCount: fullPromptTokens.count
-            ) else { continue }
-            entries.append(Entry(
-                path: path,
-                snapshot: candidate.snapshot,
-                storage: candidate.storage
-            ))
+            guard
+                let path = SnapshotAdmissionPath.validating(
+                    offset: candidate.snapshot.tokenOffset,
+                    fullPromptTokenCount: fullPromptTokens.count
+                )
+            else { continue }
+            entries.append(
+                Entry(
+                    path: path,
+                    snapshot: candidate.snapshot,
+                    storage: candidate.storage
+                ))
         }
 
         guard let first = entries.first else { return nil }
@@ -175,10 +178,12 @@ nonisolated struct SnapshotAdmission: Sendable {
         requestID: UUID? = nil,
         endOfTurn: Bool = true
     ) -> SnapshotAdmission? {
-        guard let path = SnapshotAdmissionPath.validatingLeaf(
-            offset: snapshot.tokenOffset,
-            storedTokenCount: storedTokens.count
-        ) else { return nil }
+        guard
+            let path = SnapshotAdmissionPath.validatingLeaf(
+                offset: snapshot.tokenOffset,
+                storedTokenCount: storedTokens.count
+            )
+        else { return nil }
 
         let entry = Entry(
             path: path,

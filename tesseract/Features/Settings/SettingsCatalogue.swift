@@ -25,8 +25,10 @@ enum SettingsCatalogue {
     static let autoInsertText = Setting.bool("autoInsertText", default: true)
     static let restoreClipboard = Setting.bool("restoreClipboard", default: true)
     static let overlayStyleRaw = Setting.string("overlayStyle", default: OverlayStyle.pill.rawValue)
-    static let glowThemeRaw = Setting.string("glowTheme", default: GlowTheme.appleIntelligence.rawValue)
-    static let samplingPresetRaw = Setting.string("samplingPreset", default: SamplingPreset.automatic.rawValue)
+    static let glowThemeRaw = Setting.string(
+        "glowTheme", default: GlowTheme.appleIntelligence.rawValue)
+    static let samplingPresetRaw = Setting.string(
+        "samplingPreset", default: SamplingPreset.automatic.rawValue)
 
     // MARK: - Audio
 
@@ -38,12 +40,18 @@ enum SettingsCatalogue {
 
     // MARK: - Hotkeys
 
-    static let hotkeyKeyCode = Setting.int("hotkeyKeyCode", default: Int(KeyCombo.optionSpace.keyCode))
-    static let hotkeyModifiers = Setting.int("hotkeyModifiers", default: Int(KeyCombo.optionSpace.modifiers))
-    static let ttsHotkeyKeyCode = Setting.int("ttsHotkeyKeyCode", default: Int(KeyCombo.functionSpace.keyCode))
-    static let ttsHotkeyModifiers = Setting.int("ttsHotkeyModifiers", default: Int(KeyCombo.functionSpace.modifiers))
-    static let agentHotkeyKeyCode = Setting.int("agentHotkeyKeyCode", default: Int(KeyCombo.controlSpace.keyCode))
-    static let agentHotkeyModifiers = Setting.int("agentHotkeyModifiers", default: Int(KeyCombo.controlSpace.modifiers))
+    static let hotkeyKeyCode = Setting.int(
+        "hotkeyKeyCode", default: Int(KeyCombo.optionSpace.keyCode))
+    static let hotkeyModifiers = Setting.int(
+        "hotkeyModifiers", default: Int(KeyCombo.optionSpace.modifiers))
+    static let ttsHotkeyKeyCode = Setting.int(
+        "ttsHotkeyKeyCode", default: Int(KeyCombo.functionSpace.keyCode))
+    static let ttsHotkeyModifiers = Setting.int(
+        "ttsHotkeyModifiers", default: Int(KeyCombo.functionSpace.modifiers))
+    static let agentHotkeyKeyCode = Setting.int(
+        "agentHotkeyKeyCode", default: Int(KeyCombo.controlSpace.keyCode))
+    static let agentHotkeyModifiers = Setting.int(
+        "agentHotkeyModifiers", default: Int(KeyCombo.controlSpace.modifiers))
 
     // MARK: - TTS
 
@@ -56,8 +64,10 @@ enum SettingsCatalogue {
     static let ttsLanguage = Setting.string("ttsLanguage", default: "English")
     static let ttsStreamingEnabled = Setting.bool("ttsStreamingEnabled", default: true)
     static let agentAutoSpeak = Setting.bool("agentAutoSpeak", default: false)
-    static let selectedAgentModelID = Setting.string("selectedAgentModelID", default: ModelDefinition.defaultAgentModelID)
-    static let selectedSpeechToTextModelID = Setting.string("selectedSpeechToTextModelID", default: ModelDefinition.defaultSpeechToTextModelID)
+    static let selectedAgentModelID = Setting.string(
+        "selectedAgentModelID", default: ModelDefinition.defaultAgentModelID)
+    static let selectedSpeechToTextModelID = Setting.string(
+        "selectedSpeechToTextModelID", default: ModelDefinition.defaultSpeechToTextModelID)
 
     // MARK: - Advanced
 
@@ -101,8 +111,10 @@ enum SettingsCatalogue {
     /// (The pre-refactor property literal and doc comment said 50 GiB, but the
     /// registered 20 GiB won on read; resolved here to preserve observed
     /// behaviour. See issue #16.)
-    static let prefixCacheSSDBudgetBytes = Setting.int("prefixCacheSSDBudgetBytes", default: 20 * 1024 * 1024 * 1024)
-    static let prefixCacheSSDDirectoryOverride = Setting.optionalString("prefixCacheSSDDirectoryOverride")
+    static let prefixCacheSSDBudgetBytes = Setting.int(
+        "prefixCacheSSDBudgetBytes", default: 20 * 1024 * 1024 * 1024)
+    static let prefixCacheSSDDirectoryOverride = Setting.optionalString(
+        "prefixCacheSSDDirectoryOverride")
 
     // MARK: - Onboarding
 

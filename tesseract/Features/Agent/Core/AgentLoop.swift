@@ -14,12 +14,13 @@ struct AgentContext: Sendable {
 // MARK: - LLMGenerateFunction
 
 /// Closure type for LLM generation. Connected to AgentEngine in Epic 6.
-typealias LLMGenerateFunction = @Sendable (
-    _ systemPrompt: String,
-    _ messages: [LLMMessage],
-    _ tools: [AgentToolDefinition]?,
-    _ signal: CancellationToken?
-) -> AsyncThrowingStream<AgentGeneration, Error>
+typealias LLMGenerateFunction =
+    @Sendable (
+        _ systemPrompt: String,
+        _ messages: [LLMMessage],
+        _ tools: [AgentToolDefinition]?,
+        _ signal: CancellationToken?
+    ) -> AsyncThrowingStream<AgentGeneration, Error>
 
 // MARK: - StopReason
 
@@ -154,11 +155,17 @@ private func runLoop(
             // 4. Check for cancellation or error
             switch stopReason {
             case .cancelled:
-                emit(.turnEnd(message: assistantMessage, toolResults: [], contextMessages: context.messages))
+                emit(
+                    .turnEnd(
+                        message: assistantMessage, toolResults: [],
+                        contextMessages: context.messages))
                 emit(.agentEnd(messages: allNewMessages.snapshot()))
                 return
             case .error(let error):
-                emit(.turnEnd(message: assistantMessage, toolResults: [], contextMessages: context.messages))
+                emit(
+                    .turnEnd(
+                        message: assistantMessage, toolResults: [],
+                        contextMessages: context.messages))
                 emit(.agentEnd(messages: allNewMessages.snapshot()))
                 Log.agent.error("Generation error: \(error)")
                 return
@@ -170,7 +177,10 @@ private func runLoop(
             let toolCalls = assistantMessage.toolCalls
             guard !toolCalls.isEmpty else {
                 // No tool calls — end the inner loop
-                emit(.turnEnd(message: assistantMessage, toolResults: [], contextMessages: context.messages))
+                emit(
+                    .turnEnd(
+                        message: assistantMessage, toolResults: [],
+                        contextMessages: context.messages))
                 break innerLoop
             }
 
@@ -185,7 +195,10 @@ private func runLoop(
                 emit: emit
             )
 
-            emit(.turnEnd(message: assistantMessage, toolResults: toolResults, contextMessages: context.messages))
+            emit(
+                .turnEnd(
+                    message: assistantMessage, toolResults: toolResults,
+                    contextMessages: context.messages))
 
             // 8. Set pending = steering
             pendingMessages = steeringMessages
@@ -264,11 +277,12 @@ private func streamAssistantResponse(
         if result.didMutate {
             context.messages = result.messages
         }
-        emit(.contextTransformEnd(
-            reason: ct.reason,
-            didMutate: result.didMutate,
-            messages: result.didMutate ? context.messages : nil
-        ))
+        emit(
+            .contextTransformEnd(
+                reason: ct.reason,
+                didMutate: result.didMutate,
+                messages: result.didMutate ? context.messages : nil
+            ))
     }
 
     // b. Convert to LLM messages
@@ -305,27 +319,31 @@ private func streamAssistantResponse(
             // state) plus stable tool-call identity assignment.
             switch generation {
             case .text(let text):
-                emit(.messageUpdate(
-                    message: AssistantMessage.fromStream(
-                        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
-                    ),
-                    streamDelta: AssistantStreamDelta(
-                        textDelta: text, thinkingDelta: nil, toolCallDelta: nil
-                    )
-                ))
+                emit(
+                    .messageUpdate(
+                        message: AssistantMessage.fromStream(
+                            content: accumulator.text, thinking: accumulator.thinking,
+                            toolCalls: toolCalls
+                        ),
+                        streamDelta: AssistantStreamDelta(
+                            textDelta: text, thinkingDelta: nil, toolCallDelta: nil
+                        )
+                    ))
 
             case .thinkStart:
                 break
 
             case .thinking(let text):
-                emit(.messageUpdate(
-                    message: AssistantMessage.fromStream(
-                        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
-                    ),
-                    streamDelta: AssistantStreamDelta(
-                        textDelta: nil, thinkingDelta: text, toolCallDelta: nil
-                    )
-                ))
+                emit(
+                    .messageUpdate(
+                        message: AssistantMessage.fromStream(
+                            content: accumulator.text, thinking: accumulator.thinking,
+                            toolCalls: toolCalls
+                        ),
+                        streamDelta: AssistantStreamDelta(
+                            textDelta: nil, thinkingDelta: text, toolCallDelta: nil
+                        )
+                    ))
 
             case .thinkEnd:
                 break
@@ -334,14 +352,16 @@ private func streamAssistantResponse(
                 // Reclassify now APPENDS buffered thinking after any pre-think
                 // text (the canonical rule, owned by the accumulator); truncate
                 // resets thinking to the safe prefix. Both just re-snapshot.
-                emit(.messageUpdate(
-                    message: AssistantMessage.fromStream(
-                        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
-                    ),
-                    streamDelta: AssistantStreamDelta(
-                        textDelta: nil, thinkingDelta: nil, toolCallDelta: nil
-                    )
-                ))
+                emit(
+                    .messageUpdate(
+                        message: AssistantMessage.fromStream(
+                            content: accumulator.text, thinking: accumulator.thinking,
+                            toolCalls: toolCalls
+                        ),
+                        streamDelta: AssistantStreamDelta(
+                            textDelta: nil, thinkingDelta: nil, toolCallDelta: nil
+                        )
+                    ))
 
             case .toolCall(let call):
                 let info = ToolCallInfo(
@@ -350,17 +370,19 @@ private func streamAssistantResponse(
                     argumentsJSON: encodeArguments(call.function.arguments)
                 )
                 toolCalls.append(info)
-                emit(.messageUpdate(
-                    message: AssistantMessage.fromStream(
-                        content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
-                    ),
-                    streamDelta: AssistantStreamDelta(
-                        textDelta: nil, thinkingDelta: nil,
-                        toolCallDelta: ToolCallDelta(
-                            toolCallId: info.id, name: info.name, argumentsDelta: nil
+                emit(
+                    .messageUpdate(
+                        message: AssistantMessage.fromStream(
+                            content: accumulator.text, thinking: accumulator.thinking,
+                            toolCalls: toolCalls
+                        ),
+                        streamDelta: AssistantStreamDelta(
+                            textDelta: nil, thinkingDelta: nil,
+                            toolCallDelta: ToolCallDelta(
+                                toolCallId: info.id, name: info.name, argumentsDelta: nil
+                            )
                         )
-                    )
-                ))
+                    ))
 
             case .malformedToolCall(let raw):
                 Log.agent.warning("Malformed tool call ignored: \(raw)")
@@ -461,7 +483,8 @@ private func executeToolCalls(
         if !missingParams.isEmpty {
             let errorResult = ToolResultMessage.create(
                 toolCallId: call.id, toolName: call.name,
-                result: .error("Missing required parameters: \(missingParams.joined(separator: ", "))"),
+                result: .error(
+                    "Missing required parameters: \(missingParams.joined(separator: ", "))"),
                 isError: true
             )
             results.append(errorResult)
@@ -473,18 +496,20 @@ private func executeToolCalls(
         }
 
         // Emit tool execution start
-        emit(.toolExecutionStart(
-            toolCallId: call.id, toolName: call.name,
-            argsJSON: call.argumentsJSON
-        ))
+        emit(
+            .toolExecutionStart(
+                toolCallId: call.id, toolName: call.name,
+                argsJSON: call.argumentsJSON
+            ))
 
         // Create onUpdate callback
         let toolCallId = call.id
         let toolName = call.name
         let onUpdate: ToolProgressCallback = { progressResult in
-            emit(.toolExecutionUpdate(
-                toolCallId: toolCallId, toolName: toolName, result: progressResult
-            ))
+            emit(
+                .toolExecutionUpdate(
+                    toolCallId: toolCallId, toolName: toolName, result: progressResult
+                ))
         }
 
         // Execute
@@ -499,10 +524,11 @@ private func executeToolCalls(
         }
 
         // Emit tool execution end
-        emit(.toolExecutionEnd(
-            toolCallId: call.id, toolName: call.name,
-            result: toolResult, isError: isError
-        ))
+        emit(
+            .toolExecutionEnd(
+                toolCallId: call.id, toolName: call.name,
+                result: toolResult, isError: isError
+            ))
 
         // Create result message
         let resultMessage = ToolResultMessage.create(
@@ -565,4 +591,3 @@ private final class MessageAccumulator: @unchecked Sendable {
         return messages
     }
 }
-

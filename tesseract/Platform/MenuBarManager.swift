@@ -101,8 +101,10 @@ final class MenuBarManager: ObservableObject {
         guard let button = statusItem?.button else { return }
 
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Tesseract Agent")?
-            .withSymbolConfiguration(config) {
+        if let image = NSImage(
+            systemSymbolName: "waveform", accessibilityDescription: "Tesseract Agent")?
+            .withSymbolConfiguration(config)
+        {
             image.isTemplate = true
             button.image = image
         }
@@ -112,7 +114,8 @@ final class MenuBarManager: ObservableObject {
         guard statusItem != nil else { return }
 
         let hotkeyDisplay = settings.hotkey.displayString
-        toggleItem?.title = isRecording
+        toggleItem?.title =
+            isRecording
             ? "Stop Dictation (\(hotkeyDisplay))"
             : "Start Dictation (\(hotkeyDisplay))"
 

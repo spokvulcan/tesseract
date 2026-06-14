@@ -49,11 +49,13 @@ final class SlashCommandPaletteController {
         let skillsDir = agentRoot.appendingPathComponent("skills")
         let packageSkillFiles: [URL]
         if let packageRegistry {
-            packageSkillFiles = PackageBootstrap.cachedSkillPaths(from: packageRegistry, agentRoot: agentRoot)
+            packageSkillFiles = PackageBootstrap.cachedSkillPaths(
+                from: packageRegistry, agentRoot: agentRoot)
         } else {
             packageSkillFiles = []
         }
-        let skills = SkillRegistry.discover(locations: [skillsDir], packageSkillFiles: packageSkillFiles)
+        let skills = SkillRegistry.discover(
+            locations: [skillsDir], packageSkillFiles: packageSkillFiles)
         commandRegistry.rebuild(skills: skills, extensionHost: extensionHost)
     }
 

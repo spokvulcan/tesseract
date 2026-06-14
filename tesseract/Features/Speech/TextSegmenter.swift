@@ -17,7 +17,9 @@ enum TextSegmenter {
         static let tokensPerWordEstimate: Double = 1.3
     }
 
-    static func segment(_ text: String, targetTokens: Int = Defaults.targetTokensPerSegment) -> [TextSegment] {
+    static func segment(_ text: String, targetTokens: Int = Defaults.targetTokensPerSegment)
+        -> [TextSegment]
+    {
         let sentences = splitIntoSentences(text)
         guard sentences.count > 1 else {
             return [TextSegment(index: 0, text: text)]

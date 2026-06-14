@@ -93,7 +93,8 @@ extension ModelDefinition {
         ModelDefinition(
             id: "whisper-large-v3-turbo-compact",
             displayName: "Whisper Turbo Compact",
-            description: "Same fast voice-to-text at less than half the size. Best for Macs with limited memory.",
+            description:
+                "Same fast voice-to-text at less than half the size. Best for Macs with limited memory.",
             category: .speechToText,
             source: .huggingFace(
                 repo: "argmaxinc/whisperkit-coreml",
@@ -149,7 +150,8 @@ extension ModelDefinition {
         ModelDefinition(
             id: "qwen3.6-27b-paro",
             displayName: "Qwen3.6-27B PARO",
-            description: "Highest-quality PARO agent, built on Qwen3.6. Requires a high-memory Mac (48 GB+ recommended).",
+            description:
+                "Highest-quality PARO agent, built on Qwen3.6. Requires a high-memory Mac (48 GB+ recommended).",
             category: .agent,
             source: .huggingFace(
                 repo: "z-lab/Qwen3.6-27B-PARO",
@@ -161,7 +163,8 @@ extension ModelDefinition {
         ModelDefinition(
             id: "qwen3.6-35b-a3b-ud",
             displayName: "Qwen3.6-35B-A3B UD (MLX 4bit)",
-            description: "Large sparse-MoE agent (3B active / 35B total) from Unsloth. Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5_moe.",
+            description:
+                "Large sparse-MoE agent (3B active / 35B total) from Unsloth. Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5_moe.",
             category: .agent,
             source: .huggingFace(
                 repo: "unsloth/Qwen3.6-35B-A3B-UD-MLX-4bit",
@@ -173,7 +176,8 @@ extension ModelDefinition {
         ModelDefinition(
             id: "qwen3.6-27b",
             displayName: "Qwen3.6-27B (MLX 4bit)",
-            description: "Dense 27B agent (uniform 4-bit MLX). Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5.",
+            description:
+                "Dense 27B agent (uniform 4-bit MLX). Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5.",
             category: .agent,
             source: .huggingFace(
                 repo: "mlx-community/Qwen3.6-27B-4bit",

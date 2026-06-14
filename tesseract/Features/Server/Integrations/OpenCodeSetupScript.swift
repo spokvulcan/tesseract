@@ -89,8 +89,8 @@ nonisolated enum OpenCodeSetupScript {
     private static func modelSummaryLines(snapshot: IntegrationSnapshot) -> String {
         guard !snapshot.models.isEmpty else {
             return """
-            echo "! No models downloaded yet — download one in Settings -> Models, then re-run."
-            """
+                echo "! No models downloaded yet — download one in Settings -> Models, then re-run."
+                """
         }
         let idWidth = snapshot.models.map(\.id.count).max() ?? 0
         var lines = snapshot.models.map { model in

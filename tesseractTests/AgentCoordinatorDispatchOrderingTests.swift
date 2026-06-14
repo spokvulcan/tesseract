@@ -66,7 +66,7 @@ struct AgentCoordinatorDispatchOrderingTests {
         )
 
         coordinator.sendMessage("hi")
-        #expect(coordinator.isGenerating == true)   // eager, before the loop starts
+        #expect(coordinator.isGenerating == true)  // eager, before the loop starts
 
         // Let the real .agentStart/.messageUpdate/.agentEnd dispatch run to settle.
         let deadline = ContinuousClock.now + .seconds(3)
@@ -83,9 +83,10 @@ struct AgentCoordinatorDispatchOrderingTests {
         // dispatcher flipped the busy flag BEFORE rebuilding on `.agentEnd`.
         #expect(coordinator.rows.contains(where: isStreamingRow) == false)
         // And the committed answer is present.
-        #expect(coordinator.rows.contains { row in
-            if case .assistantText(let answer) = row.kind { return answer.content == "hello" }
-            return false
-        })
+        #expect(
+            coordinator.rows.contains { row in
+                if case .assistantText(let answer) = row.kind { return answer.content == "hello" }
+                return false
+            })
     }
 }

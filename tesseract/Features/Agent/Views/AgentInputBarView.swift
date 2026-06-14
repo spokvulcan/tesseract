@@ -64,19 +64,25 @@ struct AgentInputBarView: View {
                     onImagePaste: { attachments in
                         // When the selected model can't see images, surface the
                         // one-tap switch hint instead of silently dropping (#115).
-                        guard imageInputAvailable else { coordinator.showImageSwitchHint = true; return }
+                        guard imageInputAvailable else {
+                            coordinator.showImageSwitchHint = true; return
+                        }
                         coordinator.attachImages(attachments)
                     },
-                    isEnabled: !(coordinator.voiceInput.voiceState == .recording || coordinator.voiceInput.voiceState == .transcribing),
+                    isEnabled:
+                        !(coordinator.voiceInput.voiceState == .recording
+                        || coordinator.voiceInput.voiceState == .transcribing),
                     onArrowUp: {
                         guard coordinator.commandPalette.showCommandPopup else { return false }
-                        coordinator.commandPalette.commandSelectedIndex = max(0, coordinator.commandPalette.commandSelectedIndex - 1)
+                        coordinator.commandPalette.commandSelectedIndex = max(
+                            0, coordinator.commandPalette.commandSelectedIndex - 1)
                         return true
                     },
                     onArrowDown: {
                         guard coordinator.commandPalette.showCommandPopup else { return false }
                         let count = coordinator.commandPalette.commandFilteredResults.count
-                        coordinator.commandPalette.commandSelectedIndex = min(count - 1, coordinator.commandPalette.commandSelectedIndex + 1)
+                        coordinator.commandPalette.commandSelectedIndex = min(
+                            count - 1, coordinator.commandPalette.commandSelectedIndex + 1)
                         return true
                     },
                     onEscape: {
@@ -99,8 +105,14 @@ struct AgentInputBarView: View {
                         ForEach(coordinator.pendingImages) { attachment in
                             ImageThumbnailView(
                                 attachment: attachment,
-                                onRemove: { coordinator.pendingImages.removeAll { $0.id == attachment.id } },
-                                onTap: { coordinator.openQuickLook(clicked: attachment.id, includingPending: coordinator.pendingImages) }
+                                onRemove: {
+                                    coordinator.pendingImages.removeAll { $0.id == attachment.id }
+                                },
+                                onTap: {
+                                    coordinator.openQuickLook(
+                                        clicked: attachment.id,
+                                        includingPending: coordinator.pendingImages)
+                                }
                             )
                         }
                     }
@@ -120,7 +132,9 @@ struct AgentInputBarView: View {
                     // vision toggle is gone — vision is on by default for capable
                     // models, governed globally in Settings.
                     if imageInputAvailable {
-                        Button { openImagePicker() } label: {
+                        Button {
+                            openImagePicker()
+                        } label: {
                             Image(systemName: "plus")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(.secondary)
@@ -137,10 +151,15 @@ struct AgentInputBarView: View {
                     } label: {
                         Image(systemName: "globe")
                             .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(settings.webAccessEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(
+                                settings.webAccessEnabled
+                                    ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                     }
                     .buttonStyle(.plain)
-                    .help(settings.webAccessEnabled ? "Web search enabled — click to disable" : "Web search disabled — click to enable")
+                    .help(
+                        settings.webAccessEnabled
+                            ? "Web search enabled — click to disable"
+                            : "Web search disabled — click to enable")
 
                     Button {
                         if coordinator.commandPalette.showCommandPopup {
@@ -152,7 +171,9 @@ struct AgentInputBarView: View {
                     } label: {
                         Image(systemName: "slash.circle")
                             .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(coordinator.commandPalette.showCommandPopup ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(
+                                coordinator.commandPalette.showCommandPopup
+                                    ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                     }
                     .buttonStyle(.plain)
                     .help("Commands")
@@ -180,7 +201,8 @@ struct AgentInputBarView: View {
                         } label: {
                             Image(systemName: "paperplane.fill")
                                 .font(.system(size: 18))
-                                .foregroundStyle(canSend ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                                .foregroundStyle(
+                                    canSend ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
                         }
                         .buttonStyle(.plain)
                         .disabled(!canSend)
@@ -267,7 +289,8 @@ struct AgentInputBarView: View {
         switch state {
         case .idle:
             Image(systemName: "mic.fill")
-                .foregroundStyle(canUseVoice ? AnyShapeStyle(.secondary) : AnyShapeStyle(.quaternary))
+                .foregroundStyle(
+                    canUseVoice ? AnyShapeStyle(.secondary) : AnyShapeStyle(.quaternary))
         case .recording:
             Image(systemName: "stop.fill")
                 .foregroundStyle(.red)
@@ -317,7 +340,8 @@ struct AgentInputBarView: View {
     }
 
     private var canSend: Bool {
-        (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !coordinator.pendingImages.isEmpty)
+        (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !coordinator.pendingImages.isEmpty)
             && !coordinator.isGenerating
     }
 
@@ -357,7 +381,8 @@ struct AgentInputBarView: View {
     private func refreshVisionCapability() {
         let modelID = settings.selectedAgentModelID
         guard case .downloaded = downloadManager.statuses[modelID],
-              let directory = downloadManager.modelPath(for: modelID) else {
+            let directory = downloadManager.modelPath(for: modelID)
+        else {
             selectedModelIsVisionCapable = false
             return
         }
@@ -382,7 +407,9 @@ struct AgentInputBarView: View {
                     .buttonStyle(.borderless)
                     .font(.system(size: 12, weight: .medium))
             }
-            Button { coordinator.showImageSwitchHint = false } label: {
+            Button {
+                coordinator.showImageSwitchHint = false
+            } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.tertiary)
@@ -439,7 +466,8 @@ struct AgentInputBarView: View {
         ModelDefinition.all.first { model in
             guard model.category == .agent else { return false }
             guard case .downloaded = downloadManager.statuses[model.id],
-                  let directory = downloadManager.modelPath(for: model.id) else { return false }
+                let directory = downloadManager.modelPath(for: model.id)
+            else { return false }
             return ModelVisionCapability.isVisionCapable(directory: directory)
         }
     }
@@ -470,7 +498,8 @@ struct AgentInputBarView: View {
             guard response == .OK else { return }
             let attachments = panel.urls.compactMap { url -> ImageAttachment? in
                 guard let data = try? Data(contentsOf: url) else { return nil }
-                let uti = UTType(filenameExtension: url.pathExtension)?.identifier ?? url.pathExtension
+                let uti =
+                    UTType(filenameExtension: url.pathExtension)?.identifier ?? url.pathExtension
                 return try? ImageIngest.ingest(
                     data: data, typeIdentifier: uti, filename: url.lastPathComponent
                 ).get()

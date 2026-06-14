@@ -159,8 +159,9 @@ final class TokenRadixTree {
             if edgePos < edge.count { break }
             current = child
             if pos < tokens.count,
-               child.state.checkpointType == .leaf,
-               let ref = child.state.ref {
+                child.state.checkpointType == .leaf,
+                let ref = child.state.ref
+            {
                 best = ref
             }
         }
@@ -277,7 +278,7 @@ final class TokenRadixTree {
             }
 
             guard pos < tokens.count,
-                  let child = current.children[tokens[pos]]
+                let child = current.children[tokens[pos]]
             else { break }
 
             let edgeEnd = pos + child.edgeTokens.count
@@ -319,9 +320,11 @@ final class TokenRadixTree {
     /// for the full prompt but snapshots are captured at intermediate offsets
     /// (e.g. stable-prefix boundary at 4000 on an 8000-token prompt).
     @discardableResult
-    func storeSnapshot(_ snapshot: HybridCacheSnapshot, forTokens tokens: [Int], atOffset offset: Int) -> Bool {
+    func storeSnapshot(
+        _ snapshot: HybridCacheSnapshot, forTokens tokens: [Int], atOffset offset: Int
+    ) -> Bool {
         guard offset > 0, offset <= tokens.count,
-              snapshot.tokenOffset == offset
+            snapshot.tokenOffset == offset
         else { return false }
 
         let node = insertPath(tokens: Array(tokens[0..<offset]))
@@ -454,7 +457,7 @@ final class TokenRadixTree {
         if case .ignored = effect {
             preconditionFailure(
                 "discardSnapshotRefAfterExplicitDelete requires a ref-bearing node; "
-                + "node was \(old.label)"
+                    + "node was \(old.label)"
             )
         }
         commit(next, on: node, from: old)
@@ -492,7 +495,7 @@ final class TokenRadixTree {
         guard let baseRef = node.state.ref else {
             preconditionFailure(
                 "convertConsumedBaseToChainPrefixRestorePoint requires a ref-bearing node; "
-                + "node was \(node.state.label)"
+                    + "node was \(node.state.label)"
             )
         }
         let point = ChainPrefixRestorePoint(
@@ -596,7 +599,7 @@ final class TokenRadixTree {
             guard target.state.canEvictNode else {
                 Log.agent.fault(
                     "TokenRadixTree.detachEmptyLeaf refused to unlink a node that still "
-                    + "owns an SSD ref (state \(target.state.label)); leaving it in the tree"
+                        + "owns an SSD ref (state \(target.state.label)); leaving it in the tree"
                 )
                 break
             }
@@ -734,10 +737,10 @@ final class TokenRadixTree {
     /// construction — collapsing here cannot orphan an SSD ref.
     private func collapseEmptySingleChild(_ node: RadixTreeNode) {
         guard node !== root,
-              node.state.isEmpty,
-              node.childCount == 1,
-              let parent = node.parent,
-              let onlyChild = node.children.values.first
+            node.state.isEmpty,
+            node.childCount == 1,
+            let parent = node.parent,
+            let onlyChild = node.children.values.first
         else { return }
 
         // Merge edges: node.edge + child.edge
@@ -786,8 +789,8 @@ final class TokenRadixTree {
 
     private func collectEligible(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
         if let snapshot = node.state.body,
-           node.childCount <= 1,
-           snapshot.checkpointType != .system
+            node.childCount <= 1,
+            snapshot.checkpointType != .system
         {
             result.append(node)
         }
@@ -813,41 +816,44 @@ final class TokenRadixTree {
         let state = node.state
         let snapshot = state.body
         let checkpointType = state.checkpointType?.wireString
-        let scores = snapshot.map { _ in
-            telemetryEvictionScore(for: node, now: now, config: config)
-        } ?? nil
+        let scores =
+            snapshot.map { _ in
+                telemetryEvictionScore(for: node, now: now, config: config)
+            } ?? nil
 
-        nodes.append(PromptCacheTreeNodeSnapshot(
-            id: nodeID,
-            parentID: parentID,
-            pathHash: pathHash,
-            tokenOffset: node.tokenOffset,
-            pathTokenCount: path.count,
-            edgeTokenCount: node.edgeTokens.count,
-            childCount: node.childCount,
-            depth: depth,
-            hasSnapshot: state.hasResidentBody,
-            checkpointType: checkpointType,
-            snapshotBytes: state.residentBodyBytes,
-            storageState: storageState,
-            snapshotRefID: state.refID,
-            storageBytes: state.storageBytes,
-            lastAccessAgeSeconds: max((now - node.lastAccessTime).seconds, 0),
-            normalizedRecency: scores?.normalizedRecency,
-            normalizedFlopEfficiency: scores?.normalizedFlopEfficiency,
-            utility: scores?.utility
-        ))
+        nodes.append(
+            PromptCacheTreeNodeSnapshot(
+                id: nodeID,
+                parentID: parentID,
+                pathHash: pathHash,
+                tokenOffset: node.tokenOffset,
+                pathTokenCount: path.count,
+                edgeTokenCount: node.edgeTokens.count,
+                childCount: node.childCount,
+                depth: depth,
+                hasSnapshot: state.hasResidentBody,
+                checkpointType: checkpointType,
+                snapshotBytes: state.residentBodyBytes,
+                storageState: storageState,
+                snapshotRefID: state.refID,
+                storageBytes: state.storageBytes,
+                lastAccessAgeSeconds: max((now - node.lastAccessTime).seconds, 0),
+                normalizedRecency: scores?.normalizedRecency,
+                normalizedFlopEfficiency: scores?.normalizedFlopEfficiency,
+                utility: scores?.utility
+            ))
 
         for child in node.children.values.sorted(by: Self.telemetryChildSort) {
             let childPath = path + child.edgeTokens
             let childHash = Self.telemetryPathHash(childPath)
             let childID = "\(partitionDigest):\(childHash)"
-            edges.append(PromptCacheTreeEdgeSnapshot(
-                id: "\(nodeID)->\(childID)",
-                parentID: nodeID,
-                childID: childID,
-                tokenCount: child.edgeTokens.count
-            ))
+            edges.append(
+                PromptCacheTreeEdgeSnapshot(
+                    id: "\(nodeID)->\(childID)",
+                    parentID: nodeID,
+                    childID: childID,
+                    tokenCount: child.edgeTokens.count
+                ))
             collectTelemetryNode(
                 child,
                 partitionDigest: partitionDigest,
@@ -868,8 +874,8 @@ final class TokenRadixTree {
         config: EvictionConfiguration
     ) -> EvictionScore? {
         guard let body = node.state.body,
-              node.childCount <= 1,
-              body.checkpointType != .system
+            node.childCount <= 1,
+            body.checkpointType != .system
         else { return nil }
         return EvictionPolicy.computeScores(
             candidates: [node], now: now, config: config

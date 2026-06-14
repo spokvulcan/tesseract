@@ -117,10 +117,13 @@ extension BenchmarkReport {
         lines.append("")
         lines.append("  ─── Aggregate ───")
         lines.append("  Passed: \(aggregate.passedScenarios)/\(aggregate.totalScenarios)")
-        lines.append("  Tool Accuracy: \(String(format: "%.1f%%", aggregate.overallToolAccuracy * 100))")
+        lines.append(
+            "  Tool Accuracy: \(String(format: "%.1f%%", aggregate.overallToolAccuracy * 100))")
         lines.append("  Duplicate Rate: \(String(format: "%.1f%%", aggregate.duplicateRate * 100))")
         lines.append("  Avg tok/s: \(String(format: "%.1f", aggregate.avgTokPerSec))")
-        lines.append("  Latency p50: \(String(format: "%.0f", aggregate.p50LatencyMs))ms  p95: \(String(format: "%.0f", aggregate.p95LatencyMs))ms")
+        lines.append(
+            "  Latency p50: \(String(format: "%.0f", aggregate.p50LatencyMs))ms  p95: \(String(format: "%.0f", aggregate.p95LatencyMs))ms"
+        )
         lines.append("  Peak Memory: \(String(format: "%.0f", aggregate.peakMemoryMB))MB")
         lines.append("═══════════════════════════════════════════════════════")
 

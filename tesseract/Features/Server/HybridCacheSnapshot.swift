@@ -63,9 +63,9 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     }
 
     enum CheckpointType: Comparable, Sendable {
-        case system               // stable-prefix reuse (system + tools)
-        case leaf                 // standard conversation-prefix reuse
-        case branchPoint          // Phase 2: speculative Marconi checkpoint
+        case system  // stable-prefix reuse (system + tools)
+        case leaf  // standard conversation-prefix reuse
+        case branchPoint  // Phase 2: speculative Marconi checkpoint
     }
 
     /// Capture from live cache during prefill. Deep-copies all state arrays.
@@ -89,12 +89,13 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 totalBytes += array.nbytes
                 return copy
             }
-            layers.append(LayerState(
-                className: className,
-                state: state,
-                metaState: layer.metaState,
-                offset: layer.offset
-            ))
+            layers.append(
+                LayerState(
+                    className: className,
+                    state: state,
+                    metaState: layer.metaState,
+                    offset: layer.offset
+                ))
         }
 
         return HybridCacheSnapshot(
@@ -137,8 +138,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         let maxOffset = layers.map { $0.offset }.max() ?? 0
         Log.server.info(
             "snapshot restore-begin tokenOffset=\(tokenOffset) "
-            + "layers=\(layers.count) maxLayerOffset=\(maxOffset) "
-            + "classBreakdown=\(classBreakdown)"
+                + "layers=\(layers.count) maxLayerOffset=\(maxOffset) "
+                + "classBreakdown=\(classBreakdown)"
         )
         return try layers.enumerated().map { layerIndex, layerState -> any KVCache in
             // ArraysCache (and its MambaCache subclass) reject direct metaState
@@ -167,26 +168,27 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             // `var` because `KVCache.state` has no class constraint upstream, so
             // assigning through the existential needs a mutable binding (every
             // conformer is in fact a class).
-            var cache: any KVCache = switch layerState.className {
-            case "KVCache", "KVCacheSimple":
-                KVCacheSimple()
+            var cache: any KVCache =
+                switch layerState.className {
+                case "KVCache", "KVCacheSimple":
+                    KVCacheSimple()
 
-            case "QuantizedKVCache":
-                Self.makeQuantizedCache(metaState: layerState.metaState)
+                case "QuantizedKVCache":
+                    Self.makeQuantizedCache(metaState: layerState.metaState)
 
-            case "RotatingKVCache":
-                Self.makeRotatingCache(metaState: layerState.metaState)
+                case "RotatingKVCache":
+                    Self.makeRotatingCache(metaState: layerState.metaState)
 
-            case "ChunkedKVCache":
-                ChunkedKVCache()
+                case "ChunkedKVCache":
+                    ChunkedKVCache()
 
-            default:
-                throw RestoreError(
-                    layerIndex: layerIndex,
-                    className: layerState.className,
-                    metaState: layerState.metaState
-                )
-            }
+                default:
+                    throw RestoreError(
+                        layerIndex: layerIndex,
+                        className: layerState.className,
+                        metaState: layerState.metaState
+                    )
+                }
 
             if !layerState.state.isEmpty {
                 cache.state = layerState.state.map { $0[.ellipsis] }
@@ -370,11 +372,14 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         let copied = state.map { $0[.ellipsis] }
         let cache: ArraysCache
         if metaState.count >= 2, let slotCount = Int(metaState[0]) {
-            let presentSlots = metaState[1].isEmpty
+            let presentSlots =
+                metaState[1].isEmpty
                 ? [] : metaState[1].split(separator: ",").compactMap { Int($0) }
-            let leftPadding: [Int]? = metaState.count >= 3
+            let leftPadding: [Int]? =
+                metaState.count >= 3
                 ? metaState[2].split(separator: ",").compactMap { Int($0) } : nil
-            cache = mamba
+            cache =
+                mamba
                 ? MambaCache(leftPadding: leftPadding)
                 : ArraysCache(size: slotCount, leftPadding: leftPadding)
             for (arrayIdx, slotIdx) in presentSlots.enumerated()
@@ -501,11 +506,13 @@ nonisolated extension HybridCacheSnapshot {
             case .unsupportedCacheClass(let name):
                 return "HybridCacheSnapshot cannot represent cache class '\(name)'."
             case .missingSchemaVersion:
-                return "Prompt cache file has no '\(MetadataKey.schemaVersion)' metadata, but the caller required one."
+                return
+                    "Prompt cache file has no '\(MetadataKey.schemaVersion)' metadata, but the caller required one."
             case .invalidSchemaVersion(let value):
                 return "Invalid HybridCacheSnapshot schema-version wire value: '\(value)'."
             case .schemaVersionMismatch(let expected, let actual):
-                return "HybridCacheSnapshot schema-version mismatch: expected \(expected), got \(actual)."
+                return
+                    "HybridCacheSnapshot schema-version mismatch: expected \(expected), got \(actual)."
             }
         }
     }
@@ -687,7 +694,7 @@ nonisolated extension HybridCacheSnapshot {
             // a no-op.
             let layerOffset: Int
             if let raw = metadata[Self.layerOffsetKey(layerIndex)],
-               let parsed = Int(raw)
+                let parsed = Int(raw)
             {
                 layerOffset = parsed
             } else {
@@ -700,15 +707,17 @@ nonisolated extension HybridCacheSnapshot {
             // even where a type-specific `metaState =` setter is lossy.
             // Legacy files (absent mirror) fall through to the live
             // cache — the behavior the previous version shipped.
-            let metaState = Self.layerMetaState(from: metadata, layerIndex: layerIndex)
+            let metaState =
+                Self.layerMetaState(from: metadata, layerIndex: layerIndex)
                 ?? cache.metaState
 
-            layers.append(LayerState(
-                className: className,
-                state: state,
-                metaState: metaState,
-                offset: layerOffset
-            ))
+            layers.append(
+                LayerState(
+                    className: className,
+                    state: state,
+                    metaState: metaState,
+                    offset: layerOffset
+                ))
         }
 
         return HybridCacheSnapshot(
@@ -753,14 +762,14 @@ nonisolated extension HybridCacheSnapshot {
         layerIndex: Int
     ) -> [String]? {
         guard let countRaw = metadata[layerMetaCountKey(layerIndex)],
-              let count = Int(countRaw),
-              count >= 0
+            let count = Int(countRaw),
+            count >= 0
         else {
             return nil
         }
         var result: [String] = []
         result.reserveCapacity(count)
-        for metaIndex in 0 ..< count {
+        for metaIndex in 0..<count {
             guard let value = metadata[layerMetaKey(layerIndex, metaIndex)] else {
                 return nil
             }

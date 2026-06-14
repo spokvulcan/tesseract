@@ -73,15 +73,16 @@ struct KeyCombo: Codable, Equatable, Sendable {
         UInt16(kVK_LeftArrow): "←",
         UInt16(kVK_RightArrow): "→",
         UInt16(kVK_UpArrow): "↑",
-        UInt16(kVK_DownArrow): "↓"
+        UInt16(kVK_DownArrow): "↓",
     ]
 
     private static func translateKeyCode(_ keyCode: UInt16) -> String? {
         guard let inputSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
-              let layoutData = TISGetInputSourceProperty(
+            let layoutData = TISGetInputSourceProperty(
                 inputSource,
                 kTISPropertyUnicodeKeyLayoutData
-              ) else {
+            )
+        else {
             return nil
         }
 
@@ -89,7 +90,9 @@ struct KeyCombo: Codable, Equatable, Sendable {
         guard let layoutPtr = CFDataGetBytePtr(data) else {
             return nil
         }
-        let keyboardLayout = layoutPtr.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { $0 }
+        let keyboardLayout = layoutPtr.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) {
+            $0
+        }
 
         var deadKeyState: UInt32 = 0
         var length: Int = 0

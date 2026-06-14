@@ -53,13 +53,13 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
         let options = DecodingOptions(
             task: .transcribe,
             language: language,
-            temperature: 0.0,                    // Greedy decoding for deterministic output
-            usePrefillPrompt: language != nil,   // Use prefill prompt when language is specified
+            temperature: 0.0,  // Greedy decoding for deterministic output
+            usePrefillPrompt: language != nil,  // Use prefill prompt when language is specified
             skipSpecialTokens: true,
             withoutTimestamps: false,
             clipTimestamps: [],
             noSpeechThreshold: Defaults.noSpeechThreshold,
-            chunkingStrategy: .vad               // Concurrent windows for >30s recordings
+            chunkingStrategy: .vad  // Concurrent windows for >30s recordings
         )
 
         // Capture whisperKit in a local constant to satisfy concurrency checking
@@ -87,7 +87,8 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
             )
         }
 
-        let text = results
+        let text =
+            results
             .map { $0.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")

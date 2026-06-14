@@ -60,7 +60,7 @@ struct StablePrefixDetector {
         // If the template interleaves tools after user content or renders
         // differently for different message counts, this catches mismatches.
         guard fullTokens.count >= commonLength,
-              fullTokens[0..<commonLength].elementsEqual(probeA[0..<commonLength])
+            fullTokens[0..<commonLength].elementsEqual(probeA[0..<commonLength])
         else {
             return nil
         }

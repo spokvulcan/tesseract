@@ -25,7 +25,10 @@ struct MainWindowView: View {
                     state: coordinator.state,
                     onToggle: { coordinator.toggleRecording() }
                 )
-                .disabled(!transcriptionEngine.isModelLoaded || permissionsManager.microphonePermission != .granted)
+                .disabled(
+                    !transcriptionEngine.isModelLoaded
+                        || permissionsManager.microphonePermission != .granted
+                )
                 .frame(height: 96)
 
                 // Status indicator below button (fixed 36pt)

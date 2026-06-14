@@ -67,8 +67,10 @@ final class PromptCacheTelemetryStore {
             let nodesByID = Dictionary(uniqueKeysWithValues: tree.nodes.map { ($0.id, $0) })
             var includedNodeIDs: Set<String> = []
 
-            for node in tree.nodes where
-                checkpointAllowed(node) && storageAllowed(node) && queryMatches(node, in: tree, query: query)
+            for node in tree.nodes
+            where
+                checkpointAllowed(node) && storageAllowed(node)
+                && queryMatches(node, in: tree, query: query)
             {
                 var current: PromptCacheTreeNodeSnapshot? = node
                 while let ancestor = current {
@@ -79,7 +81,9 @@ final class PromptCacheTelemetryStore {
 
             let nodes = tree.nodes.filter { includedNodeIDs.contains($0.id) }
             let nodeIDs = Set(nodes.map(\.id))
-            let edges = tree.edges.filter { nodeIDs.contains($0.parentID) && nodeIDs.contains($0.childID) }
+            let edges = tree.edges.filter {
+                nodeIDs.contains($0.parentID) && nodeIDs.contains($0.childID)
+            }
             return PromptCacheTreeSnapshot(
                 id: tree.id,
                 partitionDigest: tree.partitionDigest,
@@ -97,7 +101,8 @@ final class PromptCacheTelemetryStore {
     var selectedTree: PromptCacheTreeSnapshot? {
         let trees = filteredTrees
         if let selectedPartitionID,
-           let tree = trees.first(where: { $0.id == selectedPartitionID }) {
+            let tree = trees.first(where: { $0.id == selectedPartitionID })
+        {
             return tree
         }
         return trees.first
@@ -163,8 +168,8 @@ final class PromptCacheTelemetryStore {
 
     func copySelectedEventToPasteboard() {
         guard let selectedEvent,
-              let data = try? JSONEncoder.promptCachePretty.encode(selectedEvent),
-              let text = String(data: data, encoding: .utf8)
+            let data = try? JSONEncoder.promptCachePretty.encode(selectedEvent),
+            let text = String(data: data, encoding: .utf8)
         else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -178,7 +183,7 @@ final class PromptCacheTelemetryStore {
             events: events
         )
         guard let data = try? JSONEncoder.promptCachePretty.encode(payload),
-              let text = String(data: data, encoding: .utf8)
+            let text = String(data: data, encoding: .utf8)
         else {
             return "{}"
         }
@@ -235,19 +240,20 @@ final class PromptCacheTelemetryStore {
     private func appendSample() {
         let current = snapshot
         let ssd = current?.ssd ?? .disabled
-        metricSamples.append(PromptCacheMetricSample(
-            hitRate: aggregate.hitRate,
-            tokenReuseRate: aggregate.tokenReuseRate,
-            ramBytes: current?.residentSnapshotBytes ?? 0,
-            ramBudgetBytes: current?.memoryBudgetBytes ?? 0,
-            ssdBytes: ssd.currentBytes,
-            ssdBudgetBytes: ssd.budgetBytes,
-            evictionCount: aggregate.evictionCount,
-            admissionCount: aggregate.admissionCount,
-            averageLookupMs: aggregate.averageLookupMs,
-            averageRestoreMs: aggregate.averageRestoreMs,
-            averagePrefillMs: aggregate.averagePrefillMs
-        ))
+        metricSamples.append(
+            PromptCacheMetricSample(
+                hitRate: aggregate.hitRate,
+                tokenReuseRate: aggregate.tokenReuseRate,
+                ramBytes: current?.residentSnapshotBytes ?? 0,
+                ramBudgetBytes: current?.memoryBudgetBytes ?? 0,
+                ssdBytes: ssd.currentBytes,
+                ssdBudgetBytes: ssd.budgetBytes,
+                evictionCount: aggregate.evictionCount,
+                admissionCount: aggregate.admissionCount,
+                averageLookupMs: aggregate.averageLookupMs,
+                averageRestoreMs: aggregate.averageRestoreMs,
+                averagePrefillMs: aggregate.averagePrefillMs
+            ))
         if metricSamples.count > Self.maxSamples {
             metricSamples.removeFirst(metricSamples.count - Self.maxSamples)
         }
@@ -265,10 +271,12 @@ final class PromptCacheTelemetryStore {
             return
         }
         if let selectedNodeID,
-           selectedTree.nodes.contains(where: { $0.id == selectedNodeID }) {
+            selectedTree.nodes.contains(where: { $0.id == selectedNodeID })
+        {
             return
         }
-        selectedNodeID = selectedTree.nodes.first { $0.parentID == nil }?.id ?? selectedTree.nodes.first?.id
+        selectedNodeID =
+            selectedTree.nodes.first { $0.parentID == nil }?.id ?? selectedTree.nodes.first?.id
     }
 
     private func checkpointAllowed(_ node: PromptCacheTreeNodeSnapshot) -> Bool {

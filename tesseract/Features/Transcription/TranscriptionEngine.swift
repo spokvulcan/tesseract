@@ -20,7 +20,8 @@ final class TranscriptionEngine: Transcribing {
     /// race fires without a 30-second floor; the race itself stays on the facade.
     /// Literals are inlined rather than named constants because this `@Sendable`
     /// closure runs outside the engine's MainActor isolation.
-    static let defaultTimeout: @Sendable (_ audioDuration: TimeInterval) -> Duration = { audioDuration in
+    static let defaultTimeout: @Sendable (_ audioDuration: TimeInterval) -> Duration = {
+        audioDuration in
         let estimated = (audioDuration * 3.0) + 10
         let clamped = min(240, max(30, estimated))
         return .seconds(clamped)
@@ -44,7 +45,9 @@ final class TranscriptionEngine: Transcribing {
     private var recognizerCancelTask: Task<Void, Never>?
 
     init(
-        makeRecognizer: @escaping @Sendable () -> any SpeechRecognizer = { WhisperKitSpeechRecognizer() },
+        makeRecognizer: @escaping @Sendable () -> any SpeechRecognizer = {
+            WhisperKitSpeechRecognizer()
+        },
         timeout: @escaping @Sendable (TimeInterval) -> Duration = TranscriptionEngine.defaultTimeout
     ) {
         self.makeRecognizer = makeRecognizer
@@ -67,10 +70,15 @@ final class TranscriptionEngine: Transcribing {
         let decoderPath = modelPath.appendingPathComponent("TextDecoder.mlmodelc")
 
         guard fileManager.fileExists(atPath: encoderPath.path),
-              fileManager.fileExists(atPath: decoderPath.path) else {
+            fileManager.fileExists(atPath: decoderPath.path)
+        else {
             Log.transcription.error("Model files not found at: \(modelPath.path)")
-            Log.transcription.error("AudioEncoder at: \(encoderPath.path) - exists: \(fileManager.fileExists(atPath: encoderPath.path))")
-            Log.transcription.error("TextDecoder at: \(decoderPath.path) - exists: \(fileManager.fileExists(atPath: decoderPath.path))")
+            Log.transcription.error(
+                "AudioEncoder at: \(encoderPath.path) - exists: \(fileManager.fileExists(atPath: encoderPath.path))"
+            )
+            Log.transcription.error(
+                "TextDecoder at: \(decoderPath.path) - exists: \(fileManager.fileExists(atPath: decoderPath.path))"
+            )
             throw DictationError.modelNotLoaded
         }
 
@@ -95,7 +103,9 @@ final class TranscriptionEngine: Transcribing {
         Log.transcription.info("Unloaded Whisper model to prioritize TTS performance")
     }
 
-    func transcribe(_ audioData: AudioData, language: String = "auto") async throws -> TranscriptionResult {
+    func transcribe(_ audioData: AudioData, language: String = "auto") async throws
+        -> TranscriptionResult
+    {
         // Single-in-flight: synchronously occupy the slot before the first
         // `await` (MainActor-atomic). A `transcribe` issued while one is in
         // flight is rejected — it does not overlap, queue, or supersede.

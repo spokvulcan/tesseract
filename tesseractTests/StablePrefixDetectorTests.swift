@@ -60,7 +60,7 @@ struct StablePrefixDetectorTests {
                         rendered += "[tools:\(toolNames.joined(separator: ","))]\n"
                     }
                     if let ctx = additionalContext,
-                       let extra = ctx["prefix_text"] as? String
+                        let extra = ctx["prefix_text"] as? String
                     {
                         rendered += "[ctx:\(extra)]\n"
                     }
@@ -323,7 +323,7 @@ struct StablePrefixDetectorTests {
         let result = try StablePrefixDetector.detect(
             systemPrompt: "A system prompt that produces many tokens.",
             toolSpecs: nil,
-            fullTokens: [1, 2, 3], // way too short
+            fullTokens: [1, 2, 3],  // way too short
             tokenizer: tokenizer
         )
         #expect(result == nil)

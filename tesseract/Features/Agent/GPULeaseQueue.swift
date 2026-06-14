@@ -43,7 +43,8 @@ final class GPULeaseQueue {
         if isLeased || !waiters.isEmpty {
             let waiterID = UUID()
             try await withTaskCancellationHandler {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                try await withCheckedThrowingContinuation {
+                    (continuation: CheckedContinuation<Void, any Error>) in
                     if Task.isCancelled {
                         continuation.resume(throwing: CancellationError())
                         return
@@ -86,7 +87,8 @@ final class GPULeaseQueue {
             isLeased = false
             Log.general.info("GPULeaseQueue: lease released, queue drained")
         } else {
-            Log.general.debug("GPULeaseQueue: handing off lease, \(self.waiters.count - 1) still queued")
+            Log.general.debug(
+                "GPULeaseQueue: handing off lease, \(self.waiters.count - 1) still queued")
             waiters.removeFirst().continuation.resume()
         }
     }

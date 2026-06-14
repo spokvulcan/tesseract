@@ -27,12 +27,15 @@ nonisolated struct ChatRow: Identifiable, Equatable, Sendable {
         case .thinking(let d):
             ChatRow(id: id, kind: .thinking(ThinkingRow(content: d.content, isLast: isLast)))
         case .toolCall(let d):
-            ChatRow(id: id, kind: .toolCall(ToolCallRow(
-                displayTitle: d.displayTitle, iconName: d.iconName,
-                argumentsFormatted: d.argumentsFormatted, resultContent: d.resultContent,
-                resultImages: d.resultImages,
-                isError: d.isError, isLast: isLast,
-                isDetailExpanded: d.isDetailExpanded, filePath: d.filePath)))
+            ChatRow(
+                id: id,
+                kind: .toolCall(
+                    ToolCallRow(
+                        displayTitle: d.displayTitle, iconName: d.iconName,
+                        argumentsFormatted: d.argumentsFormatted, resultContent: d.resultContent,
+                        resultImages: d.resultImages,
+                        isError: d.isError, isLast: isLast,
+                        isDetailExpanded: d.isDetailExpanded, filePath: d.filePath)))
         case .toolText(let d):
             ChatRow(id: id, kind: .toolText(ToolTextRow(content: d.content, isLast: isLast)))
         default:
@@ -74,11 +77,12 @@ nonisolated struct ToolCallRow: Equatable, Sendable {
     let filePath: String?
 
     func togglingDetail() -> ToolCallRow {
-        ToolCallRow(displayTitle: displayTitle, iconName: iconName,
-                    argumentsFormatted: argumentsFormatted, resultContent: resultContent,
-                    resultImages: resultImages,
-                    isError: isError, isLast: isLast, isDetailExpanded: !isDetailExpanded,
-                    filePath: filePath)
+        ToolCallRow(
+            displayTitle: displayTitle, iconName: iconName,
+            argumentsFormatted: argumentsFormatted, resultContent: resultContent,
+            resultImages: resultImages,
+            isError: isError, isLast: isLast, isDetailExpanded: !isDetailExpanded,
+            filePath: filePath)
     }
 }
 

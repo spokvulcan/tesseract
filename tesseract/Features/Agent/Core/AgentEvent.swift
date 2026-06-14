@@ -68,5 +68,6 @@ enum AgentEvent: Sendable {
     // -- Tool execution --
     case toolExecutionStart(toolCallId: String, toolName: String, argsJSON: String)
     case toolExecutionUpdate(toolCallId: String, toolName: String, result: AgentToolResult)
-    case toolExecutionEnd(toolCallId: String, toolName: String, result: AgentToolResult, isError: Bool)
+    case toolExecutionEnd(
+        toolCallId: String, toolName: String, result: AgentToolResult, isError: Bool)
 }

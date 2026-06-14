@@ -107,7 +107,8 @@ struct LeafExtensionExtractionTests {
         let kv = KVCacheSimple()
         kv.state = [
             MLXArray((0..<count).map { Float($0) }).reshaped([1, heads, tokenOffset, headDim]),
-            MLXArray((0..<count).map { Float($0) + 0.5 }).reshaped([1, heads, tokenOffset, headDim]),
+            MLXArray((0..<count).map { Float($0) + 0.5 }).reshaped([1, heads, tokenOffset, headDim]
+            ),
         ]
         return HybridCacheSnapshot.capture(cache: [kv], offset: tokenOffset, type: .leaf)!
     }
@@ -251,7 +252,8 @@ struct LeafExtensionLedgerTests {
         // Resident base: allowed.
         let base = makeDescriptor(id: "base-resident")
         ledger.seedDescriptorForTesting(base)
-        #expect(ledger.beginExtensionTransfer(baseID: "base-resident", baseIsQueuedOrInFlight: false))
+        #expect(
+            ledger.beginExtensionTransfer(baseID: "base-resident", baseIsQueuedOrInFlight: false))
         #expect(ledger.transferringBaseIDsForTesting() == ["base-resident"])
     }
 
@@ -310,11 +312,12 @@ struct LeafExtensionLedgerTests {
         #expect(folded.snapshotID == "head")
         #expect(folded.inheritedSegments == [grandSegment, base.ownSegment])
         #expect(folded.totalBytes == 300 + 200 + 100)
-        #expect(folded.chainFileRelativePaths == [
-            grandSegment.fileRelativePath,
-            base.fileRelativePath,
-            extensionDescriptor.fileRelativePath,
-        ])
+        #expect(
+            folded.chainFileRelativePaths == [
+                grandSegment.fileRelativePath,
+                base.fileRelativePath,
+                extensionDescriptor.fileRelativePath,
+            ])
 
         // Slice boundary disagrees with the base's offset → no fold.
         let misaligned = makeDescriptor(
@@ -352,9 +355,10 @@ struct LeafExtensionLedgerTests {
         #expect(ledger.transferringBaseIDsForTesting().isEmpty)
 
         let chain = try #require(ledger.chainForHydration(id: "head"))
-        #expect(chain.map(\.lastPathComponent) == [
-            "base.safetensors", "head.safetensors",
-        ])
+        #expect(
+            chain.map(\.lastPathComponent) == [
+                "base.safetensors", "head.safetensors",
+            ])
 
         // Removing the folded head frees the whole chain.
         let removed = try #require(ledger.remove(id: "head"))
@@ -384,7 +388,8 @@ struct LeafExtensionLedgerTests {
         // rebuild must keep only the head, with the base's file
         // surviving as its inherited segment.
         let meta = makePartitionMeta()
-        let metaDir = root
+        let metaDir =
+            root
             .appendingPathComponent("partitions")
             .appendingPathComponent(testDigest)
         try FileManager.default.createDirectory(at: metaDir, withIntermediateDirectories: true)
@@ -414,9 +419,10 @@ struct LeafExtensionLedgerTests {
         #expect(restored.inheritedSegments == [base.ownSegment])
         #expect(ledger.currentSSDBytesForTesting() == restored.totalBytes)
         // The base's file is part of the head's chain — never orphaned.
-        #expect(FileManager.default.fileExists(
-            atPath: root.appendingPathComponent(base.fileRelativePath).path
-        ))
+        #expect(
+            FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(base.fileRelativePath).path
+            ))
     }
 
     /// Minimal container file with the descriptor embedded in the
@@ -541,16 +547,18 @@ struct LeafExtensionStoreTests {
         // The commit payloads carry the facts the tree-side router
         // acts on: the consumed base (drives the deferred ref
         // transfer) and the durable whole-chain byte count.
-        #expect(commits.infos == [
-            SSDCommitInfo(snapshotID: "base", consumedBaseID: nil, chainBytesOnDisk: 800),
-            SSDCommitInfo(snapshotID: "head", consumedBaseID: "base", chainBytesOnDisk: 1_000),
-        ])
+        #expect(
+            commits.infos == [
+                SSDCommitInfo(snapshotID: "base", consumedBaseID: nil, chainBytesOnDisk: 800),
+                SSDCommitInfo(snapshotID: "head", consumedBaseID: "base", chainBytesOnDisk: 1_000),
+            ])
 
         // Both segment files exist on disk.
         for path in [base.fileRelativePath, head.fileRelativePath] {
-            #expect(FileManager.default.fileExists(
-                atPath: root.appendingPathComponent(path).path
-            ))
+            #expect(
+                FileManager.default.fileExists(
+                    atPath: root.appendingPathComponent(path).path
+                ))
         }
     }
 
@@ -565,22 +573,27 @@ struct LeafExtensionStoreTests {
             writerDrainPreludeForTesting: { await gate.wait() }
         )
 
-        guard case .accepted = store.tryEnqueue(
-            payload: makePayload(bytes: 800, tokenOffset: 4),
-            descriptor: makeDescriptor(id: "base", bytes: 800, tokenOffset: 4)
-        ) else {
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: makePayload(bytes: 800, tokenOffset: 4),
+                descriptor: makeDescriptor(id: "base", bytes: 800, tokenOffset: 4)
+            )
+        else {
             Issue.record("base enqueue rejected")
             return
         }
         // Base is queued (writer blocked), so the extension is accepted
         // on the queued/in-flight rule.
-        guard case .accepted = store.tryEnqueue(
-            payload: makePayload(
-                bytes: 200, tokenOffset: 9,
-                extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
-            ),
-            descriptor: makeDescriptor(id: "head", bytes: 200, tokenOffset: 9, segmentBaseOffset: 4)
-        ) else {
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: makePayload(
+                    bytes: 200, tokenOffset: 9,
+                    extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
+                ),
+                descriptor: makeDescriptor(
+                    id: "head", bytes: 200, tokenOffset: 9, segmentBaseOffset: 4)
+            )
+        else {
             Issue.record("extension enqueue rejected")
             return
         }
@@ -663,10 +676,11 @@ struct LeafExtensionStoreTests {
             checkpointType: .leaf,
             bytesOnDisk: headPayload.totalBytes
         )
-        let restored = try #require(store.loadSync(
-            snapshotRef: ref,
-            expectedFingerprint: testFingerprint
-        ))
+        let restored = try #require(
+            store.loadSync(
+                snapshotRef: ref,
+                expectedFingerprint: testFingerprint
+            ))
 
         #expect(restored.tokenOffset == 7)
         #expect(restored.layers.count == 2)
@@ -700,20 +714,24 @@ struct LeafExtensionStoreTests {
         defer { cleanup(root) }
         let store = makeStoreWithPartition(config: config)
 
-        guard case .accepted = store.tryEnqueue(
-            payload: makePayload(bytes: 800, tokenOffset: 4),
-            descriptor: makeDescriptor(id: "base", bytes: 800, tokenOffset: 4)
-        ) else {
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: makePayload(bytes: 800, tokenOffset: 4),
+                descriptor: makeDescriptor(id: "base", bytes: 800, tokenOffset: 4)
+            )
+        else {
             Issue.record("base enqueue rejected")
             return
         }
         await store.flushAsync()
         let extending = SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
         let head = makeDescriptor(id: "head", bytes: 200, tokenOffset: 9, segmentBaseOffset: 4)
-        guard case .accepted = store.tryEnqueue(
-            payload: makePayload(bytes: 200, tokenOffset: 9, extending: extending),
-            descriptor: head
-        ) else {
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: makePayload(bytes: 200, tokenOffset: 9, extending: extending),
+                descriptor: head
+            )
+        else {
             Issue.record("extension enqueue rejected")
             return
         }
@@ -737,9 +755,10 @@ struct LeafExtensionStoreTests {
         #expect(store.loadSync(snapshotRef: ref, expectedFingerprint: testFingerprint) == nil)
         #expect(store.residentDescriptorForTesting(id: "head") == nil)
         #expect(store.currentSSDBytesForTesting() == 0)
-        #expect(!FileManager.default.fileExists(
-            atPath: root.appendingPathComponent(folded.fileRelativePath).path
-        ))
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: root.appendingPathComponent(folded.fileRelativePath).path
+            ))
     }
 }
 
@@ -822,15 +841,16 @@ struct LeafExtensionSupersessionPolicyTests {
         tokens: [Int],
         bytes: Int = 1_024
     ) async throws -> String {
-        let admission = try #require(SnapshotAdmission.leaf(
-            storedTokens: tokens,
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
-                offset: tokens.count, type: .leaf
-            ),
-            storage: .ramAndSSD(makePayload(bytes: bytes, tokenOffset: tokens.count)),
-            partitionKey: fixture.key,
-            requestID: UUID()
-        ))
+        let admission = try #require(
+            SnapshotAdmission.leaf(
+                storedTokens: tokens,
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
+                    offset: tokens.count, type: .leaf
+                ),
+                storage: .ramAndSSD(makePayload(bytes: bytes, tokenOffset: tokens.count)),
+                partitionKey: fixture.key,
+                requestID: UUID()
+            ))
         fixture.manager.admit(admission)
         // The pending ref appears synchronously; commitment (a manifest
         // entry) lands when the background writer settles.
@@ -852,22 +872,25 @@ struct LeafExtensionSupersessionPolicyTests {
         let ancestorTokens = Array(1...5)
 
         // No SSD-backed leaf yet → no base.
-        #expect(fixture.manager.extensionBase(
-            tokens: Array(1...9), partitionKey: fixture.key
-        ) == nil)
+        #expect(
+            fixture.manager.extensionBase(
+                tokens: Array(1...9), partitionKey: fixture.key
+            ) == nil)
 
         let baseID = try await admitCommittedAncestor(fixture, tokens: ancestorTokens)
 
-        let base = try #require(fixture.manager.extensionBase(
-            tokens: Array(1...9), partitionKey: fixture.key
-        ))
+        let base = try #require(
+            fixture.manager.extensionBase(
+                tokens: Array(1...9), partitionKey: fixture.key
+            ))
         #expect(base.baseSnapshotID == baseID)
         #expect(base.baseOffset == 5)
 
         // Strictness: the leaf is never its own base.
-        #expect(fixture.manager.extensionBase(
-            tokens: ancestorTokens, partitionKey: fixture.key
-        ) == nil)
+        #expect(
+            fixture.manager.extensionBase(
+                tokens: ancestorTokens, partitionKey: fixture.key
+            ) == nil)
     }
 
     @Test func ramOnlyAdmissionPreservesAncestorBacking() async throws {
@@ -876,13 +899,14 @@ struct LeafExtensionSupersessionPolicyTests {
         let ancestorTokens = Array(1...5)
         let baseID = try await admitCommittedAncestor(fixture, tokens: ancestorTokens)
 
-        let descendant = try #require(SnapshotAdmission.leaf(
-            storedTokens: Array(1...8),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
-            storage: .ramOnly,
-            partitionKey: fixture.key,
-            requestID: UUID()
-        ))
+        let descendant = try #require(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(1...8),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: fixture.key,
+                requestID: UUID()
+            ))
         let diagnostics = fixture.manager.admit(descendant)
 
         #expect(diagnostics.supersededLeaves.count == 1)
@@ -894,9 +918,10 @@ struct LeafExtensionSupersessionPolicyTests {
         #expect(
             fixture.store.ssdStoreForTesting?.residentDescriptorForTesting(id: baseID) != nil
         )
-        let nextBase = try #require(fixture.manager.extensionBase(
-            tokens: Array(1...12), partitionKey: fixture.key
-        ))
+        let nextBase = try #require(
+            fixture.manager.extensionBase(
+                tokens: Array(1...12), partitionKey: fixture.key
+            ))
         #expect(nextBase.baseSnapshotID == baseID)
     }
 
@@ -906,13 +931,14 @@ struct LeafExtensionSupersessionPolicyTests {
         let ancestorTokens = Array(1...5)
         let baseID = try await admitCommittedAncestor(fixture, tokens: ancestorTokens)
 
-        let descendant = try #require(SnapshotAdmission.leaf(
-            storedTokens: Array(1...8),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
-            storage: .ramAndSSD(makePayload(bytes: 1_024, tokenOffset: 8)),
-            partitionKey: fixture.key,
-            requestID: UUID()
-        ))
+        let descendant = try #require(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(1...8),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
+                storage: .ramAndSSD(makePayload(bytes: 1_024, tokenOffset: 8)),
+                partitionKey: fixture.key,
+                requestID: UUID()
+            ))
         let diagnostics = fixture.manager.admit(descendant)
 
         #expect(diagnostics.supersededLeaves.count == 1)
@@ -929,13 +955,14 @@ struct LeafExtensionSupersessionPolicyTests {
         let baseID = try await admitCommittedAncestor(fixture, tokens: ancestorTokens)
 
         let extending = SnapshotExtension(baseSnapshotID: baseID, baseOffset: 5)
-        let descendant = try #require(SnapshotAdmission.leaf(
-            storedTokens: Array(1...8),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
-            storage: .ramAndSSD(makePayload(bytes: 256, tokenOffset: 8, extending: extending)),
-            partitionKey: fixture.key,
-            requestID: UUID()
-        ))
+        let descendant = try #require(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(1...8),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
+                storage: .ramAndSSD(makePayload(bytes: 256, tokenOffset: 8, extending: extending)),
+                partitionKey: fixture.key,
+                requestID: UUID()
+            ))
         let diagnostics = fixture.manager.admit(descendant)
 
         #expect(diagnostics.supersededLeaves.count == 1)
@@ -993,13 +1020,14 @@ struct LeafExtensionSupersessionPolicyTests {
         // 700 (shielded base) + 400 (suffix) > 1_000 and the cut may
         // not touch the base — the writer drops the extension.
         let extending = SnapshotExtension(baseSnapshotID: baseID, baseOffset: 5)
-        let descendant = try #require(SnapshotAdmission.leaf(
-            storedTokens: Array(1...8),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
-            storage: .ramAndSSD(makePayload(bytes: 400, tokenOffset: 8, extending: extending)),
-            partitionKey: fixture.key,
-            requestID: UUID()
-        ))
+        let descendant = try #require(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(1...8),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
+                storage: .ramAndSSD(makePayload(bytes: 400, tokenOffset: 8, extending: extending)),
+                partitionKey: fixture.key,
+                requestID: UUID()
+            ))
         let diagnostics = fixture.manager.admit(descendant)
         // The front door accepted, so the admission reports the
         // (deferred) transfer...
@@ -1015,9 +1043,10 @@ struct LeafExtensionSupersessionPolicyTests {
         // ...but the drop leaves the base fully reachable: manifest
         // entry alive AND tree ref intact — still the extension base.
         #expect(ssdStore.residentDescriptorForTesting(id: baseID) != nil)
-        let nextBase = try #require(fixture.manager.extensionBase(
-            tokens: Array(1...12), partitionKey: fixture.key
-        ))
+        let nextBase = try #require(
+            fixture.manager.extensionBase(
+                tokens: Array(1...12), partitionKey: fixture.key
+            ))
         #expect(nextBase.baseSnapshotID == baseID)
     }
 
@@ -1048,16 +1077,18 @@ struct LeafExtensionSupersessionPolicyTests {
 
         // A: extension of B (offset 5 → 8), enqueued but unwritten — B is
         // now shielded for A's pending window.
-        let admitA = try #require(SnapshotAdmission.leaf(
-            storedTokens: Array(1...8),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
-            storage: .ramAndSSD(makePayload(
-                bytes: 256, tokenOffset: 8,
-                extending: SnapshotExtension(baseSnapshotID: baseID, baseOffset: 5)
-            )),
-            partitionKey: fixture.key,
-            requestID: UUID()
-        ))
+        let admitA = try #require(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(1...8),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 8, type: .leaf),
+                storage: .ramAndSSD(
+                    makePayload(
+                        bytes: 256, tokenOffset: 8,
+                        extending: SnapshotExtension(baseSnapshotID: baseID, baseOffset: 5)
+                    )),
+                partitionKey: fixture.key,
+                requestID: UUID()
+            ))
         let diagA = fixture.manager.admit(admitA)
         #expect(diagA.supersededLeaves.first?.mode == .transferred)
         #expect(ssdStore.transferringBaseIDsForTesting().contains(baseID))
@@ -1068,25 +1099,29 @@ struct LeafExtensionSupersessionPolicyTests {
         // C: extension of the still-pending A (offset 8 → 11), admitted
         // inside A's window. Its supersession visits A (its base → transfer)
         // and B (a non-base ancestor that A's fold still depends on).
-        let admitC = try #require(SnapshotAdmission.leaf(
-            storedTokens: Array(1...11),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 11, type: .leaf),
-            storage: .ramAndSSD(makePayload(
-                bytes: 256, tokenOffset: 11,
-                extending: SnapshotExtension(baseSnapshotID: aID, baseOffset: 8)
-            )),
-            partitionKey: fixture.key,
-            requestID: UUID()
-        ))
+        let admitC = try #require(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(1...11),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 11, type: .leaf),
+                storage: .ramAndSSD(
+                    makePayload(
+                        bytes: 256, tokenOffset: 11,
+                        extending: SnapshotExtension(baseSnapshotID: aID, baseOffset: 8)
+                    )),
+                partitionKey: fixture.key,
+                requestID: UUID()
+            ))
         let diagC = fixture.manager.admit(admitC)
 
         // A still transfers; the shielded base B is preserved, not deleted.
-        #expect(diagC.supersededLeaves.contains {
-            $0.bodyDroppedSnapshotRefID == aID && $0.mode == .transferred
-        })
-        #expect(diagC.supersededLeaves.contains {
-            $0.bodyDroppedSnapshotRefID == baseID && $0.mode == .preserved
-        })
+        #expect(
+            diagC.supersededLeaves.contains {
+                $0.bodyDroppedSnapshotRefID == aID && $0.mode == .transferred
+            })
+        #expect(
+            diagC.supersededLeaves.contains {
+                $0.bodyDroppedSnapshotRefID == baseID && $0.mode == .preserved
+            })
         // The smoking gun: B's backing survives C's admission.
         #expect(ssdStore.residentDescriptorForTesting(id: baseID) != nil)
 

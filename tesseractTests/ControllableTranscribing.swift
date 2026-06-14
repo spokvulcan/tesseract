@@ -24,7 +24,10 @@ final class ControllableTranscribing: Transcribing {
     private(set) var cancelCount = 0
     var result: TranscriptionResult
 
-    init(result: TranscriptionResult = TranscriptionResult(text: "result", segments: [], language: "en", processingTime: 0)) {
+    init(
+        result: TranscriptionResult = TranscriptionResult(
+            text: "result", segments: [], language: "en", processingTime: 0)
+    ) {
         self.result = result
     }
 

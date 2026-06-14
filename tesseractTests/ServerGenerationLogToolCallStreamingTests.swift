@@ -56,10 +56,12 @@ struct ServerGenerationLogToolCallStreamingTests {
         log.flushPending(handle: handle)
         log.ingest(handle: handle, event: .toolCallDelta(name: "read", argumentsDelta: "\"read\","))
         log.flushPending(handle: handle)
-        log.ingest(handle: handle, event: .toolCallDelta(
-            name: "read",
-            argumentsDelta: "\"arguments\":{\"path\":\"/x\"}}"
-        ))
+        log.ingest(
+            handle: handle,
+            event: .toolCallDelta(
+                name: "read",
+                argumentsDelta: "\"arguments\":{\"path\":\"/x\"}}"
+            ))
         log.flushPending(handle: handle)
 
         let spans = log.traces[0].spans
@@ -75,14 +77,17 @@ struct ServerGenerationLogToolCallStreamingTests {
     @Test func toolCallAfterDeltasReplacesBuildingSpanInPlace() {
         let (log, handle) = makeLog()
 
-        log.ingest(handle: handle, event: .toolCallDelta(name: "read", argumentsDelta: "\n{\"name\":\"read\","))
+        log.ingest(
+            handle: handle,
+            event: .toolCallDelta(name: "read", argumentsDelta: "\n{\"name\":\"read\","))
         log.flushPending(handle: handle)
         let buildingID = log.traces[0].spans[0].id
 
-        let call = ToolCall(function: ToolCall.Function(
-            name: "read",
-            arguments: ["path": "/x"]
-        ))
+        let call = ToolCall(
+            function: ToolCall.Function(
+                name: "read",
+                arguments: ["path": "/x"]
+            ))
         log.ingest(handle: handle, event: .toolCall(call))
 
         let spans = log.traces[0].spans
@@ -102,10 +107,11 @@ struct ServerGenerationLogToolCallStreamingTests {
         // deltas precede the `.toolCall` event.
         let (log, handle) = makeLog()
 
-        let call = ToolCall(function: ToolCall.Function(
-            name: "ls",
-            arguments: ["path": "/"]
-        ))
+        let call = ToolCall(
+            function: ToolCall.Function(
+                name: "ls",
+                arguments: ["path": "/"]
+            ))
         log.ingest(handle: handle, event: .toolCall(call))
 
         let spans = log.traces[0].spans
@@ -120,14 +126,17 @@ struct ServerGenerationLogToolCallStreamingTests {
     @Test func malformedToolCallAfterDeltasReplacesBuildingSpan() {
         let (log, handle) = makeLog()
 
-        log.ingest(handle: handle, event: .toolCallDelta(
-            name: "read",
-            argumentsDelta: "\n{\"name\":\"read\",\"arguments\":{broken"
-        ))
+        log.ingest(
+            handle: handle,
+            event: .toolCallDelta(
+                name: "read",
+                argumentsDelta: "\n{\"name\":\"read\",\"arguments\":{broken"
+            ))
         log.flushPending(handle: handle)
         let buildingID = log.traces[0].spans[0].id
 
-        log.ingest(handle: handle, event: .malformedToolCall("\n{\"name\":\"read\",\"arguments\":{broken"))
+        log.ingest(
+            handle: handle, event: .malformedToolCall("\n{\"name\":\"read\",\"arguments\":{broken"))
 
         let spans = log.traces[0].spans
         #expect(spans.count == 1)

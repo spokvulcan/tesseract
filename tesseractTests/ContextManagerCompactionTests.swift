@@ -34,9 +34,11 @@ struct ContextManagerCompactionTests {
     /// and a 5_000-token context window (reserve 2_048, keepRecent 1_024):
     /// older = 1_000 tokens, newer = 2_000 tokens, total ≈ 3_000 > 2_952.
     private static let oldUser = UserMessage(content: String(repeating: "A", count: 2_000))
-    private static let oldAssistant = AssistantMessage(content: String(repeating: "B", count: 2_000))
+    private static let oldAssistant = AssistantMessage(
+        content: String(repeating: "B", count: 2_000))
     private static let recentUser = UserMessage(content: String(repeating: "C", count: 4_000))
-    private static let recentAssistant = AssistantMessage(content: String(repeating: "D", count: 4_000))
+    private static let recentAssistant = AssistantMessage(
+        content: String(repeating: "D", count: 4_000))
 
     private static func overBudgetMessages() -> [any AgentMessageProtocol] {
         [oldUser, oldAssistant, recentUser, recentAssistant]

@@ -40,7 +40,9 @@ struct PromptCacheInspectorView: View {
         }
         .padding(Theme.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
     }
 
     private func nodeDetails(_ node: PromptCacheTreeNodeSnapshot) -> some View {
@@ -61,8 +63,11 @@ struct PromptCacheInspectorView: View {
             if let utility = node.utility {
                 Divider()
                 detailRow("Utility", String(format: "%.4f", utility))
-                detailRow("Recency", node.normalizedRecency.map { String(format: "%.4f", $0) } ?? "-")
-                detailRow("FLOP/byte", node.normalizedFlopEfficiency.map { String(format: "%.4f", $0) } ?? "-")
+                detailRow(
+                    "Recency", node.normalizedRecency.map { String(format: "%.4f", $0) } ?? "-")
+                detailRow(
+                    "FLOP/byte",
+                    node.normalizedFlopEfficiency.map { String(format: "%.4f", $0) } ?? "-")
             }
         }
     }

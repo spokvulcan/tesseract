@@ -72,7 +72,8 @@ struct SpeechSynthesizerTests {
 
     @Test
     func programmedStreamingErrorTerminatesTheStream() async throws {
-        let synth = InMemorySpeechSynthesizer(streamingError: FakeModelError(message: "decode failed"))
+        let synth = InMemorySpeechSynthesizer(
+            streamingError: FakeModelError(message: "decode failed"))
 
         let (stream, _) = try await synth.generateStreaming(
             text: "t", voice: nil, language: nil, parameters: .default, useVoiceAnchor: false

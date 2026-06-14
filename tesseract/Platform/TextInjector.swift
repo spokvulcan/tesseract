@@ -41,7 +41,8 @@ final class TextInjector: ObservableObject, TextInjecting {
 
         // Skip paste simulation if our own app window is focused
         // to prevent system alert sound (no text field to receive paste)
-        let isOwnAppFocused = NSApp.isActive && NSApp.keyWindow != nil && !(NSApp.keyWindow is NSPanel)
+        let isOwnAppFocused =
+            NSApp.isActive && NSApp.keyWindow != nil && !(NSApp.keyWindow is NSPanel)
 
         if !isOwnAppFocused {
             // Small delay to ensure clipboard is updated

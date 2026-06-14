@@ -34,9 +34,13 @@ extension ResolvedPackage {
         self.manifest = manifest
         self.baseURL = baseURL
         self.skillPaths = (manifest.skills ?? []).map { baseURL.appendingPathComponent($0) }
-        self.promptAppendPaths = (manifest.promptAppendFiles ?? []).map { baseURL.appendingPathComponent($0) }
+        self.promptAppendPaths = (manifest.promptAppendFiles ?? []).map {
+            baseURL.appendingPathComponent($0)
+        }
         self.extensionIdentifiers = manifest.extensions ?? []
         self.seedFilePaths = (manifest.seedFiles ?? []).map { baseURL.appendingPathComponent($0) }
-        self.contextFilePaths = (manifest.contextFiles ?? []).map { baseURL.appendingPathComponent($0) }
+        self.contextFilePaths = (manifest.contextFiles ?? []).map {
+            baseURL.appendingPathComponent($0)
+        }
     }
 }

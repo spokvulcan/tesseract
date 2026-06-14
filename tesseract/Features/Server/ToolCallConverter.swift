@@ -39,7 +39,8 @@ enum ToolCallConverter {
 
         return messages.map { message in
             let toolCallIdReplacement = message.tool_call_id.flatMap { idMap[$0] }
-            let hasToolCallsRemap = message.tool_calls?.contains { $0.id.flatMap({ idMap[$0] }) != nil } ?? false
+            let hasToolCallsRemap =
+                message.tool_calls?.contains { $0.id.flatMap({ idMap[$0] }) != nil } ?? false
 
             guard toolCallIdReplacement != nil || hasToolCallsRemap else { return message }
 

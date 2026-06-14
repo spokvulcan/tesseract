@@ -19,23 +19,27 @@ struct ImageInputAvailabilityTests {
 
     @Test
     func affordanceShownOnlyWhenCapableAndSettingOn() {
-        #expect(ImageInputAvailability.showImageAffordance(
-            isVisionCapable: true, useVisionWhenAvailable: true) == true)
+        #expect(
+            ImageInputAvailability.showImageAffordance(
+                isVisionCapable: true, useVisionWhenAvailable: true) == true)
     }
 
     @Test
     func capableButOptedOutHidesAffordance() {
         // The user turned the global opt-out off → chat runs the text-only
         // container, so images would silently drop. Hide the affordance.
-        #expect(ImageInputAvailability.showImageAffordance(
-            isVisionCapable: true, useVisionWhenAvailable: false) == false)
+        #expect(
+            ImageInputAvailability.showImageAffordance(
+                isVisionCapable: true, useVisionWhenAvailable: false) == false)
     }
 
     @Test
     func textOnlyModelHidesAffordanceRegardlessOfSetting() {
-        #expect(ImageInputAvailability.showImageAffordance(
-            isVisionCapable: false, useVisionWhenAvailable: true) == false)
-        #expect(ImageInputAvailability.showImageAffordance(
-            isVisionCapable: false, useVisionWhenAvailable: false) == false)
+        #expect(
+            ImageInputAvailability.showImageAffordance(
+                isVisionCapable: false, useVisionWhenAvailable: true) == false)
+        #expect(
+            ImageInputAvailability.showImageAffordance(
+                isVisionCapable: false, useVisionWhenAvailable: false) == false)
     }
 }

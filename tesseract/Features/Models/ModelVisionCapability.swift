@@ -30,7 +30,7 @@ final class ModelVisionCapability {
     func isVisionCapable(_ modelID: String) -> Bool {
         if let cached = cache[modelID] { return cached }
         guard case .downloaded = downloads.statuses[modelID],
-              let directory = downloads.modelPath(for: modelID)
+            let directory = downloads.modelPath(for: modelID)
         else { return false }
         let capable = Self.isVisionCapable(directory: directory)
         cache[modelID] = capable

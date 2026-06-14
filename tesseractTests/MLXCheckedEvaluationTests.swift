@@ -7,8 +7,8 @@ struct MLXCheckedEvaluationTests {
     @Test func scopedBoundaryConvertsMLXErrorsToThrows() {
         do {
             try MLXCheckedEvaluation.withErrors { error in
-                let left = MLXArray(0 ..< 10, [2, 5])
-                let right = MLXArray(0 ..< 15, [3, 5])
+                let left = MLXArray(0..<10, [2, 5])
+                let right = MLXArray(0..<15, [3, 5])
                 _ = left + right
                 try error.check()
             }

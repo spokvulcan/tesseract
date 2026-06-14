@@ -20,7 +20,8 @@ enum SlashCommandParser {
         // Split into command name and arguments at first space
         let parts = afterSlash.split(separator: " ", maxSplits: 1)
         let commandName = String(parts[0]).lowercased()
-        let arguments = parts.count > 1
+        let arguments =
+            parts.count > 1
             ? String(parts[1]).trimmingCharacters(in: .whitespaces)
             : ""
 

@@ -102,7 +102,8 @@ nonisolated enum PrefillStepBenchmarkSupport {
                 return "warm case expected cachedTokenCount > 0, got \(cachedTokenCount)"
             }
             guard cachedTokenCount < promptTokenCount else {
-                return "warm case expected non-zero suffix prefill, got cachedTokenCount=\(cachedTokenCount) promptTokenCount=\(promptTokenCount)"
+                return
+                    "warm case expected non-zero suffix prefill, got cachedTokenCount=\(cachedTokenCount) promptTokenCount=\(promptTokenCount)"
             }
             return nil
         }
@@ -147,7 +148,7 @@ nonisolated enum PrefillStepBenchmarkSupport {
         let lowestPeakWarm = lowestPeak(warm)
         let adaptivePair: PrefillStepBenchmarkSummary.SuggestedAdaptivePair?
         if let coldStep = lowestPeakCold?.prefillStepSize,
-           let warmStep = fastestWarm?.prefillStepSize
+            let warmStep = fastestWarm?.prefillStepSize
         {
             adaptivePair = .init(coldStepSize: coldStep, warmStepSize: warmStep)
         } else {
@@ -220,7 +221,7 @@ nonisolated enum PrefillStepBenchmarkSupport {
                         "path": [
                             "type": "string" as any Sendable,
                             "description": "Absolute path to the file.",
-                        ] as [String: any Sendable],
+                        ] as [String: any Sendable]
                     ] as [String: any Sendable],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],
@@ -237,7 +238,7 @@ nonisolated enum PrefillStepBenchmarkSupport {
                         "path": [
                             "type": "string" as any Sendable,
                             "description": "Absolute path to the directory.",
-                        ] as [String: any Sendable],
+                        ] as [String: any Sendable]
                     ] as [String: any Sendable],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],
@@ -282,7 +283,9 @@ final class PrefillStepBenchmarkRunner {
 
     func run() async throws {
         setupLogging()
-        log("PrefillStepBenchmark starting — model=\(runner.resolvedModelName) visionMode=\(visionMode)")
+        log(
+            "PrefillStepBenchmark starting — model=\(runner.resolvedModelName) visionMode=\(visionMode)"
+        )
 
         let engine = AgentEngine()
         let modelDir = try runner.resolveModelDirectory()
@@ -409,7 +412,8 @@ final class PrefillStepBenchmarkRunner {
             await engine.llmActor.clearMemoryCache()
             Memory.peakMemory = 0
             let activeBefore = await engine.llmActor.memoryStats().activeMB
-            let measuredUserMessage = spec.mode == .cold
+            let measuredUserMessage =
+                spec.mode == .cold
                 ? fixture.coldUserMessage
                 : fixture.warmUserMessage
             let request = try await runRequest(
@@ -622,7 +626,8 @@ final class PrefillStepBenchmarkRunner {
         }
 
         try FileManager.default.createDirectory(at: reportDir, withIntermediateDirectories: true)
-        let stepSizes = runner.activeConfig.prefillStepSizesOverride
+        let stepSizes =
+            runner.activeConfig.prefillStepSizesOverride
             ?? PrefillStepBenchmarkSupport.defaultStepSizes
         let summary = PrefillStepBenchmarkSupport.summarize(measurements: measurements)
         let report = Report(

@@ -124,14 +124,15 @@ enum PrefixCacheTestFixtures {
         endOfTurn: Bool = true,
         requestID: UUID? = nil
     ) -> PrefixCacheManager.StoreDiagnostics {
-        manager.admit(SnapshotAdmission.leaf(
-            storedTokens: tokens,
-            snapshot: makeUniformSnapshot(offset: tokens.count, type: .leaf),
-            storage: storage,
-            partitionKey: partitionKey,
-            requestID: requestID,
-            endOfTurn: endOfTurn
-        )!)
+        manager.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: tokens,
+                snapshot: makeUniformSnapshot(offset: tokens.count, type: .leaf),
+                storage: storage,
+                partitionKey: partitionKey,
+                requestID: requestID,
+                endOfTurn: endOfTurn
+            )!)
     }
 
     /// Build a leaf-only `AlphaTuner.RequestRecord` (no mid-prefill

@@ -74,10 +74,16 @@ struct HTTPResponse: Sendable {
         return json(errorBody, status: status)
     }
 
-    static func badRequest(_ message: String) -> HTTPResponse { error(status: 400, message: message) }
+    static func badRequest(_ message: String) -> HTTPResponse {
+        error(status: 400, message: message)
+    }
     static func notFound() -> HTTPResponse { error(status: 404, message: "Not found") }
-    static func internalError(_ message: String) -> HTTPResponse { error(status: 500, message: message) }
-    static func serviceUnavailable(_ message: String) -> HTTPResponse { error(status: 503, message: message) }
+    static func internalError(_ message: String) -> HTTPResponse {
+        error(status: 500, message: message)
+    }
+    static func serviceUnavailable(_ message: String) -> HTTPResponse {
+        error(status: 503, message: message)
+    }
 
     static func methodNotAllowed(allowed: [HTTPMethod]) -> HTTPResponse {
         let allow = allowed.map(\.rawValue).joined(separator: ", ")
@@ -301,14 +307,16 @@ final class HTTPResponseWriter: @unchecked Sendable {
 
     private func writeAll(_ data: Data) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            connection.send(content: data, completion: .contentProcessed { error in
-                if let error {
-                    Task { await self.lifecycle.markDisconnected() }
-                    cont.resume(throwing: error)
-                } else {
-                    cont.resume()
-                }
-            })
+            connection.send(
+                content: data,
+                completion: .contentProcessed { error in
+                    if let error {
+                        Task { await self.lifecycle.markDisconnected() }
+                        cont.resume(throwing: error)
+                    } else {
+                        cont.resume()
+                    }
+                })
         }
     }
 }
@@ -395,8 +403,7 @@ actor SSEWriter {
     @discardableResult
     func send(_ value: some Encodable) async -> Bool {
         var line = Data("data: ".utf8)
-        do { line.append(try encoder.encode(value)) }
-        catch { return false }
+        do { line.append(try encoder.encode(value)) } catch { return false }
         line.append(Data("\n\n".utf8))
         return await write(line)
     }
@@ -490,12 +497,15 @@ private nonisolated enum HTTPRequestParser {
         var headers: [(name: String, value: String)] = []
         for line in lines {
             guard let colonIndex = line.firstIndex(of: ":") else { continue }
-            let name = String(line[line.startIndex..<colonIndex]).trimmingCharacters(in: .whitespaces)
-            let value = String(line[line.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
+            let name = String(line[line.startIndex..<colonIndex]).trimmingCharacters(
+                in: .whitespaces)
+            let value = String(line[line.index(after: colonIndex)...]).trimmingCharacters(
+                in: .whitespaces)
             headers.append((name, value))
         }
 
-        let contentLengthStr = headers.first(where: { $0.name.lowercased() == "content-length" })?.value
+        let contentLengthStr = headers.first(where: { $0.name.lowercased() == "content-length" })?
+            .value
         let contentLength = contentLengthStr.flatMap(Int.init) ?? 0
         let bodyOffset = data.distance(from: data.startIndex, to: separatorRange.upperBound)
 
@@ -804,11 +814,12 @@ final class HTTPServer {
             let state = await withCheckedContinuation { continuation in
                 connection.receive(minimumIncompleteLength: 0, maximumLength: 1) {
                     content, _, isComplete, error in
-                    continuation.resume(returning: (
-                        contentBytes: content?.count ?? 0,
-                        isComplete: isComplete,
-                        hasError: error != nil
-                    ))
+                    continuation.resume(
+                        returning: (
+                            contentBytes: content?.count ?? 0,
+                            isComplete: isComplete,
+                            hasError: error != nil
+                        ))
                 }
             }
 
@@ -829,9 +840,11 @@ final class HTTPServer {
 
     // MARK: - Private — Read Request
 
-    nonisolated private static func readRequest(from connection: NWConnection) async throws -> HTTPRequest {
+    nonisolated private static func readRequest(from connection: NWConnection) async throws
+        -> HTTPRequest
+    {
         var buffer = Data()
-        let maxSize = 50 * 1024 * 1024 // 50MB (base64 images)
+        let maxSize = 50 * 1024 * 1024  // 50MB (base64 images)
 
         // Phase 1: Accumulate until headers are complete
         var headerResult: HTTPRequestParser.HeaderResult?
@@ -851,15 +864,20 @@ final class HTTPServer {
                 buffer.append(try await receiveChunk(from: connection))
                 guard buffer.count <= maxSize else { throw HTTPParseError.requestTooLarge }
             }
-            let bodyEnd = buffer.index(buffer.startIndex, offsetBy: parsed.bodyOffset + parsed.contentLength)
-            let body = Data(buffer[buffer.index(buffer.startIndex, offsetBy: parsed.bodyOffset)..<bodyEnd])
-            return HTTPRequest(method: parsed.method, path: parsed.path, headers: parsed.headers, body: body)
+            let bodyEnd = buffer.index(
+                buffer.startIndex, offsetBy: parsed.bodyOffset + parsed.contentLength)
+            let body = Data(
+                buffer[buffer.index(buffer.startIndex, offsetBy: parsed.bodyOffset)..<bodyEnd])
+            return HTTPRequest(
+                method: parsed.method, path: parsed.path, headers: parsed.headers, body: body)
         }
 
-        return HTTPRequest(method: parsed.method, path: parsed.path, headers: parsed.headers, body: nil)
+        return HTTPRequest(
+            method: parsed.method, path: parsed.path, headers: parsed.headers, body: nil)
     }
 
-    nonisolated private static func receiveChunk(from connection: NWConnection) async throws -> Data {
+    nonisolated private static func receiveChunk(from connection: NWConnection) async throws -> Data
+    {
         try await withCheckedThrowingContinuation { cont in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
                 content, _, _, error in

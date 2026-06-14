@@ -70,16 +70,21 @@ struct StablePrefixDetectorNonDeterminismTests {
                     // swift-jinja's observed non-determinism.
                     rendered += "[TOOLS_BLOCK_START]\n"
                     for tool in tools {
-                        let name = (tool["function"] as? [String: any Sendable])?["name"] as? String ?? "unknown"
+                        let name =
+                            (tool["function"] as? [String: any Sendable])?["name"] as? String
+                            ?? "unknown"
                         let permutation = callCount % 3
                         let body: String
                         switch permutation {
                         case 0:
-                            body = "{\"function\":{\"description\":\"...\",\"name\":\"\(name)\",\"parameters\":{...}}}"
+                            body =
+                                "{\"function\":{\"description\":\"...\",\"name\":\"\(name)\",\"parameters\":{...}}}"
                         case 1:
-                            body = "{\"function\":{\"name\":\"\(name)\",\"description\":\"...\",\"parameters\":{...}}}"
+                            body =
+                                "{\"function\":{\"name\":\"\(name)\",\"description\":\"...\",\"parameters\":{...}}}"
                         default:
-                            body = "{\"function\":{\"parameters\":{...},\"name\":\"\(name)\",\"description\":\"...\"}}"
+                            body =
+                                "{\"function\":{\"parameters\":{...},\"name\":\"\(name)\",\"description\":\"...\"}}"
                         }
                         // Pad with repeated content to reach a "large prompt" size
                         // (> 1000 tokens / chars, since each ASCII char = 1 token).
@@ -176,8 +181,9 @@ struct StablePrefixDetectorNonDeterminismTests {
         // With the threshold in place (fullTokens > 1000, commonLength would
         // be < fullTokens/3), the detector returns nil — refusing to poison
         // the cache with a bogus short prefix.
-        #expect(result == nil,
-                "Detector should refuse short commonLength on large prompts to avoid tree poisoning")
+        #expect(
+            result == nil,
+            "Detector should refuse short commonLength on large prompts to avoid tree poisoning")
     }
 
     // MARK: - 3. detectorThresholdScalesWithPromptSize
@@ -271,8 +277,9 @@ struct StablePrefixDetectorNonDeterminismTests {
 
         // The probes diverge early inside the flaky tools block, giving a
         // commonLength far below fullTokens/3 → rejected.
-        #expect(result == nil,
-                "Detector should reject large-prompt detection with commonLength < fullTokens/3")
+        #expect(
+            result == nil,
+            "Detector should reject large-prompt detection with commonLength < fullTokens/3")
     }
 
     // MARK: - 5. canonicalizeToolSpecsProducesIdenticalOutput
@@ -332,7 +339,7 @@ struct StablePrefixDetectorNonDeterminismTests {
                                     "options": ["type": "array"],
                                 ] as [String: any Sendable],
                             ] as [String: any Sendable],
-                        ] as [String: any Sendable],
+                        ] as [String: any Sendable]
                     ] as [String: any Sendable],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],
@@ -349,8 +356,10 @@ struct StablePrefixDetectorNonDeterminismTests {
             serializations.insert(bytes)
         }
 
-        #expect(serializations.count == 1,
-                "All canonicalizations should produce identical JSON bytes (got \(serializations.count) distinct outputs)")
+        #expect(
+            serializations.count == 1,
+            "All canonicalizations should produce identical JSON bytes (got \(serializations.count) distinct outputs)"
+        )
     }
 
     // MARK: - 7. canonicalizeHandlesNullAndScalarTypes

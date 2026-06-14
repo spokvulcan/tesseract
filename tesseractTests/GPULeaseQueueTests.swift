@@ -111,9 +111,10 @@ struct GPULeaseQueueTests {
 
         var contenders: [Task<Void, any Error>] = []
         for name in ["B", "C", "D"] {
-            contenders.append(Task {
-                try await queue.withExclusive { log.add(name) }
-            })
+            contenders.append(
+                Task {
+                    try await queue.withExclusive { log.add(name) }
+                })
             // Let each contender reach its queue slot before the next arrives,
             // so arrival order is pinned.
             await settle()

@@ -29,7 +29,9 @@ import MLXLMCommon
         PrefixCacheManager(memoryBudgetBytes: 100 * 1024 * 1024)
     }
 
-    private func makeSnapshot(offset: Int, type: HybridCacheSnapshot.CheckpointType = .leaf) -> HybridCacheSnapshot {
+    private func makeSnapshot(offset: Int, type: HybridCacheSnapshot.CheckpointType = .leaf)
+        -> HybridCacheSnapshot
+    {
         let kv = KVCacheSimple()
         kv.state = [
             MLXArray.zeros([1, 1, max(offset, 1), 64]),
@@ -57,9 +59,10 @@ import MLXLMCommon
         let manager = makeManager()
         let tokens = [1, 2, 3, 4, 5, 6, 7, 8]
         let snapshot = makeSnapshot(offset: tokens.count)
-        manager.admit(SnapshotAdmission.leaf(
-            storedTokens: tokens, snapshot: snapshot, storage: .ramOnly, partitionKey: key
-        )!)
+        manager.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: tokens, snapshot: snapshot, storage: .ramOnly, partitionKey: key
+            )!)
 
         let resolved = await SnapshotResolution.resolve(
             tokens: tokens,
@@ -89,7 +92,9 @@ import MLXLMCommon
             partitionKey: key,
             snapshotTokenOffset: snapshot.tokenOffset,
             sharedPrefixLength: snapshot.tokenOffset,
-            reason: .hit(snapshotOffset: snapshot.tokenOffset, totalTokens: offset * 2, type: snapshot.checkpointType)
+            reason: .hit(
+                snapshotOffset: snapshot.tokenOffset, totalTokens: offset * 2,
+                type: snapshot.checkpointType)
         )
     }
 

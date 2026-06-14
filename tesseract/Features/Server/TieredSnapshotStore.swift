@@ -313,12 +313,14 @@ final class TieredSnapshotStore: SnapshotStore {
             lastAccessAt: demotionLastAccessAt
         )
 
-        guard case .accepted(let ref) = ssdStore.tryEnqueue(
-            payload: payload,
-            descriptor: descriptor,
-            refreshRecencyAtCommit: demotionLastAccessAt == nil,
-            scoringConfig: scoringConfig
-        ) else {
+        guard
+            case .accepted(let ref) = ssdStore.tryEnqueue(
+                payload: payload,
+                descriptor: descriptor,
+                refreshRecencyAtCommit: demotionLastAccessAt == nil,
+                scoringConfig: scoringConfig
+            )
+        else {
             return nil
         }
 
@@ -404,7 +406,7 @@ final class TieredSnapshotStore: SnapshotStore {
         guard let pending = pendingRefsByID.removeValue(forKey: info.snapshotID) else {
             Log.agent.debug(
                 "TieredSnapshotStore.markSnapshotRefCommitted: id=\(info.snapshotID) "
-                + "not in pending map"
+                    + "not in pending map"
             )
             return
         }
@@ -421,7 +423,7 @@ final class TieredSnapshotStore: SnapshotStore {
         if case .ignored(let reason) = effect {
             Log.agent.debug(
                 "TieredSnapshotStore.markSnapshotRefCommitted: id=\(info.snapshotID) ignored "
-                + "(reason=\(String(describing: reason)))"
+                    + "(reason=\(String(describing: reason)))"
             )
         } else {
             // The ref is now committed on the node — index it so a later
@@ -478,8 +480,8 @@ final class TieredSnapshotStore: SnapshotStore {
             var reowned: [CommittedRefOwner] = []
             for dependent in dependents {
                 guard let dependentNode = dependent.node,
-                      let dependentTree = dependent.tree,
-                      dependentNode.chainPrefixRestorePoint?.ownerSnapshotID == baseID
+                    let dependentTree = dependent.tree,
+                    dependentNode.chainPrefixRestorePoint?.ownerSnapshotID == baseID
                 else { continue }
                 dependentTree.reownChainPrefixRestorePoint(
                     node: dependentNode, to: newOwnerID
@@ -502,7 +504,8 @@ final class TieredSnapshotStore: SnapshotStore {
                 // entry first, so the prior owner's death doesn't trip over a
                 // stale no-op entry that no longer matches its node's owner.
                 if let priorOwner = ancestor.chainPrefixRestorePoint?.ownerSnapshotID,
-                   priorOwner != newOwnerID {
+                    priorOwner != newOwnerID
+                {
                     chainPrefixDependentsByOwnerID[priorOwner]?.removeAll {
                         $0.node === ancestor
                     }
@@ -519,7 +522,7 @@ final class TieredSnapshotStore: SnapshotStore {
         }
         Log.agent.debug(
             "TieredSnapshotStore.convertConsumedBaseRef: base=\(baseID) "
-            + "not on the ancestor path (already cleared)"
+                + "not on the ancestor path (already cleared)"
         )
     }
 
@@ -539,7 +542,7 @@ final class TieredSnapshotStore: SnapshotStore {
     /// sweeps entries whose node was already reclaimed (dead weak ref).
     private func trimChainPrefixRestorePoints(ownerID: String) {
         guard var dependents = chainPrefixDependentsByOwnerID[ownerID],
-              dependents.count > Self.maxRestorePointsPerChain
+            dependents.count > Self.maxRestorePointsPerChain
         else { return }
         // Deepest boundary first; a dead/cleared node sorts last (offset -1).
         dependents.sort {
@@ -570,12 +573,12 @@ final class TieredSnapshotStore: SnapshotStore {
         )
         for point in points {
             guard let node = nodesByOffset[point.boundaryOffset],
-                  node.chainPrefixRestorePoint == nil,
-                  case .empty = node.state
+                node.chainPrefixRestorePoint == nil,
+                case .empty = node.state
             else {
                 Log.agent.debug(
                     "TieredSnapshotStore.restoreChainPrefixRestorePoints: node at "
-                    + "boundary=\(point.boundaryOffset) already backed — keeping direct owner"
+                        + "boundary=\(point.boundaryOffset) already backed — keeping direct owner"
                 )
                 continue
             }
@@ -594,8 +597,8 @@ final class TieredSnapshotStore: SnapshotStore {
         else { return }
         for dependent in dependents {
             guard let node = dependent.node,
-                  let tree = dependent.tree,
-                  node.chainPrefixRestorePoint?.ownerSnapshotID == ownerID
+                let tree = dependent.tree,
+                node.chainPrefixRestorePoint?.ownerSnapshotID == ownerID
             else { continue }
             tree.clearChainPrefixRestorePoint(node: node)
         }
@@ -660,7 +663,7 @@ final class TieredSnapshotStore: SnapshotStore {
         if case .ignored(let dropReason) = effect {
             Log.agent.debug(
                 "TieredSnapshotStore.markSnapshotRefDropped: id=\(id) ignored "
-                + "(reason=\(String(describing: dropReason)))"
+                    + "(reason=\(String(describing: dropReason)))"
             )
         }
     }
@@ -676,13 +679,13 @@ final class TieredSnapshotStore: SnapshotStore {
     private func clearCommittedResidentRef(id: String, reason: SSDDropReason) {
         clearChainPrefixDependents(ownerID: id)
         guard let owner = committedRefsByID.removeValue(forKey: id),
-              let node = owner.node,
-              let tree = owner.tree,
-              node.state.refID == id
+            let node = owner.node,
+            let tree = owner.tree,
+            node.state.refID == id
         else {
             Log.agent.debug(
                 "TieredSnapshotStore.markSnapshotRefDropped: id=\(id) not tracked "
-                + "(reason=\(String(describing: reason)))"
+                    + "(reason=\(String(describing: reason)))"
             )
             return
         }

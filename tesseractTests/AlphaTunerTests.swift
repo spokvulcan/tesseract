@@ -85,10 +85,12 @@ struct AlphaTunerTests {
 
         var tunedAlphas: [Double] = []
         for i in 0..<10 {
-            if let tuned = tuner.recordRequest(makeLeafOnlyRecord(
-                promptTokens: [1, 2, 3, i],
-                storedTokens: [1, 2, 3, i, 99]
-            )) {
+            if let tuned = tuner.recordRequest(
+                makeLeafOnlyRecord(
+                    promptTokens: [1, 2, 3, i],
+                    storedTokens: [1, 2, 3, i, 99]
+                ))
+            {
                 tunedAlphas.append(tuned)
             }
         }
@@ -119,10 +121,11 @@ struct AlphaTunerTests {
             AlphaTuner.minimumBootstrapWindow / AlphaTuner.bootstrapMultiplier + 5
         )
         for i in 0..<preEvictionCount {
-            tuner.recordRequest(makeLeafOnlyRecord(
-                promptTokens: [i, 100],
-                storedTokens: [i, 100, 200]
-            ))
+            tuner.recordRequest(
+                makeLeafOnlyRecord(
+                    promptTokens: [i, 100],
+                    storedTokens: [i, 100, 200]
+                ))
         }
         #expect(tuner.requestsBeforeFirstEviction == preEvictionCount)
 
@@ -163,13 +166,15 @@ struct AlphaTunerTests {
         let tuner = AlphaTuner()
 
         // Pick a pre-eviction count guaranteed to overshoot the cap.
-        let preEvictionCount = AlphaTuner.maximumBootstrapWindow * 2
+        let preEvictionCount =
+            AlphaTuner.maximumBootstrapWindow * 2
             + AlphaTuner.minimumBootstrapWindow
         for i in 0..<preEvictionCount {
-            tuner.recordRequest(makeLeafOnlyRecord(
-                promptTokens: [i, 100],
-                storedTokens: [i, 100, 200]
-            ))
+            tuner.recordRequest(
+                makeLeafOnlyRecord(
+                    promptTokens: [i, 100],
+                    storedTokens: [i, 100, 200]
+                ))
         }
 
         tuner.notifyFirstEviction(startingInventory: [])
@@ -184,10 +189,11 @@ struct AlphaTunerTests {
         let tuner = AlphaTuner()
 
         for _ in 0..<3 {
-            tuner.recordRequest(makeLeafOnlyRecord(
-                promptTokens: [1, 2],
-                storedTokens: [1, 2, 3]
-            ))
+            tuner.recordRequest(
+                makeLeafOnlyRecord(
+                    promptTokens: [1, 2],
+                    storedTokens: [1, 2, 3]
+                ))
         }
         tuner.notifyFirstEviction(startingInventory: [])
 
@@ -225,10 +231,11 @@ struct AlphaTunerTests {
         // bootstrap window; every earlier call returns nil.
         var tunedAlpha: Double?
         for i in 0..<tuner.bootstrapTarget {
-            tunedAlpha = tuner.recordRequest(makeLeafOnlyRecord(
-                promptTokens: [i, i + 1],
-                storedTokens: [i, i + 1, i + 2]
-            ))
+            tunedAlpha = tuner.recordRequest(
+                makeLeafOnlyRecord(
+                    promptTokens: [i, i + 1],
+                    storedTokens: [i, i + 1, i + 2]
+                ))
         }
         #expect(tuner.phase == .tuned)
         #expect(tunedAlpha.map { AlphaTuner.alphaCandidates.contains($0) } == true)
@@ -295,19 +302,21 @@ struct AlphaTunerTests {
         let tuner = AlphaTuner()
         tuner.notifyFirstEviction(startingInventory: [])
         for i in 0..<tuner.bootstrapTarget {
-            tuner.recordRequest(makeLeafOnlyRecord(
-                promptTokens: [i],
-                storedTokens: [i, i + 1]
-            ))
+            tuner.recordRequest(
+                makeLeafOnlyRecord(
+                    promptTokens: [i],
+                    storedTokens: [i, i + 1]
+                ))
         }
         #expect(tuner.phase == .tuned)
         #expect(tuner.bootstrapWindowCount == 0)
 
         for i in 0..<10 {
-            tuner.recordRequest(makeLeafOnlyRecord(
-                promptTokens: [9000 + i],
-                storedTokens: [9000 + i, 9100 + i]
-            ))
+            tuner.recordRequest(
+                makeLeafOnlyRecord(
+                    promptTokens: [9000 + i],
+                    storedTokens: [9000 + i, 9100 + i]
+                ))
         }
         #expect(tuner.bootstrapWindowCount == 0)
     }
@@ -333,23 +342,25 @@ struct AlphaTunerTests {
         // path doesn't include the tuner notification — that's the
         // agent layer's responsibility — so requestsBeforeFirstEviction
         // stays at 0 here. The tuner only sees first-eviction notify.
-        mgr.admit(SnapshotAdmission.leaf(
-            storedTokens: Array(1...100),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
-            storage: .ramOnly,
-            partitionKey: defaultKey
-        )!)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(1...100),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: defaultKey
+            )!)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         // Second request: pushes over budget, triggers eviction →
         // tuner enters .bootstrapping with the post-drain inventory.
-        mgr.admit(SnapshotAdmission.leaf(
-            storedTokens: Array(200...299),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
-            storage: .ramOnly,
-            partitionKey: defaultKey,
-            requestID: boundaryRequestID
-        )!)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(200...299),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: defaultKey,
+                requestID: boundaryRequestID
+            )!)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         mgr.recordRequest(
@@ -376,20 +387,22 @@ struct AlphaTunerTests {
 
         let pathA = Array(1...10)
         let pathB = Array(20...29)
-        mgr.admit(SnapshotAdmission.leaf(
-            storedTokens: pathA,
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
-                offset: pathA.count, type: .leaf),
-            storage: .ramOnly,
-            partitionKey: defaultKey
-        )!)
-        mgr.admit(SnapshotAdmission.leaf(
-            storedTokens: pathB,
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
-                offset: pathB.count, type: .leaf),
-            storage: .ramOnly,
-            partitionKey: defaultKey
-        )!)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: pathA,
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
+                    offset: pathA.count, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: defaultKey
+            )!)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: pathB,
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
+                    offset: pathB.count, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: defaultKey
+            )!)
 
         let inventory = mgr.collectSnapshotInventory()
         #expect(inventory.count == 2)
@@ -459,33 +472,35 @@ struct AlphaTunerTests {
         // First eviction happens during mid-prefill store, but the
         // tuner must stay in `.waitingForFirstEviction` until the
         // request-end record arrives.
-        let admission = try #require(SnapshotAdmission.checkpoints(
-            fullPromptTokens: promptTokens,
-            candidates: [
-                SnapshotAdmission.CheckpointCandidate(
-                    snapshot: snapshotA,
-                    storage: .ramOnly
-                ),
-                SnapshotAdmission.CheckpointCandidate(
-                    snapshot: snapshotB,
-                    storage: .ramOnly
-                )
-            ],
-            partitionKey: defaultKey,
-            requestID: boundaryRequestID
-        ))
+        let admission = try #require(
+            SnapshotAdmission.checkpoints(
+                fullPromptTokens: promptTokens,
+                candidates: [
+                    SnapshotAdmission.CheckpointCandidate(
+                        snapshot: snapshotA,
+                        storage: .ramOnly
+                    ),
+                    SnapshotAdmission.CheckpointCandidate(
+                        snapshot: snapshotB,
+                        storage: .ramOnly
+                    ),
+                ],
+                partitionKey: defaultKey,
+                requestID: boundaryRequestID
+            ))
         mgr.admit(admission)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         // The same request then stores a leaf. This must be part of
         // the seeded inventory before bootstrap begins.
-        mgr.admit(SnapshotAdmission.leaf(
-            storedTokens: storedTokens,
-            snapshot: leafSnapshot,
-            storage: .ramOnly,
-            partitionKey: defaultKey,
-            requestID: boundaryRequestID
-        )!)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: storedTokens,
+                snapshot: leafSnapshot,
+                storage: .ramOnly,
+                partitionKey: defaultKey,
+                requestID: boundaryRequestID
+            )!)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         mgr.recordRequest(
@@ -533,20 +548,22 @@ struct AlphaTunerTests {
 
         // Seed one snapshot so the boundary request's store triggers the
         // first eviction.
-        mgr.admit(SnapshotAdmission.leaf(
-            storedTokens: Array(1...100),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
-            storage: .ramOnly,
-            partitionKey: defaultKey
-        )!)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(1...100),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: defaultKey
+            )!)
 
-        mgr.admit(SnapshotAdmission.leaf(
-            storedTokens: Array(200...299),
-            snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
-            storage: .ramOnly,
-            partitionKey: defaultKey,
-            requestID: boundaryRequestID
-        )!)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: Array(200...299),
+                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(offset: 100, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: defaultKey,
+                requestID: boundaryRequestID
+            )!)
         #expect(tuner.phase == .waitingForFirstEviction)
 
         // Another request finishes first. It should be counted as pre-bootstrap
@@ -613,10 +630,11 @@ struct AlphaTunerTests {
         // — different alphas pick different victims, so per-candidate
         // scores actually vary.
         for _ in 0..<6 {
-            tuner.recordRequest(makeLeafOnlyRecord(
-                promptTokens: [1, 2],
-                storedTokens: [1, 2, 3]
-            ))
+            tuner.recordRequest(
+                makeLeafOnlyRecord(
+                    promptTokens: [1, 2],
+                    storedTokens: [1, 2, 3]
+                ))
         }
         tuner.notifyFirstEviction(startingInventory: [])
 
@@ -686,10 +704,11 @@ struct AlphaTunerTests {
         var tunedAlpha: Double?
         for i in 0..<tuner.bootstrapTarget {
             let unique = 100_000 + i * 7
-            tunedAlpha = tuner.recordRequest(makeLeafOnlyRecord(
-                promptTokens: [unique],
-                storedTokens: [unique, unique + 1]
-            ))
+            tunedAlpha = tuner.recordRequest(
+                makeLeafOnlyRecord(
+                    promptTokens: [unique],
+                    storedTokens: [unique, unique + 1]
+                ))
         }
         #expect(tuner.phase == .tuned)
         // All candidates tie at zero, so the strict `>` comparison keeps

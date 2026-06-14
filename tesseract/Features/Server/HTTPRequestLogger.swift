@@ -47,9 +47,9 @@ nonisolated struct HTTPRequestLogger: Sendable {
         let url = rootURL.appendingPathComponent("\(prefix)-request.json")
         var header = "// session=\(sessionAffinity ?? "nil")\n".data(using: .utf8) ?? Data()
         if let parsed = try? JSONSerialization.jsonObject(with: body),
-           let pretty = try? JSONSerialization.data(
-               withJSONObject: parsed,
-               options: [.prettyPrinted, .sortedKeys])
+            let pretty = try? JSONSerialization.data(
+                withJSONObject: parsed,
+                options: [.prettyPrinted, .sortedKeys])
         {
             header.append(pretty)
         } else {
@@ -58,7 +58,8 @@ nonisolated struct HTTPRequestLogger: Sendable {
         do {
             try header.write(to: url)
         } catch {
-            logger.warning("HTTPRequestLogger write failed: \(error.localizedDescription, privacy: .public)")
+            logger.warning(
+                "HTTPRequestLogger write failed: \(error.localizedDescription, privacy: .public)")
         }
         return prefix
     }

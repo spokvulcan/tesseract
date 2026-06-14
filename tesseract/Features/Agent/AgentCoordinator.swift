@@ -77,7 +77,11 @@ final class AgentCoordinator {
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
         arbiter: any InferenceArbitrating,
-        formatRawPrompt: (@MainActor (String, [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int))? = nil,
+        formatRawPrompt: (
+            @MainActor (String, [AgentToolDefinition]?) async throws -> (
+                text: String, tokenCount: Int
+            )
+        )? = nil,
         speechCoordinator: SpeechCoordinator? = nil,
         toolRegistry: ToolRegistry? = nil,
         extensionHost: ExtensionHost? = nil,
@@ -134,12 +138,15 @@ final class AgentCoordinator {
 
     // MARK: - Send Message
 
-    func sendMessage(_ text: String, images: [ImageAttachment] = [], bypassCommandParsing: Bool = false) {
+    func sendMessage(
+        _ text: String, images: [ImageAttachment] = [], bypassCommandParsing: Bool = false
+    ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !images.isEmpty else { return }
 
         if !bypassCommandParsing && images.isEmpty {
-            let parseResult = SlashCommandParser.parse(trimmed, registry: commandPalette.commandRegistry)
+            let parseResult = SlashCommandParser.parse(
+                trimmed, registry: commandPalette.commandRegistry)
             switch parseResult {
             case .matched(let command, let arguments):
                 executeCommand(command, arguments: arguments)
@@ -188,7 +195,8 @@ final class AgentCoordinator {
         case .skill(let filePath):
             executeSkill(filePath: filePath, skillName: command.name, arguments: arguments)
         case .extension(let extensionPath):
-            executeExtensionCommand(command.name, extensionPath: extensionPath, arguments: arguments)
+            executeExtensionCommand(
+                command.name, extensionPath: extensionPath, arguments: arguments)
         }
     }
 
@@ -229,7 +237,8 @@ final class AgentCoordinator {
 
     private func executeSkill(filePath: String, skillName: String, arguments: String) {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
-              let fullText = String(data: data, encoding: .utf8) else {
+            let fullText = String(data: data, encoding: .utf8)
+        else {
             error = "Failed to load skill: \(filePath)"
             return
         }
@@ -238,12 +247,12 @@ final class AgentCoordinator {
         let skillDir = URL(fileURLWithPath: filePath).deletingLastPathComponent().path
 
         var message = """
-        <skill name="\(skillName)" location="\(filePath)">
-        References are relative to \(skillDir).
+            <skill name="\(skillName)" location="\(filePath)">
+            References are relative to \(skillDir).
 
-        \(body)
-        </skill>
-        """
+            \(body)
+            </skill>
+            """
 
         if !arguments.isEmpty {
             message += "\n\n\(arguments)"
@@ -258,7 +267,8 @@ final class AgentCoordinator {
         arguments: String
     ) {
         guard let ext = extensionHost?.getExtension(path: extensionPath),
-              let cmd = ext.commands[name] else {
+            let cmd = ext.commands[name]
+        else {
             error = "Extension command not found: /\(name)"
             return
         }
@@ -344,7 +354,9 @@ final class AgentCoordinator {
         let materialized = set.attachments.enumerated().compactMap { index, attachment in
             (try? imagePreviewCache.url(for: attachment)).map { (index, $0) }
         }
-        guard let startIndex = materialized.firstIndex(where: { $0.0 == set.startIndex }) else { return }
+        guard let startIndex = materialized.firstIndex(where: { $0.0 == set.startIndex }) else {
+            return
+        }
         quickLookRequest = QuickLookRequest(urls: materialized.map(\.1), startIndex: startIndex)
     }
 
@@ -399,14 +411,18 @@ final class AgentCoordinator {
             return false
         }
         for provider in providers {
-            let preferredUTI = provider.registeredTypeIdentifiers.first {
-                UTType($0)?.conforms(to: .image) == true
-            } ?? UTType.image.identifier
-            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { [weak self] data, _ in
+            let preferredUTI =
+                provider.registeredTypeIdentifiers.first {
+                    UTType($0)?.conforms(to: .image) == true
+                } ?? UTType.image.identifier
+            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) {
+                [weak self] data, _ in
                 guard let self, let data else { return }
-                guard case .success(let attachment) = ImageIngest.ingest(
-                    data: data, typeIdentifier: preferredUTI, filename: "dropped-image"
-                ) else { return }
+                guard
+                    case .success(let attachment) = ImageIngest.ingest(
+                        data: data, typeIdentifier: preferredUTI, filename: "dropped-image"
+                    )
+                else { return }
                 Task { @MainActor in self.attachImages([attachment]) }
             }
         }
@@ -421,7 +437,9 @@ final class AgentCoordinator {
     private func conversationImages() -> [ImageAttachment] {
         agent.state.messages.flatMap { message -> [ImageAttachment] in
             if let user = message.asUser { return user.images }
-            if let tool = message.asToolResult { return tool.content.imageAttachments(namespace: tool.id) }
+            if let tool = message.asToolResult {
+                return tool.content.imageAttachments(namespace: tool.id)
+            }
             return []
         }
     }
@@ -560,9 +578,9 @@ final class AgentCoordinator {
 
     private func resetState() {
         transcript.reset()
-        agentRun.finish()   // clear isGenerating synchronously
+        agentRun.finish()  // clear isGenerating synchronously
         quickLookRequest = nil
-        imagePreviewCache.clear()   // drop the previous conversation's temp previews
+        imagePreviewCache.clear()  // drop the previous conversation's temp previews
         pendingImages = []
         showImageSwitchHint = false
     }
@@ -580,13 +598,14 @@ final class AgentCoordinator {
 
     private func persistCurrentConversation() {
         guard !agent.state.messages.isEmpty else { return }
-        conversationStore.updateCurrentMessages(agent.state.messages.map { $0 as any AgentMessageProtocol & Sendable })
+        conversationStore.updateCurrentMessages(
+            agent.state.messages.map { $0 as any AgentMessageProtocol & Sendable })
         conversationStore.saveCurrent()
     }
 
     private func autoSpeakIfEnabled() {
         guard let settings, settings.agentAutoSpeak,
-              let content = lastAssistantContent()
+            let content = lastAssistantContent()
         else { return }
         Log.agent.info("Auto-speaking response (\(content.count) chars)")
         speechCoordinator?.speakText(content)

@@ -124,7 +124,10 @@ struct ThinkingRepetitionDetectorTests {
         // Feed the same line in 3 pieces per repetition.
         let full = "The same thought I keep circling back to.\n"
         let a = String(full.prefix(15))
-        let b = String(full[full.index(full.startIndex, offsetBy: 15)..<full.index(full.startIndex, offsetBy: 30)])
+        let b = String(
+            full[
+                full.index(
+                    full.startIndex, offsetBy: 15)..<full.index(full.startIndex, offsetBy: 30)])
         let c = String(full[full.index(full.startIndex, offsetBy: 30)...])
         #expect(a + b + c == full)
 
@@ -145,10 +148,10 @@ struct ThinkingRepetitionDetectorTests {
     @Test func detectsStarterRepeatOnParaphrasedTail() {
         let config = ThinkingRepetitionDetector.Config(
             minLineLength: 30,
-            maxLineRepeats: 100,            // line-freq effectively off
+            maxLineRepeats: 100,  // line-freq effectively off
             starterPrefixChars: 22,
             maxStarterRepeats: 6,
-            maxNgramRepeats: 1_000,         // n-gram effectively off
+            maxNgramRepeats: 1_000,  // n-gram effectively off
             windowChars: 2_000,
             maxThinkingChars: nil,
             minCharsBeforeIntervention: 0
@@ -192,10 +195,10 @@ struct ThinkingRepetitionDetectorTests {
 
         let prelude = "Some real reasoning happens before the loop starts.\n"
         _ = detector.ingest(chunk: prelude)
-        _ = detector.ingest(chunk: "Let me check the file foo.ts now.\n")   // 1
-        _ = detector.ingest(chunk: "Let me check the file bar.ts now.\n")   // 2
+        _ = detector.ingest(chunk: "Let me check the file foo.ts now.\n")  // 1
+        _ = detector.ingest(chunk: "Let me check the file bar.ts now.\n")  // 2
         let decision = detector.ingest(
-            chunk: "Let me check the file baz.ts now.\n")                   // 3 → trigger
+            chunk: "Let me check the file baz.ts now.\n")  // 3 → trigger
 
         guard case .intervene(.duplicateStarter, let safe) = decision else {
             Issue.record("expected duplicateStarter, got \(decision)")
@@ -209,7 +212,7 @@ struct ThinkingRepetitionDetectorTests {
             minLineLength: 30,
             maxLineRepeats: 100,
             starterPrefixChars: 22,
-            maxStarterRepeats: nil,         // explicitly disabled
+            maxStarterRepeats: nil,  // explicitly disabled
             maxNgramRepeats: 1_000,
             maxThinkingChars: nil,
             minCharsBeforeIntervention: 0
@@ -223,9 +226,9 @@ struct ThinkingRepetitionDetectorTests {
 
     @Test func starterIgnoresLinesShorterThanPrefix() {
         let config = ThinkingRepetitionDetector.Config(
-            minLineLength: 1,               // line-length gate off
+            minLineLength: 1,  // line-length gate off
             maxLineRepeats: 100,
-            starterPrefixChars: 40,         // long prefix, real lines won't reach
+            starterPrefixChars: 40,  // long prefix, real lines won't reach
             maxStarterRepeats: 3,
             maxNgramRepeats: 1_000,
             maxThinkingChars: nil,
@@ -306,9 +309,9 @@ struct ThinkingRepetitionDetectorTests {
     @Test func charBudgetTriggersWhenConfigured() {
         let config = ThinkingRepetitionDetector.Config(
             enabled: true,
-            minLineLength: 9999,   // line signal off
+            minLineLength: 9999,  // line signal off
             maxLineRepeats: 999,
-            ngramSize: 999,        // ngram signal off (n > content)
+            ngramSize: 999,  // ngram signal off (n > content)
             maxNgramRepeats: 999,
             windowChars: 16,
             maxThinkingChars: 200,
@@ -414,18 +417,18 @@ struct ThinkingRepetitionDetectorTests {
         // Deliberately varied reasoning — multiple distinct sentences, common
         // "let me verify" re-examinations but not literal duplicates.
         let legit = """
-        Let me think about the user's constraints one by one.
-        First, line 1 needs to start with [EN] and contain "cat".
-        Second, line 2 needs to start with [FR] and contain "chat".
-        Third, line 3 needs to start with [ES] and contain "gato".
-        Also each line should end with a period and be 3 to 6 words.
-        Let me draft candidates: "[EN] The cat sits quietly."
-        Checking word count — that's 5 words including the tag. Good.
-        Next, "[FR] Le chat dort paisiblement." — 4 words with tag. Good.
-        Next, "[ES] El gato duerme tranquilamente." — 4 words with tag. Good.
-        All three end with periods. All three contain the required word.
-        Final check — constraints all satisfied, confidence high.
-        """
+            Let me think about the user's constraints one by one.
+            First, line 1 needs to start with [EN] and contain "cat".
+            Second, line 2 needs to start with [FR] and contain "chat".
+            Third, line 3 needs to start with [ES] and contain "gato".
+            Also each line should end with a period and be 3 to 6 words.
+            Let me draft candidates: "[EN] The cat sits quietly."
+            Checking word count — that's 5 words including the tag. Good.
+            Next, "[FR] Le chat dort paisiblement." — 4 words with tag. Good.
+            Next, "[ES] El gato duerme tranquilamente." — 4 words with tag. Good.
+            All three end with periods. All three contain the required word.
+            Final check — constraints all satisfied, confidence high.
+            """
         let decision = detector.ingest(chunk: legit)
         #expect(decision == .continue)
     }
@@ -495,7 +498,7 @@ struct ThinkingRepetitionDetectorTests {
         // N-gram pattern starts mid-line. After trigger, safePrefix must
         // either be empty (no `\n` before first occurrence) or end in `\n`.
         let config = ThinkingRepetitionDetector.Config(
-            minLineLength: 200,   // line signal off
+            minLineLength: 200,  // line signal off
             maxLineRepeats: 100,
             ngramSize: 20,
             maxNgramRepeats: 5,
@@ -507,8 +510,9 @@ struct ThinkingRepetitionDetectorTests {
         // Pattern immediately follows prelude with NO intervening newline and
         // repeats 6× in a row — mid-line n-gram repeat.
         let pattern = "abcdefghijklmnopqrst"
-        let decision = detector.ingest(chunk: prelude
-            + String(repeating: pattern, count: 6))
+        let decision = detector.ingest(
+            chunk: prelude
+                + String(repeating: pattern, count: 6))
         guard case .intervene(.duplicateNgram, let safe) = decision else {
             Issue.record("expected duplicateNgram, got \(decision)")
             return
@@ -555,7 +559,7 @@ struct ThinkingRepetitionDetectorTests {
         // Newline at index 99; 101 more chars of filler; then enough more to
         // cross the 200-char budget. Backtrack must land at index 99.
         let head = String(repeating: "x", count: 99) + "\n"  // 100 chars
-        let tail = String(repeating: "y", count: 150)        // 150 chars
+        let tail = String(repeating: "y", count: 150)  // 150 chars
         let decision = detector.ingest(chunk: head + tail)
         guard case .intervene(.budgetExceeded, let safe) = decision else {
             Issue.record("expected budgetExceeded, got \(decision)")

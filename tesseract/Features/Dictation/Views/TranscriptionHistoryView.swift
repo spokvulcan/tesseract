@@ -31,7 +31,8 @@ struct TranscriptionHistoryView: View {
                             case .header(let label, _):
                                 HistorySectionHeader(
                                     label: label,
-                                    leadingPadding: timeColumnWidth + timeToConnectorSpacing + connectorWidth + connectorToContentSpacing
+                                    leadingPadding: timeColumnWidth + timeToConnectorSpacing
+                                        + connectorWidth + connectorToContentSpacing
                                 )
                             case .entry(let entry, let isFirst, let isLast):
                                 TimelineEntryRow(
@@ -40,7 +41,7 @@ struct TranscriptionHistoryView: View {
                                     isLast: isLast,
                                     onDelete: { history.delete(entry) }
                                 )
-                                    .equatable()
+                                .equatable()
                             }
                         }
                     }
@@ -79,7 +80,8 @@ struct TranscriptionHistoryInlineView: View {
                     case .header(let label, _):
                         HistorySectionHeader(
                             label: label,
-                            leadingPadding: timeColumnWidth + timeToConnectorSpacing + connectorWidth + connectorToContentSpacing
+                            leadingPadding: timeColumnWidth + timeToConnectorSpacing
+                                + connectorWidth + connectorToContentSpacing
                         )
                     case .entry(let entry, let isFirst, let isLast):
                         TimelineEntryRow(
@@ -88,7 +90,7 @@ struct TranscriptionHistoryInlineView: View {
                             isLast: isLast,
                             onDelete: { history.delete(entry) }
                         )
-                            .equatable()
+                        .equatable()
                     }
                 }
             }
@@ -228,7 +230,9 @@ struct TimelineEntryRow: View, Equatable {
             actionMenuItems
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(entry.text), recorded at \(timeString), duration \(String(format: "%.1f", entry.duration)) seconds")
+        .accessibilityLabel(
+            "\(entry.text), recorded at \(timeString), duration \(String(format: "%.1f", entry.duration)) seconds"
+        )
         .accessibilityHint("Actions menu appears on hover")
     }
 
@@ -254,9 +258,7 @@ struct TimelineEntryRow: View, Equatable {
 
     // Equatable conformance for efficient diffing
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.entry.id == rhs.entry.id &&
-        lhs.isFirst == rhs.isFirst &&
-        lhs.isLast == rhs.isLast
+        lhs.entry.id == rhs.entry.id && lhs.isFirst == rhs.isFirst && lhs.isLast == rhs.isLast
     }
 }
 

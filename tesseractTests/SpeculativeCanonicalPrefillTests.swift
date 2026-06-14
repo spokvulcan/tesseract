@@ -131,11 +131,13 @@ struct SpeculativeCanonicalPrefillTests {
         let preserve = TemplateRenderContext(
             flags: [.preserveThinking]
         )
-        #expect(ServerCompletion.speculativeSeedPlan(
-            boundaryMode: .canonical, renderContext: preserve
-        ) == nil)
-        #expect(ServerCompletion.speculativeSeedPlan(
-            boundaryMode: .directTool, renderContext: preserve
-        ) == nil)
+        #expect(
+            ServerCompletion.speculativeSeedPlan(
+                boundaryMode: .canonical, renderContext: preserve
+            ) == nil)
+        #expect(
+            ServerCompletion.speculativeSeedPlan(
+                boundaryMode: .directTool, renderContext: preserve
+            ) == nil)
     }
 }

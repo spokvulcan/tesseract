@@ -152,7 +152,9 @@ struct HTTPPrefixCacheSpikeTests {
                 .assistant(
                     content: "\n\n",  // model emitted whitespace
                     reasoning: "Need to inspect.",
-                    toolCalls: [HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path":"a.swift"}"#)]
+                    toolCalls: [
+                        HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path":"a.swift"}"#)
+                    ]
                 ),
             ]
         )
@@ -163,7 +165,9 @@ struct HTTPPrefixCacheSpikeTests {
                 .assistant(
                     content: "",  // OpenCode stripped the whitespace
                     reasoning: "Need to inspect.",
-                    toolCalls: [HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path":"a.swift"}"#)]
+                    toolCalls: [
+                        HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path":"a.swift"}"#)
+                    ]
                 ),
                 .init(role: .tool, content: "file contents"),
                 .init(role: .user, content: "What's next?"),
@@ -184,14 +188,17 @@ struct HTTPPrefixCacheSpikeTests {
                 .init(role: .user, content: "Inspect"),
                 .assistant(
                     content: "Calling tool",
-                    toolCalls: [HTTPPrefixCacheToolCall(name: "glob", argumentsJSON: #"{"pattern":"*.swift"}"#)]
+                    toolCalls: [
+                        HTTPPrefixCacheToolCall(
+                            name: "glob", argumentsJSON: #"{"pattern":"*.swift"}"#)
+                    ]
                 ),
             ]
         )
         let request = HTTPPrefixCacheConversation(
             systemPrompt: nil,
             messages: assistantTurn.messages + [
-                .init(role: .tool, content: "Main.swift"),
+                .init(role: .tool, content: "Main.swift")
             ]
         )
 
@@ -389,7 +396,9 @@ struct HTTPPrefixCacheSessionReplayTests {
             assistantMessage: .assistant(
                 content: "Calling tool",
                 reasoning: "Need to inspect the file first.",
-                toolCalls: [HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path":"main.swift"}"#)]
+                toolCalls: [
+                    HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path":"main.swift"}"#)
+                ]
             )
         )
 
@@ -403,9 +412,9 @@ struct HTTPPrefixCacheSessionReplayTests {
                             id: "call_1",
                             type: "function",
                             function: .init(name: "read", arguments: #"{"path":"main.swift"}"#)
-                        ),
+                        )
                     ]
-                ),
+                )
             ],
             sessionAffinity: "session-1",
             modelID: Self.modelA,
@@ -433,7 +442,7 @@ struct HTTPPrefixCacheSessionReplayTests {
                     role: .assistant,
                     content: .text("Answer"),
                     reasoning_content: "Client reasoning"
-                ),
+                )
             ],
             sessionAffinity: "session-1",
             modelID: Self.modelA,
@@ -457,7 +466,7 @@ struct HTTPPrefixCacheSessionReplayTests {
 
         let repair = await store.repair(
             messages: [
-                .init(role: .assistant, content: .text("Answer")),
+                .init(role: .assistant, content: .text("Answer"))
             ],
             sessionAffinity: nil,
             modelID: Self.modelA,
@@ -479,7 +488,9 @@ struct HTTPPrefixCacheSessionReplayTests {
             assistantMessage: .assistant(
                 content: "Calling tool",
                 reasoning: "Stored reasoning",
-                toolCalls: [HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path":"a.swift"}"#)]
+                toolCalls: [
+                    HTTPPrefixCacheToolCall(name: "read", argumentsJSON: #"{"path":"a.swift"}"#)
+                ]
             )
         )
 
@@ -493,9 +504,9 @@ struct HTTPPrefixCacheSessionReplayTests {
                             id: "call_1",
                             type: "function",
                             function: .init(name: "read", arguments: #"{"path":"b.swift"}"#)
-                        ),
+                        )
                     ]
-                ),
+                )
             ],
             sessionAffinity: "session-1",
             modelID: Self.modelA,

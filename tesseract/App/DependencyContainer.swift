@@ -97,7 +97,8 @@ final class DependencyContainer: ObservableObject {
             arbiter: inferenceArbiter,
             formatRawPrompt: { [weak self] systemPrompt, tools in
                 guard let self else { throw AgentEngineError.modelNotLoaded }
-                return try await self.agentEngine.formatRawPrompt(systemPrompt: systemPrompt, tools: tools)
+                return try await self.agentEngine.formatRawPrompt(
+                    systemPrompt: systemPrompt, tools: tools)
             },
             speechCoordinator: speechCoordinator,
             toolRegistry: newToolRegistry,
@@ -179,41 +180,42 @@ final class DependencyContainer: ObservableObject {
     }
 
     private func makeTerminationCoordinator() -> AppTerminationCoordinator {
-        AppTerminationCoordinator(steps: .init(
-            stopHotkeys: { [hotkeyManager] in
-                hotkeyManager.stopListening()
-            },
-            cancelForegroundGenerationAndWait: { [agentCoordinator] in
-                await agentCoordinator.cancelGenerationAndWait()
-            },
-            stopHTTPServerAndDrain: { [httpServer] in
-                await httpServer.stopAndDrain()
-            },
-            cancelLLMGenerationAndWait: { [agentEngine] in
-                await agentEngine.cancelGenerationAndWait()
-            },
-            stopSpeech: { [speechCoordinator] in
-                speechCoordinator.stop()
-            },
-            cancelSpeechGeneration: { [speechEngine] in
-                await speechEngine.cancelGeneration()
-            },
-            clearSpeechVoiceAnchor: { [speechEngine] in
-                await speechEngine.clearVoiceAnchor()
-            },
-            unloadLLM: { [agentEngine] in
-                agentEngine.unloadModel()
-            },
-            awaitLLMUnload: { [agentEngine] in
-                await agentEngine.awaitPendingUnload()
-            },
-            unloadSpeech: { [speechEngine] in
-                speechEngine.unloadModel()
-            },
-            synchronizeGPU: {
-                Stream.gpu.synchronize()
-            }
-        ))
+        AppTerminationCoordinator(
+            steps: .init(
+                stopHotkeys: { [hotkeyManager] in
+                    hotkeyManager.stopListening()
+                },
+                cancelForegroundGenerationAndWait: { [agentCoordinator] in
+                    await agentCoordinator.cancelGenerationAndWait()
+                },
+                stopHTTPServerAndDrain: { [httpServer] in
+                    await httpServer.stopAndDrain()
+                },
+                cancelLLMGenerationAndWait: { [agentEngine] in
+                    await agentEngine.cancelGenerationAndWait()
+                },
+                stopSpeech: { [speechCoordinator] in
+                    speechCoordinator.stop()
+                },
+                cancelSpeechGeneration: { [speechEngine] in
+                    await speechEngine.cancelGeneration()
+                },
+                clearSpeechVoiceAnchor: { [speechEngine] in
+                    await speechEngine.clearVoiceAnchor()
+                },
+                unloadLLM: { [agentEngine] in
+                    agentEngine.unloadModel()
+                },
+                awaitLLMUnload: { [agentEngine] in
+                    await agentEngine.awaitPendingUnload()
+                },
+                unloadSpeech: { [speechEngine] in
+                    speechEngine.unloadModel()
+                },
+                synchronizeGPU: {
+                    Stream.gpu.synchronize()
+                }
+            ))
     }
 
     func setup() async {

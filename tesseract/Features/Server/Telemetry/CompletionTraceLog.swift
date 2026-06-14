@@ -41,9 +41,10 @@ nonisolated final class CompletionTraceLog: @unchecked Sendable {
     /// the tmp debug root) — the harness replays traces across
     /// sessions, so the OS must not garbage-collect them.
     static var defaultDirectory: URL {
-        let base = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
+        let base =
+            FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first ?? FileManager.default.temporaryDirectory
         return base.appendingPathComponent("PrefixCacheTraces", isDirectory: true)
     }
 
@@ -58,13 +59,14 @@ nonisolated final class CompletionTraceLog: @unchecked Sendable {
                 // A fresh (or previously empty) file opens with the
                 // corpus contract so readers can gate on schema before
                 // replaying.
-                try? Self.encoder.encode(CompletionTraceLine.header(
-                    CompletionTraceHeader(
-                        schemaVersion: CompletionTraceRecord.currentSchemaVersion,
-                        blockSize: TraceBlockDigest.blockSize,
-                        createdAt: Date().timeIntervalSinceReferenceDate
-                    )
-                ))
+                try? Self.encoder.encode(
+                    CompletionTraceLine.header(
+                        CompletionTraceHeader(
+                            schemaVersion: CompletionTraceRecord.currentSchemaVersion,
+                            blockSize: TraceBlockDigest.blockSize,
+                            createdAt: Date().timeIntervalSinceReferenceDate
+                        )
+                    ))
             }
         )
     }
@@ -97,8 +99,11 @@ nonisolated final class CompletionTraceLog: @unchecked Sendable {
         func sortKey(_ name: String) -> (day: String, rank: Int) {
             name.hasSuffix(".old") ? (String(name.dropLast(4)), 0) : (name, 1)
         }
-        return names
-            .filter { $0.hasPrefix("trace-") && ($0.hasSuffix(".jsonl") || $0.hasSuffix(".jsonl.old")) }
+        return
+            names
+            .filter {
+                $0.hasPrefix("trace-") && ($0.hasSuffix(".jsonl") || $0.hasSuffix(".jsonl.old"))
+            }
             .sorted { sortKey($0) < sortKey($1) }
             .map { directory.appendingPathComponent($0) }
     }
@@ -108,7 +113,7 @@ nonisolated final class CompletionTraceLog: @unchecked Sendable {
     /// corpus).
     static func readLines(at url: URL) -> [CompletionTraceLine] {
         guard let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8)
+            let text = String(data: data, encoding: .utf8)
         else { return [] }
         let decoder = JSONDecoder()
         return text.split(separator: "\n").compactMap { line in
@@ -126,7 +131,7 @@ nonisolated final class CompletionTraceLog: @unchecked Sendable {
             let lines = readLines(at: url)
             guard case .header(let header)? = lines.first else { continue }
             guard header.schemaVersion == CompletionTraceRecord.currentSchemaVersion,
-                  header.blockSize == TraceBlockDigest.blockSize
+                header.blockSize == TraceBlockDigest.blockSize
             else { continue }
             for case .record(let record) in lines.dropFirst() {
                 records.append(record)

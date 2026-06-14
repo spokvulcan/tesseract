@@ -20,7 +20,8 @@ struct PromptCacheChartsView: View {
 
     private var columns: [GridItem] {
         if layoutWidth >= PromptCacheLayout.wideWidth {
-            return Array(repeating: GridItem(.flexible(minimum: 180), spacing: Theme.Spacing.xs), count: 3)
+            return Array(
+                repeating: GridItem(.flexible(minimum: 180), spacing: Theme.Spacing.xs), count: 3)
         }
         return [GridItem(.flexible(minimum: 0), spacing: Theme.Spacing.xs)]
     }
@@ -49,7 +50,9 @@ private struct PromptCacheChartPanel: View {
         }
         .padding(Theme.Spacing.sm)
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
     }
 
     @ViewBuilder

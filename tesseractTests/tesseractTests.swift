@@ -39,14 +39,15 @@ struct ModelDefinitionCatalogTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let config = """
-        {
-          "architectures": ["Qwen3_5ForConditionalGeneration"],
-          "quantization_config": {
-            "quant_method": "paroquant"
-          }
-        }
-        """
-        try config.write(to: root.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+            {
+              "architectures": ["Qwen3_5ForConditionalGeneration"],
+              "quantization_config": {
+                "quant_method": "paroquant"
+              }
+            }
+            """
+        try config.write(
+            to: root.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
 
         let isParoModel = Tesseract_Agent.isParoQuantModel(directory: root)
         #expect(isParoModel)
@@ -95,18 +96,18 @@ struct ModelDefinitionCatalogTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let config = """
-        {
-          "model_type": "qwen3_5_moe",
-          "architectures": ["Qwen3_5MoeForConditionalGeneration"],
-          "text_config": {
-            "num_hidden_layers": 40,
-            "hidden_size": 4096,
-            "linear_num_value_heads": 32,
-            "linear_key_head_dim": 128,
-            "full_attention_interval": 4
-          }
-        }
-        """
+            {
+              "model_type": "qwen3_5_moe",
+              "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+              "text_config": {
+                "num_hidden_layers": 40,
+                "hidden_size": 4096,
+                "linear_num_value_heads": 32,
+                "linear_key_head_dim": 128,
+                "full_attention_interval": 4
+              }
+            }
+            """
         try config.write(
             to: root.appendingPathComponent("config.json"),
             atomically: true,
@@ -206,7 +207,8 @@ struct MessageConversionTests {
             ToolCallInfo(
                 id: "call-1",
                 name: "read",
-                argumentsJSON: #"{"path":"notes/todo.md","offset":42,"recursive":true,"metadata":{"kind":"text","priority":1},"lines":[1,2],"fallback":null}"#
+                argumentsJSON:
+                    #"{"path":"notes/todo.md","offset":42,"recursive":true,"metadata":{"kind":"text","priority":1},"lines":[1,2],"fallback":null}"#
             )
         ]
 
@@ -222,16 +224,20 @@ struct MessageConversionTests {
         #expect(content.contains("<parameter=path>\nnotes/todo.md\n</parameter>"))
         #expect(content.contains("<parameter=offset>\n42\n</parameter>"))
         #expect(content.contains("<parameter=recursive>\nTrue\n</parameter>"))
-        #expect(content.contains(#"""
-<parameter=metadata>
-{"kind":"text","priority":1}
-</parameter>
-"""#))
-        #expect(content.contains(#"""
-<parameter=lines>
-[1,2]
-</parameter>
-"""#))
+        #expect(
+            content.contains(
+                #"""
+                <parameter=metadata>
+                {"kind":"text","priority":1}
+                </parameter>
+                """#))
+        #expect(
+            content.contains(
+                #"""
+                <parameter=lines>
+                [1,2]
+                </parameter>
+                """#))
         #expect(content.contains("<parameter=fallback>\nNone\n</parameter>"))
         #expect(content.hasSuffix("</function>\n</tool_call>"))
     }
@@ -374,7 +380,8 @@ struct ReadToolTests {
             encoding: .utf8
         )
 
-        let result = try await tool.execute("read-5", readToolArgs(path: "large-lines.txt"), nil, nil)
+        let result = try await tool.execute(
+            "read-5", readToolArgs(path: "large-lines.txt"), nil, nil)
         let output = result.content.textContent
 
         #expect(output.contains("\tLine 1"))
@@ -402,7 +409,8 @@ struct ReadToolTests {
             encoding: .utf8
         )
 
-        let result = try await tool.execute("read-6", readToolArgs(path: "large-bytes.txt"), nil, nil)
+        let result = try await tool.execute(
+            "read-6", readToolArgs(path: "large-bytes.txt"), nil, nil)
         let output = result.content.textContent
 
         #expect(output.contains("\tLine 1:"))
@@ -425,7 +433,8 @@ struct ReadToolTests {
             encoding: .utf8
         )
 
-        let result = try await tool.execute("read-7", readToolArgs(path: "single-line.txt"), nil, nil)
+        let result = try await tool.execute(
+            "read-7", readToolArgs(path: "single-line.txt"), nil, nil)
         let output = result.content.textContent
 
         #expect(output.contains("[Line 1 is "))
@@ -536,7 +545,9 @@ struct LsToolTests {
             _ = try await tool.execute("ls-3", lsToolArgs(path: "missing"), nil, nil)
             Issue.record("Expected ls tool to throw for a missing path")
         } catch {
-            #expect(error.localizedDescription == "Path not found: \(root.appendingPathComponent("missing").path)")
+            #expect(
+                error.localizedDescription
+                    == "Path not found: \(root.appendingPathComponent("missing").path)")
         }
     }
 
@@ -825,12 +836,14 @@ struct EditToolTests {
 
         let result = try await tool.execute(
             "edit-4",
-            editToolArgs(path: "trailing-ws.txt", oldText: "line one\nline two\n", newText: "replaced\n"),
+            editToolArgs(
+                path: "trailing-ws.txt", oldText: "line one\nline two\n", newText: "replaced\n"),
             nil,
             nil
         )
 
-        #expect(result.content.textContent.contains("Successfully replaced text in trailing-ws.txt."))
+        #expect(
+            result.content.textContent.contains("Successfully replaced text in trailing-ws.txt."))
         #expect(try readUTF8PreservingBytes(from: fileURL) == "replaced\nline three\n")
     }
 
@@ -952,13 +965,15 @@ struct EditToolTests {
         defer { removeReadToolTestRig(root) }
 
         let noMatchURL = root.appendingPathComponent("no-match.txt")
-        try "completely different content\n".write(to: noMatchURL, atomically: true, encoding: .utf8)
+        try "completely different content\n".write(
+            to: noMatchURL, atomically: true, encoding: .utf8)
         tracker.record(noMatchURL.path)
 
         do {
             _ = try await tool.execute(
                 "edit-10",
-                editToolArgs(path: "no-match.txt", oldText: "this does not exist", newText: "replacement"),
+                editToolArgs(
+                    path: "no-match.txt", oldText: "this does not exist", newText: "replacement"),
                 nil,
                 nil
             )
@@ -976,7 +991,8 @@ struct EditToolTests {
         defer { removeReadToolTestRig(root) }
 
         let fuzzyDupsURL = root.appendingPathComponent("fuzzy-dups.txt")
-        try "hello world   \nhello world\n".write(to: fuzzyDupsURL, atomically: true, encoding: .utf8)
+        try "hello world   \nhello world\n".write(
+            to: fuzzyDupsURL, atomically: true, encoding: .utf8)
         tracker.record(fuzzyDupsURL.path)
 
         do {
@@ -1062,7 +1078,8 @@ struct EditToolTests {
         do {
             _ = try await tool.execute(
                 "edit-15",
-                editToolArgs(path: "mixed-endings.txt", oldText: "hello\nworld\n", newText: "replaced\n"),
+                editToolArgs(
+                    path: "mixed-endings.txt", oldText: "hello\nworld\n", newText: "replaced\n"),
                 nil,
                 nil
             )
@@ -1100,7 +1117,9 @@ struct EditToolTests {
 private let tinyPNGBase64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2Z0AAAAASUVORK5CYII="
 
-private func makeReadToolTestRig() throws -> (tool: AgentToolDefinition, tracker: FileReadTracker, root: URL) {
+private func makeReadToolTestRig() throws -> (
+    tool: AgentToolDefinition, tracker: FileReadTracker, root: URL
+) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("tesseract-read-tool-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1121,7 +1140,9 @@ private func removeReadToolTestRig(_ root: URL) {
     try? FileManager.default.removeItem(at: root)
 }
 
-private func makeEditToolTestRig() throws -> (tool: AgentToolDefinition, tracker: FileReadTracker, root: URL) {
+private func makeEditToolTestRig() throws -> (
+    tool: AgentToolDefinition, tracker: FileReadTracker, root: URL
+) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("tesseract-edit-tool-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1130,16 +1151,21 @@ private func makeEditToolTestRig() throws -> (tool: AgentToolDefinition, tracker
     return (createEditTool(sandbox: sandbox, readTracker: tracker), tracker, root)
 }
 
-private func makeWriteToolTestRig() throws -> (tool: AgentToolDefinition, tracker: FileReadTracker, root: URL) {
+private func makeWriteToolTestRig() throws -> (
+    tool: AgentToolDefinition, tracker: FileReadTracker, root: URL
+) {
     let root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("tesseract-write-tool-tests-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent(
+            "tesseract-write-tool-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let sandbox = PathSandbox(root: root)
     let tracker = FileReadTracker()
     return (createWriteTool(sandbox: sandbox, readTracker: tracker), tracker, root)
 }
 
-private func readToolArgs(path: String, offset: Int? = nil, limit: Int? = nil) -> [String: JSONValue] {
+private func readToolArgs(path: String, offset: Int? = nil, limit: Int? = nil) -> [String:
+    JSONValue]
+{
     var args: [String: JSONValue] = ["path": .string(path)]
     if let offset {
         args["offset"] = .int(offset)
@@ -1158,7 +1184,9 @@ private func editToolArgs(path: String, oldText: String, newText: String) -> [St
     ]
 }
 
-private func writeToolArgs(path: String, content: String, overwrite: Bool? = nil) -> [String: JSONValue] {
+private func writeToolArgs(path: String, content: String, overwrite: Bool? = nil) -> [String:
+    JSONValue]
+{
     var args: [String: JSONValue] = [
         "path": .string(path),
         "content": .string(content),

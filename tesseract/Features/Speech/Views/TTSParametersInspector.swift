@@ -18,21 +18,24 @@ struct TTSParametersInspector: View {
                     value: $settings.ttsTemperature,
                     range: 0.0...2.0,
                     summary: "Higher is more varied, less stable.",
-                    helpText: "Controls randomness. 0 always picks the most likely token; higher values produce more varied but less stable speech."
+                    helpText:
+                        "Controls randomness. 0 always picks the most likely token; higher values produce more varied but less stable speech."
                 )
                 ParameterSliderRow(
                     title: "Top-P",
                     value: $settings.ttsTopP,
                     range: 0.0...1.0,
                     summary: "Lower is clearer, less expressive.",
-                    helpText: "Nucleus sampling. Restricts choices to the most likely tokens whose cumulative probability stays under this threshold."
+                    helpText:
+                        "Nucleus sampling. Restricts choices to the most likely tokens whose cumulative probability stays under this threshold."
                 )
                 ParameterSliderRow(
                     title: "Repetition Penalty",
                     value: $settings.ttsRepetitionPenalty,
                     range: 1.0...2.0,
                     summary: "Discourages repeats and audio loops.",
-                    helpText: "Penalizes previously generated tokens to prevent repetitive patterns. 1.0 applies no penalty."
+                    helpText:
+                        "Penalizes previously generated tokens to prevent repetitive patterns. 1.0 applies no penalty."
                 )
             }
 

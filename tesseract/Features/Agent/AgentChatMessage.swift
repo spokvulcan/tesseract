@@ -25,7 +25,10 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
     let isError: Bool
 
     // Explicit init with default toolCalls for convenience.
-    init(id: UUID, timestamp: Date, role: Role, content: String, thinking: String?, toolCalls: [ToolCall] = [], toolCallId: String? = nil, isError: Bool = false) {
+    init(
+        id: UUID, timestamp: Date, role: Role, content: String, thinking: String?,
+        toolCalls: [ToolCall] = [], toolCallId: String? = nil, isError: Bool = false
+    ) {
         self.id = id
         self.timestamp = timestamp
         self.role = role
@@ -37,19 +40,29 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
     }
 
     static func system(_ content: String) -> Self {
-        Self(id: UUID(), timestamp: Date(), role: .system, content: content, thinking: nil, toolCallId: nil)
+        Self(
+            id: UUID(), timestamp: Date(), role: .system, content: content, thinking: nil,
+            toolCallId: nil)
     }
 
     static func user(_ content: String) -> Self {
-        Self(id: UUID(), timestamp: Date(), role: .user, content: content, thinking: nil, toolCallId: nil)
+        Self(
+            id: UUID(), timestamp: Date(), role: .user, content: content, thinking: nil,
+            toolCallId: nil)
     }
 
-    static func assistant(_ content: String, thinking: String? = nil, toolCalls: [ToolCall] = []) -> Self {
-        Self(id: UUID(), timestamp: Date(), role: .assistant, content: content, thinking: thinking, toolCalls: toolCalls, toolCallId: nil)
+    static func assistant(_ content: String, thinking: String? = nil, toolCalls: [ToolCall] = [])
+        -> Self
+    {
+        Self(
+            id: UUID(), timestamp: Date(), role: .assistant, content: content, thinking: thinking,
+            toolCalls: toolCalls, toolCallId: nil)
     }
 
     static func tool(_ content: String, toolCallId: String, isError: Bool = false) -> Self {
-        Self(id: UUID(), timestamp: Date(), role: .tool, content: content, thinking: nil, toolCallId: toolCallId, isError: isError)
+        Self(
+            id: UUID(), timestamp: Date(), role: .tool, content: content, thinking: nil,
+            toolCallId: toolCallId, isError: isError)
     }
 
     // MARK: - AgentMessageProtocol
@@ -72,26 +85,42 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
         case let core as CoreMessage:
             switch core {
             case .user(let user):
-                self.init(id: user.id, timestamp: user.timestamp, role: .user, content: user.content, thinking: nil)
+                self.init(
+                    id: user.id, timestamp: user.timestamp, role: .user, content: user.content,
+                    thinking: nil)
             case .assistant(let asst):
-                self.init(id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content, thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
+                self.init(
+                    id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content,
+                    thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
             case .toolResult(let tr):
-                self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId, isError: tr.isError)
+                self.init(
+                    id: tr.id, timestamp: tr.timestamp, role: .tool,
+                    content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId,
+                    isError: tr.isError)
             }
         case let user as UserMessage:
-            self.init(id: user.id, timestamp: user.timestamp, role: .user, content: user.content, thinking: nil)
+            self.init(
+                id: user.id, timestamp: user.timestamp, role: .user, content: user.content,
+                thinking: nil)
         case let asst as AssistantMessage:
-            self.init(id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content, thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
+            self.init(
+                id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content,
+                thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
         case let tr as ToolResultMessage:
-            self.init(id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent, thinking: nil, toolCallId: tr.toolCallId, isError: tr.isError)
+            self.init(
+                id: tr.id, timestamp: tr.timestamp, role: .tool, content: tr.content.textContent,
+                thinking: nil, toolCallId: tr.toolCallId, isError: tr.isError)
         case let compaction as CompactionSummaryMessage:
-            self.init(id: UUID(), timestamp: compaction.timestamp, role: .system,
-                      content: compaction.displayText, thinking: nil)
+            self.init(
+                id: UUID(), timestamp: compaction.timestamp, role: .system,
+                content: compaction.displayText, thinking: nil)
         case let chat as AgentChatMessage:
             self = chat
         default:
             // Unknown message type — render as system note
-            self.init(id: UUID(), timestamp: now, role: .system, content: "[Unknown message]", thinking: nil)
+            self.init(
+                id: UUID(), timestamp: now, role: .system, content: "[Unknown message]",
+                thinking: nil)
         }
     }
 
@@ -107,7 +136,8 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
     private static func buildToolCall(name: String, arguments: [String: JSONValue]) -> ToolCall {
         let payload = ToolCallPayload(function: .init(name: name, arguments: arguments))
         if let data = try? JSONEncoder().encode(payload),
-           let toolCall = try? JSONDecoder().decode(ToolCall.self, from: data) {
+            let toolCall = try? JSONDecoder().decode(ToolCall.self, from: data)
+        {
             return toolCall
         }
 

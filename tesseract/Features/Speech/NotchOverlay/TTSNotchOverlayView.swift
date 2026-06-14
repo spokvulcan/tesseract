@@ -28,7 +28,8 @@ final class NotchFrameTracker {
         guard let panel else { return }
         let x = screenMidX - visibleWidth / 2
         let y = screenMaxY - visibleHeight
-        panel.setFrame(NSRect(x: x, y: y, width: visibleWidth, height: visibleHeight), display: false)
+        panel.setFrame(
+            NSRect(x: x, y: y, width: visibleWidth, height: visibleHeight), display: false)
     }
 }
 
@@ -106,7 +107,9 @@ struct TTSNotchOverlayView: View {
                         let dy = value.translation.height
                         let velocity = value.predictedEndTranslation.height - dy
                         if dy < -30 || velocity < -100 {
-                            Log.speech.info("[NotchView] swipe-up dismiss (dy=\(String(format: "%.0f", dy)), vel=\(String(format: "%.0f", velocity)))")
+                            Log.speech.info(
+                                "[NotchView] swipe-up dismiss (dy=\(String(format: "%.0f", dy)), vel=\(String(format: "%.0f", velocity)))"
+                            )
                             wordTracker.shouldDismiss = true
                         } else {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
@@ -118,7 +121,9 @@ struct TTSNotchOverlayView: View {
         }
         .onChange(of: extraHeight) { _, _ in updateFrameTracker() }
         .onAppear {
-            Log.speech.info("[NotchView] onAppear — words=\(self.wordTracker.timeline.words.count), totalCharCount=\(self.wordTracker.timeline.totalCharCount), expansion=\(self.expansion)")
+            Log.speech.info(
+                "[NotchView] onAppear — words=\(self.wordTracker.timeline.words.count), totalCharCount=\(self.wordTracker.timeline.totalCharCount), expansion=\(self.expansion)"
+            )
             withAnimation(.easeOut(duration: 0.4)) {
                 expansion = 1
             }
@@ -145,7 +150,9 @@ struct TTSNotchOverlayView: View {
             }
         }
         .onChange(of: wordTracker.recognizedCharCount) { _, charCount in
-            if wordTracker.isGenerationComplete && wordTracker.timeline.totalCharCount > 0 && charCount >= wordTracker.timeline.totalCharCount && !wordTracker.shouldDismiss {
+            if wordTracker.isGenerationComplete && wordTracker.timeline.totalCharCount > 0
+                && charCount >= wordTracker.timeline.totalCharCount && !wordTracker.shouldDismiss
+            {
                 Log.speech.info("[NotchView] all text highlighted, scheduling auto-dismiss in 0.5s")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     guard !wordTracker.shouldDismiss else { return }
@@ -154,8 +161,13 @@ struct TTSNotchOverlayView: View {
             }
         }
         .onChange(of: wordTracker.isGenerationComplete) { _, complete in
-            if complete && wordTracker.timeline.totalCharCount > 0 && wordTracker.recognizedCharCount >= wordTracker.timeline.totalCharCount && !wordTracker.shouldDismiss {
-                Log.speech.info("[NotchView] generation complete with all text highlighted, scheduling auto-dismiss in 0.5s")
+            if complete && wordTracker.timeline.totalCharCount > 0
+                && wordTracker.recognizedCharCount >= wordTracker.timeline.totalCharCount
+                && !wordTracker.shouldDismiss
+            {
+                Log.speech.info(
+                    "[NotchView] generation complete with all text highlighted, scheduling auto-dismiss in 0.5s"
+                )
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     guard !wordTracker.shouldDismiss else { return }
                     wordTracker.shouldDismiss = true
@@ -164,7 +176,9 @@ struct TTSNotchOverlayView: View {
         }
         .onChange(of: expansion) { oldVal, newVal in
             if abs(oldVal - newVal) > 0.4 {
-                Log.speech.info("[NotchView] expansion: \(String(format: "%.2f", oldVal)) → \(String(format: "%.2f", newVal))")
+                Log.speech.info(
+                    "[NotchView] expansion: \(String(format: "%.2f", oldVal)) → \(String(format: "%.2f", newVal))"
+                )
             }
         }
         .onChange(of: contentVisible) { _, visible in
@@ -175,7 +189,7 @@ struct TTSNotchOverlayView: View {
     private func updateFrameTracker() {
         let targetHeight = menuBarHeight + baseTextHeight + extraHeight
         frameTracker.visibleHeight = targetHeight
-        frameTracker.visibleWidth = frameTracker.visibleWidth // triggers update via didSet
+        frameTracker.visibleWidth = frameTracker.visibleWidth  // triggers update via didSet
     }
 
     private var prompterView: some View {

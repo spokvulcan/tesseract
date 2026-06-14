@@ -12,29 +12,29 @@ struct WebContentExtractorTests {
 
     /// Realistic HTML page with boilerplate.
     private static let fullPageHTML = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Swift 6.2 Released &mdash; The Swift Blog</title>
-        <style>body { font-family: sans-serif; }</style>
-        <script>var analytics = true;</script>
-    </head>
-    <body>
-        <nav class="site-nav"><a href="/">Home</a> | <a href="/blog">Blog</a></nav>
-        <header><h1>Swift Blog</h1></header>
-        <main>
-            <article>
-                <h2>Swift 6.2 Released</h2>
-                <p>We&#x27;re excited to announce <b>Swift 6.2</b>, a major release.</p>
-                <p>This release includes improved concurrency &amp; performance.</p>
-            </article>
-        </main>
-        <aside class="sidebar"><h3>Popular Posts</h3><ul><li>Post 1</li></ul></aside>
-        <footer><p>&copy; 2026 Apple Inc.</p></footer>
-        <script>trackPageView();</script>
-    </body>
-    </html>
-    """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Swift 6.2 Released &mdash; The Swift Blog</title>
+            <style>body { font-family: sans-serif; }</style>
+            <script>var analytics = true;</script>
+        </head>
+        <body>
+            <nav class="site-nav"><a href="/">Home</a> | <a href="/blog">Blog</a></nav>
+            <header><h1>Swift Blog</h1></header>
+            <main>
+                <article>
+                    <h2>Swift 6.2 Released</h2>
+                    <p>We&#x27;re excited to announce <b>Swift 6.2</b>, a major release.</p>
+                    <p>This release includes improved concurrency &amp; performance.</p>
+                </article>
+            </main>
+            <aside class="sidebar"><h3>Popular Posts</h3><ul><li>Post 1</li></ul></aside>
+            <footer><p>&copy; 2026 Apple Inc.</p></footer>
+            <script>trackPageView();</script>
+        </body>
+        </html>
+        """
 
     @Test func extractsTitleFromHTML() {
         let result = WebContentExtractor.extractBasic(html: Self.fullPageHTML, url: Self.sampleURL)
@@ -96,12 +96,12 @@ struct WebContentExtractorTests {
 
     @Test func handlesHTMLWithOnlyBoilerplate() {
         let html = """
-        <html><body>
-        <script>lots of js code here</script>
-        <style>.class { color: red; }</style>
-        <nav>Navigation links</nav>
-        </body></html>
-        """
+            <html><body>
+            <script>lots of js code here</script>
+            <style>.class { color: red; }</style>
+            <nav>Navigation links</nav>
+            </body></html>
+            """
         let result = WebContentExtractor.extractBasic(html: html, url: Self.sampleURL)
         #expect(!result.content.contains("lots of js"))
         #expect(!result.content.contains("color: red"))
@@ -187,7 +187,8 @@ struct WebFetchToolTests {
 
     @Test func returnsErrorForFTPURL() async throws {
         let tool = createWebFetchTool()
-        let result = try await tool.execute("t3", ["url": .string("ftp://files.example.com/doc")], nil, nil)
+        let result = try await tool.execute(
+            "t3", ["url": .string("ftp://files.example.com/doc")], nil, nil)
         let text = result.content.textContent
         #expect(text.contains("Invalid URL"))
     }
@@ -201,28 +202,32 @@ struct WebFetchToolTests {
 
     @Test func returnsErrorForLocalhostURL() async throws {
         let tool = createWebFetchTool()
-        let result = try await tool.execute("t5", ["url": .string("http://localhost:8080/admin")], nil, nil)
+        let result = try await tool.execute(
+            "t5", ["url": .string("http://localhost:8080/admin")], nil, nil)
         let text = result.content.textContent
         #expect(text.contains("private"))
     }
 
     @Test func returnsErrorForPrivateIPURL() async throws {
         let tool = createWebFetchTool()
-        let result = try await tool.execute("t6", ["url": .string("http://192.168.1.1/config")], nil, nil)
+        let result = try await tool.execute(
+            "t6", ["url": .string("http://192.168.1.1/config")], nil, nil)
         let text = result.content.textContent
         #expect(text.contains("private"))
     }
 
     @Test func returnsErrorFor10xPrivateIP() async throws {
         let tool = createWebFetchTool()
-        let result = try await tool.execute("t7", ["url": .string("http://10.0.0.1/internal")], nil, nil)
+        let result = try await tool.execute(
+            "t7", ["url": .string("http://10.0.0.1/internal")], nil, nil)
         let text = result.content.textContent
         #expect(text.contains("private"))
     }
 
     @Test func returnsErrorForCredentialsInURL() async throws {
         let tool = createWebFetchTool()
-        let result = try await tool.execute("t8", ["url": .string("https://user:pass@example.com/")], nil, nil)
+        let result = try await tool.execute(
+            "t8", ["url": .string("https://user:pass@example.com/")], nil, nil)
         let text = result.content.textContent
         #expect(text.contains("credentials"))
     }
@@ -267,14 +272,16 @@ struct SSRFPreventionTests {
 
     @Test func blocksLocalDomain() async throws {
         let tool = createWebFetchTool()
-        let result = try await tool.execute("s5", ["url": .string("http://myserver.local/")], nil, nil)
+        let result = try await tool.execute(
+            "s5", ["url": .string("http://myserver.local/")], nil, nil)
         #expect(result.content.textContent.contains("private"))
     }
 
     @Test func allowsPublicURL() async throws {
         // This shouldn't be blocked by SSRF check (it will fail on network, not validation)
         let tool = createWebFetchTool()
-        let result = try await tool.execute("s6", ["url": .string("https://93.184.216.34/")], nil, nil)
+        let result = try await tool.execute(
+            "s6", ["url": .string("https://93.184.216.34/")], nil, nil)
         // Should NOT contain "private" — should fail with network error instead
         #expect(!result.content.textContent.contains("private"))
     }
@@ -338,31 +345,31 @@ struct ReadabilityExtractionTests {
 
     /// Well-structured article HTML that Readability should handle.
     private static let articleHTML = """
-    <!DOCTYPE html>
-    <html>
-    <head><title>Swift Concurrency Guide</title></head>
-    <body>
-        <nav><a href="/">Home</a></nav>
-        <article>
-            <h1>Swift Concurrency Guide</h1>
-            <p>Swift's concurrency model provides <strong>structured concurrency</strong> with async/await.</p>
-            <h2>async/await</h2>
-            <p>The <code>async</code> keyword marks a function that can suspend:</p>
-            <pre><code>func fetchData() async throws -&gt; Data {
-        let (data, _) = try await URLSession.shared.data(from: url)
-        return data
-    }</code></pre>
-            <h2>Task Groups</h2>
-            <p>Use <a href="https://docs.swift.org">task groups</a> for parallel work.</p>
-            <ul>
-                <li>Structured concurrency</li>
-                <li>Automatic cancellation</li>
-            </ul>
-        </article>
-        <footer><p>Copyright 2026</p></footer>
-    </body>
-    </html>
-    """
+        <!DOCTYPE html>
+        <html>
+        <head><title>Swift Concurrency Guide</title></head>
+        <body>
+            <nav><a href="/">Home</a></nav>
+            <article>
+                <h1>Swift Concurrency Guide</h1>
+                <p>Swift's concurrency model provides <strong>structured concurrency</strong> with async/await.</p>
+                <h2>async/await</h2>
+                <p>The <code>async</code> keyword marks a function that can suspend:</p>
+                <pre><code>func fetchData() async throws -&gt; Data {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            return data
+        }</code></pre>
+                <h2>Task Groups</h2>
+                <p>Use <a href="https://docs.swift.org">task groups</a> for parallel work.</p>
+                <ul>
+                    <li>Structured concurrency</li>
+                    <li>Automatic cancellation</li>
+                </ul>
+            </article>
+            <footer><p>Copyright 2026</p></footer>
+        </body>
+        </html>
+        """
 
     @Test func readabilityExtractsTitle() async {
         let result = await WebContentExtractor.extract(html: Self.articleHTML, url: Self.sampleURL)
@@ -384,7 +391,9 @@ struct ReadabilityExtractionTests {
     @Test func readabilityPreservesBoldText() async {
         let result = await WebContentExtractor.extract(html: Self.articleHTML, url: Self.sampleURL)
         // Demark should convert <strong> to **bold**
-        #expect(result.content.contains("**structured concurrency**") || result.content.contains("structured concurrency"))
+        #expect(
+            result.content.contains("**structured concurrency**")
+                || result.content.contains("structured concurrency"))
     }
 
     @Test func readabilityPreservesList() async {
@@ -413,11 +422,11 @@ struct SPADetectionTests {
 
     @Test func detectsReactSPA() {
         let html = """
-        <!DOCTYPE html><html><head><title>My App</title></head>
-        <body><div id="root"></div>
-        <script src="/static/js/main.abc123.js"></script>
-        </body></html>
-        """
+            <!DOCTYPE html><html><head><title>My App</title></head>
+            <body><div id="root"></div>
+            <script src="/static/js/main.abc123.js"></script>
+            </body></html>
+            """
         // Large HTML (padded), minimal text, React marker
         let padded = html + String(repeating: " ", count: 10_000)
         #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "", rawHTML: padded))
@@ -425,31 +434,34 @@ struct SPADetectionTests {
 
     @Test func detectsNextJSSPA() {
         let html = """
-        <!DOCTYPE html><html><head></head>
-        <body><div id="__next"></div></body></html>
-        """
+            <!DOCTYPE html><html><head></head>
+            <body><div id="__next"></div></body></html>
+            """
         let padded = html + String(repeating: " ", count: 10_000)
         #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "Loading...", rawHTML: padded))
     }
 
     @Test func detectsVueSPA() {
         let html = """
-        <!DOCTYPE html><html><head></head>
-        <body><div id="app"></div></body></html>
-        """
+            <!DOCTYPE html><html><head></head>
+            <body><div id="app"></div></body></html>
+            """
         let padded = html + String(repeating: " ", count: 10_000)
         #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "", rawHTML: padded))
     }
 
     @Test func detectsLargeHTMLWithNoText() {
         // No SPA markers, but large HTML with very little extracted text
-        let html = String(repeating: "<div class=\"wrapper\">", count: 500) + String(repeating: "</div>", count: 500)
+        let html =
+            String(repeating: "<div class=\"wrapper\">", count: 500)
+            + String(repeating: "</div>", count: 500)
         #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "Loading", rawHTML: html))
     }
 
     @Test func doesNotTriggerForNormalPage() {
         let html = "<html><body><p>Normal content here.</p></body></html>"
-        let content = "Normal content here. This is a well-structured article with enough text to be considered real content by the heuristic."
+        let content =
+            "Normal content here. This is a well-structured article with enough text to be considered real content by the heuristic."
         // 100+ chars of content from small HTML — not an SPA
         #expect(!WebContentExtractor.isSuspectedSPA(extractedContent: content, rawHTML: html))
     }
@@ -469,8 +481,8 @@ struct SPADetectionTests {
 
     @Test func markerDetectionIsCaseInsensitive() {
         let html = """
-        <html><body><DIV ID="root"></DIV></body></html>
-        """
+            <html><body><DIV ID="root"></DIV></body></html>
+            """
         let padded = html + String(repeating: " ", count: 10_000)
         #expect(WebContentExtractor.isSuspectedSPA(extractedContent: "", rawHTML: padded))
     }

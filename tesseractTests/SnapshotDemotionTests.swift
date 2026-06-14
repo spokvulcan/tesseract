@@ -88,7 +88,9 @@ struct SnapshotDemotionTests {
         let committed = await waitUntil {
             if case .ssdHit = manager.lookup(
                 tokens: victimTokens, partitionKey: key
-            ).reason { return true }
+            ).reason {
+                return true
+            }
             return false
         }
         #expect(committed, "demoted victim should become an SSD hit after commit")

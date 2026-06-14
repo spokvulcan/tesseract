@@ -51,11 +51,11 @@ actor LLMActor {
     /// small to fit model + headroom clamp to 0 and rely on the fallback.
     enum Defaults {
         static let cacheLimitMB = 2048
-        static let prefixCacheHeadroomBytes = 20 * 1024 * 1024 * 1024 // 20 GiB
+        static let prefixCacheHeadroomBytes = 20 * 1024 * 1024 * 1024  // 20 GiB
         /// Fallback budget used before load-time sizing runs. Each snapshot
         /// costs ~200–600 MiB depending on context length, so 3 GiB fits
         /// ~5–15 snapshots for typical Qwen3.5 workloads.
-        static let fallbackPrefixCacheMemoryBudgetBytes = 3 * 1024 * 1024 * 1024 // 3 GiB
+        static let fallbackPrefixCacheMemoryBudgetBytes = 3 * 1024 * 1024 * 1024  // 3 GiB
     }
 
     private var modelContainer: ModelContainer?
@@ -129,15 +129,15 @@ actor LLMActor {
         let format = identity.toolCallFormat
         Log.agent.info(
             "Loading model — visionMode=\(visionMode) "
-            + "format=\(format.map { "\($0)" } ?? "json (default)")"
+                + "format=\(format.map { "\($0)" } ?? "json (default)")"
         )
 
         if let ssdConfig {
             Log.agent.info(
                 "prefix-cache ssd enabled=\(ssdConfig.enabled) "
-                + "budget=\(ssdConfig.budgetBytes) "
-                + "root=\(ssdConfig.rootURL.path) "
-                + "maxPendingBytes=\(ssdConfig.maxPendingBytes)"
+                    + "budget=\(ssdConfig.budgetBytes) "
+                    + "root=\(ssdConfig.rootURL.path) "
+                    + "maxPendingBytes=\(ssdConfig.maxPendingBytes)"
             )
         } else {
             Log.agent.info("prefix-cache ssd enabled=false")
@@ -161,7 +161,8 @@ actor LLMActor {
 
         if isParoModel {
             Log.agent.info("Detected ParoQuant model — using \(visionMode ? "VLM" : "LLM") path")
-            let container: ModelContainer = visionMode
+            let container: ModelContainer =
+                visionMode
                 ? try await loadParoQuantVLMContainer(from: directory, toolCallFormat: format)
                 : try await loadParoQuantLLMContainer(from: directory, toolCallFormat: format)
             return try await verifyAndStore(container: container, identity: identity)
@@ -229,21 +230,25 @@ actor LLMActor {
             let prepared = try await context.processor.prepare(input: input)
             let lookupMs = (Date.timeIntervalSinceReferenceDate - lookupStarted) * 1000
             let promptTokenCount = prepared.text.tokens.size
-            await progressHandler?(.cacheLookupFinished(.init(
-                reason: "standardGenerationNoPrefixCache",
-                cachedTokens: 0,
-                sharedPrefixLength: 0,
-                promptTokens: promptTokenCount,
-                newTokensToPrefill: promptTokenCount,
-                lookupMs: lookupMs,
-                restoreMs: 0
-            )))
-            await progressHandler?(.prefillStarted(.init(
-                promptTokens: promptTokenCount,
-                cachedTokens: 0,
-                newTokensToPrefill: promptTokenCount,
-                prefillMs: nil
-            )))
+            await progressHandler?(
+                .cacheLookupFinished(
+                    .init(
+                        reason: "standardGenerationNoPrefixCache",
+                        cachedTokens: 0,
+                        sharedPrefixLength: 0,
+                        promptTokens: promptTokenCount,
+                        newTokensToPrefill: promptTokenCount,
+                        lookupMs: lookupMs,
+                        restoreMs: 0
+                    )))
+            await progressHandler?(
+                .prefillStarted(
+                    .init(
+                        promptTokens: promptTokenCount,
+                        cachedTokens: 0,
+                        newTokensToPrefill: promptTokenCount,
+                        prefillMs: nil
+                    )))
             let prefillStarted = Date.timeIntervalSinceReferenceDate
             // VLM-class models (2D token tensors) run upstream `prepare` as a
             // single forward pass over the whole prompt; chunk text-only
@@ -251,8 +256,9 @@ actor LLMActor {
             // bounded (ADR-0006). Image-bearing inputs stay single-shot.
             let iterator: TokenIterator
             if prepared.text.tokens.ndim >= 2,
-               prepared.image == nil, prepared.video == nil,
-               prepared.text.tokens.dim(-1) > genParams.prefillStepSize {
+                prepared.image == nil, prepared.video == nil,
+                prepared.text.tokens.dim(-1) > genParams.prefillStepSize
+            {
                 var cache = context.model.newCache(parameters: genParams)
                 let warmed = try PrefillExecutor.run(
                     model: context.model,
@@ -276,12 +282,14 @@ actor LLMActor {
                 )
             }
             let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
-            await progressHandler?(.prefillFinished(.init(
-                promptTokens: promptTokenCount,
-                cachedTokens: 0,
-                newTokensToPrefill: promptTokenCount,
-                prefillMs: prefillMs
-            )))
+            await progressHandler?(
+                .prefillFinished(
+                    .init(
+                        promptTokens: promptTokenCount,
+                        cachedTokens: 0,
+                        newTokensToPrefill: promptTokenCount,
+                        prefillMs: prefillMs
+                    )))
             let (stream, completion) = TokenGenerationLoop.start(
                 promptTokenCount: promptTokenCount,
                 modelConfiguration: context.configuration,
@@ -393,7 +401,8 @@ actor LLMActor {
         )
         let combined = originalTokens + appendedIDs
         let flatArr = MLXArray(combined.map { Int32($0) })
-        let tokenArr: MLXArray = tokenNDim >= 2
+        let tokenArr: MLXArray =
+            tokenNDim >= 2
             ? flatArr.expandedDimensions(axis: 0)
             : flatArr
         let continuedText = LMInput.Text(tokens: tokenArr, mask: nil)
@@ -674,8 +683,8 @@ actor LLMActor {
 
     nonisolated static func canonicalizeToolDict(_ dict: ToolSpec) -> ToolSpec {
         guard JSONSerialization.isValidJSONObject(dict),
-              let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
-              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return dict
         }
@@ -684,7 +693,8 @@ actor LLMActor {
 
     /// Recursively rebuild a JSON-decoded `[String: Any]` as `[String: any Sendable]`.
     /// Every JSON primitive has a Sendable counterpart; we explicitly narrow each.
-    private nonisolated static func sendableDict(from dict: [String: Any]) -> [String: any Sendable] {
+    private nonisolated static func sendableDict(from dict: [String: Any]) -> [String: any Sendable]
+    {
         var result: [String: any Sendable] = [:]
         for (key, value) in dict {
             if let narrowed = sendableJSONValue(from: value) {
@@ -776,16 +786,16 @@ actor LLMActor {
         )
         Log.agent.info(
             "Model FLOP profile (flows into the prefix cache's Eviction "
-            + "Configuration at construction) — D=\(profile.hiddenSize) "
-            + "attn=\(profile.attentionLayers) ssm=\(profile.ssmLayers) "
-            + "mlp=\(profile.mlpLayers) N=\(profile.ssmStateDim)"
+                + "Configuration at construction) — D=\(profile.hiddenSize) "
+                + "attn=\(profile.attentionLayers) ssm=\(profile.ssmLayers) "
+                + "mlp=\(profile.mlpLayers) N=\(profile.ssmStateDim)"
         )
         Log.agent.info(
             "Prefix cache budget auto-sized — "
-            + "totalRAMBytes=\(totalMemoryBytes) "
-            + "modelWeightBytes=\(modelWeightBytes) "
-            + "headroomBytes=\(Defaults.prefixCacheHeadroomBytes) "
-            + "budgetBytes=\(prefixCacheBudgetBytes)"
+                + "totalRAMBytes=\(totalMemoryBytes) "
+                + "modelWeightBytes=\(modelWeightBytes) "
+                + "headroomBytes=\(Defaults.prefixCacheHeadroomBytes) "
+                + "budgetBytes=\(prefixCacheBudgetBytes)"
         )
         modelContainer = container
         agentTokenizer = tokenizer

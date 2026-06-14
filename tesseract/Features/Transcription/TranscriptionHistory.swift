@@ -94,16 +94,22 @@ final class TranscriptionHistory: TranscriptionStoring {
     init(maxEntries: Int = 100) {
         self.maxEntries = maxEntries
 
-        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+        guard
+            let appSupport = FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first
+        else {
             // Use temp directory as fallback
-            self.storageURL = FileManager.default.temporaryDirectory.appendingPathComponent("transcription_history.json")
+            self.storageURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "transcription_history.json")
             loadFromDisk()
             return
         }
         let appDirectory = appSupport.appendingPathComponent("Tesseract Agent", isDirectory: true)
 
         // Create directory if needed
-        try? FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(
+            at: appDirectory, withIntermediateDirectories: true)
 
         self.storageURL = appDirectory.appendingPathComponent("transcription_history.json")
 
@@ -188,7 +194,8 @@ final class TranscriptionHistory: TranscriptionStoring {
         }
 
         for key in sortedKeys {
-            guard let groupEntries = grouped[key]?.sorted(by: { $0.timestamp > $1.timestamp }) else { continue }
+            guard let groupEntries = grouped[key]?.sorted(by: { $0.timestamp > $1.timestamp })
+            else { continue }
             guard let firstEntry = groupEntries.first else { continue }
 
             // Add header
@@ -196,11 +203,12 @@ final class TranscriptionHistory: TranscriptionStoring {
 
             // Add entries with position flags
             for (index, entry) in groupEntries.enumerated() {
-                items.append(.entry(
-                    entry,
-                    isFirst: index == 0,
-                    isLast: index == groupEntries.count - 1
-                ))
+                items.append(
+                    .entry(
+                        entry,
+                        isFirst: index == 0,
+                        isLast: index == groupEntries.count - 1
+                    ))
             }
         }
 

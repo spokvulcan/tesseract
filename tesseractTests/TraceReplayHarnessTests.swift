@@ -101,13 +101,14 @@ struct TraceReplayHarnessTests {
         #expect(report.simulatedLRU.evictedBytes == 18000)
 
         #expect(report.observed.rewindEvents == 0)
-        #expect(TraceReplayHarness.renderText(report) == """
-        Trace Replay — LRU baseline (PRD #82, slice #85)
-        records: 6 · block size: 256 tokens
-        observed      ttft p50 0.6000s · p95 1.1000s · hit tokens 4000 · evictions 2 terminal / 2 recovered · ssd restores 2 · hydration 0.5600s
-        rewinds       events 0 · size p50 0 · p95 0 · max 0 tokens
-        simulated LRU ttft-proxy p50 3.9020s · p95 11.8633s · hit tokens 3072 · hit requests 2/6 · evictions 4 (all terminal — RAM-only baseline) · evicted bytes 18000
-        """)
+        #expect(
+            TraceReplayHarness.renderText(report) == """
+                Trace Replay — LRU baseline (PRD #82, slice #85)
+                records: 6 · block size: 256 tokens
+                observed      ttft p50 0.6000s · p95 1.1000s · hit tokens 4000 · evictions 2 terminal / 2 recovered · ssd restores 2 · hydration 0.5600s
+                rewinds       events 0 · size p50 0 · p95 0 · max 0 tokens
+                simulated LRU ttft-proxy p50 3.9020s · p95 11.8633s · hit tokens 3072 · hit requests 2/6 · evictions 4 (all terminal — RAM-only baseline) · evicted bytes 18000
+                """)
     }
 
     @Test func replayIsDeterministic() {
@@ -169,14 +170,14 @@ struct TraceReplayHarnessTests {
     /// unchanged, the field is additive-optional.
     @Test func legacyRecordWithoutRewindStillDecodes() throws {
         let legacyJSON = """
-        {"timestamp":700000000,"requestID":"\(UUID().uuidString)","modelID":"m",
-         "partitionDigest":"p","promptTokenCount":10,"prefixBlockDigests":[],
-         "admittedCheckpoints":[],"ramBudgetBytes":1000,"restoredOffset":0,
-         "restoredFromSSD":false,"hitTokens":0,"sharedPrefixLength":0,
-         "lookupSeconds":0,"restoreSeconds":0,"hydrationSeconds":0,
-         "prefillSeconds":0,"residualPromptSeconds":0,"ttftSeconds":0,
-         "terminalEvictionCount":0,"recoveredEvictionCount":0}
-        """
+            {"timestamp":700000000,"requestID":"\(UUID().uuidString)","modelID":"m",
+             "partitionDigest":"p","promptTokenCount":10,"prefixBlockDigests":[],
+             "admittedCheckpoints":[],"ramBudgetBytes":1000,"restoredOffset":0,
+             "restoredFromSSD":false,"hitTokens":0,"sharedPrefixLength":0,
+             "lookupSeconds":0,"restoreSeconds":0,"hydrationSeconds":0,
+             "prefillSeconds":0,"residualPromptSeconds":0,"ttftSeconds":0,
+             "terminalEvictionCount":0,"recoveredEvictionCount":0}
+            """
         let decoded = try JSONDecoder().decode(
             CompletionTraceRecord.self, from: Data(legacyJSON.utf8)
         )
@@ -228,7 +229,9 @@ struct TraceReplayHarnessTests {
         let records = [
             makeRecord(
                 digests: Array(chain.prefix(5)), promptTokenCount: 1300,
-                checkpoints: [TraceAdmittedSnapshot(offset: 512, bytes: 40, checkpointType: "branchPoint")],
+                checkpoints: [
+                    TraceAdmittedSnapshot(offset: 512, bytes: 40, checkpointType: "branchPoint")
+                ],
                 leaf: TraceAdmittedSnapshot(offset: 1300, bytes: 60, checkpointType: "leaf")
             ),
             makeRecord(
@@ -308,10 +311,12 @@ struct TraceReplayHarnessTests {
         // under the same squeeze — it still hits, proving "b" was the
         // victim.
         let probed = TraceReplayHarness.replay(
-            records: records + [makeRecord(
-                digests: digestChain("a", 5), promptTokenCount: 1300,
-                ramBudgetBytes: 6000
-            )]
+            records: records + [
+                makeRecord(
+                    digests: digestChain("a", 5), promptTokenCount: 1300,
+                    ramBudgetBytes: 6000
+                )
+            ]
         )
         #expect(probed.simulatedLRU.hitRequestCount == 2)
     }
@@ -321,31 +326,42 @@ struct TraceReplayHarnessTests {
     /// The proxy is denominated in each record's own measured
     /// estimates: doubling prefill throughput halves the proxy.
     @Test func proxyUsesEachRecordsOwnEstimates() {
-        let slow = TraceReplayHarness.replay(records: [makeRecord(
-            digests: digestChain("d", 4), promptTokenCount: 1024,
-            estimates: MeasuredSecondsEstimates(prefillFlopsPerSecond: 1.0e12)
-        )])
-        let fast = TraceReplayHarness.replay(records: [makeRecord(
-            digests: digestChain("d", 4), promptTokenCount: 1024,
-            estimates: MeasuredSecondsEstimates(prefillFlopsPerSecond: 2.0e12)
-        )])
+        let slow = TraceReplayHarness.replay(records: [
+            makeRecord(
+                digests: digestChain("d", 4), promptTokenCount: 1024,
+                estimates: MeasuredSecondsEstimates(prefillFlopsPerSecond: 1.0e12)
+            )
+        ])
+        let fast = TraceReplayHarness.replay(records: [
+            makeRecord(
+                digests: digestChain("d", 4), promptTokenCount: 1024,
+                estimates: MeasuredSecondsEstimates(prefillFlopsPerSecond: 2.0e12)
+            )
+        ])
         #expect(slow.simulatedLRU.ttftProxyP50Seconds > 0)
-        #expect(abs(slow.simulatedLRU.ttftProxyP50Seconds
-            - 2 * fast.simulatedLRU.ttftProxyP50Seconds) < 1e-12)
+        #expect(
+            abs(
+                slow.simulatedLRU.ttftProxyP50Seconds
+                    - 2 * fast.simulatedLRU.ttftProxyP50Seconds) < 1e-12)
     }
 
     /// Records predating slice #84 (no estimates) replay exactly as if
     /// they carried the estimator's cold-start defaults.
     @Test func missingEstimatesFallBackToColdStartDefaults() {
-        let withNil = TraceReplayHarness.replay(records: [makeRecord(
-            digests: digestChain("d", 4), promptTokenCount: 1024, estimates: nil
-        )])
-        let withDefaults = TraceReplayHarness.replay(records: [makeRecord(
-            digests: digestChain("d", 4), promptTokenCount: 1024,
-            estimates: MeasuredSecondsEstimates()
-        )])
-        #expect(withNil.simulatedLRU.ttftProxyP50Seconds
-            == withDefaults.simulatedLRU.ttftProxyP50Seconds)
+        let withNil = TraceReplayHarness.replay(records: [
+            makeRecord(
+                digests: digestChain("d", 4), promptTokenCount: 1024, estimates: nil
+            )
+        ])
+        let withDefaults = TraceReplayHarness.replay(records: [
+            makeRecord(
+                digests: digestChain("d", 4), promptTokenCount: 1024,
+                estimates: MeasuredSecondsEstimates()
+            )
+        ])
+        #expect(
+            withNil.simulatedLRU.ttftProxyP50Seconds
+                == withDefaults.simulatedLRU.ttftProxyP50Seconds)
     }
 
     // MARK: - Degenerate corpus

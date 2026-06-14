@@ -98,9 +98,14 @@ struct TranscriptionEngineTests {
     private func makeFakeModelBundle() throws -> URL {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory
-            .appendingPathComponent("TranscriptionEngineTests-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: dir.appendingPathComponent("AudioEncoder.mlmodelc"), withIntermediateDirectories: true)
-        try fm.createDirectory(at: dir.appendingPathComponent("TextDecoder.mlmodelc"), withIntermediateDirectories: true)
+            .appendingPathComponent(
+                "TranscriptionEngineTests-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(
+            at: dir.appendingPathComponent("AudioEncoder.mlmodelc"),
+            withIntermediateDirectories: true)
+        try fm.createDirectory(
+            at: dir.appendingPathComponent("TextDecoder.mlmodelc"),
+            withIntermediateDirectories: true)
         return dir
     }
 
@@ -135,7 +140,8 @@ struct TranscriptionEngineTests {
         defer { try? FileManager.default.removeItem(at: bundle) }
 
         let recognizer = InMemorySpeechRecognizer(
-            result: TranscriptionResult(text: "hello world", segments: [], language: "en", processingTime: 0)
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0)
         )
         let engine = TranscriptionEngine(makeRecognizer: { recognizer })
 
@@ -172,7 +178,8 @@ struct TranscriptionEngineTests {
     func loadRejectsBundleMissingModelFiles() async {
         // A directory without AudioEncoder.mlmodelc / TextDecoder.mlmodelc.
         let fm = FileManager.default
-        let dir = fm.temporaryDirectory.appendingPathComponent("TE-empty-\(UUID().uuidString)", isDirectory: true)
+        let dir = fm.temporaryDirectory.appendingPathComponent(
+            "TE-empty-\(UUID().uuidString)", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: dir) }
 
@@ -198,7 +205,9 @@ struct TranscriptionEngineTests {
         try await engine.loadModel(from: bundle)
 
         let empty = AudioData(samples: [], sampleRate: 16_000, duration: 0)
-        let error = await captureDictationError { try await engine.transcribe(empty, language: "auto") }
+        let error = await captureDictationError {
+            try await engine.transcribe(empty, language: "auto")
+        }
 
         guard case .noSpeechDetected = error else {
             Issue.record("expected .noSpeechDetected, got \(String(describing: error))")
@@ -220,10 +229,13 @@ struct TranscriptionEngineTests {
         )
         try await engine.loadModel(from: bundle)
 
-        let error = await captureDictationError { try await engine.transcribe(sampleAudio(), language: "auto") }
+        let error = await captureDictationError {
+            try await engine.transcribe(sampleAudio(), language: "auto")
+        }
 
         guard case .transcriptionFailed = error else {
-            Issue.record("expected .transcriptionFailed (timeout), got \(String(describing: error))")
+            Issue.record(
+                "expected .transcriptionFailed (timeout), got \(String(describing: error))")
             return
         }
         #expect(!engine.isTranscribing)
@@ -236,7 +248,8 @@ struct TranscriptionEngineTests {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
         let recognizer = InMemorySpeechRecognizer(latency: .seconds(60))
-        let engine = TranscriptionEngine(makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
+        let engine = TranscriptionEngine(
+            makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
         try await engine.loadModel(from: bundle)
 
         let task = Task { try await engine.transcribe(sampleAudio(), language: "auto") }
@@ -260,7 +273,8 @@ struct TranscriptionEngineTests {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
         let recognizer = CancellationIgnoringSpeechRecognizer()
-        let engine = TranscriptionEngine(makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
+        let engine = TranscriptionEngine(
+            makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
         try await engine.loadModel(from: bundle)
 
         let task = Task { try await engine.transcribe(sampleAudio(), language: "auto") }
@@ -285,14 +299,19 @@ struct TranscriptionEngineTests {
     func modelFailureIsMappedOntoDictationError() async throws {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
-        let recognizer = InMemorySpeechRecognizer(transcribeError: FakeModelError(message: "kernel panic"))
+        let recognizer = InMemorySpeechRecognizer(
+            transcribeError: FakeModelError(message: "kernel panic"))
         let engine = TranscriptionEngine(makeRecognizer: { recognizer })
         try await engine.loadModel(from: bundle)
 
-        let error = await captureDictationError { try await engine.transcribe(sampleAudio(), language: "auto") }
+        let error = await captureDictationError {
+            try await engine.transcribe(sampleAudio(), language: "auto")
+        }
 
         guard case .transcriptionFailed = error else {
-            Issue.record("expected model failure mapped to .transcriptionFailed, got \(String(describing: error))")
+            Issue.record(
+                "expected model failure mapped to .transcriptionFailed, got \(String(describing: error))"
+            )
             return
         }
         #expect(!engine.isTranscribing)
@@ -305,7 +324,8 @@ struct TranscriptionEngineTests {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
         let recognizer = InMemorySpeechRecognizer(latency: .seconds(60))
-        let engine = TranscriptionEngine(makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
+        let engine = TranscriptionEngine(
+            makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
         try await engine.loadModel(from: bundle)
 
         let first = Task { try await engine.transcribe(sampleAudio(), language: "auto") }
@@ -313,7 +333,9 @@ struct TranscriptionEngineTests {
         // which means the in-flight slot is occupied.
         while await recognizer.transcribeCount == 0 { await Task.yield() }
 
-        let error = await captureDictationError { try await engine.transcribe(sampleAudio(), language: "auto") }
+        let error = await captureDictationError {
+            try await engine.transcribe(sampleAudio(), language: "auto")
+        }
         guard case .transcriptionInProgress = error else {
             Issue.record("expected .transcriptionInProgress, got \(String(describing: error))")
             return
@@ -335,7 +357,9 @@ struct TranscriptionEngineTests {
     func freshTranscribeSucceedsAfterPreviousCompletes() async throws {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
-        let recognizer = InMemorySpeechRecognizer(result: TranscriptionResult(text: "ok", segments: [], language: "en", processingTime: 0))
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(text: "ok", segments: [], language: "en", processingTime: 0)
+        )
         let engine = TranscriptionEngine(makeRecognizer: { recognizer })
         try await engine.loadModel(from: bundle)
 
@@ -351,7 +375,9 @@ struct TranscriptionEngineTests {
     func transcriptionInProgressErrorHasExpectedMessaging() {
         let error = DictationError.transcriptionInProgress
         #expect(error.errorDescription == "A transcription is already in progress.")
-        #expect(error.recoverySuggestion == "Wait for the current transcription to finish, or cancel it first.")
+        #expect(
+            error.recoverySuggestion
+                == "Wait for the current transcription to finish, or cancel it first.")
     }
 
     // MARK: - Lazy load + factory lifecycle
@@ -360,7 +386,8 @@ struct TranscriptionEngineTests {
     func modelLoadsOnceAcrossRepeatedTranscriptions() async throws {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
-        let spy = RecognizerFactorySpy(result: TranscriptionResult(text: "x", segments: [], language: "en", processingTime: 0))
+        let spy = RecognizerFactorySpy(
+            result: TranscriptionResult(text: "x", segments: [], language: "en", processingTime: 0))
         let engine = TranscriptionEngine(makeRecognizer: { spy.make() })
         try await engine.loadModel(from: bundle)
 
@@ -376,7 +403,8 @@ struct TranscriptionEngineTests {
     func unloadThenTranscribeReloadsViaTheFactory() async throws {
         let bundle = try makeFakeModelBundle()
         defer { try? FileManager.default.removeItem(at: bundle) }
-        let spy = RecognizerFactorySpy(result: TranscriptionResult(text: "x", segments: [], language: "en", processingTime: 0))
+        let spy = RecognizerFactorySpy(
+            result: TranscriptionResult(text: "x", segments: [], language: "en", processingTime: 0))
         let engine = TranscriptionEngine(makeRecognizer: { spy.make() })
 
         try await engine.loadModel(from: bundle)

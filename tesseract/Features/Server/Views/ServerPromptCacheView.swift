@@ -150,7 +150,7 @@ struct ServerPromptCacheView: View {
                     store: telemetry,
                     onShowDetails: { isInspectorPresented = true }
                 )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .padding(padding)
         }
@@ -355,7 +355,9 @@ private struct PromptCacheInspectorPopover: View {
             PromptCacheInspectorView(tree: tree, node: node, event: event)
                 .padding(Theme.Spacing.sm)
         }
-        .frame(minWidth: 320, idealWidth: 380, maxWidth: 460, minHeight: 260, idealHeight: 430, maxHeight: 560)
+        .frame(
+            minWidth: 320, idealWidth: 380, maxWidth: 460, minHeight: 260, idealHeight: 430,
+            maxHeight: 560)
     }
 }
 

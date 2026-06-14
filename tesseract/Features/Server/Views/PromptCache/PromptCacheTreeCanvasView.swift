@@ -31,7 +31,9 @@ struct PromptCacheTreeCanvasView: View {
                         minimap(tree: tree)
                             .frame(width: 128, height: 84)
                             .padding(Theme.Spacing.sm)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                            .frame(
+                                maxWidth: .infinity, maxHeight: .infinity,
+                                alignment: .bottomTrailing)
                     }
                 } else {
                     VStack(spacing: Theme.Spacing.sm) {
@@ -162,7 +164,7 @@ struct PromptCacheTreeCanvasView: View {
             }
             for edge in tree.edges {
                 guard let a = layout.positions[edge.parentID],
-                      let b = layout.positions[edge.childID]
+                    let b = layout.positions[edge.childID]
                 else { continue }
                 var path = Path()
                 path.move(to: mini(a))
@@ -176,7 +178,9 @@ struct PromptCacheTreeCanvasView: View {
             }
         }
         .padding(6)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        .background(
+            .thinMaterial,
+            in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
     }
 
     private func draw(tree: PromptCacheTreeSnapshot, context: inout GraphicsContext) {
@@ -184,7 +188,7 @@ struct PromptCacheTreeCanvasView: View {
 
         for edge in tree.edges {
             guard let from = layout.positions[edge.parentID],
-                  let to = layout.positions[edge.childID]
+                let to = layout.positions[edge.childID]
             else { continue }
             let a = screenPoint(from)
             let b = screenPoint(to)
@@ -216,7 +220,8 @@ struct PromptCacheTreeCanvasView: View {
             )
 
             if zoom > 0.55 {
-                let label = node.parentID == nil
+                let label =
+                    node.parentID == nil
                     ? "root"
                     : "\(node.tokenOffset)"
                 context.draw(
@@ -257,7 +262,9 @@ struct PromptCacheTreeCanvasView: View {
 
     private func color(for node: PromptCacheTreeNodeSnapshot) -> Color {
         if node.parentID == nil { return .secondary }
-        if node.storageState == .ssdOnly || node.storageState == .pendingWriteBodyDropped { return .teal }
+        if node.storageState == .ssdOnly || node.storageState == .pendingWriteBodyDropped {
+            return .teal
+        }
         switch node.checkpointType {
         case "system": return .indigo
         case "leaf": return .green

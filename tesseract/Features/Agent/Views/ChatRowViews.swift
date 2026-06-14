@@ -300,7 +300,9 @@ struct ToolCallRowView: View, Equatable {
         let _ = ChatViewPerf.signposter.emitEvent("ToolCallRowView.body")
         #endif
         HStack(alignment: .top, spacing: 12) {
-            StepGutter(iconName: data.iconName, iconColor: data.isError ? .red : .secondary, isLast: data.isLast)
+            StepGutter(
+                iconName: data.iconName, iconColor: data.isError ? .red : .secondary,
+                isLast: data.isLast)
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {

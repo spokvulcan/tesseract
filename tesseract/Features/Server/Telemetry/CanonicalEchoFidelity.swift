@@ -216,7 +216,8 @@ nonisolated enum CanonicalEchoFidelity {
             skipSpecialTokens: false
         )
         let nextTail = tokenizer.decode(
-            tokenIds: Array(nextRender[max(0, matched - window)..<min(nextRender.count, matched + window)]),
+            tokenIds: Array(
+                nextRender[max(0, matched - window)..<min(nextRender.count, matched + window)]),
             skipSpecialTokens: false
         )
         return .mismatch(
@@ -295,18 +296,20 @@ extension CanonicalEchoFidelity {
             if let (previousConversation, previousToolSpecs) = previous {
                 let echoIndex = previousConversation.messages.count
                 if previousConversation.isPrefix(of: conversation),
-                   echoIndex < conversation.messages.count,
-                   conversation.messages[echoIndex].role == .assistant {
+                    echoIndex < conversation.messages.count,
+                    conversation.messages[echoIndex].role == .assistant
+                {
                     let echo = conversation.messages[echoIndex]
-                    boundaries.append(check(
-                        previous: previousConversation,
-                        echo: echo,
-                        next: conversation,
-                        probeToolSpecs: previousToolSpecs,
-                        nextToolSpecs: toolSpecs,
-                        requestIndex: index - 1,
-                        tokenizer: tokenizer
-                    ))
+                    boundaries.append(
+                        check(
+                            previous: previousConversation,
+                            echo: echo,
+                            next: conversation,
+                            probeToolSpecs: previousToolSpecs,
+                            nextToolSpecs: toolSpecs,
+                            requestIndex: index - 1,
+                            tokenizer: tokenizer
+                        ))
                     // Mirror the live server: the completed turn enters the
                     // replay record so later requests that drop its
                     // reasoning get repaired, not misdiagnosed.
@@ -343,7 +346,10 @@ extension CanonicalEchoFidelity {
         for boundaryReport in report.boundaries where boundaryReport.hasMismatch {
             let boundary = boundaryReport.boundary
             lines.append("MISMATCH request#\(boundary.requestIndex) kind=\(boundary.kind.rawValue)")
-            for (label, verdict) in [("leaf", boundaryReport.leaf), ("speculation", boundaryReport.speculation ?? .faithful(pathLength: 0))] {
+            for (label, verdict) in [
+                ("leaf", boundaryReport.leaf),
+                ("speculation", boundaryReport.speculation ?? .faithful(pathLength: 0)),
+            ] {
                 if case .mismatch(let length, let matched, let derived, let next) = verdict {
                     lines.append("  \(label): fork at \(matched)/\(length)")
                     lines.append("  derived: …\(derived)")

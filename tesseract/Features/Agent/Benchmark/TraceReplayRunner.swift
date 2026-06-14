@@ -56,7 +56,8 @@ struct TraceReplayRunner {
         }
 
         let report = TraceReplayHarness.replay(records: records)
-        let text = "corpus: \(directory.path) — \(files.count) file(s)\n"
+        let text =
+            "corpus: \(directory.path) — \(files.count) file(s)\n"
             + TraceReplayHarness.renderText(report)
         try (text + "\n").data(using: .utf8)!.write(to: logURL)
         Log.server.info(text)
@@ -66,8 +67,9 @@ struct TraceReplayRunner {
     /// otherwise the live corpus home.
     private func resolveDirectory() -> URL {
         if let index = arguments.firstIndex(of: "--trace-replay"),
-           index + 1 < arguments.count,
-           !arguments[index + 1].hasPrefix("--") {
+            index + 1 < arguments.count,
+            !arguments[index + 1].hasPrefix("--")
+        {
             return URL(fileURLWithPath: arguments[index + 1], isDirectory: true)
         }
         return CompletionTraceLog.defaultDirectory

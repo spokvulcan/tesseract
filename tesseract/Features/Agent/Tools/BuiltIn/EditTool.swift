@@ -17,11 +17,14 @@ nonisolated struct EditToolError: LocalizedError {
 
 // MARK: - EditTool Factory
 
-nonisolated func createEditTool(sandbox: PathSandbox, readTracker: FileReadTracker) -> AgentToolDefinition {
+nonisolated func createEditTool(sandbox: PathSandbox, readTracker: FileReadTracker)
+    -> AgentToolDefinition
+{
     AgentToolDefinition(
         name: "edit",
         label: "Edit File",
-        description: "Edit a file by replacing an exact text match. old_text must match exactly once in the file. Add surrounding context lines to old_text to disambiguate multiple matches.",
+        description:
+            "Edit a file by replacing an exact text match. old_text must match exactly once in the file. Add surrounding context lines to old_text to disambiguate multiple matches.",
         parameterSchema: JSONSchema(
             type: "object",
             properties: [
@@ -54,7 +57,8 @@ nonisolated func createEditTool(sandbox: PathSandbox, readTracker: FileReadTrack
             let url = try sandbox.resolveExisting(path)
 
             if !readTracker.hasRead(url.path) {
-                return .error("You must read a file before editing it. Use the read tool on '\(path)' first.")
+                return .error(
+                    "You must read a file before editing it. Use the read tool on '\(path)' first.")
             }
 
             let displayName = sandbox.displayPath(url)
@@ -64,7 +68,8 @@ nonisolated func createEditTool(sandbox: PathSandbox, readTracker: FileReadTrack
             let normalizedContent = EditToolHelper.normalizeToLF(content)
             let normalizedOld = EditToolHelper.normalizeToLF(oldText)
             let normalizedNew = EditToolHelper.normalizeToLF(newText)
-            let match = EditToolHelper.fuzzyFindText(content: normalizedContent, oldText: normalizedOld)
+            let match = EditToolHelper.fuzzyFindText(
+                content: normalizedContent, oldText: normalizedOld)
 
             guard match.found else {
                 throw EditToolError(
@@ -251,7 +256,8 @@ private nonisolated enum EditToolHelper: Sendable {
         let fuzzyOld = normalizeForFuzzyMatch(oldText)
 
         guard let fuzzyRange = fuzzyContent.range(of: fuzzyOld) else {
-            return MatchResult(found: false, index: -1, matchLength: 0, contentForReplacement: content)
+            return MatchResult(
+                found: false, index: -1, matchLength: 0, contentForReplacement: content)
         }
 
         return MatchResult(
@@ -324,7 +330,8 @@ private nonisolated enum EditToolHelper: Sendable {
             .map(String.init)
 
         var diff = "--- a/\(path)\n+++ b/\(path)\n"
-        diff += "@@ -\(firstChangedLine),\(oldLines.count) +\(firstChangedLine),\(newLines.count) @@\n"
+        diff +=
+            "@@ -\(firstChangedLine),\(oldLines.count) +\(firstChangedLine),\(newLines.count) @@\n"
         for line in oldLines {
             diff += "-\(line)\n"
         }

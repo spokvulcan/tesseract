@@ -84,7 +84,8 @@ final class PermissionsManager: ObservableObject {
         case "microphone":
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
         case "accessibility":
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            urlString =
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
         default:
             urlString = "x-apple.systempreferences:com.apple.preference.security"
         }

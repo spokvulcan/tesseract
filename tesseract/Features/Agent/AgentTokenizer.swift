@@ -92,7 +92,9 @@ struct AgentTokenizer: Sendable {
     /// Resolves all seven ChatML special tokens from the tokenizer vocabulary.
     /// Uses inline string literals to avoid actor-isolation issues with static properties
     /// inside `@Sendable` closures.
-    private static func resolveSpecialTokens(from container: ModelContainer) async throws -> SpecialTokens {
+    private static func resolveSpecialTokens(from container: ModelContainer) async throws
+        -> SpecialTokens
+    {
         try await container.perform { context in
             let tokenizer = context.tokenizer
 

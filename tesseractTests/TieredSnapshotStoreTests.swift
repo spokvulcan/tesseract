@@ -228,14 +228,16 @@ struct TieredSnapshotStoreTests {
 
         let payload = makePayload(bytes: 1_024)
 
-        guard let ref = store.admitSnapshot(
-            node: node,
-            tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: payload
-        ) else {
+        guard
+            let ref = store.admitSnapshot(
+                node: node,
+                tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: payload
+            )
+        else {
             Issue.record("admitSnapshot did not accept")
             return
         }
@@ -263,14 +265,16 @@ struct TieredSnapshotStoreTests {
 
         // Hand the front door domain inputs — no caller-built descriptor.
         let payload = makePayload(bytes: 2_048, checkpointType: .system)
-        guard let ref = store.admitSnapshot(
-            node: node,
-            tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(checkpointType: .system, tokenOffset: 4_096),
-            payload: payload
-        ) else {
+        guard
+            let ref = store.admitSnapshot(
+                node: node,
+                tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(checkpointType: .system, tokenOffset: 4_096),
+                payload: payload
+            )
+        else {
             Issue.record("admitSnapshot did not accept")
             return
         }
@@ -303,14 +307,16 @@ struct TieredSnapshotStoreTests {
 
         let payload = makePayload(bytes: 1_024, checkpointType: .leaf)
 
-        guard let ref = store.admitSnapshot(
-            node: node,
-            tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(checkpointType: .leaf),
-            payload: payload
-        ) else {
+        guard
+            let ref = store.admitSnapshot(
+                node: node,
+                tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(checkpointType: .leaf),
+                payload: payload
+            )
+        else {
             Issue.record("admitSnapshot did not accept")
             return
         }
@@ -345,14 +351,16 @@ struct TieredSnapshotStoreTests {
 
         let payload = makePayload(bytes: 1_024)
 
-        guard let ref = store.admitSnapshot(
-            node: node,
-            tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: payload
-        ) else {
+        guard
+            let ref = store.admitSnapshot(
+                node: node,
+                tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: payload
+            )
+        else {
             Issue.record("admitSnapshot did not accept")
             return
         }
@@ -380,14 +388,16 @@ struct TieredSnapshotStoreTests {
 
         let payload = makePayload(bytes: 1_024)
 
-        guard let ref = store.admitSnapshot(
-            node: node,
-            tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: payload
-        ) else {
+        guard
+            let ref = store.admitSnapshot(
+                node: node,
+                tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: payload
+            )
+        else {
             Issue.record("admitSnapshot did not accept")
             return
         }
@@ -683,7 +693,8 @@ struct TieredSnapshotStoreTests {
             )
         }
         let elapsed = ContinuousClock.now - start
-        let elapsedMs = Double(elapsed.components.attoseconds) / 1_000_000_000_000_000.0
+        let elapsedMs =
+            Double(elapsed.components.attoseconds) / 1_000_000_000_000_000.0
             + Double(elapsed.components.seconds) * 1_000.0
         #expect(
             elapsedMs < 50.0,
@@ -729,26 +740,29 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard let ref = store.admitSnapshot(
-            node: node, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) else {
+        guard
+            let ref = store.admitSnapshot(
+                node: node, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            )
+        else {
             Issue.record("admitSnapshot did not accept")
             return
         }
 
         // Drop the pending ref (state 2 → 1), then a late commit arrives.
         store.markSnapshotRefDropped(id: ref.snapshotID, reason: .writerIOError)
-        store.markSnapshotRefCommitted(SSDCommitInfo(
-            snapshotID: ref.snapshotID,
-            consumedBaseID: nil,
-            chainBytesOnDisk: ref.bytesOnDisk
-        ))
+        store.markSnapshotRefCommitted(
+            SSDCommitInfo(
+                snapshotID: ref.snapshotID,
+                consumedBaseID: nil,
+                chainBytesOnDisk: ref.bytesOnDisk
+            ))
 
-        #expect(node.state.ref == nil)       // not resurrected
+        #expect(node.state.ref == nil)  // not resurrected
         #expect(node.state.body != nil)
         #expect(store.pendingRefCountForTesting == 0)
     }
@@ -761,13 +775,15 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard let ref = store.admitSnapshot(
-            node: node, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) else {
+        guard
+            let ref = store.admitSnapshot(
+                node: node, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            )
+        else {
             Issue.record("admitSnapshot did not accept")
             return
         }
@@ -776,11 +792,12 @@ struct TieredSnapshotStoreTests {
         #expect(committed)
 
         // Fire commit again — already committed, not in pending map.
-        store.markSnapshotRefCommitted(SSDCommitInfo(
-            snapshotID: ref.snapshotID,
-            consumedBaseID: nil,
-            chainBytesOnDisk: ref.bytesOnDisk
-        ))
+        store.markSnapshotRefCommitted(
+            SSDCommitInfo(
+                snapshotID: ref.snapshotID,
+                consumedBaseID: nil,
+                chainBytesOnDisk: ref.bytesOnDisk
+            ))
         #expect(node.state.committed)
         #expect(store.pendingRefCountForTesting == 0)
     }
@@ -797,25 +814,27 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard let ref = store.admitSnapshot(
-            node: node, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) else {
+        guard
+            let ref = store.admitSnapshot(
+                node: node, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            )
+        else {
             Issue.record("admitSnapshot did not accept")
             return
         }
 
         let committed = await waitUntil { node.state.committed }
         #expect(committed)
-        tree.dropBody(node: node)            // state 4 → 5 (ssdOnly)
+        tree.dropBody(node: node)  // state 4 → 5 (ssdOnly)
         #expect(store.pendingRefCountForTesting == 0)
 
         store.markSnapshotRefDropped(id: ref.snapshotID, reason: .evictedByLRU)
         #expect(node.state.ref == nil)
-        #expect(node.parent == nil)          // self-healed out of the tree
+        #expect(node.parent == nil)  // self-healed out of the tree
     }
 
     /// Same eager clear for a committed node whose RAM body is still
@@ -828,13 +847,15 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard let ref = store.admitSnapshot(
-            node: node, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) else {
+        guard
+            let ref = store.admitSnapshot(
+                node: node, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            )
+        else {
             Issue.record("admitSnapshot did not accept")
             return
         }
@@ -844,7 +865,7 @@ struct TieredSnapshotStoreTests {
 
         store.markSnapshotRefDropped(id: ref.snapshotID, reason: .evictedByLRU)
         #expect(node.state.ref == nil)
-        #expect(node.state.body != nil)      // body untouched
+        #expect(node.state.body != nil)  // body untouched
     }
 
     /// A warm-start restored ref (which never passes through the writer's
@@ -862,7 +883,7 @@ struct TieredSnapshotStoreTests {
 
         store.markSnapshotRefDropped(id: ref.snapshotID, reason: .evictedByLRU)
         #expect(node.state.ref == nil)
-        #expect(node.parent == nil)          // self-healed out of the tree
+        #expect(node.parent == nil)  // self-healed out of the tree
     }
 
     /// A drop for a committed id that an explicit delete (supersession)
@@ -874,13 +895,15 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard let firstRef = store.admitSnapshot(
-            node: node, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) else {
+        guard
+            let firstRef = store.admitSnapshot(
+                node: node, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            )
+        else {
             Issue.record("first admitSnapshot did not accept")
             return
         }
@@ -889,13 +912,15 @@ struct TieredSnapshotStoreTests {
 
         // Re-admission supersedes firstRef: the router deletes its
         // backing and prunes both indexes.
-        guard let secondRef = store.admitSnapshot(
-            node: node, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) else {
+        guard
+            let secondRef = store.admitSnapshot(
+                node: node, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            )
+        else {
             Issue.record("second admitSnapshot did not accept")
             return
         }
@@ -918,13 +943,15 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
 
         let nodeA = insertWithBody(tree, tokens: [1, 2, 3])
-        guard store.admitSnapshot(
-            node: nodeA, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) != nil else {
+        guard
+            store.admitSnapshot(
+                node: nodeA, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            ) != nil
+        else {
             Issue.record("admitSnapshot A did not accept")
             return
         }
@@ -932,20 +959,22 @@ struct TieredSnapshotStoreTests {
         #expect(committedA)
 
         let nodeB = insertWithBody(tree, tokens: [9, 9, 9])
-        guard store.admitSnapshot(
-            node: nodeB, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [9, 9, 9],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) != nil else {
+        guard
+            store.admitSnapshot(
+                node: nodeB, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [9, 9, 9],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            ) != nil
+        else {
             Issue.record("admitSnapshot B did not accept")
             return
         }
 
         let cleared = await waitUntil { nodeA.state.ref == nil }
         #expect(cleared, "evicted resident's committed ref must clear eagerly")
-        #expect(nodeA.state.body != nil)     // RAM body untouched
+        #expect(nodeA.state.body != nil)  // RAM body untouched
     }
 
     // MARK: - Re-admission supersession (SSD-orphan bug fix)
@@ -960,29 +989,35 @@ struct TieredSnapshotStoreTests {
         defer { cleanup(root) }
         let node = insertWithBody(tree, tokens: [1, 2, 3])
 
-        guard let firstRef = store.admitSnapshot(
-            node: node, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) else {
+        guard
+            let firstRef = store.admitSnapshot(
+                node: node, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            )
+        else {
             Issue.record("first admitSnapshot did not accept")
             return
         }
         let firstCommitted = await waitUntil { node.state.committed }
         #expect(firstCommitted)
-        #expect(store.ssdStoreForTesting!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID))
+        #expect(
+            store.ssdStoreForTesting!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID)
+        )
 
         // Re-admit over the committed node (state 4). The node still has a
         // RAM body, so admit applies and supersedes firstRef.
-        guard let secondRef = store.admitSnapshot(
-            node: node, tree: tree,
-            partitionKey: key,
-            pathFromRoot: [1, 2, 3],
-            snapshot: makeSnapshot(),
-            payload: makePayload(bytes: 1_024)
-        ) else {
+        guard
+            let secondRef = store.admitSnapshot(
+                node: node, tree: tree,
+                partitionKey: key,
+                pathFromRoot: [1, 2, 3],
+                snapshot: makeSnapshot(),
+                payload: makePayload(bytes: 1_024)
+            )
+        else {
             Issue.record("second admitSnapshot did not accept")
             return
         }
@@ -991,7 +1026,9 @@ struct TieredSnapshotStoreTests {
         #expect(store.isPendingForTesting(id: secondRef.snapshotID))
         #expect(store.isPendingForTesting(id: firstRef.snapshotID) == false)
         // The superseded backing is gone — no orphan.
-        #expect(store.ssdStoreForTesting!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID) == false)
+        #expect(
+            store.ssdStoreForTesting!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID)
+                == false)
 
         let secondCommitted = await waitUntil { node.state.committed }
         #expect(secondCommitted)

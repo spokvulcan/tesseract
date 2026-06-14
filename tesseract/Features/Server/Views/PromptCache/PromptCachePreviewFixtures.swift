@@ -57,41 +57,51 @@ enum PromptCachePreviewFixtures {
     )
 
     static let events: [PromptCacheTelemetryEvent] = [
-        event("lookup", fields: [
-            ("reason", "hit"),
-            ("promptTokens", "4096"),
-            ("skippedPrefillTokens", "3072"),
-            ("checkpointType", "system"),
-            ("lookupMs", "4.2"),
-            ("restoreMs", "1.8"),
-        ]),
-        event("lookup", fields: [
-            ("reason", "ssdHit"),
-            ("promptTokens", "6144"),
-            ("skippedPrefillTokens", "4096"),
-            ("checkpointType", "leaf"),
-            ("lookupMs", "11.0"),
-            ("restoreMs", "9.5"),
-        ]),
-        event("eviction", fields: [
-            ("strategy", "utility"),
-            ("offset", "6144"),
-            ("checkpointType", "leaf"),
-            ("freedBytes", "12582912"),
-            ("utility", "0.374"),
-        ]),
-        event("ssdAdmit", fields: [
-            ("id", "preview-snap-12"),
-            ("bytes", "12582912"),
-            ("outcome", "accepted"),
-        ]),
-        event("ttft", fields: [
-            ("lookupMs", "8.4"),
-            ("restoreMs", "4.1"),
-            ("prefillMs", "71.2"),
-            ("residualPromptMs", "1.2"),
-            ("ttftMs", "84.9"),
-        ]),
+        event(
+            "lookup",
+            fields: [
+                ("reason", "hit"),
+                ("promptTokens", "4096"),
+                ("skippedPrefillTokens", "3072"),
+                ("checkpointType", "system"),
+                ("lookupMs", "4.2"),
+                ("restoreMs", "1.8"),
+            ]),
+        event(
+            "lookup",
+            fields: [
+                ("reason", "ssdHit"),
+                ("promptTokens", "6144"),
+                ("skippedPrefillTokens", "4096"),
+                ("checkpointType", "leaf"),
+                ("lookupMs", "11.0"),
+                ("restoreMs", "9.5"),
+            ]),
+        event(
+            "eviction",
+            fields: [
+                ("strategy", "utility"),
+                ("offset", "6144"),
+                ("checkpointType", "leaf"),
+                ("freedBytes", "12582912"),
+                ("utility", "0.374"),
+            ]),
+        event(
+            "ssdAdmit",
+            fields: [
+                ("id", "preview-snap-12"),
+                ("bytes", "12582912"),
+                ("outcome", "accepted"),
+            ]),
+        event(
+            "ttft",
+            fields: [
+                ("lookupMs", "8.4"),
+                ("restoreMs", "4.1"),
+                ("prefillMs", "71.2"),
+                ("residualPromptMs", "1.2"),
+                ("ttftMs", "84.9"),
+            ]),
     ]
 
     static var samples: [PromptCacheMetricSample] {
@@ -189,7 +199,7 @@ enum PromptCachePreviewFixtures {
                 depth: 0,
                 childCount: branches,
                 state: .empty
-            ),
+            )
         ]
         var edges: [PromptCacheTreeEdgeSnapshot] = []
         var snapshotsByType: [String: Int] = [:]
@@ -201,42 +211,46 @@ enum PromptCachePreviewFixtures {
             let hasSnapshot = branch.isMultiple(of: snapshotEvery)
             let branchState = hasSnapshot ? storageState : .empty
 
-            nodes.append(node(
-                id: midID,
-                parentID: rootID,
-                pathHash: "b\(branch)",
-                offset: 1024 + branch * 256,
-                depth: 1,
-                childCount: 1,
-                checkpointType: hasSnapshot ? checkpoint : nil,
-                bytes: hasSnapshot ? 8 * 1024 * 1024 : 0,
-                state: branchState,
-                snapshotRefID: branchState == .empty ? nil : "preview-ref-\(branch)"
-            ))
-            nodes.append(node(
-                id: leafID,
-                parentID: midID,
-                pathHash: "b\(branch)-leaf",
-                offset: 2048 + branch * 512,
-                depth: 2,
-                childCount: 0,
-                checkpointType: "leaf",
-                bytes: 12 * 1024 * 1024,
-                state: storageState,
-                snapshotRefID: "preview-leaf-\(branch)"
-            ))
-            edges.append(PromptCacheTreeEdgeSnapshot(
-                id: "\(rootID)->\(midID)",
-                parentID: rootID,
-                childID: midID,
-                tokenCount: 1024 + branch * 12
-            ))
-            edges.append(PromptCacheTreeEdgeSnapshot(
-                id: "\(midID)->\(leafID)",
-                parentID: midID,
-                childID: leafID,
-                tokenCount: 256 + branch * 8
-            ))
+            nodes.append(
+                node(
+                    id: midID,
+                    parentID: rootID,
+                    pathHash: "b\(branch)",
+                    offset: 1024 + branch * 256,
+                    depth: 1,
+                    childCount: 1,
+                    checkpointType: hasSnapshot ? checkpoint : nil,
+                    bytes: hasSnapshot ? 8 * 1024 * 1024 : 0,
+                    state: branchState,
+                    snapshotRefID: branchState == .empty ? nil : "preview-ref-\(branch)"
+                ))
+            nodes.append(
+                node(
+                    id: leafID,
+                    parentID: midID,
+                    pathHash: "b\(branch)-leaf",
+                    offset: 2048 + branch * 512,
+                    depth: 2,
+                    childCount: 0,
+                    checkpointType: "leaf",
+                    bytes: 12 * 1024 * 1024,
+                    state: storageState,
+                    snapshotRefID: "preview-leaf-\(branch)"
+                ))
+            edges.append(
+                PromptCacheTreeEdgeSnapshot(
+                    id: "\(rootID)->\(midID)",
+                    parentID: rootID,
+                    childID: midID,
+                    tokenCount: 1024 + branch * 12
+                ))
+            edges.append(
+                PromptCacheTreeEdgeSnapshot(
+                    id: "\(midID)->\(leafID)",
+                    parentID: midID,
+                    childID: leafID,
+                    tokenCount: 256 + branch * 8
+                ))
 
             if hasSnapshot {
                 snapshotsByType[checkpoint, default: 0] += 1
@@ -340,7 +354,8 @@ private struct PromptCacheAdaptivePreview: View {
             case .overview:
                 PromptCacheOverviewView(
                     snapshot: snapshot,
-                    aggregate: PromptCacheTelemetryAggregate.from(events: PromptCachePreviewFixtures.events),
+                    aggregate: PromptCacheTelemetryAggregate.from(
+                        events: PromptCachePreviewFixtures.events),
                     samples: PromptCachePreviewFixtures.samples
                 )
 

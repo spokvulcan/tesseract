@@ -63,12 +63,12 @@ struct SnapshotStateTests {
     @Test func queryTruthTable() {
         // (label, canEvictNode, hasResidentBody, isHittable, committed, hasBody, hasRef)
         let expected: [String: (Bool, Bool, Bool, Bool, Bool, Bool)] = [
-            "empty":          (true,  false, false, false, false, false),
-            "ramOnly":        (true,  true,  true,  false, true,  false),
-            "pendingWrite":   (false, true,  true,  false, true,  true),
+            "empty": (true, false, false, false, false, false),
+            "ramOnly": (true, true, true, false, true, false),
+            "pendingWrite": (false, true, true, false, true, true),
             "pendingDropped": (false, false, false, false, false, true),
-            "committed":      (false, true,  true,  true,  true,  true),
-            "ssdOnly":        (false, false, true,  true,  false, true),
+            "committed": (false, true, true, true, true, true),
+            "ssdOnly": (false, false, true, true, false, true),
         ]
         for (label, state) in allStates() {
             let e = expected[label]!
@@ -151,7 +151,10 @@ struct SnapshotStateTests {
             ("ramOnly", .ramOnly(body()), "ramOnly", .ignored(.notPending)),
             ("pendingWrite", .pendingWrite(body(), ref(id: id)), "committed", .settled),
             ("pendingDropped", .pendingDropped(ref(id: id)), "ssdOnly", .settled),
-            ("committed", .committed(body(), ref(id: id)), "committed", .ignored(.alreadyCommitted)),
+            (
+                "committed", .committed(body(), ref(id: id)), "committed",
+                .ignored(.alreadyCommitted)
+            ),
             ("ssdOnly", .ssdOnly(ref(id: id)), "ssdOnly", .ignored(.alreadyCommitted)),
         ]
         for c in cases {
@@ -162,7 +165,8 @@ struct SnapshotStateTests {
     }
 
     @Test func committingIDMismatchIsIgnored() {
-        let (next, effect) = SnapshotState
+        let (next, effect) =
+            SnapshotState
             .pendingWrite(body(), ref(id: "REAL"))
             .committing(expectedID: "STALE")
         #expect(next.label == "pendingWrite")
@@ -189,7 +193,8 @@ struct SnapshotStateTests {
     }
 
     @Test func droppingRefIDMismatchIsIgnored() {
-        let (next, effect) = SnapshotState
+        let (next, effect) =
+            SnapshotState
             .pendingDropped(ref(id: "REAL"))
             .droppingRef(expectedID: "STALE")
         #expect(next.label == "pendingDropped")
@@ -211,7 +216,8 @@ struct SnapshotStateTests {
         }
         // pendingWrite → pendingDropped, refID kept, settled
         do {
-            let (next, result) = SnapshotState
+            let (next, result) =
+                SnapshotState
                 .pendingWrite(body(.branchPoint), ref(id: refID)).droppingBody()
             #expect(next.label == "pendingDropped")
             #expect(result.effect == .settled)
@@ -220,7 +226,8 @@ struct SnapshotStateTests {
         }
         // committed → ssdOnly, refID kept, settled
         do {
-            let (next, result) = SnapshotState
+            let (next, result) =
+                SnapshotState
                 .committed(body(.system), ref(id: refID)).droppingBody()
             #expect(next.label == "ssdOnly")
             #expect(result.effect == .settled)
@@ -338,8 +345,9 @@ struct SnapshotStateTests {
                 #expect(o.end == "empty", "becameEmpty must resolve to empty, got \(o.end)")
             }
             if o.start != "empty" && o.end == "empty" {
-                #expect(o.effect == .becameEmpty,
-                        "\(o.start) → empty must report becameEmpty, got \(o.effect)")
+                #expect(
+                    o.effect == .becameEmpty,
+                    "\(o.start) → empty must report becameEmpty, got \(o.effect)")
             }
         }
     }

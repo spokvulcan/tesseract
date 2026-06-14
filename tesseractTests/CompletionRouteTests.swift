@@ -57,9 +57,11 @@ struct CompletionRouteTests {
             systemPrompt: "System",
             messages: [
                 .init(role: .user, content: "Read the file"),
-                .assistant(content: "", toolCalls: [
-                    .init(name: "read", arguments: ["path": .string("/tmp/x")]),
-                ]),
+                .assistant(
+                    content: "",
+                    toolCalls: [
+                        .init(name: "read", arguments: ["path": .string("/tmp/x")])
+                    ]),
                 .init(role: .tool, content: "file contents"),
             ]
         )

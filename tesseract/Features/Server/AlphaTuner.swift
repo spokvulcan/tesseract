@@ -171,8 +171,8 @@ final class AlphaTuner {
         phase = .bootstrapping
         Log.agent.info(
             "AlphaTuner: bootstrap started — requestsBeforeFirstEviction="
-            + "\(requestsBeforeFirstEviction) windowSize=\(bootstrapTarget) "
-            + "inventoryEntries=\(startingInventory.count)"
+                + "\(requestsBeforeFirstEviction) windowSize=\(bootstrapTarget) "
+                + "inventoryEntries=\(startingInventory.count)"
         )
     }
 
@@ -221,8 +221,8 @@ final class AlphaTuner {
         inventoryCaptureTime = nil
         Log.agent.info(
             "AlphaTuner: tuned alpha=\(bestAlpha) "
-            + "(flopsSaved=\(bestFlops) hitTokens=\(bestHitTokens) "
-            + "windowSize=\(windowSize) inventorySize=\(inventorySize))"
+                + "(flopsSaved=\(bestFlops) hitTokens=\(bestHitTokens) "
+                + "windowSize=\(windowSize) inventorySize=\(inventorySize))"
         )
         return bestAlpha
     }

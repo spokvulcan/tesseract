@@ -205,8 +205,8 @@ nonisolated struct GenerationStreamLoop {
                 sink(.thinkEnd)
                 Log.agent.warning(
                     "Thinking-loop intervention — reason=\(reason.rawValue) "
-                    + "safe_prefix_chars=\(safe.count)"
-                    + logSuffix
+                        + "safe_prefix_chars=\(safe.count)"
+                        + logSuffix
                 )
                 return (safe, reason)
             }
@@ -319,7 +319,7 @@ nonisolated struct GenerationStreamLoop {
                 } catch {
                     Log.agent.error(
                         "Thinking-safeguard continuation failed: "
-                        + "\(error.localizedDescription) — finishing with truncated response"
+                            + "\(error.localizedDescription) — finishing with truncated response"
                     )
                     // Same as the no-starter case: the think block is closed and the
                     // parser was never re-init, so skip the post-loop finalize flush.
@@ -373,10 +373,10 @@ nonisolated struct GenerationStreamLoop {
             let wrappedBuffer = Self.wrapMalformedToolCallBuffer(droppedBuffer)
             Log.agent.warning(
                 "ToolCallProcessor dropped unparseable buffer at EOS — "
-                + "bufferLen=\(droppedBuffer.count) wrappedLen=\(wrappedBuffer.count) "
-                + "head=\(String(wrappedBuffer.prefix(120)).debugDescription) "
-                + "tail=\(String(wrappedBuffer.suffix(80)).debugDescription)"
-                + logSuffix
+                    + "bufferLen=\(droppedBuffer.count) wrappedLen=\(wrappedBuffer.count) "
+                    + "head=\(String(wrappedBuffer.prefix(120)).debugDescription) "
+                    + "tail=\(String(wrappedBuffer.suffix(80)).debugDescription)"
+                    + logSuffix
             )
             sink(.malformedToolCall(wrappedBuffer))
         }

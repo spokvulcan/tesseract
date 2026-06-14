@@ -45,8 +45,8 @@ struct SSDPrefixCacheConfig: Sendable, Equatable {
     ) -> SSDPrefixCacheConfig {
         let physicalMemory = Int(clamping: ProcessInfo.processInfo.physicalMemory)
         let maxPendingBytes = min(
-            4 * 1024 * 1024 * 1024,   // 4 GiB hard ceiling
-            physicalMemory / 16        // 1/16 of physical RAM
+            4 * 1024 * 1024 * 1024,  // 4 GiB hard ceiling
+            physicalMemory / 16  // 1/16 of physical RAM
         )
         return SSDPrefixCacheConfig(
             enabled: true,

@@ -222,10 +222,12 @@ nonisolated enum SpeculativeCanonicalPrefill {
         }
 
         // 2. Pure: safety margin + worth-it threshold.
-        guard let admitPath = admitPath(
-            futureSharedPrefix: futurePrefix,
-            canonicalLeafOffset: seed.canonicalLeafOffset
-        ) else {
+        guard
+            let admitPath = admitPath(
+                futureSharedPrefix: futurePrefix,
+                canonicalLeafOffset: seed.canonicalLeafOffset
+            )
+        else {
             diagnostics.logSkip(
                 stage: "speculativePrefill",
                 reason: "below-residual-threshold",
@@ -260,9 +262,9 @@ nonisolated enum SpeculativeCanonicalPrefill {
         // boundary is inside the path and past the image prefix (the
         // residual doubles as the reprefill input, so it must be image-free).
         guard let boundary = resolved,
-              boundary.tokenOffset > 0,
-              boundary.tokenOffset < admitPath.count,
-              boundary.tokenOffset >= seed.keySpace.minimumWarmOffset
+            boundary.tokenOffset > 0,
+            boundary.tokenOffset < admitPath.count,
+            boundary.tokenOffset >= seed.keySpace.minimumWarmOffset
         else {
             diagnostics.logSkip(
                 stage: "speculativePrefill",
@@ -325,7 +327,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
                         .expandedDimensions(axis: 0),
                     mask: nil
                 )
-                let initialState = warm.consumed == 0
+                let initialState =
+                    warm.consumed == 0
                     ? anchorDelta.map { PositionAnchor.seededState(ropeDelta: $0) }
                     : warm.chunkState
                 let output = context.model(
@@ -392,11 +395,13 @@ nonisolated enum SpeculativeCanonicalPrefill {
         warm: WarmState,
         prefillStart: TimeInterval
     ) async {
-        guard let offset = preemptCaptureOffset(
-            boundaryOffset: boundaryOffset,
-            consumedTokens: warm.consumed,
-            canonicalLeafOffset: seed.canonicalLeafOffset
-        ) else {
+        guard
+            let offset = preemptCaptureOffset(
+                boundaryOffset: boundaryOffset,
+                consumedTokens: warm.consumed,
+                canonicalLeafOffset: seed.canonicalLeafOffset
+            )
+        else {
             logPreempted(
                 seed.diagnostics,
                 prefilledTokens: warm.consumed,
@@ -450,18 +455,21 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 warm.cache = []
                 warm.chunkState = nil
             }
-            guard let leaf = HybridCacheSnapshot.capture(
-                cache: warm.cache,
-                offset: storedTokens.count,
-                type: .leaf
-            ) else {
+            guard
+                let leaf = HybridCacheSnapshot.capture(
+                    cache: warm.cache,
+                    offset: storedTokens.count,
+                    type: .leaf
+                )
+            else {
                 diagnostics.logSkip(
                     stage: "speculativePrefill",
                     reason: "unsupported-cache-type"
                 )
                 return
             }
-            let storage: SnapshotAdmission.Storage = preempted || seed.ramOnlySpine
+            let storage: SnapshotAdmission.Storage =
+                preempted || seed.ramOnlySpine
                 ? .ramOnly
                 : ServerCompletion.snapshotAdmissionStorage(
                     for: leaf,
@@ -481,14 +489,15 @@ nonisolated enum SpeculativeCanonicalPrefill {
             )
             guard survived else { return }
 
-            diagnostics.log(PrefixCacheDiagnostics.SpeculativePrefillEvent(
-                targetOffset: storedTokens.count,
-                boundaryOffset: boundaryOffset,
-                prefilledTokens: warm.consumed,
-                prefillSeconds: prefillSeconds,
-                rewindSpanTokens: storedTokens.count - seed.canonicalLeafOffset,
-                preempted: preempted
-            ))
+            diagnostics.log(
+                PrefixCacheDiagnostics.SpeculativePrefillEvent(
+                    targetOffset: storedTokens.count,
+                    boundaryOffset: boundaryOffset,
+                    prefilledTokens: warm.consumed,
+                    prefillSeconds: prefillSeconds,
+                    rewindSpanTokens: storedTokens.count - seed.canonicalLeafOffset,
+                    preempted: preempted
+                ))
         }
     }
 

@@ -33,8 +33,9 @@ struct TesseractApp: App {
         let args = CommandLine.arguments
         if args.contains("--benchmark") {
             Task { @MainActor in
-                do { try await BenchmarkRunner().run() }
-                catch { Log.agent.error("Benchmark failed: \(error)") }
+                do { try await BenchmarkRunner().run() } catch {
+                    Log.agent.error("Benchmark failed: \(error)")
+                }
                 exit(0)
             }
         } else if args.contains("--prefix-cache-e2e") {
@@ -81,41 +82,45 @@ struct TesseractApp: App {
     var body: some Scene {
         Window("Tesseract", id: "main") {
             ContentView(container: container, selectedNavigation: $selectedNavigation)
-            .background {
-                WindowOpenerView(appDelegate: appDelegate)
-            }
-            .injectCoreDependencies(from: container)
-            .focusedSceneValue(\.dictationActions, DictationActions(
-                toggleRecording: { [weak container] in
-                    container?.dictationCoordinator.toggleRecording()
-                },
-                clearHistory: { [weak container] in
-                    container?.transcriptionHistory.clear()
-                },
-                copyLastTranscription: { [weak container] in
-                    container?.transcriptionHistory.copyLatestToPasteboard()
-                },
-                isRecording: container.dictationCoordinator.state == .recording ||
-                             container.dictationCoordinator.state == .listening,
-                isModelLoaded: container.transcriptionEngine.isModelLoaded,
-                hasHistory: !container.transcriptionHistory.entries.isEmpty
-            ))
-            .task {
-                await container.setup()
-                appDelegate.setupWithContainer(container, navigationSelection: $selectedNavigation)
+                .background {
+                    WindowOpenerView(appDelegate: appDelegate)
+                }
+                .injectCoreDependencies(from: container)
+                .focusedSceneValue(
+                    \.dictationActions,
+                    DictationActions(
+                        toggleRecording: { [weak container] in
+                            container?.dictationCoordinator.toggleRecording()
+                        },
+                        clearHistory: { [weak container] in
+                            container?.transcriptionHistory.clear()
+                        },
+                        copyLastTranscription: { [weak container] in
+                            container?.transcriptionHistory.copyLatestToPasteboard()
+                        },
+                        isRecording: container.dictationCoordinator.state == .recording
+                            || container.dictationCoordinator.state == .listening,
+                        isModelLoaded: container.transcriptionEngine.isModelLoaded,
+                        hasHistory: !container.transcriptionHistory.entries.isEmpty
+                    )
+                )
+                .task {
+                    await container.setup()
+                    appDelegate.setupWithContainer(
+                        container, navigationSelection: $selectedNavigation)
 
-                // Show onboarding if needed
-                if !container.settingsManager.hasCompletedOnboarding {
+                    // Show onboarding if needed
+                    if !container.settingsManager.hasCompletedOnboarding {
+                        showOnboarding = true
+                    }
+                }
+                .sheet(isPresented: $showOnboarding) {
+                    OnboardingView(isPresented: $showOnboarding)
+                        .injectCoreDependencies(from: container)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
                     showOnboarding = true
                 }
-            }
-            .sheet(isPresented: $showOnboarding) {
-                OnboardingView(isPresented: $showOnboarding)
-                    .injectCoreDependencies(from: container)
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
-                showOnboarding = true
-            }
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 800, height: 700)

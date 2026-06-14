@@ -20,7 +20,9 @@ final class SpeechEngine {
     private var synthesizer: (any SpeechSynthesizer)?
 
     init(
-        makeSynthesizer: @escaping @Sendable () -> any SpeechSynthesizer = { Qwen3SpeechSynthesizer() }
+        makeSynthesizer: @escaping @Sendable () -> any SpeechSynthesizer = {
+            Qwen3SpeechSynthesizer()
+        }
     ) {
         self.makeSynthesizer = makeSynthesizer
     }

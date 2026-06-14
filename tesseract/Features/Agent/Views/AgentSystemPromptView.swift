@@ -67,7 +67,9 @@ struct AgentSystemPromptView: View {
             }
         }
         .onChange(of: coordinator.isGenerating) {
-            Log.agent.info("SystemPromptView .onChange(isGenerating) — isGenerating=\(coordinator.isGenerating), hasRawPrompt=\(hasRawPrompt)")
+            Log.agent.info(
+                "SystemPromptView .onChange(isGenerating) — isGenerating=\(coordinator.isGenerating), hasRawPrompt=\(hasRawPrompt)"
+            )
             if !coordinator.isGenerating, !hasRawPrompt {
                 coordinator.systemPromptInspector.fetchRawSystemPrompt()
             }

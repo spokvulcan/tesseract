@@ -39,7 +39,9 @@ nonisolated enum ExtensionEventType: String, Sendable, Hashable {
 
 /// Closure-based handler invoked when an extension event fires.
 nonisolated struct ExtensionEventHandler: Sendable {
-    let handle: @Sendable (ExtensionEventPayload, any ExtensionContext) async throws -> ExtensionEventResult?
+    let handle:
+        @Sendable (ExtensionEventPayload, any ExtensionContext) async throws ->
+            ExtensionEventResult?
 }
 
 // MARK: - ExtensionEventPayload
@@ -85,7 +87,8 @@ nonisolated enum ExtensionEventResult: Sendable {
     case cancelCompaction
 
     /// Override system prompt and/or inject extra messages before agent start.
-    case beforeAgentOverride(systemPrompt: String?, extraMessages: [any AgentMessageProtocol & Sendable]?)
+    case beforeAgentOverride(
+        systemPrompt: String?, extraMessages: [any AgentMessageProtocol & Sendable]?)
 
     /// Report discovered resource paths from the extension's package.
     case discoveredResources(skillPaths: [URL], promptPaths: [URL], contextPaths: [URL])

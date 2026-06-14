@@ -92,12 +92,12 @@ struct ChatTranscriptTests {
         let orphan = AssistantMessage(content: "orphan")
 
         let cases: [[any AgentMessageProtocol]] = [
-            [],                    // empty
-            [u1],                  // single user, no response
-            [u1, a1],              // one full turn
-            [u1, a1, u2, a2],      // multi-turn -> last
-            [compaction, u2],      // compaction boundary then user
-            [orphan, a1],          // leading non-boundary (malformed)
+            [],  // empty
+            [u1],  // single user, no response
+            [u1, a1],  // one full turn
+            [u1, a1, u2, a2],  // multi-turn -> last
+            [compaction, u2],  // compaction boundary then user
+            [orphan, a1],  // leading non-boundary (malformed)
         ]
 
         for messages in cases {
@@ -119,7 +119,7 @@ struct ChatTranscriptTests {
         let opaque = OpaqueMessage(tag: "future_unknown_tag", rawPayload: [:])
         let messages: [any AgentMessageProtocol] = [opaque]
 
-        #expect(opaque.messageUUID == opaque.messageUUID)   // stable, not re-randomized
+        #expect(opaque.messageUUID == opaque.messageUUID)  // stable, not re-randomized
 
         let fromTurns = ChatTranscript.turns(from: messages).last?.id
         let fromActive = ChatTranscript.activeTurn(from: messages)?.id
@@ -156,7 +156,9 @@ struct ChatTranscriptTests {
         let rows = ChatTranscript.rows(from: [compaction], ctx()).rows
         #expect(rows.count == 1)
         #expect(rows[0].id == "\(compaction.id.uuidString)-system")
-        guard case .system(let system) = rows[0].kind else { Issue.record("not system row"); return }
+        guard case .system(let system) = rows[0].kind else {
+            Issue.record("not system row"); return
+        }
         #expect(system.content == "[Context compacted — 4096 tokens summarized]")
     }
 
@@ -164,11 +166,12 @@ struct ChatTranscriptTests {
         let user = UserMessage(content: "read")
         let call = toolCall(id: "tc1", name: "read_file", path: "/tmp/foo.txt")
         let a1 = AssistantMessage(content: "", toolCalls: [call])
-        let result = ToolResultMessage(toolCallId: "tc1", toolName: "read_file", content: [.text("data")])
+        let result = ToolResultMessage(
+            toolCallId: "tc1", toolName: "read_file", content: [.text("data")])
         let a2 = AssistantMessage(content: "done")
         let rows = ChatTranscript.rows(from: [user, a1, result, a2], ctx()).rows
 
-        #expect(rows.count == 3)   // user, header, answer (steps hidden when collapsed)
+        #expect(rows.count == 3)  // user, header, answer (steps hidden when collapsed)
         guard case .turnHeader(let header) = rows[1].kind else { Issue.record("no header"); return }
         #expect(header.stepCount == 1)
         #expect(header.isExpanded == false)
@@ -179,11 +182,13 @@ struct ChatTranscriptTests {
         let user = UserMessage(content: "read")
         let call = toolCall(id: "tc1", name: "read_file", path: "/tmp/foo.txt")
         let a1 = AssistantMessage(content: "", toolCalls: [call])
-        let result = ToolResultMessage(toolCallId: "tc1", toolName: "read_file", content: [.text("data")], isError: false)
+        let result = ToolResultMessage(
+            toolCallId: "tc1", toolName: "read_file", content: [.text("data")], isError: false)
         let a2 = AssistantMessage(content: "done")
-        let rows = ChatTranscript.rows(from: [user, a1, result, a2], ctx(expandedTurns: [user.id])).rows
+        let rows = ChatTranscript.rows(from: [user, a1, result, a2], ctx(expandedTurns: [user.id]))
+            .rows
 
-        #expect(rows.count == 4)   // user, header, tool, answer
+        #expect(rows.count == 4)  // user, header, tool, answer
         #expect(rows[2].id == "\(a1.id.uuidString)-tool-0")
         guard case .toolCall(let tool) = rows[2].kind else { Issue.record("no tool row"); return }
         #expect(tool.displayTitle == "Reading foo.txt")
@@ -193,7 +198,9 @@ struct ChatTranscriptTests {
         #expect(tool.filePath == "/tmp/foo.txt")
         #expect(tool.isLast == true)
 
-        guard case .assistantText(let answer) = rows[3].kind else { Issue.record("no answer"); return }
+        guard case .assistantText(let answer) = rows[3].kind else {
+            Issue.record("no answer"); return
+        }
         #expect(answer.hasStepsAbove == true)
     }
 
@@ -201,11 +208,14 @@ struct ChatTranscriptTests {
         let user = UserMessage(content: "read")
         let call = toolCall(id: "tc1", name: "read_file", path: "/tmp/foo.txt")
         let a1 = AssistantMessage(content: "", toolCalls: [call])
-        let result = ToolResultMessage(toolCallId: "tc1", toolName: "read_file", content: [.text("boom")], isError: true)
+        let result = ToolResultMessage(
+            toolCallId: "tc1", toolName: "read_file", content: [.text("boom")], isError: true)
         let a2 = AssistantMessage(content: "failed")
-        let rows = ChatTranscript.rows(from: [user, a1, result, a2], ctx(expandedTurns: [user.id])).rows
+        let rows = ChatTranscript.rows(from: [user, a1, result, a2], ctx(expandedTurns: [user.id]))
+            .rows
         guard let row = rows.first(where: { $0.id == "\(a1.id.uuidString)-tool-0" }),
-              case .toolCall(let tool) = row.kind else { Issue.record("no tool row"); return }
+            case .toolCall(let tool) = row.kind
+        else { Issue.record("no tool row"); return }
         #expect(tool.isError == true)
         #expect(tool.resultContent == "boom")
     }
@@ -216,14 +226,19 @@ struct ChatTranscriptTests {
         let a1 = AssistantMessage(content: "checking", toolCalls: [call])
         let result = ToolResultMessage(toolCallId: "tc1", toolName: "ls", content: [.text("x")])
         let a2 = AssistantMessage(content: "done")
-        let rows = ChatTranscript.rows(from: [user, a1, result, a2], ctx(expandedTurns: [user.id])).rows
+        let rows = ChatTranscript.rows(from: [user, a1, result, a2], ctx(expandedTurns: [user.id]))
+            .rows
 
-        #expect(rows.count == 5)   // user, header(2), toolText, toolCall, answer
+        #expect(rows.count == 5)  // user, header(2), toolText, toolCall, answer
         #expect(rows[2].id == "\(a1.id.uuidString)-text")
-        guard case .toolText(let interim) = rows[2].kind else { Issue.record("no interim text"); return }
+        guard case .toolText(let interim) = rows[2].kind else {
+            Issue.record("no interim text"); return
+        }
         #expect(interim.content == "checking")
-        #expect(interim.isLast == false)   // a tool call follows it
-        guard case .assistantText(let answer) = rows[4].kind else { Issue.record("no answer"); return }
+        #expect(interim.isLast == false)  // a tool call follows it
+        guard case .assistantText(let answer) = rows[4].kind else {
+            Issue.record("no answer"); return
+        }
         #expect(answer.content == "done")
     }
 
@@ -241,10 +256,14 @@ struct ChatTranscriptTests {
         )
         let result = ToolResultMessage(toolCallId: "t", toolName: "ls", content: [.text("r")])
         let final = AssistantMessage(content: "final")
-        let rows = ChatTranscript.rows(from: [user, thinker, result, final], ctx(expandedTurns: [user.id])).rows
-        #expect(rows.count == 5)   // user, header(2), thinking, tool, answer
+        let rows = ChatTranscript.rows(
+            from: [user, thinker, result, final], ctx(expandedTurns: [user.id])
+        ).rows
+        #expect(rows.count == 5)  // user, header(2), thinking, tool, answer
         #expect(rows[2].id == "\(thinker.id.uuidString)-thinking")
-        guard case .thinking(let think) = rows[2].kind else { Issue.record("no thinking row"); return }
+        guard case .thinking(let think) = rows[2].kind else {
+            Issue.record("no thinking row"); return
+        }
         #expect(think.content == "pondering")
     }
 
@@ -257,7 +276,10 @@ struct ChatTranscriptTests {
         #expect(rows.count == 2)
         #expect(rows[0].id == user.id.uuidString)
         #expect(rows[1].id == "streaming-indicator")
-        if case .streamingIndicator = rows[1].kind {} else { Issue.record("not a streaming indicator") }
+        if case .streamingIndicator = rows[1].kind {
+        } else {
+            Issue.record("not a streaming indicator")
+        }
     }
 
     @Test func activeTurnStreamingThinkingAndTextExpanded() {
@@ -268,11 +290,12 @@ struct ChatTranscriptTests {
             for: turn,
             ctx(generating: true, expandedTurns: [ChatTranscript.streamingTurnID], stream: stream)
         )
-        #expect(rows.map(\.id) == [
-            user.id.uuidString, "streaming-header", "streaming-thinking", "streaming-answer",
-        ])
+        #expect(
+            rows.map(\.id) == [
+                user.id.uuidString, "streaming-header", "streaming-thinking", "streaming-answer",
+            ])
         guard case .turnHeader(let header) = rows[1].kind else { Issue.record("no header"); return }
-        #expect(header.stepCount == 1)            // thinking is the one live step
+        #expect(header.stepCount == 1)  // thinking is the one live step
         #expect(header.isGenerating == true)
         #expect(header.turnID == ChatTranscript.streamingTurnID)
     }
@@ -283,28 +306,34 @@ struct ChatTranscriptTests {
         let a1 = AssistantMessage(content: "", toolCalls: [committedCall])
         let result = ToolResultMessage(toolCallId: "tc1", toolName: "ls", content: [.text("r")])
         let turn = ChatTranscript.Turn(id: user.id, messages: [user, a1, result])
-        let stream = AssistantMessage(content: "", toolCalls: [toolCall(id: "tc2", name: "read_file", path: "/y")])
+        let stream = AssistantMessage(
+            content: "", toolCalls: [toolCall(id: "tc2", name: "read_file", path: "/y")])
 
         let rows = ChatTranscript.rows(
             for: turn,
             ctx(generating: true, expandedTurns: [ChatTranscript.streamingTurnID], stream: stream)
         )
         guard case .turnHeader(let header) = rows[1].kind else { Issue.record("no header"); return }
-        #expect(header.stepCount == 2)   // 1 committed + 1 live
+        #expect(header.stepCount == 2)  // 1 committed + 1 live
 
-        guard case .toolCall(let committed) = rows[2].kind else { Issue.record("no committed tool"); return }
-        #expect(committed.isLast == false)   // live steps follow, so not last
+        guard case .toolCall(let committed) = rows[2].kind else {
+            Issue.record("no committed tool"); return
+        }
+        #expect(committed.isLast == false)  // live steps follow, so not last
         #expect(rows.contains { $0.id == "streaming-tool-0" })
     }
 
     @Test func collapsedStreamingShowsOnlyFinalAnswer() {
         let user = UserMessage(content: "hi")
         let turn = ChatTranscript.Turn(id: user.id, messages: [user])
-        let stream = AssistantMessage(content: "partial answer")   // no thinking, no tools
+        let stream = AssistantMessage(content: "partial answer")  // no thinking, no tools
         // streamingTurnID NOT in expandedTurns -> collapsed
-        let rows = ChatTranscript.rows(for: turn, ctx(generating: true, expandedTurns: [], stream: stream))
+        let rows = ChatTranscript.rows(
+            for: turn, ctx(generating: true, expandedTurns: [], stream: stream))
         #expect(rows.map(\.id) == [user.id.uuidString, "streaming-answer"])
-        guard case .streamingText(let streaming) = rows[1].kind else { Issue.record("no streaming text"); return }
+        guard case .streamingText(let streaming) = rows[1].kind else {
+            Issue.record("no streaming text"); return
+        }
         #expect(streaming.content == "partial answer")
     }
 
@@ -316,7 +345,7 @@ struct ChatTranscriptTests {
     /// shows while generation runs.
     @Test func activeTurnWithBlankCommittedAssistantStillShowsIndicator() {
         let user = UserMessage(content: "hi")
-        let blank = AssistantMessage(content: "   ")   // whitespace-only -> no rows
+        let blank = AssistantMessage(content: "   ")  // whitespace-only -> no rows
         let turn = ChatTranscript.Turn(id: user.id, messages: [user, blank])
         let rows = ChatTranscript.rows(for: turn, ctx(generating: true, stream: nil))
         #expect(rows.map(\.id) == [user.id.uuidString, "streaming-indicator"])
@@ -328,7 +357,8 @@ struct ChatTranscriptTests {
     @Test func streamingToolRowDetailHonorsExpandedDetails() {
         let user = UserMessage(content: "hi")
         let turn = ChatTranscript.Turn(id: user.id, messages: [user])
-        let stream = AssistantMessage(content: "", toolCalls: [toolCall(id: "tc1", name: "read_file", path: "/tmp/a.txt")])
+        let stream = AssistantMessage(
+            content: "", toolCalls: [toolCall(id: "tc1", name: "read_file", path: "/tmp/a.txt")])
         let rows = ChatTranscript.rows(
             for: turn,
             ctx(
@@ -339,7 +369,8 @@ struct ChatTranscriptTests {
             )
         )
         guard let row = rows.first(where: { $0.id == "streaming-tool-0" }),
-              case .toolCall(let tool) = row.kind else { Issue.record("no streaming tool row"); return }
+            case .toolCall(let tool) = row.kind
+        else { Issue.record("no streaming tool row"); return }
         #expect(tool.isDetailExpanded == true)
     }
 
@@ -356,22 +387,28 @@ struct ChatTranscriptTests {
         let streams: [AssistantMessage] = [
             AssistantMessage(content: "", thinking: "t"),
             AssistantMessage(content: "", toolCalls: [toolCall(id: "a", name: "ls", path: "/x")]),
-            AssistantMessage(content: "interim", toolCalls: [toolCall(id: "a", name: "ls", path: "/x")]),
-            AssistantMessage(content: "", thinking: "t", toolCalls: [
-                toolCall(id: "a", name: "ls", path: "/x"),
-                toolCall(id: "b", name: "read_file", path: "/y"),
-            ]),
+            AssistantMessage(
+                content: "interim", toolCalls: [toolCall(id: "a", name: "ls", path: "/x")]),
+            AssistantMessage(
+                content: "", thinking: "t",
+                toolCalls: [
+                    toolCall(id: "a", name: "ls", path: "/x"),
+                    toolCall(id: "b", name: "read_file", path: "/y"),
+                ]),
         ]
         for stream in streams {
             let rows = ChatTranscript.rows(
                 for: turn,
-                ctx(generating: true, expandedTurns: [ChatTranscript.streamingTurnID], stream: stream)
+                ctx(
+                    generating: true, expandedTurns: [ChatTranscript.streamingTurnID],
+                    stream: stream)
             )
             guard case .turnHeader(let header) = rows[1].kind else {
                 Issue.record("no streaming header"); return
             }
             let stepRows = rows.filter {
-                $0.id != "streaming-header" && $0.id != "streaming-answer" && $0.id != user.id.uuidString
+                $0.id != "streaming-header" && $0.id != "streaming-answer"
+                    && $0.id != user.id.uuidString
             }
             #expect(header.stepCount == stepRows.count)
         }
@@ -403,7 +440,9 @@ struct ChatTranscriptTests {
         let turn = ChatTranscript.Turn(id: user.id, messages: [user])
         let rows = ChatTranscript.rows(for: turn, ctx(generating: true, stream: nil))
         #expect(rows.first?.id == user.id.uuidString)
-        guard case .user(let userRow) = rows.first?.kind else { Issue.record("no user row"); return }
+        guard case .user(let userRow) = rows.first?.kind else {
+            Issue.record("no user row"); return
+        }
         #expect(userRow.content == "")
         #expect(userRow.images.count == 1)
     }
@@ -414,14 +453,17 @@ struct ChatTranscriptTests {
         let user = UserMessage(content: "read")
         let call = toolCall(id: "tc1", name: "read_file", path: "/tmp/foo.txt")
         let a1 = AssistantMessage(content: "", toolCalls: [call])
-        let result = ToolResultMessage(toolCallId: "tc1", toolName: "read_file", content: [.text("data")])
+        let result = ToolResultMessage(
+            toolCallId: "tc1", toolName: "read_file", content: [.text("data")])
         let a2 = AssistantMessage(content: "done")
         let toolRowID = "\(a1.id.uuidString)-tool-0"
         let rows = ChatTranscript.rows(
             from: [user, a1, result, a2],
             ctx(expandedTurns: [user.id], expandedDetails: [toolRowID])
         ).rows
-        guard let row = rows.first(where: { $0.id == toolRowID }), case .toolCall(let tool) = row.kind else {
+        guard let row = rows.first(where: { $0.id == toolRowID }),
+            case .toolCall(let tool) = row.kind
+        else {
             Issue.record("tool row missing"); return
         }
         #expect(tool.isDetailExpanded == true)
@@ -436,13 +478,14 @@ struct ChatTranscriptTests {
         let user = UserMessage(content: "read")
         let call = toolCall(id: "tc1", name: "read_file", path: "/tmp/foo.txt")
         let a1 = AssistantMessage(content: "", toolCalls: [call])
-        let result = ToolResultMessage(toolCallId: "tc1", toolName: "read_file", content: [.text("data")])
+        let result = ToolResultMessage(
+            toolCallId: "tc1", toolName: "read_file", content: [.text("data")])
         let a2 = AssistantMessage(content: "done")
         let projection = ChatTranscript.rows(from: [user, a1, result, a2], ctx())  // collapsed
 
         let toolRowID = "\(a1.id.uuidString)-tool-0"
-        #expect(!projection.rows.contains { $0.id == toolRowID })   // collapsed: not rendered
-        #expect(projection.toolRowIDs.contains(toolRowID))          // but tracked for pruning
+        #expect(!projection.rows.contains { $0.id == toolRowID })  // collapsed: not rendered
+        #expect(projection.toolRowIDs.contains(toolRowID))  // but tracked for pruning
     }
 
     /// The projection reports the still-valid turn ids — committed Turn ids, plus
@@ -477,7 +520,8 @@ struct ChatTranscriptTests {
         let user = UserMessage(content: "hi")
         let call = toolCall(id: "tc1", name: "read_file", path: "/tmp/foo.txt")
         let a1 = AssistantMessage(content: "", toolCalls: [call])
-        let result = ToolResultMessage(toolCallId: "tc1", toolName: "read_file", content: [.text("data")])
+        let result = ToolResultMessage(
+            toolCallId: "tc1", toolName: "read_file", content: [.text("data")])
         let a2 = AssistantMessage(content: "done")
         let messages: [any AgentMessageProtocol] = [user, a1, result, a2]
         let context = ctx(expandedTurns: [user.id])

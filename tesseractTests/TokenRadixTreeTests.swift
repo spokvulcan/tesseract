@@ -16,7 +16,9 @@ struct TokenRadixTreeTests {
         type: HybridCacheSnapshot.CheckpointType = .system
     ) -> HybridCacheSnapshot {
         let kv = KVCacheSimple()
-        kv.state = [MLXArray.zeros([1, 1, max(offset, 1), 64]), MLXArray.zeros([1, 1, max(offset, 1), 64])]
+        kv.state = [
+            MLXArray.zeros([1, 1, max(offset, 1), 64]), MLXArray.zeros([1, 1, max(offset, 1), 64]),
+        ]
         return HybridCacheSnapshot.capture(cache: [kv], offset: offset, type: type)!
     }
 
@@ -244,16 +246,16 @@ struct TokenRadixTreeTests {
         tree.insertPath(tokens: [1, 2, 3, 4, 5])
         tree.insertPath(tokens: [1, 2, 6, 7])
         let midNode = tree.insertPath(tokens: [1, 2])
-        tree.storeSnapshot(makeSnapshot(offset: 2), on: midNode) // multi-child
-        insertAndStore(tree, tokens: [1, 2, 3, 4, 5], type: .leaf) // leaf, offset=5
-        insertAndStore(tree, tokens: [1, 2, 6, 7], type: .leaf)    // leaf, offset=4
+        tree.storeSnapshot(makeSnapshot(offset: 2), on: midNode)  // multi-child
+        insertAndStore(tree, tokens: [1, 2, 3, 4, 5], type: .leaf)  // leaf, offset=5
+        insertAndStore(tree, tokens: [1, 2, 6, 7], type: .leaf)  // leaf, offset=4
 
         let eligible = tree.eligibleEvictionNodes()
         let offsets = Set(eligible.map(\.tokenOffset))
 
         #expect(offsets.contains(5))
         #expect(offsets.contains(4))
-        #expect(!offsets.contains(2)) // multi-child node protected
+        #expect(!offsets.contains(2))  // multi-child node protected
     }
 
     // MARK: - 14b. eligibleEvictionNodesExcludeSystemSnapshots
@@ -277,7 +279,7 @@ struct TokenRadixTreeTests {
         let eligible = tree.eligibleEvictionNodes()
         let offsets = Set(eligible.map(\.tokenOffset))
 
-        #expect(offsets.contains(15))   // leaf is eligible
+        #expect(offsets.contains(15))  // leaf is eligible
         #expect(!offsets.contains(10))  // system is protected
     }
 
@@ -367,7 +369,7 @@ struct TokenRadixTreeTests {
         tree.insertPath(tokens: [1, 2, 5, 6])
         let mid = tree.insertPath(tokens: [1, 2])
         tree.storeSnapshot(makeSnapshot(offset: 2), on: mid)
-        tree.dropBody(node: mid) // empties a 2-child node → retained
+        tree.dropBody(node: mid)  // empties a 2-child node → retained
         #expect(tree.nodeCount == 4)
         #expect(mid.parent != nil)
     }
@@ -620,7 +622,8 @@ struct TokenRadixTreeTests {
         let midNode = tree.insertPath(tokens: [1, 2, 3])
         // Put midNode in state 5 (committed ref, no body) so it has a live
         // ref but is body-less, the exact orphan hazard.
-        tree.restoreCommittedRef(node: midNode, ref: PrefixCacheTestFixtures.makeRef(tokenOffset: 3))
+        tree.restoreCommittedRef(
+            node: midNode, ref: PrefixCacheTestFixtures.makeRef(tokenOffset: 3))
         #expect(tree.nodeCount == 3)
 
         // Empty the [4] leaf and let self-heal try to walk upward.
@@ -628,7 +631,7 @@ struct TokenRadixTreeTests {
         tree.storeSnapshot(makeSnapshot(offset: 4), on: leaf)
         tree.dropBody(node: leaf)
 
-        #expect(tree.nodeCount == 2)       // leaf removed, midNode retained
+        #expect(tree.nodeCount == 2)  // leaf removed, midNode retained
         #expect(midNode.parent != nil)
         #expect(midNode.state.ref != nil)
         #expect(midNode.state.committed)

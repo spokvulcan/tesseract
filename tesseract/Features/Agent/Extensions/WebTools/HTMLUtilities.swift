@@ -65,10 +65,10 @@ nonisolated enum HTMLUtilities: Sendable {
         var result = string
         for match in matches.reversed() {
             guard match.numberOfRanges >= 2,
-                  let numberRange = Range(match.range(at: 1), in: result),
-                  let fullRange = Range(match.range(at: 0), in: result),
-                  let codePoint = UInt32(result[numberRange], radix: radix),
-                  let scalar = Unicode.Scalar(codePoint)
+                let numberRange = Range(match.range(at: 1), in: result),
+                let fullRange = Range(match.range(at: 0), in: result),
+                let codePoint = UInt32(result[numberRange], radix: radix),
+                let scalar = Unicode.Scalar(codePoint)
             else { continue }
             result.replaceSubrange(fullRange, with: String(scalar))
         }

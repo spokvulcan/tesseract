@@ -95,13 +95,14 @@ private func info(
     generateTime: TimeInterval = 0.2,
     stopReason: GenerateStopReason = .stop
 ) -> RawGeneration {
-    .info(GenerateCompletionInfo(
-        promptTokenCount: prompt,
-        generationTokenCount: generated,
-        promptTime: promptTime,
-        generationTime: generateTime,
-        stopReason: stopReason
-    ))
+    .info(
+        GenerateCompletionInfo(
+            promptTokenCount: prompt,
+            generationTokenCount: generated,
+            promptTime: promptTime,
+            generationTime: generateTime,
+            stopReason: stopReason
+        ))
 }
 
 private extension AgentGeneration {
@@ -162,7 +163,8 @@ nonisolated struct GenerationStreamLoopTests {
 
         // `.text` is forwarded to the sink; `.info` is captured, never sunk.
         #expect(recorder.events.compactMap(\.asText) == ["hello world"])
-        #expect(!recorder.events.contains { if case .info = $0 { return true } else { return false } })
+        #expect(
+            !recorder.events.contains { if case .info = $0 { return true } else { return false } })
 
         #expect(outcome.completionInfo?.generationTokenCount == 7)
         #expect(outcome.intervened == false)
@@ -208,7 +210,7 @@ nonisolated struct GenerationStreamLoopTests {
             initial: cannedHandle([
                 // Vendor buffered a `<tool_call>` body but the model hit EOS
                 // before the close tag — no `.toolCall`, no `.info`.
-                .toolCallBufferDelta("<tool_call>\n<read>\n<file_path>/x</file_path>"),
+                .toolCallBufferDelta("<tool_call>\n<read>\n<file_path>/x</file_path>")
             ]),
             startsInsideThinkBlock: false,
             safeguard: .init(enabled: false)

@@ -19,7 +19,7 @@ struct SettingsManagerModelSelectionTests {
         #expect(settings.selectedAgentModelID == ModelDefinition.defaultAgentModelID)
         #expect(
             store.string(for: "selectedAgentModelID", default: "")
-            == ModelDefinition.defaultAgentModelID
+                == ModelDefinition.defaultAgentModelID
         )
     }
 
@@ -32,7 +32,7 @@ struct SettingsManagerModelSelectionTests {
         #expect(settings.selectedSpeechToTextModelID == ModelDefinition.defaultSpeechToTextModelID)
         #expect(
             store.string(for: "selectedSpeechToTextModelID", default: "")
-            == ModelDefinition.defaultSpeechToTextModelID
+                == ModelDefinition.defaultSpeechToTextModelID
         )
     }
 }

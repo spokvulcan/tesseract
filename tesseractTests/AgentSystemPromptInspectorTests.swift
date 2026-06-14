@@ -20,10 +20,13 @@ struct AgentSystemPromptInspectorTests {
     @MainActor
     private final class ControllableFormatter {
         private(set) var calls: [String] = []
-        private var continuations: [CheckedContinuation<(text: String, tokenCount: Int), Error>] = []
+        private var continuations: [CheckedContinuation<(text: String, tokenCount: Int), Error>] =
+            []
         var pendingCount: Int { continuations.count }
 
-        func format(_ systemPrompt: String, _ tools: [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int) {
+        func format(_ systemPrompt: String, _ tools: [AgentToolDefinition]?) async throws -> (
+            text: String, tokenCount: Int
+        ) {
             calls.append(systemPrompt)
             return try await withCheckedThrowingContinuation { continuations.append($0) }
         }
@@ -33,7 +36,9 @@ struct AgentSystemPromptInspectorTests {
         }
     }
 
-    private func source(_ prompt: String) -> @MainActor () -> (systemPrompt: String, tools: [AgentToolDefinition]) {
+    private func source(_ prompt: String)
+        -> @MainActor () -> (systemPrompt: String, tools: [AgentToolDefinition])
+    {
         { (prompt, []) }
     }
 

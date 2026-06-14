@@ -45,23 +45,28 @@ struct SegmentPlayback {
         /// The first/only segment of a long-form run: already `show`n, no boundary,
         /// aligned on completion.
         static func first(text: String, tokenOffsets: [Int]) -> Segment {
-            Segment(text: text, tokenOffsets: tokenOffsets, boundary: nil,
-                    firstChunkState: nil, marksSegmentComplete: true)
+            Segment(
+                text: text, tokenOffsets: tokenOffsets, boundary: nil,
+                firstChunkState: nil, marksSegmentComplete: true)
         }
 
         /// A subsequent long-form segment: switches the surface in once the head reaches
         /// `boundary`, then aligns on completion.
         static func next(text: String, tokenOffsets: [Int], boundary: TimeInterval) -> Segment {
-            Segment(text: text, tokenOffsets: tokenOffsets, boundary: boundary,
-                    firstChunkState: nil, marksSegmentComplete: true)
+            Segment(
+                text: text, tokenOffsets: tokenOffsets, boundary: boundary,
+                firstChunkState: nil, marksSegmentComplete: true)
         }
 
         /// A single (non-long-form) streaming segment: already `show`n, flips to
         /// `firstChunkState` on the first chunk, and leaves the duration estimate to the
         /// caller's `markGenerationComplete`.
-        static func single(text: String, tokenOffsets: [Int], firstChunkState: SpeechState) -> Segment {
-            Segment(text: text, tokenOffsets: tokenOffsets, boundary: nil,
-                    firstChunkState: firstChunkState, marksSegmentComplete: false)
+        static func single(text: String, tokenOffsets: [Int], firstChunkState: SpeechState)
+            -> Segment
+        {
+            Segment(
+                text: text, tokenOffsets: tokenOffsets, boundary: nil,
+                firstChunkState: firstChunkState, marksSegmentComplete: false)
         }
     }
 
@@ -94,8 +99,10 @@ struct SegmentPlayback {
                 // Switch the moment the head reaches the boundary; only push duration
                 // afterwards, so a not-yet-switched segment can't corrupt the previous
                 // segment's pacing.
-                if !switched && playback.currentPlaybackTime() >= boundary - Self.boundaryTolerance {
-                    surface?.switchText(segment.text, tokenCharOffsets: segment.tokenOffsets, segmentBase: boundary)
+                if !switched && playback.currentPlaybackTime() >= boundary - Self.boundaryTolerance
+                {
+                    surface?.switchText(
+                        segment.text, tokenCharOffsets: segment.tokenOffsets, segmentBase: boundary)
                     switched = true
                 }
                 if switched {
@@ -119,7 +126,8 @@ struct SegmentPlayback {
                 if isPaused() { return false }
                 try await Task.sleep(for: Self.drainPoll)
             }
-            surface?.switchText(segment.text, tokenCharOffsets: segment.tokenOffsets, segmentBase: boundary)
+            surface?.switchText(
+                segment.text, tokenCharOffsets: segment.tokenOffsets, segmentBase: boundary)
         }
 
         // A boundary segment's deferred duration updates didn't run for the chunks

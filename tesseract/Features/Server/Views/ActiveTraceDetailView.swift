@@ -19,7 +19,7 @@ struct ActiveTraceDetailView: View {
             Divider()
 
             StreamingSpanListView(trace: trace)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
 
@@ -61,30 +61,38 @@ struct ActiveTraceDetailView: View {
 
             // Metrics strip — compact, monospace.
             HStack(spacing: Theme.Spacing.md) {
-                MetricCell(label: "cached",
-                           value: "\(trace.cachedTokens)")
-                MetricCell(label: "prompt",
-                           value: formatOpt(trace.promptTokens))
-                MetricCell(label: "prefill",
-                           value: formatOpt(trace.newTokensToPrefill))
-                MetricCell(label: "out",
-                           value: "\(trace.generationTokens)")
-                MetricCell(label: "tok/s",
-                           value: trace.tokensPerSecond > 0
-                           ? String(format: "%.1f", trace.tokensPerSecond)
-                           : "—")
-                MetricCell(label: "TTFT",
-                           value: trace.ttftMs.map {
-                               String(format: "%.0fms", $0)
-                           } ?? "—")
+                MetricCell(
+                    label: "cached",
+                    value: "\(trace.cachedTokens)")
+                MetricCell(
+                    label: "prompt",
+                    value: formatOpt(trace.promptTokens))
+                MetricCell(
+                    label: "prefill",
+                    value: formatOpt(trace.newTokensToPrefill))
+                MetricCell(
+                    label: "out",
+                    value: "\(trace.generationTokens)")
+                MetricCell(
+                    label: "tok/s",
+                    value: trace.tokensPerSecond > 0
+                        ? String(format: "%.1f", trace.tokensPerSecond)
+                        : "—")
+                MetricCell(
+                    label: "TTFT",
+                    value: trace.ttftMs.map {
+                        String(format: "%.0fms", $0)
+                    } ?? "—")
                 Spacer()
                 Button {
                     showDiagnosticsDetail.toggle()
                 } label: {
-                    Image(systemName: showDiagnosticsDetail
-                          ? "chevron.up.circle"
-                          : "chevron.down.circle")
-                        .font(.caption)
+                    Image(
+                        systemName: showDiagnosticsDetail
+                            ? "chevron.up.circle"
+                            : "chevron.down.circle"
+                    )
+                    .font(.caption)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -93,14 +101,18 @@ struct ActiveTraceDetailView: View {
 
             if showDiagnosticsDetail {
                 HStack(spacing: Theme.Spacing.md) {
-                    MetricCell(label: "lookup",
-                               value: formatOptMs(trace.lookupMs))
-                    MetricCell(label: "restore",
-                               value: formatOptMs(trace.restoreMs))
-                    MetricCell(label: "prefill",
-                               value: formatOptMs(trace.prefillMs))
-                    MetricCell(label: "shared",
-                               value: "\(trace.sharedPrefixLength)")
+                    MetricCell(
+                        label: "lookup",
+                        value: formatOptMs(trace.lookupMs))
+                    MetricCell(
+                        label: "restore",
+                        value: formatOptMs(trace.restoreMs))
+                    MetricCell(
+                        label: "prefill",
+                        value: formatOptMs(trace.prefillMs))
+                    MetricCell(
+                        label: "shared",
+                        value: "\(trace.sharedPrefixLength)")
                     Spacer()
                     if let reason = trace.cacheReason {
                         Text(reason)
@@ -168,7 +180,8 @@ struct ActiveTraceDetailView: View {
         case .decoding:
             return "\(trace.generationTokens) tokens"
         case .completed:
-            return "\(trace.generationTokens) tokens in \(String(format: "%.1fs", trace.elapsedFromStart))"
+            return
+                "\(trace.generationTokens) tokens in \(String(format: "%.1fs", trace.elapsedFromStart))"
         case .failed: return "failed"
         case .cancelled: return "cancelled"
         }

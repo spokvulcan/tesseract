@@ -75,7 +75,9 @@ enum PackageBootstrap {
             do {
                 return try String(contentsOf: url, encoding: .utf8)
             } catch {
-                Log.agent.warning("[PackageBootstrap] Failed to read prompt append \(url.lastPathComponent): \(error.localizedDescription)")
+                Log.agent.warning(
+                    "[PackageBootstrap] Failed to read prompt append \(url.lastPathComponent): \(error.localizedDescription)"
+                )
                 return nil
             }
         }
@@ -88,7 +90,8 @@ enum PackageBootstrap {
         let fm = FileManager.default
         let cacheRoot = agentRoot.appendingPathComponent(".cache/packages", isDirectory: true)
         return registry.enabledPackages.flatMap { package -> [URL] in
-            let packageCache = cacheRoot.appendingPathComponent(package.manifest.name, isDirectory: true)
+            let packageCache = cacheRoot.appendingPathComponent(
+                package.manifest.name, isDirectory: true)
             return package.skillPaths.compactMap { originalURL -> URL? in
                 guard let relativePath = relativePath(of: originalURL, to: package.baseURL) else {
                     return nil
@@ -105,7 +108,8 @@ enum PackageBootstrap {
     /// (templates, references) are available for the agent's `read` tool.
     private static func copySkillsToCache(package: ResolvedPackage, agentRoot: URL) {
         let fm = FileManager.default
-        let packageCache = agentRoot
+        let packageCache =
+            agentRoot
             .appendingPathComponent(".cache/packages", isDirectory: true)
             .appendingPathComponent(package.manifest.name, isDirectory: true)
 
@@ -121,17 +125,23 @@ enum PackageBootstrap {
 
             // Skill directory is the parent of the skill file.
             let skillRelativeDir = (relative as NSString).deletingLastPathComponent
-            guard !skillRelativeDir.isEmpty, !copiedDirs.contains(skillRelativeDir) else { continue }
+            guard !skillRelativeDir.isEmpty, !copiedDirs.contains(skillRelativeDir) else {
+                continue
+            }
             copiedDirs.insert(skillRelativeDir)
 
-            let sourceDir = package.baseURL.appendingPathComponent(skillRelativeDir, isDirectory: true)
+            let sourceDir = package.baseURL.appendingPathComponent(
+                skillRelativeDir, isDirectory: true)
             let destDir = packageCache.appendingPathComponent(skillRelativeDir, isDirectory: true)
 
             do {
-                try fm.createDirectory(at: destDir.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.createDirectory(
+                    at: destDir.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try fm.copyItem(at: sourceDir, to: destDir)
             } catch {
-                Log.agent.warning("[PackageBootstrap] Failed to cache skill dir \(skillRelativeDir): \(error.localizedDescription)")
+                Log.agent.warning(
+                    "[PackageBootstrap] Failed to cache skill dir \(skillRelativeDir): \(error.localizedDescription)"
+                )
             }
         }
     }
@@ -139,7 +149,8 @@ enum PackageBootstrap {
     /// Compute the relative path of `url` within `base`, or nil if not contained.
     private static func relativePath(of url: URL, to base: URL) -> String? {
         let urlPath = url.standardizedFileURL.path
-        let basePath = base.standardizedFileURL.path.hasSuffix("/")
+        let basePath =
+            base.standardizedFileURL.path.hasSuffix("/")
             ? base.standardizedFileURL.path
             : base.standardizedFileURL.path + "/"
         guard urlPath.hasPrefix(basePath) else { return nil }

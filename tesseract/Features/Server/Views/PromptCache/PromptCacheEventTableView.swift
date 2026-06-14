@@ -16,7 +16,9 @@ struct PromptCacheEventTableView: View {
                 }
             }
             .padding(Theme.Spacing.sm)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+            .background(
+                .regularMaterial,
+                in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
         }
     }
 
@@ -56,8 +58,11 @@ struct PromptCacheEventTableView: View {
             .width(72)
 
             TableColumn("Event") { event in
-                Label(event.eventName, systemImage: PromptCacheEventDisplay.symbol(for: event.eventName))
-                    .font(.caption)
+                Label(
+                    event.eventName,
+                    systemImage: PromptCacheEventDisplay.symbol(for: event.eventName)
+                )
+                .font(.caption)
             }
             .width(min: 120, ideal: 160)
 
@@ -157,7 +162,8 @@ enum PromptCacheEventDisplay {
 
     static func tokenSummary(_ event: PromptCacheTelemetryEvent) -> String {
         if let cached = event.field("skippedPrefillTokens"),
-           let prompt = event.field("promptTokens") {
+            let prompt = event.field("promptTokens")
+        {
             return "\(cached)/\(prompt)"
         }
         if let offset = event.field("offset") {

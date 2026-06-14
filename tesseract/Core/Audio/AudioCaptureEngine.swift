@@ -112,12 +112,14 @@ final class AudioCaptureEngine: AudioCapturing {
         inputSampleRate = inputFormat.sampleRate
 
         // Create format for our tap
-        guard let recordingFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: inputFormat.sampleRate,
-            channels: 1,
-            interleaved: false
-        ) else {
+        guard
+            let recordingFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: inputFormat.sampleRate,
+                channels: 1,
+                interleaved: false
+            )
+        else {
             throw DictationError.audioCaptureFailed("Failed to create recording format")
         }
 
@@ -138,7 +140,9 @@ final class AudioCaptureEngine: AudioCapturing {
         inputTapInstalled = true
 
         // Start timer to poll audio level on main thread
-        levelUpdateTimer = Timer.scheduledTimer(withTimeInterval: Defaults.meterInterval, repeats: true) { [weak self] _ in
+        levelUpdateTimer = Timer.scheduledTimer(
+            withTimeInterval: Defaults.meterInterval, repeats: true
+        ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.audioLevel = self.levelRelay.level
@@ -238,7 +242,9 @@ final class AudioCaptureEngine: AudioCapturing {
         }
     }
 
-    private func resample(_ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double) -> [Float] {
+    private func resample(
+        _ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double
+    ) -> [Float] {
         let ratio = targetSampleRate / sourceSampleRate
         let outputLength = Int(Double(samples.count) * ratio)
 

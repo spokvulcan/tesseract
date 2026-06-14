@@ -42,11 +42,12 @@ final class InMemoryInferenceArbiter: InferenceArbitrating {
         llmVision: LLMVisionRequirement,
         body: () async throws -> T
     ) async throws -> T {
-        leaseCalls.append(LeaseCall(
-            slot: slot,
-            llmModelIDOverride: llmModelIDOverride,
-            llmVision: llmVision
-        ))
+        leaseCalls.append(
+            LeaseCall(
+                slot: slot,
+                llmModelIDOverride: llmModelIDOverride,
+                llmVision: llmVision
+            ))
         if let ensureLoadedError { throw ensureLoadedError }
         return try await body()
     }

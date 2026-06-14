@@ -248,10 +248,12 @@ nonisolated func makeCompactionTransform(
         reason: .compaction,
         transform: { messages, signal in
             let tokens = TokenEstimator.estimateTotal(messages)
-            guard await contextManager.shouldCompact(
-                contextTokens: tokens,
-                contextWindow: contextWindow
-            ) else {
+            guard
+                await contextManager.shouldCompact(
+                    contextTokens: tokens,
+                    contextWindow: contextWindow
+                )
+            else {
                 return ContextTransformResult(
                     messages: messages, didMutate: false, reason: .compaction
                 )
@@ -274,7 +276,6 @@ nonisolated func makeCompactionTransform(
         }
     )
 }
-
 
 // MARK: - TokenEstimator
 

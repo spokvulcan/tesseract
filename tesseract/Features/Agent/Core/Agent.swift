@@ -178,17 +178,19 @@ final class Agent {
             )
             context.messages = compacted
             state.messages = compacted.map { $0 as any AgentMessageProtocol }
-            emit(.contextTransformEnd(
-                reason: .compaction,
-                didMutate: true,
-                messages: compacted
-            ))
+            emit(
+                .contextTransformEnd(
+                    reason: .compaction,
+                    didMutate: true,
+                    messages: compacted
+                ))
         } catch {
-            emit(.contextTransformEnd(
-                reason: .compaction,
-                didMutate: false,
-                messages: nil
-            ))
+            emit(
+                .contextTransformEnd(
+                    reason: .compaction,
+                    didMutate: false,
+                    messages: nil
+                ))
             state.error = error.localizedDescription
         }
 

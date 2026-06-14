@@ -39,7 +39,9 @@ nonisolated struct PathSandbox: Sendable {
 
     /// Default sandbox root for the agent's working directory.
     static var defaultRoot: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
         return appSupport.appendingPathComponent("Tesseract Agent/agent", isDirectory: true)
     }
 
@@ -50,7 +52,8 @@ nonisolated struct PathSandbox: Sendable {
     /// - Symlinks pointing outside sandbox are rejected
     func resolve(_ path: String) throws -> URL {
         // Trailing slash ensures "agent2" doesn't prefix-match "agent/"
-        let rootPath = root.standardizedFileURL.path.hasSuffix("/")
+        let rootPath =
+            root.standardizedFileURL.path.hasSuffix("/")
             ? root.standardizedFileURL.path
             : root.standardizedFileURL.path + "/"
 
@@ -68,9 +71,10 @@ nonisolated struct PathSandbox: Sendable {
         // Check that the standardized path is within the sandbox.
         // Allow exact root match, or require the path starts with root + "/"
         let standardizedPath = standardized.path
-        guard standardizedPath == root.standardizedFileURL.path
-            || standardizedPath.hasPrefix(rootPath) else
-        {
+        guard
+            standardizedPath == root.standardizedFileURL.path
+                || standardizedPath.hasPrefix(rootPath)
+        else {
             if path.contains("..") {
                 throw PathSandboxError.pathTraversal(path)
             }
@@ -95,7 +99,7 @@ nonisolated struct PathSandbox: Sendable {
         var current = url
         while !Self.fileManager.fileExists(atPath: current.path) {
             let parent = current.deletingLastPathComponent()
-            if parent.path == current.path { break } // reached filesystem root
+            if parent.path == current.path { break }  // reached filesystem root
             current = parent
         }
 

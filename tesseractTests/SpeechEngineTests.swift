@@ -104,7 +104,8 @@ struct SpeechEngineTests {
         var params = TTSParameters.default
         params.seed = 99
         params.temperature = 0.42
-        _ = try await engine.generate(text: "t", voice: "narrator", language: "fr", parameters: params)
+        _ = try await engine.generate(
+            text: "t", voice: "narrator", language: "fr", parameters: params)
 
         #expect(await synth.recordedVoices == ["narrator"])
         #expect(await synth.recordedLanguages == ["fr"])
@@ -142,13 +143,15 @@ struct SpeechEngineTests {
         // Unlike `loadModel` (which maps onto `.modelLoadFailed`), `generate` is a
         // passthrough — the raw model error surfaces, not a `SpeechError`.
         await #expect(throws: FakeModelError.self) {
-            _ = try await engine.generate(text: "t", voice: nil, language: nil, parameters: .default)
+            _ = try await engine.generate(
+                text: "t", voice: nil, language: nil, parameters: .default)
         }
     }
 
     @Test
     func generateStreamingFailurePropagatesUnchangedAsTheStreamsTerminatingError() async throws {
-        let synth = InMemorySpeechSynthesizer(streamingError: FakeModelError(message: "decode failed"))
+        let synth = InMemorySpeechSynthesizer(
+            streamingError: FakeModelError(message: "decode failed"))
         let engine = SpeechEngine(makeSynthesizer: { synth })
         try await engine.loadModel()
 
@@ -200,7 +203,9 @@ struct SpeechEngineTests {
         }
 
         guard case .modelLoadFailed = caught else {
-            Issue.record("expected model failure mapped to .modelLoadFailed, got \(String(describing: caught))")
+            Issue.record(
+                "expected model failure mapped to .modelLoadFailed, got \(String(describing: caught))"
+            )
             return
         }
         // The facade unwinds its load lifecycle on failure.
@@ -212,7 +217,8 @@ struct SpeechEngineTests {
             try await engine.generate(text: "x", voice: nil, language: nil, parameters: .default)
         }
         guard case .modelNotLoaded = genError else {
-            Issue.record("expected .modelNotLoaded after failed load, got \(String(describing: genError))")
+            Issue.record(
+                "expected .modelNotLoaded after failed load, got \(String(describing: genError))")
             return
         }
     }
@@ -254,7 +260,8 @@ struct SpeechEngineTests {
         #expect(engine.loadingStatus == "")
 
         let error = await captureSpeechError {
-            try await engine.generate(text: "after", voice: nil, language: nil, parameters: .default)
+            try await engine.generate(
+                text: "after", voice: nil, language: nil, parameters: .default)
         }
         guard case .modelNotLoaded = error else {
             Issue.record("expected .modelNotLoaded after unload, got \(String(describing: error))")
@@ -285,7 +292,10 @@ struct SpeechEngineTests {
         #expect(engine.isModelLoaded)
         #expect(await spy.synthesizers[1].loadCount == 1)
         // The default model repo is supplied by the facade to each fresh adapter.
-        #expect(await spy.synthesizers[1].loadedRepos == ["mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"])
+        #expect(
+            await spy.synthesizers[1].loadedRepos == [
+                "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
+            ])
     }
 
     // MARK: - Voice-anchor / cancel / offsets delegation across the seam

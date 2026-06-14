@@ -10,37 +10,37 @@ struct DuckDuckGoParsingTests {
 
     /// Realistic DDG HTML fragment with multiple results.
     private static let sampleHTML = """
-    <html>
-    <body>
-    <div id="links" class="results">
-      <div class="result results_links results_links_deep web-result">
-        <div class="links_main links_deep result__body">
-          <h2 class="result__title">
-            <a rel="nofollow" class="result__a" href="https://www.swift.org/blog/swift-6.2-released/">We&#x27;re excited to announce <b>Swift</b> <b>6.2</b></a>
-          </h2>
-          <a class="result__snippet" href="https://www.swift.org/blog/swift-6.2-released/">Swift <b>6.2</b> delivers a broad set of features designed for real-world development.</a>
+        <html>
+        <body>
+        <div id="links" class="results">
+          <div class="result results_links results_links_deep web-result">
+            <div class="links_main links_deep result__body">
+              <h2 class="result__title">
+                <a rel="nofollow" class="result__a" href="https://www.swift.org/blog/swift-6.2-released/">We&#x27;re excited to announce <b>Swift</b> <b>6.2</b></a>
+              </h2>
+              <a class="result__snippet" href="https://www.swift.org/blog/swift-6.2-released/">Swift <b>6.2</b> delivers a broad set of features designed for real-world development.</a>
+            </div>
+          </div>
+          <div class="result results_links results_links_deep web-result">
+            <div class="links_main links_deep result__body">
+              <h2 class="result__title">
+                <a rel="nofollow" class="result__a" href="https://www.hackingwithswift.com/articles/277/whats-new-in-swift-6-2">What&#39;s new in Swift 6.2 &mdash; Hacking with Swift</a>
+              </h2>
+              <a class="result__snippet" href="https://www.hackingwithswift.com/articles/277/whats-new-in-swift-6-2">Swift 6.2 brings improved concurrency &amp; performance enhancements.</a>
+            </div>
+          </div>
+          <div class="result results_links results_links_deep web-result">
+            <div class="links_main links_deep result__body">
+              <h2 class="result__title">
+                <a rel="nofollow" class="result__a" href="https://developer.apple.com/swift/whats-new/">What&#x27;s new in Swift &ndash; Apple Developer</a>
+              </h2>
+              <a class="result__snippet" href="https://developer.apple.com/swift/whats-new/">Dive into the latest features and capabilities of the <b>Swift</b> programming language.</a>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="result results_links results_links_deep web-result">
-        <div class="links_main links_deep result__body">
-          <h2 class="result__title">
-            <a rel="nofollow" class="result__a" href="https://www.hackingwithswift.com/articles/277/whats-new-in-swift-6-2">What&#39;s new in Swift 6.2 &mdash; Hacking with Swift</a>
-          </h2>
-          <a class="result__snippet" href="https://www.hackingwithswift.com/articles/277/whats-new-in-swift-6-2">Swift 6.2 brings improved concurrency &amp; performance enhancements.</a>
-        </div>
-      </div>
-      <div class="result results_links results_links_deep web-result">
-        <div class="links_main links_deep result__body">
-          <h2 class="result__title">
-            <a rel="nofollow" class="result__a" href="https://developer.apple.com/swift/whats-new/">What&#x27;s new in Swift &ndash; Apple Developer</a>
-          </h2>
-          <a class="result__snippet" href="https://developer.apple.com/swift/whats-new/">Dive into the latest features and capabilities of the <b>Swift</b> programming language.</a>
-        </div>
-      </div>
-    </div>
-    </body>
-    </html>
-    """
+        </body>
+        </html>
+        """
 
     @Test func parsesMultipleResultsFromHTML() {
         let results = DuckDuckGoClient.parseResults(html: Self.sampleHTML, maxResults: 10)
@@ -57,14 +57,21 @@ struct DuckDuckGoParsingTests {
     @Test func extractsURLsDirectly() {
         let results = DuckDuckGoClient.parseResults(html: Self.sampleHTML, maxResults: 10)
         #expect(results[0].url == "https://www.swift.org/blog/swift-6.2-released/")
-        #expect(results[1].url == "https://www.hackingwithswift.com/articles/277/whats-new-in-swift-6-2")
+        #expect(
+            results[1].url == "https://www.hackingwithswift.com/articles/277/whats-new-in-swift-6-2"
+        )
         #expect(results[2].url == "https://developer.apple.com/swift/whats-new/")
     }
 
     @Test func extractsSnippetsWithHTMLEntitiesDecoded() {
         let results = DuckDuckGoClient.parseResults(html: Self.sampleHTML, maxResults: 10)
-        #expect(results[0].snippet == "Swift 6.2 delivers a broad set of features designed for real-world development.")
-        #expect(results[1].snippet == "Swift 6.2 brings improved concurrency & performance enhancements.")
+        #expect(
+            results[0].snippet
+                == "Swift 6.2 delivers a broad set of features designed for real-world development."
+        )
+        #expect(
+            results[1].snippet
+                == "Swift 6.2 brings improved concurrency & performance enhancements.")
     }
 
     @Test func respectsMaxResultsLimit() {
@@ -248,21 +255,21 @@ struct DuckDuckGoRedirectParsingTests {
 
     /// DDG HTML with redirect-wrapped URLs (the format used in some regions).
     private static let redirectHTML = """
-    <html><body>
-    <div class="result results_links results_links_deep web-result">
-      <h2 class="result__title">
-        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Farticle&rut=abc123">Example Article</a>
-      </h2>
-      <a class="result__snippet">This is the snippet for the example article.</a>
-    </div>
-    <div class="result results_links results_links_deep web-result">
-      <h2 class="result__title">
-        <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.swift.org%2Fguide&rut=def456">Swift Guide</a>
-      </h2>
-      <a class="result__snippet">Official Swift documentation guide.</a>
-    </div>
-    </body></html>
-    """
+        <html><body>
+        <div class="result results_links results_links_deep web-result">
+          <h2 class="result__title">
+            <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Farticle&rut=abc123">Example Article</a>
+          </h2>
+          <a class="result__snippet">This is the snippet for the example article.</a>
+        </div>
+        <div class="result results_links results_links_deep web-result">
+          <h2 class="result__title">
+            <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.swift.org%2Fguide&rut=def456">Swift Guide</a>
+          </h2>
+          <a class="result__snippet">Official Swift documentation guide.</a>
+        </div>
+        </body></html>
+        """
 
     @Test func extractsRealURLFromRedirectWrapper() {
         let results = DuckDuckGoClient.parseResults(html: Self.redirectHTML, maxResults: 10)
@@ -292,10 +299,10 @@ struct DuckDuckGoEdgeCaseTests {
     @Test func handlesResultsWithMismatchedTitleSnippetCount() {
         // More titles than snippets — should only return matched pairs
         let html = """
-        <a class="result__a" href="https://a.com">Title A</a>
-        <a class="result__a" href="https://b.com">Title B</a>
-        <a class="result__snippet">Snippet A</a>
-        """
+            <a class="result__a" href="https://a.com">Title A</a>
+            <a class="result__a" href="https://b.com">Title B</a>
+            <a class="result__snippet">Snippet A</a>
+            """
         let results = DuckDuckGoClient.parseResults(html: html, maxResults: 10)
         #expect(results.count == 1)
         #expect(results[0].title == "Title A")
@@ -313,9 +320,9 @@ struct DuckDuckGoEdgeCaseTests {
     @Test func snippetClosedByDivTag() {
         // Some DDG variants close snippets with </div> instead of </a>
         let html = """
-        <a class="result__a" href="https://example.com">Title</a>
-        <div class="result__snippet">Snippet closed by div</div>
-        """
+            <a class="result__a" href="https://example.com">Title</a>
+            <div class="result__snippet">Snippet closed by div</div>
+            """
         let results = DuckDuckGoClient.parseResults(html: html, maxResults: 10)
         #expect(results.count == 1)
         #expect(results[0].snippet == "Snippet closed by div")
@@ -329,7 +336,8 @@ struct DuckDuckGoLiveTests {
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["RUN_LIVE_TESTS"] != nil))
     func liveSearchReturnsResults() async throws {
-        let results = try await DuckDuckGoClient.search(query: "Swift programming language", maxResults: 3)
+        let results = try await DuckDuckGoClient.search(
+            query: "Swift programming language", maxResults: 3)
         #expect(!results.isEmpty)
         #expect(results.count <= 3)
         for result in results {

@@ -27,27 +27,31 @@ struct SalvageOnCancelTests {
 
     @Test func offsetGateRequiresThresholdPastTheRestoreBase() {
         // At threshold: admit. One short: nothing.
-        #expect(ServerCompletion.salvageableOffset(
-            cacheOffset: 5_000 + threshold, restoreBaseOffset: 5_000,
-            keyPathCount: 100_000, minimumWarmOffset: 0
-        ) == 5_000 + threshold)
-        #expect(ServerCompletion.salvageableOffset(
-            cacheOffset: 5_000 + threshold - 1, restoreBaseOffset: 5_000,
-            keyPathCount: 100_000, minimumWarmOffset: 0
-        ) == nil)
+        #expect(
+            ServerCompletion.salvageableOffset(
+                cacheOffset: 5_000 + threshold, restoreBaseOffset: 5_000,
+                keyPathCount: 100_000, minimumWarmOffset: 0
+            ) == 5_000 + threshold)
+        #expect(
+            ServerCompletion.salvageableOffset(
+                cacheOffset: 5_000 + threshold - 1, restoreBaseOffset: 5_000,
+                keyPathCount: 100_000, minimumWarmOffset: 0
+            ) == nil)
     }
 
     @Test func offsetGateRefusesInconsistentOrUnanchorableOffsets() {
         // Past the key path — a mid-flight inconsistency must never admit.
-        #expect(ServerCompletion.salvageableOffset(
-            cacheOffset: threshold, restoreBaseOffset: 0,
-            keyPathCount: threshold - 1, minimumWarmOffset: 0
-        ) == nil)
+        #expect(
+            ServerCompletion.salvageableOffset(
+                cacheOffset: threshold, restoreBaseOffset: 0,
+                keyPathCount: threshold - 1, minimumWarmOffset: 0
+            ) == nil)
         // Inside the image prefix — unanchorable on restore.
-        #expect(ServerCompletion.salvageableOffset(
-            cacheOffset: threshold, restoreBaseOffset: 0,
-            keyPathCount: 100_000, minimumWarmOffset: threshold + 1
-        ) == nil)
+        #expect(
+            ServerCompletion.salvageableOffset(
+                cacheOffset: threshold, restoreBaseOffset: 0,
+                keyPathCount: 100_000, minimumWarmOffset: threshold + 1
+            ) == nil)
     }
 
     // MARK: - Salvage seam (capture → admit → lookup)

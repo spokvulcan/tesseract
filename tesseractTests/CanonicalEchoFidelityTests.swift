@@ -33,10 +33,11 @@ struct CanonicalEchoFidelityTests {
             content: "The answer is 42.",
             reasoning: "Deep thought says 42."
         )
-        let next = conversation(baseMessages + [
-            echo,
-            HTTPPrefixCacheMessage(role: .user, content: "And the question?"),
-        ])
+        let next = conversation(
+            baseMessages + [
+                echo,
+                HTTPPrefixCacheMessage(role: .user, content: "And the question?"),
+            ])
 
         let report = CanonicalEchoFidelity.check(
             previous: previous,
@@ -98,10 +99,11 @@ struct CanonicalEchoFidelityTests {
             content: "The answer is 42.",
             reasoning: "r"
         )
-        let next = conversation(baseMessages + [
-            trimmedEcho,
-            HTTPPrefixCacheMessage(role: .user, content: "ok"),
-        ])
+        let next = conversation(
+            baseMessages + [
+                trimmedEcho,
+                HTTPPrefixCacheMessage(role: .user, content: "ok"),
+            ])
         let report = CanonicalEchoFidelity.check(
             previous: previous,
             echo: stored,
@@ -126,10 +128,11 @@ struct CanonicalEchoFidelityTests {
             content: "The answer is 42, computed instantly.",
             reasoning: "r"
         )
-        let next = conversation(baseMessages + [
-            mutated,
-            HTTPPrefixCacheMessage(role: .user, content: "ok"),
-        ])
+        let next = conversation(
+            baseMessages + [
+                mutated,
+                HTTPPrefixCacheMessage(role: .user, content: "ok"),
+            ])
         let report = CanonicalEchoFidelity.check(
             previous: previous,
             echo: stored,
@@ -139,8 +142,9 @@ struct CanonicalEchoFidelityTests {
             requestIndex: 0,
             tokenizer: tokenizer
         )
-        guard case .mismatch(let length, let matched, let derivedTail, let nextTail) =
-            report.speculation
+        guard
+            case .mismatch(let length, let matched, let derivedTail, let nextTail) =
+                report.speculation
         else {
             Issue.record("speculation verdict: \(String(describing: report.speculation))")
             return
@@ -156,15 +160,18 @@ struct CanonicalEchoFidelityTests {
         let echo = HTTPPrefixCacheMessage.assistant(
             content: "",
             reasoning: "Need to look this up.",
-            toolCalls: [HTTPPrefixCacheToolCall(
-                name: "read",
-                argumentsJSON: #"{"filePath":"/tmp/answer.txt"}"#
-            )]
+            toolCalls: [
+                HTTPPrefixCacheToolCall(
+                    name: "read",
+                    argumentsJSON: #"{"filePath":"/tmp/answer.txt"}"#
+                )
+            ]
         )
-        let next = conversation(baseMessages + [
-            echo,
-            HTTPPrefixCacheMessage(role: .tool, content: "42"),
-        ])
+        let next = conversation(
+            baseMessages + [
+                echo,
+                HTTPPrefixCacheMessage(role: .tool, content: "42"),
+            ])
         let report = CanonicalEchoFidelity.check(
             previous: previous,
             echo: echo,
@@ -187,26 +194,31 @@ struct CanonicalEchoFidelityTests {
         let orderA = HTTPPrefixCacheMessage.assistant(
             content: "",
             reasoning: "edit",
-            toolCalls: [HTTPPrefixCacheToolCall(
-                name: "edit",
-                argumentsJSON: #"{"filePath":"/a.txt","oldString":"x","newString":"y"}"#
-            )]
+            toolCalls: [
+                HTTPPrefixCacheToolCall(
+                    name: "edit",
+                    argumentsJSON: #"{"filePath":"/a.txt","oldString":"x","newString":"y"}"#
+                )
+            ]
         )
         let orderB = HTTPPrefixCacheMessage.assistant(
             content: "",
             reasoning: "edit",
-            toolCalls: [HTTPPrefixCacheToolCall(
-                name: "edit",
-                argumentsJSON: #"{"newString":"y","oldString":"x","filePath":"/a.txt"}"#
-            )]
+            toolCalls: [
+                HTTPPrefixCacheToolCall(
+                    name: "edit",
+                    argumentsJSON: #"{"newString":"y","oldString":"x","filePath":"/a.txt"}"#
+                )
+            ]
         )
         // Canonical argument JSON makes the two messages equal — and the
         // render path must agree no matter which form the client echoed.
         #expect(orderA == orderB)
-        let next = conversation(baseMessages + [
-            orderB,
-            HTTPPrefixCacheMessage(role: .tool, content: "ok"),
-        ])
+        let next = conversation(
+            baseMessages + [
+                orderB,
+                HTTPPrefixCacheMessage(role: .tool, content: "ok"),
+            ])
         let report = CanonicalEchoFidelity.check(
             previous: previous,
             echo: orderA,
@@ -222,10 +234,12 @@ struct CanonicalEchoFidelityTests {
     private let stretchHead = HTTPPrefixCacheMessage.assistant(
         content: "",
         reasoning: "Let me look at the file first.",
-        toolCalls: [HTTPPrefixCacheToolCall(
-            name: "read",
-            argumentsJSON: #"{"filePath":"/tmp/answer.txt"}"#
-        )]
+        toolCalls: [
+            HTTPPrefixCacheToolCall(
+                name: "read",
+                argumentsJSON: #"{"filePath":"/tmp/answer.txt"}"#
+            )
+        ]
     )
 
     @Test func interruptedStretchChecksRewindFloorAndSpeculationSpine() {
@@ -235,10 +249,11 @@ struct CanonicalEchoFidelityTests {
         // gate must check the rewind floor + speculation spine, not the
         // tool leaf, and both must be faithful.
         let previous = conversation(baseMessages)
-        let next = conversation(baseMessages + [
-            stretchHead,
-            HTTPPrefixCacheMessage(role: .user, content: "Stop — try the other file instead."),
-        ])
+        let next = conversation(
+            baseMessages + [
+                stretchHead,
+                HTTPPrefixCacheMessage(role: .user, content: "Stop — try the other file instead."),
+            ])
         let report = CanonicalEchoFidelity.check(
             previous: previous,
             echo: stretchHead,
@@ -269,11 +284,12 @@ struct CanonicalEchoFidelityTests {
         // has no exact counterpart (its trailing header tokens fork at
         // the BPE seam), so only the rewind floor binds.
         let previous = conversation(baseMessages)
-        let next = conversation(baseMessages + [
-            stretchHead,
-            HTTPPrefixCacheMessage(role: .tool, content: "42"),
-            HTTPPrefixCacheMessage(role: .user, content: "Stop — try the other file instead."),
-        ])
+        let next = conversation(
+            baseMessages + [
+                stretchHead,
+                HTTPPrefixCacheMessage(role: .tool, content: "42"),
+                HTTPPrefixCacheMessage(role: .user, content: "Stop — try the other file instead."),
+            ])
         let report = CanonicalEchoFidelity.check(
             previous: previous,
             echo: stretchHead,
@@ -295,8 +311,10 @@ struct CanonicalEchoFidelityTests {
     // MARK: - Session walk
 
     @Test func walkSessionReducesPairsAndRepairsDroppedReasoning() async {
-        func openAI(_ role: OpenAI.ChatRole, _ content: String,
-                    reasoning: String? = nil) -> OpenAI.ChatMessage {
+        func openAI(
+            _ role: OpenAI.ChatRole, _ content: String,
+            reasoning: String? = nil
+        ) -> OpenAI.ChatMessage {
             OpenAI.ChatMessage(role: role, content: .text(content), reasoning_content: reasoning)
         }
         let turn1 = "The answer is 42."

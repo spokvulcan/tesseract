@@ -19,7 +19,8 @@ struct AgentLoopMalformedToolCallTests {
 
         func record(_ event: AgentEvent) {
             guard case .messageEnd(let message) = event,
-                  let assistant = message as? AssistantMessage else { return }
+                let assistant = message as? AssistantMessage
+            else { return }
             lock.lock(); messages.append(assistant); lock.unlock()
         }
 
@@ -32,7 +33,8 @@ struct AgentLoopMalformedToolCallTests {
     @Test func malformedToolCallAtEosSurfacesAsContentAndPersistsTurn() async throws {
         // An interrupted tool call: `<tool_call>` body with no close tag, nothing
         // else — no text, no parsed `.toolCall`.
-        let raw = "<tool_call>\n{\"name\":\"read\",\"arguments\":{\"file_path\":\"/x\"}\n</tool_call>"
+        let raw =
+            "<tool_call>\n{\"name\":\"read\",\"arguments\":{\"file_path\":\"/x\"}\n</tool_call>"
         let generate: LLMGenerateFunction = { _, _, _, _ in
             AsyncThrowingStream { continuation in
                 continuation.yield(.malformedToolCall(raw))

@@ -27,11 +27,14 @@ nonisolated enum ReadToolError: LocalizedError {
 
 // MARK: - ReadTool Factory
 
-nonisolated func createReadTool(sandbox: PathSandbox, readTracker: FileReadTracker) -> AgentToolDefinition {
+nonisolated func createReadTool(sandbox: PathSandbox, readTracker: FileReadTracker)
+    -> AgentToolDefinition
+{
     AgentToolDefinition(
         name: "read",
         label: "Read File",
-        description: "Read the contents of a file. Returns numbered lines (cat -n style). For images, returns a note and the image data directly.",
+        description:
+            "Read the contents of a file. Returns numbered lines (cat -n style). For images, returns a note and the image data directly.",
         parameterSchema: JSONSchema(
             type: "object",
             properties: [
@@ -260,7 +263,8 @@ private nonisolated enum ReadToolHelper: Sendable {
             if !result.isEmpty {
                 result += "\n\n"
             }
-            result += "[\(remainingCount) more lines in file. Use offset=\(nextOffset) to continue.]"
+            result +=
+                "[\(remainingCount) more lines in file. Use offset=\(nextOffset) to continue.]"
         }
 
         return AgentToolResult(

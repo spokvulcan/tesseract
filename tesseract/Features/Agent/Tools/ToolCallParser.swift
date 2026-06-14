@@ -174,7 +174,8 @@ nonisolated final class ToolCallParser {
 
     private nonisolated func logFinalize(preState: FinalizeState, emittedCount: Int) {
         let logger = Logger(subsystem: "app.tesseract.agent", category: "agent")
-        let isSilentCloseShape = preState.insideThinkBlock
+        let isSilentCloseShape =
+            preState.insideThinkBlock
             && preState.thinkBlockClosed
             && preState.bufferLen == 0
         let message =
@@ -229,7 +230,7 @@ nonisolated final class ToolCallParser {
             let toolRange = buffer.range(of: Self.toolStartTag)
 
             // Find the earliest tag
-            var earliest: (kind: Int, lower: String.Index)? // kind: 0=thinkStart, 1=thinkEnd, 2=tool
+            var earliest: (kind: Int, lower: String.Index)?  // kind: 0=thinkStart, 1=thinkEnd, 2=tool
             for (kind, range) in [(0, thinkStartRange), (1, thinkEndRange), (2, toolRange)] {
                 guard let r = range else { continue }
                 if earliest == nil || r.lowerBound < earliest!.lower {
@@ -302,10 +303,11 @@ nonisolated final class ToolCallParser {
                         toolCallCurrentName = Self.extractName(from: bodySoFar)
                     }
 
-                    events.append(.toolCallDelta(
-                        name: toolCallCurrentName,
-                        argumentsDelta: String(newChars)
-                    ))
+                    events.append(
+                        .toolCallDelta(
+                            name: toolCallCurrentName,
+                            argumentsDelta: String(newChars)
+                        ))
                 }
                 break
             }
@@ -325,14 +327,15 @@ nonisolated final class ToolCallParser {
                 if toolCallCurrentName == nil {
                     toolCallCurrentName = Self.extractName(from: bodyBeforeClose)
                 }
-                events.append(.toolCallDelta(
-                    name: toolCallCurrentName,
-                    argumentsDelta: String(newChars)
-                ))
+                events.append(
+                    .toolCallDelta(
+                        name: toolCallCurrentName,
+                        argumentsDelta: String(newChars)
+                    ))
             }
 
             if let data = jsonContent.data(using: .utf8),
-               let function = try? JSONDecoder().decode(ToolCall.Function.self, from: data)
+                let function = try? JSONDecoder().decode(ToolCall.Function.self, from: data)
             {
                 events.append(.toolCall(ToolCall(function: function)))
             } else if let toolCall = Self.parseXMLFunction(jsonContent) {
@@ -398,7 +401,8 @@ nonisolated final class ToolCallParser {
     /// Used as fallback when the library's XMLFunctionParser fails.
     private static func parseXMLFunction(_ content: String) -> ToolCall? {
         // Match <function=NAME>...</function> (closing tag may lack ">")
-        guard let funcMatch = content.range(of: #"<function=([^>]+)>"#, options: .regularExpression) else {
+        guard let funcMatch = content.range(of: #"<function=([^>]+)>"#, options: .regularExpression)
+        else {
             return nil
         }
 
@@ -407,7 +411,8 @@ nonisolated final class ToolCallParser {
         // Extract all <parameter=KEY>VALUE</parameter> pairs
         var arguments: [String: JSONValue] = [:]
         let nsContent = content as NSString
-        let matches = paramRegex.matches(in: content, range: NSRange(location: 0, length: nsContent.length))
+        let matches = paramRegex.matches(
+            in: content, range: NSRange(location: 0, length: nsContent.length))
 
         for match in matches {
             guard match.numberOfRanges >= 3 else { continue }

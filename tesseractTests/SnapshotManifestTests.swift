@@ -564,22 +564,34 @@ struct SnapshotManifestTests {
             modelFingerprint: "f"
         )
         let diffs: [(label: String, key: CachePartitionKey)] = [
-            ("modelID", CachePartitionKey(
-                modelID: "m2", kvBits: 8, kvGroupSize: 64,
-                modelFingerprint: "f"
-            )),
-            ("kvBits", CachePartitionKey(
-                modelID: "m", kvBits: 4, kvGroupSize: 64,
-                modelFingerprint: "f"
-            )),
-            ("kvGroupSize", CachePartitionKey(
-                modelID: "m", kvBits: 8, kvGroupSize: 32,
-                modelFingerprint: "f"
-            )),
-            ("modelFingerprint", CachePartitionKey(
-                modelID: "m", kvBits: 8, kvGroupSize: 64,
-                modelFingerprint: "f2"
-            )),
+            (
+                "modelID",
+                CachePartitionKey(
+                    modelID: "m2", kvBits: 8, kvGroupSize: 64,
+                    modelFingerprint: "f"
+                )
+            ),
+            (
+                "kvBits",
+                CachePartitionKey(
+                    modelID: "m", kvBits: 4, kvGroupSize: 64,
+                    modelFingerprint: "f"
+                )
+            ),
+            (
+                "kvGroupSize",
+                CachePartitionKey(
+                    modelID: "m", kvBits: 8, kvGroupSize: 32,
+                    modelFingerprint: "f"
+                )
+            ),
+            (
+                "modelFingerprint",
+                CachePartitionKey(
+                    modelID: "m", kvBits: 8, kvGroupSize: 64,
+                    modelFingerprint: "f2"
+                )
+            ),
         ]
         for diff in diffs {
             #expect(

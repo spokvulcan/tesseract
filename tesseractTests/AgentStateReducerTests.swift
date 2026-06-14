@@ -29,7 +29,9 @@ struct AgentStateReducerTests {
     /// drives the phase to `.executingTool(name)`.
     @Test func toolExecutionStartAddsPendingCallAndExecutingPhase() {
         let state = AgentState()
-        reduce([.toolExecutionStart(toolCallId: "call-1", toolName: "read_file", argsJSON: "{}")], into: state)
+        reduce(
+            [.toolExecutionStart(toolCallId: "call-1", toolName: "read_file", argsJSON: "{}")],
+            into: state)
 
         #expect(state.pendingToolCalls == ["call-1"])
         #expect(state.phase == .executingTool("read_file"))
@@ -39,21 +41,25 @@ struct AgentStateReducerTests {
     /// returns to `.streaming` once the *last* outstanding call finishes.
     @Test func toolExecutionEndResumesStreamingOnlyWhenAllCallsDone() {
         let state = AgentState()
-        reduce([
-            .toolExecutionStart(toolCallId: "call-1", toolName: "read_file", argsJSON: "{}"),
-            .toolExecutionStart(toolCallId: "call-2", toolName: "write_file", argsJSON: "{}"),
-            .toolExecutionEnd(toolCallId: "call-1", toolName: "read_file",
-                              result: AgentToolResult(content: []), isError: false),
-        ], into: state)
+        reduce(
+            [
+                .toolExecutionStart(toolCallId: "call-1", toolName: "read_file", argsJSON: "{}"),
+                .toolExecutionStart(toolCallId: "call-2", toolName: "write_file", argsJSON: "{}"),
+                .toolExecutionEnd(
+                    toolCallId: "call-1", toolName: "read_file",
+                    result: AgentToolResult(content: []), isError: false),
+            ], into: state)
 
         // One still outstanding — stays in the executing phase.
         #expect(state.pendingToolCalls == ["call-2"])
         #expect(state.phase == .executingTool("write_file"))
 
-        reduce([
-            .toolExecutionEnd(toolCallId: "call-2", toolName: "write_file",
-                              result: AgentToolResult(content: []), isError: false),
-        ], into: state)
+        reduce(
+            [
+                .toolExecutionEnd(
+                    toolCallId: "call-2", toolName: "write_file",
+                    result: AgentToolResult(content: []), isError: false)
+            ], into: state)
 
         #expect(state.pendingToolCalls.isEmpty)
         #expect(state.phase == .streaming)
@@ -93,7 +99,9 @@ struct AgentStateReducerTests {
     @Test func messageEndKeepsAssistantTurnWithOnlyToolCalls() {
         let state = AgentState()
         let toolCall = ToolCallInfo(id: "call-1", name: "read_file", argumentsJSON: "{}")
-        reduce([.messageEnd(message: AssistantMessage(content: "", toolCalls: [toolCall]))], into: state)
+        reduce(
+            [.messageEnd(message: AssistantMessage(content: "", toolCalls: [toolCall]))],
+            into: state)
 
         #expect(state.messages.count == 1)
     }
@@ -108,12 +116,19 @@ struct AgentStateReducerTests {
 
         let snapshot: [any AgentMessageProtocol & Sendable] = [
             UserMessage(content: "hi"),
-            AssistantMessage(content: "calling tool", toolCalls: [ToolCallInfo(id: "c1", name: "read_file", argumentsJSON: "{}")]),
-            ToolResultMessage(toolCallId: "c1", toolName: "read_file", content: [.text("file body")]),
+            AssistantMessage(
+                content: "calling tool",
+                toolCalls: [ToolCallInfo(id: "c1", name: "read_file", argumentsJSON: "{}")]),
+            ToolResultMessage(
+                toolCallId: "c1", toolName: "read_file", content: [.text("file body")]),
         ]
-        reduce([.turnEnd(message: AssistantMessage(content: "calling tool"),
-                         toolResults: [],
-                         contextMessages: snapshot)], into: state)
+        reduce(
+            [
+                .turnEnd(
+                    message: AssistantMessage(content: "calling tool"),
+                    toolResults: [],
+                    contextMessages: snapshot)
+            ], into: state)
 
         #expect(state.messages.count == 3)
         #expect(state.messages.last is ToolResultMessage)
@@ -126,9 +141,14 @@ struct AgentStateReducerTests {
     @Test func messageUpdateSetsStreamMessage() {
         let state = AgentState()
         let partial = AssistantMessage(content: "stream…")
-        reduce([.messageUpdate(message: partial,
-                               streamDelta: AssistantStreamDelta(textDelta: "stream…", thinkingDelta: nil, toolCallDelta: nil))],
-               into: state)
+        reduce(
+            [
+                .messageUpdate(
+                    message: partial,
+                    streamDelta: AssistantStreamDelta(
+                        textDelta: "stream…", thinkingDelta: nil, toolCallDelta: nil))
+            ],
+            into: state)
 
         #expect(state.streamMessage?.content == "stream…")
     }
@@ -152,8 +172,12 @@ struct AgentStateReducerTests {
         reduce([.contextTransformStart(reason: .compaction)], into: state)
         #expect(state.phase == .transformingContext(.compaction))
 
-        let compacted: [any AgentMessageProtocol & Sendable] = [AssistantMessage(content: "summary")]
-        reduce([.contextTransformEnd(reason: .compaction, didMutate: true, messages: compacted)], into: state)
+        let compacted: [any AgentMessageProtocol & Sendable] = [
+            AssistantMessage(content: "summary")
+        ]
+        reduce(
+            [.contextTransformEnd(reason: .compaction, didMutate: true, messages: compacted)],
+            into: state)
 
         #expect(state.phase == .streaming)
         #expect(state.messages.count == 1)
@@ -166,7 +190,9 @@ struct AgentStateReducerTests {
         let state = AgentState()
         state.messages = [UserMessage(content: "keep me")]
 
-        reduce([.contextTransformEnd(reason: .compaction, didMutate: false, messages: nil)], into: state)
+        reduce(
+            [.contextTransformEnd(reason: .compaction, didMutate: false, messages: nil)],
+            into: state)
 
         #expect(state.phase == .streaming)
         #expect(state.messages.count == 1)
@@ -183,15 +209,18 @@ struct AgentStateReducerTests {
         let partial = AssistantMessage(content: "hel")
         let final = AssistantMessage(content: "hello")
 
-        reduce([
-            .agentStart,
-            .messageStart(message: final),
-            .messageUpdate(message: partial,
-                           streamDelta: AssistantStreamDelta(textDelta: "hel", thinkingDelta: nil, toolCallDelta: nil)),
-            .messageEnd(message: final),
-        ], into: state)
+        reduce(
+            [
+                .agentStart,
+                .messageStart(message: final),
+                .messageUpdate(
+                    message: partial,
+                    streamDelta: AssistantStreamDelta(
+                        textDelta: "hel", thinkingDelta: nil, toolCallDelta: nil)),
+                .messageEnd(message: final),
+            ], into: state)
 
-        #expect(state.phase == .streaming)   // finishRun owns the .idle transition, not the fold
+        #expect(state.phase == .streaming)  // finishRun owns the .idle transition, not the fold
         #expect(state.streamMessage == nil)
         #expect(state.messages.count == 1)
         #expect(state.messages.first?.asAssistant?.content == "hello")

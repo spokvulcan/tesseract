@@ -25,8 +25,12 @@ final class TTSNotchPanelController: WordHighlightSurface {
 
     // MARK: - Public API
 
-    func show(text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval) {
-        Log.speech.info("[NotchPanel] show() called, text=\(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), isDismissing=\(self.isDismissing)")
+    func show(
+        text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval
+    ) {
+        Log.speech.info(
+            "[NotchPanel] show() called, text=\(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), isDismissing=\(self.isDismissing)"
+        )
         isDismissing = false
         forceClose()
 
@@ -58,10 +62,13 @@ final class TTSNotchPanelController: WordHighlightSurface {
         let xPosition = screenFrame.midX - Defaults.notchWidth / 2
         let targetY = screenFrame.maxY - targetHeight
 
-        Log.speech.info("[NotchPanel] panel frame: x=\(xPosition), y=\(targetY), w=\(Defaults.notchWidth), h=\(targetHeight)")
+        Log.speech.info(
+            "[NotchPanel] panel frame: x=\(xPosition), y=\(targetY), w=\(Defaults.notchWidth), h=\(targetHeight)"
+        )
 
         let panel = NSPanel(
-            contentRect: NSRect(x: xPosition, y: targetY, width: Defaults.notchWidth, height: targetHeight),
+            contentRect: NSRect(
+                x: xPosition, y: targetY, width: Defaults.notchWidth, height: targetHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -82,7 +89,9 @@ final class TTSNotchPanelController: WordHighlightSurface {
         panel.orderFrontRegardless()
         self.panel = panel
 
-        wordTracker.start(text: text, tokenCharOffsets: tokenCharOffsets, playbackTimeProvider: playbackTimeProvider)
+        wordTracker.start(
+            text: text, tokenCharOffsets: tokenCharOffsets,
+            playbackTimeProvider: playbackTimeProvider)
         observeDismiss()
         Log.speech.info("[NotchPanel] show() complete — panel visible, tracker started")
     }
@@ -92,7 +101,9 @@ final class TTSNotchPanelController: WordHighlightSurface {
     }
 
     func switchText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval) {
-        Log.speech.info("[NotchPanel] switchText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), segmentBase=\(String(format: "%.2f", segmentBase))")
+        Log.speech.info(
+            "[NotchPanel] switchText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), segmentBase=\(String(format: "%.2f", segmentBase))"
+        )
         wordTracker.updateText(text, tokenCharOffsets: tokenCharOffsets, segmentBase: segmentBase)
     }
 
@@ -106,7 +117,9 @@ final class TTSNotchPanelController: WordHighlightSurface {
     }
 
     func dismiss() {
-        Log.speech.info("[NotchPanel] dismiss() called — panel=\(self.panel != nil), isDismissing=\(self.isDismissing)")
+        Log.speech.info(
+            "[NotchPanel] dismiss() called — panel=\(self.panel != nil), isDismissing=\(self.isDismissing)"
+        )
         guard panel != nil else {
             Log.speech.info("[NotchPanel] dismiss() — no panel, skipping")
             return
@@ -140,16 +153,20 @@ final class TTSNotchPanelController: WordHighlightSurface {
 
     private func observeDismiss() {
         dismissObserver?.invalidate()
-        dismissObserver = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        dismissObserver = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) {
+            [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let shouldDismiss = self.wordTracker.shouldDismiss
                 if shouldDismiss && !self.isDismissing {
-                    Log.speech.info("[NotchPanel] observeDismiss timer detected shouldDismiss=true, triggering cleanup")
+                    Log.speech.info(
+                        "[NotchPanel] observeDismiss timer detected shouldDismiss=true, triggering cleanup"
+                    )
                     self.isDismissing = true
                     self.wordTracker.stop()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                        Log.speech.info("[NotchPanel] observeDismiss deferred cleanup — removing panel")
+                        Log.speech.info(
+                            "[NotchPanel] observeDismiss deferred cleanup — removing panel")
                         self?.dismissObserver?.invalidate()
                         self?.dismissObserver = nil
                         self?.panel?.orderOut(nil)

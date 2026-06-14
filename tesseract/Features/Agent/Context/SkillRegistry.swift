@@ -97,16 +97,19 @@ nonisolated enum SkillRegistry: Sendable {
         let fm = FileManager.default
         var results: [SkillMetadata] = []
 
-        guard let entries = try? fm.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+        guard
+            let entries = try? fm.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        else {
             return []
         }
 
         for entry in entries {
-            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            let isDirectory =
+                (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
 
             if isDirectory {
                 // Look for SKILL.md in this subdirectory
@@ -118,7 +121,9 @@ nonisolated enum SkillRegistry: Sendable {
                 results.append(contentsOf: scanSubdirectories(entry, depth: 1))
             } else if entry.pathExtension.lowercased() == "md" {
                 // Root .md files with valid frontmatter
-                if let skill = parseSkillFile(entry, fallbackName: entry.deletingPathExtension().lastPathComponent) {
+                if let skill = parseSkillFile(
+                    entry, fallbackName: entry.deletingPathExtension().lastPathComponent)
+                {
                     results.append(skill)
                 }
             }
@@ -134,16 +139,19 @@ nonisolated enum SkillRegistry: Sendable {
         let fm = FileManager.default
         var results: [SkillMetadata] = []
 
-        guard let entries = try? fm.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+        guard
+            let entries = try? fm.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        else {
             return []
         }
 
         for entry in entries {
-            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            let isDirectory =
+                (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             guard isDirectory else { continue }
 
             let skillFile = entry.appendingPathComponent("SKILL.md")
@@ -162,8 +170,8 @@ nonisolated enum SkillRegistry: Sendable {
     /// Returns nil if the file doesn't exist, has no frontmatter, or lacks a description.
     private static func parseSkillFile(_ url: URL, fallbackName: String) -> SkillMetadata? {
         guard let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8),
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let text = String(data: data, encoding: .utf8),
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return nil
         }
@@ -172,13 +180,14 @@ nonisolated enum SkillRegistry: Sendable {
 
         // Description is required
         guard let description = frontmatter["description"],
-              !description.isEmpty
+            !description.isEmpty
         else {
             return nil
         }
 
         let name = frontmatter["name"] ?? fallbackName
-        let disableInvocation = frontmatter["disable-model-invocation"]
+        let disableInvocation =
+            frontmatter["disable-model-invocation"]
             .map { $0.lowercased() == "true" } ?? false
 
         return SkillMetadata(

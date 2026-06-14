@@ -126,7 +126,8 @@ struct CompletionHandler: Sendable {
 
         let completionRequest: OpenAI.ChatCompletionRequest
         do {
-            completionRequest = try JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: body)
+            completionRequest = try JSONDecoder().decode(
+                OpenAI.ChatCompletionRequest.self, from: body)
         } catch {
             try await writer.send(.badRequest("Invalid JSON: \(error.localizedDescription)"))
             return
@@ -218,12 +219,13 @@ struct CompletionHandler: Sendable {
         } catch is LeaseTimeoutError {
             await activityLog.fail(handle: logHandle, error: "Model is busy")
             let base = HTTPResponse.serviceUnavailable("Model is busy, try again later")
-            try await writer.send(HTTPResponse(
-                statusCode: base.statusCode,
-                statusText: base.statusText,
-                headers: base.headers + [("Retry-After", "5")],
-                body: base.body
-            ))
+            try await writer.send(
+                HTTPResponse(
+                    statusCode: base.statusCode,
+                    statusText: base.statusText,
+                    headers: base.headers + [("Retry-After", "5")],
+                    body: base.body
+                ))
         } catch AgentEngineError.modelNotDownloaded(let id) {
             await activityLog.fail(handle: logHandle, error: "Model not downloaded")
             // Post-lease race: validated pre-lease, then the model was
@@ -314,32 +316,33 @@ struct CompletionHandler: Sendable {
 
         Log.server.info(
             "HTTP completion reasoning sources — sessionAffinityPresent=\(sessionAffinity != nil) "
-            + "client=\(repairedRequest.clientCount) "
-            + "sessionRecovered=\(repairedRequest.sessionRecoveredCount) "
-            + "missing=\(repairedRequest.missingCount)"
+                + "client=\(repairedRequest.clientCount) "
+                + "sessionRecovered=\(repairedRequest.sessionRecoveredCount) "
+                + "missing=\(repairedRequest.missingCount)"
         )
         Log.server.info(
             "HTTP completion start — completionID=\(completionID) "
-            + "model=\(Self.echoModelID(requestModel: request.model, physical: modelState.modelID)) "
-            + "stream=\(request.stream == true) "
-            + "messages=\(repairedRequest.messages.count) normalizedMessages=\(messages.count) "
-            + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCache=\(prefixCacheEligibility) "
-            + "maxTokens=\(params.maxTokens)"
+                + "model=\(Self.echoModelID(requestModel: request.model, physical: modelState.modelID)) "
+                + "stream=\(request.stream == true) "
+                + "messages=\(repairedRequest.messages.count) normalizedMessages=\(messages.count) "
+                + "toolDefinitions=\(toolSpecs?.count ?? 0) prefixCache=\(prefixCacheEligibility) "
+                + "maxTokens=\(params.maxTokens)"
         )
 
         do {
             let inferenceRequest = ServerInferenceRequest(
-                input: .chat(.init(
-                    systemPrompt: systemPrompt ?? "",
-                    messages: messages,
-                    toolSpecs: toolSpecs,
-                    prefixCacheConversation: prefixCacheConversation,
-                    templateRenderContext: renderContext,
-                    progressHandler: Self.makeProgressHandler(
-                        activityLog: activityLog,
-                        logHandle: logHandle
-                    )
-                )),
+                input: .chat(
+                    .init(
+                        systemPrompt: systemPrompt ?? "",
+                        messages: messages,
+                        toolSpecs: toolSpecs,
+                        prefixCacheConversation: prefixCacheConversation,
+                        templateRenderContext: renderContext,
+                        progressHandler: Self.makeProgressHandler(
+                            activityLog: activityLog,
+                            logHandle: logHandle
+                        )
+                    )),
                 parameters: params,
                 route: .serverCompatible
             )
@@ -347,16 +350,17 @@ struct CompletionHandler: Sendable {
                 inferenceRequest
             )
             let startModelState = start.modelState ?? modelState
-            return .success(.init(
-                modelID: startModelState.modelID,
-                visionMode: startModelState.visionMode,
-                completionID: completionID,
-                stream: start.stream,
-                cachedTokenCount: start.cachedTokenCount,
-                cancel: start.cancel,
-                waitForCompletion: start.waitForCompletion,
-                diagnostics: start.diagnostics
-            ))
+            return .success(
+                .init(
+                    modelID: startModelState.modelID,
+                    visionMode: startModelState.visionMode,
+                    completionID: completionID,
+                    stream: start.stream,
+                    cachedTokenCount: start.cachedTokenCount,
+                    cancel: start.cancel,
+                    waitForCompletion: start.waitForCompletion,
+                    diagnostics: start.diagnostics
+                ))
         } catch {
             Log.server.error("HTTP completion failed to start generation: \(error)")
             return .failure(error)
@@ -419,7 +423,8 @@ struct CompletionHandler: Sendable {
         case .failure(let error):
             Log.server.error("Generation failed to start: \(error)")
             await activityLog.fail(handle: logHandle, error: error.localizedDescription)
-            try? await writer.send(.serviceUnavailable("Generation failed: \(error.localizedDescription)"))
+            try? await writer.send(
+                .serviceUnavailable("Generation failed: \(error.localizedDescription)"))
             return
         }
 
@@ -436,10 +441,10 @@ struct CompletionHandler: Sendable {
                 case .malformedToolCall(let raw):
                     Log.server.warning(
                         "Malformed tool call in HTTP response — "
-                        + "completionID=\(start.completionID) "
-                        + "rawLen=\(raw.count) "
-                        + "head=\(String(raw.prefix(120)).debugDescription) "
-                        + "tail=\(String(raw.suffix(80)).debugDescription)"
+                            + "completionID=\(start.completionID) "
+                            + "rawLen=\(raw.count) "
+                            + "head=\(String(raw.prefix(120)).debugDescription) "
+                            + "tail=\(String(raw.suffix(80)).debugDescription)"
                     )
                 case .info(let i):
                     info = i
@@ -453,7 +458,8 @@ struct CompletionHandler: Sendable {
         } catch {
             Log.server.error("Generation stream error: \(error)")
             await activityLog.fail(handle: logHandle, error: error.localizedDescription)
-            try? await writer.send(.internalError("Generation error: \(error.localizedDescription)"))
+            try? await writer.send(
+                .internalError("Generation error: \(error.localizedDescription)"))
             return
         }
 
@@ -509,9 +515,9 @@ struct CompletionHandler: Sendable {
         let finishReason = projection.finishReason
         Log.server.info(
             "HTTP completion finished — completionID=\(start.completionID) "
-            + "stream=false finishReason=\(finishReason.rawValue) "
-            + "promptTokens=\(info?.promptTokenCount ?? 0) completionTokens=\(info?.generationTokenCount ?? 0) "
-            + "cachedTokens=\(start.cachedTokenCount)"
+                + "stream=false finishReason=\(finishReason.rawValue) "
+                + "promptTokens=\(info?.promptTokenCount ?? 0) completionTokens=\(info?.generationTokenCount ?? 0) "
+                + "cachedTokens=\(start.cachedTokenCount)"
         )
         await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
         do {
@@ -543,7 +549,8 @@ struct CompletionHandler: Sendable {
         case .failure(let error):
             Log.server.error("Streaming generation failed to start: \(error)")
             await activityLog.fail(handle: logHandle, error: error.localizedDescription)
-            try? await writer.send(.serviceUnavailable("Generation failed: \(error.localizedDescription)"))
+            try? await writer.send(
+                .serviceUnavailable("Generation failed: \(error.localizedDescription)"))
             return
         }
 
@@ -563,10 +570,13 @@ struct CompletionHandler: Sendable {
         let idleKeepaliveInterval: Duration = .milliseconds(250)
 
         // Emit initial chunk with role
-        guard await sse.send(makeChunk(
-            id: start.completionID, model: model, created: created,
-            delta: OpenAI.ChunkDelta(role: .assistant)
-        )) else {
+        guard
+            await sse.send(
+                makeChunk(
+                    id: start.completionID, model: model, created: created,
+                    delta: OpenAI.ChunkDelta(role: .assistant)
+                ))
+        else {
             await cancelAndDrainGeneration(start)
             return
         }
@@ -653,12 +663,13 @@ struct CompletionHandler: Sendable {
                     completionID: start.completionID,
                     rawLen: projection.diagnostic.malformedLen
                 )
-                _ = await sse.send(makeChunk(
-                    id: start.completionID,
-                    model: model,
-                    created: created,
-                    delta: OpenAI.ChunkDelta(content: projection.textContent)
-                ))
+                _ = await sse.send(
+                    makeChunk(
+                        id: start.completionID,
+                        model: model,
+                        created: created,
+                        delta: OpenAI.ChunkDelta(content: projection.textContent)
+                    ))
             }
 
             let finalChunk = Self.makeFinalStreamingChunk(
@@ -700,18 +711,20 @@ struct CompletionHandler: Sendable {
 
             Log.server.info(
                 "HTTP completion finished — completionID=\(start.completionID) "
-                + "stream=true finishReason=\(projection.finishReason.rawValue) "
-                + "promptTokens=\(projection.info?.promptTokenCount ?? 0) "
-                + "completionTokens=\(projection.info?.generationTokenCount ?? 0) "
-                + "cachedTokens=\(start.cachedTokenCount)"
+                    + "stream=true finishReason=\(projection.finishReason.rawValue) "
+                    + "promptTokens=\(projection.info?.promptTokenCount ?? 0) "
+                    + "completionTokens=\(projection.info?.generationTokenCount ?? 0) "
+                    + "cachedTokens=\(start.cachedTokenCount)"
             )
-            await activityLog.complete(handle: logHandle, finishReason: projection.finishReason.rawValue)
+            await activityLog.complete(
+                handle: logHandle, finishReason: projection.finishReason.rawValue)
 
         case .disconnected(let source):
             Log.server.info(
                 "HTTP streaming disconnect — completionID=\(start.completionID) source=\(source.rawValue)"
             )
-            Log.server.debug("HTTP streaming cancel dispatched — completionID=\(start.completionID)")
+            Log.server.debug(
+                "HTTP streaming cancel dispatched — completionID=\(start.completionID)")
             await cancelAndDrainGeneration(start)
             await activityLog.cancel(handle: logHandle)
             return
@@ -818,7 +831,7 @@ struct CompletionHandler: Sendable {
                     index: 0,
                     delta: delta,
                     finish_reason: finishReason
-                ),
+                )
             ]
         )
     }
@@ -843,7 +856,8 @@ struct CompletionHandler: Sendable {
         created: Int,
         cachedTokenCount: Int
     ) -> OpenAI.ChatCompletionResponse {
-        let openAIToolCalls = projection.toolCalls.isEmpty
+        let openAIToolCalls =
+            projection.toolCalls.isEmpty
             ? nil
             : ToolCallConverter.convertToOpenAI(projection.toolCalls)
 
@@ -859,10 +873,11 @@ struct CompletionHandler: Sendable {
                     message: OpenAI.ResponseMessage(
                         role: .assistant,
                         content: projection.textContent.isEmpty ? nil : projection.textContent,
-                        reasoning_content: projection.thinkingContent.isEmpty ? nil : projection.thinkingContent,
+                        reasoning_content: projection.thinkingContent.isEmpty
+                            ? nil : projection.thinkingContent,
                         tool_calls: openAIToolCalls
                     )
-                ),
+                )
             ],
             usage: makeUsage(
                 info: projection.info,
@@ -890,7 +905,7 @@ struct CompletionHandler: Sendable {
                     index: 0,
                     delta: OpenAI.ChunkDelta(),
                     finish_reason: projection.finishReason
-                ),
+                )
             ]
         )
         if includeUsage, let info = projection.info {
@@ -942,19 +957,25 @@ struct CompletionHandler: Sendable {
                 accumulator.ingest(event)
                 switch event {
                 case .text(let chunk):
-                    guard await sse.send(makeChunk(
-                        id: completionID, model: model, created: created,
-                        delta: OpenAI.ChunkDelta(content: chunk)
-                    )) else {
+                    guard
+                        await sse.send(
+                            makeChunk(
+                                id: completionID, model: model, created: created,
+                                delta: OpenAI.ChunkDelta(content: chunk)
+                            ))
+                    else {
                         cancel()
                         return .disconnected(.chunkWrite)
                     }
 
                 case .thinking(let chunk):
-                    guard await sse.send(makeChunk(
-                        id: completionID, model: model, created: created,
-                        delta: OpenAI.ChunkDelta(reasoning_content: chunk)
-                    )) else {
+                    guard
+                        await sse.send(
+                            makeChunk(
+                                id: completionID, model: model, created: created,
+                                delta: OpenAI.ChunkDelta(reasoning_content: chunk)
+                            ))
+                    else {
                         cancel()
                         return .disconnected(.chunkWrite)
                     }
@@ -965,25 +986,35 @@ struct CompletionHandler: Sendable {
                     let openAICalls = ToolCallConverter.convertToOpenAI([call])
                     guard let oaiCall = openAICalls.first else { continue }
 
-                    guard await sse.send(makeChunk(
-                        id: completionID, model: model, created: created,
-                        delta: OpenAI.ChunkDelta(tool_calls: [
-                            OpenAI.ToolCall(id: oaiCall.id, type: "function",
-                                function: OpenAI.FunctionCall(name: oaiCall.function?.name, arguments: ""),
-                                index: index),
-                        ])
-                    )) else {
+                    guard
+                        await sse.send(
+                            makeChunk(
+                                id: completionID, model: model, created: created,
+                                delta: OpenAI.ChunkDelta(tool_calls: [
+                                    OpenAI.ToolCall(
+                                        id: oaiCall.id, type: "function",
+                                        function: OpenAI.FunctionCall(
+                                            name: oaiCall.function?.name, arguments: ""),
+                                        index: index)
+                                ])
+                            ))
+                    else {
                         cancel()
                         return .disconnected(.chunkWrite)
                     }
 
-                    guard await sse.send(makeChunk(
-                        id: completionID, model: model, created: created,
-                        delta: OpenAI.ChunkDelta(tool_calls: [
-                            OpenAI.ToolCall(function: OpenAI.FunctionCall(arguments: oaiCall.function?.arguments),
-                                index: index),
-                        ])
-                    )) else {
+                    guard
+                        await sse.send(
+                            makeChunk(
+                                id: completionID, model: model, created: created,
+                                delta: OpenAI.ChunkDelta(tool_calls: [
+                                    OpenAI.ToolCall(
+                                        function: OpenAI.FunctionCall(
+                                            arguments: oaiCall.function?.arguments),
+                                        index: index)
+                                ])
+                            ))
+                    else {
                         cancel()
                         return .disconnected(.chunkWrite)
                     }
@@ -991,10 +1022,10 @@ struct CompletionHandler: Sendable {
                 case .malformedToolCall(let raw):
                     Log.server.warning(
                         "Malformed tool call in stream — "
-                        + "completionID=\(completionID) "
-                        + "rawLen=\(raw.count) "
-                        + "head=\(String(raw.prefix(120)).debugDescription) "
-                        + "tail=\(String(raw.suffix(80)).debugDescription)"
+                            + "completionID=\(completionID) "
+                            + "rawLen=\(raw.count) "
+                            + "head=\(String(raw.prefix(120)).debugDescription) "
+                            + "tail=\(String(raw.suffix(80)).debugDescription)"
                     )
 
                 case .info(let i):
@@ -1027,7 +1058,7 @@ struct CompletionHandler: Sendable {
     private func logSurfacedFallback(completionID: String, rawLen: Int) {
         Log.server.info(
             "Surfaced dropped tool-call buffer as text content — "
-            + "completionID=\(completionID) rawLen=\(rawLen)"
+                + "completionID=\(completionID) rawLen=\(rawLen)"
         )
     }
 

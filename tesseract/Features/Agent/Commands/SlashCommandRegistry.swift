@@ -41,24 +41,26 @@ final class SlashCommandRegistry {
 
         for skill in skills {
             guard seenNames.insert(skill.name).inserted else { continue }
-            result.append(SlashCommand(
-                name: skill.name,
-                description: skill.description,
-                source: .skill(filePath: skill.filePath),
-                argumentHint: nil
-            ))
+            result.append(
+                SlashCommand(
+                    name: skill.name,
+                    description: skill.description,
+                    source: .skill(filePath: skill.filePath),
+                    argumentHint: nil
+                ))
         }
 
         if let extensionHost {
             for ext in extensionHost.registeredExtensions {
                 for (_, cmd) in ext.commands {
                     guard seenNames.insert(cmd.name).inserted else { continue }
-                    result.append(SlashCommand(
-                        name: cmd.name,
-                        description: cmd.description,
-                        source: .extension(extensionPath: ext.path),
-                        argumentHint: nil
-                    ))
+                    result.append(
+                        SlashCommand(
+                            name: cmd.name,
+                            description: cmd.description,
+                            source: .extension(extensionPath: ext.path),
+                            argumentHint: nil
+                        ))
                 }
             }
         }

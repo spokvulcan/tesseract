@@ -169,7 +169,8 @@ final class DictationCoordinator {
         processingTask = Task {
             do {
                 // Transcribe with selected language
-                let result = try await transcriptionEngine.transcribe(audioData, language: settings.language)
+                let result = try await transcriptionEngine.transcribe(
+                    audioData, language: settings.language)
 
                 // Stale-task guard: a cancel-and-restart since this operation
                 // began means a newer operation owns the coordinator state — drop

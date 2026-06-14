@@ -41,12 +41,13 @@ struct WordTimelineTests {
 
     @Test func classifiesBracketedAndPunctuationOnlyWordsAsAnnotations() {
         let timeline = WordTimeline(text: "hello [laughs] world --- 42")
-        let byText = Dictionary(uniqueKeysWithValues: timeline.words.map { ($0.text, $0.isAnnotation) })
+        let byText = Dictionary(
+            uniqueKeysWithValues: timeline.words.map { ($0.text, $0.isAnnotation) })
         #expect(byText["hello"] == false)
-        #expect(byText["[laughs]"] == true)     // bracketed
+        #expect(byText["[laughs]"] == true)  // bracketed
         #expect(byText["world"] == false)
-        #expect(byText["---"] == true)          // no letters or numbers
-        #expect(byText["42"] == false)          // digits count as content
+        #expect(byText["---"] == true)  // no letters or numbers
+        #expect(byText["42"] == false)  // digits count as content
     }
 
     // MARK: - cursor: char → active word + in-word lit fraction
@@ -55,7 +56,7 @@ struct WordTimelineTests {
         // ends: hello→5, world→11, foo→15 (charOffset + word.count).
         let timeline = WordTimeline(text: "hello world foo")
         #expect(timeline.activeWordIndex(highlightedCharCount: 0) == 0)
-        #expect(timeline.activeWordIndex(highlightedCharCount: 5) == 0)   // <= end is still this word
+        #expect(timeline.activeWordIndex(highlightedCharCount: 5) == 0)  // <= end is still this word
         #expect(timeline.activeWordIndex(highlightedCharCount: 6) == 1)
         #expect(timeline.activeWordIndex(highlightedCharCount: 9) == 1)
         // Past the end clamps to the last word (matches the view's fallback).
@@ -78,9 +79,9 @@ struct WordTimelineTests {
     @Test func litFractionIsLitCountOverLetterCountClampedAtBothEnds() {
         let timeline = WordTimeline(text: "hello world foo")
         #expect(abs(timeline.litFraction(wordIndex: 0, charCount: 3) - 0.6) < 1e-9)  // 3/5
-        #expect(timeline.litFraction(wordIndex: 0, charCount: 100) == 1.0)           // saturates at fully lit
-        #expect(timeline.litFraction(wordIndex: 0, charCount: -5) == 0.0)            // never negative
-        #expect(timeline.litFraction(wordIndex: 99, charCount: 0) == 0.0)            // out of range is safe
+        #expect(timeline.litFraction(wordIndex: 0, charCount: 100) == 1.0)  // saturates at fully lit
+        #expect(timeline.litFraction(wordIndex: 0, charCount: -5) == 0.0)  // never negative
+        #expect(timeline.litFraction(wordIndex: 99, charCount: 0) == 0.0)  // out of range is safe
     }
 
     // MARK: - advance: the single pacing fold (replaces tickToken / tickProportional)
@@ -88,7 +89,8 @@ struct WordTimelineTests {
     /// A 100-char single "word" makes the proportional math exact: charCount ==
     /// floor(progress * 100).
     private func hundredCharTimeline(tokenCharOffsets: [Int] = []) -> WordTimeline {
-        let t = WordTimeline(text: String(repeating: "a", count: 100), tokenCharOffsets: tokenCharOffsets)
+        let t = WordTimeline(
+            text: String(repeating: "a", count: 100), tokenCharOffsets: tokenCharOffsets)
         #expect(t.totalCharCount == 100)
         return t
     }
@@ -187,6 +189,6 @@ struct WordTimelineTests {
             isGenerationComplete: false, pacing: .init(seed: 10)
         )
         #expect(high == 50)
-        #expect(low == 10)   // a smaller elapsed yields a smaller count — no internal floor
+        #expect(low == 10)  // a smaller elapsed yields a smaller count — no internal floor
     }
 }

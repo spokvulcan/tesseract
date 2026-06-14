@@ -30,7 +30,8 @@ struct ToolCallConverterTests {
         #expect(call.index == 0)
 
         let argsData = try #require(
-            JSONSerialization.jsonObject(with: Data((call.function?.arguments ?? "").utf8)) as? [String: Any]
+            JSONSerialization.jsonObject(with: Data((call.function?.arguments ?? "").utf8))
+                as? [String: Any]
         )
         #expect(argsData["command"] as? String == "ls")
     }
@@ -53,7 +54,8 @@ struct ToolCallConverterTests {
     @Test func convertsMultipleToolCallsWithUniqueIDs() {
         let calls = [
             ToolCall(function: .init(name: "bash", arguments: ["command": "ls" as any Sendable])),
-            ToolCall(function: .init(name: "read", arguments: ["path": "file.txt" as any Sendable])),
+            ToolCall(
+                function: .init(name: "read", arguments: ["path": "file.txt" as any Sendable])),
         ]
 
         let result = ToolCallConverter.convertToOpenAI(calls)
@@ -79,11 +81,14 @@ struct ToolCallConverterTests {
     }
 
     @Test func complexArgumentsAreJSONStringified() throws {
-        let toolCall = ToolCall(function: .init(name: "edit", arguments: [
-            "path": "file.swift" as any Sendable,
-            "line": 42 as any Sendable,
-            "insert": true as any Sendable,
-        ]))
+        let toolCall = ToolCall(
+            function: .init(
+                name: "edit",
+                arguments: [
+                    "path": "file.swift" as any Sendable,
+                    "line": 42 as any Sendable,
+                    "insert": true as any Sendable,
+                ]))
 
         let result = ToolCallConverter.convertToOpenAI([toolCall])
         let argsJSON = result[0].function?.arguments ?? ""
@@ -126,9 +131,9 @@ struct ToolCallConverterTests {
                         id: "call_abc",
                         type: "function",
                         function: OpenAI.FunctionCall(name: "bash", arguments: "{}")
-                    ),
+                    )
                 ]
-            ),
+            )
         ]
         let idMap = ["call_abc": "call_xyz"]
 
@@ -139,7 +144,7 @@ struct ToolCallConverterTests {
 
     @Test func emptyIDMapPassesThroughUnchanged() {
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .tool, content: .text("result"), tool_call_id: "call_abc"),
+            .init(role: .tool, content: .text("result"), tool_call_id: "call_abc")
         ]
 
         let result = ToolCallConverter.mapToolCallIDs(messages, idMap: [:])
@@ -149,7 +154,7 @@ struct ToolCallConverterTests {
 
     @Test func unmappedIDsLeftUnchanged() {
         let messages: [OpenAI.ChatMessage] = [
-            .init(role: .tool, content: .text("result"), tool_call_id: "call_unknown"),
+            .init(role: .tool, content: .text("result"), tool_call_id: "call_unknown")
         ]
         let idMap = ["call_other": "call_mapped"]
 

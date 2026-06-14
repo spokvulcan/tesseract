@@ -27,13 +27,15 @@ private func scriptedTokenStream(
         for token in script {
             continuation.yield(.token(token))
         }
-        continuation.yield(.info(GenerateCompletionInfo(
-            promptTokenCount: 7,
-            generationTokenCount: script.count,
-            promptTime: promptTime,
-            generationTime: 0.1,
-            stopReason: stopReason
-        )))
+        continuation.yield(
+            .info(
+                GenerateCompletionInfo(
+                    promptTokenCount: 7,
+                    generationTokenCount: script.count,
+                    promptTime: promptTime,
+                    generationTime: 0.1,
+                    stopReason: stopReason
+                )))
         continuation.finish()
     }
 }

@@ -25,8 +25,10 @@ struct PrefixCacheDiagnosticsTests {
             plannedCheckpoints: [(offset: 900, type: .branchPoint)]
         )
 
-        #expect(context.render(event) ==
-            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=hit promptTokens=1024 sharedPrefixLength=900 snapshotOffset=768 checkpointType=system skippedPrefillTokens=768 newTokensToPrefill=256 lookupMs=12.000 restoreMs=3.000 plannedCheckpoints=[900:branchPoint] hydratedFromSSD=false chainPrefixRestore=false")
+        #expect(
+            context.render(event)
+                == "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=hit promptTokens=1024 sharedPrefixLength=900 snapshotOffset=768 checkpointType=system skippedPrefillTokens=768 newTokensToPrefill=256 lookupMs=12.000 restoreMs=3.000 plannedCheckpoints=[900:branchPoint] hydratedFromSSD=false chainPrefixRestore=false"
+        )
     }
 
     @Test func lookupMissRendersTreeDepthAndNilSnapshotFields() {
@@ -41,8 +43,10 @@ struct PrefixCacheDiagnosticsTests {
             plannedCheckpoints: []
         )
 
-        #expect(context.render(event) ==
-            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=missNoSnapshotInPrefix promptTokens=700 sharedPrefixLength=128 snapshotOffset=nil checkpointType=nil skippedPrefillTokens=0 newTokensToPrefill=700 lookupMs=4.000 restoreMs=0.000 plannedCheckpoints=[] hydratedFromSSD=false chainPrefixRestore=false")
+        #expect(
+            context.render(event)
+                == "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=missNoSnapshotInPrefix promptTokens=700 sharedPrefixLength=128 snapshotOffset=nil checkpointType=nil skippedPrefillTokens=0 newTokensToPrefill=700 lookupMs=4.000 restoreMs=0.000 plannedCheckpoints=[] hydratedFromSSD=false chainPrefixRestore=false"
+        )
     }
 
     @Test func captureDistinguishesPrefillAndLeafSources() {
@@ -71,35 +75,39 @@ struct PrefixCacheDiagnosticsTests {
             continuation: HTTPLeafContinuationKind.toolResult.rawValue
         )
 
-        #expect(context.render(event) ==
-            "event=leafMode requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 mode=directToolLeaf continuation=toolResult")
+        #expect(
+            context.render(event)
+                == "event=leafMode requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 mode=directToolLeaf continuation=toolResult"
+        )
     }
 
     @Test func evictionRendersUtilityScoresOnlyWhenPresent() {
-        let utility = PrefixCacheDiagnostics.EvictionEvent(.init(
-            strategy: .utility,
-            offset: 512,
-            checkpointType: .leaf,
-            freedBytes: 4096,
-            budgetBytes: 2048,
-            snapshotBytesAfter: 1024,
-            normalizedRecency: 0.25,
-            normalizedFlopEfficiency: 0.75,
-            utility: 1.0,
-            bodyDroppedSnapshotRefID: nil
-        ))
-        let fallback = PrefixCacheDiagnostics.EvictionEvent(.init(
-            strategy: .fallback,
-            offset: 256,
-            checkpointType: .system,
-            freedBytes: 2048,
-            budgetBytes: 0,
-            snapshotBytesAfter: 0,
-            normalizedRecency: nil,
-            normalizedFlopEfficiency: nil,
-            utility: nil,
-            bodyDroppedSnapshotRefID: nil
-        ))
+        let utility = PrefixCacheDiagnostics.EvictionEvent(
+            .init(
+                strategy: .utility,
+                offset: 512,
+                checkpointType: .leaf,
+                freedBytes: 4096,
+                budgetBytes: 2048,
+                snapshotBytesAfter: 1024,
+                normalizedRecency: 0.25,
+                normalizedFlopEfficiency: 0.75,
+                utility: 1.0,
+                bodyDroppedSnapshotRefID: nil
+            ))
+        let fallback = PrefixCacheDiagnostics.EvictionEvent(
+            .init(
+                strategy: .fallback,
+                offset: 256,
+                checkpointType: .system,
+                freedBytes: 2048,
+                budgetBytes: 0,
+                snapshotBytesAfter: 0,
+                normalizedRecency: nil,
+                normalizedFlopEfficiency: nil,
+                utility: nil,
+                bodyDroppedSnapshotRefID: nil
+            ))
 
         let utilityLine = context.render(utility)
         let fallbackLine = context.render(fallback)
@@ -120,8 +128,10 @@ struct PrefixCacheDiagnosticsTests {
             residualPromptMs: 0.015
         )
 
-        #expect(context.render(event) ==
-            "event=ttft requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 lookupMs=1.000 restoreMs=2.000 prefillMs=20.000 residualPromptMs=15.000 ttftMs=38.000")
+        #expect(
+            context.render(event)
+                == "event=ttft requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 lookupMs=1.000 restoreMs=2.000 prefillMs=20.000 residualPromptMs=15.000 ttftMs=38.000"
+        )
     }
 
     @Test func memoryRendersCacheAndMlxCounters() {
@@ -140,8 +150,10 @@ struct PrefixCacheDiagnosticsTests {
             mlxCacheLimitBytes: 333
         )
 
-        #expect(context.render(event) ==
-            "event=memory requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 snapshotCount=3 totalSnapshotBytes=8192 budgetBytes=16384 modelWeightBytes=123456 activeMlxBytes=111 peakMlxBytes=222 mlxCacheLimitBytes=333 partitionCount=2")
+        #expect(
+            context.render(event)
+                == "event=memory requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 snapshotCount=3 totalSnapshotBytes=8192 budgetBytes=16384 modelWeightBytes=123456 activeMlxBytes=111 peakMlxBytes=222 mlxCacheLimitBytes=333 partitionCount=2"
+        )
     }
 
     // MARK: - SSD-tier event renderers (Task 4.1.12)
@@ -153,8 +165,9 @@ struct PrefixCacheDiagnosticsTests {
             outcome: .accepted
         )
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=ssdAdmit id=snap-1 bytes=4096 outcome=accepted")
+        #expect(
+            PrefixCacheDiagnostics.renderSystem(event)
+                == "event=ssdAdmit id=snap-1 bytes=4096 outcome=accepted")
     }
 
     @Test func ssdAdmitDroppedSystemProtectionWinsRendersOutcome() {
@@ -164,8 +177,9 @@ struct PrefixCacheDiagnosticsTests {
             outcome: .droppedSystemProtectionWins
         )
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=ssdAdmit id=snap-2 bytes=8192 outcome=droppedSystemProtectionWins")
+        #expect(
+            PrefixCacheDiagnostics.renderSystem(event)
+                == "event=ssdAdmit id=snap-2 bytes=8192 outcome=droppedSystemProtectionWins")
     }
 
     @Test func ssdEvictAtAdmissionPairsVictimAndIncoming() {
@@ -174,8 +188,9 @@ struct PrefixCacheDiagnosticsTests {
             incomingID: "new-1"
         )
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=ssdEvictAtAdmission victimID=old-1 incomingID=new-1")
+        #expect(
+            PrefixCacheDiagnostics.renderSystem(event)
+                == "event=ssdEvictAtAdmission victimID=old-1 incomingID=new-1")
     }
 
     @Test func ssdHitRendersHydrateMs() {
@@ -184,8 +199,8 @@ struct PrefixCacheDiagnosticsTests {
             hydrateMs: 0.045
         )
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=ssdHit id=snap-3 hydrateMs=45.000")
+        #expect(
+            PrefixCacheDiagnostics.renderSystem(event) == "event=ssdHit id=snap-3 hydrateMs=45.000")
     }
 
     @Test func ssdMissCarriesGranularReason() {
@@ -194,15 +209,15 @@ struct PrefixCacheDiagnosticsTests {
             reason: .fingerprintMismatch
         )
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=ssdMiss id=snap-4 reason=fingerprintMismatch")
+        #expect(
+            PrefixCacheDiagnostics.renderSystem(event)
+                == "event=ssdMiss id=snap-4 reason=fingerprintMismatch")
     }
 
     @Test func ssdBodyDropCarriesIDOnly() {
         let event = PrefixCacheDiagnostics.SSDBodyDropEvent(id: "snap-5")
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=ssdBodyDrop id=snap-5")
+        #expect(PrefixCacheDiagnostics.renderSystem(event) == "event=ssdBodyDrop id=snap-5")
     }
 
     @Test func leafSupersessionKeepsRefIDWireField() {
@@ -217,10 +232,14 @@ struct PrefixCacheDiagnosticsTests {
             mode: .deleted
         )
 
-        #expect(context.render(withRef) ==
-            "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=512 storageRefID=snap-old mode=transferred")
-        #expect(context.render(withoutRef) ==
-            "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=256 storageRefID=nil mode=deleted")
+        #expect(
+            context.render(withRef)
+                == "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=512 storageRefID=snap-old mode=transferred"
+        )
+        #expect(
+            context.render(withoutRef)
+                == "event=leafSupersession requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 offset=256 storageRefID=nil mode=deleted"
+        )
     }
 
     @Test func leafExtensionCommitRendersChainShape() {
@@ -232,22 +251,22 @@ struct PrefixCacheDiagnosticsTests {
             chainSegments: 3
         )
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=leafExtensionCommit id=snap-new baseID=snap-base suffixBytes=1024 chainBytes=8192 chainSegments=3")
+        #expect(
+            PrefixCacheDiagnostics.renderSystem(event)
+                == "event=leafExtensionCommit id=snap-new baseID=snap-base suffixBytes=1024 chainBytes=8192 chainSegments=3"
+        )
     }
 
     @Test func ssdRecordHitCarriesIDOnly() {
         let event = PrefixCacheDiagnostics.SSDRecordHitEvent(id: "snap-6")
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=ssdRecordHit id=snap-6")
+        #expect(PrefixCacheDiagnostics.renderSystem(event) == "event=ssdRecordHit id=snap-6")
     }
 
     @Test func snapshotRefCommitEventKeepsWireName() {
         let event = PrefixCacheDiagnostics.SnapshotRefCommitEvent(id: "snap-7")
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=storageRefCommit id=snap-7")
+        #expect(PrefixCacheDiagnostics.renderSystem(event) == "event=storageRefCommit id=snap-7")
     }
 
     @Test func snapshotRefDropCallbackEventKeepsWireName() {
@@ -267,7 +286,8 @@ struct PrefixCacheDiagnosticsTests {
             )
             let line = PrefixCacheDiagnostics.renderSystem(event)
             #expect(
-                line == "event=storageRefDropCallback id=snap-8 reason=\(PrefixCacheDiagnostics.ssdDropReasonString(reason))"
+                line
+                    == "event=storageRefDropCallback id=snap-8 reason=\(PrefixCacheDiagnostics.ssdDropReasonString(reason))"
             )
         }
     }
@@ -280,15 +300,18 @@ struct PrefixCacheDiagnosticsTests {
             durationSeconds: 0.012
         )
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=warmStartComplete partitionCount=3 snapshotCount=17 invalidatedPartitionCount=1 durationMs=12.000")
+        #expect(
+            PrefixCacheDiagnostics.renderSystem(event)
+                == "event=warmStartComplete partitionCount=3 snapshotCount=17 invalidatedPartitionCount=1 durationMs=12.000"
+        )
     }
 
     @Test func fingerprintMismatchCarriesPartitionDigest() {
         let event = PrefixCacheDiagnostics.FingerprintMismatchEvent(partition: "abcd1234")
 
-        #expect(PrefixCacheDiagnostics.renderSystem(event) ==
-            "event=fingerprintMismatch partition=abcd1234")
+        #expect(
+            PrefixCacheDiagnostics.renderSystem(event)
+                == "event=fingerprintMismatch partition=abcd1234")
     }
 
     @Test func testSinkCapturesContextfulAndSystemEvents() {
@@ -336,8 +359,10 @@ struct PrefixCacheDiagnosticsTests {
             plannedCheckpoints: [(offset: 900, type: .branchPoint)]
         )
         let rendered = context.render(lookup)
-        #expect(rendered ==
-            "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=hit promptTokens=1024 sharedPrefixLength=900 snapshotOffset=768 checkpointType=system skippedPrefillTokens=768 newTokensToPrefill=256 lookupMs=12.000 restoreMs=3.000 plannedCheckpoints=[900:branchPoint] hydratedFromSSD=false chainPrefixRestore=false")
+        #expect(
+            rendered
+                == "event=lookup requestID=00000000-0000-0000-0000-000000000001 modelID=qwen3.5 kvBits=8 kvGroupSize=64 reason=hit promptTokens=1024 sharedPrefixLength=900 snapshotOffset=768 checkpointType=system skippedPrefillTokens=768 newTokensToPrefill=256 lookupMs=12.000 restoreMs=3.000 plannedCheckpoints=[900:branchPoint] hydratedFromSSD=false chainPrefixRestore=false"
+        )
 
         let runID = UUID()
         let localContext = PrefixCacheDiagnostics.Context(

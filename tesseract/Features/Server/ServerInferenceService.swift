@@ -49,21 +49,23 @@ final class ServerInferenceService {
 
     func start(_ request: ServerInferenceRequest) async throws -> ServerInferenceStart {
         let modelState = currentModelState()
-        let routeDescription: String = switch request.route {
-        case .standard:
-            "standard"
-        case .serverCompatible:
-            "serverCompatible"
-        }
-        let inputDescription: String = switch request.input {
-        case .prompt:
-            "prompt"
-        case .chat:
-            "chat"
-        }
+        let routeDescription: String =
+            switch request.route {
+            case .standard:
+                "standard"
+            case .serverCompatible:
+                "serverCompatible"
+            }
+        let inputDescription: String =
+            switch request.input {
+            case .prompt:
+                "prompt"
+            case .chat:
+                "chat"
+            }
         Log.server.info(
             "Server inference start — route=\(routeDescription) input=\(inputDescription) "
-            + "model=\(modelState?.modelID ?? "") visionMode=\(modelState?.visionMode ?? false)"
+                + "model=\(modelState?.modelID ?? "") visionMode=\(modelState?.visionMode ?? false)"
         )
 
         switch request.input {
@@ -96,15 +98,15 @@ final class ServerInferenceService {
                     )
                     Log.server.info(
                         "HTTP completion using prefix-cache path — model=\(modelState.modelID) "
-                        + "cachedTokens=\(start.cachedTokenCount)"
+                            + "cachedTokens=\(start.cachedTokenCount)"
                     )
                     return ServerInferenceStart(start, modelState: modelState)
 
                 case .standard(let reason):
                     Log.server.info(
                         "HTTP completion using standard generation path — "
-                        + "model=\(modelState.modelID) reason=\(reason.rawValue) "
-                        + "toolDefinitions=\(chat.toolSpecs?.count ?? 0)"
+                            + "model=\(modelState.modelID) reason=\(reason.rawValue) "
+                            + "toolDefinitions=\(chat.toolSpecs?.count ?? 0)"
                     )
                     return try startStandardChat(
                         chat, parameters: request.parameters, modelState: modelState

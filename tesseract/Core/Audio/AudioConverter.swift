@@ -28,7 +28,9 @@ enum AudioConverter {
     }
 
     /// Resample audio from one sample rate to another using linear interpolation
-    static func resample(_ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double) -> [Float] {
+    static func resample(
+        _ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double
+    ) -> [Float] {
         guard sourceSampleRate != targetSampleRate else { return samples }
         guard !samples.isEmpty else { return [] }
 

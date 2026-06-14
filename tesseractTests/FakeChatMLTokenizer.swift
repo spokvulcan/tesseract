@@ -64,16 +64,20 @@ struct FakeChatMLTokenizer: Tokenizer {
             if let parts = message["content"] as? [[String: any Sendable]] {
                 for part in parts {
                     if part["type"] as? String == "image" {
-                        tokens += [Self.visionStartTokenId, Self.imagePadTokenId, Self.visionEndTokenId]
+                        tokens += [
+                            Self.visionStartTokenId, Self.imagePadTokenId, Self.visionEndTokenId,
+                        ]
                     } else {
-                        tokens += encode(text: part["text"] as? String ?? "", addSpecialTokens: false)
+                        tokens += encode(
+                            text: part["text"] as? String ?? "", addSpecialTokens: false)
                     }
                 }
             } else {
                 var content = message["content"] as? String ?? ""
                 if stripsThinkBeforeLastUser,
-                   role == "assistant",
-                   let lastUserIndex, index < lastUserIndex {
+                    role == "assistant",
+                    let lastUserIndex, index < lastUserIndex
+                {
                     content = Self.strippingThink(content)
                 }
                 tokens += encode(text: content, addSpecialTokens: false)
@@ -102,7 +106,7 @@ struct FakeChatMLTokenizer: Tokenizer {
     /// later user message exists.
     private static func strippingThink(_ content: String) -> String {
         guard let start = content.range(of: "<think>"),
-              let end = content.range(of: "</think>")
+            let end = content.range(of: "</think>")
         else { return content }
         var stripped = content
         stripped.removeSubrange(start.lowerBound..<end.upperBound)

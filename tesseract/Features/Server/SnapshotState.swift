@@ -124,7 +124,8 @@ nonisolated enum SnapshotState {
     var ref: SnapshotRef? {
         switch self {
         case .pendingWrite(_, let r), .pendingDropped(let r),
-             .committed(_, let r), .ssdOnly(let r): r
+            .committed(_, let r), .ssdOnly(let r):
+            r
         case .empty, .ramOnly: nil
         }
     }
@@ -296,33 +297,45 @@ nonisolated enum SnapshotState {
     func droppingBody() -> (SnapshotState, DropBodyResult) {
         switch self {
         case .ramOnly(let b):
-            (.empty, DropBodyResult(
-                droppedCheckpointType: b.checkpointType,
-                droppedBodyBytes: b.memoryBytes,
-                refID: nil,
-                effect: .becameEmpty
-            ))
+            (
+                .empty,
+                DropBodyResult(
+                    droppedCheckpointType: b.checkpointType,
+                    droppedBodyBytes: b.memoryBytes,
+                    refID: nil,
+                    effect: .becameEmpty
+                )
+            )
         case .pendingWrite(let b, let r):
-            (.pendingDropped(r), DropBodyResult(
-                droppedCheckpointType: b.checkpointType,
-                droppedBodyBytes: b.memoryBytes,
-                refID: r.snapshotID,
-                effect: .settled
-            ))
+            (
+                .pendingDropped(r),
+                DropBodyResult(
+                    droppedCheckpointType: b.checkpointType,
+                    droppedBodyBytes: b.memoryBytes,
+                    refID: r.snapshotID,
+                    effect: .settled
+                )
+            )
         case .committed(let b, let r):
-            (.ssdOnly(r), DropBodyResult(
-                droppedCheckpointType: b.checkpointType,
-                droppedBodyBytes: b.memoryBytes,
-                refID: r.snapshotID,
-                effect: .settled
-            ))
+            (
+                .ssdOnly(r),
+                DropBodyResult(
+                    droppedCheckpointType: b.checkpointType,
+                    droppedBodyBytes: b.memoryBytes,
+                    refID: r.snapshotID,
+                    effect: .settled
+                )
+            )
         case .empty, .pendingDropped, .ssdOnly:
-            (self, DropBodyResult(
-                droppedCheckpointType: nil,
-                droppedBodyBytes: 0,
-                refID: nil,
-                effect: .ignored(.notResident)
-            ))
+            (
+                self,
+                DropBodyResult(
+                    droppedCheckpointType: nil,
+                    droppedBodyBytes: 0,
+                    refID: nil,
+                    effect: .ignored(.notResident)
+                )
+            )
         }
     }
 

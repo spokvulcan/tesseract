@@ -50,7 +50,9 @@ struct ServerConfigurationView: View {
                     }
                 }
             } footer: {
-                Text("The local API server provides an OpenAI-compatible /v1/chat/completions endpoint for integration with other tools.")
+                Text(
+                    "The local API server provides an OpenAI-compatible /v1/chat/completions endpoint for integration with other tools."
+                )
             }
 
             Section {
@@ -79,7 +81,9 @@ struct ServerConfigurationView: View {
             } header: {
                 Text("Integrations")
             } footer: {
-                Text("Run the command in a terminal to configure OpenCode for this server — every downloaded model, image input included. Re-run it after downloading models or changing the port.")
+                Text(
+                    "Run the command in a terminal to configure OpenCode for this server — every downloaded model, image input included. Re-run it after downloading models or changing the port."
+                )
             }
 
             ServerPreserveThinkingSection()
@@ -156,20 +160,26 @@ private struct ServerPreserveThinkingSection: View {
         let supported = models.filter { supportingModelIDs.contains($0.id) }
         return Section {
             if supported.isEmpty {
-                Text("No downloaded model supports preserved thinking. Models such as Qwen3.6 support it.")
-                    .foregroundStyle(.secondary)
+                Text(
+                    "No downloaded model supports preserved thinking. Models such as Qwen3.6 support it."
+                )
+                .foregroundStyle(.secondary)
             } else {
                 ForEach(supported) { model in
-                    Toggle(model.displayName, isOn: Binding(
-                        get: { settings.preserveThinkingRender(modelID: model.id) },
-                        set: { settings.setPreserveThinkingRender($0, modelID: model.id) }
-                    ))
+                    Toggle(
+                        model.displayName,
+                        isOn: Binding(
+                            get: { settings.preserveThinkingRender(modelID: model.id) },
+                            set: { settings.setPreserveThinkingRender($0, modelID: model.id) }
+                        ))
                 }
             }
         } header: {
             Text("Preserve Thinking")
         } footer: {
-            Text("Keeps each turn's thinking in the prompt so a client's follow-up requests reuse the prefix cache instead of re-prefilling the conversation. Uses more context window. Set per model; applies to new requests.")
+            Text(
+                "Keeps each turn's thinking in the prompt so a client's follow-up requests reuse the prefix cache instead of re-prefilling the conversation. Uses more context window. Set per model; applies to new requests."
+            )
         }
         // Re-scan whenever the downloaded agent-model set changes. `task(id:)`
         // cancels the prior scan, and the cancellation check guards against a

@@ -102,7 +102,9 @@ final class AgentVoiceInputController {
         }
 
         voiceState = .transcribing
-        Log.agent.info("Voice input stopped, transcribing \(String(format: "%.1f", audioData.duration))s audio")
+        Log.agent.info(
+            "Voice input stopped, transcribing \(String(format: "%.1f", audioData.duration))s audio"
+        )
 
         let ticket = operations.capture()
         Task {

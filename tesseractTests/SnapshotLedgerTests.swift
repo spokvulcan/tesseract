@@ -126,7 +126,8 @@ struct SnapshotLedgerTests {
     /// Write a partition's `_meta.json` sidecar the directory-walk
     /// rebuild reads for the fingerprint.
     private func writeMetaFile(_ meta: PartitionMeta, digest: String, rootURL: URL) throws {
-        let dir = rootURL
+        let dir =
+            rootURL
             .appendingPathComponent("partitions")
             .appendingPathComponent(digest)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -421,7 +422,8 @@ struct SnapshotLedgerTests {
 
         // The `_meta.json` sidecar the directory-walk rebuild depends on
         // is written synchronously, carrying the registered fingerprint.
-        let metaURL = root
+        let metaURL =
+            root
             .appendingPathComponent("partitions")
             .appendingPathComponent(testDigest)
             .appendingPathComponent("_meta.json")
@@ -790,12 +792,14 @@ struct SnapshotLedgerTests {
         let chainHead = makeDescriptor(
             id: "chain-head", bytes: 1_000,
             lastAccessAt: now - 60, tokenOffset: 8_000,
-            inheritedSegments: [SnapshotSegment(
-                baseOffset: 0,
-                tokenOffset: 6_000,
-                fileRelativePath: "partitions/\(testDigest)/snapshots/0/base.safetensors",
-                bytes: 9_000
-            )]
+            inheritedSegments: [
+                SnapshotSegment(
+                    baseOffset: 0,
+                    tokenOffset: 6_000,
+                    fileRelativePath: "partitions/\(testDigest)/snapshots/0/base.safetensors",
+                    bytes: 9_000
+                )
+            ]
         )
         ledger.seedDescriptorForTesting(singleFile)
         ledger.seedDescriptorForTesting(chainHead)
@@ -819,10 +823,11 @@ struct SnapshotLedgerTests {
         let ledger = makeLedgerWithPartition(budgetBytes: 1_500, root: root)
         let now = Date().timeIntervalSinceReferenceDate
 
-        ledger.seedDescriptorForTesting(makeDescriptor(
-            id: "system-chain", type: .system, bytes: 1_000,
-            lastAccessAt: now - 86_400, tokenOffset: 100
-        ))
+        ledger.seedDescriptorForTesting(
+            makeDescriptor(
+                id: "system-chain", type: .system, bytes: 1_000,
+                lastAccessAt: now - 86_400, tokenOffset: 100
+            ))
 
         let (decision, evicted) = ledger.admit(
             makeDescriptor(bytes: 1_000, tokenOffset: 50_000),

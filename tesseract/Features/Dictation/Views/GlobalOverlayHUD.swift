@@ -176,7 +176,7 @@ struct GlobalOverlayHUD: View {
             return LinearGradient(
                 colors: [
                     Color.white.opacity(0.2),
-                    Color.white.opacity(0.08)
+                    Color.white.opacity(0.08),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -185,7 +185,7 @@ struct GlobalOverlayHUD: View {
             return LinearGradient(
                 colors: [
                     Color.white.opacity(0.2),
-                    Color.white.opacity(0.08)
+                    Color.white.opacity(0.08),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -227,7 +227,7 @@ struct GlobalOverlayHUD: View {
                 colors: [
                     Color.white.opacity(0.0),
                     Color.white.opacity(0.25),
-                    Color.white.opacity(0.0)
+                    Color.white.opacity(0.0),
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -237,7 +237,7 @@ struct GlobalOverlayHUD: View {
                 colors: [
                     Color.white.opacity(0.0),
                     Color.white.opacity(0.18),
-                    Color.white.opacity(0.0)
+                    Color.white.opacity(0.0),
                 ],
                 startPoint: .leading,
                 endPoint: .trailing

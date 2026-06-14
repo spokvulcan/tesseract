@@ -40,11 +40,12 @@ nonisolated enum PrefixCacheDiagnostics {
             }
             PrefixCacheDiagnostics.forwardToSink(line)
             PrefixCacheDiagnostics.forwardTelemetryEvent(
-                PrefixCacheDiagnostics.telemetryEvent(SkipEvent(
-                    stage: stage,
-                    reason: reason,
-                    extraFields: extraFields
-                ), context: self)
+                PrefixCacheDiagnostics.telemetryEvent(
+                    SkipEvent(
+                        stage: stage,
+                        reason: reason,
+                        extraFields: extraFields
+                    ), context: self)
             )
         }
     }
@@ -246,13 +247,15 @@ nonisolated enum PrefixCacheDiagnostics {
             ]
 
             if let normalizedRecency {
-                fields.append(("normalizedRecency", PrefixCacheDiagnostics.scalar(normalizedRecency)))
+                fields.append(
+                    ("normalizedRecency", PrefixCacheDiagnostics.scalar(normalizedRecency)))
             }
             if let normalizedFlopEfficiency {
-                fields.append((
-                    "normalizedFlopEfficiency",
-                    PrefixCacheDiagnostics.scalar(normalizedFlopEfficiency)
-                ))
+                fields.append(
+                    (
+                        "normalizedFlopEfficiency",
+                        PrefixCacheDiagnostics.scalar(normalizedFlopEfficiency)
+                    ))
             }
             if let utility {
                 fields.append(("utility", PrefixCacheDiagnostics.scalar(utility)))
@@ -563,7 +566,8 @@ nonisolated enum PrefixCacheDiagnostics {
     /// `requestID` / `modelID` / `kvBits` / `kvGroupSize` prefix.
     nonisolated static func renderSystem(_ payload: some Payload) -> String {
         let fields: [(String, String)] = [("event", payload.eventName)] + payload.fields
-        return fields
+        return
+            fields
             .map { key, value in "\(key)=\(escape(value))" }
             .joined(separator: " ")
     }
@@ -736,7 +740,9 @@ nonisolated enum PrefixCacheDiagnostics {
         value.map(String.init) ?? "nil"
     }
 
-    private static func optionalCheckpointType(_ value: HybridCacheSnapshot.CheckpointType?) -> String {
+    private static func optionalCheckpointType(_ value: HybridCacheSnapshot.CheckpointType?)
+        -> String
+    {
         value?.wireString ?? "nil"
     }
 
@@ -757,11 +763,14 @@ nonisolated enum PrefixCacheDiagnostics {
     }
 
     private static func escape(_ value: String) -> String {
-        guard value.range(
-            of: #"^[A-Za-z0-9._:/,\-\[\]]+$"#,
-            options: .regularExpression
-        ) != nil else {
-            let escaped = value
+        guard
+            value.range(
+                of: #"^[A-Za-z0-9._:/,\-\[\]]+$"#,
+                options: .regularExpression
+            ) != nil
+        else {
+            let escaped =
+                value
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
             return "\"\(escaped)\""

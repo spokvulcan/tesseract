@@ -47,7 +47,9 @@ struct RecordingButtonView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint(state == .recording ? "Double tap to stop recording" : "Double tap to start recording")
+        .accessibilityHint(
+            state == .recording ? "Double tap to stop recording" : "Double tap to start recording"
+        )
         .onChange(of: state) { _, newState in
             isPulsing = newState == .recording
         }

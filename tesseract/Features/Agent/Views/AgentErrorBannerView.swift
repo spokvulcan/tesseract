@@ -42,7 +42,9 @@ struct AgentInputStatusStrip: View {
             return .voiceError(message)
         }
         if agentEngine.isLoading {
-            let text = agentEngine.loadingStatus.isEmpty ? "Loading model\u{2026}" : agentEngine.loadingStatus
+            let text =
+                agentEngine.loadingStatus.isEmpty
+                ? "Loading model\u{2026}" : agentEngine.loadingStatus
             return .loading(text)
         }
         if !agentEngine.isModelLoaded && !isModelDownloaded {
@@ -116,11 +118,13 @@ struct AgentInputStatusStrip: View {
     }
 
     private func statusLabel(_ status: Status) -> some View {
-        let (text, style): (String, AnyShapeStyle) = switch status {
-        case .error(let m), .voiceError(let m): (m, AnyShapeStyle(.primary.opacity(0.7)))
-        case .loading(let t): (t, AnyShapeStyle(.secondary))
-        case .notDownloaded: ("Download an agent model to get started", AnyShapeStyle(.secondary))
-        }
+        let (text, style): (String, AnyShapeStyle) =
+            switch status {
+            case .error(let m), .voiceError(let m): (m, AnyShapeStyle(.primary.opacity(0.7)))
+            case .loading(let t): (t, AnyShapeStyle(.secondary))
+            case .notDownloaded:
+                ("Download an agent model to get started", AnyShapeStyle(.secondary))
+            }
         return Text(text)
             .font(.caption)
             .foregroundStyle(style)

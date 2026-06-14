@@ -33,9 +33,11 @@ struct AgentRunControllerTests {
     }
 
     private static let oldUser = UserMessage(content: String(repeating: "A", count: 2_000))
-    private static let oldAssistant = AssistantMessage(content: String(repeating: "B", count: 2_000))
+    private static let oldAssistant = AssistantMessage(
+        content: String(repeating: "B", count: 2_000))
     private static let recentUser = UserMessage(content: String(repeating: "C", count: 4_000))
-    private static let recentAssistant = AssistantMessage(content: String(repeating: "D", count: 4_000))
+    private static let recentAssistant = AssistantMessage(
+        content: String(repeating: "D", count: 4_000))
 
     private func makeAgent() -> Agent {
         makeNoOpAgent(modelID: "agent-run-controller-test-model")
@@ -80,7 +82,7 @@ struct AgentRunControllerTests {
             reportError: { errors.report($0) }
         )
 
-        run.runUnderLease { /* never reached — lease throws first */ }
+        run.runUnderLease { /* never reached — lease throws first */  }
 
         // Eager: flag is up while the run is still queued and the agent idle.
         #expect(run.isGenerating == true)
@@ -109,7 +111,7 @@ struct AgentRunControllerTests {
         let bodyMark = ErrorRecorder()
         run.runUnderLease { bodyMark.report("body") }
 
-        #expect(run.isGenerating == true)   // eager, while queued
+        #expect(run.isGenerating == true)  // eager, while queued
         try await waitUntilIdle(run)
 
         #expect(bodyMark.messages == ["body"])
@@ -128,12 +130,12 @@ struct AgentRunControllerTests {
         let agent = makeAgent()
         let peer = InMemoryInferenceArbiter()
         let settings = SettingsManager(store: InMemorySettingsStore())
-        #expect(settings.useVisionWhenAvailable == true)   // default on
+        #expect(settings.useVisionWhenAvailable == true)  // default on
         let run = AgentRunController(
             agent: agent, arbiter: peer, settings: settings, reportError: { _ in }
         )
 
-        run.runUnderLease { }
+        run.runUnderLease {}
         try await waitUntilIdle(run)
 
         #expect(peer.leaseCalls == [.init(slot: .llm, llmVision: .visionIfCapable)])
@@ -150,7 +152,7 @@ struct AgentRunControllerTests {
             agent: agent, arbiter: peer, settings: settings, reportError: { _ in }
         )
 
-        run.runUnderLease { }
+        run.runUnderLease {}
         try await waitUntilIdle(run)
 
         #expect(peer.leaseCalls == [.init(slot: .llm, llmVision: .fromSettings)])
@@ -179,10 +181,11 @@ struct AgentRunControllerTests {
         )
 
         run.runUnderLease { [agent] in
-            await agent.forceCompact(contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
+            await agent.forceCompact(
+                contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
         }
 
-        #expect(run.isGenerating == true)   // eager, synchronous
+        #expect(run.isGenerating == true)  // eager, synchronous
         try await waitUntilIdle(run)
 
         #expect(await recorder.callCount == 0)
@@ -214,7 +217,8 @@ struct AgentRunControllerTests {
         )
 
         run.runUnderLease { [agent] in
-            await agent.forceCompact(contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
+            await agent.forceCompact(
+                contextManager: contextManager, contextWindow: 5_000, summarize: summarize)
         }
 
         let deadline = ContinuousClock.now + .seconds(3)
@@ -241,7 +245,8 @@ struct AgentRunControllerTests {
     /// up (only the event spine flips it down).
     @Test func sendIssuesPromptAndRaisesEagerFlag() async throws {
         let agent = makeAgent()
-        let run = AgentRunController(agent: agent, arbiter: InMemoryInferenceArbiter(), reportError: { _ in })
+        let run = AgentRunController(
+            agent: agent, arbiter: InMemoryInferenceArbiter(), reportError: { _ in })
 
         run.send(CoreMessage.user(UserMessage(content: "Hello")))
         #expect(run.isGenerating == true)
@@ -256,7 +261,8 @@ struct AgentRunControllerTests {
     /// `cancelAndWait` drains the run and drives `isGenerating` to `false`.
     @Test func cancelAndWaitResetsIsGenerating() async throws {
         let agent = makeAgent()
-        let run = AgentRunController(agent: agent, arbiter: InMemoryInferenceArbiter(), reportError: { _ in })
+        let run = AgentRunController(
+            agent: agent, arbiter: InMemoryInferenceArbiter(), reportError: { _ in })
 
         run.send(CoreMessage.user(UserMessage(content: "Hi")))
         #expect(run.isGenerating == true)

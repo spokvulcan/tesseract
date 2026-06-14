@@ -69,15 +69,19 @@ final class ChatTranscriptController {
     /// Projects the message log into rows via the pure ``ChatTranscript`` module.
     /// Makes the auto-expand decision, asks the module for the rows + splice
     /// point, then prunes stale expansion state — all explicit steps.
-    func rebuild(messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool) {
+    func rebuild(
+        messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool
+    ) {
         let perfState = ChatViewPerf.signposter.beginInterval("rebuildRows")
 
         applyStreamingHeaderAutoExpand(isGenerating: isGenerating)
 
-        let projection = ChatTranscript.rows(from: messages, makeContext(stream: stream, isGenerating: isGenerating))
+        let projection = ChatTranscript.rows(
+            from: messages, makeContext(stream: stream, isGenerating: isGenerating))
         rows = projection.rows
         activeTurnRowIndex = projection.activeTurnStart
-        pruneExpansionState(validTurnIDs: projection.validTurnIDs, toolRowIDs: projection.toolRowIDs)
+        pruneExpansionState(
+            validTurnIDs: projection.validTurnIDs, toolRowIDs: projection.toolRowIDs)
 
         ChatViewPerf.signposter.endInterval("rebuildRows", perfState)
     }
@@ -87,7 +91,9 @@ final class ChatTranscriptController {
     /// Throttled streaming update — patches only the active turn's rows and bumps
     /// `streamingRowVersion`. Re-projects only the active (last) turn and splices
     /// it onto the stable prefix.
-    func patchStreamingTail(messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool) {
+    func patchStreamingTail(
+        messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool
+    ) {
         let now = ContinuousClock.now
         guard now - lastStreamingUpdate >= streamingThrottle else { return }
         lastStreamingUpdate = now
@@ -97,7 +103,9 @@ final class ChatTranscriptController {
         streamingRowVersion &+= 1
     }
 
-    private func applyTailPatch(messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool) {
+    private func applyTailPatch(
+        messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool
+    ) {
         guard isGenerating, activeTurnRowIndex <= rows.count else {
             rebuild(messages: messages, stream: stream, isGenerating: isGenerating)
             return
@@ -111,7 +119,8 @@ final class ChatTranscriptController {
             return
         }
 
-        let tailRows = ChatTranscript.rows(for: activeTurn, makeContext(stream: stream, isGenerating: isGenerating))
+        let tailRows = ChatTranscript.rows(
+            for: activeTurn, makeContext(stream: stream, isGenerating: isGenerating))
         let spliceIndex = min(activeTurnRowIndex, rows.count)
         rows.replaceSubrange(spliceIndex..., with: tailRows)
     }
@@ -119,7 +128,9 @@ final class ChatTranscriptController {
     // MARK: - Event-driven transitions (fed by the dispatcher)
 
     /// `.turnEnd`: auto-expand the last turn on the first turnEnd, then rebuild.
-    func onTurnEnd(messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool) {
+    func onTurnEnd(
+        messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool
+    ) {
         // By now the user message is committed and the assistant turn exists.
         if autoExpandedTurnID == nil {
             autoExpandLastTurn(messages: messages)
@@ -140,10 +151,15 @@ final class ChatTranscriptController {
 
     // MARK: - Expand / Collapse
 
-    func toggleTurnExpanded(_ turnID: UUID, messages: [any AgentMessageProtocol], stream: AssistantMessage?, isGenerating: Bool) {
+    func toggleTurnExpanded(
+        _ turnID: UUID, messages: [any AgentMessageProtocol], stream: AssistantMessage?,
+        isGenerating: Bool
+    ) {
         expandedTurns.formSymmetricDifference([turnID])
         // Track manual collapse of the streaming header.
-        if turnID == ChatTranscript.streamingTurnID && !expandedTurns.contains(ChatTranscript.streamingTurnID) {
+        if turnID == ChatTranscript.streamingTurnID
+            && !expandedTurns.contains(ChatTranscript.streamingTurnID)
+        {
             streamingManuallyCollapsed = true
         }
         rebuild(messages: messages, stream: stream, isGenerating: isGenerating)
@@ -152,7 +168,8 @@ final class ChatTranscriptController {
     func toggleDetailExpanded(_ rowID: String) {
         expandedDetails.formSymmetricDifference([rowID])
         if let idx = rows.firstIndex(where: { $0.id == rowID }),
-           case .toolCall(let data) = rows[idx].kind {
+            case .toolCall(let data) = rows[idx].kind
+        {
             rows[idx] = ChatRow(id: rowID, kind: .toolCall(data.togglingDetail()))
         }
     }
@@ -173,7 +190,9 @@ final class ChatTranscriptController {
     /// Builds the projection context from current controller state plus the fed
     /// `stream` / `isGenerating`. The injected timestamp formatter keeps the
     /// projection pure and deterministic.
-    private func makeContext(stream: AssistantMessage?, isGenerating: Bool) -> ChatTranscript.Context {
+    private func makeContext(stream: AssistantMessage?, isGenerating: Bool)
+        -> ChatTranscript.Context
+    {
         ChatTranscript.Context(
             isGenerating: isGenerating,
             expandedTurns: expandedTurns,

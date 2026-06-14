@@ -74,10 +74,12 @@ final class HybridCacheCorrectnessRunner {
         var logs: [String] = []
         var checks: [CheckResult] = []
 
-        let shortPrompt = BenchmarkHarness.promptTokens(targetTokens: 2048, tokenizer: context.tokenizer)
+        let shortPrompt = BenchmarkHarness.promptTokens(
+            targetTokens: 2048, tokenizer: context.tokenizer)
         // Test 8 wants a 16K prompt with restore at 8K — exercises cache shapes
         // and chunk-loop handling well past the 4K-context typical case.
-        let longPrompt = BenchmarkHarness.promptTokens(targetTokens: 16384, tokenizer: context.tokenizer)
+        let longPrompt = BenchmarkHarness.promptTokens(
+            targetTokens: 16384, tokenizer: context.tokenizer)
         logs.append("\n── Token sequences ──")
         logs.append("  short prompt: \(shortPrompt.count) tokens")
         logs.append("  long prompt:  \(longPrompt.count) tokens")
@@ -114,7 +116,8 @@ final class HybridCacheCorrectnessRunner {
         }
 
         runTest("midPrefillRestoreMatchesFullPrefill") {
-            try test1_midPrefillRestore(context: context, tokens: shortPrompt, fullLogits: shortFullLogits)
+            try test1_midPrefillRestore(
+                context: context, tokens: shortPrompt, fullLogits: shortFullLogits)
         }
         runTest("restoreAtExactMatch") {
             try test2_restoreAtExactMatch(context: context, tokens: shortPrompt)
@@ -144,7 +147,8 @@ final class HybridCacheCorrectnessRunner {
             try test7_multipleRestoresFromSameSnapshot(context: context, tokens: shortPrompt)
         }
         runTest("longContext16KRestore") {
-            try test8_longContextRestore(context: context, tokens: longPrompt, fullLogits: longFullLogits)
+            try test8_longContextRestore(
+                context: context, tokens: longPrompt, fullLogits: longFullLogits)
         }
         runTest("leafHitWithNormalizationDivergenceBounded") {
             try test9_leafHitWithTrimBoundedDivergence(context: context, tokens: shortPrompt)
@@ -187,7 +191,8 @@ final class HybridCacheCorrectnessRunner {
         }
 
         let passed = failures.isEmpty
-        let detail = passed
+        let detail =
+            passed
             ? "all \(kValues.count) K values bitwise match (K=\(kValues))"
             : "diverged at: \(failures.joined(separator: ", "))"
         return (passed, detail, lines)
@@ -212,9 +217,11 @@ final class HybridCacheCorrectnessRunner {
         // Doing it in this order means only one prefill is needed.
         let liveCache = context.model.newCache(parameters: nil)
         try prefill(context: context, tokens: tokens, checkpoints: [:], cache: liveCache)
-        guard let snap = HybridCacheSnapshot.capture(
-            cache: liveCache, offset: tokens.count, type: .system
-        ) else {
+        guard
+            let snap = HybridCacheSnapshot.capture(
+                cache: liveCache, offset: tokens.count, type: .system
+            )
+        else {
             return (false, "capture nil", [])
         }
         // Forward the sentinel on the live cache. Captures the "predict
@@ -247,9 +254,11 @@ final class HybridCacheCorrectnessRunner {
             checkpoints: [k: .system],
             cache: prefillCache
         )
-        guard let snap = HybridCacheSnapshot.capture(
-            cache: prefillCache, offset: k, type: .system
-        ) else {
+        guard
+            let snap = HybridCacheSnapshot.capture(
+                cache: prefillCache, offset: k, type: .system
+            )
+        else {
             return (false, "capture nil", [])
         }
         let restored = try snap.restore()
@@ -290,9 +299,11 @@ final class HybridCacheCorrectnessRunner {
             checkpoints: [:],
             cache: cacheA
         )
-        guard let snap = HybridCacheSnapshot.capture(
-            cache: cacheA, offset: k, type: .system
-        ) else {
+        guard
+            let snap = HybridCacheSnapshot.capture(
+                cache: cacheA, offset: k, type: .system
+            )
+        else {
             return (false, "capture nil", [])
         }
         let cacheB = try snap.restore()
@@ -302,7 +313,8 @@ final class HybridCacheCorrectnessRunner {
         )
         var detail = "\(label)Layers=\(result.layerCount) maxAbsDiff=\(result.maxDiff)"
         if checkOffset { detail += " offsetMatch=\(!result.offsetMismatch)" }
-        let passed = result.layerCount > 0
+        let passed =
+            result.layerCount > 0
             && result.maxDiff <= bitwiseTolerance
             && !result.offsetMismatch
         return (passed, detail, [])
@@ -323,9 +335,11 @@ final class HybridCacheCorrectnessRunner {
             return (true, "no QuantizedKVCache layers in this model — skipped", [])
         }
 
-        guard let snap = HybridCacheSnapshot.capture(
-            cache: cacheA, offset: tokens.count, type: .system
-        ) else {
+        guard
+            let snap = HybridCacheSnapshot.capture(
+                cache: cacheA, offset: tokens.count, type: .system
+            )
+        else {
             return (false, "capture nil", [])
         }
         let cacheB = try snap.restore()
@@ -365,9 +379,11 @@ final class HybridCacheCorrectnessRunner {
             checkpoints: [:],
             cache: setupCache
         )
-        guard let snap = HybridCacheSnapshot.capture(
-            cache: setupCache, offset: k, type: .system
-        ) else {
+        guard
+            let snap = HybridCacheSnapshot.capture(
+                cache: setupCache, offset: k, type: .system
+            )
+        else {
             return (false, "capture nil", [])
         }
 
@@ -428,9 +444,11 @@ final class HybridCacheCorrectnessRunner {
             cache: setupCache
         )
         let leafOffset = tokens.count - 1
-        guard let leafSnap = HybridCacheSnapshot.capture(
-            cache: setupCache, offset: leafOffset, type: .leaf
-        ) else {
+        guard
+            let leafSnap = HybridCacheSnapshot.capture(
+                cache: setupCache, offset: leafOffset, type: .leaf
+            )
+        else {
             return (false, "leaf capture nil", [])
         }
         let restoredCache = try leafSnap.restore()
@@ -461,9 +479,11 @@ final class HybridCacheCorrectnessRunner {
             checkpoints: [:],
             cache: setupCache
         )
-        guard let snap = HybridCacheSnapshot.capture(
-            cache: setupCache, offset: k, type: .system
-        ) else {
+        guard
+            let snap = HybridCacheSnapshot.capture(
+                cache: setupCache, offset: k, type: .system
+            )
+        else {
             return (false, "capture nil at K=\(k)", [])
         }
 
@@ -546,9 +566,11 @@ final class HybridCacheCorrectnessRunner {
             if trimmedThisIter > 0 { sawTrimmable = true }
             guard trimmedThisIter > 0 else { continue }
 
-            guard let leafSnap = HybridCacheSnapshot.capture(
-                cache: liveCache, offset: leafOffset, type: .leaf
-            ) else {
+            guard
+                let leafSnap = HybridCacheSnapshot.capture(
+                    cache: liveCache, offset: leafOffset, type: .leaf
+                )
+            else {
                 return (false, "trimmed leaf capture nil at trim=\(trimAmount)", lines)
             }
             let restoredCache = try leafSnap.restore()
@@ -565,7 +587,7 @@ final class HybridCacheCorrectnessRunner {
 
             lines.append(
                 "  trim=\(trimAmount): maxAbsDiff=\(diff) "
-                + "argmax cold=\(coldArgmax) restored=\(restoredArgmax) stable=\(stable)"
+                    + "argmax cold=\(coldArgmax) restored=\(restoredArgmax) stable=\(stable)"
             )
         }
 
@@ -649,9 +671,11 @@ final class HybridCacheCorrectnessRunner {
             checkpoints: [:],
             cache: setupCache
         )
-        guard let snap = HybridCacheSnapshot.capture(
-            cache: setupCache, offset: k, type: .system
-        ) else {
+        guard
+            let snap = HybridCacheSnapshot.capture(
+                cache: setupCache, offset: k, type: .system
+            )
+        else {
             throw HybridCacheCorrectnessError.snapshotCaptureFailed
         }
         let cache = try snap.restore()

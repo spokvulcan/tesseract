@@ -41,7 +41,8 @@ struct PromptCacheDiagnosticsFileSinkTests {
         #expect(files.count == 1)
         #expect(files[0].hasSuffix(".jsonl"))
 
-        let contents = try String(contentsOf: directory.appendingPathComponent(files[0]), encoding: .utf8)
+        let contents = try String(
+            contentsOf: directory.appendingPathComponent(files[0]), encoding: .utf8)
         let lines = contents.split(separator: "\n")
         #expect(lines.count == 2)
 
@@ -86,7 +87,8 @@ struct PromptCacheDiagnosticsFileSinkTests {
 
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
         #expect(files.count == 1)
-        let contents = try String(contentsOf: directory.appendingPathComponent(files[0]), encoding: .utf8)
+        let contents = try String(
+            contentsOf: directory.appendingPathComponent(files[0]), encoding: .utf8)
         #expect(contents.split(separator: "\n").count == 2)
     }
 }

@@ -21,12 +21,12 @@ struct CacheKeySpaceTests {
 
     /// [text…] <vision_start> pad×runLength <vision_end> [text…]
     private static func prompt(runLengths: [Int], textChunk: Int = 4) -> [Int] {
-        var tokens: [Int] = Array(1 ... textChunk)
+        var tokens: [Int] = Array(1...textChunk)
         for (i, run) in runLengths.enumerated() {
             tokens.append(visionStart)
             tokens.append(contentsOf: Array(repeating: pad, count: run))
             tokens.append(visionEnd)
-            tokens.append(contentsOf: Array(100 + i * 10 ..< 100 + i * 10 + textChunk))
+            tokens.append(contentsOf: Array(100 + i * 10..<100 + i * 10 + textChunk))
         }
         return tokens
     }
@@ -39,13 +39,15 @@ struct CacheKeySpaceTests {
     /// image-bearing snapshot on disk — revert the function, don't update the
     /// goldens.
     @Test func pseudoTokenExpansionMatchesGoldenValues() throws {
-        let digestA = try #require(ImageDigest(rawDigest: Data(0 ..< 32)))
+        let digestA = try #require(ImageDigest(rawDigest: Data(0..<32)))
         let digestB = Self.digest("tesseract-image-a")
         let digestC = Self.digest("tesseract-image-b")
 
         // Digest bytes themselves are part of the frozen surface.
-        #expect(digestB.hexString == "8a7136e7652bd150764b2cf0f3144e7014fbb90c2691dbef0b9fa20d97e254b6")
-        #expect(digestC.hexString == "467e2ab3b7fa4141ccfe3fb3ace77350e1fc2b5c7f9a0e72a4700d9d7923a512")
+        #expect(
+            digestB.hexString == "8a7136e7652bd150764b2cf0f3144e7014fbb90c2691dbef0b9fa20d97e254b6")
+        #expect(
+            digestC.hexString == "467e2ab3b7fa4141ccfe3fb3ace77350e1fc2b5c7f9a0e72a4700d9d7923a512")
 
         let golden: [(ImageDigest, Int, Int)] = [
             (digestA, 0, -3_964_090_289_384_830_885),
@@ -69,7 +71,7 @@ struct CacheKeySpaceTests {
     @Test func pseudoTokensAreAlwaysNegative() {
         let digests = ["a", "b", "c", "d"].map(Self.digest)
         for digest in digests {
-            for index in 0 ..< 256 {
+            for index in 0..<256 {
                 #expect(ImagePseudoToken.value(digest: digest, index: index) < 0)
             }
         }
@@ -149,7 +151,8 @@ struct CacheKeySpaceTests {
 
         #expect(space.keyPath.count == tokens.count)
         let run = try #require(space.imageTable.first?.runRange)
-        #expect(Array(space.keyPath[run]) == ImagePseudoToken.expansion(digest: digest, runLength: 3))
+        #expect(
+            Array(space.keyPath[run]) == ImagePseudoToken.expansion(digest: digest, runLength: 3))
         // Everything outside the run — framing included — is untouched.
         for index in tokens.indices where !run.contains(index) {
             #expect(space.keyPath[index] == tokens[index])
@@ -217,9 +220,10 @@ struct CacheKeySpaceTests {
 
         let render = [1, 2, Self.visionStart, Self.pad, Self.visionEnd, 100]
         let translated = try space.translate(renderTokens: render).get()
-        #expect(translated == [1, 2, Self.visionStart]
-            + ImagePseudoToken.expansion(digest: digest, runLength: 3)
-            + [Self.visionEnd, 100])
+        #expect(
+            translated == [1, 2, Self.visionStart]
+                + ImagePseudoToken.expansion(digest: digest, runLength: 3)
+                + [Self.visionEnd, 100])
     }
 
     /// A prefix render contains only the leading images — occurrence i maps
@@ -238,9 +242,10 @@ struct CacheKeySpaceTests {
 
         let prefixRender = [1, Self.visionStart, Self.pad, Self.visionEnd]
         let translated = try space.translate(renderTokens: prefixRender).get()
-        #expect(translated == [1, Self.visionStart]
-            + ImagePseudoToken.expansion(digest: digestA, runLength: 2)
-            + [Self.visionEnd])
+        #expect(
+            translated == [1, Self.visionStart]
+                + ImagePseudoToken.expansion(digest: digestA, runLength: 2)
+                + [Self.visionEnd])
     }
 
     @Test func translationFailsTypedWhenRenderHasMoreImagesThanRequest() throws {
@@ -270,8 +275,9 @@ struct CacheKeySpaceTests {
         ).get()
 
         let render = [1, Self.visionStart, Self.pad, Self.visionEnd, 7, Self.pad, 9]
-        #expect(try space.translatedLength(renderTokens: render).get()
-            == (try space.translate(renderTokens: render).get().count))
+        #expect(
+            try space.translatedLength(renderTokens: render).get()
+                == (try space.translate(renderTokens: render).get().count))
 
         let overflow = [Self.pad, 5, Self.pad, 6, Self.pad]
         switch space.translatedLength(renderTokens: overflow) {
@@ -393,13 +399,13 @@ struct CacheKeySpaceTests {
         let run1 = space.imageTable[1].runRange
 
         // Below / at the first run: both images are in the remainder.
-        #expect(space.remainderImageIndices(from: 0) == 0 ..< 2)
-        #expect(space.remainderImageIndices(from: run0.lowerBound) == 0 ..< 2)
+        #expect(space.remainderImageIndices(from: 0) == 0..<2)
+        #expect(space.remainderImageIndices(from: run0.lowerBound) == 0..<2)
         // At the boundary after the first image: only the second.
-        #expect(space.remainderImageIndices(from: run0.upperBound) == 1 ..< 2)
-        #expect(space.remainderImageIndices(from: run1.lowerBound) == 1 ..< 2)
+        #expect(space.remainderImageIndices(from: run0.upperBound) == 1..<2)
+        #expect(space.remainderImageIndices(from: run1.lowerBound) == 1..<2)
         // Past the last image: empty (an image-free remainder).
-        #expect(space.remainderImageIndices(from: run1.upperBound) == 2 ..< 2)
+        #expect(space.remainderImageIndices(from: run1.upperBound) == 2..<2)
         // Splitting a run: nil — no valid restore there.
         #expect(space.remainderImageIndices(from: run0.lowerBound + 1) == nil)
         #expect(space.remainderImageIndices(from: run1.upperBound - 1) == nil)
@@ -407,7 +413,7 @@ struct CacheKeySpaceTests {
 
     @Test func remainderImageIndicesIsEmptyForTextOnly() {
         let space = CacheKeySpace.identity(keyPath: [1, 2, 3])
-        #expect(space.remainderImageIndices(from: 0) == 0 ..< 0)
+        #expect(space.remainderImageIndices(from: 0) == 0..<0)
     }
 
     /// Pinned against the model's harvested rope delta by the VLM spike

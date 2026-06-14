@@ -30,14 +30,17 @@ final class AudioDeviceManager: ObservableObject {
 
         // Select default device if none selected
         if selectedDevice == nil {
-            selectedDevice = availableDevices.first { $0.isDefault }
+            selectedDevice =
+                availableDevices.first { $0.isDefault }
                 ?? availableDevices.first
         }
 
         // Verify selected device still exists
         if let selected = selectedDevice,
-           !availableDevices.contains(where: { $0.id == selected.id }) {
-            selectedDevice = availableDevices.first { $0.isDefault }
+            !availableDevices.contains(where: { $0.id == selected.id })
+        {
+            selectedDevice =
+                availableDevices.first { $0.isDefault }
                 ?? availableDevices.first
         }
     }

@@ -70,22 +70,26 @@ final class PrefixCacheE2ERunner {
             toolSpecs: toolSpecs,
             parameters: params
         )
-        log("  directTextChars=\(managedEquivalence.direct.generatedText.count) "
-            + "serviceTextChars=\(managedEquivalence.service.generatedText.count) "
-            + "directToolCalls=\(managedEquivalence.direct.toolCalls.count) "
-            + "serviceToolCalls=\(managedEquivalence.service.toolCalls.count)")
-        checks.append(CheckResult(
-            name: "managed_standard_route_generated_text_matches",
-            passed: managedEquivalence.direct.generatedText == managedEquivalence.service.generatedText,
-            detail: "directChars=\(managedEquivalence.direct.generatedText.count) "
-                + "serviceChars=\(managedEquivalence.service.generatedText.count)"
-        ))
-        checks.append(CheckResult(
-            name: "managed_standard_route_tool_calls_match",
-            passed: managedEquivalence.direct.toolCalls == managedEquivalence.service.toolCalls,
-            detail: "directToolCalls=\(managedEquivalence.direct.toolCalls.count) "
-                + "serviceToolCalls=\(managedEquivalence.service.toolCalls.count)"
-        ))
+        log(
+            "  directTextChars=\(managedEquivalence.direct.generatedText.count) "
+                + "serviceTextChars=\(managedEquivalence.service.generatedText.count) "
+                + "directToolCalls=\(managedEquivalence.direct.toolCalls.count) "
+                + "serviceToolCalls=\(managedEquivalence.service.toolCalls.count)")
+        checks.append(
+            CheckResult(
+                name: "managed_standard_route_generated_text_matches",
+                passed: managedEquivalence.direct.generatedText
+                    == managedEquivalence.service.generatedText,
+                detail: "directChars=\(managedEquivalence.direct.generatedText.count) "
+                    + "serviceChars=\(managedEquivalence.service.generatedText.count)"
+            ))
+        checks.append(
+            CheckResult(
+                name: "managed_standard_route_tool_calls_match",
+                passed: managedEquivalence.direct.toolCalls == managedEquivalence.service.toolCalls,
+                detail: "directToolCalls=\(managedEquivalence.direct.toolCalls.count) "
+                    + "serviceToolCalls=\(managedEquivalence.service.toolCalls.count)"
+            ))
 
         // Step 2: Request A — baseline, cold cache.
         log("\n── Step 2: Request A (baseline, cold prefix cache) ──")
@@ -97,13 +101,15 @@ final class PrefixCacheE2ERunner {
             toolSpecs: toolSpecs,
             parameters: params
         )
-        log("  cachedTokens=\(requestA.cachedTokens) ttft=\(String(format: "%.3f", requestA.ttftSeconds))s "
-            + "generatedChars=\(requestA.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestA_cold_start",
-            passed: requestA.cachedTokens == 0,
-            detail: "cachedTokens=\(requestA.cachedTokens) expected 0"
-        ))
+        log(
+            "  cachedTokens=\(requestA.cachedTokens) ttft=\(String(format: "%.3f", requestA.ttftSeconds))s "
+                + "generatedChars=\(requestA.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "requestA_cold_start",
+                passed: requestA.cachedTokens == 0,
+                detail: "cachedTokens=\(requestA.cachedTokens) expected 0"
+            ))
 
         // Step 3: Request B — same system + tools, different user → should
         // hit the stable-prefix snapshot planned during Request A.
@@ -116,19 +122,23 @@ final class PrefixCacheE2ERunner {
             toolSpecs: toolSpecs,
             parameters: params
         )
-        log("  cachedTokens=\(requestB1.cachedTokens) ttft=\(String(format: "%.3f", requestB1.ttftSeconds))s "
-            + "generatedChars=\(requestB1.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestB_hits_stable_prefix",
-            passed: requestB1.cachedTokens > 0,
-            detail: "cachedTokens=\(requestB1.cachedTokens) expected > 0"
-        ))
-        let ttftRatio = requestA.ttftSeconds > 0 ? requestB1.ttftSeconds / requestA.ttftSeconds : 1.0
-        checks.append(CheckResult(
-            name: "requestB_ttft_dropped",
-            passed: ttftRatio < 0.6,
-            detail: "ttftB/ttftA=\(String(format: "%.3f", ttftRatio)) expected < 0.6"
-        ))
+        log(
+            "  cachedTokens=\(requestB1.cachedTokens) ttft=\(String(format: "%.3f", requestB1.ttftSeconds))s "
+                + "generatedChars=\(requestB1.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "requestB_hits_stable_prefix",
+                passed: requestB1.cachedTokens > 0,
+                detail: "cachedTokens=\(requestB1.cachedTokens) expected > 0"
+            ))
+        let ttftRatio =
+            requestA.ttftSeconds > 0 ? requestB1.ttftSeconds / requestA.ttftSeconds : 1.0
+        checks.append(
+            CheckResult(
+                name: "requestB_ttft_dropped",
+                passed: ttftRatio < 0.6,
+                detail: "ttftB/ttftA=\(String(format: "%.3f", ttftRatio)) expected < 0.6"
+            ))
 
         // Step 4: Logit equivalence proxy.
         //   - Unload the model to clear `_prefixCache` (LLMActor drops it on unload)
@@ -152,13 +162,15 @@ final class PrefixCacheE2ERunner {
             toolSpecs: toolSpecs,
             parameters: params
         )
-        log("  cachedTokens=\(requestB2.cachedTokens) (expected 0) "
-            + "generatedChars=\(requestB2.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestB2_cold_after_reload",
-            passed: requestB2.cachedTokens == 0,
-            detail: "cachedTokens=\(requestB2.cachedTokens) expected 0 after reload"
-        ))
+        log(
+            "  cachedTokens=\(requestB2.cachedTokens) (expected 0) "
+                + "generatedChars=\(requestB2.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "requestB2_cold_after_reload",
+                passed: requestB2.cachedTokens == 0,
+                detail: "cachedTokens=\(requestB2.cachedTokens) expected 0 after reload"
+            ))
 
         let equivalence = Self.checkGreedyOutputEquivalence(
             requestB1.generatedText,
@@ -166,11 +178,12 @@ final class PrefixCacheE2ERunner {
             labelA: "cached",
             labelB: "cold"
         )
-        checks.append(CheckResult(
-            name: "greedy_output_equivalence",
-            passed: equivalence.passed,
-            detail: equivalence.detail
-        ))
+        checks.append(
+            CheckResult(
+                name: "greedy_output_equivalence",
+                passed: equivalence.passed,
+                detail: equivalence.detail
+            ))
 
         // Step 5: Normalization round-trip — Request B with trailing
         // whitespace on user content must still tokenize to the same stable
@@ -188,22 +201,26 @@ final class PrefixCacheE2ERunner {
             parameters: params
         )
         log("  cachedTokens=\(requestB3.cachedTokens) (expected > 0, second run after Request B2)")
-        checks.append(CheckResult(
-            name: "normalization_roundtrip_hits_cache",
-            passed: requestB3.cachedTokens > 0,
-            detail: "cachedTokens=\(requestB3.cachedTokens) expected > 0 (second identical request)"
-        ))
+        checks.append(
+            CheckResult(
+                name: "normalization_roundtrip_hits_cache",
+                passed: requestB3.cachedTokens > 0,
+                detail:
+                    "cachedTokens=\(requestB3.cachedTokens) expected > 0 (second identical request)"
+            ))
 
         // Step 6: Verify the cache actually stored both stable-prefix and
         // last-message-boundary checkpoints (not just one). We infer this
         // from the skipped-tokens growth: Request B3 should skip more than
         // the bare `<|im_start|>system\n` header (which would be ~20 tokens).
         log("\n── Step 6: Checkpoint depth ──")
-        checks.append(CheckResult(
-            name: "checkpoint_skips_more_than_system_header",
-            passed: requestB3.cachedTokens > 100,
-            detail: "cachedTokens=\(requestB3.cachedTokens) expected > 100 (covers full system+tools prefix)"
-        ))
+        checks.append(
+            CheckResult(
+                name: "checkpoint_skips_more_than_system_header",
+                passed: requestB3.cachedTokens > 100,
+                detail:
+                    "cachedTokens=\(requestB3.cachedTokens) expected > 100 (covers full system+tools prefix)"
+            ))
 
         let toolLoopResult = try await runToolLoopScenario(
             engine: engine,
@@ -278,7 +295,8 @@ final class PrefixCacheE2ERunner {
         logFileHandle?.closeFile()
 
         if !allPassed {
-            throw PrefixCacheE2EError.verificationFailed(failedChecks: checks.filter { !$0.passed }.map(\.name))
+            throw PrefixCacheE2EError.verificationFailed(
+                failedChecks: checks.filter { !$0.passed }.map(\.name))
         }
     }
 
@@ -343,9 +361,11 @@ final class PrefixCacheE2ERunner {
         var llmMessage: LLMMessage {
             switch self {
             case .user(let content, let images):
-                .user(content: content, images: images.map {
-                    ImageAttachment(data: $0, mimeType: "image/png")
-                })
+                .user(
+                    content: content,
+                    images: images.map {
+                        ImageAttachment(data: $0, mimeType: "image/png")
+                    })
             case .assistant(let content, let reasoning, let toolCalls):
                 .assistant(
                     content: content,
@@ -398,18 +418,21 @@ final class PrefixCacheE2ERunner {
                 assistantReasoning += chunk
                 generatedText += chunk
             case .toolCall(let call):
-                toolCalls.append(ToolCallInfo(
-                    id: "bench-call-\(toolCalls.count)",
-                    name: call.function.name,
-                    argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(call.function.arguments)
-                ))
+                toolCalls.append(
+                    ToolCallInfo(
+                        id: "bench-call-\(toolCalls.count)",
+                        name: call.function.name,
+                        argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(
+                            call.function.arguments)
+                    ))
             case .thinkTruncate(let safePrefix):
                 Self.applyThinkTruncate(
                     safePrefix: safePrefix,
                     generatedText: &generatedText,
                     assistantReasoning: &assistantReasoning
                 )
-            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta, .info:
+            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta,
+                .info:
                 break
             }
         }
@@ -480,12 +503,13 @@ final class PrefixCacheE2ERunner {
 
         let serviceStart = try await service.start(
             ServerInferenceRequest(
-                input: .chat(.init(
-                    systemPrompt: systemPrompt,
-                    messages: messages,
-                    toolSpecs: toolSpecs,
-                    prefixCacheConversation: nil
-                )),
+                input: .chat(
+                    .init(
+                        systemPrompt: systemPrompt,
+                        messages: messages,
+                        toolSpecs: toolSpecs,
+                        prefixCacheConversation: nil
+                    )),
                 parameters: toolLoopParams,
                 route: .standard
             )
@@ -515,18 +539,21 @@ final class PrefixCacheE2ERunner {
                 assistantReasoning += chunk
                 generatedText += chunk
             case .toolCall(let call):
-                toolCalls.append(ToolCallInfo(
-                    id: "managed-call-\(toolCalls.count)",
-                    name: call.function.name,
-                    argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(call.function.arguments)
-                ))
+                toolCalls.append(
+                    ToolCallInfo(
+                        id: "managed-call-\(toolCalls.count)",
+                        name: call.function.name,
+                        argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(
+                            call.function.arguments)
+                    ))
             case .thinkTruncate(let safePrefix):
                 Self.applyThinkTruncate(
                     safePrefix: safePrefix,
                     generatedText: &generatedText,
                     assistantReasoning: &assistantReasoning
                 )
-            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta, .info:
+            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta,
+                .info:
                 break
             }
         }
@@ -598,13 +625,16 @@ final class PrefixCacheE2ERunner {
             toolSpecs: toolSpecs,
             parameters: toolLoopParams
         )
-        log("  cachedTokens=\(requestY1.cachedTokens) ttft=\(String(format: "%.3f", requestY1.ttftSeconds))s "
-            + "toolCalls=\(requestY1.toolCalls.count) generatedChars=\(requestY1.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestY1_emits_tool_calls",
-            passed: !requestY1.toolCalls.isEmpty,
-            detail: "toolCalls=\(requestY1.toolCalls.count) expected > 0"
-        ))
+        log(
+            "  cachedTokens=\(requestY1.cachedTokens) ttft=\(String(format: "%.3f", requestY1.ttftSeconds))s "
+                + "toolCalls=\(requestY1.toolCalls.count) generatedChars=\(requestY1.generatedText.count)"
+        )
+        checks.append(
+            CheckResult(
+                name: "requestY1_emits_tool_calls",
+                passed: !requestY1.toolCalls.isEmpty,
+                detail: "toolCalls=\(requestY1.toolCalls.count) expected > 0"
+            ))
 
         let toolResults = requestY1.toolCalls.enumerated().map { index, call in
             BenchmarkMessage.toolResult(
@@ -649,29 +679,35 @@ final class PrefixCacheE2ERunner {
             toolSpecs: toolSpecs,
             parameters: toolLoopParams
         )
-        log("  cachedTokens=\(requestY2.cachedTokens) ttft=\(String(format: "%.3f", requestY2.ttftSeconds))s "
-            + "toolCalls=\(requestY2.toolCalls.count) generatedChars=\(requestY2.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestY2_hits_direct_tool_leaf",
-            passed: requestY2.cachedTokens > stablePrefixBaseline,
-            detail: "cachedTokens=\(requestY2.cachedTokens) expected > stable-prefix baseline="
-                + "\(stablePrefixBaseline)"
-        ))
-        checks.append(CheckResult(
-            name: "requestY2_finishes_tool_loop",
-            passed: requestY2.toolCalls.isEmpty && !requestY2.assistantText.isEmpty,
-            detail: "toolCalls=\(requestY2.toolCalls.count) assistantChars=\(requestY2.assistantText.count) "
-                + "expected 0 tool calls and non-empty assistant text"
-        ))
+        log(
+            "  cachedTokens=\(requestY2.cachedTokens) ttft=\(String(format: "%.3f", requestY2.ttftSeconds))s "
+                + "toolCalls=\(requestY2.toolCalls.count) generatedChars=\(requestY2.generatedText.count)"
+        )
+        checks.append(
+            CheckResult(
+                name: "requestY2_hits_direct_tool_leaf",
+                passed: requestY2.cachedTokens > stablePrefixBaseline,
+                detail: "cachedTokens=\(requestY2.cachedTokens) expected > stable-prefix baseline="
+                    + "\(stablePrefixBaseline)"
+            ))
+        checks.append(
+            CheckResult(
+                name: "requestY2_finishes_tool_loop",
+                passed: requestY2.toolCalls.isEmpty && !requestY2.assistantText.isEmpty,
+                detail:
+                    "toolCalls=\(requestY2.toolCalls.count) assistantChars=\(requestY2.assistantText.count) "
+                    + "expected 0 tool calls and non-empty assistant text"
+            ))
 
-        let resolvedMessages = continuationMessages + [
-            .assistant(
-                content: requestY2.assistantText,
-                reasoning: requestY2.assistantReasoning,
-                toolCalls: requestY2.toolCalls
-            ),
-            .user("summarize that in one sentence"),
-        ]
+        let resolvedMessages =
+            continuationMessages + [
+                .assistant(
+                    content: requestY2.assistantText,
+                    reasoning: requestY2.assistantReasoning,
+                    toolCalls: requestY2.toolCalls
+                ),
+                .user("summarize that in one sentence"),
+            ]
         let storedResolvedConversation = HTTPPrefixCacheConversation(
             systemPrompt: systemPrompt,
             messages: continuationMessages.map(\.prefixCacheMessage) + [
@@ -681,7 +717,7 @@ final class PrefixCacheE2ERunner {
                     toolCalls: requestY2.toolCalls.map {
                         HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
                     }
-                ),
+                )
             ]
         )
         let nextUserConversation = HTTPPrefixCacheConversation(
@@ -699,14 +735,16 @@ final class PrefixCacheE2ERunner {
             toolSpecs: toolSpecs,
             parameters: toolLoopParams
         )
-        log("  cachedTokens=\(requestY3.cachedTokens) ttft=\(String(format: "%.3f", requestY3.ttftSeconds))s "
-            + "generatedChars=\(requestY3.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestY3_hits_canonical_user_leaf",
-            passed: requestY3.cachedTokens > stablePrefixBaseline,
-            detail: "cachedTokens=\(requestY3.cachedTokens) expected > stable-prefix baseline="
-                + "\(stablePrefixBaseline)"
-        ))
+        log(
+            "  cachedTokens=\(requestY3.cachedTokens) ttft=\(String(format: "%.3f", requestY3.ttftSeconds))s "
+                + "generatedChars=\(requestY3.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "requestY3_hits_canonical_user_leaf",
+                passed: requestY3.cachedTokens > stablePrefixBaseline,
+                detail: "cachedTokens=\(requestY3.cachedTokens) expected > stable-prefix baseline="
+                    + "\(stablePrefixBaseline)"
+            ))
 
         return ToolLoopScenarioResult(
             requestY1: requestY1,
@@ -761,13 +799,15 @@ final class PrefixCacheE2ERunner {
             parameters: params
         )
         let postCaptureBranchCount = await branchPointCount(engine: engine)
-        log("  C cachedTokens=\(requestC.cachedTokens) "
-            + "branchPoint count = \(postCaptureBranchCount)")
-        checks.append(CheckResult(
-            name: "requestC_captures_branch_point",
-            passed: postCaptureBranchCount > preCaptureBranchCount,
-            detail: "branchPoint count: \(preCaptureBranchCount) → \(postCaptureBranchCount)"
-        ))
+        log(
+            "  C cachedTokens=\(requestC.cachedTokens) "
+                + "branchPoint count = \(postCaptureBranchCount)")
+        checks.append(
+            CheckResult(
+                name: "requestC_captures_branch_point",
+                passed: postCaptureBranchCount > preCaptureBranchCount,
+                detail: "branchPoint count: \(preCaptureBranchCount) → \(postCaptureBranchCount)"
+            ))
 
         // Step 8: re-hit
         log("\n── Step 8: Branch-point re-hit ──")
@@ -779,14 +819,17 @@ final class PrefixCacheE2ERunner {
             toolSpecs: toolSpecs,
             parameters: params
         )
-        log("  D cachedTokens=\(requestD.cachedTokens) "
-            + "(stable-prefix-only baseline = \(stablePrefixCachedTokens))")
-        checks.append(CheckResult(
-            name: "requestD_hits_branch_point",
-            passed: requestD.cachedTokens > stablePrefixCachedTokens,
-            detail: "D cachedTokens=\(requestD.cachedTokens) vs stable-prefix=\(stablePrefixCachedTokens) "
-                + "(deeper hit means branch-point reuse)"
-        ))
+        log(
+            "  D cachedTokens=\(requestD.cachedTokens) "
+                + "(stable-prefix-only baseline = \(stablePrefixCachedTokens))")
+        checks.append(
+            CheckResult(
+                name: "requestD_hits_branch_point",
+                passed: requestD.cachedTokens > stablePrefixCachedTokens,
+                detail:
+                    "D cachedTokens=\(requestD.cachedTokens) vs stable-prefix=\(stablePrefixCachedTokens) "
+                    + "(deeper hit means branch-point reuse)"
+            ))
 
         // Step 9: survival under utility-scored eviction pressure.
         // alpha=2 puts F/B above pure recency in the utility sum so the
@@ -801,14 +844,15 @@ final class PrefixCacheE2ERunner {
         await engine.llmActor.setEvictionAlpha(2.0)
 
         guard let preStats = await engine.llmActor.prefixCacheStats(),
-              preStats.snapshotCount > 0
+            preStats.snapshotCount > 0
         else {
             log("  skipping — prefix cache empty")
-            checks.append(CheckResult(
-                name: "branch_point_survives_under_pressure",
-                passed: false,
-                detail: "prefix cache empty before pressure step"
-            ))
+            checks.append(
+                CheckResult(
+                    name: "branch_point_survives_under_pressure",
+                    passed: false,
+                    detail: "prefix cache empty before pressure step"
+                ))
             await engine.llmActor.setEvictionAlpha(priorAlpha)
             return
         }
@@ -824,10 +868,11 @@ final class PrefixCacheE2ERunner {
         let avgBytes = preStats.totalSnapshotBytes / preStats.snapshotCount
         let tightBudget = max(preStats.totalSnapshotBytes - avgBytes, avgBytes)
         await engine.llmActor.setPrefixCacheBudgetBytes(tightBudget)
-        log("  tight budget = \(tightBudget) bytes "
-            + "(pre-pressure total = \(preStats.totalSnapshotBytes), "
-            + "avg snapshot size = \(avgBytes), "
-            + "starting branchPoint count = \(preStats.snapshotsByType[.branchPoint] ?? 0))")
+        log(
+            "  tight budget = \(tightBudget) bytes "
+                + "(pre-pressure total = \(preStats.totalSnapshotBytes), "
+                + "avg snapshot size = \(avgBytes), "
+                + "starting branchPoint count = \(preStats.snapshotsByType[.branchPoint] ?? 0))")
 
         for (i, prompt) in Self.branchPointNoisePrompts.enumerated() {
             _ = try await runRequest(
@@ -843,15 +888,17 @@ final class PrefixCacheE2ERunner {
         let postStats = await engine.llmActor.prefixCacheStats()
         let postBranchCount = postStats?.snapshotsByType[.branchPoint] ?? 0
         let postTotalBytes = postStats?.totalSnapshotBytes ?? 0
-        log("  post-pressure branchPoint count = \(postBranchCount), "
-            + "totalBytes = \(postTotalBytes)")
-        checks.append(CheckResult(
-            name: "branch_point_survives_under_pressure",
-            passed: postBranchCount >= 1,
-            detail: "branchPoint count after \(Self.branchPointNoisePrompts.count) "
-                + "noise requests + tight budget: \(postBranchCount) "
-                + "(≥1 means utility scoring preserved it)"
-        ))
+        log(
+            "  post-pressure branchPoint count = \(postBranchCount), "
+                + "totalBytes = \(postTotalBytes)")
+        checks.append(
+            CheckResult(
+                name: "branch_point_survives_under_pressure",
+                passed: postBranchCount >= 1,
+                detail: "branchPoint count after \(Self.branchPointNoisePrompts.count) "
+                    + "noise requests + tight budget: \(postBranchCount) "
+                    + "(≥1 means utility scoring preserved it)"
+            ))
 
         // Restore the pre-step weighting so the step is self-contained.
         await engine.llmActor.setEvictionAlpha(priorAlpha)
@@ -905,7 +952,7 @@ final class PrefixCacheE2ERunner {
         let ssdConfig = SSDPrefixCacheConfig(
             enabled: true,
             rootURL: ssdRoot,
-            budgetBytes: 4 * 1024 * 1024 * 1024,     // 4 GiB
+            budgetBytes: 4 * 1024 * 1024 * 1024,  // 4 GiB
             maxPendingBytes: 1 * 1024 * 1024 * 1024  // 1 GiB front door
         )
         let ssdEngine = AgentEngine(ssdConfig: ssdConfig)
@@ -941,13 +988,15 @@ final class PrefixCacheE2ERunner {
                 toolSpecs: toolSpecs,
                 parameters: params
             )
-            log("  cachedTokens=\(requestX1.cachedTokens) ttft=\(String(format: "%.3f", requestX1.ttftSeconds))s "
-                + "generatedChars=\(requestX1.generatedText.count)")
-            checks.append(CheckResult(
-                name: "requestX1_cold_on_ssd_engine",
-                passed: requestX1.cachedTokens == 0,
-                detail: "cachedTokens=\(requestX1.cachedTokens) expected 0"
-            ))
+            log(
+                "  cachedTokens=\(requestX1.cachedTokens) ttft=\(String(format: "%.3f", requestX1.ttftSeconds))s "
+                    + "generatedChars=\(requestX1.generatedText.count)")
+            checks.append(
+                CheckResult(
+                    name: "requestX1_cold_on_ssd_engine",
+                    passed: requestX1.cachedTokens == 0,
+                    detail: "cachedTokens=\(requestX1.cachedTokens) expected 0"
+                ))
 
             let continuationMessages: [BenchmarkMessage] = [
                 .user(restartPrompt),
@@ -973,21 +1022,25 @@ final class PrefixCacheE2ERunner {
                 toolSpecs: toolSpecs,
                 parameters: params
             )
-            log("  cachedTokens=\(requestX2.cachedTokens) ttft=\(String(format: "%.3f", requestX2.ttftSeconds))s "
-                + "generatedChars=\(requestX2.generatedText.count)")
+            log(
+                "  cachedTokens=\(requestX2.cachedTokens) ttft=\(String(format: "%.3f", requestX2.ttftSeconds))s "
+                    + "generatedChars=\(requestX2.generatedText.count)")
 
-            checks.append(CheckResult(
-                name: "requestX2_hits_leaf_after_restart",
-                passed: requestX2.cachedTokens > stablePrefixBaseline,
-                detail: "cachedTokens=\(requestX2.cachedTokens) expected > stable-prefix baseline="
-                    + "\(stablePrefixBaseline) after warm-started leaf restore"
-            ))
+            checks.append(
+                CheckResult(
+                    name: "requestX2_hits_leaf_after_restart",
+                    passed: requestX2.cachedTokens > stablePrefixBaseline,
+                    detail:
+                        "cachedTokens=\(requestX2.cachedTokens) expected > stable-prefix baseline="
+                        + "\(stablePrefixBaseline) after warm-started leaf restore"
+                ))
 
-            checks.append(CheckResult(
-                name: "requestX2_generated_nonempty_after_leaf_hit",
-                passed: !requestX2.generatedText.isEmpty,
-                detail: "generatedChars=\(requestX2.generatedText.count) expected > 0"
-            ))
+            checks.append(
+                CheckResult(
+                    name: "requestX2_generated_nonempty_after_leaf_hit",
+                    passed: !requestX2.generatedText.isEmpty,
+                    detail: "generatedChars=\(requestX2.generatedText.count) expected > 0"
+                ))
 
             log("\n── Step X3: Request (fresh user message, same system) ──")
             let requestX3 = try await runRequest(
@@ -998,12 +1051,16 @@ final class PrefixCacheE2ERunner {
                 toolSpecs: toolSpecs,
                 parameters: params
             )
-            log("  cachedTokens=\(requestX3.cachedTokens) ttft=\(String(format: "%.3f", requestX3.ttftSeconds))s")
-            checks.append(CheckResult(
-                name: "requestX3_stable_prefix_reused_across_users",
-                passed: requestX3.cachedTokens > 0,
-                detail: "cachedTokens=\(requestX3.cachedTokens) expected > 0 (new user, same system)"
-            ))
+            log(
+                "  cachedTokens=\(requestX3.cachedTokens) ttft=\(String(format: "%.3f", requestX3.ttftSeconds))s"
+            )
+            checks.append(
+                CheckResult(
+                    name: "requestX3_stable_prefix_reused_across_users",
+                    passed: requestX3.cachedTokens > 0,
+                    detail:
+                        "cachedTokens=\(requestX3.cachedTokens) expected > 0 (new user, same system)"
+                ))
 
             // ── Step Y: Snapshot Demotion (PRD #82 slice #87) ──
             // Shrink the RAM budget to force every resident body out of
@@ -1016,9 +1073,10 @@ final class PrefixCacheE2ERunner {
             let preShrink = await ssdEngine.llmActor.promptCacheTelemetrySnapshot()
             let priorBudget = preShrink?.memoryBudgetBytes ?? ssdConfig.budgetBytes
             let preCounters = preShrink?.counters ?? PromptCacheCumulativeCounters()
-            log("  pre-shrink residentBytes=\(preShrink?.residentSnapshotBytes ?? 0) "
-                + "budget=\(priorBudget) recovered=\(preCounters.recoveredEvictions) "
-                + "terminal=\(preCounters.terminalEvictions)")
+            log(
+                "  pre-shrink residentBytes=\(preShrink?.residentSnapshotBytes ?? 0) "
+                    + "budget=\(priorBudget) recovered=\(preCounters.recoveredEvictions) "
+                    + "terminal=\(preCounters.terminalEvictions)")
 
             await ssdEngine.llmActor.setPrefixCacheBudgetBytes(1)
             // Drain demotion writes and let the writer's MainActor commit
@@ -1032,22 +1090,25 @@ final class PrefixCacheE2ERunner {
             let postCounters = postShrink?.counters ?? PromptCacheCumulativeCounters()
             let recoveredDelta = postCounters.recoveredEvictions - preCounters.recoveredEvictions
             let terminalDelta = postCounters.terminalEvictions - preCounters.terminalEvictions
-            log("  post-shrink residentBytes=\(postShrink?.residentSnapshotBytes ?? 0) "
-                + "recoveredΔ=\(recoveredDelta) terminalΔ=\(terminalDelta)")
-            checks.append(CheckResult(
-                name: "requestY_budget_shrink_demotes_not_destroys",
-                passed: recoveredDelta > 0 && terminalDelta == 0,
-                detail: "recoveredΔ=\(recoveredDelta) (expected > 0), "
-                    + "terminalΔ=\(terminalDelta) (expected 0 — every drop SSD-recoverable)"
-            ))
+            log(
+                "  post-shrink residentBytes=\(postShrink?.residentSnapshotBytes ?? 0) "
+                    + "recoveredΔ=\(recoveredDelta) terminalΔ=\(terminalDelta)")
+            checks.append(
+                CheckResult(
+                    name: "requestY_budget_shrink_demotes_not_destroys",
+                    passed: recoveredDelta > 0 && terminalDelta == 0,
+                    detail: "recoveredΔ=\(recoveredDelta) (expected > 0), "
+                        + "terminalΔ=\(terminalDelta) (expected 0 — every drop SSD-recoverable)"
+                ))
 
-            let demotionContinuation: [BenchmarkMessage] = continuationMessages + [
-                .assistant(
-                    content: requestX2.assistantText,
-                    reasoning: requestX2.assistantReasoning
-                ),
-                .user("show the first ten lines of the largest file"),
-            ]
+            let demotionContinuation: [BenchmarkMessage] =
+                continuationMessages + [
+                    .assistant(
+                        content: requestX2.assistantText,
+                        reasoning: requestX2.assistantReasoning
+                    ),
+                    .user("show the first ten lines of the largest file"),
+                ]
             let requestY = try await runRequest(
                 engine: ssdEngine,
                 modelID: modelID,
@@ -1058,16 +1119,18 @@ final class PrefixCacheE2ERunner {
             )
             let postY = await ssdEngine.llmActor.promptCacheTelemetrySnapshot()
             let hydrationsDelta = (postY?.counters.hydrations ?? 0) - postCounters.hydrations
-            log("  Y cachedTokens=\(requestY.cachedTokens) "
-                + "ttft=\(String(format: "%.3f", requestY.ttftSeconds))s "
-                + "hydrationsΔ=\(hydrationsDelta)")
-            checks.append(CheckResult(
-                name: "requestY_hydration_restores_at_depth",
-                passed: requestY.cachedTokens > stablePrefixBaseline && hydrationsDelta > 0,
-                detail: "cachedTokens=\(requestY.cachedTokens) expected > "
-                    + "stable-prefix baseline=\(stablePrefixBaseline), "
-                    + "hydrationsΔ=\(hydrationsDelta) expected > 0 (served from SSD)"
-            ))
+            log(
+                "  Y cachedTokens=\(requestY.cachedTokens) "
+                    + "ttft=\(String(format: "%.3f", requestY.ttftSeconds))s "
+                    + "hydrationsΔ=\(hydrationsDelta)")
+            checks.append(
+                CheckResult(
+                    name: "requestY_hydration_restores_at_depth",
+                    passed: requestY.cachedTokens > stablePrefixBaseline && hydrationsDelta > 0,
+                    detail: "cachedTokens=\(requestY.cachedTokens) expected > "
+                        + "stable-prefix baseline=\(stablePrefixBaseline), "
+                        + "hydrationsΔ=\(hydrationsDelta) expected > 0 (served from SSD)"
+                ))
 
             log("  Unloading SSD engine…")
             await tearDownSSDEngine()
@@ -1106,11 +1169,12 @@ final class PrefixCacheE2ERunner {
         let identity = ModelIdentity(directory: modelDir)
         guard identity.imageKeying != nil else {
             log("  model defines no image keying (not a recognized VLM) — skipping")
-            checks.append(CheckResult(
-                name: "image_scenario",
-                passed: true,
-                detail: "skipped — model defines no image keying"
-            ))
+            checks.append(
+                CheckResult(
+                    name: "image_scenario",
+                    passed: true,
+                    detail: "skipped — model defines no image keying"
+                ))
             return
         }
 
@@ -1118,7 +1182,7 @@ final class PrefixCacheE2ERunner {
         try await reloadEngine(engine, modelDir: modelDir, visionMode: true)
 
         guard let imageA = BenchmarkHarness.deterministicPNG(width: 256, height: 256, seed: 17),
-              let imageB = BenchmarkHarness.deterministicPNG(width: 256, height: 256, seed: 41)
+            let imageB = BenchmarkHarness.deterministicPNG(width: 256, height: 256, seed: 41)
         else {
             throw PrefixCacheE2EError.imageEncodingFailed
         }
@@ -1133,13 +1197,16 @@ final class PrefixCacheE2ERunner {
             toolSpecs: [],
             parameters: params
         )
-        log("  cachedTokens=\(requestZ1.cachedTokens) ttft=\(String(format: "%.3f", requestZ1.ttftSeconds))s "
-            + "generatedChars=\(requestZ1.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestZ1_image_turn_serves_cold",
-            passed: requestZ1.cachedTokens == 0,
-            detail: "cachedTokens=\(requestZ1.cachedTokens) expected 0 (image-add turns serve cold)"
-        ))
+        log(
+            "  cachedTokens=\(requestZ1.cachedTokens) ttft=\(String(format: "%.3f", requestZ1.ttftSeconds))s "
+                + "generatedChars=\(requestZ1.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "requestZ1_image_turn_serves_cold",
+                passed: requestZ1.cachedTokens == 0,
+                detail:
+                    "cachedTokens=\(requestZ1.cachedTokens) expected 0 (image-add turns serve cold)"
+            ))
 
         // Extends Z1's conversation exactly — the canonical leaf stored after
         // Z1's generation should serve the follow-up at/past the image prefix.
@@ -1158,15 +1225,18 @@ final class PrefixCacheE2ERunner {
             toolSpecs: [],
             parameters: params
         )
-        log("  cachedTokens=\(requestZ2.cachedTokens) ttft=\(String(format: "%.3f", requestZ2.ttftSeconds))s "
-            + "generatedChars=\(requestZ2.generatedText.count)")
+        log(
+            "  cachedTokens=\(requestZ2.cachedTokens) ttft=\(String(format: "%.3f", requestZ2.ttftSeconds))s "
+                + "generatedChars=\(requestZ2.generatedText.count)")
         // Hits below the image's minimum warm offset degrade to cold by
         // construction, so any nonzero count here is a restore past the image.
-        checks.append(CheckResult(
-            name: "requestZ2_followup_restores_past_image",
-            passed: requestZ2.cachedTokens > 0,
-            detail: "cachedTokens=\(requestZ2.cachedTokens) expected > 0 (hit at/past the image prefix)"
-        ))
+        checks.append(
+            CheckResult(
+                name: "requestZ2_followup_restores_past_image",
+                passed: requestZ2.cachedTokens > 0,
+                detail:
+                    "cachedTokens=\(requestZ2.cachedTokens) expected > 0 (hit at/past the image prefix)"
+            ))
 
         log("\n── Step Z3: Warm-vs-cold equivalence (Position Anchor) ──")
         log("  Reloading to clear the prefix cache…")
@@ -1179,24 +1249,27 @@ final class PrefixCacheE2ERunner {
             toolSpecs: [],
             parameters: params
         )
-        log("  cachedTokens=\(requestZ3.cachedTokens) (expected 0) "
-            + "generatedChars=\(requestZ3.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestZ3_cold_after_reload",
-            passed: requestZ3.cachedTokens == 0,
-            detail: "cachedTokens=\(requestZ3.cachedTokens) expected 0 after reload"
-        ))
+        log(
+            "  cachedTokens=\(requestZ3.cachedTokens) (expected 0) "
+                + "generatedChars=\(requestZ3.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "requestZ3_cold_after_reload",
+                passed: requestZ3.cachedTokens == 0,
+                detail: "cachedTokens=\(requestZ3.cachedTokens) expected 0 after reload"
+            ))
         let equivalence = Self.checkGreedyOutputEquivalence(
             requestZ2.generatedText,
             requestZ3.generatedText,
             labelA: "warm",
             labelB: "cold"
         )
-        checks.append(CheckResult(
-            name: "image_warm_output_equivalence",
-            passed: equivalence.passed,
-            detail: equivalence.detail
-        ))
+        checks.append(
+            CheckResult(
+                name: "image_warm_output_equivalence",
+                passed: equivalence.passed,
+                detail: equivalence.detail
+            ))
 
         log("\n── Step Z4: Agent-shaped history rides the cache-aware arm ──")
         let llmHistory = followUpMessages.map(\.llmMessage)
@@ -1209,40 +1282,44 @@ final class PrefixCacheE2ERunner {
         )
         let agentStart = try await service.start(
             ServerInferenceRequest(
-                input: .chat(.init(
-                    systemPrompt: systemPrompt,
-                    messages: llmHistory,
-                    toolSpecs: [],
-                    prefixCacheConversation: AgentConversationBuilder.conversation(
+                input: .chat(
+                    .init(
                         systemPrompt: systemPrompt,
                         messages: llmHistory,
-                        toolSpecs: []
-                    )
-                )),
+                        toolSpecs: [],
+                        prefixCacheConversation: AgentConversationBuilder.conversation(
+                            systemPrompt: systemPrompt,
+                            messages: llmHistory,
+                            toolSpecs: []
+                        )
+                    )),
                 parameters: params,
                 route: .serverCompatible
             )
         )
         let agentResult = try await collectManagedRequest(stream: agentStart.stream)
-        log("  cachedTokens=\(agentStart.cachedTokenCount) "
-            + "generatedChars=\(agentResult.generatedText.count)")
-        checks.append(CheckResult(
-            name: "agent_image_history_lands_cache_aware",
-            passed: agentStart.cachedTokenCount > 0,
-            detail: "cachedTokens=\(agentStart.cachedTokenCount) expected > 0 "
-                + "(agent history with images hits the cache stored by the HTTP-shaped run)"
-        ))
+        log(
+            "  cachedTokens=\(agentStart.cachedTokenCount) "
+                + "generatedChars=\(agentResult.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "agent_image_history_lands_cache_aware",
+                passed: agentStart.cachedTokenCount > 0,
+                detail: "cachedTokens=\(agentStart.cachedTokenCount) expected > 0 "
+                    + "(agent history with images hits the cache stored by the HTTP-shaped run)"
+            ))
         let agentEquivalence = Self.checkGreedyOutputEquivalence(
             agentResult.generatedText,
             requestZ3.generatedText,
             labelA: "agent",
             labelB: "http"
         )
-        checks.append(CheckResult(
-            name: "agent_image_output_matches_http_path",
-            passed: agentEquivalence.passed,
-            detail: agentEquivalence.detail
-        ))
+        checks.append(
+            CheckResult(
+                name: "agent_image_output_matches_http_path",
+                passed: agentEquivalence.passed,
+                detail: agentEquivalence.detail
+            ))
 
         log("\n── Step Z5: Different image, same size (must never hit) ──")
         let requestZ5 = try await runRequest(
@@ -1254,12 +1331,13 @@ final class PrefixCacheE2ERunner {
             parameters: params
         )
         log("  cachedTokens=\(requestZ5.cachedTokens)")
-        checks.append(CheckResult(
-            name: "different_image_same_size_never_hits",
-            passed: requestZ5.cachedTokens == 0,
-            detail: "cachedTokens=\(requestZ5.cachedTokens) expected 0 — "
-                + "digest-keyed pseudo-tokens diverge at the image run"
-        ))
+        checks.append(
+            CheckResult(
+                name: "different_image_same_size_never_hits",
+                passed: requestZ5.cachedTokens == 0,
+                detail: "cachedTokens=\(requestZ5.cachedTokens) expected 0 — "
+                    + "digest-keyed pseudo-tokens diverge at the image run"
+            ))
 
         // ── Step Z6: Image-add turn reuses a warm text prefix (PRD #104) ──
         // The phase-2 reversal of the ADR-0007 phase-1 cut: an image-add turn
@@ -1273,7 +1351,8 @@ final class PrefixCacheE2ERunner {
         log("  Reloading to clear the prefix cache…")
         try await reloadEngine(engine, modelDir: modelDir, visionMode: true)
 
-        let textTurnPrompt = "In two sentences, explain why deterministic fixtures matter for caching."
+        let textTurnPrompt =
+            "In two sentences, explain why deterministic fixtures matter for caching."
         log("\n── Step Z6a: Text turn (warms the text prefix) ──")
         let requestZ6a = try await runRequest(
             engine: engine,
@@ -1283,7 +1362,9 @@ final class PrefixCacheE2ERunner {
             toolSpecs: [],
             parameters: params
         )
-        log("  cachedTokens=\(requestZ6a.cachedTokens) generatedChars=\(requestZ6a.generatedText.count)")
+        log(
+            "  cachedTokens=\(requestZ6a.cachedTokens) generatedChars=\(requestZ6a.generatedText.count)"
+        )
 
         // The image-add turn extends Z6a's conversation: the cached text leaf
         // (system + user1 + assistant1) sits entirely below the new image, so
@@ -1304,14 +1385,17 @@ final class PrefixCacheE2ERunner {
             toolSpecs: [],
             parameters: params
         )
-        log("  cachedTokens=\(requestZ6b.cachedTokens) ttft=\(String(format: "%.3f", requestZ6b.ttftSeconds))s "
-            + "generatedChars=\(requestZ6b.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestZ6b_image_add_reuses_text_prefix",
-            passed: requestZ6b.cachedTokens > 0,
-            detail: "cachedTokens=\(requestZ6b.cachedTokens) expected > 0 — phase 2 restores the warm "
-                + "text prefix and continues through the new image (phase 1 served this cold at 0)"
-        ))
+        log(
+            "  cachedTokens=\(requestZ6b.cachedTokens) ttft=\(String(format: "%.3f", requestZ6b.ttftSeconds))s "
+                + "generatedChars=\(requestZ6b.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "requestZ6b_image_add_reuses_text_prefix",
+                passed: requestZ6b.cachedTokens > 0,
+                detail:
+                    "cachedTokens=\(requestZ6b.cachedTokens) expected > 0 — phase 2 restores the warm "
+                    + "text prefix and continues through the new image (phase 1 served this cold at 0)"
+            ))
 
         log("\n── Step Z6c: Warm-vs-cold equivalence for the image-add turn ──")
         log("  Reloading to clear the prefix cache…")
@@ -1324,24 +1408,27 @@ final class PrefixCacheE2ERunner {
             toolSpecs: [],
             parameters: params
         )
-        log("  cold cachedTokens=\(requestZ6cold.cachedTokens) (expected 0) "
-            + "generatedChars=\(requestZ6cold.generatedText.count)")
-        checks.append(CheckResult(
-            name: "requestZ6_cold_after_reload",
-            passed: requestZ6cold.cachedTokens == 0,
-            detail: "cachedTokens=\(requestZ6cold.cachedTokens) expected 0 after reload"
-        ))
+        log(
+            "  cold cachedTokens=\(requestZ6cold.cachedTokens) (expected 0) "
+                + "generatedChars=\(requestZ6cold.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "requestZ6_cold_after_reload",
+                passed: requestZ6cold.cachedTokens == 0,
+                detail: "cachedTokens=\(requestZ6cold.cachedTokens) expected 0 after reload"
+            ))
         let imageAddEquivalence = Self.checkGreedyOutputEquivalence(
             requestZ6b.generatedText,
             requestZ6cold.generatedText,
             labelA: "warm",
             labelB: "cold"
         )
-        checks.append(CheckResult(
-            name: "image_add_warm_output_equivalence",
-            passed: imageAddEquivalence.passed,
-            detail: imageAddEquivalence.detail
-        ))
+        checks.append(
+            CheckResult(
+                name: "image_add_warm_output_equivalence",
+                passed: imageAddEquivalence.passed,
+                detail: imageAddEquivalence.detail
+            ))
     }
 
     /// Long shared user-message prefix (~80 tokens) for the branch-point
@@ -1429,7 +1516,7 @@ final class PrefixCacheE2ERunner {
                         "path": [
                             "type": "string" as any Sendable,
                             "description": "Absolute path to the file.",
-                        ] as [String: any Sendable],
+                        ] as [String: any Sendable]
                     ] as [String: any Sendable],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],
@@ -1446,7 +1533,7 @@ final class PrefixCacheE2ERunner {
                         "path": [
                             "type": "string" as any Sendable,
                             "description": "Absolute path to the directory.",
-                        ] as [String: any Sendable],
+                        ] as [String: any Sendable]
                     ] as [String: any Sendable],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],
@@ -1483,7 +1570,8 @@ final class PrefixCacheE2ERunner {
             return (true, "fully identical (\(a.count) chars)")
         }
         let matchLength = longestCommonPrefix(a, b).count
-        let label = "\(labelA)=\"\(escapeForLog(a.prefix(60)))\" "
+        let label =
+            "\(labelA)=\"\(escapeForLog(a.prefix(60)))\" "
             + "\(labelB)=\"\(escapeForLog(b.prefix(60)))\""
         if matchLength >= threshold {
             return (
@@ -1503,7 +1591,7 @@ final class PrefixCacheE2ERunner {
 
     private static func escapeForLog(_ s: String) -> String {
         s.replacingOccurrences(of: "\n", with: "\\n")
-         .replacingOccurrences(of: "\t", with: "\\t")
+            .replacingOccurrences(of: "\t", with: "\\t")
     }
 
     // MARK: - Reporting
@@ -1515,7 +1603,8 @@ final class PrefixCacheE2ERunner {
     private var reportURL: URL {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        return reportDir
+        return
+            reportDir
             .appendingPathComponent("e2e_\(formatter.string(from: Date())).json")
     }
 

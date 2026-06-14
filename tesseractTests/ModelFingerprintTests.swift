@@ -45,9 +45,15 @@ struct ModelFingerprintTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let frozenDate = Date(timeIntervalSince1970: 1_700_000_000)
-        try writeFile(Data("{\"model\":\"test\"}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: frozenDate)
-        try writeFile(Data("{\"version\":\"1\"}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: frozenDate)
-        try writeFile(Data(repeating: 0xAA, count: 1024), at: dir.appendingPathComponent("model.safetensors"), modificationDate: frozenDate)
+        try writeFile(
+            Data("{\"model\":\"test\"}".utf8), at: dir.appendingPathComponent("config.json"),
+            modificationDate: frozenDate)
+        try writeFile(
+            Data("{\"version\":\"1\"}".utf8), at: dir.appendingPathComponent("tokenizer.json"),
+            modificationDate: frozenDate)
+        try writeFile(
+            Data(repeating: 0xAA, count: 1024), at: dir.appendingPathComponent("model.safetensors"),
+            modificationDate: frozenDate)
 
         let fp1 = try ModelFingerprint.computeFingerprint(modelDir: dir)
         let fp2 = try ModelFingerprint.computeFingerprint(modelDir: dir)
@@ -75,7 +81,8 @@ struct ModelFingerprintTests {
         // safetensors file so we isolate the config-sensitivity signal from
         // the mtime-sensitivity signal.
         try writeFile(Data("{\"model\":\"B\"}".utf8), at: configURL, modificationDate: date)
-        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: safetensorsURL.path)
+        try FileManager.default.setAttributes(
+            [.modificationDate: date], ofItemAtPath: safetensorsURL.path)
 
         let fpB = try ModelFingerprint.computeFingerprint(modelDir: dir)
         #expect(fpA != fpB, "config.json content change must change the fingerprint")
@@ -90,14 +97,17 @@ struct ModelFingerprintTests {
         let tokenizerURL = dir.appendingPathComponent("tokenizer.json")
         let safetensorsURL = dir.appendingPathComponent("model.safetensors")
 
-        try writeFile(Data("{\"model\":\"test\"}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(
+            Data("{\"model\":\"test\"}".utf8), at: dir.appendingPathComponent("config.json"),
+            modificationDate: date)
         try writeFile(Data("{\"version\":\"1\"}".utf8), at: tokenizerURL, modificationDate: date)
         try writeFile(Data(repeating: 0xAA, count: 512), at: safetensorsURL, modificationDate: date)
 
         let fp1 = try ModelFingerprint.computeFingerprint(modelDir: dir)
 
         try writeFile(Data("{\"version\":\"2\"}".utf8), at: tokenizerURL, modificationDate: date)
-        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: safetensorsURL.path)
+        try FileManager.default.setAttributes(
+            [.modificationDate: date], ofItemAtPath: safetensorsURL.path)
 
         let fp2 = try ModelFingerprint.computeFingerprint(modelDir: dir)
         #expect(fp1 != fp2, "tokenizer.json content change must change the fingerprint")
@@ -109,19 +119,25 @@ struct ModelFingerprintTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let configDate = Date(timeIntervalSince1970: 1_700_000_000)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: configDate)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: configDate)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("config.json"),
+            modificationDate: configDate)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"),
+            modificationDate: configDate)
 
         let weightURL = dir.appendingPathComponent("model.safetensors")
         let payload = Data(repeating: 0xAA, count: 1024)
 
-        try writeFile(payload, at: weightURL, modificationDate: Date(timeIntervalSince1970: 1_700_000_100))
+        try writeFile(
+            payload, at: weightURL, modificationDate: Date(timeIntervalSince1970: 1_700_000_100))
         let fp1 = try ModelFingerprint.computeFingerprint(modelDir: dir)
 
         // Same bytes, different mtime — should still flip the fingerprint so
         // a weight swap that happens to produce an identical byte stream but
         // a different file (different inode, different mtime) is detected.
-        try writeFile(payload, at: weightURL, modificationDate: Date(timeIntervalSince1970: 1_700_000_200))
+        try writeFile(
+            payload, at: weightURL, modificationDate: Date(timeIntervalSince1970: 1_700_000_200))
         let fp2 = try ModelFingerprint.computeFingerprint(modelDir: dir)
 
         #expect(fp1 != fp2, "mtime change on a safetensors file must change the fingerprint")
@@ -133,8 +149,11 @@ struct ModelFingerprintTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"),
+            modificationDate: date)
 
         let weightURL = dir.appendingPathComponent("model.safetensors")
         try writeFile(Data(repeating: 0xAA, count: 512), at: weightURL, modificationDate: date)
@@ -162,16 +181,30 @@ struct ModelFingerprintTests {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
 
         // Create files in order A, B in dir1
-        try writeFile(Data("{}".utf8), at: dir1.appendingPathComponent("config.json"), modificationDate: date)
-        try writeFile(Data("{}".utf8), at: dir1.appendingPathComponent("tokenizer.json"), modificationDate: date)
-        try writeFile(Data(repeating: 0x11, count: 128), at: dir1.appendingPathComponent("a.safetensors"), modificationDate: date)
-        try writeFile(Data(repeating: 0x22, count: 128), at: dir1.appendingPathComponent("b.safetensors"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir1.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir1.appendingPathComponent("tokenizer.json"),
+            modificationDate: date)
+        try writeFile(
+            Data(repeating: 0x11, count: 128), at: dir1.appendingPathComponent("a.safetensors"),
+            modificationDate: date)
+        try writeFile(
+            Data(repeating: 0x22, count: 128), at: dir1.appendingPathComponent("b.safetensors"),
+            modificationDate: date)
 
         // Create files in order B, A in dir2
-        try writeFile(Data("{}".utf8), at: dir2.appendingPathComponent("config.json"), modificationDate: date)
-        try writeFile(Data("{}".utf8), at: dir2.appendingPathComponent("tokenizer.json"), modificationDate: date)
-        try writeFile(Data(repeating: 0x22, count: 128), at: dir2.appendingPathComponent("b.safetensors"), modificationDate: date)
-        try writeFile(Data(repeating: 0x11, count: 128), at: dir2.appendingPathComponent("a.safetensors"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir2.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir2.appendingPathComponent("tokenizer.json"),
+            modificationDate: date)
+        try writeFile(
+            Data(repeating: 0x22, count: 128), at: dir2.appendingPathComponent("b.safetensors"),
+            modificationDate: date)
+        try writeFile(
+            Data(repeating: 0x11, count: 128), at: dir2.appendingPathComponent("a.safetensors"),
+            modificationDate: date)
 
         let fp1 = try ModelFingerprint.computeFingerprint(modelDir: dir1)
         let fp2 = try ModelFingerprint.computeFingerprint(modelDir: dir2)
@@ -184,17 +217,25 @@ struct ModelFingerprintTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
-        try writeFile(Data(repeating: 0x11, count: 128), at: dir.appendingPathComponent("model.safetensors"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"),
+            modificationDate: date)
+        try writeFile(
+            Data(repeating: 0x11, count: 128), at: dir.appendingPathComponent("model.safetensors"),
+            modificationDate: date)
 
         let fp1 = try ModelFingerprint.computeFingerprint(modelDir: dir)
 
         // Drop a README.md and a spurious .txt into the dir. Neither should
         // affect the fingerprint — the spec is explicitly the identity files
         // (config, tokenizer, preparation files) + *.safetensors metadata.
-        try writeFile(Data("# hi".utf8), at: dir.appendingPathComponent("README.md"), modificationDate: date)
-        try writeFile(Data("ignore me".utf8), at: dir.appendingPathComponent("notes.txt"), modificationDate: date)
+        try writeFile(
+            Data("# hi".utf8), at: dir.appendingPathComponent("README.md"), modificationDate: date)
+        try writeFile(
+            Data("ignore me".utf8), at: dir.appendingPathComponent("notes.txt"),
+            modificationDate: date)
 
         let fp2 = try ModelFingerprint.computeFingerprint(modelDir: dir)
         #expect(fp1 == fp2, "non-safetensors / non-config files must not affect the fingerprint")
@@ -214,9 +255,14 @@ struct ModelFingerprintTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
-        try writeFile(Data(repeating: 0xAA, count: 512), at: dir.appendingPathComponent("model.safetensors"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"),
+            modificationDate: date)
+        try writeFile(
+            Data(repeating: 0xAA, count: 512), at: dir.appendingPathComponent("model.safetensors"),
+            modificationDate: date)
 
         let preparationURL = dir.appendingPathComponent(fileName)
         try writeFile(Data("{\"v\":\"1\"}".utf8), at: preparationURL, modificationDate: date)
@@ -236,9 +282,14 @@ struct ModelFingerprintTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
-        try writeFile(Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"), modificationDate: date)
-        try writeFile(Data(repeating: 0xAA, count: 512), at: dir.appendingPathComponent("model.safetensors"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("config.json"), modificationDate: date)
+        try writeFile(
+            Data("{}".utf8), at: dir.appendingPathComponent("tokenizer.json"),
+            modificationDate: date)
+        try writeFile(
+            Data(repeating: 0xAA, count: 512), at: dir.appendingPathComponent("model.safetensors"),
+            modificationDate: date)
 
         let fpWithout = try ModelFingerprint.computeFingerprint(modelDir: dir)
 
@@ -275,7 +326,9 @@ struct ModelFingerprintTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        try writeFile(Data(repeating: 0xFF, count: 256), at: dir.appendingPathComponent("model.safetensors"), modificationDate: date)
+        try writeFile(
+            Data(repeating: 0xFF, count: 256), at: dir.appendingPathComponent("model.safetensors"),
+            modificationDate: date)
 
         let fp = try ModelFingerprint.computeFingerprint(modelDir: dir)
         #expect(fp.count == 64)

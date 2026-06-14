@@ -50,7 +50,9 @@ final class AgentDebugLogger {
             try? data.write(to: dir.appendingPathComponent("tools.json"))
         }
 
-        Log.agent.info("System prompt: \(prompt.count) chars, \(tools.count) tools [\(tools.map(\.name).joined(separator: ", "))]")
+        Log.agent.info(
+            "System prompt: \(prompt.count) chars, \(tools.count) tools [\(tools.map(\.name).joined(separator: ", "))]"
+        )
     }
 
     /// Logs a complete turn: assistant content, thinking, tool calls + results, and message count.
@@ -74,10 +76,12 @@ final class AgentDebugLogger {
         }
 
         if !toolResults.isEmpty {
-            entry["toolCalls"] = toolResults.map { [
-                "name": $0.toolName,
-                "result": String($0.content.textContent.prefix(500)),
-            ] }
+            entry["toolCalls"] = toolResults.map {
+                [
+                    "name": $0.toolName,
+                    "result": String($0.content.textContent.prefix(500)),
+                ]
+            }
         }
 
         write(entry, filename: String(format: "turn_%03d.json", turnIndex), to: dir)

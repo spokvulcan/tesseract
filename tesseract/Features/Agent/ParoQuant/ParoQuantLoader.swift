@@ -12,7 +12,8 @@ import Tokenizers
 
 /// Returns `true` if the model directory contains a ParoQuant checkpoint.
 nonisolated func isParoQuantModel(directory: URL) -> Bool {
-    guard let configData = try? Data(contentsOf: directory.appendingPathComponent("config.json")) else {
+    guard let configData = try? Data(contentsOf: directory.appendingPathComponent("config.json"))
+    else {
         return false
     }
     return isSupportedParoQuantModel(directory: directory, configData: configData)
@@ -29,7 +30,7 @@ nonisolated struct ParoQuantConfig: Sendable {
 /// Reads ParoQuant quantization config from config.json data.
 nonisolated private func readParoQuantConfig(_ configData: Data) -> ParoQuantConfig? {
     guard let json = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
-          let qc = json["quantization_config"] as? [String: Any]
+        let qc = json["quantization_config"] as? [String: Any]
     else { return nil }
 
     let bits = qc["bits"] as? Int ?? 4
@@ -42,9 +43,9 @@ nonisolated private func readParoQuantConfig(_ configData: Data) -> ParoQuantCon
 nonisolated private func detectQuantMethod(directory: URL) -> String? {
     let configURL = directory.appendingPathComponent("config.json")
     guard let data = try? Data(contentsOf: configURL),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let qc = json["quantization_config"] as? [String: Any],
-          let method = qc["quant_method"] as? String
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let qc = json["quantization_config"] as? [String: Any],
+        let method = qc["quant_method"] as? String
     else { return nil }
     return method
 }
@@ -52,9 +53,9 @@ nonisolated private func detectQuantMethod(directory: URL) -> String? {
 /// The custom loader is meant for z-lab Qwen3.5/3.6 PARO models (4B, 9B, and 27B) with VLM wrappers.
 nonisolated private func isSupportedParoQuantModel(directory: URL, configData: Data) -> Bool {
     guard let json = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
-          let qc = json["quantization_config"] as? [String: Any],
-          let method = qc["quant_method"] as? String,
-          method == "paroquant"
+        let qc = json["quantization_config"] as? [String: Any],
+        let method = qc["quant_method"] as? String,
+        method == "paroquant"
     else { return false }
 
     let supportedDirectoryNames: Set<String> = [
@@ -84,7 +85,8 @@ nonisolated private enum AWQ {
     static let inverseReorder = [0, 4, 1, 5, 2, 6, 3, 7]
 
     // Pre-computed MLXArrays (created once, reused across calls)
-    nonisolated(unsafe) static let shiftsArray = MLXArray(shifts.map { Int64($0) }).reshaped(1, 1, 8)
+    nonisolated(unsafe) static let shiftsArray = MLXArray(shifts.map { Int64($0) }).reshaped(
+        1, 1, 8)
     nonisolated(unsafe) static let reorderIndices = MLXArray(inverseReorder.map { Int32($0) })
 }
 
@@ -338,7 +340,8 @@ nonisolated private struct ParoQuantInputProcessor: UserInputProcessor {
             Log.agent.warning(
                 "Tokenizer is missing a chat template for the ParoQuant model; falling back to plain text prompt formatting"
             )
-            let prompt = messages
+            let prompt =
+                messages
                 .compactMap { $0["content"] as? String }
                 .joined(separator: "\n\n")
             let promptTokens = tokenizer.encode(text: prompt)
@@ -444,8 +447,9 @@ private func loadVLMProcessor(
 ) async -> (any UserInputProcessor)? {
     let configURL = directory.appendingPathComponent("preprocessor_config.json")
     guard let configData = try? Data(contentsOf: configURL),
-          let baseConfig = try? JSONDecoder().decode(
-              BaseProcessorConfiguration.self, from: configData) else {
+        let baseConfig = try? JSONDecoder().decode(
+            BaseProcessorConfiguration.self, from: configData)
+    else {
         return nil
     }
     do {
@@ -476,7 +480,8 @@ nonisolated enum ParoQuantError: LocalizedError {
         case .missingConfig:
             return "Missing quantization_config in config.json for ParoQuant model"
         case .unsupportedModel:
-            return "The custom ParoQuant loader only supports z-lab Qwen3.5/3.6 PARO models (4B, 9B, and 27B)"
+            return
+                "The custom ParoQuant loader only supports z-lab Qwen3.5/3.6 PARO models (4B, 9B, and 27B)"
         case .missingTensor(let key):
             return "Missing required ParoQuant tensor: \(key)"
         case .invalidTensorShape(let key, let expected, let actual):
@@ -484,7 +489,8 @@ nonisolated enum ParoQuantError: LocalizedError {
         case .rotationLayerNotFound(let path):
             return "Unable to find ParoQuant rotation layer in model: \(path)"
         case .rotationLayerTypeMismatch(let path, let actualType):
-            return "ParoQuant rotation layer \(path) is not a Linear-compatible module: \(actualType)"
+            return
+                "ParoQuant rotation layer \(path) is not a Linear-compatible module: \(actualType)"
         case .rotationLayerPatchFailed(let path):
             return "Failed to replace ParoQuant layer with RotateQuantizedLinear: \(path)"
         }

@@ -16,12 +16,11 @@ struct AgentConversationListView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 conversationRows
-                .padding(.vertical, 8)
+                    .padding(.vertical, 8)
             }
             .defaultScrollAnchor(.bottom)
             .onScrollGeometryChange(for: Bool.self) { geo in
-                geo.contentSize.height > 0 &&
-                geo.visibleRect.maxY >= geo.contentSize.height - 80
+                geo.contentSize.height > 0 && geo.visibleRect.maxY >= geo.contentSize.height - 80
             } action: { _, nearBottom in
                 isNearBottom = nearBottom
             }
@@ -31,7 +30,9 @@ struct AgentConversationListView: View {
             } action: { oldHeight, newHeight in
                 let delta = newHeight - oldHeight
                 if abs(delta) > 1 {
-                    Log.agent.debug("[Perf] ScrollGeo contentHeight: \(String(format: "%.0f", oldHeight)) → \(String(format: "%.0f", newHeight)) (Δ\(String(format: "%.0f", delta))) | isNearBottom=\(isNearBottom)")
+                    Log.agent.debug(
+                        "[Perf] ScrollGeo contentHeight: \(String(format: "%.0f", oldHeight)) → \(String(format: "%.0f", newHeight)) (Δ\(String(format: "%.0f", delta))) | isNearBottom=\(isNearBottom)"
+                    )
                     ChatViewPerf.signposter.emitEvent("ContentHeightChange")
                 }
             }

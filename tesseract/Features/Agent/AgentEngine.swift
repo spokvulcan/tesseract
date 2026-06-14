@@ -148,8 +148,8 @@ final class AgentEngine {
             let st = tokenizer.specialTokens
             Log.agent.info(
                 "Special tokens resolved — imStart=\(st.imStart) imEnd=\(st.imEnd) "
-                + "endOfText=\(st.endOfText) thinkStart=\(st.thinkStart) thinkEnd=\(st.thinkEnd) "
-                + "toolCallStart=\(st.toolCallStart) toolCallEnd=\(st.toolCallEnd)"
+                    + "endOfText=\(st.endOfText) thinkStart=\(st.thinkStart) thinkEnd=\(st.thinkEnd) "
+                    + "toolCallStart=\(st.toolCallStart) toolCallEnd=\(st.toolCallEnd)"
             )
 
             agentTokenizer = tokenizer
@@ -198,7 +198,8 @@ final class AgentEngine {
         tools: [AgentToolDefinition]?,
         parameters: AgentGenerateParameters = .default
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
-        Log.agent.debug("generate(llmMessages:) — \(messages.count) messages, \(tools?.count ?? 0) tools")
+        Log.agent.debug(
+            "generate(llmMessages:) — \(messages.count) messages, \(tools?.count ?? 0) tools")
         return try generate(
             systemPrompt: systemPrompt,
             messages: messages,
@@ -217,7 +218,9 @@ final class AgentEngine {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters = .default
     ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
-        Log.agent.debug("generate(toolSpecs:) — \(messages.count) messages, \(toolSpecs?.count ?? 0) tool specs")
+        Log.agent.debug(
+            "generate(toolSpecs:) — \(messages.count) messages, \(toolSpecs?.count ?? 0) tool specs"
+        )
         return try startChatInference(
             systemPrompt: systemPrompt,
             messages: messages,
@@ -251,20 +254,25 @@ final class AgentEngine {
     ///
     /// Some model templates (e.g. Qwen3.5) require at least one user message, so a placeholder
     /// is appended and stripped from the output to isolate the system prompt portion.
-    func formatRawPrompt(systemPrompt: String, tools: [AgentToolDefinition]?) async throws -> (text: String, tokenCount: Int) {
+    func formatRawPrompt(systemPrompt: String, tools: [AgentToolDefinition]?) async throws -> (
+        text: String, tokenCount: Int
+    ) {
         let placeholder = "__SYSTEM_PROMPT_END__"
         let messages: [[String: any Sendable]] = [
             ["role": "system", "content": systemPrompt],
             ["role": "user", "content": placeholder],
         ]
         let toolSpecs: [ToolSpec]? = tools?.map { $0.toolSpec }
-        var result = try await llmActor.formatRawPromptWithCount(messages: messages, tools: toolSpecs)
+        var result = try await llmActor.formatRawPromptWithCount(
+            messages: messages, tools: toolSpecs)
 
         // Strip everything from the placeholder user message onward
         if let range = result.text.range(of: placeholder) {
             // Back up to the im_start tag for the user turn
             let beforePlaceholder = result.text[..<range.lowerBound]
-            if let userTagRange = beforePlaceholder.range(of: "<|im_start|>user", options: .backwards) {
+            if let userTagRange = beforePlaceholder.range(
+                of: "<|im_start|>user", options: .backwards)
+            {
                 result.text = String(result.text[..<userTagRange.lowerBound])
             } else {
                 result.text = String(beforePlaceholder)
@@ -463,8 +471,8 @@ final class AgentEngine {
                     continuation.yield(.info(info))
                     Log.agent.info(
                         "Generation complete — \(info.generationTokenCount) tokens, "
-                        + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s, "
-                        + "stopReason=\(describeStopReason(info.stopReason))"
+                            + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s, "
+                            + "stopReason=\(describeStopReason(info.stopReason))"
                     )
                 }
                 if outcome.diagnostics.hasUnparsedToolCallMarkers {
@@ -477,9 +485,10 @@ final class AgentEngine {
                 loopCancel()
                 continuation.finish()
             } catch {
-                continuation.finish(throwing: AgentEngineError.generationFailed(
-                    error.localizedDescription
-                ))
+                continuation.finish(
+                    throwing: AgentEngineError.generationFailed(
+                        error.localizedDescription
+                    ))
             }
         }
 

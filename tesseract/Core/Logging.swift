@@ -65,7 +65,8 @@ nonisolated enum DebugPaths: Sendable {
 
 nonisolated enum Log: Sendable {
     static let audio = PublicLogger(subsystem: "app.tesseract.agent", category: "audio")
-    static let transcription = PublicLogger(subsystem: "app.tesseract.agent", category: "transcription")
+    static let transcription = PublicLogger(
+        subsystem: "app.tesseract.agent", category: "transcription")
     static let general = PublicLogger(subsystem: "app.tesseract.agent", category: "general")
     static let speech = PublicLogger(subsystem: "app.tesseract.agent", category: "speech")
     static let image = PublicLogger(subsystem: "app.tesseract.agent", category: "image")

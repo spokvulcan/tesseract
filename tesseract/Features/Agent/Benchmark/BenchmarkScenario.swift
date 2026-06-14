@@ -141,7 +141,8 @@ private enum BenchmarkSkillFixtures {
             - `- [x]` for completed tasks
             """,
         name: "task-management",
-        description: "Use this skill when the user wants to create, list, complete, or manage tasks and to-do items."
+        description:
+            "Use this skill when the user wants to create, list, complete, or manage tasks and to-do items."
     )
 }
 
@@ -194,7 +195,10 @@ struct TaskCreationScenario: BenchmarkScenario {
             fileAssertions: [
                 FileAssertion(
                     path: "tasks.md",
-                    mustContain: ["Buy groceries", "Schedule dentist appointment", "Call mom", "Water the plants"]
+                    mustContain: [
+                        "Buy groceries", "Schedule dentist appointment", "Call mom",
+                        "Water the plants",
+                    ]
                 )
             ]
         ),
@@ -264,7 +268,10 @@ struct TaskCompletionScenario: BenchmarkScenario {
             fileAssertions: [
                 FileAssertion(
                     path: "tasks.md",
-                    mustContain: ["- [x] Buy groceries", "- [ ] Schedule dentist appointment", "- [ ] Call mom"]
+                    mustContain: [
+                        "- [x] Buy groceries", "- [ ] Schedule dentist appointment",
+                        "- [ ] Call mom",
+                    ]
                 )
             ]
         ),
@@ -307,7 +314,8 @@ struct MultiStepScenario: BenchmarkScenario {
             tools: [BenchmarkTool.read("tasks"), BenchmarkTool.edit(path: "tasks")],
             forbidden: ["write"],
             fileAssertions: [
-                FileAssertion(path: "tasks.md", mustContain: ["Order an Italian cookbook", "Buy groceries"])
+                FileAssertion(
+                    path: "tasks.md", mustContain: ["Order an Italian cookbook", "Buy groceries"])
             ]
         ),
         TurnExpectation(
@@ -594,7 +602,9 @@ struct AmbiguousTaskScenario: BenchmarkScenario {
             fileAssertions: [
                 FileAssertion(
                     path: "tasks.md",
-                    mustContain: ["- [ ] Call mom", "- [x] Call mom about taxes", "- [ ] Buy groceries"]
+                    mustContain: [
+                        "- [ ] Call mom", "- [x] Call mom about taxes", "- [ ] Buy groceries",
+                    ]
                 )
             ]
         ),
@@ -651,7 +661,10 @@ struct ExactEditSafetyScenario: BenchmarkScenario {
             fileAssertions: [
                 FileAssertion(
                     path: "tasks.md",
-                    mustContain: ["- [ ] Call mom", "- [x] Call mom about taxes", "- [ ] Schedule dentist appointment"],
+                    mustContain: [
+                        "- [ ] Call mom", "- [x] Call mom about taxes",
+                        "- [ ] Schedule dentist appointment",
+                    ],
                     mustNotContain: ["- [x] Call mom\n"]
                 )
             ]

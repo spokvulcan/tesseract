@@ -56,10 +56,11 @@ nonisolated enum OpenCodeConfigMerge {
             root["model"] = "\(providerKey)/\(defaultModelID)"
         }
 
-        var data = (try? JSONSerialization.data(
-            withJSONObject: root,
-            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        )) ?? Data("{}".utf8)
+        var data =
+            (try? JSONSerialization.data(
+                withJSONObject: root,
+                options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            )) ?? Data("{}".utf8)
         data.append(Data("\n".utf8))
         return Output(configData: data, replacedCorruptInput: replacedCorruptInput)
     }

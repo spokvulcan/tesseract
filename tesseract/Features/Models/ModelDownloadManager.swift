@@ -24,7 +24,8 @@ final class ModelDownloadManager: ObservableObject {
     private var downloadTasks: [String: Task<Void, Never>] = [:]
 
     static let modelStorageURL: URL = {
-        let url = URL.applicationSupportDirectory.appendingPathComponent(ModelUtils.storageDirectoryName)
+        let url = URL.applicationSupportDirectory.appendingPathComponent(
+            ModelUtils.storageDirectoryName)
         // Ensure directory exists and is excluded from Time Machine / iCloud backup
         // (re-downloadable content per Apple guidelines). Setting on the parent
         // directory excludes all contents.
@@ -81,11 +82,13 @@ final class ModelDownloadManager: ObservableObject {
     }
 
     private static func hasFileRecursively(in directory: URL, withExtension ext: String) -> Bool {
-        guard let enumerator = FileManager.default.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return false }
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        else { return false }
 
         for case let fileURL as URL in enumerator {
             if fileURL.pathExtension == ext {
@@ -97,11 +100,13 @@ final class ModelDownloadManager: ObservableObject {
 
     private static func directorySize(at url: URL) -> Int64 {
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return 0 }
+        guard
+            let enumerator = fm.enumerator(
+                at: url,
+                includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        else { return 0 }
 
         var total: Int64 = 0
         for case let fileURL as URL in enumerator {
@@ -117,7 +122,8 @@ final class ModelDownloadManager: ObservableObject {
 
     func download(modelID: String) {
         guard let model = ModelDefinition.all.first(where: { $0.id == modelID }) else { return }
-        guard case .huggingFace(let repo, let requiredExtension, let pathPrefix) = model.source else { return }
+        guard case .huggingFace(let repo, let requiredExtension, let pathPrefix) = model.source
+        else { return }
 
         if case .downloading = statuses[modelID] { return }
 
@@ -214,7 +220,8 @@ final class ModelDownloadManager: ObservableObject {
         }
 
         guard !filtered.isEmpty else {
-            let desc = pathPrefix.map { "No files found for prefix '\($0)' in \(repoID)" }
+            let desc =
+                pathPrefix.map { "No files found for prefix '\($0)' in \(repoID)" }
                 ?? "No files found in \(repoID)"
             throw NSError(
                 domain: "ModelDownload", code: 1,
@@ -222,7 +229,8 @@ final class ModelDownloadManager: ObservableObject {
             )
         }
 
-        guard let subdir = ModelDefinition.all.first(where: { $0.id == modelID })?.cacheSubdirectory else {
+        guard let subdir = ModelDefinition.all.first(where: { $0.id == modelID })?.cacheSubdirectory
+        else {
             throw NSError(
                 domain: "ModelDownload", code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "No cache subdirectory for \(modelID)"]
@@ -270,7 +278,8 @@ final class ModelDownloadManager: ObservableObject {
 
             let parentDir = targetFile.deletingLastPathComponent()
             if !FileManager.default.fileExists(atPath: parentDir.path) {
-                try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(
+                    at: parentDir, withIntermediateDirectories: true)
             }
 
             _ = try await client.downloadFile(
@@ -294,7 +303,9 @@ final class ModelDownloadManager: ObservableObject {
 
         // Clean up stale file left by a previous failed download
         var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: result.modelDir.path, isDirectory: &isDir), !isDir.boolValue {
+        if FileManager.default.fileExists(atPath: result.modelDir.path, isDirectory: &isDir),
+            !isDir.boolValue
+        {
             try? FileManager.default.removeItem(at: result.modelDir)
         }
 
@@ -319,7 +330,9 @@ final class ModelDownloadManager: ObservableObject {
             guard let repoID = Repo.ID(rawValue: repo) else {
                 throw NSError(
                     domain: "ModelDownload", code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: "Invalid companion repository ID: \(repo)"]
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Invalid companion repository ID: \(repo)"
+                    ]
                 )
             }
             let entries = try await client.listFiles(in: repoID, recursive: false)
@@ -385,9 +398,12 @@ final class ModelDownloadManager: ObservableObject {
                     try await self?.ensureCompanionFiles(for: model)
                     let status = Self.computeStatus(for: model)
                     self?.statuses[modelID] = status
-                    Log.general.info("Verify OK: \(model.displayName) — \(result.totalFiles) files valid")
+                    Log.general.info(
+                        "Verify OK: \(model.displayName) — \(result.totalFiles) files valid")
                 } else {
-                    Log.general.info("Verify: \(model.displayName) — \(result.pending.count)/\(result.totalFiles) files need repair")
+                    Log.general.info(
+                        "Verify: \(model.displayName) — \(result.pending.count)/\(result.totalFiles) files need repair"
+                    )
                     try await self?.downloadPendingFiles(
                         modelID: modelID,
                         repoID: repoID,

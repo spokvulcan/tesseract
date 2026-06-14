@@ -231,12 +231,16 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
             let source = snapshot.layers[layerIdx]
             for (arrayIdx, payloadArray) in layer.state.enumerated() {
                 let reference = source.state[arrayIdx].asData()
-                #expect(payloadArray.data == reference.data,
-                        "layer \(layerIdx) array \(arrayIdx) bytes mismatch")
-                #expect(payloadArray.shape == reference.shape,
-                        "layer \(layerIdx) array \(arrayIdx) shape mismatch")
-                #expect(payloadArray.dtype == "float32",
-                        "layer \(layerIdx) array \(arrayIdx) dtype — expected the pinned wire-format literal \"float32\"")
+                #expect(
+                    payloadArray.data == reference.data,
+                    "layer \(layerIdx) array \(arrayIdx) bytes mismatch")
+                #expect(
+                    payloadArray.shape == reference.shape,
+                    "layer \(layerIdx) array \(arrayIdx) shape mismatch")
+                #expect(
+                    payloadArray.dtype == "float32",
+                    "layer \(layerIdx) array \(arrayIdx) dtype — expected the pinned wire-format literal \"float32\""
+                )
             }
         }
     }
@@ -299,17 +303,18 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
         let partitionKey = CachePartitionKey(
             modelID: "test-model", kvBits: nil, kvGroupSize: 64
         )
-        let admission = try #require(SnapshotAdmission.checkpoints(
-            fullPromptTokens: [1, 2, 3, 4],
-            candidates: [
-                SnapshotAdmission.CheckpointCandidate(
-                    snapshot: snapshot,
-                    storage: .ramAndSSD(payload)
-                )
-            ],
-            partitionKey: partitionKey,
-            requestID: UUID()
-        ))
+        let admission = try #require(
+            SnapshotAdmission.checkpoints(
+                fullPromptTokens: [1, 2, 3, 4],
+                candidates: [
+                    SnapshotAdmission.CheckpointCandidate(
+                        snapshot: snapshot,
+                        storage: .ramAndSSD(payload)
+                    )
+                ],
+                partitionKey: partitionKey,
+                requestID: UUID()
+            ))
         let diagnostics = manager.admit(admission)
 
         #expect(diagnostics.evictions.isEmpty)
@@ -329,17 +334,18 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
         let partitionKey = CachePartitionKey(
             modelID: "test-model", kvBits: nil, kvGroupSize: 64
         )
-        let admission = try #require(SnapshotAdmission.checkpoints(
-            fullPromptTokens: [7, 8, 9, 10, 11],
-            candidates: [
-                SnapshotAdmission.CheckpointCandidate(
-                    snapshot: snapshot,
-                    storage: .ramOnly
-                )
-            ],
-            partitionKey: partitionKey,
-            requestID: UUID()
-        ))
+        let admission = try #require(
+            SnapshotAdmission.checkpoints(
+                fullPromptTokens: [7, 8, 9, 10, 11],
+                candidates: [
+                    SnapshotAdmission.CheckpointCandidate(
+                        snapshot: snapshot,
+                        storage: .ramOnly
+                    )
+                ],
+                partitionKey: partitionKey,
+                requestID: UUID()
+            ))
         let diagnostics = manager.admit(admission)
 
         #expect(diagnostics.evictions.isEmpty)
@@ -358,10 +364,12 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
 
     private func readServerCompletionSource() throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
-        let projectRoot = testFile
-            .deletingLastPathComponent()   // tesseractTests
-            .deletingLastPathComponent()   // project root
-        let sourceFile = projectRoot
+        let projectRoot =
+            testFile
+            .deletingLastPathComponent()  // tesseractTests
+            .deletingLastPathComponent()  // project root
+        let sourceFile =
+            projectRoot
             .appendingPathComponent("tesseract")
             .appendingPathComponent("Features")
             .appendingPathComponent("Server")
@@ -387,7 +395,8 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
         // helper and the speculative executor both route through
         // `admitStructuredLeaf`, which owns its own construction.
         #expect(
-            source.components(separatedBy: "let leafAdmission = SnapshotAdmission.leaf(").count - 1 == 1,
+            source.components(separatedBy: "let leafAdmission = SnapshotAdmission.leaf(").count - 1
+                == 1,
             "The direct leaf path must construct its leaf Snapshot Admission value inline"
         )
         #expect(

@@ -10,7 +10,10 @@ struct PrefillStepBenchmarkRunnerTests {
         #expect(matrix.count == 10)
         #expect(matrix.filter { $0.mode == .cold }.count == 5)
         #expect(matrix.filter { $0.mode == .warm }.count == 5)
-        #expect(matrix.map(\.prefillStepSize) == [256, 256, 512, 512, 1024, 1024, 2048, 2048, 4096, 4096])
+        #expect(
+            matrix.map(\.prefillStepSize) == [
+                256, 256, 512, 512, 1024, 1024, 2048, 2048, 4096, 4096,
+            ])
     }
 
     @Test func adaptiveSuggestionUsesLowestPeakColdAndFastestWarm() {

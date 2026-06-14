@@ -114,7 +114,7 @@ actor MessageCodecRegistry {
 
         let typeId = ObjectIdentifier(type(of: message))
         guard let tag = tagsByType[typeId],
-              let codec = codecsByTag[tag]
+            let codec = codecsByTag[tag]
         else {
             throw MessageCodecError.unregisteredType(String(describing: type(of: message)))
         }
@@ -188,33 +188,47 @@ nonisolated enum SyncMessageCodec {
         if let opaque = message as? OpaqueMessage {
             return TaggedMessage(type: opaque.tag, payload: opaque.rawPayload)
         }
-        if let msg = message as? UserMessage { return try encodeTyped(msg, tag: UserMessage.persistenceTag) }
-        if let msg = message as? AssistantMessage { return try encodeTyped(msg, tag: AssistantMessage.persistenceTag) }
-        if let msg = message as? ToolResultMessage { return try encodeTyped(msg, tag: ToolResultMessage.persistenceTag) }
-        if let msg = message as? CompactionSummaryMessage { return try encodeTyped(msg, tag: CompactionSummaryMessage.persistenceTag) }
+        if let msg = message as? UserMessage {
+            return try encodeTyped(msg, tag: UserMessage.persistenceTag)
+        }
+        if let msg = message as? AssistantMessage {
+            return try encodeTyped(msg, tag: AssistantMessage.persistenceTag)
+        }
+        if let msg = message as? ToolResultMessage {
+            return try encodeTyped(msg, tag: ToolResultMessage.persistenceTag)
+        }
+        if let msg = message as? CompactionSummaryMessage {
+            return try encodeTyped(msg, tag: CompactionSummaryMessage.persistenceTag)
+        }
 
         // CoreMessage wrapper — unwrap and encode the inner message
         if let core = message as? CoreMessage {
             switch core {
             case .user(let u): return try encodeTyped(u, tag: UserMessage.persistenceTag)
             case .assistant(let a): return try encodeTyped(a, tag: AssistantMessage.persistenceTag)
-            case .toolResult(let t): return try encodeTyped(t, tag: ToolResultMessage.persistenceTag)
+            case .toolResult(let t):
+                return try encodeTyped(t, tag: ToolResultMessage.persistenceTag)
             }
         }
 
         // AgentChatMessage (legacy UI type) — convert to appropriate core type
         if let chat = message as? AgentChatMessage {
             switch chat.role {
-            case .user: return try encodeTyped(UserMessage.create(chat.content), tag: UserMessage.persistenceTag)
-            case .assistant: return try encodeTyped(
-                AssistantMessage(content: chat.content, thinking: chat.thinking),
-                tag: AssistantMessage.persistenceTag)
-            case .tool: return try encodeTyped(
-                ToolResultMessage(toolCallId: "", toolName: "", content: [.text(chat.content)]),
-                tag: ToolResultMessage.persistenceTag)
-            case .system: return try encodeTyped(
-                CompactionSummaryMessage(summary: chat.content, tokensBefore: 0),
-                tag: CompactionSummaryMessage.persistenceTag)
+            case .user:
+                return try encodeTyped(
+                    UserMessage.create(chat.content), tag: UserMessage.persistenceTag)
+            case .assistant:
+                return try encodeTyped(
+                    AssistantMessage(content: chat.content, thinking: chat.thinking),
+                    tag: AssistantMessage.persistenceTag)
+            case .tool:
+                return try encodeTyped(
+                    ToolResultMessage(toolCallId: "", toolName: "", content: [.text(chat.content)]),
+                    tag: ToolResultMessage.persistenceTag)
+            case .system:
+                return try encodeTyped(
+                    CompactionSummaryMessage(summary: chat.content, tokensBefore: 0),
+                    tag: CompactionSummaryMessage.persistenceTag)
             }
         }
 
@@ -240,7 +254,8 @@ nonisolated enum SyncMessageCodec {
         try messages.map { try encode($0) }
     }
 
-    static func decodeAll(_ tagged: [TaggedMessage]) throws -> [any AgentMessageProtocol & Sendable] {
+    static func decodeAll(_ tagged: [TaggedMessage]) throws -> [any AgentMessageProtocol & Sendable]
+    {
         try tagged.map { try decode($0) }
     }
 
@@ -256,7 +271,9 @@ nonisolated enum SyncMessageCodec {
         return TaggedMessage(type: tag, payload: payload)
     }
 
-    private static func decodeTyped<M: Codable>(_ type: M.Type, from tagged: TaggedMessage) throws -> M {
+    private static func decodeTyped<M: Codable>(_ type: M.Type, from tagged: TaggedMessage) throws
+        -> M
+    {
         let payloadAny = tagged.payload.mapValues { $0.toAny() }
         let data = try JSONSerialization.data(withJSONObject: payloadAny)
         return try JSONDecoder().decode(M.self, from: data)

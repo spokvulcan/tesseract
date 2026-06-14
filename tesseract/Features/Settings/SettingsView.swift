@@ -17,7 +17,7 @@ struct GeneralSettingsSection: View {
             set: { newValue in
                 // Only allow turning off dock if menu bar is enabled
                 if !newValue && !settings.showInMenuBar {
-                    return // Don't allow - would make app inaccessible
+                    return  // Don't allow - would make app inaccessible
                 }
                 settings.showInDock = newValue
             }
@@ -30,7 +30,7 @@ struct GeneralSettingsSection: View {
             set: { newValue in
                 // Only allow turning off menu bar if dock is enabled
                 if !newValue && !settings.showInDock {
-                    return // Don't allow - would make app inaccessible
+                    return  // Don't allow - would make app inaccessible
                 }
                 settings.showInMenuBar = newValue
             }
@@ -123,7 +123,10 @@ struct AudioLevelMeter: View {
             }
             .buttonStyle(.bordered)
             .accessibilityLabel(isTestingMic ? "Stop microphone test" : "Test microphone")
-            .accessibilityHint(isTestingMic ? "Stops the microphone level test" : "Starts monitoring microphone input level")
+            .accessibilityHint(
+                isTestingMic
+                    ? "Stops the microphone level test" : "Starts monitoring microphone input level"
+            )
         }
     }
 
@@ -169,9 +172,9 @@ struct RecordingSettingsSection: View {
 
     private func refreshSelectedAgentModelCapabilities() {
         guard case .downloaded = selectedAgentModelStatus,
-              let directory = container.modelDownloadManager.modelPath(
-                  for: settings.selectedAgentModelID
-              )
+            let directory = container.modelDownloadManager.modelPath(
+                for: settings.selectedAgentModelID
+            )
         else {
             selectedAgentModelDeclaresPreserveThinking = false
             return
@@ -231,14 +234,18 @@ struct RecordingSettingsSection: View {
                         }
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityHint(isRecordingHotkey ? "Cancel recording new hotkey" : "Record a new push-to-talk hotkey")
+                    .accessibilityHint(
+                        isRecordingHotkey
+                            ? "Cancel recording new hotkey" : "Record a new push-to-talk hotkey")
                 }
 
                 if settings.hotkey.modifierFlags.contains(.function) {
-                    Text("Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text(
+                        "Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -257,7 +264,8 @@ struct RecordingSettingsSection: View {
                             .padding(.vertical, 4)
                             .background(Color.secondary.opacity(0.2))
                             .cornerRadius(4)
-                            .accessibilityLabel("Current TTS hotkey: \(settings.ttsHotkey.displayString)")
+                            .accessibilityLabel(
+                                "Current TTS hotkey: \(settings.ttsHotkey.displayString)")
                     }
 
                     Button(isRecordingTTSHotkey ? "Cancel" : "Change") {
@@ -268,14 +276,18 @@ struct RecordingSettingsSection: View {
                         }
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityHint(isRecordingTTSHotkey ? "Cancel recording new hotkey" : "Record a new speech hotkey")
+                    .accessibilityHint(
+                        isRecordingTTSHotkey
+                            ? "Cancel recording new hotkey" : "Record a new speech hotkey")
                 }
 
                 if settings.ttsHotkey.modifierFlags.contains(.function) {
-                    Text("Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text(
+                        "Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -294,7 +306,8 @@ struct RecordingSettingsSection: View {
                             .padding(.vertical, 4)
                             .background(Color.secondary.opacity(0.2))
                             .cornerRadius(4)
-                            .accessibilityLabel("Current agent hotkey: \(settings.agentHotkey.displayString)")
+                            .accessibilityLabel(
+                                "Current agent hotkey: \(settings.agentHotkey.displayString)")
                     }
 
                     Button(isRecordingAgentHotkey ? "Cancel" : "Change") {
@@ -305,14 +318,18 @@ struct RecordingSettingsSection: View {
                         }
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityHint(isRecordingAgentHotkey ? "Cancel recording new hotkey" : "Record a new agent hotkey")
+                    .accessibilityHint(
+                        isRecordingAgentHotkey
+                            ? "Cancel recording new hotkey" : "Record a new agent hotkey")
                 }
 
                 if settings.agentHotkey.modifierFlags.contains(.function) {
-                    Text("Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text(
+                        "Note: fn is not reliably delivered for global hotkeys on macOS. Consider adding ⌘, ⌥, ⌃, or ⇧."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -336,29 +353,35 @@ struct RecordingSettingsSection: View {
                         }
                     }
 
-                    if let selected = agentModels.first(where: { $0.id == settings.selectedAgentModelID }) {
+                    if let selected = agentModels.first(where: {
+                        $0.id == settings.selectedAgentModelID
+                    }) {
                         Text(selected.description)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
 
                     if selectedAgentModelDeclaresPreserveThinking {
-                        Toggle("Preserve Thinking in Prompts", isOn: Binding(
-                            get: {
-                                settings.preserveThinkingRender(
-                                    modelID: settings.selectedAgentModelID
-                                )
-                            },
-                            set: {
-                                settings.setPreserveThinkingRender(
-                                    $0, modelID: settings.selectedAgentModelID
-                                )
-                            }
-                        ))
-                        Text("Keeps each turn's thinking in the prompt so follow-up requests reuse the cache instead of re-reading the conversation. Uses more context window. Applies to new conversations.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        Toggle(
+                            "Preserve Thinking in Prompts",
+                            isOn: Binding(
+                                get: {
+                                    settings.preserveThinkingRender(
+                                        modelID: settings.selectedAgentModelID
+                                    )
+                                },
+                                set: {
+                                    settings.setPreserveThinkingRender(
+                                        $0, modelID: settings.selectedAgentModelID
+                                    )
+                                }
+                            ))
+                        Text(
+                            "Keeps each turn's thinking in the prompt so follow-up requests reuse the cache instead of re-reading the conversation. Uses more context window. Applies to new conversations."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -377,17 +400,21 @@ struct RecordingSettingsSection: View {
 
             Section("Web Access") {
                 Toggle("Enable Web Search", isOn: $settings.webAccessEnabled)
-                Text("Search queries are sent to DuckDuckGo. No conversation data leaves your device.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Search queries are sent to DuckDuckGo. No conversation data leaves your device."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Section("Vision") {
                 Toggle("Use vision models when available", isOn: $settings.useVisionWhenAvailable)
-                Text("When on, a vision-capable model loads its image-aware container so you can attach images in chat. Prefill speed is unchanged — vision only keeps a small vision tower resident (~1 GB). Turn off to load the faster, text-only container instead; a model already loaded with vision keeps it until the next reload.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    "When on, a vision-capable model loads its image-aware container so you can attach images in chat. Prefill speed is unchanged — vision only keeps a small vision tower resident (~1 GB). Turn off to load the faster, text-only container instead; a model already loaded with vision keeps it until the next reload."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Dictation Model") {

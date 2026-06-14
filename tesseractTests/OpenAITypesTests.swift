@@ -14,63 +14,64 @@ struct OpenAITypesTests {
 
     @Test func decodesFullChatCompletionRequest() throws {
         let json = """
-        {
-          "model": "qwen3.5-9b-paro",
-          "messages": [
-            { "role": "system", "content": "You are a coding assistant." },
-            { "role": "user", "content": "Read main.swift" },
             {
-              "role": "assistant",
-              "content": "I'll read that file for you.",
-              "tool_calls": [
+              "model": "qwen3.5-9b-paro",
+              "messages": [
+                { "role": "system", "content": "You are a coding assistant." },
+                { "role": "user", "content": "Read main.swift" },
                 {
-                  "id": "call_abc123",
+                  "role": "assistant",
+                  "content": "I'll read that file for you.",
+                  "tool_calls": [
+                    {
+                      "id": "call_abc123",
+                      "type": "function",
+                      "function": {
+                        "name": "read",
+                        "arguments": "{\\"path\\": \\"main.swift\\"}"
+                      }
+                    }
+                  ]
+                },
+                { "role": "tool", "tool_call_id": "call_abc123", "content": "file contents..." },
+                { "role": "user", "content": [
+                    { "type": "text", "text": "What about this image?" },
+                    { "type": "image_url", "image_url": { "url": "data:image/png;base64,abc" } }
+                  ]
+                }
+              ],
+              "tools": [
+                {
                   "type": "function",
                   "function": {
-                    "name": "read",
-                    "arguments": "{\\"path\\": \\"main.swift\\"}"
+                    "name": "bash",
+                    "description": "Execute shell commands",
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "command": { "type": "string" }
+                      },
+                      "required": ["command"]
+                    }
                   }
                 }
-              ]
-            },
-            { "role": "tool", "tool_call_id": "call_abc123", "content": "file contents..." },
-            { "role": "user", "content": [
-                { "type": "text", "text": "What about this image?" },
-                { "type": "image_url", "image_url": { "url": "data:image/png;base64,abc" } }
-              ]
+              ],
+              "stream": true,
+              "max_tokens": 4096,
+              "max_completion_tokens": 8192,
+              "temperature": 0.6,
+              "top_p": 0.95,
+              "top_k": 32,
+              "min_p": 0.05,
+              "presence_penalty": 1.2,
+              "repetition_penalty": 1.05,
+              "reasoning_effort": "medium",
+              "stream_options": { "include_usage": true }
             }
-          ],
-          "tools": [
-            {
-              "type": "function",
-              "function": {
-                "name": "bash",
-                "description": "Execute shell commands",
-                "parameters": {
-                  "type": "object",
-                  "properties": {
-                    "command": { "type": "string" }
-                  },
-                  "required": ["command"]
-                }
-              }
-            }
-          ],
-          "stream": true,
-          "max_tokens": 4096,
-          "max_completion_tokens": 8192,
-          "temperature": 0.6,
-          "top_p": 0.95,
-          "top_k": 32,
-          "min_p": 0.05,
-          "presence_penalty": 1.2,
-          "repetition_penalty": 1.05,
-          "reasoning_effort": "medium",
-          "stream_options": { "include_usage": true }
-        }
-        """
+            """
 
-        let request = try JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+        let request = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
 
         #expect(request.model == "qwen3.5-9b-paro")
         #expect(request.messages.count == 5)
@@ -127,26 +128,28 @@ struct OpenAITypesTests {
 
     @Test func effectiveMaxTokensFallsBackToMaxTokens() throws {
         let json = """
-        { "messages": [{ "role": "user", "content": "hi" }], "max_tokens": 512 }
-        """
-        let request = try JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+            { "messages": [{ "role": "user", "content": "hi" }], "max_tokens": 512 }
+            """
+        let request = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
         #expect(request.effectiveMaxTokens == 512)
     }
 
     @Test func decodesAssistantReasoningContentInRequestMessages() throws {
         let json = """
-        {
-          "messages": [
             {
-              "role": "assistant",
-              "content": "Final answer",
-              "reasoning_content": "Hidden chain of thought"
+              "messages": [
+                {
+                  "role": "assistant",
+                  "content": "Final answer",
+                  "reasoning_content": "Hidden chain of thought"
+                }
+              ]
             }
-          ]
-        }
-        """
+            """
 
-        let request = try JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+        let request = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
 
         #expect(request.messages.count == 1)
         #expect(request.messages[0].reasoning_content == "Hidden chain of thought")
@@ -155,18 +158,19 @@ struct OpenAITypesTests {
 
     @Test func decodesAssistantReasoningAliasInRequestMessages() throws {
         let json = """
-        {
-          "messages": [
             {
-              "role": "assistant",
-              "content": "Final answer",
-              "reasoning": "Alias reasoning"
+              "messages": [
+                {
+                  "role": "assistant",
+                  "content": "Final answer",
+                  "reasoning": "Alias reasoning"
+                }
+              ]
             }
-          ]
-        }
-        """
+            """
 
-        let request = try JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+        let request = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
 
         #expect(request.messages.count == 1)
         #expect(request.messages[0].reasoning == "Alias reasoning")
@@ -208,15 +212,17 @@ struct OpenAITypesTests {
 
     @Test func stopSequenceDecodesStringAndArray() throws {
         let singleJSON = """
-        { "messages": [{ "role": "user", "content": "hi" }], "stop": "\\n" }
-        """
-        let single = try JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: Data(singleJSON.utf8))
+            { "messages": [{ "role": "user", "content": "hi" }], "stop": "\\n" }
+            """
+        let single = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(singleJSON.utf8))
         #expect(single.stop?.sequences == ["\n"])
 
         let arrayJSON = """
-        { "messages": [{ "role": "user", "content": "hi" }], "stop": ["\\n", "END"] }
-        """
-        let array = try JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: Data(arrayJSON.utf8))
+            { "messages": [{ "role": "user", "content": "hi" }], "stop": ["\\n", "END"] }
+            """
+        let array = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(arrayJSON.utf8))
         #expect(array.stop?.sequences == ["\n", "END"])
     }
 
@@ -224,44 +230,45 @@ struct OpenAITypesTests {
 
     @Test func decodesSpecNonStreamingResponse() throws {
         let json = """
-        {
-          "id": "chatcmpl-abc123",
-          "object": "chat.completion",
-          "model": "qwen3.5-9b-paro",
-          "created": 1712345678,
-          "system_fingerprint": "tesseract-1.0-mlx",
-          "choices": [
             {
-              "index": 0,
-              "finish_reason": "stop",
-              "message": {
-                "role": "assistant",
-                "content": "Here is the file content...",
-                "tool_calls": [
-                  {
-                    "id": "call_xyz789",
-                    "type": "function",
-                    "function": {
-                      "name": "bash",
-                      "arguments": "{\\"command\\": \\"ls\\"}"
-                    }
+              "id": "chatcmpl-abc123",
+              "object": "chat.completion",
+              "model": "qwen3.5-9b-paro",
+              "created": 1712345678,
+              "system_fingerprint": "tesseract-1.0-mlx",
+              "choices": [
+                {
+                  "index": 0,
+                  "finish_reason": "stop",
+                  "message": {
+                    "role": "assistant",
+                    "content": "Here is the file content...",
+                    "tool_calls": [
+                      {
+                        "id": "call_xyz789",
+                        "type": "function",
+                        "function": {
+                          "name": "bash",
+                          "arguments": "{\\"command\\": \\"ls\\"}"
+                        }
+                      }
+                    ]
                   }
-                ]
+                }
+              ],
+              "usage": {
+                "prompt_tokens": 150,
+                "completion_tokens": 42,
+                "total_tokens": 192,
+                "prompt_tokens_details": {
+                  "cached_tokens": 120
+                }
               }
             }
-          ],
-          "usage": {
-            "prompt_tokens": 150,
-            "completion_tokens": 42,
-            "total_tokens": 192,
-            "prompt_tokens_details": {
-              "cached_tokens": 120
-            }
-          }
-        }
-        """
+            """
 
-        let response = try JSONDecoder().decode(OpenAI.ChatCompletionResponse.self, from: Data(json.utf8))
+        let response = try JSONDecoder().decode(
+            OpenAI.ChatCompletionResponse.self, from: Data(json.utf8))
 
         #expect(response.id == "chatcmpl-abc123")
         #expect(response.object == "chat.completion")
@@ -293,18 +300,20 @@ struct OpenAITypesTests {
     @Test func decodesSpecStreamingChunks() throws {
         // Content chunk
         let contentJSON = """
-        {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
-        """
-        let content = try JSONDecoder().decode(OpenAI.ChatCompletionChunk.self, from: Data(contentJSON.utf8))
+            {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
+            """
+        let content = try JSONDecoder().decode(
+            OpenAI.ChatCompletionChunk.self, from: Data(contentJSON.utf8))
         #expect(content.choices[0].delta.role == .assistant)
         #expect(content.choices[0].delta.content == "Hello")
         #expect(content.choices[0].finish_reason == nil)
 
         // Tool call name chunk
         let toolNameJSON = """
-        {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"bash","arguments":""}}]},"finish_reason":null}]}
-        """
-        let toolName = try JSONDecoder().decode(OpenAI.ChatCompletionChunk.self, from: Data(toolNameJSON.utf8))
+            {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"bash","arguments":""}}]},"finish_reason":null}]}
+            """
+        let toolName = try JSONDecoder().decode(
+            OpenAI.ChatCompletionChunk.self, from: Data(toolNameJSON.utf8))
         #expect(toolName.choices[0].delta.tool_calls?.count == 1)
         #expect(toolName.choices[0].delta.tool_calls?[0].index == 0)
         #expect(toolName.choices[0].delta.tool_calls?[0].id == "call_abc")
@@ -312,25 +321,29 @@ struct OpenAITypesTests {
 
         // Tool call arguments chunk (no id/type, just arguments)
         let toolArgsJSON = """
-        {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"command\\": \\"ls\\"}"}}]},"finish_reason":null}]}
-        """
-        let toolArgs = try JSONDecoder().decode(OpenAI.ChatCompletionChunk.self, from: Data(toolArgsJSON.utf8))
+            {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"command\\": \\"ls\\"}"}}]},"finish_reason":null}]}
+            """
+        let toolArgs = try JSONDecoder().decode(
+            OpenAI.ChatCompletionChunk.self, from: Data(toolArgsJSON.utf8))
         #expect(toolArgs.choices[0].delta.tool_calls?[0].id == nil)
-        #expect(toolArgs.choices[0].delta.tool_calls?[0].function?.arguments == #"{"command": "ls"}"#)
+        #expect(
+            toolArgs.choices[0].delta.tool_calls?[0].function?.arguments == #"{"command": "ls"}"#)
 
         // Reasoning chunk
         let reasoningJSON = """
-        {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{"reasoning_content":"Thinking..."},"finish_reason":null}]}
-        """
-        let reasoning = try JSONDecoder().decode(OpenAI.ChatCompletionChunk.self, from: Data(reasoningJSON.utf8))
+            {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{"reasoning_content":"Thinking..."},"finish_reason":null}]}
+            """
+        let reasoning = try JSONDecoder().decode(
+            OpenAI.ChatCompletionChunk.self, from: Data(reasoningJSON.utf8))
         #expect(reasoning.choices[0].delta.reasoning_content == "Thinking...")
         #expect(reasoning.choices[0].delta.content == nil)
 
         // Final chunk with finish_reason and usage
         let finalJSON = """
-        {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":150,"completion_tokens":42,"total_tokens":192,"prompt_tokens_details":{"cached_tokens":120}}}
-        """
-        let final = try JSONDecoder().decode(OpenAI.ChatCompletionChunk.self, from: Data(finalJSON.utf8))
+            {"id":"chatcmpl-s1","object":"chat.completion.chunk","model":"qwen3.5-9b-paro","created":1712345678,"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":150,"completion_tokens":42,"total_tokens":192,"prompt_tokens_details":{"cached_tokens":120}}}
+            """
+        let final = try JSONDecoder().decode(
+            OpenAI.ChatCompletionChunk.self, from: Data(finalJSON.utf8))
         #expect(final.choices[0].finish_reason == .tool_calls)
         #expect(final.choices[0].delta.content == nil)
         #expect(final.choices[0].delta.tool_calls == nil)
@@ -396,7 +409,8 @@ struct OpenAITypesTests {
                             OpenAI.ToolCall(
                                 id: "call_xyz",
                                 type: "function",
-                                function: OpenAI.FunctionCall(name: "bash", arguments: #"{"command":"ls"}"#)
+                                function: OpenAI.FunctionCall(
+                                    name: "bash", arguments: #"{"command":"ls"}"#)
                             )
                         ]
                     )
@@ -471,7 +485,10 @@ struct OpenAITypesTests {
                     index: 0,
                     delta: OpenAI.ChunkDelta(
                         tool_calls: [
-                            OpenAI.ToolCall(id: "call_abc", type: "function", function: OpenAI.FunctionCall(name: "bash", arguments: ""), index: 0)
+                            OpenAI.ToolCall(
+                                id: "call_abc", type: "function",
+                                function: OpenAI.FunctionCall(name: "bash", arguments: ""), index: 0
+                            )
                         ]
                     )
                 )
@@ -569,7 +586,8 @@ struct OpenAITypesTests {
     @Test func messageContentTextValueJoinsParts() {
         let content = OpenAI.MessageContent.parts([
             OpenAI.ContentPart(type: .text, text: "Hello"),
-            OpenAI.ContentPart(type: .image_url, image_url: OpenAI.ImageURL(url: "data:image/png;base64,abc")),
+            OpenAI.ContentPart(
+                type: .image_url, image_url: OpenAI.ImageURL(url: "data:image/png;base64,abc")),
             OpenAI.ContentPart(type: .text, text: "World"),
         ])
         #expect(content.textValue == "Hello\nWorld")
@@ -577,7 +595,8 @@ struct OpenAITypesTests {
 
     @Test func messageContentTextValueReturnsNilForImageOnlyParts() {
         let imageOnly = OpenAI.MessageContent.parts([
-            OpenAI.ContentPart(type: .image_url, image_url: OpenAI.ImageURL(url: "data:image/png;base64,abc")),
+            OpenAI.ContentPart(
+                type: .image_url, image_url: OpenAI.ImageURL(url: "data:image/png;base64,abc"))
         ])
         #expect(imageOnly.textValue == nil)
 

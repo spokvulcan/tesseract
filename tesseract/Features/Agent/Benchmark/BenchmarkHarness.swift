@@ -118,8 +118,8 @@ nonisolated enum BenchmarkHarness {
     /// must draw its images from it.
     static func deterministicImage(width: Int, height: Int, seed: Int) -> CIImage {
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
-        for y in 0 ..< height {
-            for x in 0 ..< width {
+        for y in 0..<height {
+            for x in 0..<width {
                 let i = (y * width + x) * 4
                 bytes[i] = UInt8((x * 7 + seed) % 256)
                 bytes[i + 1] = UInt8((y * 5 + seed * 2) % 256)

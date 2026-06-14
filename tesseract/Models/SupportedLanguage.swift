@@ -7,10 +7,10 @@ import Foundation
 
 /// Represents a language supported by the Whisper model for transcription.
 struct SupportedLanguage: Identifiable, Hashable {
-    let code: String       // ISO 639-1 code (e.g., "en")
-    let name: String       // Display name (e.g., "English")
-    let flag: String       // Emoji flag (e.g., "🇬🇧")
-    let nativeName: String? // Optional native name
+    let code: String  // ISO 639-1 code (e.g., "en")
+    let name: String  // Display name (e.g., "English")
+    let flag: String  // Emoji flag (e.g., "🇬🇧")
+    let nativeName: String?  // Optional native name
 
     var id: String { code }
 
@@ -67,7 +67,8 @@ struct SupportedLanguage: Identifiable, Hashable {
         SupportedLanguage(code: "ht", name: "Haitian", flag: "🇭🇹", nativeName: "Kreyòl Ayisyen"),
         SupportedLanguage(code: "hu", name: "Hungarian", flag: "🇭🇺", nativeName: "Magyar"),
         SupportedLanguage(code: "hy", name: "Armenian", flag: "🇦🇲", nativeName: "Հայերեն"),
-        SupportedLanguage(code: "id", name: "Indonesian", flag: "🇮🇩", nativeName: "Bahasa Indonesia"),
+        SupportedLanguage(
+            code: "id", name: "Indonesian", flag: "🇮🇩", nativeName: "Bahasa Indonesia"),
         SupportedLanguage(code: "is", name: "Icelandic", flag: "🇮🇸", nativeName: "Íslenska"),
         SupportedLanguage(code: "it", name: "Italian", flag: "🇮🇹", nativeName: "Italiano"),
         SupportedLanguage(code: "ja", name: "Japanese", flag: "🇯🇵", nativeName: "日本語"),
@@ -78,7 +79,8 @@ struct SupportedLanguage: Identifiable, Hashable {
         SupportedLanguage(code: "kn", name: "Kannada", flag: "🇮🇳", nativeName: "ಕನ್ನಡ"),
         SupportedLanguage(code: "ko", name: "Korean", flag: "🇰🇷", nativeName: "한국어"),
         SupportedLanguage(code: "la", name: "Latin", flag: "🏛️", nativeName: "Latina"),
-        SupportedLanguage(code: "lb", name: "Luxembourgish", flag: "🇱🇺", nativeName: "Lëtzebuergesch"),
+        SupportedLanguage(
+            code: "lb", name: "Luxembourgish", flag: "🇱🇺", nativeName: "Lëtzebuergesch"),
         SupportedLanguage(code: "ln", name: "Lingala", flag: "🇨🇩", nativeName: "Lingála"),
         SupportedLanguage(code: "lo", name: "Lao", flag: "🇱🇦", nativeName: "ລາວ"),
         SupportedLanguage(code: "lt", name: "Lithuanian", flag: "🇱🇹", nativeName: "Lietuvių"),
@@ -141,6 +143,8 @@ struct SupportedLanguage: Identifiable, Hashable {
     }
 
     /// Common languages shown at the top of pickers (order is intentional)
-    static let common: [SupportedLanguage] = ["en", "es", "fr", "de", "it", "pt", "ru", "ja", "zh", "ko", "ar", "hi"]
-        .compactMap { code in language(forCode: code) }
+    static let common: [SupportedLanguage] = [
+        "en", "es", "fr", "de", "it", "pt", "ru", "ja", "zh", "ko", "ar", "hi",
+    ]
+    .compactMap { code in language(forCode: code) }
 }

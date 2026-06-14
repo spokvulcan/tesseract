@@ -53,19 +53,20 @@ struct ModelIdentityTests {
     /// VLM checkpoints nest architecture fields under `text_config`; a 9B-shaped
     /// config yields a profile distinct from the 4B fallback.
     @Test func flopProfileReadsNestedTextConfig() throws {
-        let dir = try makeModelDir(config: #"""
-        {
-          "model_type": "qwen3_5",
-          "text_config": {
-            "model_type": "qwen3_5_text",
-            "num_hidden_layers": 32,
-            "hidden_size": 4096,
-            "linear_num_value_heads": 32,
-            "linear_key_head_dim": 128,
-            "full_attention_interval": 4
-          }
-        }
-        """#)
+        let dir = try makeModelDir(
+            config: #"""
+                {
+                  "model_type": "qwen3_5",
+                  "text_config": {
+                    "model_type": "qwen3_5_text",
+                    "num_hidden_layers": 32,
+                    "hidden_size": 4096,
+                    "linear_num_value_heads": 32,
+                    "linear_key_head_dim": 128,
+                    "full_attention_interval": 4
+                  }
+                }
+                """#)
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let profile = ModelIdentity(directory: dir).flopProfile
@@ -83,16 +84,17 @@ struct ModelIdentityTests {
     /// falling through to `.qwen35_4B_PARO`. (A 4B-shaped fixture would parse
     /// byte-identical to the fallback and pass even if the read path broke.)
     @Test func flopProfileReadsTopLevelFields() throws {
-        let dir = try makeModelDir(config: #"""
-        {
-          "model_type": "qwen3_5",
-          "num_hidden_layers": 32,
-          "hidden_size": 4096,
-          "linear_num_value_heads": 32,
-          "linear_key_head_dim": 128,
-          "full_attention_interval": 4
-        }
-        """#)
+        let dir = try makeModelDir(
+            config: #"""
+                {
+                  "model_type": "qwen3_5",
+                  "num_hidden_layers": 32,
+                  "hidden_size": 4096,
+                  "linear_num_value_heads": 32,
+                  "linear_key_head_dim": 128,
+                  "full_attention_interval": 4
+                }
+                """#)
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let profile = ModelIdentity(directory: dir).flopProfile
@@ -156,8 +158,12 @@ struct ModelIdentityTests {
 
     /// Non-Qwen `model_type` defers to the vendor's format inference.
     @Test func toolCallFormatInfersForNonQwenFamilies() {
-        #expect(ModelIdentity(configJSON: ["model_type": "glm4"], chatTemplate: nil).toolCallFormat == .glm4)
-        #expect(ModelIdentity(configJSON: ["model_type": "llama"], chatTemplate: nil).toolCallFormat == nil)
+        #expect(
+            ModelIdentity(configJSON: ["model_type": "glm4"], chatTemplate: nil).toolCallFormat
+                == .glm4)
+        #expect(
+            ModelIdentity(configJSON: ["model_type": "llama"], chatTemplate: nil).toolCallFormat
+                == nil)
     }
 
     /// The seam interprets config + template together with no disk access.
@@ -211,10 +217,12 @@ struct ModelIdentityTests {
             chatTemplate: nil
         )
 
-        #expect(identity.fullAttentionScratchProfile == ModelIdentity.FullAttentionScratchProfile(
-            attentionHeads: 24,
-            bytesPerElement: 2
-        ))
+        #expect(
+            identity.fullAttentionScratchProfile
+                == ModelIdentity.FullAttentionScratchProfile(
+                    attentionHeads: 24,
+                    bytesPerElement: 2
+                ))
     }
 
     /// LLM-only layouts keep the same fields at top level; fp32 activations double
@@ -230,10 +238,12 @@ struct ModelIdentityTests {
             chatTemplate: nil
         )
 
-        #expect(identity.fullAttentionScratchProfile == ModelIdentity.FullAttentionScratchProfile(
-            attentionHeads: 16,
-            bytesPerElement: 4
-        ))
+        #expect(
+            identity.fullAttentionScratchProfile
+                == ModelIdentity.FullAttentionScratchProfile(
+                    attentionHeads: 16,
+                    bytesPerElement: 4
+                ))
     }
 
     /// Non-Qwen3.5 families are not guarded by Qwen35-specific scratch math.
@@ -264,9 +274,11 @@ struct ModelIdentityTests {
             ],
             chatTemplate: nil
         )
-        #expect(identity.imageKeying == ModelIdentity.ImageKeying(
-            imagePadTokenId: 248_056, spatialMergeSize: 2
-        ))
+        #expect(
+            identity.imageKeying
+                == ModelIdentity.ImageKeying(
+                    imagePadTokenId: 248_056, spatialMergeSize: 2
+                ))
     }
 
     /// Missing optional fields fall back to the vendor decode defaults.
@@ -275,22 +287,26 @@ struct ModelIdentityTests {
             configJSON: ["model_type": "qwen3_5", "vision_config": [String: Any]()],
             chatTemplate: nil
         )
-        #expect(identity.imageKeying == ModelIdentity.ImageKeying(
-            imagePadTokenId: 248_056, spatialMergeSize: 2
-        ))
+        #expect(
+            identity.imageKeying
+                == ModelIdentity.ImageKeying(
+                    imagePadTokenId: 248_056, spatialMergeSize: 2
+                ))
     }
 
     /// Text-only Qwen3.5 (no `vision_config`) and non-Qwen3.5 vision models
     /// are not recognized for image keying — their image requests degrade to
     /// Unkeyed Completions instead of being keyed with unverified geometry.
     @Test func imageKeyingIsNilOffTheRecognizedVisionFamily() {
-        #expect(ModelIdentity(
-            configJSON: ["model_type": "qwen3_5"], chatTemplate: nil
-        ).imageKeying == nil)
-        #expect(ModelIdentity(
-            configJSON: ["model_type": "llava", "vision_config": [String: Any]()],
-            chatTemplate: nil
-        ).imageKeying == nil)
+        #expect(
+            ModelIdentity(
+                configJSON: ["model_type": "qwen3_5"], chatTemplate: nil
+            ).imageKeying == nil)
+        #expect(
+            ModelIdentity(
+                configJSON: ["model_type": "llava", "vision_config": [String: Any]()],
+                chatTemplate: nil
+            ).imageKeying == nil)
         #expect(ModelIdentity(configJSON: nil, chatTemplate: nil).imageKeying == nil)
     }
 

@@ -150,9 +150,10 @@ nonisolated struct PromptCacheTelemetryAggregate: Codable, Equatable, Sendable {
                 // (issue #101). `shared > floor` excludes a restore that landed
                 // exactly at the divergence (a hit, but not a rewind).
                 if (chainPrefixRewind || reason == "chainPrefixHit"),
-                   let shared = event.intField("sharedPrefixLength"),
-                   let floor = event.intField("snapshotOffset"),
-                   shared > floor {
+                    let shared = event.intField("sharedPrefixLength"),
+                    let floor = event.intField("snapshotOffset"),
+                    shared > floor
+                {
                     aggregate.rewindEventCount += 1
                     aggregate.rewindTokens += shared - floor
                 }

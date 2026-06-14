@@ -56,7 +56,7 @@ struct ImagePreviewSetTests {
     func pendingImagesMergeAfterConversationImages() {
         let conversation = [makeAttachment(), makeAttachment()]
         let pending = [makeAttachment()]
-        let merged = conversation + pending   // the coordinator's merge order
+        let merged = conversation + pending  // the coordinator's merge order
 
         let set = ImagePreviewSet.project(all: merged, clicked: pending[0].id)
 

@@ -11,8 +11,8 @@ nonisolated enum ToolArgumentNormalizer: Sendable {
 
     static func decode(_ json: String) -> [String: JSONValue]? {
         guard let data = json.data(using: .utf8),
-              let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data) else
-        {
+            let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data)
+        else {
             return nil
         }
         return normalize(parsed)
@@ -21,8 +21,8 @@ nonisolated enum ToolArgumentNormalizer: Sendable {
     static func encode(_ arguments: [String: JSONValue]) -> String {
         let normalized = normalize(arguments)
         guard let data = try? JSONEncoder().encode(normalized),
-              let json = String(data: data, encoding: .utf8) else
-        {
+            let json = String(data: data, encoding: .utf8)
+        else {
             return "{}"
         }
         return json
@@ -46,7 +46,8 @@ nonisolated enum ToolArgumentNormalizer: Sendable {
 
         for _ in 0..<8 {
             guard case .string(let wrapped) = current,
-                  let next = parseWrappedScalar(wrapped) else {
+                let next = parseWrappedScalar(wrapped)
+            else {
                 break
             }
 
@@ -78,7 +79,8 @@ nonisolated enum ToolArgumentNormalizer: Sendable {
             from: trimmed,
             prefixes: ["int(", ".int(", "JSONValue.int("]
         ),
-        let value = Int(payload.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            let value = Int(payload.trimmingCharacters(in: .whitespacesAndNewlines))
+        {
             return .int(value)
         }
 
@@ -86,7 +88,8 @@ nonisolated enum ToolArgumentNormalizer: Sendable {
             from: trimmed,
             prefixes: ["double(", ".double(", "JSONValue.double("]
         ),
-        let value = Double(payload.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            let value = Double(payload.trimmingCharacters(in: .whitespacesAndNewlines))
+        {
             return .double(value)
         }
 
@@ -119,8 +122,9 @@ nonisolated enum ToolArgumentNormalizer: Sendable {
         let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmed.hasPrefix("\""), trimmed.hasSuffix("\""),
-           let data = trimmed.data(using: .utf8),
-           let decoded = try? JSONDecoder().decode(String.self, from: data) {
+            let data = trimmed.data(using: .utf8),
+            let decoded = try? JSONDecoder().decode(String.self, from: data)
+        {
             return decoded
         }
 
@@ -136,7 +140,8 @@ extension ToolCallInfo {
     /// Parses `argumentsJSON` into normalized `[String: JSONValue]`. Returns `[:]` on failure.
     nonisolated var parsedArguments: [String: JSONValue] {
         guard !argumentsJSON.isEmpty,
-              let parsed = ToolArgumentNormalizer.decode(argumentsJSON) else { return [:] }
+            let parsed = ToolArgumentNormalizer.decode(argumentsJSON)
+        else { return [:] }
         return parsed
     }
 }
@@ -180,7 +185,9 @@ extension [String: JSONValue] {
         case .int(let i): return [i]  // Single int → treat as one-element array
         case .string(let s):
             // Accept comma-separated string like "3, 4, 5"
-            let parts = s.split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            let parts = s.split(separator: ",").compactMap {
+                Int($0.trimmingCharacters(in: .whitespaces))
+            }
             return parts.isEmpty ? nil : parts
         default: return nil
         }

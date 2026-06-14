@@ -59,21 +59,22 @@ struct SurvivalGateTests {
         )
         store.registerPartition(meta, for: key)
         let id = UUID().uuidString
-        store.ssdStoreForTesting!.seedDescriptorForTesting(PersistedSnapshotDescriptor(
-            snapshotID: id,
-            partitionDigest: key.partitionDigest,
-            pathFromRoot: Array(100...120),
-            tokenOffset: 1_000,
-            checkpointType: HybridCacheSnapshot.CheckpointType.leaf.wireString,
-            bytes: bytes,
-            createdAt: Date().timeIntervalSinceReferenceDate,
-            lastAccessAt: Date().timeIntervalSinceReferenceDate,
-            fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+        store.ssdStoreForTesting!.seedDescriptorForTesting(
+            PersistedSnapshotDescriptor(
                 snapshotID: id,
-                partitionDigest: key.partitionDigest
-            ),
-            schemaVersion: SnapshotManifestSchema.currentVersion
-        ))
+                partitionDigest: key.partitionDigest,
+                pathFromRoot: Array(100...120),
+                tokenOffset: 1_000,
+                checkpointType: HybridCacheSnapshot.CheckpointType.leaf.wireString,
+                bytes: bytes,
+                createdAt: Date().timeIntervalSinceReferenceDate,
+                lastAccessAt: Date().timeIntervalSinceReferenceDate,
+                fileRelativePath: PersistedSnapshotDescriptor.relativeFilePath(
+                    snapshotID: id,
+                    partitionDigest: key.partitionDigest
+                ),
+                schemaVersion: SnapshotManifestSchema.currentVersion
+            ))
     }
 
     @discardableResult
@@ -202,8 +203,9 @@ struct SurvivalGateTests {
         )
 
         #expect(manager.cumulativeCounters.survivalGateSkips == 1)
-        #expect(diagnostics.supersededLeaves.map(\.mode)
-            == [PrefixCacheManager.LeafSupersession.Mode.preserved])
+        #expect(
+            diagnostics.supersededLeaves.map(\.mode)
+                == [PrefixCacheManager.LeafSupersession.Mode.preserved])
         #expect(ancestor.state.refID == ancestorRef.snapshotID)
         let (leaf, _) = tree.findBestSnapshot(tokens: leafTokens, updateAccess: false)!
         #expect(leaf.state.ref == nil, "gated-out leaf stays RAM-only")
@@ -224,16 +226,19 @@ struct SurvivalGateTests {
         seedWarmResident(store, bytes: 900)
 
         let tokens = Array(1...10)
-        manager.admit(SnapshotAdmission.checkpoints(
-            fullPromptTokens: tokens + [999],
-            candidates: [SnapshotAdmission.CheckpointCandidate(
-                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
-                    offset: tokens.count, type: .branchPoint
-                ),
-                storage: .ramAndSSD(makePayload(bytes: 5_000))
-            )],
-            partitionKey: key
-        )!)
+        manager.admit(
+            SnapshotAdmission.checkpoints(
+                fullPromptTokens: tokens + [999],
+                candidates: [
+                    SnapshotAdmission.CheckpointCandidate(
+                        snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
+                            offset: tokens.count, type: .branchPoint
+                        ),
+                        storage: .ramAndSSD(makePayload(bytes: 5_000))
+                    )
+                ],
+                partitionKey: key
+            )!)
 
         #expect(manager.cumulativeCounters.survivalGateSkips == 1)
         #expect(store.pendingRefCountForTesting == 0)
@@ -253,16 +258,19 @@ struct SurvivalGateTests {
         seedWarmResident(store, bytes: 900)
 
         let tokens = Array(1...10)
-        manager.admit(SnapshotAdmission.checkpoints(
-            fullPromptTokens: tokens + [999],
-            candidates: [SnapshotAdmission.CheckpointCandidate(
-                snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
-                    offset: tokens.count, type: .branchPoint
-                ),
-                storage: .ramAndSSD(makePayload(bytes: 5_000))
-            )],
-            partitionKey: key
-        )!)
+        manager.admit(
+            SnapshotAdmission.checkpoints(
+                fullPromptTokens: tokens + [999],
+                candidates: [
+                    SnapshotAdmission.CheckpointCandidate(
+                        snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
+                            offset: tokens.count, type: .branchPoint
+                        ),
+                        storage: .ramAndSSD(makePayload(bytes: 5_000))
+                    )
+                ],
+                partitionKey: key
+            )!)
 
         #expect(manager.cumulativeCounters.survivalGateSkips == 0)
         #expect(store.pendingRefCountForTesting == 1)

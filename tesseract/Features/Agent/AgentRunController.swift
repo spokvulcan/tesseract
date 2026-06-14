@@ -104,7 +104,9 @@ final class AgentRunController {
 
         sendTask = Task {
             do {
-                try await arbiter.withExclusiveGPU(.llm, llmModelIDOverride: nil, llmVision: visionReq) {
+                try await arbiter.withExclusiveGPU(
+                    .llm, llmModelIDOverride: nil, llmVision: visionReq
+                ) {
                     await body()
                 }
                 // Body ran to completion under the lease — clear the busy flag.

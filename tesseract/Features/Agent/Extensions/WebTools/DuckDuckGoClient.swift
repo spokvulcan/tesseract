@@ -160,13 +160,13 @@ nonisolated enum DuckDuckGoClient: Sendable {
 
             // Group 1: href, Group 2: title HTML
             guard titleMatch.numberOfRanges >= 3,
-                  let hrefRange = Range(titleMatch.range(at: 1), in: html),
-                  let titleHTMLRange = Range(titleMatch.range(at: 2), in: html)
+                let hrefRange = Range(titleMatch.range(at: 1), in: html),
+                let titleHTMLRange = Range(titleMatch.range(at: 2), in: html)
             else { continue }
 
             // Group 1: snippet HTML
             guard snippetMatch.numberOfRanges >= 2,
-                  let snippetHTMLRange = Range(snippetMatch.range(at: 1), in: html)
+                let snippetHTMLRange = Range(snippetMatch.range(at: 1), in: html)
             else { continue }
 
             let href = String(html[hrefRange])
@@ -197,11 +197,11 @@ nonisolated enum DuckDuckGoClient: Sendable {
 
         // If it's a DDG redirect, extract the uddg parameter
         if let components = URLComponents(string: fullURL),
-           let host = components.host,
-           host.contains("duckduckgo.com"),
-           let queryItems = components.queryItems,
-           let uddg = queryItems.first(where: { $0.name == "uddg" })?.value,
-           !uddg.isEmpty
+            let host = components.host,
+            host.contains("duckduckgo.com"),
+            let queryItems = components.queryItems,
+            let uddg = queryItems.first(where: { $0.name == "uddg" })?.value,
+            !uddg.isEmpty
         {
             return uddg
         }
@@ -217,7 +217,8 @@ nonisolated enum DuckDuckGoClient: Sendable {
         let stripped = HTMLUtilities.stripHTMLTags(html)
         let decoded = HTMLUtilities.decodeHTMLEntities(stripped)
 
-        return decoded
+        return
+            decoded
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")

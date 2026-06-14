@@ -20,7 +20,8 @@ struct SpeechRecognizerTests {
     @Test
     func returnsCannedResultAndRecordsLoadAndTranscribe() async throws {
         let recognizer = InMemorySpeechRecognizer(
-            result: TranscriptionResult(text: "canned", segments: [], language: "fr", processingTime: 0)
+            result: TranscriptionResult(
+                text: "canned", segments: [], language: "fr", processingTime: 0)
         )
         let path = URL(fileURLWithPath: "/tmp/model.mlmodelc")
 

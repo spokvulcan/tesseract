@@ -399,9 +399,9 @@ nonisolated final class ServerCompletion {
         // after it to observe any start or drain that interleaved.
         await preemptSpeculativePrefill(on: actor)
         guard drainGeneration == entryDrainGeneration,
-              inflightStartCount == 0,
-              activeCompletion == nil,
-              let prefixCache = _prefixCache
+            inflightStartCount == 0,
+            activeCompletion == nil,
+            let prefixCache = _prefixCache
         else {
             seed.discard()
             seed.diagnostics.logSkip(stage: "speculativePrefill", reason: "not-idle")
@@ -557,8 +557,8 @@ nonisolated final class ServerCompletion {
         let continuationInjection = safeguardConfig.continuationHandOff
         let continuationToolSpecs = canonicalTools
         let actorRef = actor
-        let continuationStarter:
-            @Sendable (String) async throws -> HTTPServerRawGenerationStart = { safePrefix in
+        let continuationStarter: @Sendable (String) async throws -> HTTPServerRawGenerationStart = {
+            safePrefix in
             try await actorRef.startThinkingContinuationFromTokens(
                 originalTokens: fullTokensForContinuation,
                 tokenNDim: tokenNDimForContinuation,
@@ -678,7 +678,8 @@ nonisolated final class ServerCompletion {
         startsInsideThinkBlock: Bool,
         safeguardConfig: ThinkingRepetitionDetector.Config,
         loopCancel: LateBoundCancel,
-        continuationStarter: @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
+        continuationStarter:
+            @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
         continuation: AsyncThrowingStream<AgentGeneration, Error>.Continuation,
         finishHook: @escaping @Sendable () async -> Void,
         scheduleSpeculative: @escaping @Sendable (SpeculativeCanonicalPrefill.Seed) async -> Void
@@ -707,10 +708,11 @@ nonisolated final class ServerCompletion {
                 // consumers (the Requests-log UI).
                 accumulator.ingest(event)
                 if case .toolCall(let call) = event {
-                    toolCalls.append(HTTPPrefixCacheToolCall(
-                        name: call.function.name,
-                        arguments: call.function.arguments
-                    ))
+                    toolCalls.append(
+                        HTTPPrefixCacheToolCall(
+                            name: call.function.name,
+                            arguments: call.function.arguments
+                        ))
                 }
                 continuation.yield(event)
             }
@@ -741,11 +743,12 @@ nonisolated final class ServerCompletion {
                 _ supersededLeaves: [PrefixCacheManager.LeafSupersession]
             ) {
                 for supersession in supersededLeaves {
-                    diagnosticsContext.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
-                        offset: supersession.offset,
-                        snapshotRefID: supersession.bodyDroppedSnapshotRefID,
-                        mode: supersession.mode
-                    ))
+                    diagnosticsContext.log(
+                        PrefixCacheDiagnostics.LeafSupersessionEvent(
+                            offset: supersession.offset,
+                            snapshotRefID: supersession.bodyDroppedSnapshotRefID,
+                            mode: supersession.mode
+                        ))
                 }
             }
 
@@ -755,13 +758,13 @@ nonisolated final class ServerCompletion {
             // hybrid-linear-attention stale-state bug, jundot/omlx#825).
             Log.agent.info(
                 "Generation starting — "
-                + "request_id=\(requestID.uuidString) "
-                + "cached=\(mlxStart.skippedPrefillTokens)/"
-                + "\(mlxStart.promptTokenCount) "
-                + "sharedPrefix=\(mlxStart.sharedPrefixLength) "
-                + "lookup=\(mlxStart.lookupReason) "
-                + "restoreMs=\(String(format: "%.1f", mlxStart.restoreMs * 1000)) "
-                + "prefillMs=\(String(format: "%.1f", mlxStart.prefillMs * 1000))"
+                    + "request_id=\(requestID.uuidString) "
+                    + "cached=\(mlxStart.skippedPrefillTokens)/"
+                    + "\(mlxStart.promptTokenCount) "
+                    + "sharedPrefix=\(mlxStart.sharedPrefixLength) "
+                    + "lookup=\(mlxStart.lookupReason) "
+                    + "restoreMs=\(String(format: "%.1f", mlxStart.restoreMs * 1000)) "
+                    + "prefillMs=\(String(format: "%.1f", mlxStart.prefillMs * 1000))"
             )
 
             // Drive the shared spine. `handle` is the sink (fold + project +
@@ -797,16 +800,17 @@ nonisolated final class ServerCompletion {
                 // metrics (token counts / finish reason) from the stream,
                 // exactly as the previous EOS `handle(.info:)` did.
                 handle(.info(completionInfo))
-                diagnosticsContext.log(PrefixCacheDiagnostics.TTFTEvent(
-                    lookupMs: mlxStart.lookupMs,
-                    restoreMs: mlxStart.restoreMs,
-                    prefillMs: mlxStart.prefillMs,
-                    residualPromptMs: completionInfo.promptTime
-                ))
+                diagnosticsContext.log(
+                    PrefixCacheDiagnostics.TTFTEvent(
+                        lookupMs: mlxStart.lookupMs,
+                        restoreMs: mlxStart.restoreMs,
+                        prefillMs: mlxStart.prefillMs,
+                        residualPromptMs: completionInfo.promptTime
+                    ))
                 Log.agent.info(
                     "Generation complete — \(completionInfo.generationTokenCount) tokens, "
-                    + "\(String(format: "%.1f", completionInfo.tokensPerSecond)) tok/s, "
-                    + "stopReason=\(describeStopReason(completionInfo.stopReason))"
+                        + "\(String(format: "%.1f", completionInfo.tokensPerSecond)) tok/s, "
+                        + "stopReason=\(describeStopReason(completionInfo.stopReason))"
                 )
                 Log.agent.debug(
                     "Raw library chunks (after ToolCallProcessor):\n\(outcome.diagnostics.rawChunksJoined)"
@@ -826,16 +830,16 @@ nonisolated final class ServerCompletion {
                 let parserState = outcome.diagnostics.finalizeState
                 Log.agent.warning(
                     "Generation stream closed without .info event — "
-                    + "request_id=\(requestID.uuidString) "
-                    + "rawLen=\(rawChunks.count) "
-                    + "libraryParsedToolCalls=\(outcome.diagnostics.libraryParsedToolCalls) "
-                    + "cachedTokens=\(mlxStart.skippedPrefillTokens)/"
-                    + "\(mlxStart.promptTokenCount) "
-                    + "lookupReason=\(mlxStart.lookupReason) "
-                    + "parserInsideThink=\(parserState.insideThinkBlock) "
-                    + "parserThinkClosed=\(parserState.thinkBlockClosed) "
-                    + "parserBufferLen=\(parserState.bufferLen) "
-                    + "rawTail=\(String(rawChunks.suffix(200)).debugDescription)"
+                        + "request_id=\(requestID.uuidString) "
+                        + "rawLen=\(rawChunks.count) "
+                        + "libraryParsedToolCalls=\(outcome.diagnostics.libraryParsedToolCalls) "
+                        + "cachedTokens=\(mlxStart.skippedPrefillTokens)/"
+                        + "\(mlxStart.promptTokenCount) "
+                        + "lookupReason=\(mlxStart.lookupReason) "
+                        + "parserInsideThink=\(parserState.insideThinkBlock) "
+                        + "parserThinkClosed=\(parserState.thinkBlockClosed) "
+                        + "parserBufferLen=\(parserState.bufferLen) "
+                        + "rawTail=\(String(rawChunks.suffix(200)).debugDescription)"
                 )
             }
 
@@ -904,23 +908,26 @@ nonisolated final class ServerCompletion {
                 }
 
                 // 1. Build stored conversation (prompt + generated assistant turn).
-                let storedConversation = conversation.appendingAssistant(.assistant(
-                    content: accumulator.text,
-                    reasoning: accumulator.thinking ?? "",
-                    toolCalls: toolCalls
-                ))
+                let storedConversation = conversation.appendingAssistant(
+                    .assistant(
+                        content: accumulator.text,
+                        reasoning: accumulator.thinking ?? "",
+                        toolCalls: toolCalls
+                    ))
 
                 // 2. Re-tokenize stored conversation → flat render sequence,
                 // then translate into key space (identity for text-only). The
                 // translated path is what every capture offset and admission
                 // below keys on — length-equal to the prepared sequence, so
                 // key index == KV offset holds.
-                guard let storedRenderTokens = await Self.measureStoredTokenSequence(
-                    container: container,
-                    conversation: storedConversation,
-                    toolSpecs: canonicalTools,
-                    renderContext: renderContext
-                ) else {
+                guard
+                    let storedRenderTokens = await Self.measureStoredTokenSequence(
+                        container: container,
+                        conversation: storedConversation,
+                        toolSpecs: canonicalTools,
+                        renderContext: renderContext
+                    )
+                else {
                     diagnosticsContext.logSkip(
                         stage: "leafStore",
                         reason: "tokenization-failed",
@@ -946,12 +953,13 @@ nonisolated final class ServerCompletion {
                     promptStartsThinking: startsInsideThinkBlock,
                     emittedToolCalls: !toolCalls.isEmpty
                 )
-                diagnosticsContext.log(PrefixCacheDiagnostics.LeafModeEvent(
-                    mode: leafStoreMode.rawValue,
-                    continuation: toolCalls.isEmpty
-                        ? HTTPLeafContinuationKind.userTurn.rawValue
-                        : HTTPLeafContinuationKind.toolResult.rawValue
-                ))
+                diagnosticsContext.log(
+                    PrefixCacheDiagnostics.LeafModeEvent(
+                        mode: leafStoreMode.rawValue,
+                        continuation: toolCalls.isEmpty
+                            ? HTTPLeafContinuationKind.userTurn.rawValue
+                            : HTTPLeafContinuationKind.toolResult.rawValue
+                    ))
 
                 // directLeaf snapshots the live final KV cache (below) and
                 // needs none of the builder's probe/boundary/tokenizer work;
@@ -959,16 +967,18 @@ nonisolated final class ServerCompletion {
                 // This mapping is the one place that knows directLeaf is the
                 // live-cache path, so a future `HTTPLeafStoreMode` surfaces as
                 // a compile error here rather than a silently missed branch.
-                let boundaryMode: BoundaryLeafMode? = switch leafStoreMode {
-                case .directToolLeaf: .directTool
-                case .canonicalUserLeaf: .canonical
-                case .directLeaf: nil
-                }
-                if let boundaryMode {
-                    let transientBoundary: HybridCacheSnapshot? = switch boundaryMode {
-                    case .directTool: mlxStart.transientLastMessageBoundarySnapshot
-                    case .canonical: mlxStart.transientLastUserBoundarySnapshot
+                let boundaryMode: BoundaryLeafMode? =
+                    switch leafStoreMode {
+                    case .directToolLeaf: .directTool
+                    case .canonicalUserLeaf: .canonical
+                    case .directLeaf: nil
                     }
+                if let boundaryMode {
+                    let transientBoundary: HybridCacheSnapshot? =
+                        switch boundaryMode {
+                        case .directTool: mlxStart.transientLastMessageBoundarySnapshot
+                        case .canonical: mlxStart.transientLastUserBoundarySnapshot
+                        }
                     let leafTokenizer = await container.perform { $0.tokenizer }
                     let leafPlan = await LeafAdmissionBuilder.plan(
                         mode: boundaryMode,
@@ -1014,9 +1024,11 @@ nonisolated final class ServerCompletion {
                         // resume with it seeded.
                         var positionAnchorRopeDelta: Int? = nil
                         if mlxStart.seedsPositionAnchor {
-                            guard let delta = mlxStart.keySpace.positionAnchorDelta(
-                                upTo: boundarySnapshot.tokenOffset
-                            ) else {
+                            guard
+                                let delta = mlxStart.keySpace.positionAnchorDelta(
+                                    upTo: boundarySnapshot.tokenOffset
+                                )
+                            else {
                                 diagnosticsContext.logSkip(
                                     stage: Self.leafStages(for: boundaryMode).store,
                                     reason: "boundary-splits-image-run",
@@ -1166,11 +1178,13 @@ nonisolated final class ServerCompletion {
                     await container.perform(
                         nonSendable: finalCache
                     ) { _, cache in
-                        guard let snap = HybridCacheSnapshot.capture(
-                            cache: cache,
-                            offset: storedTokens.count,
-                            type: .leaf
-                        ) else {
+                        guard
+                            let snap = HybridCacheSnapshot.capture(
+                                cache: cache,
+                                offset: storedTokens.count,
+                                type: .leaf
+                            )
+                        else {
                             return (nil, nil)
                         }
                         let storage = Self.snapshotAdmissionStorage(
@@ -1206,13 +1220,14 @@ nonisolated final class ServerCompletion {
                     )
                     break leafBlock
                 }
-                diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
-                    offset: leafSnapshot.tokenOffset,
-                    checkpointType: leafSnapshot.checkpointType,
-                    bytes: leafSnapshot.memoryBytes,
-                    duringPrefill: false,
-                    source: "leaf"
-                ))
+                diagnosticsContext.log(
+                    PrefixCacheDiagnostics.CaptureEvent(
+                        offset: leafSnapshot.tokenOffset,
+                        checkpointType: leafSnapshot.checkpointType,
+                        bytes: leafSnapshot.memoryBytes,
+                        duringPrefill: false,
+                        source: "leaf"
+                    ))
 
                 // Coalesce admit + stats read in one MainActor
                 // hop — saves one cross-actor switch on the success
@@ -1281,14 +1296,15 @@ nonisolated final class ServerCompletion {
                     prefixCache.evictionConfig.estimates
                 )
             }
-            diagnosticsContext.log(PrefixCacheDiagnostics.MemoryEvent(
-                stats: finalStats,
-                budgetBytes: finalBudgetBytes,
-                modelWeightBytes: loadedModelWeightBytes,
-                activeMlxBytes: Int64(clamping: Memory.activeMemory),
-                peakMlxBytes: Int64(clamping: Memory.peakMemory),
-                mlxCacheLimitBytes: Int64(clamping: Memory.cacheLimit)
-            ))
+            diagnosticsContext.log(
+                PrefixCacheDiagnostics.MemoryEvent(
+                    stats: finalStats,
+                    budgetBytes: finalBudgetBytes,
+                    modelWeightBytes: loadedModelWeightBytes,
+                    activeMlxBytes: Int64(clamping: Memory.activeMemory),
+                    peakMlxBytes: Int64(clamping: Memory.peakMemory),
+                    mlxCacheLimitBytes: Int64(clamping: Memory.cacheLimit)
+                ))
 
             // Per-completion trace record (PRD #82, slice #83): one line in
             // the replay corpus for every finished cache-aware completion.
@@ -1350,9 +1366,10 @@ nonisolated final class ServerCompletion {
         } catch is CancellationError {
             continuation.finish()
         } catch {
-            continuation.finish(throwing: AgentEngineError.generationFailed(
-                error.localizedDescription
-            ))
+            continuation.finish(
+                throwing: AgentEngineError.generationFailed(
+                    error.localizedDescription
+                ))
         }
 
         // **Stretch Abandonment**, abort arm (issue #100): a client abort or
@@ -1370,10 +1387,11 @@ nonisolated final class ServerCompletion {
         // arm on the same keyed-with-boundary preconditions the stop-finish
         // seed path already requires.
         if speculativeSeed == nil,
-           Task.isCancelled,
-           mlxStart.unkeyedReason == nil,
-           mlxStart.transientLastUserBoundarySnapshot != nil,
-           !renderContext.preservesThinking {
+            Task.isCancelled,
+            mlxStart.unkeyedReason == nil,
+            mlxStart.transientLastUserBoundarySnapshot != nil,
+            !renderContext.preservesThinking
+        {
             let abortTokenizer = await container.perform { $0.tokenizer }
             speculativeSeed = SpeculativeCanonicalPrefill.makeSeed(
                 storedConversation: conversation,
@@ -1628,13 +1646,17 @@ nonisolated final class ServerCompletion {
                 keySpace: keySpace
             )
             if !keySpace.isIdentity,
-               case .cold = prefillPlan.restore,
-               checkpointPlan.count > prefillPlan.checkpointsToCapture.count {
+                case .cold = prefillPlan.restore,
+                checkpointPlan.count > prefillPlan.checkpointsToCapture.count
+            {
                 diagnosticsContext.logSkip(
                     stage: "checkpointPlan",
                     reason: "inside-image-prefix",
                     extraFields: [
-                        ("dropped", "\(checkpointPlan.count - prefillPlan.checkpointsToCapture.count)"),
+                        (
+                            "dropped",
+                            "\(checkpointPlan.count - prefillPlan.checkpointsToCapture.count)"
+                        ),
                         ("minimumWarmOffset", "\(keySpace.minimumWarmOffset)"),
                     ]
                 )
@@ -1689,7 +1711,7 @@ nonisolated final class ServerCompletion {
                     let image = fullInput.image,
                     let allFrames = image.frames
                 else { return nil }
-                let spanTokens = fullInput.text.tokens[0..., restoreOffset ..< prefixEnd]
+                let spanTokens = fullInput.text.tokens[0..., restoreOffset..<prefixEnd]
                 let spanFrames = Array(allFrames[remainderRange])
                 let skipPatches = allFrames[..<remainderRange.lowerBound]
                     .reduce(0) { $0 + $1.product }
@@ -1764,27 +1786,30 @@ nonisolated final class ServerCompletion {
             }
             let skippedTokens = prefillPlan.prefillBaseOffset
             let newTokensToPrefill = fullTokenCount - skippedTokens
-            await progressHandler?(.cacheLookupFinished(.init(
-                reason: String(describing: lookupResult.reason),
-                cachedTokens: skippedTokens,
-                sharedPrefixLength: lookupResult.sharedPrefixLength,
-                promptTokens: fullTokenCount,
-                newTokensToPrefill: newTokensToPrefill,
-                lookupMs: lookupMs * 1000,
-                restoreMs: restoreMs * 1000
-            )))
-            diagnosticsContext.log(PrefixCacheDiagnostics.LookupEvent(
-                reason: lookupResult.reason,
-                promptTokens: fullTokenCount,
-                sharedPrefixLength: lookupResult.sharedPrefixLength,
-                skippedPrefillTokens: skippedTokens,
-                newTokensToPrefill: newTokensToPrefill,
-                lookupMs: lookupMs,
-                restoreMs: restoreMs,
-                plannedCheckpoints: prefillPlan.checkpointsToCapture,
-                hydratedFromSSD: resolved.hydratedFromSSD,
-                chainPrefixRestore: resolved.wasChainPrefixRestore
-            ))
+            await progressHandler?(
+                .cacheLookupFinished(
+                    .init(
+                        reason: String(describing: lookupResult.reason),
+                        cachedTokens: skippedTokens,
+                        sharedPrefixLength: lookupResult.sharedPrefixLength,
+                        promptTokens: fullTokenCount,
+                        newTokensToPrefill: newTokensToPrefill,
+                        lookupMs: lookupMs * 1000,
+                        restoreMs: restoreMs * 1000
+                    )))
+            diagnosticsContext.log(
+                PrefixCacheDiagnostics.LookupEvent(
+                    reason: lookupResult.reason,
+                    promptTokens: fullTokenCount,
+                    sharedPrefixLength: lookupResult.sharedPrefixLength,
+                    skippedPrefillTokens: skippedTokens,
+                    newTokensToPrefill: newTokensToPrefill,
+                    lookupMs: lookupMs,
+                    restoreMs: restoreMs,
+                    plannedCheckpoints: prefillPlan.checkpointsToCapture,
+                    hydratedFromSSD: resolved.hydratedFromSSD,
+                    chainPrefixRestore: resolved.wasChainPrefixRestore
+                ))
 
             // 8. Fold the plan's checkpoints plus the transient boundary
             // helpers (captured as leaves; a planned checkpoint at the same
@@ -1802,7 +1827,8 @@ nonisolated final class ServerCompletion {
                     ($0, HybridCacheSnapshot.CheckpointType.leaf)
                 }
             )
-            let allCheckpoints = plannedCheckpoints.merging(helperCheckpoints) { stored, _ in stored }
+            let allCheckpoints = plannedCheckpoints.merging(helperCheckpoints) { stored, _ in stored
+            }
 
             // 9. App-owned prefill (ADR-0006): drive chunked forward passes
             // over the suffix, capturing snapshots at the checkpoint offsets,
@@ -1812,14 +1838,17 @@ nonisolated final class ServerCompletion {
             // parameters) guarantees the iterator never swaps cache elements
             // during decode, so the array this module retains stays the live
             // final cache for the post-generation leaf capture.
-            await progressHandler?(.prefillStarted(.init(
-                promptTokens: fullTokenCount,
-                cachedTokens: skippedTokens,
-                newTokensToPrefill: newTokensToPrefill,
-                prefillMs: nil
-            )))
+            await progressHandler?(
+                .prefillStarted(
+                    .init(
+                        promptTokens: fullTokenCount,
+                        cachedTokens: skippedTokens,
+                        newTokensToPrefill: newTokensToPrefill,
+                        prefillMs: nil
+                    )))
             var liveCache = cacheToUse ?? context.model.newCache(parameters: genParams)
-            let prefillResult: (iterator: StateThreadedTokenIterator, snapshots: [HybridCacheSnapshot])
+            let prefillResult:
+                (iterator: StateThreadedTokenIterator, snapshots: [HybridCacheSnapshot])
             let prefillMs: TimeInterval
             do {
                 (prefillResult, prefillMs) = try measure {
@@ -1867,12 +1896,14 @@ nonisolated final class ServerCompletion {
                                     "loaded model does not support windowed vision continuation"
                                 )
                             }
-                            guard case .logits(let prepared) = try continuation.prepareContinuation(
-                                imagePrefixInput,
-                                cache: liveCache,
-                                state: imageContinuationAnchor,
-                                windowSize: genParams.prefillStepSize
-                            ) else {
+                            guard
+                                case .logits(let prepared) = try continuation.prepareContinuation(
+                                    imagePrefixInput,
+                                    cache: liveCache,
+                                    state: imageContinuationAnchor,
+                                    windowSize: genParams.prefillStepSize
+                                )
+                            else {
                                 throw AgentEngineError.generationFailed(
                                     "vision container returned .tokens from prepareContinuation"
                                 )
@@ -1959,12 +1990,14 @@ nonisolated final class ServerCompletion {
                 throw CancellationError()
             }
             let iterator = prefillResult.iterator
-            await progressHandler?(.prefillFinished(.init(
-                promptTokens: fullTokenCount,
-                cachedTokens: skippedTokens,
-                newTokensToPrefill: newTokensToPrefill,
-                prefillMs: prefillMs * 1000
-            )))
+            await progressHandler?(
+                .prefillFinished(
+                    .init(
+                        promptTokens: fullTokenCount,
+                        cachedTokens: skippedTokens,
+                        newTokensToPrefill: newTokensToPrefill,
+                        prefillMs: prefillMs * 1000
+                    )))
 
             // Fold the observed prefill into the rolling FLOPs/s estimate
             // (slice #84) — a real measured operation on this device.
@@ -1995,11 +2028,13 @@ nonisolated final class ServerCompletion {
                     capturedSnapshots.append(snapshot)
                 }
             }
-            let transientLastMessageBoundarySnapshot = prefillPlan.transientBoundaries.lastMessage.flatMap { offset in
-                transientSnapshots[offset]
-                    ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
-            }
-            let transientLastUserBoundarySnapshot = prefillPlan.transientBoundaries.lastUser.flatMap { offset in
+            let transientLastMessageBoundarySnapshot = prefillPlan.transientBoundaries.lastMessage
+                .flatMap { offset in
+                    transientSnapshots[offset]
+                        ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
+                }
+            let transientLastUserBoundarySnapshot = prefillPlan.transientBoundaries.lastUser.flatMap
+            { offset in
                 transientSnapshots[offset]
                     ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
             }
@@ -2014,13 +2049,14 @@ nonisolated final class ServerCompletion {
                 requestID: requestID
             )
             for snapshot in capturedSnapshots {
-                diagnosticsContext.log(PrefixCacheDiagnostics.CaptureEvent(
-                    offset: snapshot.tokenOffset,
-                    checkpointType: snapshot.checkpointType,
-                    bytes: snapshot.memoryBytes,
-                    duringPrefill: true,
-                    source: "prefill"
-                ))
+                diagnosticsContext.log(
+                    PrefixCacheDiagnostics.CaptureEvent(
+                        offset: snapshot.tokenOffset,
+                        checkpointType: snapshot.checkpointType,
+                        bytes: snapshot.memoryBytes,
+                        duringPrefill: true,
+                        source: "prefill"
+                    ))
             }
 
             // 11. Start the app-owned generation stream.
@@ -2100,12 +2136,14 @@ nonisolated final class ServerCompletion {
         )
 
         let fullTokenCount = fullInput.text.tokens.dim(-1)
-        await progressHandler?(.prefillStarted(.init(
-            promptTokens: fullTokenCount,
-            cachedTokens: 0,
-            newTokensToPrefill: fullTokenCount,
-            prefillMs: nil
-        )))
+        await progressHandler?(
+            .prefillStarted(
+                .init(
+                    promptTokens: fullTokenCount,
+                    cachedTokens: 0,
+                    newTokensToPrefill: fullTokenCount,
+                    prefillMs: nil
+                )))
         var iteratorParams = parameters
         iteratorParams.kvBits = nil
         let cache = context.model.newCache(parameters: parameters)
@@ -2166,12 +2204,14 @@ nonisolated final class ServerCompletion {
             )
         }
         let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStarted
-        await progressHandler?(.prefillFinished(.init(
-            promptTokens: fullTokenCount,
-            cachedTokens: 0,
-            newTokensToPrefill: fullTokenCount,
-            prefillMs: prefillMs * 1000
-        )))
+        await progressHandler?(
+            .prefillFinished(
+                .init(
+                    promptTokens: fullTokenCount,
+                    cachedTokens: 0,
+                    newTokensToPrefill: fullTokenCount,
+                    prefillMs: prefillMs * 1000
+                )))
 
         let (stream, task) = TokenGenerationLoop.start(
             promptTokenCount: fullTokenCount,
@@ -2243,7 +2283,7 @@ nonisolated final class ServerCompletion {
             flopProfile = .fallback
             Log.agent.info(
                 "PrefixCacheManager built before model identity is known — "
-                + "using the fallback FLOP profile; the cache is rebuilt after load."
+                    + "using the fallback FLOP profile; the cache is rebuilt after load."
             )
         }
         let cache = await MainActor.run { () -> PrefixCacheManager in
@@ -2441,8 +2481,8 @@ nonisolated final class ServerCompletion {
         snapshotOffset: Int
     ) -> Bool {
         guard suffixSliceableClassNames.contains(layer.className),
-              layer.offset == snapshotOffset,
-              !layer.state.isEmpty
+            layer.offset == snapshotOffset,
+            !layer.state.isEmpty
         else { return false }
         return layer.state.allSatisfy { array in
             array.ndim >= 3 && array.dim(-2) == snapshotOffset
@@ -2457,8 +2497,8 @@ nonisolated final class ServerCompletion {
         for snapshot: HybridCacheSnapshot
     ) -> SnapshotExtension? {
         guard let extending,
-              extending.baseOffset > 0,
-              extending.baseOffset < snapshot.tokenOffset
+            extending.baseOffset > 0,
+            extending.baseOffset < snapshot.tokenOffset
         else { return nil }
 
         var fullBytes = 0
@@ -2476,7 +2516,7 @@ nonisolated final class ServerCompletion {
             }
         }
         guard fullBytes > 0,
-              Double(suffixBytes) <= extensionMaxSuffixFraction * Double(fullBytes)
+            Double(suffixBytes) <= extensionMaxSuffixFraction * Double(fullBytes)
         else { return nil }
         return extending
     }
@@ -2499,13 +2539,15 @@ nonisolated final class ServerCompletion {
         admissionStage: String,
         captureSource: String
     ) async -> Bool {
-        guard let admission = SnapshotAdmission.leaf(
-            storedTokens: storedTokens,
-            snapshot: leaf,
-            storage: storage,
-            partitionKey: partitionKey,
-            requestID: requestID
-        ) else {
+        guard
+            let admission = SnapshotAdmission.leaf(
+                storedTokens: storedTokens,
+                snapshot: leaf,
+                storage: storage,
+                partitionKey: partitionKey,
+                requestID: requestID
+            )
+        else {
             diagnostics.logSkip(
                 stage: admissionStage,
                 reason: "invalid-path",
@@ -2517,13 +2559,14 @@ nonisolated final class ServerCompletion {
             return false
         }
 
-        diagnostics.log(PrefixCacheDiagnostics.CaptureEvent(
-            offset: leaf.tokenOffset,
-            checkpointType: leaf.checkpointType,
-            bytes: leaf.memoryBytes,
-            duringPrefill: false,
-            source: captureSource
-        ))
+        diagnostics.log(
+            PrefixCacheDiagnostics.CaptureEvent(
+                offset: leaf.tokenOffset,
+                checkpointType: leaf.checkpointType,
+                bytes: leaf.memoryBytes,
+                duringPrefill: false,
+                source: captureSource
+            ))
 
         // Coalesce admit + stats read in one MainActor hop; the post-store
         // budget/total snapshot feeds the capturedThenEvicted diagnostic
@@ -2540,11 +2583,12 @@ nonisolated final class ServerCompletion {
             }
         }
         for supersession in storeDiagnostics.supersededLeaves {
-            diagnostics.log(PrefixCacheDiagnostics.LeafSupersessionEvent(
-                offset: supersession.offset,
-                snapshotRefID: supersession.bodyDroppedSnapshotRefID,
-                mode: supersession.mode
-            ))
+            diagnostics.log(
+                PrefixCacheDiagnostics.LeafSupersessionEvent(
+                    offset: supersession.offset,
+                    snapshotRefID: supersession.bodyDroppedSnapshotRefID,
+                    mode: supersession.mode
+                ))
         }
         let admissionEvicted = storeDiagnostics.evictions.contains { event in
             event.offset == leaf.tokenOffset && event.checkpointType == .leaf
@@ -2579,7 +2623,8 @@ nonisolated final class ServerCompletion {
             var suffixBaseOffset: Int?
             var stateToExtract = layer.state
             if let activeExtension,
-               layerIsSuffixSliceable(layer, snapshotOffset: snapshot.tokenOffset) {
+                layerIsSuffixSliceable(layer, snapshotOffset: snapshot.tokenOffset)
+            {
                 suffixBaseOffset = activeExtension.baseOffset
                 stateToExtract = layer.state.map { array in
                     array[.ellipsis, activeExtension.baseOffset..<snapshot.tokenOffset, 0...]
@@ -2590,19 +2635,21 @@ nonisolated final class ServerCompletion {
             arrays.reserveCapacity(stateToExtract.count)
             for array in stateToExtract {
                 let extracted = array.asData(access: .copy)
-                arrays.append(SnapshotPayload.ArrayPayload(
-                    data: extracted.data,
-                    dtype: dtypeWireString(extracted.dType),
-                    shape: extracted.shape
-                ))
+                arrays.append(
+                    SnapshotPayload.ArrayPayload(
+                        data: extracted.data,
+                        dtype: dtypeWireString(extracted.dType),
+                        shape: extracted.shape
+                    ))
             }
-            layers.append(SnapshotPayload.LayerPayload(
-                className: layer.className,
-                state: arrays,
-                metaState: layer.metaState,
-                offset: layer.offset,
-                suffixBaseOffset: suffixBaseOffset
-            ))
+            layers.append(
+                SnapshotPayload.LayerPayload(
+                    className: layer.className,
+                    state: arrays,
+                    metaState: layer.metaState,
+                    offset: layer.offset,
+                    suffixBaseOffset: suffixBaseOffset
+                ))
         }
 
         return SnapshotPayload(
@@ -2647,7 +2694,7 @@ nonisolated final class ServerCompletion {
         @unknown default:
             fatalError(
                 "dtypeWireString missing case for MLX DType \(dtype) — "
-                + "extend the switch to preserve the SSD wire-format contract."
+                    + "extend the switch to preserve the SSD wire-format contract."
             )
         }
     }
@@ -2708,9 +2755,15 @@ nonisolated final class ServerCompletion {
     ) -> (store: String, capture: String, admission: String, source: String) {
         switch mode {
         case .directTool:
-            ("directToolLeafStore", "directToolLeafCapture", "directToolLeafAdmission", "directToolLeaf")
+            (
+                "directToolLeafStore", "directToolLeafCapture", "directToolLeafAdmission",
+                "directToolLeaf"
+            )
         case .canonical:
-            ("canonicalLeafStore", "canonicalLeafCapture", "canonicalLeafAdmission", "canonicalLeaf")
+            (
+                "canonicalLeafStore", "canonicalLeafCapture", "canonicalLeafAdmission",
+                "canonicalLeaf"
+            )
         }
     }
 
@@ -2751,7 +2804,8 @@ nonisolated final class ServerCompletion {
             )
         case .noTransientBoundary:
             return LeafSkipLog(
-                stage: stage, reason: "no-transient-boundary-snapshot", level: .info, extraFields: []
+                stage: stage, reason: "no-transient-boundary-snapshot", level: .info,
+                extraFields: []
             )
         case .noResolvedBoundary(let canonicalLen):
             return LeafSkipLog(
@@ -2761,7 +2815,9 @@ nonisolated final class ServerCompletion {
         case .storedAtOrBeforeBoundary(let storedLen, let boundaryOffset):
             return LeafSkipLog(
                 stage: stage, reason: "stored-at-or-before-boundary", level: .info,
-                extraFields: [("storedLen", "\(storedLen)"), ("boundaryOffset", "\(boundaryOffset)")]
+                extraFields: [
+                    ("storedLen", "\(storedLen)"), ("boundaryOffset", "\(boundaryOffset)"),
+                ]
             )
         case .canonicalLongerThanStored(let canonicalLen, let storedLen):
             return LeafSkipLog(
@@ -2921,7 +2977,8 @@ nonisolated final class ServerCompletion {
                 // `.newAxis` and would promote a pre-batched 2D chunk to
                 // 3D. Match the processor's original rank.
                 let flatInput = MLXArray(residual.map { Int32($0) })
-                let inputArr = tokenNDim >= 2
+                let inputArr =
+                    tokenNDim >= 2
                     ? flatInput.expandedDimensions(axis: 0)
                     : flatInput
                 _ = try PrefillExecutor.run(
@@ -2935,11 +2992,13 @@ nonisolated final class ServerCompletion {
                 )
                 let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStart
 
-                guard let leaf = HybridCacheSnapshot.capture(
-                    cache: restoredCache,
-                    offset: storedTokens.count,
-                    type: .leaf
-                ) else {
+                guard
+                    let leaf = HybridCacheSnapshot.capture(
+                        cache: restoredCache,
+                        offset: storedTokens.count,
+                        type: .leaf
+                    )
+                else {
                     diagnosticsContext.logSkip(
                         stage: captureStage,
                         reason: "unsupported-cache-type"
@@ -2948,9 +3007,9 @@ nonisolated final class ServerCompletion {
                 }
                 Log.agent.info(
                     "\(captureSource) captured — offset=\(leaf.tokenOffset) "
-                    + "residualTokens=\(residual.count) "
-                    + "prefillMs=\(String(format: "%.3f", prefillMs * 1000)) "
-                    + "storedLen=\(storedTokens.count)"
+                        + "residualTokens=\(residual.count) "
+                        + "prefillMs=\(String(format: "%.3f", prefillMs * 1000)) "
+                        + "storedLen=\(storedTokens.count)"
                 )
 
                 let survived = await Self.admitStructuredLeaf(
@@ -3000,11 +3059,12 @@ nonisolated final class ServerCompletion {
         keyPathCount: Int,
         minimumWarmOffset: Int
     ) -> Int? {
-        guard cacheOffset - restoreBaseOffset
+        guard
+            cacheOffset - restoreBaseOffset
                 >= SpeculativeCanonicalPrefill.minimumPreemptCaptureTokens,
-              cacheOffset > 0,
-              cacheOffset <= keyPathCount,
-              cacheOffset >= minimumWarmOffset
+            cacheOffset > 0,
+            cacheOffset <= keyPathCount,
+            cacheOffset >= minimumWarmOffset
         else { return nil }
         return cacheOffset
     }
@@ -3031,12 +3091,14 @@ nonisolated final class ServerCompletion {
         diagnostics: PrefixCacheDiagnostics.Context
     ) async {
         let reportedOffset = httpPrefixCacheReportedTokenCount(cache)
-        guard salvageableOffset(
-            cacheOffset: reportedOffset,
-            restoreBaseOffset: restoreBaseOffset,
-            keyPathCount: keySpace.keyPath.count,
-            minimumWarmOffset: keySpace.minimumWarmOffset
-        ) != nil else {
+        guard
+            salvageableOffset(
+                cacheOffset: reportedOffset,
+                restoreBaseOffset: restoreBaseOffset,
+                keyPathCount: keySpace.keyPath.count,
+                minimumWarmOffset: keySpace.minimumWarmOffset
+            ) != nil
+        else {
             diagnostics.logSkip(
                 stage: "salvageOnCancel",
                 reason: "below-progress-threshold",
@@ -3052,12 +3114,14 @@ nonisolated final class ServerCompletion {
         // proves the cancel progressed far enough to be worth capturing.
         eval(cache)
         let settledOffset = httpPrefixCacheReportedTokenCount(cache)
-        guard let offset = salvageableOffset(
-            cacheOffset: settledOffset,
-            restoreBaseOffset: restoreBaseOffset,
-            keyPathCount: keySpace.keyPath.count,
-            minimumWarmOffset: keySpace.minimumWarmOffset
-        ) else {
+        guard
+            let offset = salvageableOffset(
+                cacheOffset: settledOffset,
+                restoreBaseOffset: restoreBaseOffset,
+                keyPathCount: keySpace.keyPath.count,
+                minimumWarmOffset: keySpace.minimumWarmOffset
+            )
+        else {
             diagnostics.logSkip(
                 stage: "salvageOnCancel",
                 reason: "settled-offset-not-salvageable",
@@ -3068,9 +3132,11 @@ nonisolated final class ServerCompletion {
             )
             return
         }
-        guard let leaf = HybridCacheSnapshot.capture(
-            cache: cache, offset: offset, type: .leaf
-        ) else {
+        guard
+            let leaf = HybridCacheSnapshot.capture(
+                cache: cache, offset: offset, type: .leaf
+            )
+        else {
             diagnostics.logSkip(
                 stage: "salvageOnCancel",
                 reason: "unsupported-cache-type"
@@ -3091,8 +3157,8 @@ nonisolated final class ServerCompletion {
         if survived {
             Log.agent.info(
                 "Salvage-on-cancel admitted — offset=\(offset) "
-                + "restoreBase=\(restoreBaseOffset) "
-                + "salvagedTokens=\(offset - restoreBaseOffset)"
+                    + "restoreBase=\(restoreBaseOffset) "
+                    + "salvagedTokens=\(offset - restoreBaseOffset)"
             )
         }
     }

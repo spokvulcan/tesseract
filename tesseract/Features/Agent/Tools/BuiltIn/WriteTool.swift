@@ -11,11 +11,14 @@ nonisolated struct WriteToolError: LocalizedError {
 
 // MARK: - WriteTool Factory
 
-nonisolated func createWriteTool(sandbox: PathSandbox, readTracker: FileReadTracker) -> AgentToolDefinition {
+nonisolated func createWriteTool(sandbox: PathSandbox, readTracker: FileReadTracker)
+    -> AgentToolDefinition
+{
     AgentToolDefinition(
         name: "write",
         label: "Write File",
-        description: "Write content to a file. Creates parent directories if needed. By default, appends to existing files. Set overwrite to true to replace the entire file (requires reading the file first).",
+        description:
+            "Write content to a file. Creates parent directories if needed. By default, appends to existing files. Set overwrite to true to replace the entire file (requires reading the file first).",
         parameterSchema: JSONSchema(
             type: "object",
             properties: [
@@ -29,7 +32,8 @@ nonisolated func createWriteTool(sandbox: PathSandbox, readTracker: FileReadTrac
                 ),
                 "overwrite": PropertySchema(
                     type: "boolean",
-                    description: "If true, replace the entire file instead of appending. Requires reading the file first. Default: false"
+                    description:
+                        "If true, replace the entire file instead of appending. Requires reading the file first. Default: false"
                 ),
             ],
             required: ["path", "content"]
@@ -47,7 +51,9 @@ nonisolated func createWriteTool(sandbox: PathSandbox, readTracker: FileReadTrac
             let fileExists = FileManager.default.fileExists(atPath: url.path)
 
             if overwrite && fileExists && !readTracker.hasRead(url.path) {
-                return .error("You must read a file before overwriting it. Use the read tool on '\(path)' first.")
+                return .error(
+                    "You must read a file before overwriting it. Use the read tool on '\(path)' first."
+                )
             }
 
             if signal?.isCancelled == true {

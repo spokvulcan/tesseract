@@ -238,124 +238,137 @@ final class AppBindings {
         // the newly selected model replaces the previous one, freeing its
         // memory. The initial emission is dropped: the launch load is
         // `whisperLoadTask`'s job, and it must not be raced by a duplicate.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await _ in Observations({ self.settings.selectedSpeechToTextModelID }).dropFirst() {
-                await self.loadWhisperModelIfAvailable()
-            }
-        })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await _ in Observations({ self.settings.selectedSpeechToTextModelID })
+                    .dropFirst()
+                {
+                    await self.loadWhisperModelIfAvailable()
+                }
+            })
 
         // Reload the agent model when the selection changes — but only while an
         // LLM slot is already loaded. The gate drops the initial emission, so a
         // selected-but-unused model never forces a multi-gigabyte load at launch.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await _ in Observations({ self.settings.selectedAgentModelID }) {
-                guard self.inputs.isLLMSlotLoaded() else { continue }
-                do {
-                    try await self.effects.reloadLLMIfNeeded()
-                } catch {
-                    Log.agent.error("Agent model reload failed: \(error.localizedDescription)")
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await _ in Observations({ self.settings.selectedAgentModelID }) {
+                    guard self.inputs.isLLMSlotLoaded() else { continue }
+                    do {
+                        try await self.effects.reloadLLMIfNeeded()
+                    } catch {
+                        Log.agent.error("Agent model reload failed: \(error.localizedDescription)")
+                    }
                 }
-            }
-        })
+            })
 
         // Start/stop the HTTP server with the setting. The initial emission is
         // load-bearing: enabled-at-launch produces the launch start.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await enabled in Observations({ self.settings.isServerEnabled }) {
-                if enabled {
-                    await self.effects.startHTTPServer()
-                } else {
-                    self.effects.stopHTTPServer()
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await enabled in Observations({ self.settings.isServerEnabled }) {
+                    if enabled {
+                        await self.effects.startHTTPServer()
+                    } else {
+                        self.effects.stopHTTPServer()
+                    }
                 }
-            }
-        })
+            })
 
         // Apply port changes live, clamped by the one shared rule the server
         // was also constructed with.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await port in Observations({ self.settings.serverPort }) {
-                await self.effects.updateHTTPServerPort(HTTPServer.clampedPort(port))
-            }
-        })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await port in Observations({ self.settings.serverPort }) {
+                    await self.effects.updateHTTPServerPort(HTTPServer.clampedPort(port))
+                }
+            })
 
         // The single dictation-state subscription: raw state fans out to both
         // overlay panels (the disabled one stays hidden) and the menu bar, so
         // every surface always sees the same emission — no second path, no race.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await state in Observations({ self.inputs.dictationState() }) {
-                self.effects.pushDictationStateToPill(state)
-                self.effects.pushDictationStateToBorder(state)
-                self.effects.pushDictationStateToMenuBar(state)
-            }
-        })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await state in Observations({ self.inputs.dictationState() }) {
+                    self.effects.pushDictationStateToPill(state)
+                    self.effects.pushDictationStateToBorder(state)
+                    self.effects.pushDictationStateToMenuBar(state)
+                }
+            })
 
         // Keep the border's glow theme live — pure view data, re-applied on change.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await glowTheme in Observations({ self.settings.glowTheme }) {
-                self.effects.setBorderGlowTheme(glowTheme)
-            }
-        })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await glowTheme in Observations({ self.settings.glowTheme }) {
+                    self.effects.setBorderGlowTheme(glowTheme)
+                }
+            })
 
         // Forward audio level to both overlays; each drops it while disabled, so
         // the hidden overlay does no SwiftUI work at audio frame-rate. The
         // enabled gate inside the panel is the single source of truth for which
         // overlay is live — no separate active-overlay pointer to keep in sync.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await level in Observations({ self.inputs.audioLevel() }) {
-                self.effects.pushAudioLevelToPill(level)
-                self.effects.pushAudioLevelToBorder(level)
-            }
-        })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await level in Observations({ self.inputs.audioLevel() }) {
+                    self.effects.pushAudioLevelToPill(level)
+                    self.effects.pushAudioLevelToBorder(level)
+                }
+            })
 
         // Re-bind the dictation hotkey on change. The initial emission matches
         // the combo the wiring already bound, so the unchanged-combo guard makes
         // launch a no-op instead of a redundant re-bind.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await hotkey in Observations({ self.settings.hotkey }) {
-                if hotkey != self.inputs.currentDictationHotkey() {
-                    self.effects.updateDictationHotkey(hotkey)
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await hotkey in Observations({ self.settings.hotkey }) {
+                    if hotkey != self.inputs.currentDictationHotkey() {
+                        self.effects.updateDictationHotkey(hotkey)
+                    }
                 }
-            }
-        })
+            })
 
         // Re-bind the TTS and agent hotkeys on change; re-applying the current
         // combo at subscription time is a harmless re-register.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await hotkey in Observations({ self.settings.ttsHotkey }) {
-                self.effects.updateTTSHotkey(hotkey)
-            }
-        })
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await hotkey in Observations({ self.settings.agentHotkey }) {
-                self.effects.updateAgentHotkey(hotkey)
-            }
-        })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await hotkey in Observations({ self.settings.ttsHotkey }) {
+                    self.effects.updateTTSHotkey(hotkey)
+                }
+            })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await hotkey in Observations({ self.settings.agentHotkey }) {
+                    self.effects.updateAgentHotkey(hotkey)
+                }
+            })
 
         // Enable the overlay matching the current style and disable the other.
         // Each panel's enabled flag gates both its visibility and its
         // audio-frame handling, so the inactive overlay stays hidden and idle.
-        observationTasks.append(Task { [weak self] in
-            guard let self else { return }
-            for await style in Observations({ self.settings.overlayStyle }) {
-                switch style {
-                case .pill:
-                    self.effects.setPillOverlayEnabled(true)
-                    self.effects.setBorderOverlayEnabled(false)
-                case .fullScreenBorder:
-                    self.effects.setPillOverlayEnabled(false)
-                    self.effects.setBorderOverlayEnabled(true)
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await style in Observations({ self.settings.overlayStyle }) {
+                    switch style {
+                    case .pill:
+                        self.effects.setPillOverlayEnabled(true)
+                        self.effects.setBorderOverlayEnabled(false)
+                    case .fullScreenBorder:
+                        self.effects.setPillOverlayEnabled(false)
+                        self.effects.setBorderOverlayEnabled(true)
+                    }
                 }
-            }
-        })
+            })
     }
 }

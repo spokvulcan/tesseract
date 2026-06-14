@@ -94,9 +94,14 @@ struct DictationCoordinatorTests {
     private func makeFakeModelBundle() throws -> URL {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory
-            .appendingPathComponent("DictationCoordinatorTests-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: dir.appendingPathComponent("AudioEncoder.mlmodelc"), withIntermediateDirectories: true)
-        try fm.createDirectory(at: dir.appendingPathComponent("TextDecoder.mlmodelc"), withIntermediateDirectories: true)
+            .appendingPathComponent(
+                "DictationCoordinatorTests-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(
+            at: dir.appendingPathComponent("AudioEncoder.mlmodelc"),
+            withIntermediateDirectories: true)
+        try fm.createDirectory(
+            at: dir.appendingPathComponent("TextDecoder.mlmodelc"),
+            withIntermediateDirectories: true)
         return dir
     }
 
@@ -112,14 +117,17 @@ struct DictationCoordinatorTests {
         while !condition() {
             n += 1
             if n > attempts {
-                Issue.record("condition not met within \(attempts) yields", sourceLocation: sourceLocation)
+                Issue.record(
+                    "condition not met within \(attempts) yields", sourceLocation: sourceLocation)
                 throw WaitTimedOut()
             }
             await Task.yield()
         }
     }
 
-    private func makeEngine(recognizer: InMemorySpeechRecognizer, bundle: URL) async throws -> TranscriptionEngine {
+    private func makeEngine(recognizer: InMemorySpeechRecognizer, bundle: URL) async throws
+        -> TranscriptionEngine
+    {
         let engine = TranscriptionEngine(makeRecognizer: { recognizer })
         try await engine.loadModel(from: bundle)
         return engine
@@ -133,7 +141,8 @@ struct DictationCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: bundle) }
 
         let recognizer = InMemorySpeechRecognizer(
-            result: TranscriptionResult(text: "hello world", segments: [], language: "en", processingTime: 0)
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0)
         )
         let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
 
@@ -166,7 +175,10 @@ struct DictationCoordinatorTests {
         let expected = TranscriptionPostProcessor().process("hello world")
         #expect(!expected.isEmpty)
         #expect(coordinator.lastTranscription == expected)
-        #expect(store.entries == [FakeTranscriptionStore.Entry(text: expected, duration: 2.0, model: "Whisper Turbo")])
+        #expect(
+            store.entries == [
+                FakeTranscriptionStore.Entry(text: expected, duration: 2.0, model: "Whisper Turbo")
+            ])
         #expect(injector.injected == [expected + " "])
         #expect(capture.stopCount == 1)
     }
@@ -196,7 +208,9 @@ struct DictationCoordinatorTests {
 
         // handleError runs synchronously for the too-short guard.
         #expect(coordinator.state == .error(DictationError.recordingTooShort.localizedDescription))
-        #expect(coordinator.lastError?.localizedDescription == DictationError.recordingTooShort.localizedDescription)
+        #expect(
+            coordinator.lastError?.localizedDescription
+                == DictationError.recordingTooShort.localizedDescription)
         #expect(await recognizer.transcribeCount == 0)
     }
 
@@ -208,13 +222,15 @@ struct DictationCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: bundle) }
 
         let recognizer = InMemorySpeechRecognizer(
-            result: TranscriptionResult(text: "   ", segments: [], language: "en", processingTime: 0)
+            result: TranscriptionResult(
+                text: "   ", segments: [], language: "en", processingTime: 0)
         )
         let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
 
         let store = FakeTranscriptionStore()
         let coordinator = DictationCoordinator(
-            audioCapture: FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
             history: store,
@@ -227,7 +243,9 @@ struct DictationCoordinatorTests {
         try await waitUntil {
             if case .error = coordinator.state { return true } else { return false }
         }
-        #expect(coordinator.lastError?.localizedDescription == DictationError.noSpeechDetected.localizedDescription)
+        #expect(
+            coordinator.lastError?.localizedDescription
+                == DictationError.noSpeechDetected.localizedDescription)
         #expect(store.entries.isEmpty)
     }
 
@@ -241,7 +259,8 @@ struct DictationCoordinatorTests {
         let recognizer = InMemorySpeechRecognizer()
         let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
 
-        let capture = FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
         let coordinator = DictationCoordinator(
             audioCapture: capture,
             transcriptionEngine: engine,
@@ -267,11 +286,13 @@ struct DictationCoordinatorTests {
         // Over-running recognizer so the transcription is still in flight when we
         // cancel; a long timeout so the timeout race doesn't fire first.
         let recognizer = InMemorySpeechRecognizer(latency: .seconds(60))
-        let engine = TranscriptionEngine(makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
+        let engine = TranscriptionEngine(
+            makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
         try await engine.loadModel(from: bundle)
 
         let coordinator = DictationCoordinator(
-            audioCapture: FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
@@ -302,10 +323,12 @@ struct DictationCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: bundle) }
 
         let recognizer = InMemorySpeechRecognizer(latency: .seconds(60))
-        let engine = TranscriptionEngine(makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
+        let engine = TranscriptionEngine(
+            makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
         try await engine.loadModel(from: bundle)
 
-        let capture = FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
         let coordinator = DictationCoordinator(
             audioCapture: capture,
             transcriptionEngine: engine,
@@ -338,12 +361,14 @@ struct DictationCoordinatorTests {
     func successfulTranscriptionArrivingAfterCancelCommitsNothing() async throws {
         // Engine-facing double that delivers SUCCESS on demand, even after cancel.
         let engine = ControllableTranscribing(
-            result: TranscriptionResult(text: "late success", segments: [], language: "en", processingTime: 0)
+            result: TranscriptionResult(
+                text: "late success", segments: [], language: "en", processingTime: 0)
         )
         let injector = FakeTextInjector()
         let store = FakeTranscriptionStore()
         let coordinator = DictationCoordinator(
-            audioCapture: FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
             textInjector: injector,
             history: store,
@@ -376,7 +401,8 @@ struct DictationCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: bundle) }
 
         let recognizer = InMemorySpeechRecognizer(
-            result: TranscriptionResult(text: "done", segments: [], language: "en", processingTime: 0)
+            result: TranscriptionResult(
+                text: "done", segments: [], language: "en", processingTime: 0)
         )
         let engine = TranscriptionEngine(makeRecognizer: { recognizer })
         try await engine.loadModel(from: bundle)
@@ -384,7 +410,8 @@ struct DictationCoordinatorTests {
         let injector = FakeTextInjector()
         injector.gated = true
         let coordinator = DictationCoordinator(
-            audioCapture: FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
             textInjector: injector,
             history: FakeTranscriptionStore(),
@@ -416,7 +443,8 @@ struct DictationCoordinatorTests {
         defer { try? FileManager.default.removeItem(at: bundle) }
 
         let recognizer = InMemorySpeechRecognizer(
-            result: TranscriptionResult(text: "done", segments: [], language: "en", processingTime: 0)
+            result: TranscriptionResult(
+                text: "done", segments: [], language: "en", processingTime: 0)
         )
         let engine = TranscriptionEngine(makeRecognizer: { recognizer })
         try await engine.loadModel(from: bundle)
@@ -424,7 +452,8 @@ struct DictationCoordinatorTests {
         let injector = FakeTextInjector()
         injector.gated = true
         let coordinator = DictationCoordinator(
-            audioCapture: FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
             textInjector: injector,
             history: FakeTranscriptionStore(),

@@ -23,7 +23,7 @@ nonisolated enum ImagePseudoToken {
     /// The full length-`runLength` expansion for one image's placeholder run.
     static func expansion(digest: ImageDigest, runLength: Int) -> [Int] {
         let seed = seed(from: digest)
-        return (0 ..< runLength).map { value(seed: seed, index: $0) }
+        return (0..<runLength).map { value(seed: seed, index: $0) }
     }
 
     private static func seed(from digest: ImageDigest) -> UInt64 {

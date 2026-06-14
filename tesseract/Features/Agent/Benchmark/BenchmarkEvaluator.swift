@@ -98,7 +98,8 @@ enum BenchmarkEvaluator {
             toolRoundsUsed: toolRounds
         )
 
-        let passed = toolsCorrect
+        let passed =
+            toolsCorrect
             && argsCorrect
             && responseRelevant
             && clarificationAsked
@@ -130,7 +131,9 @@ enum BenchmarkEvaluator {
         switch expectation.toolMatchMode {
         case .noTools:
             if !executed.isEmpty {
-                details.append("Expected no executed tools, but called: \(executed.map(\.name).joined(separator: ", "))")
+                details.append(
+                    "Expected no executed tools, but called: \(executed.map(\.name).joined(separator: ", "))"
+                )
                 return false
             }
             return true
@@ -180,11 +183,12 @@ enum BenchmarkEvaluator {
         _ calls: [(name: String, arguments: [String: JSONValue])],
         conversationHistory: [(name: String, arguments: [String: JSONValue], result: String)]
     ) -> Int {
-        let historyKeys = Set(conversationHistory.compactMap { entry -> String? in
-            guard !entry.result.hasPrefix("Error:") else { return nil }
-            guard !readOnlyTools.contains(entry.name) else { return nil }
-            return canonicalKey(name: entry.name, arguments: entry.arguments)
-        })
+        let historyKeys = Set(
+            conversationHistory.compactMap { entry -> String? in
+                guard !entry.result.hasPrefix("Error:") else { return nil }
+                guard !readOnlyTools.contains(entry.name) else { return nil }
+                return canonicalKey(name: entry.name, arguments: entry.arguments)
+            })
 
         var duplicates = 0
         for call in calls {
@@ -278,7 +282,8 @@ enum BenchmarkEvaluator {
             }
 
             guard let matchIndex = foundIndex else {
-                details.append("Missing expected tool call \(expectedIndex + 1): \(expectedCall.name)")
+                details.append(
+                    "Missing expected tool call \(expectedIndex + 1): \(expectedCall.name)")
                 return false
             }
 
@@ -300,7 +305,8 @@ enum BenchmarkEvaluator {
         }
 
         if requireExactLength && matched == expected.count && actual.count > expected.count {
-            details.append("Unexpected extra tool call(s): \(actual.dropFirst(expected.count).map(\.name))")
+            details.append(
+                "Unexpected extra tool call(s): \(actual.dropFirst(expected.count).map(\.name))")
             return false
         }
 
@@ -388,7 +394,8 @@ enum BenchmarkEvaluator {
 
         var executedCounts: [String: Int] = [:]
         for call in executed {
-            executedCounts[canonicalKey(name: call.name, arguments: call.arguments), default: 0] += 1
+            executedCounts[canonicalKey(name: call.name, arguments: call.arguments), default: 0] +=
+                1
         }
 
         var invalidAttempts: [String] = []
@@ -402,7 +409,9 @@ enum BenchmarkEvaluator {
         }
 
         if !invalidAttempts.isEmpty {
-            details.append("Attempted tool call(s) that never executed: \(invalidAttempts.joined(separator: ", "))")
+            details.append(
+                "Attempted tool call(s) that never executed: \(invalidAttempts.joined(separator: ", "))"
+            )
             valid = false
         }
 
@@ -423,7 +432,8 @@ enum BenchmarkEvaluator {
         for assertion in assertions {
             let fileURL = sandboxRoot.appendingPathComponent(assertion.path)
             guard let data = try? Data(contentsOf: fileURL),
-                  let text = String(data: data, encoding: .utf8) else {
+                let text = String(data: data, encoding: .utf8)
+            else {
                 details.append("File assertion failed: could not read \(assertion.path)")
                 passed = false
                 continue
@@ -431,14 +441,17 @@ enum BenchmarkEvaluator {
 
             for substring in assertion.mustContain {
                 if !text.localizedCaseInsensitiveContains(substring) {
-                    details.append("File assertion failed: \(assertion.path) missing '\(substring)'")
+                    details.append(
+                        "File assertion failed: \(assertion.path) missing '\(substring)'")
                     passed = false
                 }
             }
 
             for substring in assertion.mustNotContain {
                 if text.localizedCaseInsensitiveContains(substring) {
-                    details.append("File assertion failed: \(assertion.path) unexpectedly contains '\(substring)'")
+                    details.append(
+                        "File assertion failed: \(assertion.path) unexpectedly contains '\(substring)'"
+                    )
                     passed = false
                 }
             }
@@ -457,7 +470,9 @@ enum BenchmarkEvaluator {
         let totalCalls = turns.reduce(0) { $0 + $1.toolsCalled.count }
         let duplicateRate = totalCalls == 0 ? 0.0 : Double(totalDuplicates) / Double(totalCalls)
 
-        let tokSpeeds = turns.compactMap { $0.performance.tokPerSec > 0 ? $0.performance.tokPerSec : nil }
+        let tokSpeeds = turns.compactMap {
+            $0.performance.tokPerSec > 0 ? $0.performance.tokPerSec : nil
+        }
         let avgTokPerSec = tokSpeeds.isEmpty ? 0 : tokSpeeds.reduce(0, +) / Double(tokSpeeds.count)
 
         let latencies = turns.map(\.performance.latencyMs)
@@ -480,13 +495,16 @@ enum BenchmarkEvaluator {
         let allTurns = scenarios.flatMap(\.turns)
         let toolTurns = allTurns.filter { !$0.toolsCalled.isEmpty || !$0.checks.toolsCorrect }
         let correctToolTurns = toolTurns.filter { $0.checks.toolsCorrect }
-        let overallToolAccuracy = toolTurns.isEmpty ? 1.0 : Double(correctToolTurns.count) / Double(toolTurns.count)
+        let overallToolAccuracy =
+            toolTurns.isEmpty ? 1.0 : Double(correctToolTurns.count) / Double(toolTurns.count)
 
         let totalDuplicates = allTurns.reduce(0) { $0 + $1.checks.duplicateToolCalls }
         let totalCalls = allTurns.reduce(0) { $0 + $1.toolsCalled.count }
         let duplicateRate = totalCalls == 0 ? 0.0 : Double(totalDuplicates) / Double(totalCalls)
 
-        let tokSpeeds = allTurns.compactMap { $0.performance.tokPerSec > 0 ? $0.performance.tokPerSec : nil }
+        let tokSpeeds = allTurns.compactMap {
+            $0.performance.tokPerSec > 0 ? $0.performance.tokPerSec : nil
+        }
         let avgTokPerSec = tokSpeeds.isEmpty ? 0 : tokSpeeds.reduce(0, +) / Double(tokSpeeds.count)
 
         let latencies = allTurns.map(\.performance.latencyMs).sorted()

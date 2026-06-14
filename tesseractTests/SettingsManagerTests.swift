@@ -149,7 +149,7 @@ struct SettingsManagerTests {
         // …and persisted through the store (survives the next relaunch).
         #expect(
             store.string(for: "selectedAgentModelID", default: "")
-            == ModelDefinition.defaultAgentModelID
+                == ModelDefinition.defaultAgentModelID
         )
     }
 

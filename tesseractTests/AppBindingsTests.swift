@@ -25,10 +25,11 @@ struct AppBindingsTests {
 
         h.bindings.start()
 
-        #expect(Array(h.recorder.events.prefix(2)) == [
-            "setBorderGlowTheme(matrix)",
-            "setUpOverlayPanels",
-        ])
+        #expect(
+            Array(h.recorder.events.prefix(2)) == [
+                "setBorderGlowTheme(matrix)",
+                "setUpOverlayPanels",
+            ])
     }
 
     @Test
@@ -39,26 +40,28 @@ struct AppBindingsTests {
         h.bindings.start()
 
         // The initial emission pushes the current state once to each surface.
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "pushDictationState") == [
-                "pushDictationStateToPill(idle)",
-                "pushDictationStateToBorder(idle)",
-                "pushDictationStateToMenuBar(idle)",
-            ]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "pushDictationState") == [
+                    "pushDictationStateToPill(idle)",
+                    "pushDictationStateToBorder(idle)",
+                    "pushDictationStateToMenuBar(idle)",
+                ]
+            })
 
         h.driver.dictationState = .recording
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "pushDictationState") == [
-                "pushDictationStateToPill(idle)",
-                "pushDictationStateToBorder(idle)",
-                "pushDictationStateToMenuBar(idle)",
-                "pushDictationStateToPill(recording)",
-                "pushDictationStateToBorder(recording)",
-                "pushDictationStateToMenuBar(recording)",
-            ]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "pushDictationState") == [
+                    "pushDictationStateToPill(idle)",
+                    "pushDictationStateToBorder(idle)",
+                    "pushDictationStateToMenuBar(idle)",
+                    "pushDictationStateToPill(recording)",
+                    "pushDictationStateToBorder(recording)",
+                    "pushDictationStateToMenuBar(recording)",
+                ]
+            })
     }
 
     @Test
@@ -68,23 +71,25 @@ struct AppBindingsTests {
 
         h.bindings.start()
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "pushAudioLevel") == [
-                "pushAudioLevelToPill(0.0)",
-                "pushAudioLevelToBorder(0.0)",
-            ]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "pushAudioLevel") == [
+                    "pushAudioLevelToPill(0.0)",
+                    "pushAudioLevelToBorder(0.0)",
+                ]
+            })
 
         h.driver.audioLevel = 0.5
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "pushAudioLevel") == [
-                "pushAudioLevelToPill(0.0)",
-                "pushAudioLevelToBorder(0.0)",
-                "pushAudioLevelToPill(0.5)",
-                "pushAudioLevelToBorder(0.5)",
-            ]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "pushAudioLevel") == [
+                    "pushAudioLevelToPill(0.0)",
+                    "pushAudioLevelToBorder(0.0)",
+                    "pushAudioLevelToPill(0.5)",
+                    "pushAudioLevelToBorder(0.5)",
+                ]
+            })
     }
 
     @Test
@@ -95,9 +100,11 @@ struct AppBindingsTests {
         h.bindings.start()
         h.settings.glowTheme = .ocean
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "setBorderGlowTheme").last == "setBorderGlowTheme(ocean)"
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "setBorderGlowTheme").last
+                    == "setBorderGlowTheme(ocean)"
+            })
     }
 
     @Test
@@ -115,10 +122,11 @@ struct AppBindingsTests {
 
         // Exactly one re-bind: the changed combo. The initial (unchanged)
         // emission must not have produced one.
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "updateDictationHotkey")
-                == ["updateDictationHotkey(\(newCombo.displayString))"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "updateDictationHotkey")
+                    == ["updateDictationHotkey(\(newCombo.displayString))"]
+            })
     }
 
     @Test
@@ -133,12 +141,13 @@ struct AppBindingsTests {
         h.settings.ttsHotkey = ttsCombo
         h.settings.agentHotkey = agentCombo
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "updateTTSHotkey").last
-                == "updateTTSHotkey(\(ttsCombo.displayString))"
-                && h.recorder.events(withPrefix: "updateAgentHotkey").last
-                == "updateAgentHotkey(\(agentCombo.displayString))"
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "updateTTSHotkey").last
+                    == "updateTTSHotkey(\(ttsCombo.displayString))"
+                    && h.recorder.events(withPrefix: "updateAgentHotkey").last
+                        == "updateAgentHotkey(\(agentCombo.displayString))"
+            })
     }
 
     @Test
@@ -148,16 +157,18 @@ struct AppBindingsTests {
 
         h.bindings.start()
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "startHTTPServer") == ["startHTTPServer"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "startHTTPServer") == ["startHTTPServer"]
+            })
         #expect(h.recorder.events(withPrefix: "stopHTTPServer").isEmpty)
 
         h.settings.isServerEnabled = false
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "stopHTTPServer") == ["stopHTTPServer"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "stopHTTPServer") == ["stopHTTPServer"]
+            })
         #expect(h.recorder.events(withPrefix: "startHTTPServer") == ["startHTTPServer"])
     }
 
@@ -170,9 +181,10 @@ struct AppBindingsTests {
 
         // Fence on another rule's initial emission so the server subscription
         // has demonstrably run before we assert it produced no start.
-        #expect(await waitUntil {
-            !h.recorder.events(withPrefix: "updateHTTPServerPort").isEmpty
-        })
+        #expect(
+            await waitUntil {
+                !h.recorder.events(withPrefix: "updateHTTPServerPort").isEmpty
+            })
         #expect(h.recorder.events(withPrefix: "startHTTPServer").isEmpty)
     }
 
@@ -184,9 +196,11 @@ struct AppBindingsTests {
         h.bindings.start()
         h.settings.serverPort = 0
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "updateHTTPServerPort").last == "updateHTTPServerPort(1)"
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "updateHTTPServerPort").last
+                    == "updateHTTPServerPort(1)"
+            })
     }
 
     @Test
@@ -199,9 +213,10 @@ struct AppBindingsTests {
 
         // Fence on a later-installed rule's initial emission, so the reload
         // guard has demonstrably seen — and dropped — its own.
-        #expect(await waitUntil {
-            !h.recorder.events(withPrefix: "updateHTTPServerPort").isEmpty
-        })
+        #expect(
+            await waitUntil {
+                !h.recorder.events(withPrefix: "updateHTTPServerPort").isEmpty
+            })
         #expect(h.recorder.events(withPrefix: "reloadLLM").isEmpty)
     }
 
@@ -214,16 +229,18 @@ struct AppBindingsTests {
         h.bindings.start()
 
         // Let the guard drop the initial emission while nothing is loaded.
-        #expect(await waitUntil {
-            !h.recorder.events(withPrefix: "updateHTTPServerPort").isEmpty
-        })
+        #expect(
+            await waitUntil {
+                !h.recorder.events(withPrefix: "updateHTTPServerPort").isEmpty
+            })
 
         h.driver.isLLMSlotLoaded = true
         h.settings.selectedAgentModelID = "another-agent-model"
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "reloadLLM") == ["reloadLLMIfNeeded"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "reloadLLM") == ["reloadLLMIfNeeded"]
+            })
     }
 
     @Test
@@ -234,10 +251,11 @@ struct AppBindingsTests {
 
         h.bindings.start()
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "loadWhisperModel")
-                == ["loadWhisperModel(/models/whisper)"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "loadWhisperModel")
+                    == ["loadWhisperModel(/models/whisper)"]
+            })
     }
 
     @Test
@@ -266,10 +284,11 @@ struct AppBindingsTests {
         h.driver.whisperModelPath = URL(fileURLWithPath: "/models/whisper")
         h.statuses.send([ModelDefinition.defaultSpeechToTextModelID: .downloaded(sizeOnDisk: 1)])
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "loadWhisperModel")
-                == ["loadWhisperModel(/models/whisper)"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "loadWhisperModel")
+                    == ["loadWhisperModel(/models/whisper)"]
+            })
 
         // A re-download completing while the engine is already serving → skip.
         h.driver.isTranscriptionModelLoaded = true
@@ -277,8 +296,9 @@ struct AppBindingsTests {
         h.statuses.send([ModelDefinition.defaultSpeechToTextModelID: .downloaded(sizeOnDisk: 2)])
 
         for _ in 0..<100 { await Task.yield() }
-        #expect(h.recorder.events(withPrefix: "loadWhisperModel")
-            == ["loadWhisperModel(/models/whisper)"])
+        #expect(
+            h.recorder.events(withPrefix: "loadWhisperModel")
+                == ["loadWhisperModel(/models/whisper)"])
     }
 
     @Test
@@ -290,22 +310,24 @@ struct AppBindingsTests {
 
         h.bindings.start()
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "loadWhisperModel")
-                == ["loadWhisperModel(/models/whisper)"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "loadWhisperModel")
+                    == ["loadWhisperModel(/models/whisper)"]
+            })
 
         // Switching the selection loads the newly selected model even though
         // the engine is already serving — that is the hot-swap.
         h.driver.whisperModelPath = URL(fileURLWithPath: "/models/whisper-compact")
         h.settings.selectedSpeechToTextModelID = "whisper-large-v3-turbo-compact"
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "loadWhisperModel") == [
-                "loadWhisperModel(/models/whisper)",
-                "loadWhisperModel(/models/whisper-compact)",
-            ]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "loadWhisperModel") == [
+                    "loadWhisperModel(/models/whisper)",
+                    "loadWhisperModel(/models/whisper-compact)",
+                ]
+            })
     }
 
     @Test
@@ -321,13 +343,15 @@ struct AppBindingsTests {
         h.driver.whisperModelPath = URL(fileURLWithPath: "/models/whisper-compact")
         h.statuses.send(["whisper-large-v3-turbo-compact": .downloaded(sizeOnDisk: 1)])
 
-        #expect(await waitUntil {
-            h.settings.selectedSpeechToTextModelID == "whisper-large-v3-turbo-compact"
-        })
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "loadWhisperModel")
-                == ["loadWhisperModel(/models/whisper-compact)"]
-        })
+        #expect(
+            await waitUntil {
+                h.settings.selectedSpeechToTextModelID == "whisper-large-v3-turbo-compact"
+            })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "loadWhisperModel")
+                    == ["loadWhisperModel(/models/whisper-compact)"]
+            })
     }
 
     @Test
@@ -361,17 +385,19 @@ struct AppBindingsTests {
 
         // The Whisper load is suspended at the gate — yet the server-enable
         // rule has already started the server. Launch is not gated on the load.
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "startHTTPServer") == ["startHTTPServer"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "startHTTPServer") == ["startHTTPServer"]
+            })
         #expect(h.recorder.events(withPrefix: "loadWhisperModel").isEmpty)
 
         gate.open()
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "loadWhisperModel")
-                == ["loadWhisperModel(/models/whisper)"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "loadWhisperModel")
+                    == ["loadWhisperModel(/models/whisper)"]
+            })
     }
 
     @Test
@@ -380,9 +406,10 @@ struct AppBindingsTests {
         defer { h.bindings.stop() }
 
         h.bindings.start()
-        #expect(await waitUntil {
-            !h.recorder.events(withPrefix: "setPillOverlayEnabled").isEmpty
-        })
+        #expect(
+            await waitUntil {
+                !h.recorder.events(withPrefix: "setPillOverlayEnabled").isEmpty
+            })
 
         h.bindings.stop()
         for _ in 0..<100 { await Task.yield() }
@@ -405,19 +432,25 @@ struct AppBindingsTests {
         h.bindings.start()
 
         // Initial emission applies the persisted style (pill by default).
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "setPillOverlayEnabled") == ["setPillOverlayEnabled(true)"]
-                && h.recorder.events(withPrefix: "setBorderOverlayEnabled") == ["setBorderOverlayEnabled(false)"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "setPillOverlayEnabled") == [
+                    "setPillOverlayEnabled(true)"
+                ]
+                    && h.recorder.events(withPrefix: "setBorderOverlayEnabled") == [
+                        "setBorderOverlayEnabled(false)"
+                    ]
+            })
 
         h.settings.overlayStyle = .fullScreenBorder
 
-        #expect(await waitUntil {
-            h.recorder.events(withPrefix: "setPillOverlayEnabled")
-                == ["setPillOverlayEnabled(true)", "setPillOverlayEnabled(false)"]
-                && h.recorder.events(withPrefix: "setBorderOverlayEnabled")
-                == ["setBorderOverlayEnabled(false)", "setBorderOverlayEnabled(true)"]
-        })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "setPillOverlayEnabled")
+                    == ["setPillOverlayEnabled(true)", "setPillOverlayEnabled(false)"]
+                    && h.recorder.events(withPrefix: "setBorderOverlayEnabled")
+                        == ["setBorderOverlayEnabled(false)", "setBorderOverlayEnabled(true)"]
+            })
     }
 }
 

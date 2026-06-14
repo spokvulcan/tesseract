@@ -28,8 +28,8 @@ struct PromptCacheKPIStrip: View {
     private var ramDetail: String {
         let percent = PromptCacheFormatting.percent(memoryRatio)
         guard let snapshot,
-              snapshot.budgetCeilingBytes > 0,
-              snapshot.memoryBudgetBytes < snapshot.budgetCeilingBytes
+            snapshot.budgetCeilingBytes > 0,
+            snapshot.memoryBudgetBytes < snapshot.budgetCeilingBytes
         else { return percent }
         return "\(percent) · ceiling \(PromptCacheFormatting.bytes(snapshot.budgetCeilingBytes))"
     }
@@ -39,9 +39,10 @@ struct PromptCacheKPIStrip: View {
         if snapshot.ssd.pendingCount > 0 {
             return "\(snapshot.ssd.pendingCount) pending"
         }
-        return PromptCacheFormatting.percent(snapshot.ssd.budgetBytes > 0
-            ? Double(snapshot.ssd.currentBytes) / Double(snapshot.ssd.budgetBytes)
-            : 0)
+        return PromptCacheFormatting.percent(
+            snapshot.ssd.budgetBytes > 0
+                ? Double(snapshot.ssd.currentBytes) / Double(snapshot.ssd.budgetBytes)
+                : 0)
     }
 
     private var restoreMix: String {
@@ -81,7 +82,8 @@ struct PromptCacheKPIStrip: View {
             PromptCacheMetricTile(
                 title: "Hit Rate",
                 value: PromptCacheFormatting.percent(aggregate.hitRate),
-                detail: "\(aggregate.hitCount + aggregate.ssdHitCount)/\(aggregate.lookupCount) lookups",
+                detail:
+                    "\(aggregate.hitCount + aggregate.ssdHitCount)/\(aggregate.lookupCount) lookups",
                 symbol: "checkmark.circle",
                 tint: .green
             ),
@@ -240,6 +242,7 @@ private struct KPIBlock: View {
         }
         .padding(Theme.Spacing.sm)
         .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        .glassEffect(
+            .regular, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
     }
 }

@@ -20,12 +20,15 @@ struct SlashCommandPopupView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(commands.enumerated()), id: \.element.id) { index, command in
-                        commandRow(command, isSelected: index == selectedIndex, isHovered: hoveredId == command.id)
-                            .id(command.id)
-                            .onHover { hovering in
-                                hoveredId = hovering ? command.id : nil
-                            }
-                            .onTapGesture { onSelect(command) }
+                        commandRow(
+                            command, isSelected: index == selectedIndex,
+                            isHovered: hoveredId == command.id
+                        )
+                        .id(command.id)
+                        .onHover { hovering in
+                            hoveredId = hovering ? command.id : nil
+                        }
+                        .onTapGesture { onSelect(command) }
                     }
                 }
                 .padding(.vertical, 4)
@@ -41,12 +44,15 @@ struct SlashCommandPopupView: View {
             }
         }
         .frame(width: 360, height: popupHeight)
-        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .glassEffect(
+            .regular.interactive(), in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
         .shadow(color: .black.opacity(0.15), radius: 16, x: 0, y: -4)
     }
 
     @ViewBuilder
-    private func commandRow(_ command: SlashCommand, isSelected: Bool, isHovered: Bool) -> some View {
+    private func commandRow(_ command: SlashCommand, isSelected: Bool, isHovered: Bool) -> some View
+    {
         HStack(spacing: 8) {
             Image(systemName: iconForSource(command.source))
                 .font(.system(size: 12))

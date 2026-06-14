@@ -25,7 +25,8 @@ final class TTSWordTracker {
     var shouldDismiss: Bool = false {
         didSet {
             if shouldDismiss != oldValue {
-                Log.speech.info("[WordTracker] shouldDismiss changed: \(oldValue) → \(self.shouldDismiss)")
+                Log.speech.info(
+                    "[WordTracker] shouldDismiss changed: \(oldValue) → \(self.shouldDismiss)")
             }
         }
     }
@@ -72,8 +73,12 @@ final class TTSWordTracker {
 
     // MARK: - Public API
 
-    func start(text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval) {
-        Log.speech.info("[WordTracker] start() — text=\(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count)")
+    func start(
+        text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval
+    ) {
+        Log.speech.info(
+            "[WordTracker] start() — text=\(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count)"
+        )
         stop()
 
         timeline = WordTimeline(text: text, tokenCharOffsets: tokenCharOffsets)
@@ -87,7 +92,9 @@ final class TTSWordTracker {
         // Seed the pacing smoothing from the text-length estimate.
         estimatedFinalDuration = seededEstimate()
         pacing = WordTimeline.Pacing(seed: estimatedFinalDuration)
-        Log.speech.info("[WordTracker] start() — \(tokenCharOffsets.isEmpty ? "proportional" : "token-aligned"), estDur=\(String(format: "%.1f", self.estimatedFinalDuration))s")
+        Log.speech.info(
+            "[WordTracker] start() — \(tokenCharOffsets.isEmpty ? "proportional" : "token-aligned"), estDur=\(String(format: "%.1f", self.estimatedFinalDuration))s"
+        )
 
         tickLogCounter = 0
         startTimer()
@@ -98,7 +105,9 @@ final class TTSWordTracker {
     }
 
     func updateText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval) {
-        Log.speech.info("[WordTracker] updateText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), segmentBase=\(String(format: "%.2f", segmentBase))")
+        Log.speech.info(
+            "[WordTracker] updateText() — \(text.prefix(40))…, tokenOffsets=\(tokenCharOffsets.count), segmentBase=\(String(format: "%.2f", segmentBase))"
+        )
 
         timeline = WordTimeline(text: text, tokenCharOffsets: tokenCharOffsets)
         recognizedCharCount = 0
@@ -123,7 +132,9 @@ final class TTSWordTracker {
     func markSegmentComplete() {
         if totalDuration > 0 {
             estimatedFinalDuration = totalDuration
-            Log.speech.info("[WordTracker] markSegmentComplete() — aligned estimate to actual \(String(format: "%.1f", self.totalDuration))s")
+            Log.speech.info(
+                "[WordTracker] markSegmentComplete() — aligned estimate to actual \(String(format: "%.1f", self.totalDuration))s"
+            )
         }
     }
 
@@ -134,7 +145,9 @@ final class TTSWordTracker {
         if totalDuration > 0 && timeline.totalCharCount > 0 {
             let actualRate = Double(timeline.totalCharCount) / totalDuration
             Self.learnedCharsPerSec = actualRate * 0.7 + Self.learnedCharsPerSec * 0.3
-            Log.speech.info("[WordTracker] markGenerationComplete() — actualRate=\(String(format: "%.1f", actualRate)) c/s, learnedRate=\(String(format: "%.1f", Self.learnedCharsPerSec)) c/s, totalDuration=\(String(format: "%.1f", self.totalDuration))s")
+            Log.speech.info(
+                "[WordTracker] markGenerationComplete() — actualRate=\(String(format: "%.1f", actualRate)) c/s, learnedRate=\(String(format: "%.1f", Self.learnedCharsPerSec)) c/s, totalDuration=\(String(format: "%.1f", self.totalDuration))s"
+            )
         }
     }
 
@@ -178,9 +191,10 @@ final class TTSWordTracker {
 
     private func tick() {
         guard isActive,
-              totalDuration > 0,
-              timeline.totalCharCount > 0,
-              let provider = playbackTimeProvider else { return }
+            totalDuration > 0,
+            timeline.totalCharCount > 0,
+            let provider = playbackTimeProvider
+        else { return }
 
         let elapsed = provider() - segmentBase
 
@@ -202,7 +216,9 @@ final class TTSWordTracker {
         // Log every ~1 second (60 ticks)
         tickLogCounter += 1
         if tickLogCounter % 60 == 1 {
-            Log.speech.info("[WordTracker] tick #\(self.tickLogCounter): elapsed=\(String(format: "%.2f", elapsed)), charCount=\(self.recognizedCharCount)/\(self.timeline.totalCharCount)")
+            Log.speech.info(
+                "[WordTracker] tick #\(self.tickLogCounter): elapsed=\(String(format: "%.2f", elapsed)), charCount=\(self.recognizedCharCount)/\(self.timeline.totalCharCount)"
+            )
         }
     }
 }

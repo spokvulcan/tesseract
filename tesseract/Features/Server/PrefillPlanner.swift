@@ -94,11 +94,14 @@ nonisolated struct PrefillPlan: Sendable {
     /// planned checkpoint.
     var transientCheckpointOffsets: Set<Int> {
         var offsets: Set<Int> = []
-        for offset in [transientBoundaries.lastMessage, transientBoundaries.lastUser].compactMap({ $0 })
+        for offset in [transientBoundaries.lastMessage, transientBoundaries.lastUser].compactMap({
+            $0
+        })
         where offset > prefillBaseOffset
             && offset >= minimumWarmOffset
             && offset < promptTokenCount
-            && !checkpointsToCapture.contains(where: { $0.offset == offset }) {
+            && !checkpointsToCapture.contains(where: { $0.offset == offset })
+        {
             offsets.insert(offset)
         }
         return offsets
@@ -138,14 +141,16 @@ nonisolated enum PrefillPlanner {
             tokenizer: tokenizer
         )
 
-        let genPromptStr = promptStartsThinking
+        let genPromptStr =
+            promptStartsThinking
             ? "<|im_start|>assistant\n<think>\n"
             : "<|im_start|>assistant\n"
         let genPromptTokens = tokenizer.encode(text: genPromptStr, addSpecialTokens: false)
         let lastMessageOffset: Int?
         if genPromptTokens.count > 0,
-           fullTokens.count > genPromptTokens.count,
-           Array(fullTokens.suffix(genPromptTokens.count)).elementsEqual(genPromptTokens) {
+            fullTokens.count > genPromptTokens.count,
+            Array(fullTokens.suffix(genPromptTokens.count)).elementsEqual(genPromptTokens)
+        {
             lastMessageOffset = fullTokens.count - genPromptTokens.count
         } else {
             lastMessageOffset = nil
@@ -219,9 +224,10 @@ nonisolated enum PrefillPlanner {
         let restore: PrefillPlan.Restore
         let checkpointsToCapture: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
         if let snapshot = lookupResult.snapshot,
-           snapshot.tokenOffset > 0,
-           snapshot.tokenOffset < promptTokenCount,
-           let anchorDelta = keySpace.positionAnchorDelta(upTo: snapshot.tokenOffset) {
+            snapshot.tokenOffset > 0,
+            snapshot.tokenOffset < promptTokenCount,
+            let anchorDelta = keySpace.positionAnchorDelta(upTo: snapshot.tokenOffset)
+        {
             let cacheOffset = snapshot.tokenOffset
             restore = .restore(cacheOffset: cacheOffset, anchorDelta: anchorDelta)
             // Capture in the suffix the snapshot doesn't cover, minus the

@@ -79,7 +79,9 @@ struct PrefixCacheBudgetBandTests {
         // the fixpoint where halving and one regrowth step cancel.
         #expect(amplitudes.first! > amplitudes.last!)
         let fixpoint = ceiling / 4  // c* = c*/2 + c/8
-        #expect(abs(band.currentBytes - fixpoint) <= ceiling / PrefixCacheBudgetBand.regrowthDenominator)
+        #expect(
+            abs(band.currentBytes - fixpoint) <= ceiling / PrefixCacheBudgetBand.regrowthDenominator
+        )
         // And it never leaves the band.
         #expect(band.currentBytes >= 0 && band.currentBytes <= ceiling)
     }
@@ -111,13 +113,17 @@ struct PressureReactiveBudgetManagerTests {
         case .leaf:
             PrefixCacheTestFixtures.admitUniformLeaf(manager, tokens: tokens, partitionKey: key)
         case .system, .branchPoint:
-            manager.admit(SnapshotAdmission.checkpoints(
-                fullPromptTokens: tokens + [9_999],
-                candidates: [.ramOnly(PrefixCacheTestFixtures.makeUniformSnapshot(
-                    offset: tokens.count, type: type
-                ))],
-                partitionKey: key
-            )!)
+            manager.admit(
+                SnapshotAdmission.checkpoints(
+                    fullPromptTokens: tokens + [9_999],
+                    candidates: [
+                        .ramOnly(
+                            PrefixCacheTestFixtures.makeUniformSnapshot(
+                                offset: tokens.count, type: type
+                            ))
+                    ],
+                    partitionKey: key
+                )!)
         }
     }
 
@@ -136,8 +142,8 @@ struct PressureReactiveBudgetManagerTests {
         )
 
         admit(manager, tokens: Array(1...10), type: .system)
-        admit(manager, tokens: Array(20...29), type: .leaf)   // stale leaf
-        admit(manager, tokens: Array(40...49), type: .leaf)   // freshest leaf
+        admit(manager, tokens: Array(20...29), type: .leaf)  // stale leaf
+        admit(manager, tokens: Array(40...49), type: .leaf)  // freshest leaf
         admit(manager, tokens: Array(60...69), type: .branchPoint)
         #expect(manager.stats.snapshotCount == 4)
 

@@ -88,9 +88,10 @@ struct ChainPrefixRestoreTreeTests {
 
         #expect(node.chainPrefixRestorePoint == nil)
         #expect(tree.nodeCount < countBefore)
-        #expect(tree.findBestSnapshot(
-            tokens: [1, 2, 3], includeSnapshotRefs: true
-        ) == nil)
+        #expect(
+            tree.findBestSnapshot(
+                tokens: [1, 2, 3], includeSnapshotRefs: true
+            ) == nil)
     }
 
     @Test func conversionDiscardsRefAndKeepsBoundaryAddressable() {
@@ -128,26 +129,28 @@ struct ChainPrefixRestoreRouterTests {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("chain-prefix-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let store = TieredSnapshotStore(ssdConfig: SSDPrefixCacheConfig(
-            enabled: true,
-            rootURL: root,
-            budgetBytes: 1_000_000,
-            maxPendingBytes: 10_000_000
-        ))
+        let store = TieredSnapshotStore(
+            ssdConfig: SSDPrefixCacheConfig(
+                enabled: true,
+                rootURL: root,
+                budgetBytes: 1_000_000,
+                maxPendingBytes: 10_000_000
+            ))
         let key = CachePartitionKey(
             modelID: "mlx-community/Qwen3-4B-4bit",
             kvBits: 8,
             kvGroupSize: 64,
             modelFingerprint: testFingerprint
         )
-        store.registerPartition(PartitionMeta(
-            modelID: key.modelID,
-            modelFingerprint: testFingerprint,
-            kvBits: key.kvBits,
-            kvGroupSize: key.kvGroupSize,
-            createdAt: 100_000,
-            schemaVersion: SnapshotManifestSchema.currentVersion
-        ), for: key)
+        store.registerPartition(
+            PartitionMeta(
+                modelID: key.modelID,
+                modelFingerprint: testFingerprint,
+                kvBits: key.kvBits,
+                kvGroupSize: key.kvGroupSize,
+                createdAt: 100_000,
+                schemaVersion: SnapshotManifestSchema.currentVersion
+            ), for: key)
         return (root, store, store.getOrCreateTree(for: key), key)
     }
 
@@ -180,22 +183,23 @@ struct ChainPrefixRestoreRouterTests {
             PrefixCacheTestFixtures.makeUniformSnapshot(offset: tokens.count, type: .leaf),
             on: node
         )
-        let ref = try #require(fixture.store.admitSnapshot(
-            node: node,
-            tree: fixture.tree,
-            partitionKey: fixture.key,
-            pathFromRoot: tokens,
-            snapshot: HybridCacheSnapshot(
-                tokenOffset: tokens.count,
-                layers: [],
-                checkpointType: .leaf,
-                memoryBytes: 0,
-                createdAt: ContinuousClock().now
-            ),
-            payload: PrefixCacheTestFixtures.makeLeafPayload(
-                bytes: bytes, tokenOffset: tokens.count, extending: extending
-            )
-        ))
+        let ref = try #require(
+            fixture.store.admitSnapshot(
+                node: node,
+                tree: fixture.tree,
+                partitionKey: fixture.key,
+                pathFromRoot: tokens,
+                snapshot: HybridCacheSnapshot(
+                    tokenOffset: tokens.count,
+                    layers: [],
+                    checkpointType: .leaf,
+                    memoryBytes: 0,
+                    createdAt: ContinuousClock().now
+                ),
+                payload: PrefixCacheTestFixtures.makeLeafPayload(
+                    bytes: bytes, tokenOffset: tokens.count, extending: extending
+                )
+            ))
         await fixture.store.flush()
         let committed = await waitUntil { node.state.committed }
         #expect(committed, "leaf at \(tokens.count) must commit")
@@ -292,9 +296,10 @@ struct ChainPrefixRestoreRouterTests {
         #expect(baseNode.chainPrefixRestorePoint == nil)
         // Nothing left on the node — the lookup degrades shallower
         // instead of resolving a dangling point.
-        #expect(fixture.tree.findBestSnapshot(
-            tokens: [1, 2, 3, 4, 5, 99], includeSnapshotRefs: true
-        ) == nil)
+        #expect(
+            fixture.tree.findBestSnapshot(
+                tokens: [1, 2, 3, 4, 5, 99], includeSnapshotRefs: true
+            ) == nil)
     }
 
     @Test func lruCutOfTheOwnerClearsDependentsThroughTheDropCallback() async throws {
@@ -355,12 +360,13 @@ struct ChainPrefixRestoreRouterTests {
     private func restartedManager(
         _ fixture: Fixture
     ) async throws -> (manager: PrefixCacheManager, store: TieredSnapshotStore) {
-        let store = TieredSnapshotStore(ssdConfig: SSDPrefixCacheConfig(
-            enabled: true,
-            rootURL: fixture.root,
-            budgetBytes: 1_000_000,
-            maxPendingBytes: 10_000_000
-        ))
+        let store = TieredSnapshotStore(
+            ssdConfig: SSDPrefixCacheConfig(
+                enabled: true,
+                rootURL: fixture.root,
+                budgetBytes: 1_000_000,
+                maxPendingBytes: 10_000_000
+            ))
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 1_000_000, tieredStore: store
         )
@@ -456,9 +462,10 @@ struct ChainPrefixRestoreRouterTests {
         if case .chainPrefixHit = rewind.reason {
             Issue.record("condemned chain must not surface a restore point")
         }
-        #expect(store.tree(for: fixture.key)?.findBestSnapshot(
-            tokens: Array(1...9), includeSnapshotRefs: true
-        ) == nil)
+        #expect(
+            store.tree(for: fixture.key)?.findBestSnapshot(
+                tokens: Array(1...9), includeSnapshotRefs: true
+            ) == nil)
     }
 
     @Test func warmStartReconstructedPointsClearWhenTheOwnerDies() async throws {
@@ -480,9 +487,10 @@ struct ChainPrefixRestoreRouterTests {
         // the owner dies — same eager clearing as the in-session channel.
         store.deleteSnapshot(snapshotID: headRef.snapshotID)
         #expect(ctx.node.chainPrefixRestorePoint == nil)
-        #expect(store.tree(for: fixture.key)?.findBestSnapshot(
-            tokens: [1, 2, 3, 4, 5, 99], includeSnapshotRefs: true
-        ) == nil)
+        #expect(
+            store.tree(for: fixture.key)?.findBestSnapshot(
+                tokens: [1, 2, 3, 4, 5, 99], includeSnapshotRefs: true
+            ) == nil)
     }
 }
 
@@ -494,12 +502,14 @@ struct ChainPrefixHydrationTests {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("chain-prefix-hydrate-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        return (SSDPrefixCacheConfig(
-            enabled: true,
-            rootURL: root,
-            budgetBytes: 1_000_000,
-            maxPendingBytes: 10_000_000
-        ), root)
+        return (
+            SSDPrefixCacheConfig(
+                enabled: true,
+                rootURL: root,
+                budgetBytes: 1_000_000,
+                maxPendingBytes: 10_000_000
+            ), root
+        )
     }
 
     @Test func prefixHydrationComposesOnlyTheLeadingSegments() async throws {
@@ -512,14 +522,15 @@ struct ChainPrefixHydrationTests {
             onDrop: { _, _ in }
         )
         let digest = "abcd1234"
-        store.registerPartition(PartitionMeta(
-            modelID: "mlx-community/Qwen3-4B-4bit",
-            modelFingerprint: testFingerprint,
-            kvBits: 8,
-            kvGroupSize: 64,
-            createdAt: 100_000,
-            schemaVersion: SnapshotManifestSchema.currentVersion
-        ), digest: digest)
+        store.registerPartition(
+            PartitionMeta(
+                modelID: "mlx-community/Qwen3-4B-4bit",
+                modelFingerprint: testFingerprint,
+                kvBits: 8,
+                kvGroupSize: 64,
+                createdAt: 100_000,
+                schemaVersion: SnapshotManifestSchema.currentVersion
+            ), digest: digest)
 
         func descriptor(
             id: String, bytes: Int, tokenOffset: Int, segmentBaseOffset: Int = 0
@@ -567,10 +578,12 @@ struct ChainPrefixHydrationTests {
         )!
 
         let basePayload = ServerCompletion.extractSnapshotPayload(baseSnapshot)
-        guard case .accepted = store.tryEnqueue(
-            payload: basePayload,
-            descriptor: descriptor(id: "base", bytes: basePayload.totalBytes, tokenOffset: 4)
-        ) else {
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: basePayload,
+                descriptor: descriptor(id: "base", bytes: basePayload.totalBytes, tokenOffset: 4)
+            )
+        else {
             Issue.record("base enqueue rejected")
             return
         }
@@ -580,13 +593,15 @@ struct ChainPrefixHydrationTests {
             headSnapshot,
             extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
         )
-        guard case .accepted = store.tryEnqueue(
-            payload: headPayload,
-            descriptor: descriptor(
-                id: "head", bytes: headPayload.totalBytes,
-                tokenOffset: 7, segmentBaseOffset: 4
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: headPayload,
+                descriptor: descriptor(
+                    id: "head", bytes: headPayload.totalBytes,
+                    tokenOffset: 7, segmentBaseOffset: 4
+                )
             )
-        ) else {
+        else {
             Issue.record("extension enqueue rejected")
             return
         }
@@ -599,9 +614,10 @@ struct ChainPrefixHydrationTests {
             checkpointType: .leaf,
             partitionDigest: digest
         )
-        let restored = try #require(store.loadSyncPrefix(
-            point: point, expectedFingerprint: testFingerprint
-        ))
+        let restored = try #require(
+            store.loadSyncPrefix(
+                point: point, expectedFingerprint: testFingerprint
+            ))
 
         // The composed body is the *base* capture exactly: the sliced
         // layer carries only the leading extent, and the whole-state
@@ -641,9 +657,10 @@ struct ChainPrefixHydrationTests {
             checkpointType: .leaf,
             partitionDigest: "abcd1234"
         )
-        #expect(store.loadSyncPrefix(
-            point: point, expectedFingerprint: testFingerprint
-        ) == nil)
+        #expect(
+            store.loadSyncPrefix(
+                point: point, expectedFingerprint: testFingerprint
+            ) == nil)
     }
 }
 
@@ -690,13 +707,15 @@ struct ChainPrefixRestorePolicyTests {
             PrefixCacheTestFixtures.makeUniformSnapshot(offset: 4_096, type: .leaf),
             on: pointed
         )
-        tree.attachChainPrefixRestorePoint(node: pointed, point: ChainPrefixRestorePoint(
-            ownerSnapshotID: "owner",
-            boundaryOffset: 4_096,
-            prefixBytes: 1 << 20,
-            checkpointType: .leaf,
-            partitionDigest: "deadbeef"
-        ))
+        tree.attachChainPrefixRestorePoint(
+            node: pointed,
+            point: ChainPrefixRestorePoint(
+                ownerSnapshotID: "owner",
+                boundaryOffset: 4_096,
+                prefixBytes: 1 << 20,
+                checkpointType: .leaf,
+                partitionDigest: "deadbeef"
+            ))
         let bare = tree.insertPath(tokens: Array(5_001...9_096))
         tree.storeSnapshot(
             PrefixCacheTestFixtures.makeUniformSnapshot(offset: 4_096, type: .leaf),

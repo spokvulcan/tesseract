@@ -8,7 +8,7 @@ enum AgentPhase: Sendable, Equatable {
     case idle
     case transformingContext(ContextTransformReason)
     case streaming
-    case executingTool(String) // tool name
+    case executingTool(String)  // tool name
 }
 
 // MARK: - AgentState

@@ -30,12 +30,15 @@ final class RecordingHighlightSurface: WordHighlightSurface {
 
     private(set) var calls: [Call] = []
 
-    func show(text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval) {
+    func show(
+        text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval
+    ) {
         calls.append(.show(text: text, tokenCharOffsets: tokenCharOffsets))
     }
 
     func switchText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval) {
-        calls.append(.switchText(text: text, tokenCharOffsets: tokenCharOffsets, segmentBase: segmentBase))
+        calls.append(
+            .switchText(text: text, tokenCharOffsets: tokenCharOffsets, segmentBase: segmentBase))
     }
 
     func updateTotalDuration(_ duration: TimeInterval) {

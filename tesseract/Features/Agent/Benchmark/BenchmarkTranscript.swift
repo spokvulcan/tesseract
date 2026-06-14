@@ -17,8 +17,9 @@ final class BenchmarkTranscript {
     func writeHeader(scenarioID: String, description: String, parameters: AgentGenerateParameters) {
         lines.append(String(repeating: "═", count: 72))
         lines.append("SCENARIO: \(scenarioID) — \(description)")
-        lines.append("Parameters: temp=\(parameters.temperature), topP=\(parameters.topP)"
-            + (parameters.repetitionPenalty.map { ", repPenalty=\($0)" } ?? ""))
+        lines.append(
+            "Parameters: temp=\(parameters.temperature), topP=\(parameters.topP)"
+                + (parameters.repetitionPenalty.map { ", repPenalty=\($0)" } ?? ""))
         lines.append("Started: \(ISO8601DateFormatter().string(from: Date()))")
         lines.append(String(repeating: "═", count: 72))
         lines.append("")
@@ -40,7 +41,9 @@ final class BenchmarkTranscript {
     /// Writes the exact raw ChatML prompt the model sees, rendered through the Jinja
     /// template (includes `<|im_start|>`, `<|im_end|>`, tool definitions, etc.).
     func writeRawPrompt(round: Int, rawPrompt: String, messageCount: Int) {
-        lines.append("╌╌╌ ROUND \(round) — MODEL INPUT (\(messageCount) messages, \(rawPrompt.count) chars) ╌╌╌")
+        lines.append(
+            "╌╌╌ ROUND \(round) — MODEL INPUT (\(messageCount) messages, \(rawPrompt.count) chars) ╌╌╌"
+        )
         lines.append("")
         lines.append(rawPrompt)
         lines.append("")
@@ -49,8 +52,10 @@ final class BenchmarkTranscript {
     // MARK: - Round Output
 
     /// Writes the reconstructed raw model output for one generation round.
-    func writeRoundOutput(round: Int, rawOutput: String, thinkingContent: String?,
-                          promptTokens: Int? = nil, genTokens: Int? = nil) {
+    func writeRoundOutput(
+        round: Int, rawOutput: String, thinkingContent: String?,
+        promptTokens: Int? = nil, genTokens: Int? = nil
+    ) {
         var header = "╌╌╌ ROUND \(round) — RAW OUTPUT"
         if let pt = promptTokens, let gt = genTokens {
             header += " (\(pt) prompt → \(gt) gen tokens)"
@@ -126,7 +131,8 @@ final class BenchmarkTranscript {
             lines.append("")
             lines.append("  ⚠ FAILURE REASONS:")
             if !checks.toolsCorrect {
-                lines.append("    ✗ Tools incorrect — expected \(expectedTools), got \(toolsCalled)")
+                lines.append(
+                    "    ✗ Tools incorrect — expected \(expectedTools), got \(toolsCalled)")
             }
             if !checks.argumentsCorrect {
                 lines.append("    ✗ Arguments incorrect")
@@ -188,7 +194,8 @@ final class BenchmarkTranscript {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         if let data = try? encoder.encode(arguments),
-           let json = String(data: data, encoding: .utf8) {
+            let json = String(data: data, encoding: .utf8)
+        {
             return json
         }
         // Fallback: manual formatting

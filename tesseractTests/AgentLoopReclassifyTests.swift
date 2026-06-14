@@ -19,7 +19,8 @@ struct AgentLoopReclassifyTests {
 
         func record(_ event: AgentEvent) {
             guard case .messageEnd(let message) = event,
-                  let assistant = message as? AssistantMessage else { return }
+                let assistant = message as? AssistantMessage
+            else { return }
             lock.lock(); messages.append(assistant); lock.unlock()
         }
 

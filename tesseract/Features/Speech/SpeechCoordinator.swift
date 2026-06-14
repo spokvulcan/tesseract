@@ -223,10 +223,13 @@ final class SpeechCoordinator {
         state = .streamingLongForm(segment: startIndex + 1, of: segmentCount)
 
         // Show notch overlay with the first segment's text, then drain it.
-        let firstOffsets = await speechEngine.computeTokenCharOffsets(text: localSegments[startIndex].text)
-        notchOverlay?.show(text: localSegments[startIndex].text, tokenCharOffsets: firstOffsets, playbackTimeProvider: { [weak self] in
-            self?.playback.currentPlaybackTime() ?? 0
-        })
+        let firstOffsets = await speechEngine.computeTokenCharOffsets(
+            text: localSegments[startIndex].text)
+        notchOverlay?.show(
+            text: localSegments[startIndex].text, tokenCharOffsets: firstOffsets,
+            playbackTimeProvider: { [weak self] in
+                self?.playback.currentPlaybackTime() ?? 0
+            })
 
         let firstDrained = try await segmentPlayback.run(
             .first(text: localSegments[startIndex].text, tokenOffsets: firstOffsets),
@@ -280,7 +283,9 @@ final class SpeechCoordinator {
             )
 
             let drained = try await segmentPlayback.run(
-                .next(text: localSegments[i].text, tokenOffsets: segOffsets, boundary: prevSegEndDuration),
+                .next(
+                    text: localSegments[i].text, tokenOffsets: segOffsets,
+                    boundary: prevSegEndDuration),
                 stream: segStream,
                 onState: onState,
                 isPaused: isPaused
@@ -306,7 +311,8 @@ final class SpeechCoordinator {
 
     private func generateAndPlayBatch(text: String) async {
         do {
-            let voiceDesc = settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription
+            let voiceDesc =
+                settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription
             let language = settings.ttsLanguage
 
             let (samples, sampleRate) = try await withTTSReady {
@@ -334,9 +340,11 @@ final class SpeechCoordinator {
 
             let duration = Double(samples.count) / Double(sampleRate)
             let tokenOffsets = await speechEngine.computeTokenCharOffsets(text: text)
-            notchOverlay?.show(text: text, tokenCharOffsets: tokenOffsets, playbackTimeProvider: { [weak self] in
-                self?.playback.currentPlaybackTime() ?? 0
-            })
+            notchOverlay?.show(
+                text: text, tokenCharOffsets: tokenOffsets,
+                playbackTimeProvider: { [weak self] in
+                    self?.playback.currentPlaybackTime() ?? 0
+                })
             notchOverlay?.updateTotalDuration(duration)
             notchOverlay?.markGenerationComplete()
         } catch is CancellationError {
@@ -353,7 +361,8 @@ final class SpeechCoordinator {
 
     private func generateAndPlayStreaming(text: String) async {
         do {
-            let voiceDesc = settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription
+            let voiceDesc =
+                settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription
             let language = settings.ttsLanguage
 
             try await withTTSReady {
@@ -393,9 +402,11 @@ final class SpeechCoordinator {
 
         playback.startStreaming(sampleRate: sampleRate, diagnostics: .default)
         let tokenOffsets = await speechEngine.computeTokenCharOffsets(text: text)
-        notchOverlay?.show(text: text, tokenCharOffsets: tokenOffsets, playbackTimeProvider: { [weak self] in
-            self?.playback.currentPlaybackTime() ?? 0
-        })
+        notchOverlay?.show(
+            text: text, tokenCharOffsets: tokenOffsets,
+            playbackTimeProvider: { [weak self] in
+                self?.playback.currentPlaybackTime() ?? 0
+            })
 
         let segmentPlayback = SegmentPlayback(playback: playback, surface: notchOverlay)
         let drained = try await segmentPlayback.run(

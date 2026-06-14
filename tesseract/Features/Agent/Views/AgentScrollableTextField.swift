@@ -12,7 +12,7 @@ struct AgentScrollableTextField: NSViewRepresentable {
     var onArrowUp: (() -> Bool)?
     var onArrowDown: (() -> Bool)?
     var onEscape: (() -> Bool)?
-    
+
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
         scrollView.hasVerticalScroller = true
@@ -35,48 +35,49 @@ struct AgentScrollableTextField: NSViewRepresentable {
         textView.isSelectable = true
         textView.isEditable = isEnabled
         textView.allowsUndo = true
-        
+
         // Disable focus ring on text view
         textView.focusRingType = .none
-        
+
         // Wrapping configuration
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.containerSize = NSSize(
+            width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
-        
+
         // Initial height calculation
         DispatchQueue.main.async {
             context.coordinator.recalculateHeight(textView: textView)
         }
-        
+
         return scrollView
     }
-    
+
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         let textView = nsView.documentView as! NSTextView
-        
+
         if textView.string != text {
             textView.string = text
             textView.setSelectedRange(NSRange(location: text.utf16.count, length: 0))
             context.coordinator.recalculateHeight(textView: textView)
         }
-        
+
         // Disable focus ring
         nsView.focusRingType = .none
         textView.focusRingType = .none
-        
+
         if textView.isEditable != isEnabled {
             textView.isEditable = isEnabled
             textView.textColor = isEnabled ? .labelColor : .secondaryLabelColor
         }
     }
-    
+
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
-    
+
     class Coordinator: NSObject, NSTextViewDelegate {
         var parent: AgentScrollableTextField
 
@@ -92,7 +93,8 @@ struct AgentScrollableTextField: NSViewRepresentable {
 
         func recalculateHeight(textView: NSTextView) {
             guard let layoutManager = textView.layoutManager,
-                  let textContainer = textView.textContainer else { return }
+                let textContainer = textView.textContainer
+            else { return }
 
             layoutManager.ensureLayout(for: textContainer)
             let usedRect = layoutManager.usedRect(for: textContainer)
@@ -175,11 +177,14 @@ enum PasteboardImageReader {
         let urlOptions: [NSPasteboard.ReadingOptionKey: Any] = [
             .urlReadingContentsConformToTypes: [UTType.image.identifier]
         ]
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: urlOptions) as? [URL],
-           !urls.isEmpty {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: urlOptions)
+            as? [URL],
+            !urls.isEmpty
+        {
             let attachments = urls.compactMap { url -> ImageAttachment? in
                 guard let data = try? Data(contentsOf: url) else { return nil }
-                let uti = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.identifier)
+                let uti =
+                    (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.identifier)
                     ?? UTType(filenameExtension: url.pathExtension)?.identifier
                     ?? url.pathExtension
                 return try? ImageIngest.ingest(
@@ -193,16 +198,19 @@ enum PasteboardImageReader {
         for utType in ImageIngest.supportedUTTypes {
             let type = NSPasteboard.PasteboardType(utType.identifier)
             if let data = pasteboard.data(forType: type),
-               let attachment = try? ImageIngest.ingest(
-                   data: data, typeIdentifier: utType.identifier, filename: "pasted-image"
-               ).get() {
+                let attachment = try? ImageIngest.ingest(
+                    data: data, typeIdentifier: utType.identifier, filename: "pasted-image"
+                ).get()
+            {
                 return [attachment]
             }
         }
 
         // 3. Decoded image with no file backing.
         if let image = NSImage(pasteboard: pasteboard),
-           let attachment = try? ImageIngest.ingest(image: image, filename: "pasted-image.png").get() {
+            let attachment = try? ImageIngest.ingest(image: image, filename: "pasted-image.png")
+                .get()
+        {
             return [attachment]
         }
 

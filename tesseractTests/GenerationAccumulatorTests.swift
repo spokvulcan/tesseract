@@ -28,7 +28,7 @@ struct GenerationAccumulatorTests {
     @Test func safeguardSequenceTruncatesThenAppendsInjection() {
         var acc = GenerationAccumulator()
         acc.ingest(.thinkStart)
-        acc.ingest(.thinking("loop loop loop"))            // pre-safeguard garbage
+        acc.ingest(.thinking("loop loop loop"))  // pre-safeguard garbage
         acc.ingest(.thinkTruncate(safePrefix: "Step 1. "))
         acc.ingest(.thinking("(safeguard)"))
         acc.ingest(.thinkEnd)

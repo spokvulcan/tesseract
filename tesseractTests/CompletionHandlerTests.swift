@@ -184,10 +184,11 @@ struct CompletionHandlerTests {
             text: "Done",
             thinking: "Need to inspect first.",
             toolCalls: [
-                ToolCall(function: .init(
-                    name: "bash",
-                    arguments: ["command": "ls"]
-                )),
+                ToolCall(
+                    function: .init(
+                        name: "bash",
+                        arguments: ["command": "ls"]
+                    ))
             ],
             info: info,
             maxTokens: 256,
@@ -542,7 +543,7 @@ struct ModelSelectionTests {
 
     @Test func resolvesKnownButDownloadingToNotDownloaded() {
         let statuses: [String: ModelStatus] = [
-            Self.qwen9: .downloading(progress: 0.5),
+            Self.qwen9: .downloading(progress: 0.5)
         ]
         #expect(
             CompletionHandler.resolveModelSelection(
@@ -555,7 +556,7 @@ struct ModelSelectionTests {
 
     @Test func resolvesKnownButErroredToNotDownloaded() {
         let statuses: [String: ModelStatus] = [
-            Self.qwen9: .error("network failure"),
+            Self.qwen9: .error("network failure")
         ]
         #expect(
             CompletionHandler.resolveModelSelection(
@@ -780,7 +781,7 @@ struct HTTPServerIntegrationTests {
     @Test func sseWriterDetectsDisconnect() async throws {
         // Verify that SSEWriter.send returns false when the connection fails,
         // and that the handler does not run all 200 iterations.
-        let chunksSent = LeaseAcquiredSignal() // reuse as "at least some sent" flag
+        let chunksSent = LeaseAcquiredSignal()  // reuse as "at least some sent" flag
         let handlerDone = LeaseAcquiredSignal()
 
         let server = HTTPServer(port: 0)

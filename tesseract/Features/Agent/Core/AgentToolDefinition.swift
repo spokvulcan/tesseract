@@ -17,7 +17,7 @@ nonisolated final class CancellationToken: Sendable {
 
 /// Simple JSON Schema representation for tool parameter validation.
 nonisolated struct JSONSchema: Sendable {
-    let type: String // "object"
+    let type: String  // "object"
     let properties: [String: PropertySchema]
     let required: [String]
 }
@@ -25,7 +25,7 @@ nonisolated struct JSONSchema: Sendable {
 /// Schema for a single tool parameter.
 /// Uses a `Box` wrapper for `items` to break the recursive value-type cycle.
 nonisolated struct PropertySchema: Sendable {
-    let type: String // "string", "integer", "boolean", "array"
+    let type: String  // "string", "integer", "boolean", "array"
     let description: String
     let enumValues: [String]?
     private let _items: Box<PropertySchema>?
@@ -62,12 +62,13 @@ nonisolated struct AgentToolDefinition: Sendable {
     let description: String
     let parameterSchema: JSONSchema
 
-    let execute: @Sendable (
-        _ toolCallId: String,
-        _ argsJSON: [String: JSONValue],
-        _ signal: CancellationToken?,
-        _ onUpdate: ToolProgressCallback?
-    ) async throws -> AgentToolResult
+    let execute:
+        @Sendable (
+            _ toolCallId: String,
+            _ argsJSON: [String: JSONValue],
+            _ signal: CancellationToken?,
+            _ onUpdate: ToolProgressCallback?
+        ) async throws -> AgentToolResult
 
     /// Generates an OpenAI-compatible function tool spec matching the format
     /// used by `AgentTool.toolSpec` and MLXLMCommon's `ToolSpec`.

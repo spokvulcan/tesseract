@@ -30,12 +30,14 @@ struct CanonicalEchoFidelityCorpusTests {
 
     @Test(.enabled(if: corpusRoot != nil && modelRoot != nil))
     func corpusHasZeroMismatchedBoundaries() async throws {
-        let corpus = URL(fileURLWithPath: NSString(
-            string: Self.corpusRoot!
-        ).expandingTildeInPath)
-        let modelDirectory = URL(fileURLWithPath: NSString(
-            string: Self.modelRoot!
-        ).expandingTildeInPath)
+        let corpus = URL(
+            fileURLWithPath: NSString(
+                string: Self.corpusRoot!
+            ).expandingTildeInPath)
+        let modelDirectory = URL(
+            fileURLWithPath: NSString(
+                string: Self.modelRoot!
+            ).expandingTildeInPath)
 
         let tokenizer = try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
 
@@ -47,7 +49,8 @@ struct CanonicalEchoFidelityCorpusTests {
         try #require(!recordingFiles.isEmpty, "no recordings under \(recordingsDirectory.path)")
 
         // Group recordings by session affinity, preserving file order.
-        var sessions: [String: [(model: String, request: CanonicalEchoFidelity.RecordedRequest)]] = [:]
+        var sessions: [String: [(model: String, request: CanonicalEchoFidelity.RecordedRequest)]] =
+            [:]
         var sessionOrder: [String] = []
         var undecodable: [String] = []
         for file in recordingFiles {
@@ -57,10 +60,14 @@ struct CanonicalEchoFidelityCorpusTests {
             }
             let key = recording.session ?? "unaffiliated"
             if sessions[key] == nil { sessionOrder.append(key) }
-            sessions[key, default: []].append((recording.model, CanonicalEchoFidelity.RecordedRequest(
-                messages: recording.body.messages,
-                tools: recording.body.tools
-            )))
+            sessions[key, default: []].append(
+                (
+                    recording.model,
+                    CanonicalEchoFidelity.RecordedRequest(
+                        messages: recording.body.messages,
+                        tools: recording.body.tools
+                    )
+                ))
         }
 
         var totalBoundaries = 0
@@ -77,8 +84,9 @@ struct CanonicalEchoFidelityCorpusTests {
             totalMismatches += report.mismatchCount
             print(CanonicalEchoFidelity.renderText(report))
         }
-        print("corpus total: sessions=\(sessionOrder.count) boundaries=\(totalBoundaries) "
-            + "mismatches=\(totalMismatches) undecodable=\(undecodable.count)")
+        print(
+            "corpus total: sessions=\(sessionOrder.count) boundaries=\(totalBoundaries) "
+                + "mismatches=\(totalMismatches) undecodable=\(undecodable.count)")
 
         #expect(totalBoundaries > 0, "corpus produced no checkable boundaries")
         #expect(totalMismatches == 0, "canonical-echo fidelity gate failed")
@@ -100,7 +108,7 @@ struct CanonicalEchoFidelityCorpusTests {
             raw = String(raw[raw.index(after: newline)...])
         }
         guard let data = raw.data(using: .utf8),
-              let body = try? JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: data)
+            let body = try? JSONDecoder().decode(OpenAI.ChatCompletionRequest.self, from: data)
         else { return nil }
         return (session, body.model ?? "unknown", body)
     }

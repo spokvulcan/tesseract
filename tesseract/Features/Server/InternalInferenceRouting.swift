@@ -4,7 +4,8 @@ import os
 private nonisolated func makeInternalInferenceStream(
     inferenceService: ServerInferenceService,
     parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters,
-    requestBuilder: @escaping @MainActor @Sendable (AgentGenerateParameters) -> ServerInferenceRequest
+    requestBuilder:
+        @escaping @MainActor @Sendable (AgentGenerateParameters) -> ServerInferenceRequest
 ) -> AsyncThrowingStream<AgentGeneration, Error> {
     let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
     let cancelHandle = OSAllocatedUnfairLock<@Sendable () -> Void>(initialState: {})
@@ -67,16 +68,17 @@ nonisolated func makeServerInferenceGenerateClosure(
             requestBuilder: { parameters in
                 let toolSpecs = tools?.map(\.toolSpec)
                 return ServerInferenceRequest(
-                    input: .chat(.init(
-                        systemPrompt: systemPrompt,
-                        messages: messages,
-                        toolSpecs: toolSpecs,
-                        prefixCacheConversation: AgentConversationBuilder.conversation(
+                    input: .chat(
+                        .init(
                             systemPrompt: systemPrompt,
                             messages: messages,
-                            toolSpecs: toolSpecs
-                        )
-                    )),
+                            toolSpecs: toolSpecs,
+                            prefixCacheConversation: AgentConversationBuilder.conversation(
+                                systemPrompt: systemPrompt,
+                                messages: messages,
+                                toolSpecs: toolSpecs
+                            )
+                        )),
                     parameters: parameters,
                     route: .serverCompatible
                 )

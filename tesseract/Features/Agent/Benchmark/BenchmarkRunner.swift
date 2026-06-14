@@ -49,15 +49,18 @@ final class BenchmarkRunner {
             params.maxTokens = min(params.maxTokens, config.maxTokensPerRound)
 
             let paramLabel = BenchmarkConfig.label(for: params)
-            log("\n━━━ Config \(configIdx + 1)/\(paramConfigs.count): \(paramLabel) (maxTokens=\(params.maxTokens)) ━━━")
+            log(
+                "\n━━━ Config \(configIdx + 1)/\(paramConfigs.count): \(paramLabel) (maxTokens=\(params.maxTokens)) ━━━"
+            )
 
             var scenarioResults: [BenchmarkScenarioResult] = []
             var peakMemoryMB: Float = 0
 
             for scenario in scenarios {
                 // Skip slow scenarios on non-default configs during full sweep
-                if config.sweep == .full && configIdx > 0 &&
-                   BenchmarkConfig.slowScenarioIDs.contains(scenario.id) {
+                if config.sweep == .full && configIdx > 0
+                    && BenchmarkConfig.slowScenarioIDs.contains(scenario.id)
+                {
                     log("  Skipping \(scenario.id) (slow scenario, non-default config)")
                     continue
                 }
@@ -71,11 +74,13 @@ final class BenchmarkRunner {
                 peakMemoryMB = max(peakMemoryMB, mem.peakMB)
 
                 let status = result.passed ? "PASS" : "FAIL"
-                log("  [\(status)] \(scenario.id): \(scenario.description) — " +
-                    "tools: \(String(format: "%.0f%%", result.summary.toolAccuracy * 100)), " +
-                    "dups: \(String(format: "%.0f%%", result.summary.duplicateRate * 100)), " +
-                    "\(String(format: "%.1f", result.summary.avgTokPerSec)) tok/s " +
-                    "[mem active=\(String(format: "%.0f", mem.activeMB))MB peak=\(String(format: "%.0f", mem.peakMB))MB]")
+                log(
+                    "  [\(status)] \(scenario.id): \(scenario.description) — "
+                        + "tools: \(String(format: "%.0f%%", result.summary.toolAccuracy * 100)), "
+                        + "dups: \(String(format: "%.0f%%", result.summary.duplicateRate * 100)), "
+                        + "\(String(format: "%.1f", result.summary.avgTokPerSec)) tok/s "
+                        + "[mem active=\(String(format: "%.0f", mem.activeMB))MB peak=\(String(format: "%.0f", mem.peakMB))MB]"
+                )
             }
 
             let aggregate = BenchmarkEvaluator.computeAggregate(
@@ -175,7 +180,8 @@ final class BenchmarkRunner {
 
         // 6. Run each turn
         var turnResults: [BenchmarkTurnResult] = []
-        var conversationToolHistory: [(name: String, arguments: [String: JSONValue], result: String)] = []
+        var conversationToolHistory:
+            [(name: String, arguments: [String: JSONValue], result: String)] = []
 
         for (turnIdx, expectation) in scenario.turns.enumerated() {
             let turnStart = CFAbsoluteTimeGetCurrent()
@@ -288,8 +294,10 @@ final class BenchmarkRunner {
 
             let status = turnResult.passed ? "ok" : "FAIL"
             let tokSec = aggregateInfo.map { String(format: "%.1f", $0.tokensPerSecond) } ?? "?"
-            log("    Turn \(turnIdx + 1)/\(scenario.turns.count) [\(status)] — " +
-                "tools: \(toolsCalled.map(\.name)) — \(tokSec) tok/s — \(String(format: "%.0f", latencyMs))ms")
+            log(
+                "    Turn \(turnIdx + 1)/\(scenario.turns.count) [\(status)] — "
+                    + "tools: \(toolsCalled.map(\.name)) — \(tokSec) tok/s — \(String(format: "%.0f", latencyMs))ms"
+            )
         }
 
         // Write scenario footer and save transcript
@@ -303,7 +311,8 @@ final class BenchmarkRunner {
         )
 
         let transcriptDir = config.outputDir.appendingPathComponent("transcripts")
-        try? FileManager.default.createDirectory(at: transcriptDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(
+            at: transcriptDir, withIntermediateDirectories: true)
         let transcriptURL = transcriptDir.appendingPathComponent("\(scenario.id).transcript.txt")
         try? transcript.write(to: transcriptURL)
         log("    Transcript: \(transcriptURL.path)")
@@ -366,7 +375,9 @@ final class BenchmarkRunner {
                 )
                 try file.content.write(to: url, atomically: true, encoding: .utf8)
             } catch {
-                log("WARNING: Failed to seed benchmark file '\(file.relativePath)': \(error.localizedDescription)")
+                log(
+                    "WARNING: Failed to seed benchmark file '\(file.relativePath)': \(error.localizedDescription)"
+                )
             }
         }
     }
@@ -402,12 +413,13 @@ final class BenchmarkRunner {
     ) -> String {
         let contextLoader = ContextLoader(agentRoot: URL(fileURLWithPath: agentRoot))
         let loadedContext = contextLoader.load()
-        let defaultPrompt: String = switch config.promptProfile {
-        case .benchmark:
-            Self.benchmarkCorePrompt
-        case .production:
-            SystemPromptAssembler.defaultCorePrompt
-        }
+        let defaultPrompt: String =
+            switch config.promptProfile {
+            case .benchmark:
+                Self.benchmarkCorePrompt
+            case .production:
+                SystemPromptAssembler.defaultCorePrompt
+            }
 
         return SystemPromptAssembler.assemble(
             defaultPrompt: defaultPrompt,
@@ -512,7 +524,8 @@ final class BenchmarkRunner {
         // Resolve model ID to cache subdirectory
         let targetID = config.resolvedModelID
         guard let definition = ModelDefinition.all.first(where: { $0.id == targetID }),
-              let cacheSub = definition.cacheSubdirectory else {
+            let cacheSub = definition.cacheSubdirectory
+        else {
             throw BenchmarkError.modelNotFound(
                 "Unknown model ID '\(targetID)'. Available: \(ModelDefinition.all.filter { $0.category == .agent }.map(\.id))"
             )
@@ -549,7 +562,8 @@ final class BenchmarkRunner {
     // MARK: - Logging
 
     private func setupLogging() {
-        try? FileManager.default.createDirectory(at: config.outputDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(
+            at: config.outputDir, withIntermediateDirectories: true)
         let logURL = config.outputDir.appendingPathComponent("latest.log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         logFileHandle = FileHandle(forWritingAtPath: logURL.path)
@@ -700,7 +714,8 @@ final class TurnEventCollector {
 
     private static func parseArguments(from json: String) -> [String: JSONValue] {
         guard let data = json.data(using: .utf8),
-              let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data) else {
+            let parsed = try? JSONDecoder().decode([String: JSONValue].self, from: data)
+        else {
             return [:]
         }
         return parsed

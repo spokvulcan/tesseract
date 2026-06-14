@@ -13,10 +13,22 @@ struct SpeechComposerView: View {
     @Binding var language: String
 
     private static let voicePresets: [(label: String, description: String)] = [
-        ("Natural", "A natural, clear voice with a moderate pace and neutral tone, suitable for everyday conversations."),
-        ("Warm", "A warm, friendly female voice with a gentle tone and smooth cadence, comforting and approachable."),
-        ("Deep", "A deep, resonant male narrator voice with a measured pace and authoritative presence."),
-        ("Calm", "A calm, soothing voice with a slow, deliberate pace, perfect for reading and relaxation.")
+        (
+            "Natural",
+            "A natural, clear voice with a moderate pace and neutral tone, suitable for everyday conversations."
+        ),
+        (
+            "Warm",
+            "A warm, friendly female voice with a gentle tone and smooth cadence, comforting and approachable."
+        ),
+        (
+            "Deep",
+            "A deep, resonant male narrator voice with a measured pace and authoritative presence."
+        ),
+        (
+            "Calm",
+            "A calm, soothing voice with a slow, deliberate pace, perfect for reading and relaxation."
+        ),
     ]
 
     var body: some View {
@@ -47,7 +59,9 @@ struct SpeechComposerView: View {
             )
             .textFieldStyle(.plain)
             .lineLimit(1...3)
-            .help("Describe the voice in natural language — e.g. “a warm, friendly narrator”. Leave empty for the default voice.")
+            .help(
+                "Describe the voice in natural language — e.g. “a warm, friendly narrator”. Leave empty for the default voice."
+            )
 
             Menu {
                 ForEach(Self.voicePresets, id: \.label) { preset in

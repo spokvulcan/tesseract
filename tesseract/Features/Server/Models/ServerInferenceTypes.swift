@@ -1,7 +1,8 @@
 import Foundation
 import MLXLMCommon
 
-typealias ServerInferenceProgressHandler = @MainActor @Sendable (ServerInferenceProgressEvent) -> Void
+typealias ServerInferenceProgressHandler =
+    @MainActor @Sendable (ServerInferenceProgressEvent) -> Void
 
 nonisolated enum ServerInferenceProgressEvent: Sendable, Equatable {
     case cacheLookupStarted

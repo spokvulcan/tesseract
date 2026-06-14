@@ -40,7 +40,8 @@ nonisolated func createLsTool(sandbox: PathSandbox) -> AgentToolDefinition {
     AgentToolDefinition(
         name: "ls",
         label: "ls",
-        description: "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first).",
+        description:
+            "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first).",
         parameterSchema: JSONSchema(
             type: "object",
             properties: [
@@ -142,7 +143,9 @@ private nonisolated enum LsToolHelper: Sendable {
         var notices: [String] = []
 
         if let entryLimitReached {
-            notices.append("\(entryLimitReached) entries limit reached. Use limit=\(entryLimitReached * 2) for more")
+            notices.append(
+                "\(entryLimitReached) entries limit reached. Use limit=\(entryLimitReached * 2) for more"
+            )
         }
 
         var truncationDetails: LsToolTruncationDetails?
@@ -195,7 +198,8 @@ private nonisolated enum LsToolHelper: Sendable {
         firstLineExceedsLimit: Bool
     ) {
         let totalBytes = content.utf8.count
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(
+            String.init)
         let totalLines = lines.count
 
         if totalBytes <= maxBytes {

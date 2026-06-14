@@ -138,8 +138,8 @@ nonisolated struct ContextLoader: Sendable {
     /// Read a file's contents, returning nil if the file doesn't exist or is empty.
     private func readNonEmpty(_ url: URL) -> String? {
         guard let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8),
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let text = String(data: data, encoding: .utf8),
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return nil
         }

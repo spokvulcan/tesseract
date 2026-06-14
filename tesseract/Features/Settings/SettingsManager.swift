@@ -218,7 +218,10 @@ final class SettingsManager {
     }
 
     var selectedSpeechToTextModelID: String {
-        didSet { SettingsCatalogue.selectedSpeechToTextModelID.write(selectedSpeechToTextModelID, to: store) }
+        didSet {
+            SettingsCatalogue.selectedSpeechToTextModelID.write(
+                selectedSpeechToTextModelID, to: store)
+        }
     }
 
     var ttsParameters: TTSParameters {
@@ -317,14 +320,19 @@ final class SettingsManager {
     /// Hard top-level byte budget for the SSD tier. Default single-sourced in
     /// `SettingsCatalogue.prefixCacheSSDBudgetBytes` (20 GiB).
     var prefixCacheSSDBudgetBytes: Int {
-        didSet { SettingsCatalogue.prefixCacheSSDBudgetBytes.write(prefixCacheSSDBudgetBytes, to: store) }
+        didSet {
+            SettingsCatalogue.prefixCacheSSDBudgetBytes.write(prefixCacheSSDBudgetBytes, to: store)
+        }
     }
 
     /// Optional override for the SSD root directory. When `nil`, the config
     /// falls back to the sandbox Caches directory. Accepts either a file
     /// URL string or a plain filesystem path. Writing `nil` removes the key.
     var prefixCacheSSDDirectoryOverride: String? {
-        didSet { SettingsCatalogue.prefixCacheSSDDirectoryOverride.write(prefixCacheSSDDirectoryOverride, to: store) }
+        didSet {
+            SettingsCatalogue.prefixCacheSSDDirectoryOverride.write(
+                prefixCacheSSDDirectoryOverride, to: store)
+        }
     }
 
     // MARK: - Onboarding
@@ -369,7 +377,8 @@ final class SettingsManager {
         self.ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.load(from: store)
         self.agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.load(from: store)
         self.selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.load(from: store)
-        self.selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.load(from: store)
+        self.selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.load(
+            from: store)
         self.maxRecordingDuration = SettingsCatalogue.maxRecordingDuration.load(from: store)
         self.playSounds = SettingsCatalogue.playSounds.load(from: store)
         self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
@@ -377,8 +386,10 @@ final class SettingsManager {
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
         self.serverPort = SettingsCatalogue.serverPort.load(from: store)
         self.prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.load(from: store)
-        self.prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.load(from: store)
-        self.prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.load(from: store)
+        self.prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.load(
+            from: store)
+        self.prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride
+            .load(from: store)
         self.hasCompletedOnboarding = SettingsCatalogue.hasCompletedOnboarding.load(from: store)
 
         normalizePersistedSelectionsIfNeeded()

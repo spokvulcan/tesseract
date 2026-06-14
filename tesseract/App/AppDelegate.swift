@@ -47,14 +47,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-              !(window is NSPanel),
-              window.canBecomeMain else { return }
+            !(window is NSPanel),
+            window.canBecomeMain
+        else { return }
         trackedMainWindow = window
     }
 
     @objc private func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-              window === trackedMainWindow else { return }
+            window === trackedMainWindow
+        else { return }
         trackedMainWindow = nil
     }
 
@@ -69,7 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // If more than one instance is running (including this one), terminate this instance
         if runningApps.count > 1 {
             // Activate the other instance
-            if let otherInstance = runningApps.first(where: { $0 != NSRunningApplication.current }) {
+            if let otherInstance = runningApps.first(where: { $0 != NSRunningApplication.current })
+            {
                 otherInstance.activate()
             }
             // Terminate this instance
@@ -77,7 +80,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func setupWithContainer(_ container: DependencyContainer, navigationSelection: Binding<NavigationItem?>) {
+    func setupWithContainer(
+        _ container: DependencyContainer, navigationSelection: Binding<NavigationItem?>
+    ) {
         // Prevent duplicate setup from multiple window instances
         guard !hasSetupWithContainer else { return }
         hasSetupWithContainer = true
@@ -112,7 +117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool)
+        -> Bool
+    {
         if !flag {
             showMainWindow()
         }

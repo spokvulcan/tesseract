@@ -154,11 +154,12 @@ struct CompletionTraceTests {
         }
 
         let files = CompletionTraceLog.traceFiles(in: directory)
-        #expect(files.map(\.lastPathComponent) == [
-            "trace-2026-06-10.jsonl",
-            "trace-2026-06-11.jsonl.old",
-            "trace-2026-06-11.jsonl",
-        ])
+        #expect(
+            files.map(\.lastPathComponent) == [
+                "trace-2026-06-10.jsonl",
+                "trace-2026-06-11.jsonl.old",
+                "trace-2026-06-11.jsonl",
+            ])
     }
 
     @Test func traceLogReaderRejectsForeignSchema() throws {
@@ -167,11 +168,12 @@ struct CompletionTraceTests {
 
         // Hand-write a file whose header claims a future schema.
         let url = directory.appendingPathComponent("trace-fake.jsonl")
-        let header = CompletionTraceLine.header(CompletionTraceHeader(
-            schemaVersion: CompletionTraceRecord.currentSchemaVersion + 1,
-            blockSize: TraceBlockDigest.blockSize,
-            createdAt: 0
-        ))
+        let header = CompletionTraceLine.header(
+            CompletionTraceHeader(
+                schemaVersion: CompletionTraceRecord.currentSchemaVersion + 1,
+                blockSize: TraceBlockDigest.blockSize,
+                createdAt: 0
+            ))
         let record = CompletionTraceLine.record(try #require(makeRecord()))
         let encoder = JSONEncoder()
         var data = try encoder.encode(header)
@@ -209,10 +211,12 @@ struct CompletionTraceTests {
 
     @Test func estimatesStartFromDocumentedColdStartDefaults() {
         let estimates = MeasuredSecondsEstimates()
-        #expect(estimates.prefillFlopsPerSecond
-            == MeasuredSecondsEstimates.defaultPrefillFlopsPerSecond)
-        #expect(estimates.hydrationBytesPerSecond
-            == MeasuredSecondsEstimates.defaultHydrationBytesPerSecond)
+        #expect(
+            estimates.prefillFlopsPerSecond
+                == MeasuredSecondsEstimates.defaultPrefillFlopsPerSecond)
+        #expect(
+            estimates.hydrationBytesPerSecond
+                == MeasuredSecondsEstimates.defaultHydrationBytesPerSecond)
         #expect(estimates.prefillSampleCount == 0)
         #expect(estimates.hydrationSampleCount == 0)
     }
@@ -225,7 +229,8 @@ struct CompletionTraceTests {
 
         // Second sample at 4e12 blends at the EWMA weight, never jumps.
         let afterSecond = afterFirst.recordingPrefill(flops: 4.0e12, seconds: 1.0)
-        let expected = 2.0e12 * (1 - MeasuredSecondsEstimates.sampleWeight)
+        let expected =
+            2.0e12 * (1 - MeasuredSecondsEstimates.sampleWeight)
             + 4.0e12 * MeasuredSecondsEstimates.sampleWeight
         #expect(abs(afterSecond.prefillFlopsPerSecond - expected) < 1e3)
 

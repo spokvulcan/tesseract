@@ -115,13 +115,17 @@ final class ParoQuantVLMSmokeRunner {
 
     private typealias CheckResult = BenchmarkHarness.CheckResult
 
-    nonisolated private static func runAllChecks(context: ModelContext) async throws -> TestRunResult {
+    nonisolated private static func runAllChecks(context: ModelContext) async throws
+        -> TestRunResult
+    {
         var logs: [String] = []
         var checks: [CheckResult] = []
 
         guard let vlm = context.model as? Qwen35 else {
             return TestRunResult(
-                logs: ["model is \(type(of: context.model)), not Qwen35 — spike requires the Qwen3.5 VLM container"],
+                logs: [
+                    "model is \(type(of: context.model)), not Qwen35 — spike requires the Qwen3.5 VLM container"
+                ],
                 checks: [CheckResult(name: "vlmContainerType", passed: false, detail: "not Qwen35")]
             )
         }
@@ -131,7 +135,8 @@ final class ParoQuantVLMSmokeRunner {
         let image = BenchmarkHarness.deterministicImage(width: 256, height: 256, seed: 17)
         let image2 = BenchmarkHarness.deterministicImage(width: 256, height: 256, seed: 41)
         let imageInput = try await prepareImageInput(context: context, image: image)
-        let textTokens = BenchmarkHarness.promptTokens(targetTokens: 1536, tokenizer: context.tokenizer)
+        let textTokens = BenchmarkHarness.promptTokens(
+            targetTokens: 1536, tokenizer: context.tokenizer)
         logs.append("image prompt: \(imageInput.text.tokens.dim(-1)) tokens")
         logs.append("text prompt:  \(textTokens.count) tokens")
 
@@ -236,7 +241,9 @@ final class ParoQuantVLMSmokeRunner {
         return (
             matches,
             "harvested=\(harvested) computedFromGrids=\(computed)",
-            ["  frames=\((input.image?.frames ?? []).map(\.values).map { [$0.0, $0.1, $0.2] }) merge=\(merge)"]
+            [
+                "  frames=\((input.image?.frames ?? []).map(\.values).map { [$0.0, $0.1, $0.2] }) merge=\(merge)"
+            ]
         )
     }
 
@@ -260,7 +267,8 @@ final class ParoQuantVLMSmokeRunner {
             text: .init(tokens: prefix, mask: ones(like: prefix).asType(.int8)),
             image: input.image
         )
-        guard case .logits = try context.model.prepare(prefixInput, cache: cache, windowSize: nil) else {
+        guard case .logits = try context.model.prepare(prefixInput, cache: cache, windowSize: nil)
+        else {
             return (false, "prepare returned .tokens", [])
         }
         let (dropped, _) = lastTokenLogits(
@@ -291,9 +299,10 @@ final class ParoQuantVLMSmokeRunner {
         )
 
         let cacheB = context.model.newCache(parameters: nil)
-        let outB1 = try prefill(context: context, tokens: Array(tokens.prefix(split)), cache: cacheB)
+        let outB1 = try prefill(
+            context: context, tokens: Array(tokens.prefix(split)), cache: cacheB)
         let outB2 = try prefill(
-            context: context, tokens: Array(tokens[split ..< (tokens.count - 1)]),
+            context: context, tokens: Array(tokens[split..<(tokens.count - 1)]),
             checkpointBaseOffset: split, cache: cacheB, initialState: outB1.state
         )
         let (logitsB, _) = lastTokenLogits(
@@ -304,7 +313,9 @@ final class ParoQuantVLMSmokeRunner {
         return (
             true,
             "maxAbsDiff=\(diff) (informational: FP noise floor from chunk shapes alone)",
-            ["  argmax A=\(logitsA.argMax().item(Int32.self)) B=\(logitsB.argMax().item(Int32.self))"]
+            [
+                "  argmax A=\(logitsA.argMax().item(Int32.self)) B=\(logitsB.argMax().item(Int32.self))"
+            ]
         )
     }
 
@@ -335,7 +346,8 @@ final class ParoQuantVLMSmokeRunner {
 
         let setupCache = context.model.newCache(parameters: nil)
         try prefill(context: context, tokens: Array(tokens.prefix(k)), cache: setupCache)
-        guard let snap = HybridCacheSnapshot.capture(cache: setupCache, offset: k, type: .system) else {
+        guard let snap = HybridCacheSnapshot.capture(cache: setupCache, offset: k, type: .system)
+        else {
             return (false, "capture nil", [])
         }
         let restored = try snap.restore()
@@ -347,7 +359,7 @@ final class ParoQuantVLMSmokeRunner {
             initialState = state
         }
         let warmOut = try prefill(
-            context: context, tokens: Array(tokens[k ..< (tokens.count - 1)]),
+            context: context, tokens: Array(tokens[k..<(tokens.count - 1)]),
             checkpointBaseOffset: k, cache: restored, initialState: initialState
         )
         let (warmLogits, _) = lastTokenLogits(
@@ -357,9 +369,15 @@ final class ParoQuantVLMSmokeRunner {
 
         let diff = BenchmarkHarness.maxAbsDiff(coldLogits, warmLogits)
         if seeded {
-            return (diff <= bitwiseTolerance, "maxAbsDiff=\(diff) (expected 0: seeded delta anchors positions)", [])
+            return (
+                diff <= bitwiseTolerance,
+                "maxAbsDiff=\(diff) (expected 0: seeded delta anchors positions)", []
+            )
         }
-        return (diff > 0, "maxAbsDiff=\(diff) (expected > 0: nil-state remainder restarts positions at 0)", [])
+        return (
+            diff > 0,
+            "maxAbsDiff=\(diff) (expected > 0: nil-state remainder restarts positions at 0)", []
+        )
     }
 
     /// Turn-over-turn chaining: prefill an image turn cold, capture the leaf
@@ -392,9 +410,11 @@ final class ParoQuantVLMSmokeRunner {
         // Shape-matched cold chain: prepare(turn 1) → threaded-state suffix
         // prefill → sentinel forward. One cache, no restore.
         let coldCache = context.model.newCache(parameters: nil)
-        guard case .logits(let coldTurn1) = try context.model.prepare(
-            input, cache: coldCache, windowSize: nil
-        ) else {
+        guard
+            case .logits(let coldTurn1) = try context.model.prepare(
+                input, cache: coldCache, windowSize: nil
+            )
+        else {
             return (false, "cold turn-1 prepare returned .tokens", [])
         }
         eval(coldCache)
@@ -416,9 +436,11 @@ final class ParoQuantVLMSmokeRunner {
             text: .init(tokens: singlePrefix, mask: ones(like: singlePrefix).asType(.int8)),
             image: input.image
         )
-        guard case .logits(let singleOut) = try context.model.prepare(
-            singleInput, cache: singleCache, windowSize: nil
-        ) else {
+        guard
+            case .logits(let singleOut) = try context.model.prepare(
+                singleInput, cache: singleCache, windowSize: nil
+            )
+        else {
             return (false, "single-shot cold prepare returned .tokens", [])
         }
         eval(singleCache)
@@ -431,18 +453,22 @@ final class ParoQuantVLMSmokeRunner {
         // captured at its end, restored, then the text continuation prefills
         // with the harvested delta seeded into fresh state.
         let warmSetup = context.model.newCache(parameters: nil)
-        guard case .logits(let turn1Out) = try context.model.prepare(
-            input, cache: warmSetup, windowSize: nil
-        ) else {
+        guard
+            case .logits(let turn1Out) = try context.model.prepare(
+                input, cache: warmSetup, windowSize: nil
+            )
+        else {
             return (false, "turn-1 prepare returned .tokens", [])
         }
         eval(warmSetup)
         guard let turn1State = turn1Out.state, let turn1Deltas = turn1State[ropeDeltasKey] else {
             return (false, "no rope delta in turn-1 prepare state", [])
         }
-        guard let snap = HybridCacheSnapshot.capture(
-            cache: warmSetup, offset: turn1Tokens.count, type: .system
-        ) else {
+        guard
+            let snap = HybridCacheSnapshot.capture(
+                cache: warmSetup, offset: turn1Tokens.count, type: .system
+            )
+        else {
             return (false, "leaf capture nil", [])
         }
         let restored = try snap.restore()
@@ -495,8 +521,12 @@ final class ParoQuantVLMSmokeRunner {
         let prepared = try await context.processor.prepare(input: UserInput(chat: chat))
         let tokens = LLMActor.extractTokenSequence(prepared.text.tokens)
 
-        guard let visionStart = tokens.firstIndex(of: vlm.config.visionStartTokenId), visionStart > 64 else {
-            return (false, "no vision start token (or image not in remainder) — prompt shape wrong", [])
+        guard let visionStart = tokens.firstIndex(of: vlm.config.visionStartTokenId),
+            visionStart > 64
+        else {
+            return (
+                false, "no vision start token (or image not in remainder) — prompt shape wrong", []
+            )
         }
         let k = visionStart - 8
 
@@ -506,9 +536,11 @@ final class ParoQuantVLMSmokeRunner {
             text: .init(tokens: coldPrefixArr, mask: ones(like: coldPrefixArr).asType(.int8)),
             image: prepared.image
         )
-        guard case .logits(let coldOut) = try context.model.prepare(
-            coldInput, cache: coldCache, windowSize: nil
-        ) else {
+        guard
+            case .logits(let coldOut) = try context.model.prepare(
+                coldInput, cache: coldCache, windowSize: nil
+            )
+        else {
             return (false, "cold prepare returned .tokens", [])
         }
         eval(coldCache)
@@ -521,20 +553,23 @@ final class ParoQuantVLMSmokeRunner {
         // vendor prepare over the image-bearing remainder.
         let setupCache = context.model.newCache(parameters: nil)
         try prefill(context: context, tokens: Array(tokens.prefix(k)), cache: setupCache)
-        guard let snap = HybridCacheSnapshot.capture(cache: setupCache, offset: k, type: .system) else {
+        guard let snap = HybridCacheSnapshot.capture(cache: setupCache, offset: k, type: .system)
+        else {
             return (false, "capture nil", [])
         }
         let restored = try snap.restore()
 
-        let remainder = Array(tokens[k ..< (tokens.count - 1)])
+        let remainder = Array(tokens[k..<(tokens.count - 1)])
         let remainderArr = MLXArray(remainder.map { Int32($0) }).expandedDimensions(axis: 0)
         let remainderInput = LMInput(
             text: .init(tokens: remainderArr, mask: ones(like: remainderArr).asType(.int8)),
             image: prepared.image
         )
-        guard case .logits(let warmOut) = try context.model.prepare(
-            remainderInput, cache: restored, windowSize: nil
-        ) else {
+        guard
+            case .logits(let warmOut) = try context.model.prepare(
+                remainderInput, cache: restored, windowSize: nil
+            )
+        else {
             return (false, "remainder prepare returned .tokens", [])
         }
         eval(restored)
@@ -591,8 +626,12 @@ final class ParoQuantVLMSmokeRunner {
         let prepared = try await context.processor.prepare(input: UserInput(chat: chat))
         let tokens = LLMActor.extractTokenSequence(prepared.text.tokens)
 
-        guard let visionStart = tokens.firstIndex(of: vlm.config.visionStartTokenId), visionStart > 64 else {
-            return (false, "no vision start token (or image not in remainder) — prompt shape wrong", [])
+        guard let visionStart = tokens.firstIndex(of: vlm.config.visionStartTokenId),
+            visionStart > 64
+        else {
+            return (
+                false, "no vision start token (or image not in remainder) — prompt shape wrong", []
+            )
         }
         let k = visionStart - 8  // clean text boundary below the image run
 
@@ -611,7 +650,8 @@ final class ParoQuantVLMSmokeRunner {
 
             let working: [any KVCache]
             if restore {
-                guard let snap = HybridCacheSnapshot.capture(cache: cache, offset: k, type: .system) else {
+                guard let snap = HybridCacheSnapshot.capture(cache: cache, offset: k, type: .system)
+                else {
                     throw ParoQuantVLMSmokeError.unexpectedPrepareResult
                 }
                 working = try snap.restore()
@@ -623,20 +663,23 @@ final class ParoQuantVLMSmokeRunner {
             var anchor = LMOutput.State()
             anchor[ropeDeltasKey] = MLXArray([Int32(0)])  // [0, k) is text → delta 0
 
-            let remainder = Array(tokens[k ..< (tokens.count - 1)])
+            let remainder = Array(tokens[k..<(tokens.count - 1)])
             let remainderArr = MLXArray(remainder.map { Int32($0) }).expandedDimensions(axis: 0)
             let remainderInput = LMInput(
                 text: .init(tokens: remainderArr, mask: ones(like: remainderArr).asType(.int8)),
                 image: prepared.image
             )
-            guard case .logits(let out) = try vlm.prepareContinuation(
-                remainderInput, cache: working, state: anchor, windowSize: 512
-            ) else {
+            guard
+                case .logits(let out) = try vlm.prepareContinuation(
+                    remainderInput, cache: working, state: anchor, windowSize: 512
+                )
+            else {
                 throw ParoQuantVLMSmokeError.unexpectedPrepareResult
             }
             eval(working)
             let (logits, _) = lastTokenLogits(
-                model: context.model, token: tokens[tokens.count - 1], cache: working, state: out.state
+                model: context.model, token: tokens[tokens.count - 1], cache: working,
+                state: out.state
             )
             return (logits, out.state)
         }
@@ -662,7 +705,8 @@ final class ParoQuantVLMSmokeRunner {
             harvested = deltas.asArray(Int32.self).map(Int.init)
         }
 
-        let passed = bitwiseDiff <= bitwiseTolerance && argmaxWarm == argmaxCold && harvested == [computed]
+        let passed =
+            bitwiseDiff <= bitwiseTolerance && argmaxWarm == argmaxCold && harvested == [computed]
         return (
             passed,
             "bitwiseVsShapeMatched=\(bitwiseDiff) (expected 0); "
@@ -750,15 +794,19 @@ final class ParoQuantVLMSmokeRunner {
             let prefixTokens = sliced2D(prepared.text.tokens, to: k)
             let prefixInput = LMInput(
                 text: .init(tokens: prefixTokens, mask: ones(like: prefixTokens).asType(.int8)),
-                image: LMInput.ProcessedImage(pixels: pixels[0 ..< image1Patches, 0...], frames: [frames[0]])
+                image: LMInput.ProcessedImage(
+                    pixels: pixels[0..<image1Patches, 0...], frames: [frames[0]])
             )
-            guard case .logits = try context.model.prepare(prefixInput, cache: cache, windowSize: nil) else {
+            guard
+                case .logits = try context.model.prepare(prefixInput, cache: cache, windowSize: nil)
+            else {
                 throw ParoQuantVLMSmokeError.unexpectedPrepareResult
             }
 
             let working: [any KVCache]
             if restore {
-                guard let snap = HybridCacheSnapshot.capture(cache: cache, offset: k, type: .system) else {
+                guard let snap = HybridCacheSnapshot.capture(cache: cache, offset: k, type: .system)
+                else {
                     throw ParoQuantVLMSmokeError.unexpectedPrepareResult
                 }
                 working = try snap.restore()
@@ -770,21 +818,25 @@ final class ParoQuantVLMSmokeRunner {
             var anchor = LMOutput.State()
             anchor[ropeDeltasKey] = MLXArray([Int32(image1Delta)])  // image 1 is cached
 
-            let remainder = Array(tokens[k ..< (tokens.count - 1)])
+            let remainder = Array(tokens[k..<(tokens.count - 1)])
             let remainderArr = MLXArray(remainder.map { Int32($0) }).expandedDimensions(axis: 0)
             let remainderInput = LMInput(
                 text: .init(tokens: remainderArr, mask: ones(like: remainderArr).asType(.int8)),
                 // Skip image 1's patch rows — only image 2's pixels are new.
-                image: LMInput.ProcessedImage(pixels: pixels[image1Patches..., 0...], frames: [frames[1]])
+                image: LMInput.ProcessedImage(
+                    pixels: pixels[image1Patches..., 0...], frames: [frames[1]])
             )
-            guard case .logits(let out) = try vlm.prepareContinuation(
-                remainderInput, cache: working, state: anchor, windowSize: 512
-            ) else {
+            guard
+                case .logits(let out) = try vlm.prepareContinuation(
+                    remainderInput, cache: working, state: anchor, windowSize: 512
+                )
+            else {
                 throw ParoQuantVLMSmokeError.unexpectedPrepareResult
             }
             eval(working)
             let (logits, _) = lastTokenLogits(
-                model: context.model, token: tokens[tokens.count - 1], cache: working, state: out.state
+                model: context.model, token: tokens[tokens.count - 1], cache: working,
+                state: out.state
             )
             return (logits, out.state)
         }
@@ -801,7 +853,8 @@ final class ParoQuantVLMSmokeRunner {
             harvested = deltas.asArray(Int32.self).map(Int.init)
         }
 
-        let passed = bitwiseDiff <= bitwiseTolerance && argmaxWarm == argmaxCold && harvested == [totalDelta]
+        let passed =
+            bitwiseDiff <= bitwiseTolerance && argmaxWarm == argmaxCold && harvested == [totalDelta]
         return (
             passed,
             "bitwiseVsShapeMatched=\(bitwiseDiff) (expected 0); "
@@ -853,9 +906,11 @@ final class ParoQuantVLMSmokeRunner {
             text: .init(tokens: wholeTokens, mask: ones(like: wholeTokens).asType(.int8)),
             image: input.image
         )
-        guard case .logits(let out) = try vlm.prepareContinuation(
-            wholeInput, cache: cache, state: nil, windowSize: 512
-        ) else {
+        guard
+            case .logits(let out) = try vlm.prepareContinuation(
+                wholeInput, cache: cache, state: nil, windowSize: 512
+            )
+        else {
             return (false, "prepareContinuation returned .tokens", [])
         }
         let lastPosition = out.logits[0..., -1, 0...]
@@ -866,7 +921,9 @@ final class ParoQuantVLMSmokeRunner {
         return (
             argmaxWarm == argmaxCold,
             "argmax wholeContinuation=\(argmaxWarm) cold=\(argmaxCold) (expected equal)",
-            ["  prompt=\(tokens.count) tokens, one prepareContinuation over the whole image+text input from zero"]
+            [
+                "  prompt=\(tokens.count) tokens, one prepareContinuation over the whole image+text input from zero"
+            ]
         )
     }
 
@@ -886,9 +943,11 @@ final class ParoQuantVLMSmokeRunner {
             text: .init(tokens: prefix, mask: ones(like: prefix).asType(.int8)),
             image: input.image
         )
-        guard case .logits(let out) = try context.model.prepare(
-            prefixInput, cache: cache, windowSize: nil
-        ) else {
+        guard
+            case .logits(let out) = try context.model.prepare(
+                prefixInput, cache: cache, windowSize: nil
+            )
+        else {
             throw ParoQuantVLMSmokeError.unexpectedPrepareResult
         }
         eval(cache)
@@ -955,7 +1014,8 @@ final class ParoQuantVLMSmokeRunner {
     /// Slice a token tensor (1D or 2D) to its first `count` positions,
     /// returned 2D ([1, count]).
     nonisolated private static func sliced2D(_ tokens: MLXArray, to count: Int) -> MLXArray {
-        let sliced = tokens.ndim > 1 ? tokens[0..., ..<count] : tokens[..<count].expandedDimensions(axis: 0)
+        let sliced =
+            tokens.ndim > 1 ? tokens[0..., ..<count] : tokens[..<count].expandedDimensions(axis: 0)
         return sliced
     }
 

@@ -39,9 +39,11 @@ struct ModelCardView: View {
                     .foregroundStyle(.secondary)
 
                 if case .downloaded(let sizeOnDisk) = status {
-                    Text("(\(ByteCountFormatter.string(fromByteCount: sizeOnDisk, countStyle: .file)) on disk)")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                    Text(
+                        "(\(ByteCountFormatter.string(fromByteCount: sizeOnDisk, countStyle: .file)) on disk)"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                 }
 
                 Spacer()

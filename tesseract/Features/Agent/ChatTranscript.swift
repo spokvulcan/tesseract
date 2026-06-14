@@ -213,25 +213,29 @@ nonisolated enum ChatTranscript {
         // image-only (empty content). This converges both paths onto the
         // full-rebuild behaviour.
         if let user {
-            rows.append(ChatRow(
-                id: turn.id.uuidString,
-                kind: .user(UserRow(
-                    content: user.content,
-                    images: user.images,
-                    timestamp: ctx.formatTimestamp(user.timestamp),
-                    messageID: turn.id
+            rows.append(
+                ChatRow(
+                    id: turn.id.uuidString,
+                    kind: .user(
+                        UserRow(
+                            content: user.content,
+                            images: user.images,
+                            timestamp: ctx.formatTimestamp(user.timestamp),
+                            messageID: turn.id
+                        ))
                 ))
-            ))
         }
 
         // System (compaction) row.
         if let compaction {
-            rows.append(ChatRow(
-                id: turn.id.uuidString + "-system",
-                kind: .system(SystemRow(
-                    content: compaction.displayText
+            rows.append(
+                ChatRow(
+                    id: turn.id.uuidString + "-system",
+                    kind: .system(
+                        SystemRow(
+                            content: compaction.displayText
+                        ))
                 ))
-            ))
         }
 
         // Committed assistant body: steps (thinking / intermediate text / tool
@@ -251,21 +255,24 @@ nonisolated enum ChatTranscript {
             guard let asst = msg.asAssistant else { continue }
 
             if let thinking = asst.thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !thinking.isEmpty {
-                steps.append(ChatRow(
-                    id: "\(asst.id)-thinking",
-                    kind: .thinking(ThinkingRow(content: thinking, isLast: false))
-                ))
+                !thinking.isEmpty
+            {
+                steps.append(
+                    ChatRow(
+                        id: "\(asst.id)-thinking",
+                        kind: .thinking(ThinkingRow(content: thinking, isLast: false))
+                    ))
             }
 
             let isFinalAnswer = asst.id == lastAssistant?.id && asst.toolCalls.isEmpty
             let trimmed = asst.content.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if !trimmed.isEmpty && !isFinalAnswer {
-                steps.append(ChatRow(
-                    id: "\(asst.id)-text",
-                    kind: .toolText(ToolTextRow(content: trimmed, isLast: false))
-                ))
+                steps.append(
+                    ChatRow(
+                        id: "\(asst.id)-text",
+                        kind: .toolText(ToolTextRow(content: trimmed, isLast: false))
+                    ))
             }
 
             for (index, info) in asst.toolCalls.enumerated() {
@@ -273,17 +280,23 @@ nonisolated enum ChatTranscript {
                 let result = toolResultMap[info.id]
                 let rowID = "\(asst.id)-tool-\(index)"
                 toolRowIDs.insert(rowID)
-                steps.append(ChatRow(id: rowID, kind: .toolCall(ToolCallRow(
-                    displayTitle: props.title,
-                    iconName: props.icon,
-                    argumentsFormatted: props.argsFormatted,
-                    resultContent: result?.content.textContent,
-                    resultImages: result.map { $0.content.imageAttachments(namespace: $0.id) } ?? [],
-                    isError: result?.isError ?? false,
-                    isLast: false,
-                    isDetailExpanded: ctx.expandedDetails.contains(rowID),
-                    filePath: props.filePath
-                ))))
+                steps.append(
+                    ChatRow(
+                        id: rowID,
+                        kind: .toolCall(
+                            ToolCallRow(
+                                displayTitle: props.title,
+                                iconName: props.icon,
+                                argumentsFormatted: props.argsFormatted,
+                                resultContent: result?.content.textContent,
+                                resultImages: result.map {
+                                    $0.content.imageAttachments(namespace: $0.id)
+                                } ?? [],
+                                isError: result?.isError ?? false,
+                                isLast: false,
+                                isDetailExpanded: ctx.expandedDetails.contains(rowID),
+                                filePath: props.filePath
+                            ))))
             }
 
             if isFinalAnswer && !trimmed.isEmpty {
@@ -318,15 +331,17 @@ nonisolated enum ChatTranscript {
                 rows.append(header)
             }
         } else if !steps.isEmpty {
-            rows.append(ChatRow(
-                id: "\(turn.id)-header",
-                kind: .turnHeader(TurnHeaderRow(
-                    stepCount: steps.count,
-                    isGenerating: false,
-                    turnID: turn.id,
-                    isExpanded: committedExpanded
+            rows.append(
+                ChatRow(
+                    id: "\(turn.id)-header",
+                    kind: .turnHeader(
+                        TurnHeaderRow(
+                            stepCount: steps.count,
+                            isGenerating: false,
+                            turnID: turn.id,
+                            isExpanded: committedExpanded
+                        ))
                 ))
-            ))
         }
 
         // Committed step rows (when expanded). The last committed step is only
@@ -355,15 +370,17 @@ nonisolated enum ChatTranscript {
         // same transcript Turn is ever enabled, revisit this ordering — the older
         // committed answer would otherwise render below the newer live stream.
         if let answer {
-            rows.append(ChatRow(
-                id: answer.id.uuidString + "-answer",
-                kind: .assistantText(AssistantTextRow(
-                    content: answer.content,
-                    timestamp: ctx.formatTimestamp(answer.timestamp),
-                    messageID: answer.id,
-                    hasStepsAbove: !steps.isEmpty
+            rows.append(
+                ChatRow(
+                    id: answer.id.uuidString + "-answer",
+                    kind: .assistantText(
+                        AssistantTextRow(
+                            content: answer.content,
+                            timestamp: ctx.formatTimestamp(answer.timestamp),
+                            messageID: answer.id,
+                            hasStepsAbove: !steps.isEmpty
+                        ))
                 ))
-            ))
         }
 
         return (rows, toolRowIDs)
@@ -409,7 +426,8 @@ nonisolated enum ChatTranscript {
         guard let stream else { return 0 }
         var count = 0
         if let thinking = stream.thinking,
-           !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
             count += 1
         }
         count += stream.toolCalls.count
@@ -423,12 +441,13 @@ nonisolated enum ChatTranscript {
         guard totalStepCount > 0 else { return nil }
         return ChatRow(
             id: "streaming-header",
-            kind: .turnHeader(TurnHeaderRow(
-                stepCount: totalStepCount,
-                isGenerating: true,
-                turnID: streamingTurnID,
-                isExpanded: isExpanded
-            ))
+            kind: .turnHeader(
+                TurnHeaderRow(
+                    stepCount: totalStepCount,
+                    isGenerating: true,
+                    turnID: streamingTurnID,
+                    isExpanded: isExpanded
+                ))
         )
     }
 
@@ -441,58 +460,66 @@ nonisolated enum ChatTranscript {
         guard ctx.expandedTurns.contains(streamingTurnID) else {
             // Collapsed — only the final streaming answer (plain text, no tools).
             if !trimmed.isEmpty && stream.toolCalls.isEmpty {
-                rows.append(ChatRow(
-                    id: "streaming-answer",
-                    kind: .streamingText(StreamingTextRow(content: trimmed))
-                ))
+                rows.append(
+                    ChatRow(
+                        id: "streaming-answer",
+                        kind: .streamingText(StreamingTextRow(content: trimmed))
+                    ))
             }
             return rows
         }
 
         // Streaming thinking.
         if let thinking = stream.thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !thinking.isEmpty {
-            rows.append(ChatRow(
-                id: "streaming-thinking",
-                kind: .thinking(ThinkingRow(
-                    content: thinking,
-                    isLast: stream.toolCalls.isEmpty && trimmed.isEmpty
+            !thinking.isEmpty
+        {
+            rows.append(
+                ChatRow(
+                    id: "streaming-thinking",
+                    kind: .thinking(
+                        ThinkingRow(
+                            content: thinking,
+                            isLast: stream.toolCalls.isEmpty && trimmed.isEmpty
+                        ))
                 ))
-            ))
         }
 
         // Streaming tool calls.
         for (index, info) in stream.toolCalls.enumerated() {
             let rowID = "streaming-tool-\(index)"
             let props = ToolDisplayHelpers.displayProps(for: info)
-            rows.append(ChatRow(
-                id: rowID,
-                kind: .toolCall(ToolCallRow(
-                    displayTitle: props.title,
-                    iconName: props.icon,
-                    argumentsFormatted: props.argsFormatted,
-                    resultContent: nil,
-                    resultImages: [],
-                    isError: false,
-                    isLast: index == stream.toolCalls.count - 1 && trimmed.isEmpty,
-                    isDetailExpanded: ctx.expandedDetails.contains(rowID),
-                    filePath: props.filePath
+            rows.append(
+                ChatRow(
+                    id: rowID,
+                    kind: .toolCall(
+                        ToolCallRow(
+                            displayTitle: props.title,
+                            iconName: props.icon,
+                            argumentsFormatted: props.argsFormatted,
+                            resultContent: nil,
+                            resultImages: [],
+                            isError: false,
+                            isLast: index == stream.toolCalls.count - 1 && trimmed.isEmpty,
+                            isDetailExpanded: ctx.expandedDetails.contains(rowID),
+                            filePath: props.filePath
+                        ))
                 ))
-            ))
         }
 
         // Streaming text.
         if !trimmed.isEmpty {
             if stream.toolCalls.isEmpty {
-                rows.append(ChatRow(
-                    id: "streaming-answer",
-                    kind: .streamingText(StreamingTextRow(content: trimmed))
-                ))
+                rows.append(
+                    ChatRow(
+                        id: "streaming-answer",
+                        kind: .streamingText(StreamingTextRow(content: trimmed))
+                    ))
             } else {
-                rows.append(ChatRow(
-                    id: "streaming-text",
-                    kind: .toolText(ToolTextRow(content: trimmed, isLast: true))
-                ))
+                rows.append(
+                    ChatRow(
+                        id: "streaming-text",
+                        kind: .toolText(ToolTextRow(content: trimmed, isLast: true))
+                    ))
             }
         }
 

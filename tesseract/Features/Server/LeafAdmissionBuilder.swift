@@ -285,19 +285,21 @@ nonisolated enum LeafAdmissionBuilder {
             case .skip(let reason): return .skip(reason: reason)
             }
             guard toolTokens.count > transientBoundary.tokenOffset else {
-                return .skip(reason: .storedAtOrBeforeBoundary(
-                    storedLen: toolTokens.count,
-                    boundaryOffset: transientBoundary.tokenOffset
-                ))
+                return .skip(
+                    reason: .storedAtOrBeforeBoundary(
+                        storedLen: toolTokens.count,
+                        boundaryOffset: transientBoundary.tokenOffset
+                    ))
             }
             // The residual `toolTokens[boundary...]` doubles as the reprefill
             // input, so it must be image-free — past the last image run, key
             // space and real tokens agree token-for-token.
             guard transientBoundary.tokenOffset >= keySpace.minimumWarmOffset else {
-                return .skip(reason: .boundaryInsideImagePrefix(
-                    boundaryOffset: transientBoundary.tokenOffset,
-                    minimumWarmOffset: keySpace.minimumWarmOffset
-                ))
+                return .skip(
+                    reason: .boundaryInsideImagePrefix(
+                        boundaryOffset: transientBoundary.tokenOffset,
+                        minimumWarmOffset: keySpace.minimumWarmOffset
+                    ))
             }
             return .fromBoundary(boundary: transientBoundary, storedTokens: toolTokens)
 
@@ -331,23 +333,26 @@ nonisolated enum LeafAdmissionBuilder {
             let minimumWarmOffset = keySpace.minimumWarmOffset
             let boundary: HybridCacheSnapshot
             if let transientBoundary,
-               transientBoundary.tokenOffset < canonicalTokens.count,
-               transientBoundary.tokenOffset >= minimumWarmOffset {
+                transientBoundary.tokenOffset < canonicalTokens.count,
+                transientBoundary.tokenOffset >= minimumWarmOffset
+            {
                 boundary = transientBoundary
             } else if let resolved = await resolveBoundary(canonicalTokens),
-                      resolved.tokenOffset > 0,
-                      resolved.tokenOffset < canonicalTokens.count,
-                      resolved.tokenOffset >= minimumWarmOffset {
+                resolved.tokenOffset > 0,
+                resolved.tokenOffset < canonicalTokens.count,
+                resolved.tokenOffset >= minimumWarmOffset
+            {
                 boundary = resolved
             } else {
                 return .skip(reason: .noResolvedBoundary(canonicalLen: canonicalTokens.count))
             }
 
             guard canonicalTokens.count <= storedTokens.count else {
-                return .skip(reason: .canonicalLongerThanStored(
-                    canonicalLen: canonicalTokens.count,
-                    storedLen: storedTokens.count
-                ))
+                return .skip(
+                    reason: .canonicalLongerThanStored(
+                        canonicalLen: canonicalTokens.count,
+                        storedLen: storedTokens.count
+                    ))
             }
             return .fromBoundary(boundary: boundary, storedTokens: canonicalTokens)
         }

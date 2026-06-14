@@ -32,7 +32,7 @@ struct ImageIngestTests {
             data: data, typeIdentifier: "public.png", filename: "shot.png"
         ).get()
 
-        #expect(attachment.data == data)       // original bytes preserved
+        #expect(attachment.data == data)  // original bytes preserved
         #expect(attachment.mimeType == "image/png")
         #expect(attachment.filename == "shot.png")
     }
@@ -40,9 +40,14 @@ struct ImageIngestTests {
     @Test
     func resolvesIdentifierFromMIMEUTIAndExtension() throws {
         let data = ImageTestFixtures.tinyPNGData
-        #expect(try ImageIngest.ingest(data: data, typeIdentifier: "image/png").get().mimeType == "image/png")
-        #expect(try ImageIngest.ingest(data: data, typeIdentifier: "public.png").get().mimeType == "image/png")
-        #expect(try ImageIngest.ingest(data: data, typeIdentifier: "png").get().mimeType == "image/png")
+        #expect(
+            try ImageIngest.ingest(data: data, typeIdentifier: "image/png").get().mimeType
+                == "image/png")
+        #expect(
+            try ImageIngest.ingest(data: data, typeIdentifier: "public.png").get().mimeType
+                == "image/png")
+        #expect(
+            try ImageIngest.ingest(data: data, typeIdentifier: "png").get().mimeType == "image/png")
     }
 
     @Test
@@ -51,7 +56,8 @@ struct ImageIngestTests {
             (.png, "image/png"), (.jpeg, "image/jpeg"), (.gif, "image/gif"), (.tiff, "image/tiff"),
         ]
         for (fileType, mime) in cases {
-            let attachment = try ImageIngest.ingest(data: encode(fileType), typeIdentifier: mime).get()
+            let attachment = try ImageIngest.ingest(data: encode(fileType), typeIdentifier: mime)
+                .get()
             #expect(attachment.mimeType == mime)
         }
     }
@@ -70,19 +76,22 @@ struct ImageIngestTests {
     @Test
     func rejectsOversizeWithByteCount() {
         let big = Data(count: ImageIngest.maxBytes + 1)
-        #expect(ImageIngest.ingest(data: big, typeIdentifier: "image/png")
+        #expect(
+            ImageIngest.ingest(data: big, typeIdentifier: "image/png")
                 == .failure(.oversize(bytes: ImageIngest.maxBytes + 1)))
     }
 
     @Test
     func rejectsNonImageBytesOfAnAcceptedType() {
-        #expect(ImageIngest.ingest(data: Data([0, 1, 2, 3]), typeIdentifier: "image/png")
+        #expect(
+            ImageIngest.ingest(data: Data([0, 1, 2, 3]), typeIdentifier: "image/png")
                 == .failure(.notAnImage))
     }
 
     @Test
     func rejectsUnsupportedType() {
-        let result = ImageIngest.ingest(data: ImageTestFixtures.tinyPNGData, typeIdentifier: "public.plain-text")
+        let result = ImageIngest.ingest(
+            data: ImageTestFixtures.tinyPNGData, typeIdentifier: "public.plain-text")
         guard case .failure(.unsupportedType) = result else {
             Issue.record("expected .unsupportedType, got \(result)"); return
         }
@@ -90,7 +99,8 @@ struct ImageIngestTests {
 
     @Test
     func rejectsUnresolvableType() {
-        let result = ImageIngest.ingest(data: ImageTestFixtures.tinyPNGData, typeIdentifier: "not a real type")
+        let result = ImageIngest.ingest(
+            data: ImageTestFixtures.tinyPNGData, typeIdentifier: "not a real type")
         guard case .failure(.unsupportedType) = result else {
             Issue.record("expected .unsupportedType, got \(result)"); return
         }
@@ -99,7 +109,9 @@ struct ImageIngestTests {
     // MARK: - Batch cap (slice #117)
 
     private func attachments(_ n: Int) -> [ImageAttachment] {
-        (0..<n).map { _ in ImageAttachment(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png") }
+        (0..<n).map { _ in
+            ImageAttachment(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")
+        }
     }
 
     @Test
@@ -128,11 +140,12 @@ struct ImageIngestTests {
     func mixedBatchSeparatesAcceptedFromRejected() {
         let png = ImageTestFixtures.tinyPNGData
         let inputs: [(Data, String)] = [
-            (png, "image/png"),        // accepted
-            (Data([1, 2, 3]), "image/png"),   // not an image
-            (png, "text/plain"),       // unsupported type
+            (png, "image/png"),  // accepted
+            (Data([1, 2, 3]), "image/png"),  // not an image
+            (png, "text/plain"),  // unsupported type
         ]
-        let accepted = inputs
+        let accepted =
+            inputs
             .map { ImageIngest.ingest(data: $0.0, typeIdentifier: $0.1) }
             .compactMap { try? $0.get() }
 

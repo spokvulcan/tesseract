@@ -66,7 +66,9 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
     let images: [ImageAttachment]
     let timestamp: Date
 
-    init(id: UUID = UUID(), content: String, images: [ImageAttachment] = [], timestamp: Date = Date()) {
+    init(
+        id: UUID = UUID(), content: String, images: [ImageAttachment] = [], timestamp: Date = Date()
+    ) {
         self.id = id
         self.content = content
         self.images = images
@@ -93,7 +95,9 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
 // MARK: - AssistantMessage
 
 /// A response from the LLM, optionally containing thinking and tool calls.
-nonisolated struct AssistantMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Sendable {
+nonisolated struct AssistantMessage: AgentMessageProtocol, Codable, Equatable, Identifiable,
+    Sendable
+{
     let id: UUID
     let content: String
     let thinking: String?
@@ -135,7 +139,9 @@ nonisolated struct AssistantMessage: AgentMessageProtocol, Codable, Equatable, I
 // MARK: - ToolResultMessage
 
 /// The result of executing a tool call.
-nonisolated struct ToolResultMessage: AgentMessageProtocol, Codable, Equatable, Identifiable, Sendable {
+nonisolated struct ToolResultMessage: AgentMessageProtocol, Codable, Equatable, Identifiable,
+    Sendable
+{
     let id: UUID
     let toolCallId: String
     let toolName: String
@@ -211,7 +217,8 @@ extension AgentMessageProtocol {
     /// Extracts UUID from any Identifiable message. All core types conform.
     nonisolated var messageUUID: UUID {
         if let identifiable = self as? any Identifiable,
-           let uuid = identifiable.id as? UUID {
+            let uuid = identifiable.id as? UUID
+        {
             return uuid
         }
         return UUID()

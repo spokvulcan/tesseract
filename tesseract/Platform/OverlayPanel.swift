@@ -174,16 +174,18 @@ final class OverlayPanel<Content: View> {
         hideRequestID &+= 1
         let requestID = hideRequestID
 
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            panel.animator().alphaValue = 0
-        }, completionHandler: {
-            Task { @MainActor [weak self, weak panel] in
-                guard let self, requestID == self.hideRequestID else { return }
-                panel?.orderOut(nil)
-            }
-        })
+        NSAnimationContext.runAnimationGroup(
+            { context in
+                context.duration = 0.2
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                panel.animator().alphaValue = 0
+            },
+            completionHandler: {
+                Task { @MainActor [weak self, weak panel] in
+                    guard let self, requestID == self.hideRequestID else { return }
+                    panel?.orderOut(nil)
+                }
+            })
     }
 
     // MARK: - Frame
@@ -215,7 +217,7 @@ final class OverlayPanel<Content: View> {
             (.default, NSApplication.didChangeScreenParametersNotification),
             (NSWorkspace.shared.notificationCenter, NSWorkspace.activeSpaceDidChangeNotification),
             (NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification),
-            (NSWorkspace.shared.notificationCenter, NSWorkspace.screensDidWakeNotification)
+            (NSWorkspace.shared.notificationCenter, NSWorkspace.screensDidWakeNotification),
         ]
         for (center, name) in sources {
             center.publisher(for: name)

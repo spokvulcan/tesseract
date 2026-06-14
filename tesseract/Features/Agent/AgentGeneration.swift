@@ -114,7 +114,7 @@ struct AgentGenerateParameters: Sendable, Codable {
         }
         Log.agent.warning(
             "temperature=\(temperature) on thinking-capable model — Qwen docs "
-            + "advise against greedy decoding in thinking mode; loop risk elevated."
+                + "advise against greedy decoding in thinking mode; loop risk elevated."
         )
     }
 }

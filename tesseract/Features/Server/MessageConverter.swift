@@ -129,18 +129,20 @@ enum MessageConverter {
                     markIneligible(.nonTextAssistantMessage(index: index))
                 }
                 let infos = convertAssistantToolCalls(message.tool_calls)
-                llmMessages.append(.assistant(
-                    content: text,
-                    reasoning: message.resolvedReasoningContent,
-                    toolCalls: infos?.isEmpty == false ? infos : nil
-                ))
-                cacheMessages.append(.assistant(
-                    content: text,
-                    reasoning: message.resolvedReasoningContent,
-                    toolCalls: (infos ?? []).map {
-                        HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
-                    }
-                ))
+                llmMessages.append(
+                    .assistant(
+                        content: text,
+                        reasoning: message.resolvedReasoningContent,
+                        toolCalls: infos?.isEmpty == false ? infos : nil
+                    ))
+                cacheMessages.append(
+                    .assistant(
+                        content: text,
+                        reasoning: message.resolvedReasoningContent,
+                        toolCalls: (infos ?? []).map {
+                            HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
+                        }
+                    ))
 
             case .tool:
                 hasNonSystemMessage = true
@@ -148,19 +150,23 @@ enum MessageConverter {
                 if !imageParts.isEmpty {
                     markIneligible(.nonTextToolMessage(index: index))
                 }
-                llmMessages.append(.toolResult(
-                    toolCallId: message.tool_call_id ?? "", content: text
-                ))
+                llmMessages.append(
+                    .toolResult(
+                        toolCallId: message.tool_call_id ?? "", content: text
+                    ))
                 cacheMessages.append(.init(role: .tool, content: text))
             }
         }
 
-        let eligibility = firstIneligibility ?? .eligible(HTTPPrefixCacheConversation(
-            systemPrompt: systemPrompt,
-            messages: cacheMessages,
-            toolDefinitionsDigest: toolDefinitionDigest(tools),
-            templateContextDigest: templateContextDigest
-        ))
+        let eligibility =
+            firstIneligibility
+            ?? .eligible(
+                HTTPPrefixCacheConversation(
+                    systemPrompt: systemPrompt,
+                    messages: cacheMessages,
+                    toolDefinitionsDigest: toolDefinitionDigest(tools),
+                    templateContextDigest: templateContextDigest
+                ))
         return NormalizedRequest(
             systemPrompt: systemPrompt,
             messages: reorderToolResults(llmMessages),
@@ -169,7 +175,9 @@ enum MessageConverter {
     }
 
     /// Extract system prompt and convert OpenAI messages to internal `LLMMessage` values.
-    static func convertMessages(_ messages: [OpenAI.ChatMessage]) -> (systemPrompt: String?, messages: [LLMMessage]) {
+    static func convertMessages(_ messages: [OpenAI.ChatMessage]) -> (
+        systemPrompt: String?, messages: [LLMMessage]
+    ) {
         let normalized = normalizeRequest(messages)
         return (normalized.systemPrompt, normalized.messages)
     }
@@ -214,7 +222,8 @@ enum MessageConverter {
         while i < result.count {
             // Find an assistant message with tool calls
             guard case .assistant(_, _, let toolCalls) = result[i],
-                  let toolCalls, !toolCalls.isEmpty else {
+                let toolCalls, !toolCalls.isEmpty
+            else {
                 i += 1
                 continue
             }
@@ -223,7 +232,8 @@ enum MessageConverter {
             let resultStart = i + 1
             var resultEnd = resultStart
             while resultEnd < result.count,
-                  case .toolResult = result[resultEnd] {
+                case .toolResult = result[resultEnd]
+            {
                 resultEnd += 1
             }
 
@@ -276,7 +286,7 @@ enum MessageConverter {
 
         return tools.map { tool in
             var functionDict: [String: any Sendable] = [
-                "name": tool.function.name,
+                "name": tool.function.name
             ]
             if let description = tool.function.description {
                 functionDict["description"] = description
@@ -298,20 +308,21 @@ enum MessageConverter {
     /// Expects format: `data:<mimeType>;base64,<base64data>`
     static func convertImageContent(_ part: OpenAI.ContentPart) -> ImageAttachment? {
         guard part.type == .image_url,
-              let urlString = part.image_url?.url,
-              urlString.hasPrefix("data:") else {
+            let urlString = part.image_url?.url,
+            urlString.hasPrefix("data:")
+        else {
             return nil
         }
 
         // Parse: data:<mimeType>;base64,<data>
-        let afterData = urlString.dropFirst(5) // drop "data:"
+        let afterData = urlString.dropFirst(5)  // drop "data:"
         guard let semicolonIndex = afterData.firstIndex(of: ";") else { return nil }
 
         let mimeType = String(afterData[afterData.startIndex..<semicolonIndex])
         let afterSemicolon = afterData[afterData.index(after: semicolonIndex)...]
 
         guard afterSemicolon.hasPrefix("base64,") else { return nil }
-        let base64String = String(afterSemicolon.dropFirst(7)) // drop "base64,"
+        let base64String = String(afterSemicolon.dropFirst(7))  // drop "base64,"
 
         guard let data = Data(base64Encoded: base64String) else { return nil }
 
@@ -362,14 +373,17 @@ enum MessageConverter {
         }
     }
 
-    private static func reorderToolResultMessages(_ messages: [OpenAI.ChatMessage]) -> [OpenAI.ChatMessage] {
+    private static func reorderToolResultMessages(_ messages: [OpenAI.ChatMessage]) -> [OpenAI
+        .ChatMessage]
+    {
         var result = messages
         var index = 0
 
         while index < result.count {
             guard result[index].role == .assistant,
-                  let toolCalls = result[index].tool_calls,
-                  !toolCalls.isEmpty else {
+                let toolCalls = result[index].tool_calls,
+                !toolCalls.isEmpty
+            else {
                 index += 1
                 continue
             }
@@ -396,7 +410,8 @@ enum MessageConverter {
             var reordered: [OpenAI.ChatMessage] = []
             for toolCall in toolCalls {
                 if let toolCallID = toolCall.id,
-                   let matched = resultsByID.removeValue(forKey: toolCallID) {
+                    let matched = resultsByID.removeValue(forKey: toolCallID)
+                {
                     reordered.append(matched)
                 }
             }

@@ -141,9 +141,11 @@ nonisolated struct CacheKeySpace: Sendable {
         placeholderIdentity: ImagePlaceholderIdentity?
     ) -> Result<CacheKeySpace, UnkeyedReason> {
         guard !images.isEmpty else {
-            return .success(CacheKeySpace(
-                keyPath: preparedTokens, imageTable: [], placeholderIdentity: placeholderIdentity
-            ))
+            return .success(
+                CacheKeySpace(
+                    keyPath: preparedTokens, imageTable: [],
+                    placeholderIdentity: placeholderIdentity
+                ))
         }
         guard let identity = placeholderIdentity else {
             return .failure(.unrecognizedPlaceholderFamily)
@@ -161,13 +163,15 @@ nonisolated struct CacheKeySpace: Sendable {
             keyPath.replaceSubrange(
                 run, with: ImagePseudoToken.expansion(digest: image.digest, runLength: run.count)
             )
-            table.append(ImageTableEntry(
-                digest: image.digest, runRange: run, positionSpan: image.positionSpan
-            ))
+            table.append(
+                ImageTableEntry(
+                    digest: image.digest, runRange: run, positionSpan: image.positionSpan
+                ))
         }
-        return .success(CacheKeySpace(
-            keyPath: keyPath, imageTable: table, placeholderIdentity: placeholderIdentity
-        ))
+        return .success(
+            CacheKeySpace(
+                keyPath: keyPath, imageTable: table, placeholderIdentity: placeholderIdentity
+            ))
     }
 
     // MARK: - Translation (render space → key space)
@@ -193,9 +197,10 @@ nonisolated struct CacheKeySpace: Sendable {
                 continue
             }
             guard imageIndex < imageTable.count else {
-                return .failure(.placeholderOccurrencesExceedImages(
-                    occurrences: imageIndex + 1, images: imageTable.count
-                ))
+                return .failure(
+                    .placeholderOccurrencesExceedImages(
+                        occurrences: imageIndex + 1, images: imageTable.count
+                    ))
             }
             // The key path already holds this image's expansion — splice the
             // run instead of re-deriving every pseudo-token.
@@ -220,9 +225,10 @@ nonisolated struct CacheKeySpace: Sendable {
                 continue
             }
             guard imageIndex < imageTable.count else {
-                return .failure(.placeholderOccurrencesExceedImages(
-                    occurrences: imageIndex + 1, images: imageTable.count
-                ))
+                return .failure(
+                    .placeholderOccurrencesExceedImages(
+                        occurrences: imageIndex + 1, images: imageTable.count
+                    ))
             }
             length += imageTable[imageIndex].runLength
             imageIndex += 1
@@ -274,9 +280,9 @@ nonisolated struct CacheKeySpace: Sendable {
             if entry.runRange.lowerBound < offset {
                 return nil  // offset splits this run
             }
-            return index ..< imageTable.count  // first image at or beyond offset
+            return index..<imageTable.count  // first image at or beyond offset
         }
-        return imageTable.count ..< imageTable.count  // all images precede offset
+        return imageTable.count..<imageTable.count  // all images precede offset
     }
 
     // MARK: - Geometry
@@ -298,12 +304,12 @@ nonisolated struct CacheKeySpace: Sendable {
             if token == padTokenId {
                 if runStart == nil { runStart = index }
             } else if let start = runStart {
-                runs.append(start ..< index)
+                runs.append(start..<index)
                 runStart = nil
             }
         }
         if let start = runStart {
-            runs.append(start ..< tokens.count)
+            runs.append(start..<tokens.count)
         }
         return runs
     }

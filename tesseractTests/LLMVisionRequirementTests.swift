@@ -19,22 +19,28 @@ struct LLMVisionRequirementTests {
     /// global opt-out is on *and* the model is capable. A migrated user who opts
     /// out gets text-only — no stale legacy flag can override the choice.
     @Test func fromSettingsHonorsOptOutAndCapability() {
-        #expect(LLMVisionRequirement.fromSettings.wantsVision(
-            useVisionWhenAvailable: true, isVisionCapable: true) == true)
-        #expect(LLMVisionRequirement.fromSettings.wantsVision(
-            useVisionWhenAvailable: false, isVisionCapable: true) == false)   // opt-out wins
-        #expect(LLMVisionRequirement.fromSettings.wantsVision(
-            useVisionWhenAvailable: true, isVisionCapable: false) == false)
-        #expect(LLMVisionRequirement.fromSettings.wantsVision(
-            useVisionWhenAvailable: false, isVisionCapable: false) == false)
+        #expect(
+            LLMVisionRequirement.fromSettings.wantsVision(
+                useVisionWhenAvailable: true, isVisionCapable: true) == true)
+        #expect(
+            LLMVisionRequirement.fromSettings.wantsVision(
+                useVisionWhenAvailable: false, isVisionCapable: true) == false)  // opt-out wins
+        #expect(
+            LLMVisionRequirement.fromSettings.wantsVision(
+                useVisionWhenAvailable: true, isVisionCapable: false) == false)
+        #expect(
+            LLMVisionRequirement.fromSettings.wantsVision(
+                useVisionWhenAvailable: false, isVisionCapable: false) == false)
     }
 
     /// `.visionIfCapable` (HTTP server, ADR-0008): capability alone — the global
     /// opt-out cannot silently break a configured client.
     @Test func visionIfCapableIgnoresOptOut() {
-        #expect(LLMVisionRequirement.visionIfCapable.wantsVision(
-            useVisionWhenAvailable: false, isVisionCapable: true) == true)
-        #expect(LLMVisionRequirement.visionIfCapable.wantsVision(
-            useVisionWhenAvailable: true, isVisionCapable: false) == false)
+        #expect(
+            LLMVisionRequirement.visionIfCapable.wantsVision(
+                useVisionWhenAvailable: false, isVisionCapable: true) == true)
+        #expect(
+            LLMVisionRequirement.visionIfCapable.wantsVision(
+                useVisionWhenAvailable: true, isVisionCapable: false) == false)
     }
 }

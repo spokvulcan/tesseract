@@ -58,14 +58,15 @@ nonisolated struct WordTimeline: Equatable, Sendable {
             // or numbers (punctuation-only); letterCount is reused as the lit denominator.
             let letterCount = word.filter { $0.isLetter || $0.isNumber }.count
             let isAnnotation = (word.hasPrefix("[") && word.hasSuffix("]")) || letterCount == 0
-            built.append(Word(
-                text: word,
-                charOffset: offset,
-                isAnnotation: isAnnotation,
-                charCount: word.count,
-                letterCount: letterCount
-            ))
-            offset += word.count + 1   // word characters plus one separating space
+            built.append(
+                Word(
+                    text: word,
+                    charOffset: offset,
+                    isAnnotation: isAnnotation,
+                    charCount: word.count,
+                    letterCount: letterCount
+                ))
+            offset += word.count + 1  // word characters plus one separating space
         }
 
         self.words = built
@@ -85,7 +86,8 @@ nonisolated struct WordTimeline: Equatable, Sendable {
     /// where the view needs it, never eagerly here.
     func activeWordIndex(highlightedCharCount: Int) -> Int {
         guard !words.isEmpty else { return 0 }
-        for (i, word) in words.enumerated() where highlightedCharCount <= word.charOffset + word.charCount {
+        for (i, word) in words.enumerated()
+        where highlightedCharCount <= word.charOffset + word.charCount {
             return i
         }
         return words.count - 1
@@ -132,7 +134,8 @@ nonisolated struct WordTimeline: Equatable, Sendable {
     ) -> (charCount: Int, pacing: Pacing) {
         guard totalCharCount > 0 else { return (0, pacing) }
 
-        let target = isGenerationComplete ? totalDuration : max(totalDuration, estimatedFinalDuration)
+        let target =
+            isGenerationComplete ? totalDuration : max(totalDuration, estimatedFinalDuration)
         var next = pacing
         next.smoothedEffDuration += (target - next.smoothedEffDuration) * Self.smoothingFactor
 

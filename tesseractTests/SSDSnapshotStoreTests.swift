@@ -223,7 +223,8 @@ struct SSDSnapshotStoreTests {
         let store = SSDSnapshotStore(config: config)
 
         let payload = makePayload(bytes: 1_024)
-        let descriptor = makeDescriptor(checkpointType: "not-a-real-type", bytes: payload.totalBytes)
+        let descriptor = makeDescriptor(
+            checkpointType: "not-a-real-type", bytes: payload.totalBytes)
         let result = store.tryEnqueue(payload: payload, descriptor: descriptor)
         #expect(result == .rejectedInvalidCheckpointType)
     }
@@ -341,7 +342,8 @@ struct SSDSnapshotStoreTests {
         }
         #expect(committed)
 
-        let fileURL = root
+        let fileURL =
+            root
             .appendingPathComponent("partitions")
             .appendingPathComponent(descriptor.partitionDigest)
             .appendingPathComponent("snapshots")
@@ -400,8 +402,11 @@ struct SSDSnapshotStoreTests {
         // AND the temp file has been removed. A crash during
         // write would leave the temp file, never a half-written
         // final.
-        let finalURL = root
-            .appendingPathComponent("partitions/\(descriptor.partitionDigest)/snapshots/a/\(descriptor.snapshotID).safetensors")
+        let finalURL =
+            root
+            .appendingPathComponent(
+                "partitions/\(descriptor.partitionDigest)/snapshots/a/\(descriptor.snapshotID).safetensors"
+            )
         let tempURL = finalURL.appendingPathExtension("tmp")
         #expect(FileManager.default.fileExists(atPath: finalURL.path))
         #expect(FileManager.default.fileExists(atPath: tempURL.path) == false)
@@ -514,11 +519,15 @@ struct SSDSnapshotStoreTests {
         let oversized = makeDescriptor(id: "oversized", checkpointType: "leaf", bytes: 800)
         _ = store.tryEnqueue(payload: makePayload(bytes: 800), descriptor: oversized)
         let dropped = await waitUntil {
-            tracker.dropped.contains(where: { $0.id == oversized.snapshotID && $0.reason == .systemProtectionWins })
+            tracker.dropped.contains(where: {
+                $0.id == oversized.snapshotID && $0.reason == .systemProtectionWins
+            })
         }
         #expect(dropped)
         #expect(
-            tracker.dropped.contains(where: { $0.id == leafVictim.snapshotID && $0.reason == .evictedByLRU })
+            tracker.dropped.contains(where: {
+                $0.id == leafVictim.snapshotID && $0.reason == .evictedByLRU
+            })
         )
 
         // Do NOT call `flushManifestForTesting()`. The test is
@@ -595,7 +604,8 @@ struct SSDSnapshotStoreTests {
             onDrop: tracker.onDrop
         )
 
-        let descriptor = makeDescriptor(id: "manifest-persist", checkpointType: "system", bytes: 1_024)
+        let descriptor = makeDescriptor(
+            id: "manifest-persist", checkpointType: "system", bytes: 1_024)
         _ = store.tryEnqueue(payload: makePayload(bytes: 1_024), descriptor: descriptor)
         _ = await waitUntil { tracker.committed.contains(descriptor.snapshotID) }
 
@@ -745,7 +755,8 @@ struct SSDSnapshotStoreTests {
         }
         #expect(committed)
 
-        let snapshot = store.loadSync(snapshotRef: committedRef(from: pending),
+        let snapshot = store.loadSync(
+            snapshotRef: committedRef(from: pending),
             expectedFingerprint: fingerprint
         )
         #expect(snapshot != nil)
@@ -791,7 +802,8 @@ struct SSDSnapshotStoreTests {
         }
         _ = await waitUntil { tracker.committed.contains(pending.snapshotID) }
 
-        let snapshot = store.loadSync(snapshotRef: committedRef(from: pending),
+        let snapshot = store.loadSync(
+            snapshotRef: committedRef(from: pending),
             expectedFingerprint: String(repeating: "z", count: 64)
         )
         #expect(snapshot == nil)
@@ -843,7 +855,8 @@ struct SSDSnapshotStoreTests {
         try FileManager.default.removeItem(at: fileURL)
 
         let fingerprint = makePartitionMeta().modelFingerprint
-        let snapshot = store.loadSync(snapshotRef: committedRef(from: pending),
+        let snapshot = store.loadSync(
+            snapshotRef: committedRef(from: pending),
             expectedFingerprint: fingerprint
         )
         #expect(snapshot == nil)
@@ -876,9 +889,11 @@ struct SSDSnapshotStoreTests {
 
         let payload = makePayload(bytes: 256)
         let descriptor = makeDescriptor(bytes: 256)
-        guard case .accepted = store.tryEnqueue(
-            payload: payload, descriptor: descriptor
-        ) else {
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: payload, descriptor: descriptor
+            )
+        else {
             #expect(Bool(false), "tryEnqueue rejected")
             return
         }
@@ -1050,7 +1065,9 @@ struct SSDSnapshotStoreTests {
         }
 
         let dropped = await waitUntil {
-            tracker.dropped.contains { $0.id == leaf.snapshotID && $0.reason == .systemProtectionWins }
+            tracker.dropped.contains {
+                $0.id == leaf.snapshotID && $0.reason == .systemProtectionWins
+            }
         }
         #expect(dropped)
 
@@ -1093,12 +1110,14 @@ struct SSDSnapshotStoreTests {
             onDrop: tracker.onDrop
         )
 
-        store.seedDescriptorForTesting(makeDescriptor(
-            id: "old-leaf-1", checkpointType: "leaf", bytes: 2_048, lastAccessAt: 1
-        ))
-        store.seedDescriptorForTesting(makeDescriptor(
-            id: "old-leaf-2", checkpointType: "leaf", bytes: 2_048, lastAccessAt: 2
-        ))
+        store.seedDescriptorForTesting(
+            makeDescriptor(
+                id: "old-leaf-1", checkpointType: "leaf", bytes: 2_048, lastAccessAt: 1
+            ))
+        store.seedDescriptorForTesting(
+            makeDescriptor(
+                id: "old-leaf-2", checkpointType: "leaf", bytes: 2_048, lastAccessAt: 2
+            ))
 
         let payload = makePayload(bytes: 4_096)
         let incoming = makeDescriptor(checkpointType: "leaf", bytes: payload.totalBytes)
@@ -1216,7 +1235,8 @@ struct SSDSnapshotStoreTests {
             bytesOnDisk: descriptor.bytes
         )
 
-        let result = store.loadSync(snapshotRef: snapshotRef,
+        let result = store.loadSync(
+            snapshotRef: snapshotRef,
             expectedFingerprint: String(repeating: "b", count: 64)
         )
         #expect(result == nil)

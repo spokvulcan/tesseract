@@ -37,18 +37,20 @@ nonisolated enum AgentConversationBuilder {
                     guard let digest = cachedDigest(for: attachment) else { return nil }
                     cacheImages.append(HTTPPrefixCacheImage(data: attachment.data, digest: digest))
                 }
-                converted.append(HTTPPrefixCacheMessage(
-                    role: .user, content: content, images: cacheImages
-                ))
+                converted.append(
+                    HTTPPrefixCacheMessage(
+                        role: .user, content: content, images: cacheImages
+                    ))
 
             case .assistant(let content, let reasoning, let toolCalls):
-                converted.append(.assistant(
-                    content: content,
-                    reasoning: reasoning,
-                    toolCalls: (toolCalls ?? []).map {
-                        HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
-                    }
-                ))
+                converted.append(
+                    .assistant(
+                        content: content,
+                        reasoning: reasoning,
+                        toolCalls: (toolCalls ?? []).map {
+                            HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
+                        }
+                    ))
 
             case .toolResult(_, let content):
                 // The chat template matches tool results to calls positionally;
@@ -79,7 +81,8 @@ nonisolated enum AgentConversationBuilder {
         if let cached = digestCache.withLock({ $0[attachment.id] }) {
             return cached
         }
-        let verdict: ImageDigest? = attachment.ciImage != nil
+        let verdict: ImageDigest? =
+            attachment.ciImage != nil
             ? ImageDigest(imageBytes: attachment.data)
             : nil
         digestCache.withLock { cache in
@@ -97,10 +100,10 @@ nonisolated enum AgentConversationBuilder {
     /// stability is the requirement, not cross-adapter equality.
     private static func toolSpecsDigest(_ toolSpecs: [ToolSpec]?) -> String {
         guard let toolSpecs, !toolSpecs.isEmpty,
-              JSONSerialization.isValidJSONObject(toolSpecs),
-              let data = try? JSONSerialization.data(
-                  withJSONObject: toolSpecs, options: [.sortedKeys]
-              )
+            JSONSerialization.isValidJSONObject(toolSpecs),
+            let data = try? JSONSerialization.data(
+                withJSONObject: toolSpecs, options: [.sortedKeys]
+            )
         else {
             return HTTPPrefixCacheConversation.emptyToolDefinitionsDigest
         }

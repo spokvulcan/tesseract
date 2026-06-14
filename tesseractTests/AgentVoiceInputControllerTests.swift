@@ -40,9 +40,11 @@ struct AgentVoiceInputControllerTests {
     /// invoke `onVoiceTranscription` or overwrite `voiceState`.
     @Test func lateVoiceSuccessAfterCancelDoesNotInvokeCallback() async throws {
         let engine = ControllableTranscribing(
-            result: TranscriptionResult(text: "late voice", segments: [], language: "en", processingTime: 0)
+            result: TranscriptionResult(
+                text: "late voice", segments: [], language: "en", processingTime: 0)
         )
-        let capture = FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
         let controller = makeController(capture: capture, engine: engine)
 
         let recorder = CallbackRecorder()
@@ -73,9 +75,11 @@ struct AgentVoiceInputControllerTests {
     /// callback, then returns to `.idle`. It does not send anywhere else.
     @Test func finishCaptureEmitsTranscribedTextViaCallback() async throws {
         let engine = ControllableTranscribing(
-            result: TranscriptionResult(text: "hello world", segments: [], language: "en", processingTime: 0)
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0)
         )
-        let capture = FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
         let controller = makeController(capture: capture, engine: engine)
 
         let recorder = CallbackRecorder()
@@ -100,7 +104,8 @@ struct AgentVoiceInputControllerTests {
     /// surfaces an error in `voiceState` (not the shared banner).
     @Test func recordingTooShortSurfacesErrorAndSkipsTranscription() async throws {
         let engine = ControllableTranscribing()
-        let capture = FakeAudioCapture(cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 0.2))
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 0.2))
         let controller = makeController(capture: capture, engine: engine)
 
         controller.start()

@@ -57,12 +57,13 @@ struct ChatTranscriptControllerTests {
         let asst2 = AssistantMessage(content: "Answer two")
         let rows = committedRows([user1, asst1, user2, asst2])
 
-        #expect(rows.map(\.id) == [
-            user1.id.uuidString,
-            "\(asst1.id.uuidString)-answer",
-            user2.id.uuidString,
-            "\(asst2.id.uuidString)-answer",
-        ])
+        #expect(
+            rows.map(\.id) == [
+                user1.id.uuidString,
+                "\(asst1.id.uuidString)-answer",
+                user2.id.uuidString,
+                "\(asst2.id.uuidString)-answer",
+            ])
     }
 
     @Test func compactionMarkerRendersSystemRow() {
@@ -82,7 +83,8 @@ struct ChatTranscriptControllerTests {
     }
 
     @Test func imageOnlyUserMessageRendersUserRow() {
-        let image = ImageAttachment(data: Data([0x01, 0x02]), mimeType: "image/png", filename: "pic.png")
+        let image = ImageAttachment(
+            data: Data([0x01, 0x02]), mimeType: "image/png", filename: "pic.png")
         let user = UserMessage(content: "", images: [image])
         let asst = AssistantMessage(content: "Nice picture")
         let rows = committedRows([user, asst])
@@ -100,7 +102,8 @@ struct ChatTranscriptControllerTests {
 
     @Test func expandedToolCallTurnRendersToolRowMatchedToResult() {
         let user = UserMessage(content: "Read the file")
-        let call = ToolCallInfo(id: "tc1", name: "read_file", argumentsJSON: #"{"path":"/tmp/foo.txt"}"#)
+        let call = ToolCallInfo(
+            id: "tc1", name: "read_file", argumentsJSON: #"{"path":"/tmp/foo.txt"}"#)
         let asst1 = AssistantMessage(content: "", toolCalls: [call])
         let result = ToolResultMessage(
             toolCallId: "tc1", toolName: "read_file",
@@ -147,7 +150,10 @@ struct ChatTranscriptControllerTests {
         let asst1 = AssistantMessage(content: "", toolCalls: [call])
         let result = ToolResultMessage(
             toolCallId: "tc1", toolName: "screenshot",
-            content: [.text("captured"), .image(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")],
+            content: [
+                .text("captured"),
+                .image(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png"),
+            ],
             isError: false
         )
         let asst2 = AssistantMessage(content: "Done")
@@ -179,16 +185,17 @@ struct ChatTranscriptControllerTests {
         let pngA = ImageTestFixtures.tinyPNGData
         let pngB = pngA + Data([0xFF])
         let blocks: [ContentBlock] = [
-            .image(data: pngA, mimeType: "image/png"),   // index 0
+            .image(data: pngA, mimeType: "image/png"),  // index 0
             .text("between"),
-            .image(data: pngA, mimeType: "image/png"),   // index 2 — same bytes
-            .image(data: pngB, mimeType: "image/png"),   // index 3
+            .image(data: pngA, mimeType: "image/png"),  // index 2 — same bytes
+            .image(data: pngB, mimeType: "image/png"),  // index 3
         ]
         let ns1 = UUID()
         let ns2 = UUID()
 
         // Stable across independent projections under the same tool-result id.
-        #expect(blocks.imageAttachments(namespace: ns1).map(\.id)
+        #expect(
+            blocks.imageAttachments(namespace: ns1).map(\.id)
                 == blocks.imageAttachments(namespace: ns1).map(\.id))
 
         // Every position distinct within a result, even byte-identical images.
@@ -243,7 +250,8 @@ struct ChatTranscriptControllerTests {
         let messages: [any AgentMessageProtocol] = [user]
 
         let controller = ChatTranscriptController(streamingThrottle: .zero)
-        controller.rebuild(messages: messages, stream: AssistantMessage(content: "par"), isGenerating: true)
+        controller.rebuild(
+            messages: messages, stream: AssistantMessage(content: "par"), isGenerating: true)
         #expect(controller.streamingRowVersion == 0)
 
         controller.patchStreamingTail(
@@ -253,9 +261,11 @@ struct ChatTranscriptControllerTests {
         )
 
         #expect(controller.streamingRowVersion == 1)
-        #expect(controller.rows.first?.id == user.id.uuidString)   // stable prefix
+        #expect(controller.rows.first?.id == user.id.uuidString)  // stable prefix
         guard case .streamingText(let streamed) = controller.rows.last?.kind else {
-            Issue.record("last row not streamingText: \(String(describing: controller.rows.last?.kind))"); return
+            Issue.record(
+                "last row not streamingText: \(String(describing: controller.rows.last?.kind))");
+            return
         }
         #expect(streamed.content == "partial answer")
     }
@@ -267,16 +277,20 @@ struct ChatTranscriptControllerTests {
         let messages: [any AgentMessageProtocol] = [user]
 
         let unthrottled = ChatTranscriptController(streamingThrottle: .zero)
-        unthrottled.rebuild(messages: messages, stream: AssistantMessage(content: "a"), isGenerating: true)
+        unthrottled.rebuild(
+            messages: messages, stream: AssistantMessage(content: "a"), isGenerating: true)
         for _ in 0..<3 {
-            unthrottled.patchStreamingTail(messages: messages, stream: AssistantMessage(content: "a"), isGenerating: true)
+            unthrottled.patchStreamingTail(
+                messages: messages, stream: AssistantMessage(content: "a"), isGenerating: true)
         }
         #expect(unthrottled.streamingRowVersion == 3)
 
         let throttled = ChatTranscriptController(streamingThrottle: .seconds(60))
-        throttled.rebuild(messages: messages, stream: AssistantMessage(content: "a"), isGenerating: true)
+        throttled.rebuild(
+            messages: messages, stream: AssistantMessage(content: "a"), isGenerating: true)
         for _ in 0..<3 {
-            throttled.patchStreamingTail(messages: messages, stream: AssistantMessage(content: "a"), isGenerating: true)
+            throttled.patchStreamingTail(
+                messages: messages, stream: AssistantMessage(content: "a"), isGenerating: true)
         }
         #expect(throttled.streamingRowVersion == 0)
     }

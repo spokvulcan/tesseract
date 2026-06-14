@@ -51,7 +51,8 @@ nonisolated func createSkillTool(skills: [SkillMetadata]) -> AgentToolDefinition
             // This lets users invoke them via slash commands that mention the name.
             let query = name.lowercased()
             guard let skill = skills.first(where: { $0.name == query }) else {
-                let available = skills
+                let available =
+                    skills
                     .filter { !$0.disableModelInvocation }
                     .map(\.name)
                     .joined(separator: ", ")
@@ -91,7 +92,7 @@ private nonisolated func loadSkill(_ skill: SkillMetadata) -> AgentToolResult {
     let fileURL = URL(fileURLWithPath: skill.filePath)
 
     guard let data = try? Data(contentsOf: fileURL),
-          let fullText = String(data: data, encoding: .utf8)
+        let fullText = String(data: data, encoding: .utf8)
     else {
         return .error("Failed to read skill file: \(skill.filePath)")
     }
@@ -131,10 +132,11 @@ private nonisolated func loadLinkedFile(
     }
 
     guard let data = try? Data(contentsOf: resolved),
-          let content = String(data: data, encoding: .utf8)
+        let content = String(data: data, encoding: .utf8)
     else {
-        let available = enumerateLinkedFiles(in: skillDir,
-                                             skillFile: URL(fileURLWithPath: skill.filePath))
+        let available = enumerateLinkedFiles(
+            in: skillDir,
+            skillFile: URL(fileURLWithPath: skill.filePath))
         if available.isEmpty {
             return .error("File not found: \(relativePath)")
         }
@@ -154,11 +156,13 @@ private nonisolated func enumerateLinkedFiles(in directory: URL, skillFile: URL)
     let fm = FileManager.default
     var results: [String] = []
 
-    guard let entries = try? fm.contentsOfDirectory(
-        at: directory,
-        includingPropertiesForKeys: [.isDirectoryKey],
-        options: [.skipsHiddenFiles]
-    ) else {
+    guard
+        let entries = try? fm.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+    else {
         return []
     }
 
@@ -175,7 +179,9 @@ private nonisolated func enumerateLinkedFiles(in directory: URL, skillFile: URL)
                 options: [.skipsHiddenFiles]
             ) {
                 for subFile in subEntries {
-                    let subIsDir = (try? subFile.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                    let subIsDir =
+                        (try? subFile.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory
+                        ?? false
                     if !subIsDir {
                         results.append("\(subName)/\(subFile.lastPathComponent)")
                     }

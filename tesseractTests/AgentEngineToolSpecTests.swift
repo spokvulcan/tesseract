@@ -21,12 +21,12 @@ struct AgentEngineToolSpecTests {
                 "parameters": [
                     "type": "object",
                     "properties": [
-                        "command": ["type": "string"] as [String: any Sendable],
+                        "command": ["type": "string"] as [String: any Sendable]
                     ] as [String: any Sendable],
                     "required": ["command"],
                 ] as [String: any Sendable],
             ] as [String: any Sendable],
-        ],
+        ]
     ]
 
     @Test func buildUserInputForwardsToolSpecs() {

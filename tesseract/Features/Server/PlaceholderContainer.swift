@@ -175,14 +175,14 @@ nonisolated struct PlaceholderContainerHeader: Codable, Sendable {
         defer { try? handle.close() }
 
         guard let lengthData = try? handle.read(upToCount: 8),
-              lengthData.count == 8
+            lengthData.count == 8
         else { return nil }
         let headerLength = lengthData.withUnsafeBytes {
             $0.load(as: UInt64.self).littleEndian
         }
         guard headerLength <= UInt64(Int.max),
-              let headerData = try? handle.read(upToCount: Int(headerLength)),
-              headerData.count == Int(headerLength)
+            let headerData = try? handle.read(upToCount: Int(headerLength)),
+            headerData.count == Int(headerLength)
         else { return nil }
         return try? JSONDecoder().decode(
             PlaceholderContainerHeader.self,
@@ -210,22 +210,24 @@ nonisolated func encodePlaceholderContainer(
         var arrayEntries: [PlaceholderContainerHeader.ArrayEntry] = []
         arrayEntries.reserveCapacity(layer.state.count)
         for array in layer.state {
-            arrayEntries.append(.init(
-                dtype: array.dtype,
-                shape: array.shape,
-                byteOffset: runningByteOffset,
-                byteSize: array.data.count
-            ))
+            arrayEntries.append(
+                .init(
+                    dtype: array.dtype,
+                    shape: array.shape,
+                    byteOffset: runningByteOffset,
+                    byteSize: array.data.count
+                ))
             runningByteOffset += array.data.count
             blobs.append(array.data)
         }
-        layerHeaders.append(.init(
-            className: layer.className,
-            metaState: layer.metaState,
-            offset: layer.offset,
-            suffixBaseOffset: layer.suffixBaseOffset,
-            arrays: arrayEntries
-        ))
+        layerHeaders.append(
+            .init(
+                className: layer.className,
+                metaState: layer.metaState,
+                offset: layer.offset,
+                suffixBaseOffset: layer.suffixBaseOffset,
+                arrays: arrayEntries
+            ))
     }
 
     let header = PlaceholderContainerHeader(

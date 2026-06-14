@@ -22,7 +22,8 @@ import Foundation
 protocol WordHighlightSurface: AnyObject {
     /// Show a fresh segment and begin tracking. `playbackTimeProvider` is the clock
     /// the surface samples to pace the highlight.
-    func show(text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval)
+    func show(
+        text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval)
 
     /// Switch to the next segment's text once the playback head crosses the
     /// **Segment Window** (`segmentBase`: the previous segment's cumulative scheduled

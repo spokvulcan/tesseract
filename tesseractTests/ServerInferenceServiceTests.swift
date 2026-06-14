@@ -45,12 +45,13 @@ struct ServerInferenceServiceTests {
         )
         let start = try await service.start(
             ServerInferenceRequest(
-                input: .chat(.init(
-                    systemPrompt: "System",
-                    messages: [.user(content: "Hello")],
-                    toolSpecs: nil,
-                    prefixCacheConversation: nil
-                )),
+                input: .chat(
+                    .init(
+                        systemPrompt: "System",
+                        messages: [.user(content: "Hello")],
+                        toolSpecs: nil,
+                        prefixCacheConversation: nil
+                    )),
                 parameters: .default
             )
         )
@@ -86,12 +87,13 @@ struct ServerInferenceServiceTests {
 
         let start = try await service.start(
             ServerInferenceRequest(
-                input: .chat(.init(
-                    systemPrompt: "System",
-                    messages: [.user(content: "Hello")],
-                    toolSpecs: nil,
-                    prefixCacheConversation: prefixConversation
-                )),
+                input: .chat(
+                    .init(
+                        systemPrompt: "System",
+                        messages: [.user(content: "Hello")],
+                        toolSpecs: nil,
+                        prefixCacheConversation: prefixConversation
+                    )),
                 parameters: .default,
                 route: .serverCompatible
             )
@@ -112,21 +114,23 @@ struct ServerInferenceServiceTests {
         completion.start = makeStart(textChunks: ["server path"])
         completion.progressEvents = [
             .cacheLookupStarted,
-            .cacheLookupFinished(.init(
-                reason: "missNoEntries",
-                cachedTokens: 0,
-                sharedPrefixLength: 0,
-                promptTokens: 4096,
-                newTokensToPrefill: 4096,
-                lookupMs: 2.0,
-                restoreMs: 0
-            )),
-            .prefillStarted(.init(
-                promptTokens: 4096,
-                cachedTokens: 0,
-                newTokensToPrefill: 4096,
-                prefillMs: nil
-            )),
+            .cacheLookupFinished(
+                .init(
+                    reason: "missNoEntries",
+                    cachedTokens: 0,
+                    sharedPrefixLength: 0,
+                    promptTokens: 4096,
+                    newTokensToPrefill: 4096,
+                    lookupMs: 2.0,
+                    restoreMs: 0
+                )),
+            .prefillStarted(
+                .init(
+                    promptTokens: 4096,
+                    cachedTokens: 0,
+                    newTokensToPrefill: 4096,
+                    prefillMs: nil
+                )),
         ]
         let log = ServerGenerationLog()
         let handle = log.startRequest(
@@ -147,16 +151,17 @@ struct ServerInferenceServiceTests {
 
         let start = try await service.start(
             ServerInferenceRequest(
-                input: .chat(.init(
-                    systemPrompt: "System",
-                    messages: [.user(content: "Hello")],
-                    toolSpecs: nil,
-                    prefixCacheConversation: prefixConversation,
-                    progressHandler: CompletionHandler.makeProgressHandler(
-                        activityLog: log,
-                        logHandle: handle
-                    )
-                )),
+                input: .chat(
+                    .init(
+                        systemPrompt: "System",
+                        messages: [.user(content: "Hello")],
+                        toolSpecs: nil,
+                        prefixCacheConversation: prefixConversation,
+                        progressHandler: CompletionHandler.makeProgressHandler(
+                            activityLog: log,
+                            logHandle: handle
+                        )
+                    )),
                 parameters: .default,
                 route: .serverCompatible
             )
@@ -186,12 +191,13 @@ struct ServerInferenceServiceTests {
 
         let start = try await service.start(
             ServerInferenceRequest(
-                input: .chat(.init(
-                    systemPrompt: "System",
-                    messages: [.user(content: "Hello")],
-                    toolSpecs: nil,
-                    prefixCacheConversation: nil
-                )),
+                input: .chat(
+                    .init(
+                        systemPrompt: "System",
+                        messages: [.user(content: "Hello")],
+                        toolSpecs: nil,
+                        prefixCacheConversation: nil
+                    )),
                 parameters: .default,
                 route: .serverCompatible
             )
@@ -227,12 +233,13 @@ struct ServerInferenceServiceTests {
 
         let start = try await service.start(
             ServerInferenceRequest(
-                input: .chat(.init(
-                    systemPrompt: "System",
-                    messages: [.user(content: "Hello")],
-                    toolSpecs: nil,
-                    prefixCacheConversation: assistantLast
-                )),
+                input: .chat(
+                    .init(
+                        systemPrompt: "System",
+                        messages: [.user(content: "Hello")],
+                        toolSpecs: nil,
+                        prefixCacheConversation: assistantLast
+                    )),
                 parameters: .default,
                 route: .serverCompatible
             )
@@ -256,12 +263,13 @@ struct ServerInferenceServiceTests {
 
         let start = try await service.start(
             ServerInferenceRequest(
-                input: .chat(.init(
-                    systemPrompt: "System",
-                    messages: [.user(content: "Hello")],
-                    toolSpecs: nil,
-                    prefixCacheConversation: nil
-                )),
+                input: .chat(
+                    .init(
+                        systemPrompt: "System",
+                        messages: [.user(content: "Hello")],
+                        toolSpecs: nil,
+                        prefixCacheConversation: nil
+                    )),
                 parameters: .default,
                 route: .serverCompatible
             )
@@ -289,12 +297,13 @@ struct ServerInferenceServiceTests {
         await #expect(throws: AgentEngineError.self) {
             _ = try await service.start(
                 ServerInferenceRequest(
-                    input: .chat(.init(
-                        systemPrompt: "System",
-                        messages: [.user(content: "Hello")],
-                        toolSpecs: nil,
-                        prefixCacheConversation: prefixConversation
-                    )),
+                    input: .chat(
+                        .init(
+                            systemPrompt: "System",
+                            messages: [.user(content: "Hello")],
+                            toolSpecs: nil,
+                            prefixCacheConversation: prefixConversation
+                        )),
                     parameters: .default,
                     route: .serverCompatible
                 )
@@ -330,18 +339,21 @@ struct ServerInferenceServiceTests {
         #expect(try await collectText(from: stream) == "foreground background")
         #expect(completion.calls.count == 1)
         #expect(engine.calls.isEmpty)
-        #expect(completion.calls[0].conversation == AgentConversationBuilder.conversation(
-            systemPrompt: "System",
-            messages: [.user(content: "Hello")],
-            toolSpecs: nil
-        ))
+        #expect(
+            completion.calls[0].conversation
+                == AgentConversationBuilder.conversation(
+                    systemPrompt: "System",
+                    messages: [.user(content: "Hello")],
+                    toolSpecs: nil
+                ))
     }
 
     /// A history the conversation shape cannot carry (an attachment that no
     /// longer decodes) builds no conversation — the request still goes out
     /// server-compatible and the **Completion Route** falls back to the
     /// managed arm: uncached but correct, never a dropped request.
-    @Test func sharedGenerateClosureFallsBackToManagedArmWhenAttachmentIsUndecodable() async throws {
+    @Test func sharedGenerateClosureFallsBackToManagedArmWhenAttachmentIsUndecodable() async throws
+    {
         let engine = StubManagedInferenceEngine()
         let completion = StubServerCompletionStarter()
         engine.chatStart = makeStart(textChunks: ["managed fallback"])
@@ -357,9 +369,13 @@ struct ServerInferenceServiceTests {
 
         let stream = generate(
             "System",
-            [.user(content: "What is in this image?", images: [
-                ImageAttachment(data: Data([0x00, 0x01]), mimeType: "image/png")
-            ])],
+            [
+                .user(
+                    content: "What is in this image?",
+                    images: [
+                        ImageAttachment(data: Data([0x00, 0x01]), mimeType: "image/png")
+                    ])
+            ],
             nil,
             nil
         )
@@ -451,7 +467,9 @@ struct ServerInferenceServiceTests {
 
         _ = try await collectText(from: generate("System", [.user(content: "q1")], nil, nil))
         #expect(completion.calls.count == 1)
-        #expect(completion.calls[0].parameters.temperature == AgentGenerateParameters.qwen35.temperature)
+        #expect(
+            completion.calls[0].parameters.temperature == AgentGenerateParameters.qwen35.temperature
+        )
 
         // Flip the model after the closure exists. The provider must observe
         // the new value on the very next call.
@@ -460,7 +478,9 @@ struct ServerInferenceServiceTests {
         completion.start = makeStart(textChunks: ["ok"])
         _ = try await collectText(from: generate("System", [.user(content: "q2")], nil, nil))
         #expect(completion.calls.count == 2)
-        #expect(completion.calls[1].parameters.temperature == AgentGenerateParameters.qwen3Thinking.temperature)
+        #expect(
+            completion.calls[1].parameters.temperature
+                == AgentGenerateParameters.qwen3Thinking.temperature)
     }
 
     /// Internal agent sessions must reach `ServerInferenceService` whether or
@@ -494,7 +514,8 @@ struct ServerInferenceServiceTests {
         #expect(completion.calls.count == 1)
     }
 
-    @Test func sharedGenerateClosureCancelsUnderlyingServiceStartWhenConsumerTaskIsCancelled() async {
+    @Test func sharedGenerateClosureCancelsUnderlyingServiceStartWhenConsumerTaskIsCancelled() async
+    {
         let engine = StubManagedInferenceEngine()
         let completion = StubServerCompletionStarter()
         let probe = ControlledInferenceStart()
@@ -568,15 +589,16 @@ private final class StubManagedInferenceEngine: ManagedInferenceStarting {
         prompt: String,
         parameters: AgentGenerateParameters
     ) throws -> HTTPServerGenerationStart {
-        calls.append(.init(
-            kind: .prompt,
-            prompt: prompt,
-            systemPrompt: nil,
-            messageCount: 0,
-            toolSpecCount: 0,
-            progressHandlerForwarded: false,
-            parameters: parameters
-        ))
+        calls.append(
+            .init(
+                kind: .prompt,
+                prompt: prompt,
+                systemPrompt: nil,
+                messageCount: 0,
+                toolSpecCount: 0,
+                progressHandlerForwarded: false,
+                parameters: parameters
+            ))
         return promptStart
     }
 
@@ -588,16 +610,17 @@ private final class StubManagedInferenceEngine: ManagedInferenceStarting {
         renderContext: TemplateRenderContext,
         progressHandler: ServerInferenceProgressHandler?
     ) throws -> HTTPServerGenerationStart {
-        calls.append(.init(
-            kind: .chat,
-            prompt: nil,
-            systemPrompt: systemPrompt,
-            messageCount: messages.count,
-            toolSpecCount: toolSpecs?.count ?? 0,
-            progressHandlerForwarded: progressHandler != nil,
-            parameters: parameters,
-            renderContext: renderContext
-        ))
+        calls.append(
+            .init(
+                kind: .chat,
+                prompt: nil,
+                systemPrompt: systemPrompt,
+                messageCount: messages.count,
+                toolSpecCount: toolSpecs?.count ?? 0,
+                progressHandlerForwarded: progressHandler != nil,
+                parameters: parameters,
+                renderContext: renderContext
+            ))
         return chatStart
     }
 }
@@ -632,14 +655,15 @@ private final class StubServerCompletionStarter: ServerCompletionStarting {
         renderContext: TemplateRenderContext,
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart {
-        calls.append(.init(
-            modelID: modelID,
-            conversation: conversation,
-            toolSpecCount: toolSpecs?.count ?? 0,
-            progressHandlerForwarded: progressHandler != nil,
-            parameters: parameters,
-            renderContext: renderContext
-        ))
+        calls.append(
+            .init(
+                modelID: modelID,
+                conversation: conversation,
+                toolSpecCount: toolSpecs?.count ?? 0,
+                progressHandlerForwarded: progressHandler != nil,
+                parameters: parameters,
+                renderContext: renderContext
+            ))
         if let error {
             throw error
         }

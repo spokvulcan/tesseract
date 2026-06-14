@@ -243,7 +243,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let base = manifest.snapshots[baseID],
-              base.tokenOffset == descriptor.segmentBaseOffset
+            base.tokenOffset == descriptor.segmentBaseOffset
         else { return nil }
         return PersistedSnapshotDescriptor(
             snapshotID: descriptor.snapshotID,
@@ -320,7 +320,8 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         _ meta: PartitionMeta,
         digest: String
     ) {
-        let dir = rootURL
+        let dir =
+            rootURL
             .appendingPathComponent("partitions")
             .appendingPathComponent(digest)
         let url = dir.appendingPathComponent("_meta.json")
@@ -336,7 +337,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         } catch {
             Log.agent.error(
                 "SnapshotLedger.writePartitionMetaFile failed "
-                + "digest=\(digest) error=\(String(describing: error))"
+                    + "digest=\(digest) error=\(String(describing: error))"
             )
         }
     }
@@ -404,9 +405,10 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         // participate in normal utility eviction and never bypass system
         // protection. Front-door validation rejects these already, so
         // this branch is only reached in tests.
-        let incomingType = HybridCacheSnapshot.CheckpointType(
-            wireString: descriptor.checkpointType
-        ) ?? .leaf
+        let incomingType =
+            HybridCacheSnapshot.CheckpointType(
+                wireString: descriptor.checkpointType
+            ) ?? .leaf
 
         // Pass 1 — evict non-system residents in terminal-loss utility
         // order under the lock.
@@ -463,9 +465,10 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        let incomingType = HybridCacheSnapshot.CheckpointType(
-            wireString: descriptor.checkpointType
-        ) ?? .leaf
+        let incomingType =
+            HybridCacheSnapshot.CheckpointType(
+                wireString: descriptor.checkpointType
+            ) ?? .leaf
         let predicate: (HybridCacheSnapshot.CheckpointType) -> Bool =
             incomingType == .system ? { _ in true } : { $0 != .system }
 
@@ -535,11 +538,12 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         ) {
             lru.map { resident -> Double in
                 guard resident.totalBytes > 0 else { return 0 }
-                let rePrefillSeconds = EvictionPolicy.parentRelativeFlops(
-                    nodeOffset: resident.tokenOffset,
-                    parentOffset: 0,
-                    profile: config.flopProfile
-                ) / config.estimates.prefillFlopsPerSecond
+                let rePrefillSeconds =
+                    EvictionPolicy.parentRelativeFlops(
+                        nodeOffset: resident.tokenOffset,
+                        parentOffset: 0,
+                        profile: config.flopProfile
+                    ) / config.estimates.prefillFlopsPerSecond
                 return rePrefillSeconds / Double(resident.totalBytes)
             }
         }
@@ -943,8 +947,8 @@ extension SnapshotLedger {
         guard loaded.isSchemaCompatible else {
             Log.agent.info(
                 "SnapshotLedger.seedFromWarmStart schema mismatch "
-                + "loaded=\(loaded.schemaVersion) "
-                + "current=\(SnapshotManifestSchema.currentVersion); starting fresh"
+                    + "loaded=\(loaded.schemaVersion) "
+                    + "current=\(SnapshotManifestSchema.currentVersion); starting fresh"
             )
             let backupURL = rootURL.appendingPathComponent(
                 "manifest.v\(loaded.schemaVersion).bak"
@@ -1018,11 +1022,11 @@ extension SnapshotLedger {
             let partitionDir = partitionsDir.appendingPathComponent(digest)
             let metaURL = partitionDir.appendingPathComponent("_meta.json")
             guard let metaData = try? Data(contentsOf: metaURL),
-                  let meta = try? JSONDecoder().decode(PartitionMeta.self, from: metaData)
+                let meta = try? JSONDecoder().decode(PartitionMeta.self, from: metaData)
             else {
                 Log.agent.error(
                     "SnapshotLedger rebuild: partition \(digest) missing or "
-                    + "unreadable _meta.json"
+                        + "unreadable _meta.json"
                 )
                 // Skip the partition entirely — the normal fingerprint
                 // mismatch path in `commitRestoredManifest` handles
@@ -1032,21 +1036,25 @@ extension SnapshotLedger {
             rebuilt.partitions[digest] = meta
 
             let snapshotsDir = partitionDir.appendingPathComponent("snapshots")
-            guard let shardNames = try? FileManager.default.contentsOfDirectory(
-                atPath: snapshotsDir.path
-            ) else { continue }
+            guard
+                let shardNames = try? FileManager.default.contentsOfDirectory(
+                    atPath: snapshotsDir.path
+                )
+            else { continue }
 
             for shard in shardNames {
                 let shardDir = snapshotsDir.appendingPathComponent(shard)
-                guard let fileNames = try? FileManager.default.contentsOfDirectory(
-                    atPath: shardDir.path
-                ) else { continue }
+                guard
+                    let fileNames = try? FileManager.default.contentsOfDirectory(
+                        atPath: shardDir.path
+                    )
+                else { continue }
                 for name in fileNames where name.hasSuffix(".safetensors") {
                     let fileURL = shardDir.appendingPathComponent(name)
                     let relativePath = "partitions/\(digest)/snapshots/\(shard)/\(name)"
                     walkedFiles[relativePath] = fileURL
                     guard let descriptor = extractDescriptorFromFile(fileURL),
-                          descriptor.partitionDigest == digest
+                        descriptor.partitionDigest == digest
                     else { continue }
                     candidates.append(descriptor)
                 }
@@ -1069,9 +1077,11 @@ extension SnapshotLedger {
         var keptPaths = Set<String>()
         for descriptor in candidates
         where !inheritedPaths.contains(descriptor.fileRelativePath) {
-            guard descriptor.inheritedSegments.allSatisfy({
-                walkedFiles[$0.fileRelativePath] != nil
-            }) else {
+            guard
+                descriptor.inheritedSegments.allSatisfy({
+                    walkedFiles[$0.fileRelativePath] != nil
+                })
+            else {
                 // Broken chain — a missing inherited file means the head
                 // can never compose. Drop the entry; its own file falls
                 // out via the keep-set sweep below.
@@ -1086,9 +1096,9 @@ extension SnapshotLedger {
 
         Log.agent.info(
             "SnapshotLedger rebuild: recovered "
-            + "partitions=\(rebuilt.partitions.count) "
-            + "descriptors=\(rebuilt.snapshots.count) "
-            + "orphanedFiles=\(orphanedFiles.count)"
+                + "partitions=\(rebuilt.partitions.count) "
+                + "descriptors=\(rebuilt.snapshots.count) "
+                + "orphanedFiles=\(orphanedFiles.count)"
         )
 
         // Delete orphaned files off the hot path.
@@ -1154,9 +1164,11 @@ extension SnapshotLedger {
             // longer decodes — `PrefixCacheManager.warmStart` would skip
             // them silently otherwise, leaving their bytes stranded in
             // `currentSSDBytes`.
-            guard HybridCacheSnapshot.CheckpointType(
-                wireString: desc.checkpointType
-            ) != nil else {
+            guard
+                HybridCacheSnapshot.CheckpointType(
+                    wireString: desc.checkpointType
+                ) != nil
+            else {
                 deadDescriptorFiles.append(
                     contentsOf: chainFileURLs(for: desc)
                 )
@@ -1193,7 +1205,8 @@ extension SnapshotLedger {
             let capturedDigests = invalidatedDigests
             Task.detached {
                 for digest in capturedDigests {
-                    let dir = capturedRoot
+                    let dir =
+                        capturedRoot
                         .appendingPathComponent("partitions")
                         .appendingPathComponent(digest)
                     try? FileManager.default.removeItem(at: dir)
@@ -1212,11 +1225,11 @@ extension SnapshotLedger {
 
         Log.agent.info(
             "SnapshotLedger.seedFromWarmStart source=\(source) "
-            + "partitions=\(restored.partitions.count) "
-            + "snapshots=\(restored.snapshots.count) "
-            + "bytes=\(seedBytes) "
-            + "invalidated=\(invalidatedDigests.count) "
-            + "dead=\(deadDescriptorFiles.count)"
+                + "partitions=\(restored.partitions.count) "
+                + "snapshots=\(restored.snapshots.count) "
+                + "bytes=\(seedBytes) "
+                + "invalidated=\(invalidatedDigests.count) "
+                + "dead=\(deadDescriptorFiles.count)"
         )
 
         return WarmStartOutcome(
@@ -1239,7 +1252,7 @@ extension SnapshotLedger {
         // Stale-schema files cannot be reattached safely; treat as
         // orphaned and let the caller delete.
         guard header.schemaVersion == SnapshotManifestSchema.currentVersion,
-              header.descriptor.schemaVersion == SnapshotManifestSchema.currentVersion
+            header.descriptor.schemaVersion == SnapshotManifestSchema.currentVersion
         else {
             return nil
         }

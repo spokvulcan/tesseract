@@ -87,7 +87,8 @@ actor HTTPPrefixCacheSessionReplayStore {
             }
 
             if let signature = assistantSignature(for: message),
-               let recovered = storedTurns[signature]?.reasoning {
+                let recovered = storedTurns[signature]?.reasoning
+            {
                 var repaired = message
                 repaired.reasoning_content = recovered
                 repaired.reasoning = nil
@@ -114,12 +115,13 @@ actor HTTPPrefixCacheSessionReplayStore {
         assistantMessage: HTTPPrefixCacheMessage
     ) {
         guard assistantMessage.role == .assistant,
-              let signature = assistantMessage.assistantSignature,
-              let key = replayKey(
+            let signature = assistantMessage.assistantSignature,
+            let key = replayKey(
                 sessionAffinity: sessionAffinity,
                 modelID: modelID,
                 visionMode: visionMode
-              ) else {
+            )
+        else {
             return
         }
 
@@ -147,13 +149,14 @@ actor HTTPPrefixCacheSessionReplayStore {
     ) -> HTTPPrefixCacheAssistantSignature? {
         guard message.role == .assistant else { return nil }
 
-        let toolCalls = message.tool_calls?.compactMap { toolCall -> HTTPPrefixCacheToolCall? in
-            guard let name = toolCall.function?.name else { return nil }
-            return HTTPPrefixCacheToolCall(
-                name: name,
-                argumentsJSON: toolCall.function?.arguments ?? "{}"
-            )
-        } ?? []
+        let toolCalls =
+            message.tool_calls?.compactMap { toolCall -> HTTPPrefixCacheToolCall? in
+                guard let name = toolCall.function?.name else { return nil }
+                return HTTPPrefixCacheToolCall(
+                    name: name,
+                    argumentsJSON: toolCall.function?.arguments ?? "{}"
+                )
+            } ?? []
 
         return HTTPPrefixCacheAssistantSignature(
             content: message.content?.textValue ?? "",

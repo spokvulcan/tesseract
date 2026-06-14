@@ -201,9 +201,21 @@ struct ServerGenerationLogTests {
 
         let spans = log.traces[0].spans
         #expect(spans.count == 3)
-        if case .thinking(_, let c) = spans[0] { #expect(c == "thinking…") } else { Issue.record("span 0 not thinking") }
-        if case .text(_, let c) = spans[1] { #expect(c == "answer") } else { Issue.record("span 1 not text") }
-        if case .thinking(_, let c) = spans[2] { #expect(c == "more") } else { Issue.record("span 2 not thinking") }
+        if case .thinking(_, let c) = spans[0] {
+            #expect(c == "thinking…")
+        } else {
+            Issue.record("span 0 not thinking")
+        }
+        if case .text(_, let c) = spans[1] {
+            #expect(c == "answer")
+        } else {
+            Issue.record("span 1 not text")
+        }
+        if case .thinking(_, let c) = spans[2] {
+            #expect(c == "more")
+        } else {
+            Issue.record("span 2 not thinking")
+        }
     }
 
     @Test func malformedToolCallCountsAsFirstOutputAndFlipsToDecoding() {
@@ -231,13 +243,16 @@ struct ServerGenerationLogTests {
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
         log.ingest(handle: handle, event: .text("x"))
-        log.ingest(handle: handle, event: .info(.init(
-            promptTokenCount: 1024,
-            generationTokenCount: 256,
-            promptTime: 0.5,
-            generateTime: 8.0,
-            stopReason: .stop
-        )))
+        log.ingest(
+            handle: handle,
+            event: .info(
+                .init(
+                    promptTokenCount: 1024,
+                    generationTokenCount: 256,
+                    promptTime: 0.5,
+                    generateTime: 8.0,
+                    stopReason: .stop
+                )))
 
         let trace = log.traces[0]
         #expect(trace.promptTokens == 1024)

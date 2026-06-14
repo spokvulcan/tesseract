@@ -42,7 +42,8 @@ nonisolated enum ImageIngest {
     /// The same accepted set as `UTType`s, in a stable order — for the file
     /// picker's allowed types and the pasteboard probe. Derived from
     /// `supportedMIMETypes` so picker, paste, and ingest can never drift apart.
-    static let supportedUTTypes: [UTType] = supportedMIMETypes
+    static let supportedUTTypes: [UTType] =
+        supportedMIMETypes
         .sorted()
         .compactMap { UTType(mimeType: $0) }
 
@@ -76,9 +77,10 @@ nonisolated enum ImageIngest {
     ) -> Result<ImageAttachment, Rejection> {
         guard let png = pngData(from: image) else { return .failure(.notAnImage) }
         guard png.count <= maxBytes else { return .failure(.oversize(bytes: png.count)) }
-        return .success(ImageAttachment(
-            data: png, mimeType: "image/png", filename: filename ?? "pasted-image.png"
-        ))
+        return .success(
+            ImageAttachment(
+                data: png, mimeType: "image/png", filename: filename ?? "pasted-image.png"
+            ))
     }
 
     /// Cap a batch of candidate attachments to the room remaining under `limit`,
@@ -97,7 +99,7 @@ nonisolated enum ImageIngest {
     /// Resolve a declared identifier to a canonical MIME type. Accepts a MIME
     /// (passed through), a UTI, or a bare filename extension.
     static func normalizedMIME(forIdentifier identifier: String) -> String? {
-        if identifier.contains("/") { return identifier }   // already a MIME
+        if identifier.contains("/") { return identifier }  // already a MIME
         if let utType = UTType(identifier) ?? UTType(filenameExtension: identifier) {
             return utType.preferredMIMEType
         }
@@ -114,8 +116,8 @@ nonisolated enum ImageIngest {
     /// PNG-encode a decoded image via a bitmap rep.
     static func pngData(from image: NSImage) -> Data? {
         guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:])
+            let rep = NSBitmapImageRep(data: tiff),
+            let png = rep.representation(using: .png, properties: [:])
         else { return nil }
         return png
     }

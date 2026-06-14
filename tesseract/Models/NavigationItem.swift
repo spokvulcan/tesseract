@@ -20,7 +20,9 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
 
     static let mainPages: [NavigationItem] = [.agent, .dictation, .speech]
     static let settingsPages: [NavigationItem] = [.general, .recording, .model]
-    static let serverPages: [NavigationItem] = [.serverDashboard, .serverPromptCache, .serverConfiguration]
+    static let serverPages: [NavigationItem] = [
+        .serverDashboard, .serverPromptCache, .serverConfiguration,
+    ]
 
     var name: LocalizedStringResource {
         switch self {

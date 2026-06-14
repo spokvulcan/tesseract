@@ -51,8 +51,9 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
 
     func currentPlaybackTime() -> TimeInterval {
         guard let node = playerNode,
-              let nodeTime = node.lastRenderTime,
-              let playerTime = node.playerTime(forNodeTime: nodeTime) else {
+            let nodeTime = node.lastRenderTime,
+            let playerTime = node.playerTime(forNodeTime: nodeTime)
+        else {
             return 0
         }
         return Double(playerTime.sampleTime) / playerTime.sampleRate
@@ -66,17 +67,22 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
 
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: Double(sampleRate),
-            channels: 1,
-            interleaved: false
-        ) else {
+        guard
+            let format = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: Double(sampleRate),
+                channels: 1,
+                interleaved: false
+            )
+        else {
             Log.speech.error("Failed to create audio format")
             return
         }
 
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else {
+        guard
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
+        else {
             Log.speech.error("Failed to create audio buffer")
             return
         }
@@ -119,12 +125,14 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         stop()
         self.diagnostics = diagnostics
 
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: Double(sampleRate),
-            channels: 1,
-            interleaved: false
-        ) else {
+        guard
+            let format = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: Double(sampleRate),
+                channels: 1,
+                interleaved: false
+            )
+        else {
             Log.speech.error("Failed to create audio format for streaming")
             return
         }
@@ -160,7 +168,8 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                 Log.speech.info("Created debug dir: \(dir.path)")
             } catch {
-                Log.speech.error("Failed to create debug dir \(dir.path): \(error.localizedDescription)")
+                Log.speech.error(
+                    "Failed to create debug dir \(dir.path): \(error.localizedDescription)")
             }
             debugOutputDir = dir
             debugRawChunks = []
@@ -185,7 +194,10 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         }
 
         // Create and schedule a buffer for this chunk
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else {
+        guard
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
+        else {
             Log.speech.error("Failed to create PCM buffer for chunk")
             return
         }
@@ -257,7 +269,9 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         guard let dir = debugOutputDir else { return }
         let sampleRate = debugSampleRate
 
-        Log.speech.info("Writing debug dump: \(self.debugRawChunks.count) chunks, \(self.debugScheduledSamples.count) scheduled samples")
+        Log.speech.info(
+            "Writing debug dump: \(self.debugRawChunks.count) chunks, \(self.debugScheduledSamples.count) scheduled samples"
+        )
 
         // Write raw chunks
         let rawDir = dir.appendingPathComponent("raw_chunks")
@@ -271,7 +285,9 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         }
 
         // Write full_stream.wav
-        writeWAV(samples: debugScheduledSamples, sampleRate: sampleRate, to: dir.appendingPathComponent("full_stream.wav"))
+        writeWAV(
+            samples: debugScheduledSamples, sampleRate: sampleRate,
+            to: dir.appendingPathComponent("full_stream.wav"))
 
         // Write metadata.json
         var scheduledOffset = 0
@@ -295,11 +311,15 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
             "chunks": chunks,
         ]
 
-        if let jsonData = try? JSONSerialization.data(withJSONObject: metadata, options: [.prettyPrinted, .sortedKeys]) {
+        if let jsonData = try? JSONSerialization.data(
+            withJSONObject: metadata, options: [.prettyPrinted, .sortedKeys])
+        {
             try? jsonData.write(to: dir.appendingPathComponent("metadata.json"))
         }
 
-        Log.speech.info("Debug dump written: \(debugRawChunks.count) chunks, \(debugScheduledSamples.count) samples → \(dir.path)")
+        Log.speech.info(
+            "Debug dump written: \(debugRawChunks.count) chunks, \(debugScheduledSamples.count) samples → \(dir.path)"
+        )
     }
 
     private func writeWAV(samples: [Float], sampleRate: Int, to url: URL) {
@@ -327,7 +347,9 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         data.append(contentsOf: "data".utf8)
         data.append(contentsOf: withUnsafeBytes(of: dataSize.littleEndian) { Array($0) })
         samples.withUnsafeBufferPointer { buf in
-            buf.baseAddress!.withMemoryRebound(to: UInt8.self, capacity: buf.count * MemoryLayout<Float>.size) { ptr in
+            buf.baseAddress!.withMemoryRebound(
+                to: UInt8.self, capacity: buf.count * MemoryLayout<Float>.size
+            ) { ptr in
                 data.append(ptr, count: buf.count * MemoryLayout<Float>.size)
             }
         }

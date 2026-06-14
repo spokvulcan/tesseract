@@ -31,7 +31,7 @@ final class ModelManager {
         let encoderPath = modelPath.appendingPathComponent("AudioEncoder.mlmodelc")
         let decoderPath = modelPath.appendingPathComponent("TextDecoder.mlmodelc")
 
-        return fileManager.fileExists(atPath: encoderPath.path) &&
-               fileManager.fileExists(atPath: decoderPath.path)
+        return fileManager.fileExists(atPath: encoderPath.path)
+            && fileManager.fileExists(atPath: decoderPath.path)
     }
 }

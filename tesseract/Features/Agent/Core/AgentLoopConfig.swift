@@ -13,10 +13,11 @@ struct AgentModelRef: Sendable {
 /// `contextTransformStart(reason:)` before awaiting the async transform.
 struct ContextTransformConfig: Sendable {
     let reason: ContextTransformReason
-    let transform: @Sendable (
-        _ messages: [any AgentMessageProtocol],
-        _ signal: CancellationToken?
-    ) async -> ContextTransformResult
+    let transform:
+        @Sendable (
+            _ messages: [any AgentMessageProtocol],
+            _ signal: CancellationToken?
+        ) async -> ContextTransformResult
 }
 
 // MARK: - AgentLoopConfig

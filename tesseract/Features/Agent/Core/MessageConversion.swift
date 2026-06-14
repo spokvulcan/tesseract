@@ -29,13 +29,14 @@ func toLLMCommonMessages(_ messages: [LLMMessage]) -> [Chat.Message] {
                 }
             )
         case .assistant(let content, let reasoning, let toolCalls):
-            .assistant(reconstructAssistantPromptContent(
-                content,
-                reasoning: reasoning,
-                toolCalls: toolCalls?.map {
-                    HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
-                } ?? []
-            ))
+            .assistant(
+                reconstructAssistantPromptContent(
+                    content,
+                    reasoning: reasoning,
+                    toolCalls: toolCalls?.map {
+                        HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
+                    } ?? []
+                ))
         case .toolResult(_, let content):
             .tool(content)
         }

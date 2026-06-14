@@ -49,7 +49,8 @@ struct BenchmarkConfig {
     /// Scenarios that should be skipped for non-default param configs (too slow).
     static let slowScenarioIDs: Set<String> = ["S4"]
 
-    private static func fullSweepConfigs(base: AgentGenerateParameters) -> [AgentGenerateParameters] {
+    private static func fullSweepConfigs(base: AgentGenerateParameters) -> [AgentGenerateParameters]
+    {
         let temperatures: [Float] = [0.3, 0.6, 0.8, 1.0]
         let topPs: [Float] = [0.8, 0.9, 0.95]
         let repPenalties: [Float?] = [nil, 1.05, 1.1]
@@ -71,8 +72,10 @@ struct BenchmarkConfig {
 
     /// Short label for a parameter config (used in filenames and charts).
     static func label(for params: AgentGenerateParameters) -> String {
-        var parts = ["t=\(String(format: "%.1f", params.temperature))",
-                     "p=\(String(format: "%.2f", params.topP))"]
+        var parts = [
+            "t=\(String(format: "%.1f", params.temperature))",
+            "p=\(String(format: "%.2f", params.topP))",
+        ]
         if params.topK > 0 {
             parts.append("k=\(params.topK)")
         }
@@ -143,7 +146,8 @@ struct BenchmarkConfig {
 
         let maxTokensPerRound: Int = {
             if let idx = args.firstIndex(of: "--bench-max-tokens"), idx + 1 < args.count,
-               let val = Int(args[idx + 1]) {
+                let val = Int(args[idx + 1])
+            {
                 return val
             }
             return 2048

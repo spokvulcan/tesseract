@@ -49,8 +49,8 @@ struct ImagePreviewFileCacheTests {
         let urlA = try cache.url(for: original)
         let urlB = try cache.url(for: copy)
 
-        #expect(urlA == urlB)             // digest dedup → one file
-        #expect(fs.writes.count == 1)     // write-once
+        #expect(urlA == urlB)  // digest dedup → one file
+        #expect(fs.writes.count == 1)  // write-once
     }
 
     @Test
@@ -74,8 +74,8 @@ struct ImagePreviewFileCacheTests {
         cache.prewarm(image)
         #expect(fs.writes.count == 1)
 
-        let url = try cache.url(for: image)   // the later click
-        #expect(fs.writes.count == 1)         // file already present — instant open
+        let url = try cache.url(for: image)  // the later click
+        #expect(fs.writes.count == 1)  // file already present — instant open
         #expect(fs.storage[url] != nil)
     }
 
@@ -111,7 +111,7 @@ struct ImagePreviewFileCacheTests {
             .appendingPathComponent("qltest-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: realRoot) }
 
-        let cache = ImagePreviewFileCache(root: realRoot)   // real DiskImagePreviewFileSystem
+        let cache = ImagePreviewFileCache(root: realRoot)  // real DiskImagePreviewFileSystem
         let image = makeAttachment(byte: 7)
 
         let url = try cache.url(for: image)

@@ -29,7 +29,8 @@ struct HybridCacheSnapshotTests {
             }
         }
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: cache, offset: 10, type: .system))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: cache, offset: 10, type: .system))
 
         #expect(snapshot.layers.count == 32)
         #expect(snapshot.tokenOffset == 10)
@@ -41,7 +42,8 @@ struct HybridCacheSnapshotTests {
         let values = MLXArray.ones([1, 1, 5, 64])
         kv.state = [keys, values]
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [kv], offset: 5, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 5, type: .leaf))
 
         kv.state = [MLXArray.zeros([1, 1, 8, 64]), MLXArray.zeros([1, 1, 8, 64])]
 
@@ -58,9 +60,10 @@ struct HybridCacheSnapshotTests {
 
         let quantized = QuantizedKVCache(groupSize: 64, bits: 8)
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(
-            cache: [kv, mamba, quantized], offset: 4, type: .system
-        ))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [kv, mamba, quantized], offset: 4, type: .system
+            ))
 
         #expect(snapshot.layers[0].className == "KVCache")
         #expect(snapshot.layers[1].className == "MambaCache")
@@ -73,9 +76,10 @@ struct HybridCacheSnapshotTests {
 
         let quantized = QuantizedKVCache(groupSize: 64, bits: 8)
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(
-            cache: [simple, quantized], offset: 4, type: .system
-        ))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [simple, quantized], offset: 4, type: .system
+            ))
 
         #expect(snapshot.layers[0].className == "KVCache")
         #expect(snapshot.layers[1].className == "QuantizedKVCache")
@@ -90,9 +94,11 @@ struct HybridCacheSnapshotTests {
         let mamba = MambaCache()
         mamba.state = [MLXArray.zeros([1, 3, 100]), MLXArray.zeros([1, 64, 16, 24])]
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [kv, mamba], offset: 10, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv, mamba], offset: 10, type: .leaf))
 
-        let expectedBytes = kv.state.reduce(0) { $0 + $1.nbytes }
+        let expectedBytes =
+            kv.state.reduce(0) { $0 + $1.nbytes }
             + mamba.state.reduce(0) { $0 + $1.nbytes }
 
         #expect(snapshot.memoryBytes == expectedBytes)
@@ -113,7 +119,8 @@ struct HybridCacheSnapshotTests {
         let cacheList = CacheList(KVCacheSimple(), MambaCache())
 
         // One supported layer + one CacheList → entire capture returns nil
-        let snapshot = HybridCacheSnapshot.capture(cache: [kv, cacheList], offset: 4, type: .system)
+        let snapshot = HybridCacheSnapshot.capture(
+            cache: [kv, cacheList], offset: 4, type: .system)
         #expect(snapshot == nil)
     }
 
@@ -123,7 +130,8 @@ struct HybridCacheSnapshotTests {
         let original = KVCacheSimple()
         original.state = [MLXArray.zeros([1, 1, 20, 64]), MLXArray.zeros([1, 1, 20, 64])]
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [original], offset: 20, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [original], offset: 20, type: .leaf))
         let restored = try snapshot.restore()
 
         #expect(restored.count == 1)
@@ -134,7 +142,8 @@ struct HybridCacheSnapshotTests {
     @Test func restoreCreatesQuantizedKVCache() throws {
         let quantized = QuantizedKVCache(groupSize: 64, bits: 8)
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [quantized], offset: 0, type: .system))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [quantized], offset: 0, type: .system))
         let restored = try snapshot.restore()
 
         #expect(restored.count == 1)
@@ -148,7 +157,8 @@ struct HybridCacheSnapshotTests {
         let rotating = RotatingKVCache(maxSize: 512)
         rotating.state = [MLXArray.zeros([1, 1, 10, 64]), MLXArray.zeros([1, 1, 10, 64])]
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [rotating], offset: 10, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [rotating], offset: 10, type: .leaf))
         let restored = try snapshot.restore()
 
         #expect(restored.count == 1)
@@ -160,7 +170,8 @@ struct HybridCacheSnapshotTests {
         let mamba = MambaCache()
         mamba.state = [MLXArray.zeros([1, 3, 14336]), MLXArray.zeros([1, 64, 128, 192])]
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [mamba], offset: 100, type: .system))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [mamba], offset: 100, type: .system))
         let restored = try snapshot.restore()
 
         #expect(restored.count == 1)
@@ -175,7 +186,8 @@ struct HybridCacheSnapshotTests {
         chunked.state = [MLXArray.zeros([1, 1, 10, 64]), MLXArray.zeros([1, 1, 10, 64])]
         chunked.metaState = ["256", "5"]  // chunkSize=256, startPosition=5
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [chunked], offset: 10, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [chunked], offset: 10, type: .leaf))
         let restored = try snapshot.restore()
 
         #expect(restored.count == 1)
@@ -191,7 +203,8 @@ struct HybridCacheSnapshotTests {
             .reshaped([1, 1, 10, 64])
         kv.state = [keys, values]
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [kv], offset: 10, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 10, type: .leaf))
         let restored = try snapshot.restore()
 
         let restoredKeys = restored[0].state[0]
@@ -204,7 +217,8 @@ struct HybridCacheSnapshotTests {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.ones([1, 1, 5, 64]), MLXArray.ones([1, 1, 5, 64])]
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [kv], offset: 5, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 5, type: .leaf))
         var restored = try snapshot.restore()
 
         restored[0].state = [MLXArray.zeros([1, 1, 8, 64]), MLXArray.zeros([1, 1, 8, 64])]
@@ -217,7 +231,8 @@ struct HybridCacheSnapshotTests {
         kv.state = [MLXArray.zeros([1, 1, 42, 64]), MLXArray.zeros([1, 1, 42, 64])]
         #expect(kv.offset == 42)
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [kv], offset: 42, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 42, type: .leaf))
         let restored = try snapshot.restore()
 
         #expect(restored[0].offset == 42)
@@ -227,7 +242,8 @@ struct HybridCacheSnapshotTests {
     @Test func restoredQuantizedKVCacheHasCorrectBits() throws {
         let quantized = QuantizedKVCache(groupSize: 32, bits: 4)
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [quantized], offset: 0, type: .system))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [quantized], offset: 0, type: .system))
         let restored = try snapshot.restore()
 
         let restoredQ = restored[0] as? QuantizedKVCache
@@ -242,7 +258,8 @@ struct HybridCacheSnapshotTests {
         chunked.metaState = ["16", "500"]
         chunked.offset = 510
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [chunked], offset: 510, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [chunked], offset: 510, type: .leaf))
         let restored = try snapshot.restore()
 
         #expect(restored[0] is ChunkedKVCache)
@@ -259,7 +276,8 @@ struct HybridCacheSnapshotTests {
         ]
         arrays.offset = 7
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [arrays], offset: 7, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [arrays], offset: 7, type: .leaf))
         let restored = try snapshot.restore()
 
         #expect(restored[0] is ArraysCache)
@@ -278,12 +296,14 @@ struct HybridCacheSnapshotTests {
         // that setter.
         let corrupt = HybridCacheSnapshot(
             tokenOffset: 8,
-            layers: [HybridCacheSnapshot.LayerState(
-                className: "QuantizedKVCache",
-                state: [],
-                metaState: ["0", "8"],  // truncated: 2 values instead of 4
-                offset: 8
-            )],
+            layers: [
+                HybridCacheSnapshot.LayerState(
+                    className: "QuantizedKVCache",
+                    state: [],
+                    metaState: ["0", "8"],  // truncated: 2 values instead of 4
+                    offset: 8
+                )
+            ],
             checkpointType: .leaf,
             memoryBytes: 0,
             createdAt: .now
@@ -297,12 +317,14 @@ struct HybridCacheSnapshotTests {
     @Test func restoreThrowsOnNonNumericQuantizedMetaState() {
         let corrupt = HybridCacheSnapshot(
             tokenOffset: 8,
-            layers: [HybridCacheSnapshot.LayerState(
-                className: "QuantizedKVCache",
-                state: [],
-                metaState: ["0", "8", "sixty-four", "8"],
-                offset: 8
-            )],
+            layers: [
+                HybridCacheSnapshot.LayerState(
+                    className: "QuantizedKVCache",
+                    state: [],
+                    metaState: ["0", "8", "sixty-four", "8"],
+                    offset: 8
+                )
+            ],
             checkpointType: .leaf,
             memoryBytes: 0,
             createdAt: .now
@@ -316,12 +338,14 @@ struct HybridCacheSnapshotTests {
     @Test func restoreThrowsOnUnknownCacheClassName() {
         let corrupt = HybridCacheSnapshot(
             tokenOffset: 4,
-            layers: [HybridCacheSnapshot.LayerState(
-                className: "FutureCache",
-                state: [],
-                metaState: [""],
-                offset: 4
-            )],
+            layers: [
+                HybridCacheSnapshot.LayerState(
+                    className: "FutureCache",
+                    state: [],
+                    metaState: [""],
+                    offset: 4
+                )
+            ],
             checkpointType: .leaf,
             memoryBytes: 0,
             createdAt: .now
@@ -352,7 +376,8 @@ struct HybridCacheSnapshotTests {
             .reshaped([1, 1, 10, 64])
         kv.state = [keys, values]
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [kv], offset: 10, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 10, type: .leaf))
 
         try withTempSnapshotURL { url in
             try snapshot.serialize(
@@ -385,9 +410,10 @@ struct HybridCacheSnapshotTests {
                 MLXArray.zeros([1, 1, 4, 64]),
                 MLXArray.zeros([1, 1, 4, 64]),
             ]
-            let snapshot = try #require(HybridCacheSnapshot.capture(
-                cache: [kv], offset: 4, type: ckptType
-            ))
+            let snapshot = try #require(
+                HybridCacheSnapshot.capture(
+                    cache: [kv], offset: 4, type: ckptType
+                ))
             try withTempSnapshotURL { url in
                 try snapshot.serialize(
                     to: url,
@@ -396,8 +422,9 @@ struct HybridCacheSnapshotTests {
                 let restored = try HybridCacheSnapshot.deserialize(
                     from: url, expectedFingerprint: "fp"
                 )
-                #expect(restored.checkpointType == ckptType,
-                        "round-trip failed for \(ckptType)")
+                #expect(
+                    restored.checkpointType == ckptType,
+                    "round-trip failed for \(ckptType)")
             }
         }
     }
@@ -417,9 +444,10 @@ struct HybridCacheSnapshotTests {
         chunked.metaState = ["16", "500"]
         chunked.offset = 510
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(
-            cache: [chunked], offset: 510, type: .leaf
-        ))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [chunked], offset: 510, type: .leaf
+            ))
 
         try withTempSnapshotURL { url in
             try snapshot.serialize(
@@ -449,12 +477,15 @@ struct HybridCacheSnapshotTests {
         let mamba = MambaCache()
         mamba.state = [
             MLXArray(Array(stride(from: Float(0), to: 300, by: 1))).reshaped([1, 3, 100]),
-            MLXArray(Array(stride(from: Float(0), to: Float(1_024), by: 1))).reshaped([1, 4, 16, 16]),
+            MLXArray(Array(stride(from: Float(0), to: Float(1_024), by: 1))).reshaped([
+                1, 4, 16, 16,
+            ]),
         ]
 
-        let snap1 = try #require(HybridCacheSnapshot.capture(
-            cache: [kv, mamba], offset: 10, type: .system
-        ))
+        let snap1 = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [kv, mamba], offset: 10, type: .system
+            ))
 
         try withTempSnapshotURL { url in
             try snap1.serialize(
@@ -468,9 +499,10 @@ struct HybridCacheSnapshotTests {
             // Hydrate snap2 into live caches, re-capture on top — mirrors
             // the warm-start hydration + continued-prefill path.
             let hydrated = try snap2.restore()
-            let snap3 = try #require(HybridCacheSnapshot.capture(
-                cache: hydrated, offset: snap2.tokenOffset, type: snap2.checkpointType
-            ))
+            let snap3 = try #require(
+                HybridCacheSnapshot.capture(
+                    cache: hydrated, offset: snap2.tokenOffset, type: snap2.checkpointType
+                ))
 
             #expect(snap1.layers.count == snap3.layers.count)
             for (a, b) in zip(snap1.layers, snap3.layers) {
@@ -481,8 +513,9 @@ struct HybridCacheSnapshotTests {
                 for (arrA, arrB) in zip(a.state, b.state) {
                     #expect(arrA.shape == arrB.shape)
                     #expect(arrA.dtype == arrB.dtype)
-                    #expect(arrA.asData() == arrB.asData(),
-                            "layer state bytes mismatch after round-trip")
+                    #expect(
+                        arrA.asData() == arrB.asData(),
+                        "layer state bytes mismatch after round-trip")
                 }
             }
         }
@@ -491,7 +524,8 @@ struct HybridCacheSnapshotTests {
     @Test func deserializeThrowsOnFingerprintMismatch() throws {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [kv], offset: 4, type: .system))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 4, type: .system))
 
         try withTempSnapshotURL { url in
             try snapshot.serialize(
@@ -509,9 +543,10 @@ struct HybridCacheSnapshotTests {
     @Test func deserializePassesWhenSchemaVersionMatches() throws {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
-        let snapshot = try #require(HybridCacheSnapshot.capture(
-            cache: [kv], offset: 4, type: .system
-        ))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [kv], offset: 4, type: .system
+            ))
 
         try withTempSnapshotURL { url in
             try snapshot.serialize(
@@ -533,9 +568,10 @@ struct HybridCacheSnapshotTests {
     @Test func deserializeThrowsOnSchemaVersionMismatch() throws {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
-        let snapshot = try #require(HybridCacheSnapshot.capture(
-            cache: [kv], offset: 4, type: .system
-        ))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [kv], offset: 4, type: .system
+            ))
 
         try withTempSnapshotURL { url in
             try snapshot.serialize(
@@ -558,9 +594,10 @@ struct HybridCacheSnapshotTests {
     @Test func deserializeThrowsOnMissingSchemaVersionWhenRequired() throws {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
-        let snapshot = try #require(HybridCacheSnapshot.capture(
-            cache: [kv], offset: 4, type: .system
-        ))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [kv], offset: 4, type: .system
+            ))
 
         try withTempSnapshotURL { url in
             try snapshot.serialize(
@@ -583,9 +620,10 @@ struct HybridCacheSnapshotTests {
         // key may or may not be present in the file.
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
-        let snapshot = try #require(HybridCacheSnapshot.capture(
-            cache: [kv], offset: 4, type: .system
-        ))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [kv], offset: 4, type: .system
+            ))
 
         try withTempSnapshotURL { url in
             try snapshot.serialize(
@@ -606,7 +644,8 @@ struct HybridCacheSnapshotTests {
     @Test func deserializeThrowsOnMissingFingerprint() throws {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [kv], offset: 4, type: .system))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 4, type: .system))
 
         try withTempSnapshotURL { url in
             try snapshot.serialize(to: url, metadata: [:])
@@ -621,7 +660,8 @@ struct HybridCacheSnapshotTests {
     @Test func serializePreservesCallerMetadataUnderNonReservedKeys() throws {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
-        let snapshot = try #require(HybridCacheSnapshot.capture(cache: [kv], offset: 4, type: .leaf))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 4, type: .leaf))
 
         try withTempSnapshotURL { url in
             try snapshot.serialize(
@@ -671,9 +711,10 @@ struct HybridCacheSnapshotTests {
         #expect(expectedMetaState[2] == "32")
         #expect(expectedMetaState[3] == "4")
 
-        let snapshot = try #require(HybridCacheSnapshot.capture(
-            cache: [quantized], offset: 8, type: .leaf
-        ))
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [quantized], offset: 8, type: .leaf
+            ))
         #expect(snapshot.layers[0].className == "QuantizedKVCache")
         #expect(snapshot.layers[0].metaState == expectedMetaState)
 
@@ -704,10 +745,12 @@ struct HybridCacheSnapshotTests {
         // for the contract (see Task 4.1.3 in
         // docs/marconi-hybrid-prefix-cache-implementation-plan.md).
         let testFile = URL(fileURLWithPath: #filePath)
-        let projectRoot = testFile
-            .deletingLastPathComponent()   // tesseractTests
-            .deletingLastPathComponent()   // project root
-        let snapshotFile = projectRoot
+        let projectRoot =
+            testFile
+            .deletingLastPathComponent()  // tesseractTests
+            .deletingLastPathComponent()  // project root
+        let snapshotFile =
+            projectRoot
             .appendingPathComponent("tesseract")
             .appendingPathComponent("Features")
             .appendingPathComponent("Server")

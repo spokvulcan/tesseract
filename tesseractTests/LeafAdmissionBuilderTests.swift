@@ -130,19 +130,21 @@ import MLXLMCommon
             ),
         ])
 
-        let canonical = try #require(try LeafAdmissionBuilder.reusablePrefix(
-            continuation: .userTurn,
-            storedConversation: stored,
-            toolSpecs: nil,
-            tokenizer: strippingTokenizer,
-            keySpace: .identity()
-        )?.get())
-        let future = try #require(try LeafAdmissionBuilder.futureSharedPrefix(
-            storedConversation: stored,
-            toolSpecs: nil,
-            tokenizer: strippingTokenizer,
-            keySpace: .identity()
-        )?.get())
+        let canonical = try #require(
+            try LeafAdmissionBuilder.reusablePrefix(
+                continuation: .userTurn,
+                storedConversation: stored,
+                toolSpecs: nil,
+                tokenizer: strippingTokenizer,
+                keySpace: .identity()
+            )?.get())
+        let future = try #require(
+            try LeafAdmissionBuilder.futureSharedPrefix(
+                storedConversation: stored,
+                toolSpecs: nil,
+                tokenizer: strippingTokenizer,
+                keySpace: .identity()
+            )?.get())
 
         // The canonical leaf path stops at the strip divergence (the start of
         // the assistant's think block); the future shared path runs through
@@ -213,19 +215,21 @@ import MLXLMCommon
             ),
         ])
 
-        let canonicalFuture = try #require(try LeafAdmissionBuilder.futureSharedPrefix(
-            storedConversation: stored,
-            toolSpecs: nil,
-            tokenizer: thinkingTokenizer,
-            keySpace: .identity()
-        )?.get())
-        let preservedFuture = try #require(try LeafAdmissionBuilder.futureSharedPrefix(
-            storedConversation: stored,
-            toolSpecs: nil,
-            tokenizer: thinkingTokenizer,
-            keySpace: .identity(),
-            renderContext: TemplateRenderContext(flags: [.preserveThinking])
-        )?.get())
+        let canonicalFuture = try #require(
+            try LeafAdmissionBuilder.futureSharedPrefix(
+                storedConversation: stored,
+                toolSpecs: nil,
+                tokenizer: thinkingTokenizer,
+                keySpace: .identity()
+            )?.get())
+        let preservedFuture = try #require(
+            try LeafAdmissionBuilder.futureSharedPrefix(
+                storedConversation: stored,
+                toolSpecs: nil,
+                tokenizer: thinkingTokenizer,
+                keySpace: .identity(),
+                renderContext: TemplateRenderContext(flags: [.preserveThinking])
+            )?.get())
 
         // Preserve-Thinking keeps the stored turn's reasoning span that the
         // canonical render strips — so the speculative spine is strictly longer.
@@ -341,9 +345,11 @@ import MLXLMCommon
             Issue.record("expected .skip, got \(plan)")
             return
         }
-        #expect(reason == .storedAtOrBeforeBoundary(
-            storedLen: toolTokens.count, boundaryOffset: toolTokens.count
-        ))
+        #expect(
+            reason
+                == .storedAtOrBeforeBoundary(
+                    storedLen: toolTokens.count, boundaryOffset: toolTokens.count
+                ))
     }
 
     @Test func directToolBoundaryInsideTheImagePrefixSkipsTyped() async throws {
@@ -371,16 +377,19 @@ import MLXLMCommon
             Issue.record("expected .skip, got \(plan)")
             return
         }
-        #expect(reason == .boundaryInsideImagePrefix(
-            boundaryOffset: 3, minimumWarmOffset: keySpace.minimumWarmOffset
-        ))
+        #expect(
+            reason
+                == .boundaryInsideImagePrefix(
+                    boundaryOffset: 3, minimumWarmOffset: keySpace.minimumWarmOffset
+                ))
         #expect(keySpace.minimumWarmOffset == 5)
     }
 
     @Test func canonicalBoundaryInsideTheImagePrefixFallsBackToTheResolver() async throws {
         let stored = conversation(messages: [
             HTTPPrefixCacheMessage(
-                role: .user, content: "explain this", images: [HTTPPrefixCacheImage(data: Data([0x0D]))]
+                role: .user, content: "explain this",
+                images: [HTTPPrefixCacheImage(data: Data([0x0D]))]
             ),
             HTTPPrefixCacheMessage(role: .assistant, content: "because reasons"),
         ])
@@ -413,7 +422,8 @@ import MLXLMCommon
     @Test func canonicalSkipsWhenNoBoundaryClearsTheImagePrefix() async throws {
         let stored = conversation(messages: [
             HTTPPrefixCacheMessage(
-                role: .user, content: "explain this", images: [HTTPPrefixCacheImage(data: Data([0x0E]))]
+                role: .user, content: "explain this",
+                images: [HTTPPrefixCacheImage(data: Data([0x0E]))]
             ),
             HTTPPrefixCacheMessage(role: .assistant, content: "because reasons"),
         ])
@@ -472,9 +482,11 @@ import MLXLMCommon
             Issue.record("expected .skip, got \(plan)")
             return
         }
-        #expect(reason == .renderTranslationFailed(
-            failure: .placeholderOccurrencesExceedImages(occurrences: 2, images: 1)
-        ))
+        #expect(
+            reason
+                == .renderTranslationFailed(
+                    failure: .placeholderOccurrencesExceedImages(occurrences: 2, images: 1)
+                ))
     }
 
     // MARK: canonical routing
@@ -555,7 +567,8 @@ import MLXLMCommon
         #expect(reason == .noResolvedBoundary(canonicalLen: canonical.count))
     }
 
-    @Test func canonicalSkipsWhenResolvedBoundaryIsNotStrictlyBeforeTheCanonicalPath() async throws {
+    @Test func canonicalSkipsWhenResolvedBoundaryIsNotStrictlyBeforeTheCanonicalPath() async throws
+    {
         let stored = canonicalTurn()
         let canonical = try canonicalPrefix(stored)
         // A resolved snapshot at the canonical length is not a usable restore

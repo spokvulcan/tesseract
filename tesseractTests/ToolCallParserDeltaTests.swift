@@ -136,12 +136,14 @@ struct ToolCallParserDeltaTests {
     @Test func twoConsecutiveToolCallsInOneStreamResetDeltaAccumulator() {
         let parser = Parser()
         var events: [Parser.Event] = []
-        events.append(contentsOf: parser.processChunk(
-            "<tool_call>\n{\"name\":\"a\",\"arguments\":{}}</tool_call>"
-        ))
-        events.append(contentsOf: parser.processChunk(
-            "<tool_call>\n{\"name\":\"b\",\"arguments\":{}}</tool_call>"
-        ))
+        events.append(
+            contentsOf: parser.processChunk(
+                "<tool_call>\n{\"name\":\"a\",\"arguments\":{}}</tool_call>"
+            ))
+        events.append(
+            contentsOf: parser.processChunk(
+                "<tool_call>\n{\"name\":\"b\",\"arguments\":{}}</tool_call>"
+            ))
 
         let deltas = events.compactMap { event -> String? in
             if case .toolCallDelta(_, let delta) = event { return delta }

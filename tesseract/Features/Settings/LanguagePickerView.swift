@@ -15,9 +15,9 @@ struct LanguagePickerView: View {
         }
         let search = searchText.lowercased()
         return SupportedLanguage.all.filter { language in
-            language.name.lowercased().contains(search) ||
-            language.code.lowercased().contains(search) ||
-            (language.nativeName?.lowercased().contains(search) ?? false)
+            language.name.lowercased().contains(search)
+                || language.code.lowercased().contains(search)
+                || (language.nativeName?.lowercased().contains(search) ?? false)
         }
     }
 
@@ -150,9 +150,9 @@ struct CompactLanguagePickerView: View {
         }
         let search = searchText.lowercased()
         return SupportedLanguage.all.filter { language in
-            language.name.lowercased().contains(search) ||
-            language.code.lowercased().contains(search) ||
-            (language.nativeName?.lowercased().contains(search) ?? false)
+            language.name.lowercased().contains(search)
+                || language.code.lowercased().contains(search)
+                || (language.nativeName?.lowercased().contains(search) ?? false)
         }
     }
 
@@ -206,10 +206,12 @@ struct CompactLanguagePickerView: View {
 
             // Language grid
             ScrollView {
-                LazyVGrid(columns: [
-                    GridItem(.flexible()),
-                    GridItem(.flexible())
-                ], spacing: 8) {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                    ], spacing: 8
+                ) {
                     ForEach(filteredLanguages) { language in
                         CompactLanguageCell(
                             language: language,
@@ -251,7 +253,9 @@ struct CompactLanguageCell: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(isSelected ? Color.accentColor.opacity(0.15) : Color(nsColor: .windowBackgroundColor))
+        .background(
+            isSelected ? Color.accentColor.opacity(0.15) : Color(nsColor: .windowBackgroundColor)
+        )
         .cornerRadius(8)
         .overlay(
             RoundedRectangle(cornerRadius: 8)

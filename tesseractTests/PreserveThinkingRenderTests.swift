@@ -39,8 +39,9 @@ struct PreserveThinkingRenderTests {
             chatTemplate: "{%- if add_generation_prompt %}<think>{%- endif %}"
         )
         #expect(identity.declaredTemplateFlags.isEmpty)
-        #expect(ModelIdentity(configJSON: nil, chatTemplate: nil)
-            .declaredTemplateFlags.isEmpty)
+        #expect(
+            ModelIdentity(configJSON: nil, chatTemplate: nil)
+                .declaredTemplateFlags.isEmpty)
     }
 
     // MARK: - Resolution (request wins, setting falls back, allowlist gates)
@@ -85,11 +86,13 @@ struct PreserveThinkingRenderTests {
     // MARK: - Digest and render-context plumbing
 
     @Test func canonicalDigestMatchesTheConversationDefault() {
-        #expect(TemplateRenderContext.canonical.digest
-            == HTTPPrefixCacheConversation.defaultTemplateContextDigest)
+        #expect(
+            TemplateRenderContext.canonical.digest
+                == HTTPPrefixCacheConversation.defaultTemplateContextDigest)
         let preserve = TemplateRenderContext(flags: [preserveFlag])
-        #expect(preserve.digest
-            != HTTPPrefixCacheConversation.defaultTemplateContextDigest)
+        #expect(
+            preserve.digest
+                != HTTPPrefixCacheConversation.defaultTemplateContextDigest)
     }
 
     @Test func additionalContextMergesFlagsOverTheBase() {
@@ -145,9 +148,9 @@ struct PreserveThinkingRenderTests {
 
         // A pre-field sidecar (no key) decodes to nil — the canonical render.
         let legacyJSON = """
-        {"modelID":"m","modelFingerprint":"f","kvGroupSize":64,
-         "createdAt":0,"schemaVersion":\(SnapshotManifestSchema.currentVersion)}
-        """
+            {"modelID":"m","modelFingerprint":"f","kvGroupSize":64,
+             "createdAt":0,"schemaVersion":\(SnapshotManifestSchema.currentVersion)}
+            """
         let legacy = try JSONDecoder().decode(
             PartitionMeta.self, from: Data(legacyJSON.utf8)
         )
@@ -158,9 +161,9 @@ struct PreserveThinkingRenderTests {
 
     @Test func kwargsDecodeKeepsBoolsAndDropsEverythingElse() throws {
         let json = """
-        {"preserve_thinking": true, "effort": "high", "depth": 3,
-         "nested": {"a": 1}, "off": false}
-        """
+            {"preserve_thinking": true, "effort": "high", "depth": 3,
+             "nested": {"a": 1}, "off": false}
+            """
         let kwargs = try JSONDecoder().decode(
             OpenAI.ChatTemplateKwargs.self, from: Data(json.utf8)
         )
@@ -171,15 +174,18 @@ struct PreserveThinkingRenderTests {
 
     @Test func speculativeSeedingSelfSkipsUnderPreserveThinking() {
         let preserve = TemplateRenderContext(flags: [preserveFlag])
-        #expect(ServerCompletion.speculativeSeedPlan(
-            boundaryMode: .canonical, renderContext: .canonical
-        ) != nil)
-        #expect(ServerCompletion.speculativeSeedPlan(
-            boundaryMode: .canonical, renderContext: preserve
-        ) == nil)
-        #expect(ServerCompletion.speculativeSeedPlan(
-            boundaryMode: .directTool, renderContext: preserve
-        ) == nil)
+        #expect(
+            ServerCompletion.speculativeSeedPlan(
+                boundaryMode: .canonical, renderContext: .canonical
+            ) != nil)
+        #expect(
+            ServerCompletion.speculativeSeedPlan(
+                boundaryMode: .canonical, renderContext: preserve
+            ) == nil)
+        #expect(
+            ServerCompletion.speculativeSeedPlan(
+                boundaryMode: .directTool, renderContext: preserve
+            ) == nil)
     }
 
     // MARK: - Append stability (the no-rewind property, on the fake template)
@@ -195,12 +201,14 @@ struct PreserveThinkingRenderTests {
             [
                 "role": "assistant", "content": "",
                 "reasoning_content": "Let me read it first.",
-                "tool_calls": [[
-                    "function": [
-                        "name": "read",
-                        "arguments": ["filePath": "/tmp/answer.txt"],
-                    ] as [String: any Sendable]
-                ]] as [[String: any Sendable]],
+                "tool_calls": [
+                    [
+                        "function": [
+                            "name": "read",
+                            "arguments": ["filePath": "/tmp/answer.txt"],
+                        ] as [String: any Sendable]
+                    ]
+                ] as [[String: any Sendable]],
             ],
             ["role": "tool", "content": "42"],
             [

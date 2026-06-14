@@ -72,7 +72,9 @@ nonisolated enum WebContentExtractor: Sendable {
 
         // SPA framework markers in HTML with little text
         if textLen < 500 {
-            if spaMarkers.contains(where: { rawHTML.range(of: $0, options: .caseInsensitive) != nil }) {
+            if spaMarkers.contains(where: {
+                rawHTML.range(of: $0, options: .caseInsensitive) != nil
+            }) {
                 return true
             }
         }
@@ -99,7 +101,9 @@ nonisolated enum WebContentExtractor: Sendable {
 
     // MARK: - Readability + Demark Pipeline
 
-    private static func extractWithReadability(html: String, url: URL) async throws -> ExtractedContent? {
+    private static func extractWithReadability(html: String, url: URL) async throws
+        -> ExtractedContent?
+    {
         let reader = Readability(html: html, url: url)
         guard let article = try reader.parse() else { return nil }
 
@@ -135,7 +139,8 @@ nonisolated enum WebContentExtractor: Sendable {
 
     /// Matches entire noise block elements (tag + content) with backreference.
     private static let noiseBlockRegex = try! NSRegularExpression(
-        pattern: #"<(script|style|nav|footer|header|aside|noscript|svg|iframe|form)\b[^>]*>[\s\S]*?</\1>"#,
+        pattern:
+            #"<(script|style|nav|footer|header|aside|noscript|svg|iframe|form)\b[^>]*>[\s\S]*?</\1>"#,
         options: .caseInsensitive
     )
 
@@ -146,7 +151,8 @@ nonisolated enum WebContentExtractor: Sendable {
 
     /// Matches elements with noise classes, backreference for closing tag.
     private static let noiseClassRegex = try! NSRegularExpression(
-        pattern: #"<(\w+)[^>]+class="[^"]*\b(ad|ads|advert|banner|cookie|popup|modal|sidebar|comment|share|social|login|signup|newsletter|promo)\b[^"]*"[^>]*>[\s\S]*?</\1>"#,
+        pattern:
+            #"<(\w+)[^>]+class="[^"]*\b(ad|ads|advert|banner|cookie|popup|modal|sidebar|comment|share|social|login|signup|newsletter|promo)\b[^"]*"[^>]*>[\s\S]*?</\1>"#,
         options: .caseInsensitive
     )
 
@@ -181,8 +187,8 @@ nonisolated enum WebContentExtractor: Sendable {
         let range = NSRange(location: 0, length: nsHTML.length)
 
         guard let match = titleRegex.firstMatch(in: html, range: range),
-              match.numberOfRanges >= 2,
-              let titleRange = Range(match.range(at: 1), in: html)
+            match.numberOfRanges >= 2,
+            let titleRange = Range(match.range(at: 1), in: html)
         else { return "" }
 
         let raw = String(html[titleRange])
@@ -204,7 +210,8 @@ nonisolated enum WebContentExtractor: Sendable {
 
     /// Collapse runs of whitespace into readable formatting.
     static func collapseWhitespace(_ text: String) -> String {
-        var result = text
+        var result =
+            text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
 
