@@ -30,7 +30,15 @@ nonisolated struct QuickLookRequest: Equatable {
 /// A single Quick Look item — a file URL plus a human title (the filename).
 /// `NSURL` already conforms to `QLPreviewItem`, but a wrapper lets us supply a
 /// nicer title and keeps the data source's type explicit.
-final class QuickLookPreviewItem: NSObject, QLPreviewItem {
+///
+/// `nonisolated` is **load-bearing**: QuickLook reads `previewItemURL` on a
+/// background `NSOperationQueue` (its async-loading determination drives the
+/// item through `NSFileCoordinator`), not on the main thread. Under the build's
+/// MainActor-default isolation an unannotated class gets a main-actor `@objc`
+/// getter whose executor check traps off-main — the exact crash seen opening a
+/// pasted image. This is an immutable, thread-agnostic data carrier (two
+/// `Sendable` `let`s), so reading it from any thread is safe.
+nonisolated final class QuickLookPreviewItem: NSObject, QLPreviewItem {
     let previewItemURL: URL?
     let previewItemTitle: String?
 
