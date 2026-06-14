@@ -110,10 +110,11 @@ actor LLMActor {
     ///
     /// - Parameters:
     ///   - directory: Local path containing model weights, config, and tokenizer files.
-    ///   - visionMode: When `true`, loads the VLM variant of ParoQuant models (supports
-    ///     image attachments but has ~3.4× slower prefill on long text prompts). When
-    ///     `false`, loads the LLM variant with fast chunked prefill. Ignored for
-    ///     non-ParoQuant models.
+    ///   - visionMode: When `true`, loads the VLM variant of ParoQuant models (adds
+    ///     image support). Text prefill measures on par with the LLM variant — the
+    ///     "~3.4× slower prefill" claim was retired by measurement (ADR-0013) — so the
+    ///     only standing cost is the resident vision tower (~+1 GB RAM). When `false`,
+    ///     loads the LLM variant. Ignored for non-ParoQuant models.
     ///   - ssdConfig: Snapshot of the SSD prefix-cache config, normally
     ///     produced by `SettingsManager.makeSSDPrefixCacheConfig()`. `nil`
     ///     disables SSD for the lifetime of this load.

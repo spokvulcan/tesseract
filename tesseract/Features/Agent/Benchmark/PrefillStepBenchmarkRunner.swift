@@ -278,15 +278,17 @@ final class PrefillStepBenchmarkRunner {
         self.reportStamp = formatter.string(from: Date())
     }
 
+    private var visionMode: Bool { runner.activeConfig.visionMode }
+
     func run() async throws {
         setupLogging()
-        log("PrefillStepBenchmark starting — model=\(runner.resolvedModelName)")
+        log("PrefillStepBenchmark starting — model=\(runner.resolvedModelName) visionMode=\(visionMode)")
 
         let engine = AgentEngine()
         let modelDir = try runner.resolveModelDirectory()
         let modelID = runner.activeConfig.resolvedModelID
-        log("Loading model from: \(modelDir.path)")
-        try await engine.loadModel(from: modelDir, visionMode: false)
+        log("Loading model from: \(modelDir.path) (visionMode=\(visionMode))")
+        try await engine.loadModel(from: modelDir, visionMode: visionMode)
         log("Model loaded.")
 
         let fixtureData = try await engine.llmActor.withModelContainer { container in
@@ -302,7 +304,10 @@ final class PrefillStepBenchmarkRunner {
         )
 
         var measurements: [PrefillStepBenchmarkMeasurement] = []
-        let cases = PrefillStepBenchmarkSupport.benchmarkMatrix()
+        let cases = PrefillStepBenchmarkSupport.benchmarkMatrix(
+            stepSizes: runner.activeConfig.prefillStepSizesOverride
+                ?? PrefillStepBenchmarkSupport.defaultStepSizes
+        )
 
         for spec in cases {
             log("\n── \(spec.id) ──")
@@ -378,7 +383,7 @@ final class PrefillStepBenchmarkRunner {
     ) async -> PrefillStepBenchmarkMeasurement {
         do {
             engine.unloadModel()
-            try await engine.loadModel(from: modelDir, visionMode: false)
+            try await engine.loadModel(from: modelDir, visionMode: visionMode)
 
             let parameters = AgentGenerateParameters(
                 maxTokens: 1,
@@ -596,6 +601,7 @@ final class PrefillStepBenchmarkRunner {
             let date: String
             let model: String
             let hardware: String
+            let visionMode: Bool
             let targetStablePrefixTokens: Int
             let targetUserTokens: Int
             let stepSizes: [Int]
@@ -616,15 +622,18 @@ final class PrefillStepBenchmarkRunner {
         }
 
         try FileManager.default.createDirectory(at: reportDir, withIntermediateDirectories: true)
+        let stepSizes = runner.activeConfig.prefillStepSizesOverride
+            ?? PrefillStepBenchmarkSupport.defaultStepSizes
         let summary = PrefillStepBenchmarkSupport.summarize(measurements: measurements)
         let report = Report(
             metadata: Metadata(
                 date: ISO8601DateFormatter().string(from: Date()),
                 model: runner.resolvedModelName,
                 hardware: runner.resolvedHardwareDescription,
+                visionMode: visionMode,
                 targetStablePrefixTokens: PrefillStepBenchmarkSupport.targetStablePrefixTokens,
                 targetUserTokens: PrefillStepBenchmarkSupport.targetUserTokens,
-                stepSizes: PrefillStepBenchmarkSupport.defaultStepSizes
+                stepSizes: stepSizes
             ),
             fixture: FixtureInfo(
                 coldPromptTokens: fixtureColdPromptTokens,
@@ -633,7 +642,7 @@ final class PrefillStepBenchmarkRunner {
             ),
             measurements: measurements,
             summary: summary,
-            passed: measurements.count == PrefillStepBenchmarkSupport.defaultStepSizes.count * 2
+            passed: measurements.count == stepSizes.count * 2
                 && measurements.allSatisfy(\.passed)
         )
 

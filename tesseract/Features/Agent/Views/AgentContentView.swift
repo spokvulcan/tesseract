@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct AgentContentView: View {
     @Environment(AgentCoordinator.self) private var coordinator
@@ -7,6 +8,8 @@ struct AgentContentView: View {
     @State private var inputText = ""
     @State private var showingHistory = false
     @State private var speakingMessageID: UUID?
+    /// True while an image-bearing drag hovers the window (slice #117).
+    @State private var isDropTargeted = false
     @Environment(SettingsManager.self) private var settings
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
 
@@ -68,6 +71,38 @@ struct AgentContentView: View {
             }
         }
         .navigationTitle("Agent")
+        .background(
+            QuickLookContainer(
+                request: coordinator.quickLookRequest,
+                onClose: { coordinator.dismissQuickLook() }
+            )
+        )
+        // Full-window image drop (slice #117): dropping an image anywhere lands it
+        // in the composer's pending strip. `isTargeted` only flips for drags whose
+        // items conform to `.image`, so non-image drags never dim the window.
+        .onDrop(of: [.image], isTargeted: $isDropTargeted) { providers in
+            coordinator.handleWindowImageDrop(providers)
+        }
+        .overlay {
+            if isDropTargeted {
+                ZStack {
+                    Color.black.opacity(0.4)
+                    VStack(spacing: 12) {
+                        Image(systemName: "photo.badge.plus")
+                            .font(.system(size: 44, weight: .light))
+                        Text("Drop image to attach")
+                            .font(.title2.weight(.medium))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(32)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+                }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         .onChange(of: speechCoordinator.state) { _, newState in
             if case .idle = newState { speakingMessageID = nil }
         }

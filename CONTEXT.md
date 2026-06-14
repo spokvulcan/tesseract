@@ -286,6 +286,29 @@ in-actor `nil` return (the retired pattern this is not), degraded mode
 > *serve*. Image guards can make a request impossible to *key* — that yields an
 > **Unkeyed Completion**, not a route bounce.
 
+### Vision capability and mode
+
+**Vision-Capable Model**:
+A model whose on-disk directory declares image input — its **Model Identity** carries
+an image-placeholder identity (the `qwen3_5`-family `vision_config`); text-only
+checkpoints do not. A fixed property of the model as downloaded — the same fact the
+`/v1/models` snapshot advertises to clients. The PARO family is vision-capable.
+_Avoid_: "vision model" (ambiguous with the loaded container), "multimodal" (there is
+no audio/video input path), "supports images" as a per-request flag.
+
+**Vision Mode**:
+Whether a **Vision-Capable Model** is currently loaded as its image-able VLM container
+rather than its text-only container — a load-state of the `.llm` slot, never a property
+of the model itself. The two containers wrap the same language-model weights; the VLM
+adds the vision tower. Text prefill is equivalent across the two containers (the
+historical "slower VLM prefill" is retired), so the only standing cost of vision mode
+is the resident vision tower — which is why a vision-capable model can hold it on by
+default. The HTTP server forces it on unconditionally (ADR-0008); the chat composer's
+former per-turn toggle is retired in favour of a soft global opt-out.
+_Avoid_: "vision enabled" as a per-message attribute, conflating it with
+**Vision-Capable Model**, "the toggle loads the image" (the toggle selects the
+container, not an attachment).
+
 ### Prefill orchestration
 
 **Prefill Plan**:

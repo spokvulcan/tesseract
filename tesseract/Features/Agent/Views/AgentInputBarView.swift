@@ -15,22 +15,40 @@ struct AgentInputBarView: View {
 
     @State private var isHoldingMic = false
     @State private var textHeight: CGFloat = 20
-    @State private var pendingImages: [ImageAttachment] = []
+    /// Whether the *selected* agent model can serve images. Probed off the view
+    /// body (disk read via `ModelIdentity`) and cached here, refreshed only when
+    /// the selection or its download status changes — never per keystroke.
+    @State private var selectedModelIsVisionCapable = false
     @Environment(SettingsManager.self) private var settings
 
-    private static let supportedImageTypes: [UTType] = [.png, .jpeg, .gif, .webP, .tiff]
+    // The pending-image queue and the "switch to a vision model" hint live on the
+    // coordinator (`coordinator.pendingImages` / `coordinator.showImageSwitchHint`)
+    // so a full-window drop, hosted above the composer, reaches the same queue
+    // (slice #117).
 
-    /// Whether controls that depend on a loaded model should be disabled.
-    /// The vision toggle disables itself during both generation and model loading
-    /// (model loading happens during a vision mode switch).
+    /// The image-input-availability projection (ADR-0013): show image affordances
+    /// only when the model is vision-capable *and* the global vision opt-out is on.
+    private var imageInputAvailable: Bool {
+        ImageInputAvailability.showImageAffordance(
+            isVisionCapable: selectedModelIsVisionCapable,
+            useVisionWhenAvailable: settings.useVisionWhenAvailable
+        )
+    }
+
+    /// Whether controls that depend on a loaded model should be disabled —
+    /// during both generation and model (re)loading.
     private var isModelBusy: Bool {
         coordinator.isGenerating || agentEngine.isLoading
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if coordinator.showImageSwitchHint {
+                imageHintBanner
+            }
+
             ZStack(alignment: .topLeading) {
-                if inputText.isEmpty && pendingImages.isEmpty {
+                if inputText.isEmpty && coordinator.pendingImages.isEmpty {
                     Text("Message…")
                         .font(.system(size: 15))
                         .foregroundColor(.secondary)
@@ -44,10 +62,10 @@ struct AgentInputBarView: View {
                     dynamicHeight: $textHeight,
                     onCommit: { handleCommit() },
                     onImagePaste: { attachments in
-                        // Silently drop pasted images when vision mode is off —
-                        // the container doesn't support them.
-                        guard settings.visionModeEnabled else { return }
-                        pendingImages.append(contentsOf: attachments)
+                        // When the selected model can't see images, surface the
+                        // one-tap switch hint instead of silently dropping (#115).
+                        guard imageInputAvailable else { coordinator.showImageSwitchHint = true; return }
+                        coordinator.attachImages(attachments)
                     },
                     isEnabled: !(coordinator.voiceInput.voiceState == .recording || coordinator.voiceInput.voiceState == .transcribing),
                     onArrowUp: {
@@ -71,17 +89,19 @@ struct AgentInputBarView: View {
                 .frame(height: min(max(textHeight, 20), 150))
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
-                .padding(.bottom, pendingImages.isEmpty ? 12 : 4)
+                .padding(.bottom, coordinator.pendingImages.isEmpty ? 12 : 4)
             }
 
             // Image preview strip
-            if !pendingImages.isEmpty {
+            if !coordinator.pendingImages.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(pendingImages) { attachment in
-                            ImageThumbnailView(attachment: attachment) {
-                                pendingImages.removeAll { $0.id == attachment.id }
-                            }
+                        ForEach(coordinator.pendingImages) { attachment in
+                            ImageThumbnailView(
+                                attachment: attachment,
+                                onRemove: { coordinator.pendingImages.removeAll { $0.id == attachment.id } },
+                                onTap: { coordinator.openQuickLook(clicked: attachment.id, includingPending: coordinator.pendingImages) }
+                            )
                         }
                     }
                     .padding(.horizontal, 16)
@@ -93,34 +113,24 @@ struct AgentInputBarView: View {
             HStack(spacing: 16) {
                 // Formatting and attachment actions
                 HStack(spacing: 14) {
-                    // Image attach button — kept visible in both modes to avoid
-                    // layout jumps when the vision toggle flips. Disabled when
-                    // vision mode is off since the text-only container drops images.
-                    Button { openImagePicker() } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 24, height: 24)
-                            .background(.quinary, in: Circle())
+                    // Image attach button — shown only when the selected model can
+                    // serve images and vision is enabled (ADR-0013). Hidden, not
+                    // disabled: capability changes on model switch, not per
+                    // keystroke, so there are no layout jumps to mask. The standalone
+                    // vision toggle is gone — vision is on by default for capable
+                    // models, governed globally in Settings.
+                    if imageInputAvailable {
+                        Button { openImagePicker() } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 24, height: 24)
+                                .background(.quinary, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add image")
+                        .disabled(isModelBusy)
                     }
-                    .buttonStyle(.plain)
-                    .help(settings.visionModeEnabled
-                          ? "Add image"
-                          : "Enable vision mode to attach images")
-                    .disabled(!settings.visionModeEnabled || isModelBusy)
-
-                    Button {
-                        coordinator.setVisionModeEnabled(!settings.visionModeEnabled)
-                    } label: {
-                        Image(systemName: "photo")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(settings.visionModeEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                    }
-                    .buttonStyle(.plain)
-                    .help(settings.visionModeEnabled
-                          ? "Vision mode enabled — click to switch to fast text-only"
-                          : "Vision mode disabled (text-only, fast prefill) — click to enable image support")
-                    .disabled(isModelBusy)
 
                     Button {
                         settings.webAccessEnabled.toggle()
@@ -190,14 +200,30 @@ struct AgentInputBarView: View {
         .onChange(of: inputText) { _, newValue in
             coordinator.commandPalette.updateCommandPopup(for: newValue)
         }
-        .onChange(of: settings.visionModeEnabled) { _, newValue in
-            // Clear any queued images when the user disables vision — the
-            // LLM container would silently drop them.
-            if !newValue {
-                pendingImages = []
+        .onChange(of: imageInputAvailable) { _, available in
+            // Mirror availability to the coordinator so the full-window drop
+            // (hosted above the composer) can decide attach-vs-hint (#117).
+            coordinator.imageInputAvailable = available
+            if available {
+                // Vision input just became available (model switched / opt-in) —
+                // the hint is moot.
+                coordinator.showImageSwitchHint = false
+            } else {
+                // Clear any queued images when image input becomes unavailable
+                // (model switched to text-only, or vision opted out) — the LLM
+                // container would silently drop them.
+                coordinator.pendingImages = []
             }
         }
+        .onChange(of: settings.selectedAgentModelID) { _, _ in
+            refreshVisionCapability()
+        }
+        .onChange(of: downloadManager.statuses[settings.selectedAgentModelID]) { _, _ in
+            refreshVisionCapability()
+        }
         .onAppear {
+            refreshVisionCapability()
+            coordinator.imageInputAvailable = imageInputAvailable
             coordinator.voiceInput.onVoiceTranscription = { text in
                 if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     inputText = text
@@ -207,12 +233,6 @@ struct AgentInputBarView: View {
             }
         }
         .padding(Theme.Spacing.md)
-        .onDrop(of: [.image], isTargeted: nil) { providers in
-            // Silently ignore image drops when vision mode is off.
-            guard settings.visionModeEnabled else { return false }
-            handleDrop(providers)
-            return true
-        }
     }
 
     // MARK: - Mic Button
@@ -297,7 +317,7 @@ struct AgentInputBarView: View {
     }
 
     private var canSend: Bool {
-        (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImages.isEmpty)
+        (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !coordinator.pendingImages.isEmpty)
             && !coordinator.isGenerating
     }
 
@@ -324,48 +344,139 @@ struct AgentInputBarView: View {
 
     private func send() {
         let text = inputText
-        let images = pendingImages
+        let images = coordinator.pendingImages
         inputText = ""
-        pendingImages = []
+        coordinator.pendingImages = []
         coordinator.sendMessage(text, images: images)
     }
 
-    /// 10 MB max per image — larger files are silently skipped.
-    private static let maxImageBytes = 10 * 1024 * 1024
+    /// Re-probe whether the selected agent model is vision-capable and cache the
+    /// result in `selectedModelIsVisionCapable`. Called on selection/status
+    /// changes and on appear — never from the view body — so the `ModelIdentity`
+    /// disk read stays off the per-keystroke render path.
+    private func refreshVisionCapability() {
+        let modelID = settings.selectedAgentModelID
+        guard case .downloaded = downloadManager.statuses[modelID],
+              let directory = downloadManager.modelPath(for: modelID) else {
+            selectedModelIsVisionCapable = false
+            return
+        }
+        selectedModelIsVisionCapable = ModelVisionCapability.isVisionCapable(directory: directory)
+    }
+
+    // MARK: - Image Switch Hint (slice #115)
+
+    @ViewBuilder
+    private var imageHintBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "eye.slash")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text(visionSwitch.message)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if let title = visionSwitch.actionTitle {
+                Button(title) { applyVisionSwitch() }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            Button { coordinator.showImageSwitchHint = false } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+    }
+
+    /// How the user can make image input available from the current state.
+    private enum VisionSwitch: Equatable {
+        /// The selected model is vision-capable but the global opt-out is off.
+        case turnOnSetting
+        /// A different downloaded model can see images — offer to switch to it.
+        case switchModel(id: String, name: String)
+        /// No vision-capable model is downloaded — nothing to switch to.
+        case noVisionModel
+
+        var message: String {
+            switch self {
+            case .turnOnSetting:
+                "Vision is turned off. Turn it on to attach images."
+            case .switchModel(_, let name):
+                "This model can’t see images. Switch to \(name) to attach images."
+            case .noVisionModel:
+                "This model can’t see images. Download a vision model from Settings → Models."
+            }
+        }
+
+        var actionTitle: String? {
+            switch self {
+            case .turnOnSetting: "Turn On"
+            case .switchModel: "Switch"
+            case .noVisionModel: nil
+            }
+        }
+    }
+
+    private var visionSwitch: VisionSwitch {
+        if selectedModelIsVisionCapable && !settings.useVisionWhenAvailable {
+            return .turnOnSetting
+        }
+        if let model = firstDownloadedVisionModel() {
+            return .switchModel(id: model.id, name: model.displayName)
+        }
+        return .noVisionModel
+    }
+
+    /// The first downloaded agent model that can serve images, if any.
+    private func firstDownloadedVisionModel() -> ModelDefinition? {
+        ModelDefinition.all.first { model in
+            guard model.category == .agent else { return false }
+            guard case .downloaded = downloadManager.statuses[model.id],
+                  let directory = downloadManager.modelPath(for: model.id) else { return false }
+            return ModelVisionCapability.isVisionCapable(directory: directory)
+        }
+    }
+
+    /// Apply the one-tap switch: turn vision on, or switch to a vision model.
+    private func applyVisionSwitch() {
+        switch visionSwitch {
+        case .turnOnSetting:
+            settings.useVisionWhenAvailable = true
+        case .switchModel(let id, _):
+            settings.selectedAgentModelID = id
+            if !settings.useVisionWhenAvailable {
+                settings.useVisionWhenAvailable = true
+            }
+        case .noVisionModel:
+            break
+        }
+        coordinator.showImageSwitchHint = false
+    }
 
     private func openImagePicker() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = Self.supportedImageTypes
+        panel.allowedContentTypes = ImageIngest.supportedUTTypes
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.message = "Select images to attach"
         panel.begin { response in
             guard response == .OK else { return }
             let attachments = panel.urls.compactMap { url -> ImageAttachment? in
-                guard let data = try? Data(contentsOf: url),
-                      data.count <= Self.maxImageBytes else { return nil }
-                let mimeType = url.mimeTypeForImage ?? "image/png"
-                return ImageAttachment(data: data, mimeType: mimeType, filename: url.lastPathComponent)
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                let uti = UTType(filenameExtension: url.pathExtension)?.identifier ?? url.pathExtension
+                return try? ImageIngest.ingest(
+                    data: data, typeIdentifier: uti, filename: url.lastPathComponent
+                ).get()
             }
             DispatchQueue.main.async {
-                pendingImages.append(contentsOf: attachments)
-            }
-        }
-    }
-
-    private func handleDrop(_ providers: [NSItemProvider]) {
-        for provider in providers {
-            let registeredTypes = provider.registeredTypeIdentifiers
-            let mimeType = registeredTypes.lazy
-                .compactMap { UTType($0)?.preferredMIMEType }
-                .first ?? "image/png"
-
-            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
-                guard let data, data.count <= Self.maxImageBytes else { return }
-                let attachment = ImageAttachment(data: data, mimeType: mimeType, filename: "dropped-image")
-                DispatchQueue.main.async {
-                    pendingImages.append(attachment)
-                }
+                coordinator.attachImages(attachments)
             }
         }
     }
@@ -376,24 +487,31 @@ struct AgentInputBarView: View {
 private struct ImageThumbnailView: View {
     let attachment: ImageAttachment
     let onRemove: () -> Void
+    /// Click the thumbnail (not the ✕) to open it full size in Quick Look (#116).
+    var onTap: (() -> Void)? = nil
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            if let nsImage = NSImage(data: attachment.data) {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 56, height: 56)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.quaternary)
-                    .frame(width: 56, height: 56)
-                    .overlay {
-                        Image(systemName: "photo")
-                            .foregroundStyle(.secondary)
-                    }
+            Group {
+                if let nsImage = NSImage(data: attachment.data) {
+                    Image(nsImage: nsImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.quaternary)
+                        .frame(width: 56, height: 56)
+                        .overlay {
+                            Image(systemName: "photo")
+                                .foregroundStyle(.secondary)
+                        }
+                }
             }
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .onTapGesture { onTap?() }
+            .help("Click to view full size")
 
             Button(action: onRemove) {
                 Image(systemName: "xmark.circle.fill")
@@ -403,14 +521,5 @@ private struct ImageThumbnailView: View {
             .buttonStyle(.plain)
             .offset(x: 6, y: -6)
         }
-    }
-}
-
-// MARK: - URL Image MIME Type Helper
-
-private extension URL {
-    var mimeTypeForImage: String? {
-        guard let utType = UTType(filenameExtension: pathExtension) else { return nil }
-        return utType.preferredMIMEType
     }
 }

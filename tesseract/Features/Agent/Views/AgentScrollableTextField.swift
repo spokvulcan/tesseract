@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct AgentScrollableTextField: NSViewRepresentable {
     @Binding var text: String
@@ -130,23 +131,15 @@ struct AgentScrollableTextField: NSViewRepresentable {
             return false
         }
 
-        /// Handles image data from the pasteboard, returning attachments if images were found.
+        /// Reads any images from the pasteboard (the full PNG/JPEG/TIFF/GIF/WebP/
+        /// HEIC set, plus a decoded `NSImage` or copied image file-URL) via the
+        /// shared `ImageIngest` core and forwards them. Returns whether images were
+        /// found; the caller always falls through to `super.paste` so a mixed
+        /// text+image clipboard pastes its text too (slice #115).
+        @discardableResult
         func handleImagePaste() -> Bool {
             guard let onImagePaste = parent.onImagePaste else { return false }
-
-            let pb = NSPasteboard.general
-            let imageTypes: [NSPasteboard.PasteboardType] = [.png, .tiff]
-            guard pb.availableType(from: imageTypes) != nil else { return false }
-
-            var attachments: [ImageAttachment] = []
-            for type in imageTypes {
-                if let data = pb.data(forType: type) {
-                    let mimeType = type == .png ? "image/png" : "image/tiff"
-                    attachments.append(ImageAttachment(data: data, mimeType: mimeType, filename: "pasted-image"))
-                    break
-                }
-            }
-
+            let attachments = PasteboardImageReader.read(NSPasteboard.general)
             guard !attachments.isEmpty else { return false }
             onImagePaste(attachments)
             return true
@@ -156,12 +149,63 @@ struct AgentScrollableTextField: NSViewRepresentable {
 
 // MARK: - ImagePasteTextView
 
-/// Custom NSTextView that intercepts paste to handle image content.
+/// Custom NSTextView that intercepts paste to also attach image content.
 final class ImagePasteTextView: NSTextView {
     weak var coordinator: AgentScrollableTextField.Coordinator?
 
     override func paste(_ sender: Any?) {
-        if coordinator?.handleImagePaste() == true { return }
+        // Attach any images first, then always paste text. Image pasteboard data
+        // does not materialize as text, so a mixed clipboard yields both (#115).
+        coordinator?.handleImagePaste()
         super.paste(sender)
+    }
+}
+
+// MARK: - Pasteboard Image Reader
+
+/// The impure pasteboard edge for ⌘V (slice #115): pulls image content off an
+/// `NSPasteboard` and funnels each candidate through `ImageIngest`. Tries, in
+/// order, the richest source first: copied image *file* URLs (⌘C on a file in
+/// Finder), raw image data of a supported type, then a decoded `NSImage` (copied
+/// in Preview or a browser). The first source that yields attachments wins, so a
+/// single image never double-attaches.
+enum PasteboardImageReader {
+    static func read(_ pasteboard: NSPasteboard) -> [ImageAttachment] {
+        // 1. Image file URLs.
+        let urlOptions: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingContentsConformToTypes: [UTType.image.identifier]
+        ]
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: urlOptions) as? [URL],
+           !urls.isEmpty {
+            let attachments = urls.compactMap { url -> ImageAttachment? in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                let uti = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.identifier)
+                    ?? UTType(filenameExtension: url.pathExtension)?.identifier
+                    ?? url.pathExtension
+                return try? ImageIngest.ingest(
+                    data: data, typeIdentifier: uti, filename: url.lastPathComponent
+                ).get()
+            }
+            if !attachments.isEmpty { return attachments }
+        }
+
+        // 2. Raw image data of a supported type.
+        for utType in ImageIngest.supportedUTTypes {
+            let type = NSPasteboard.PasteboardType(utType.identifier)
+            if let data = pasteboard.data(forType: type),
+               let attachment = try? ImageIngest.ingest(
+                   data: data, typeIdentifier: utType.identifier, filename: "pasted-image"
+               ).get() {
+                return [attachment]
+            }
+        }
+
+        // 3. Decoded image with no file backing.
+        if let image = NSImage(pasteboard: pasteboard),
+           let attachment = try? ImageIngest.ingest(image: image, filename: "pasted-image.png").get() {
+            return [attachment]
+        }
+
+        return []
     }
 }

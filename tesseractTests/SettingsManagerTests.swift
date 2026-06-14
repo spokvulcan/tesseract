@@ -32,6 +32,21 @@ struct SettingsManagerTests {
         #expect(settings.prefixCacheSSDBudgetBytes == 20 * 1024 * 1024 * 1024)
         #expect(settings.prefixCacheSSDDirectoryOverride == nil)
         #expect(settings.selectedAgentModelID == ModelDefinition.defaultAgentModelID)
+        #expect(settings.useVisionWhenAvailable == true)
+    }
+
+    /// The vision opt-out persists across a relaunch and writes exactly its own
+    /// key (the hydration≠mutation boundary) — pins ADR-0013's global setting.
+    @Test
+    func visionOptOutPersistsAndWritesOnlyItsKey() {
+        let store = InMemorySettingsStore()
+        let first = SettingsManager(store: store)
+        store.resetWriteRecording()
+        first.useVisionWhenAvailable = false
+        #expect(store.writes == ["useVisionWhenAvailable"])
+
+        let second = SettingsManager(store: store)
+        #expect(second.useVisionWhenAvailable == false)
     }
 
     // MARK: - Persistence across a simulated relaunch

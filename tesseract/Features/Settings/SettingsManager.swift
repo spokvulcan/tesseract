@@ -258,12 +258,25 @@ final class SettingsManager {
 
     // MARK: - Agent Vision Mode
 
-    /// When true, the agent loads the VLM Qwen3.5 container which supports image
-    /// attachments but has ~3.4× slower prefill on long text prompts. Default false
-    /// — users opt-in via the composer toggle when they need to attach an image.
-    /// Changing this triggers a model reload via `InferenceArbiter.ensureLoaded(.llm)`.
+    /// Legacy per-session vision flag (default false). The composer toggle that
+    /// drove it was removed in #113; it now only backs the arbiter's
+    /// `.fromSettings` vision requirement. The VLM and LLM containers wrap the
+    /// same language-model weights and chunk text prefill identically — measured
+    /// parity on Qwen3.6-27B PARO (cold 79.3 s vision vs 79.9 s text over 16,413
+    /// tokens; warm 20.9 s vs 21.2 s), so vision's only standing cost is the
+    /// resident vision tower (~+1 GB RAM), not prefill speed (ADR-0013).
     var visionModeEnabled: Bool {
         didSet { SettingsCatalogue.visionModeEnabled.write(visionModeEnabled, to: store) }
+    }
+
+    /// Global opt-out "Use vision models when available" (default on, ADR-0013).
+    /// Governs chat-initiated loads only: when on, the chat send path requests
+    /// `.visionIfCapable` so a vision-capable model loads its VLM container from
+    /// turn one; when off, it falls back to `.fromSettings` (text-only). The HTTP
+    /// server ignores it (ADR-0008). Load-state upgrades but never downgrades, so
+    /// flipping this mid-session takes effect on the next (re)load, not eagerly.
+    var useVisionWhenAvailable: Bool {
+        didSet { SettingsCatalogue.useVisionWhenAvailable.write(useVisionWhenAvailable, to: store) }
     }
 
     // MARK: - Preserve-Thinking Render (issue #98)
@@ -367,6 +380,7 @@ final class SettingsManager {
         self.playSounds = SettingsCatalogue.playSounds.load(from: store)
         self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
         self.visionModeEnabled = SettingsCatalogue.visionModeEnabled.load(from: store)
+        self.useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.load(from: store)
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
         self.serverPort = SettingsCatalogue.serverPort.load(from: store)
         self.prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.load(from: store)
@@ -461,6 +475,7 @@ final class SettingsManager {
         selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.default
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default
         visionModeEnabled = SettingsCatalogue.visionModeEnabled.default
+        useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.default
         samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
         isServerEnabled = SettingsCatalogue.isServerEnabled.default
         serverPort = SettingsCatalogue.serverPort.default

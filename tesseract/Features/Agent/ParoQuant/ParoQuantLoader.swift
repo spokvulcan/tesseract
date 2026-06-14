@@ -404,10 +404,12 @@ nonisolated func loadParoQuantLLMContainer(
 
 /// Load a vision-capable ParoQuant container via the VLM type registry.
 ///
-/// Qwen3.5 resolves to `MLXVLM.Qwen35`, whose `prepare` handles image-text
-/// merging but runs prefill un-chunked (~390 tok/s on long text prompts).
-/// This container should only be loaded when the user has explicitly enabled
-/// vision mode; text-only turns should use `loadParoQuantLLMContainer`.
+/// Qwen3.5/3.6 resolves to `MLXVLM.Qwen35`, whose `prepare` handles image-text
+/// merging. Text prefill measures on par with the text-only container — the
+/// retired "~390 tok/s un-chunked on long text prompts" claim was disproven by
+/// measurement (ADR-0013); the only standing cost is the resident vision tower.
+/// Loaded eagerly for vision-capable models (ADR-0013); text-only models and the
+/// vision-opted-out path use `loadParoQuantLLMContainer`.
 nonisolated func loadParoQuantVLMContainer(
     from directory: URL, toolCallFormat: ToolCallFormat?
 ) async throws -> ModelContainer {

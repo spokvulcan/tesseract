@@ -138,6 +138,62 @@ struct ChatTranscriptControllerTests {
         #expect(answer.hasStepsAbove == true)
     }
 
+    /// A tool result carrying an `.image` block surfaces it as `resultImages` on
+    /// the projected tool row (slice #116), alongside its text — previously the
+    /// image was dropped by `projectTurn`.
+    @Test func toolResultImageBlockSurvivesProjectionIntoResultImages() {
+        let user = UserMessage(content: "Screenshot the page")
+        let call = ToolCallInfo(id: "tc1", name: "screenshot", argumentsJSON: "{}")
+        let asst1 = AssistantMessage(content: "", toolCalls: [call])
+        let result = ToolResultMessage(
+            toolCallId: "tc1", toolName: "screenshot",
+            content: [.text("captured"), .image(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")],
+            isError: false
+        )
+        let asst2 = AssistantMessage(content: "Done")
+        let messages: [any AgentMessageProtocol] = [user, asst1, result, asst2]
+
+        let controller = ChatTranscriptController()
+        controller.rebuild(messages: messages, stream: nil, isGenerating: false)
+        controller.toggleTurnExpanded(user.id, messages: messages, stream: nil, isGenerating: false)
+        let rows = controller.rows
+
+        guard case .toolCall(let tool) = rows[2].kind else {
+            Issue.record("row 2 not a tool call: \(rows[2].kind)"); return
+        }
+        #expect(tool.resultContent == "captured")
+        #expect(tool.resultImages.count == 1)
+        #expect(tool.resultImages.first?.mimeType == "image/png")
+        #expect(tool.resultImages.first?.data == ImageTestFixtures.tinyPNGData)
+    }
+
+    /// Regression: tool-result image attachment ids must be derived from the
+    /// bytes, not freshly minted per call. The transcript builds the row's
+    /// attachments once and `conversationImages()` re-derives them again; Quick
+    /// Look matches the clicked id against that re-derived set, so a random
+    /// `UUID()` per call left tool-result images un-clickable. Same bytes at the
+    /// same position ⇒ same id across calls; identical bytes at different
+    /// positions ⇒ distinct ids.
+    @Test func toolResultImageAttachmentIDsAreStableAndPositionUnique() {
+        let pngA = ImageTestFixtures.tinyPNGData
+        let pngB = pngA + Data([0xFF])   // distinct bytes ⇒ distinct digest
+        let blocks: [ContentBlock] = [
+            .image(data: pngA, mimeType: "image/png"),   // index 0
+            .text("between"),
+            .image(data: pngA, mimeType: "image/png"),   // index 2 — same bytes, different position
+            .image(data: pngB, mimeType: "image/png"),   // index 3 — different bytes
+        ]
+
+        // Stable across independent projections (render path vs conversationImages()).
+        #expect(blocks.imageAttachments.map(\.id) == blocks.imageAttachments.map(\.id))
+
+        let ids = blocks.imageAttachments.map(\.id)
+        #expect(ids.count == 3)
+        #expect(ids[0] != ids[1])   // identical bytes, different position
+        #expect(ids[1] != ids[2])   // different bytes
+        #expect(ids[0] != ids[2])
+    }
+
     @Test func intermediateTextIsDistinctFromFinalAnswer() {
         let user = UserMessage(content: "Do it")
         let call = ToolCallInfo(id: "tc1", name: "ls", argumentsJSON: #"{"path":"/tmp"}"#)
