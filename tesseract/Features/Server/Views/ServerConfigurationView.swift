@@ -81,6 +81,8 @@ struct ServerConfigurationView: View {
             } footer: {
                 Text("Run the command in a terminal to configure OpenCode for this server — every downloaded model, image input included. Re-run it after downloading models or changing the port.")
             }
+
+            ServerPreserveThinkingSection()
         }
         .formStyle(.grouped)
         .navigationTitle("Configuration")
@@ -113,5 +115,81 @@ struct ServerConfigurationView: View {
         } else {
             portText = String(settings.serverPort)
         }
+    }
+}
+
+/// Per-model **Preserve-Thinking Render** opt-in for models the server serves
+/// (issue #98, PRD #94). The server already resolves `preserve_thinking` per
+/// request — request `chat_template_kwargs` win, this per-model app setting is
+/// the fallback, and only templates that declare the flag participate
+/// (`ModelIdentity.declaredTemplateFlags`). It writes the same
+/// `preserveThinkingRender.<modelID>` key the Agent Preferences toggle does, so
+/// a model served to a client (e.g. OpenCode) can be configured even when it is
+/// not the selected agent model. Surfaced unconditionally — the setting is
+/// per-model and shared with the agent, so it is meaningful with the server off.
+private struct ServerPreserveThinkingSection: View {
+    @Environment(SettingsManager.self) private var settings
+    @EnvironmentObject private var modelDownloadManager: ModelDownloadManager
+
+    /// IDs of downloaded agent models whose template declares
+    /// `preserve_thinking` — the models that get a toggle. Populated off the
+    /// MainActor (`ModelIdentity.declares`, ADR-0001); empty until the first
+    /// scan completes, so the empty-state shows briefly on first appearance.
+    @State private var supportingModelIDs: Set<String> = []
+
+    /// Downloaded agent models in catalogue order — the set the server can
+    /// serve, mirroring the OpenCode one-liner / `/v1/models`.
+    private var downloadedAgentModels: [ModelDefinition] {
+        ModelDefinition.all.filter { definition in
+            guard definition.category == .agent else { return false }
+            if case .downloaded = modelDownloadManager.statuses[definition.id] {
+                return true
+            }
+            return false
+        }
+    }
+
+    var body: some View {
+        let models = downloadedAgentModels
+        // Only models whose template declares the flag get a toggle — matches
+        // the Agent Preferences gating and the "models that support this" intent.
+        let supported = models.filter { supportingModelIDs.contains($0.id) }
+        return Section {
+            if supported.isEmpty {
+                Text("No downloaded model supports preserved thinking. Models such as Qwen3.6 support it.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(supported) { model in
+                    Toggle(model.displayName, isOn: Binding(
+                        get: { settings.preserveThinkingRender(modelID: model.id) },
+                        set: { settings.setPreserveThinkingRender($0, modelID: model.id) }
+                    ))
+                }
+            }
+        } header: {
+            Text("Preserve Thinking")
+        } footer: {
+            Text("Keeps each turn's thinking in the prompt so a client's follow-up requests reuse the prefix cache instead of re-prefilling the conversation. Uses more context window. Set per model; applies to new requests.")
+        }
+        // Re-scan whenever the downloaded agent-model set changes. `task(id:)`
+        // cancels the prior scan, and the cancellation check guards against a
+        // stale write clobbering the newer set's result.
+        .task(id: models.map(\.id)) {
+            await refreshCapabilities()
+        }
+    }
+
+    private func refreshCapabilities() async {
+        var supporting: Set<String> = []
+        for model in downloadedAgentModels {
+            guard let directory = modelDownloadManager.modelPath(for: model.id) else {
+                continue
+            }
+            if await ModelIdentity.declares(.preserveThinking, atDirectory: directory) {
+                supporting.insert(model.id)
+            }
+        }
+        guard !Task.isCancelled else { return }
+        supportingModelIDs = supporting
     }
 }

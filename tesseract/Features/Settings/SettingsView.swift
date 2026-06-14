@@ -176,17 +176,15 @@ struct RecordingSettingsSection: View {
             selectedAgentModelDeclaresPreserveThinking = false
             return
         }
-        // `ModelIdentity(directory:)` reads chat_template.jinja + config.json
-        // from disk; keep that off the MainActor (ADR-0001) so opening or
-        // switching the settings pane can't stutter on a slow/large model dir.
+        // `ModelIdentity.declares` runs the disk-reading probe off the MainActor
+        // (ADR-0001) so opening or switching the settings pane can't stutter.
         // Publish back only while the same model is still selected, so a slow
         // read for a since-deselected model can't clobber a newer answer.
         let modelID = settings.selectedAgentModelID
         Task {
-            let declares = await Task.detached {
-                ModelIdentity(directory: directory)
-                    .declaredTemplateFlags.contains(.preserveThinking)
-            }.value
+            let declares = await ModelIdentity.declares(
+                .preserveThinking, atDirectory: directory
+            )
             guard settings.selectedAgentModelID == modelID else { return }
             selectedAgentModelDeclaresPreserveThinking = declares
         }

@@ -294,3 +294,20 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         )
     }
 }
+
+extension ModelIdentity {
+    /// Whether the model at `directory` declares `flag` in its chat template.
+    /// `init(directory:)` reads `chat_template.jinja` + `config.json` from disk,
+    /// so the probe runs off the MainActor (ADR-0001) — a view can `await` it
+    /// without stuttering while opening or switching a settings pane. The single
+    /// home for the template-flag capability probe shared by the agent-preferences
+    /// and server-configuration **Preserve-Thinking Render** toggles (issue #98).
+    static func declares(
+        _ flag: TemplateRenderFlag,
+        atDirectory directory: URL
+    ) async -> Bool {
+        await Task.detached {
+            ModelIdentity(directory: directory).declaredTemplateFlags.contains(flag)
+        }.value
+    }
+}

@@ -63,7 +63,7 @@ struct ContentView: View {
         case .serverConfiguration:
             ServerConfigurationView()
                 .injectCoreDependencies(from: container)
-                .environment(container.inferenceArbiter)
+                .injectModelDependencies(from: container)
         case .serverPromptCache:
             ServerPromptCacheView()
                 .injectCoreDependencies(from: container)
