@@ -167,31 +167,39 @@ struct ChatTranscriptControllerTests {
         #expect(tool.resultImages.first?.data == ImageTestFixtures.tinyPNGData)
     }
 
-    /// Regression: tool-result image attachment ids must be derived from the
-    /// bytes, not freshly minted per call. The transcript builds the row's
-    /// attachments once and `conversationImages()` re-derives them again; Quick
-    /// Look matches the clicked id against that re-derived set, so a random
-    /// `UUID()` per call left tool-result images un-clickable. Same bytes at the
-    /// same position ⇒ same id across calls; identical bytes at different
-    /// positions ⇒ distinct ids.
-    @Test func toolResultImageAttachmentIDsAreStableAndPositionUnique() {
+    /// Regression: tool-result image attachment ids identify the *occurrence* —
+    /// (tool-result, position) — not the content. The transcript builds the
+    /// row's attachments once and `conversationImages()` re-derives them again;
+    /// Quick Look matches the clicked id against that re-derived set. So the id
+    /// must be (a) stable across calls under the same tool-result id — a random
+    /// `UUID()` per call left tool-result images un-clickable — and (b) unique
+    /// per occurrence, including byte-identical images in *different* results, so
+    /// clicking the second of two identical screenshots opens that one.
+    @Test func toolResultImageAttachmentIDsIdentifyOccurrenceNotContent() {
         let pngA = ImageTestFixtures.tinyPNGData
-        let pngB = pngA + Data([0xFF])   // distinct bytes ⇒ distinct digest
+        let pngB = pngA + Data([0xFF])
         let blocks: [ContentBlock] = [
             .image(data: pngA, mimeType: "image/png"),   // index 0
             .text("between"),
-            .image(data: pngA, mimeType: "image/png"),   // index 2 — same bytes, different position
-            .image(data: pngB, mimeType: "image/png"),   // index 3 — different bytes
+            .image(data: pngA, mimeType: "image/png"),   // index 2 — same bytes
+            .image(data: pngB, mimeType: "image/png"),   // index 3
         ]
+        let ns1 = UUID()
+        let ns2 = UUID()
 
-        // Stable across independent projections (render path vs conversationImages()).
-        #expect(blocks.imageAttachments.map(\.id) == blocks.imageAttachments.map(\.id))
+        // Stable across independent projections under the same tool-result id.
+        #expect(blocks.imageAttachments(namespace: ns1).map(\.id)
+                == blocks.imageAttachments(namespace: ns1).map(\.id))
 
-        let ids = blocks.imageAttachments.map(\.id)
-        #expect(ids.count == 3)
-        #expect(ids[0] != ids[1])   // identical bytes, different position
-        #expect(ids[1] != ids[2])   // different bytes
-        #expect(ids[0] != ids[2])
+        // Every position distinct within a result, even byte-identical images.
+        let ids1 = blocks.imageAttachments(namespace: ns1).map(\.id)
+        #expect(ids1.count == 3)
+        #expect(Set(ids1).count == 3)
+
+        // Different tool result ⇒ disjoint ids, so byte-identical images across
+        // results never collide (the bug this fix closes).
+        let ids2 = blocks.imageAttachments(namespace: ns2).map(\.id)
+        #expect(Set(ids1).isDisjoint(with: Set(ids2)))
     }
 
     @Test func intermediateTextIsDistinctFromFinalAnswer() {

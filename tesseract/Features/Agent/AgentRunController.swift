@@ -96,8 +96,9 @@ final class AgentRunController {
         // ADR-0013: when "Use vision models when available" is on (the default),
         // the chat send path demands the vision container for any vision-capable
         // model so attaching an image just works with no toggle and no re-prefill.
-        // Off → `.fromSettings` (text-only). Absent settings (some tests) keep the
-        // pre-#113 `.fromSettings` default so the lease contract is unchanged there.
+        // Off → `.fromSettings`, which the arbiter resolves against the same
+        // opt-out (→ text-only). Absent settings (some tests) keep the
+        // `.fromSettings` default so the lease contract is unchanged there.
         let visionReq: LLMVisionRequirement =
             (settings?.useVisionWhenAvailable ?? false) ? .visionIfCapable : .fromSettings
 

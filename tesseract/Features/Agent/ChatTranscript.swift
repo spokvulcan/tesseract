@@ -278,7 +278,7 @@ nonisolated enum ChatTranscript {
                     iconName: props.icon,
                     argumentsFormatted: props.argsFormatted,
                     resultContent: result?.content.textContent,
-                    resultImages: result?.content.imageAttachments ?? [],
+                    resultImages: result.map { $0.content.imageAttachments(namespace: $0.id) } ?? [],
                     isError: result?.isError ?? false,
                     isLast: false,
                     isDetailExpanded: ctx.expandedDetails.contains(rowID),

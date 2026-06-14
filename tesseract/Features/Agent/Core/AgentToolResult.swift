@@ -53,48 +53,44 @@ extension [ContentBlock] {
 
     /// Extracts all `.image` blocks as `ImageAttachment`s (slice #116), so
     /// tool-result images survive the transcript projection and join the Quick
-    /// Look navigable set.
+    /// Look navigable set. `namespace` is the owning `ToolResultMessage.id`.
     ///
-    /// The attachment `id` is derived deterministically from the image bytes (the
-    /// same `ImageDigest` that keys the prefix and preview-file caches) folded
-    /// with the block index. This is **load-bearing**: `ToolResultMessage` stores
-    /// raw `ContentBlock`s with no id, and this projection is recomputed both when
-    /// the transcript builds the row *and* again inside `conversationImages()`.
-    /// Quick Look matches the clicked id against that re-derived set — a fresh
-    /// `UUID()` per call would never match (the viewer would never open) and would
-    /// churn row identity on every streaming patch (defeating the `ToolCallRow`
-    /// Equatable short-circuit and re-running the `.task(id:)` image decode). Same
-    /// bytes at the same position ⇒ same id across every call.
-    nonisolated var imageAttachments: [ImageAttachment] {
+    /// The attachment `id` identifies the image **occurrence** — its position in
+    /// a specific tool result — not its content: `namespace` (the stable
+    /// tool-result id) folded with the block index. This is **load-bearing**:
+    /// `ToolResultMessage` stores raw `ContentBlock`s with no per-image id, and
+    /// this projection is recomputed both when the transcript builds the row
+    /// *and* again inside `conversationImages()`. Quick Look matches the clicked
+    /// id against that re-derived set, so the id must be (a) stable across calls
+    /// — a fresh `UUID()` per call would never match, and would churn row
+    /// identity on every streaming patch (defeating the `ToolCallRow` Equatable
+    /// short-circuit and re-running the `.task(id:)` image decode) — and (b)
+    /// unique per occurrence, so clicking the second of two byte-identical
+    /// screenshots (same bytes, *different* tool results) opens that one, not
+    /// the first. Occurrence identity gives both; deriving from the content
+    /// digest gave only (a) and collided across results.
+    nonisolated func imageAttachments(namespace: UUID) -> [ImageAttachment] {
         enumerated().compactMap { index, block in
             guard case .image(let data, let mimeType) = block else { return nil }
             return ImageAttachment(
-                id: Self.stableImageID(for: data, index: index),
+                id: Self.occurrenceID(namespace: namespace, index: index),
                 data: data, mimeType: mimeType
             )
         }
     }
 
-    /// A reproducible UUID for a tool-result image: the leading 16 bytes of the
-    /// image's SHA-256 `ImageDigest`, with the block index XORed into the trailing
-    /// bytes so two byte-identical images in one result still get distinct — but
-    /// stable — ids. Cross-launch stable, matching the digest used for caching.
-    nonisolated private static func stableImageID(for data: Data, index: Int) -> UUID {
-        let digest = ImageDigest(imageBytes: data).rawBytes   // 32 SHA-256 bytes
-        var bytes = [UInt8](repeating: 0, count: 16)
-        digest.copyBytes(to: &bytes, count: 16)
+    /// A reproducible UUID for an image occurrence: the tool-result `namespace`
+    /// id with the block index XORed into its trailing bytes. Stable (both inputs
+    /// are stable) and unique per (tool result, position), so re-projections
+    /// match and distinct occurrences — even byte-identical ones — stay distinct.
+    nonisolated private static func occurrenceID(namespace: UUID, index: Int) -> UUID {
         let idx = UInt32(truncatingIfNeeded: index)
-        bytes[12] ^= UInt8(truncatingIfNeeded: idx)
-        bytes[13] ^= UInt8(truncatingIfNeeded: idx >> 8)
-        bytes[14] ^= UInt8(truncatingIfNeeded: idx >> 16)
-        bytes[15] ^= UInt8(truncatingIfNeeded: idx >> 24)
-        let t: uuid_t = (
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5], bytes[6], bytes[7],
-            bytes[8], bytes[9], bytes[10], bytes[11],
-            bytes[12], bytes[13], bytes[14], bytes[15]
-        )
-        return UUID(uuid: t)
+        var u = namespace.uuid   // uuid_t — XOR the index into its trailing bytes
+        u.12 ^= UInt8(truncatingIfNeeded: idx)
+        u.13 ^= UInt8(truncatingIfNeeded: idx >> 8)
+        u.14 ^= UInt8(truncatingIfNeeded: idx >> 16)
+        u.15 ^= UInt8(truncatingIfNeeded: idx >> 24)
+        return UUID(uuid: u)
     }
 }
 

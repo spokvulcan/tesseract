@@ -67,19 +67,12 @@ enum SettingsCatalogue {
     // MARK: - Agent
 
     static let webAccessEnabled = Setting.bool("webAccessEnabled", default: true)
-    /// Legacy per-session vision toggle, default `false`. No longer surfaced in
-    /// the composer (removed in #113); it remains the backing for the arbiter's
-    /// `.fromSettings` vision requirement, which the chat send path now reaches
-    /// only when `useVisionWhenAvailable` is off (→ forces the text-only
-    /// container). Background/legacy callers still resolve vision through it.
-    static let visionModeEnabled = Setting.bool("visionModeEnabled", default: false)
     /// Global opt-out governing chat-initiated vision loads (ADR-0013, PRD #112).
     /// When on (default), the chat send path requests `.visionIfCapable`, so a
     /// vision-capable model loads its VLM container from turn one and image
-    /// affordances appear in the composer. When off, the send path falls back to
-    /// `.fromSettings` (→ text-only). The HTTP server ignores this (ADR-0008).
-    /// A *new* key rather than a repurposed `visionModeEnabled` so no user's
-    /// stale persisted toggle value flips meaning — everyone gets default-on.
+    /// affordances appear in the composer. When off, the send path resolves
+    /// `.fromSettings`, which gates vision on this opt-out (→ text-only). The
+    /// HTTP server ignores this (ADR-0008).
     static let useVisionWhenAvailable = Setting.bool("useVisionWhenAvailable", default: true)
 
     /// Per-model opt-in for the **Preserve-Thinking Render** (issue #98).

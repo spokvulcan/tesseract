@@ -335,14 +335,17 @@ final class AgentCoordinator {
     func openQuickLook(clicked id: UUID, includingPending pending: [ImageAttachment] = []) {
         let all = conversationImages() + pending
         guard let set = ImagePreviewSet.project(all: all, clicked: id) else { return }
-        let urls = imagePreviewCache.materialize(set.attachments)
-        // Re-derive the start index from the clicked image's URL so a (rare)
-        // dropped write can't misalign the opening index.
-        let clicked = set.attachments[set.startIndex]
-        guard let clickedURL = try? imagePreviewCache.url(for: clicked),
-              let startIndex = urls.firstIndex(of: clickedURL)
-        else { return }
-        quickLookRequest = QuickLookRequest(urls: urls, startIndex: startIndex)
+        // Materialize each attachment, keeping its original position, so the
+        // opening index tracks the *clicked occurrence* — not the first
+        // byte-identical copy (digest-keyed files give duplicates the same URL,
+        // so matching by URL would jump to index 0) and not a slot misaligned by
+        // a dropped write. A dropped write of the clicked image itself drops its
+        // index from the set, so we open nothing rather than the wrong image.
+        let materialized = set.attachments.enumerated().compactMap { index, attachment in
+            (try? imagePreviewCache.url(for: attachment)).map { (index, $0) }
+        }
+        guard let startIndex = materialized.firstIndex(where: { $0.0 == set.startIndex }) else { return }
+        quickLookRequest = QuickLookRequest(urls: materialized.map(\.1), startIndex: startIndex)
     }
 
     /// Pre-warm one image's temp file (called as the transcript decodes it) so a
@@ -418,7 +421,7 @@ final class AgentCoordinator {
     private func conversationImages() -> [ImageAttachment] {
         agent.state.messages.flatMap { message -> [ImageAttachment] in
             if let user = message.asUser { return user.images }
-            if let tool = message.asToolResult { return tool.content.imageAttachments }
+            if let tool = message.asToolResult { return tool.content.imageAttachments(namespace: tool.id) }
             return []
         }
     }
