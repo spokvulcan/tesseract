@@ -51,16 +51,6 @@ weighing decisions:
 
 ## Agent skills
 
-### Skill-first
-
-Before any **work** request (not chit-chat or quick lookups), ALWAYS open your reply with
-`Skill check: <skill> — <why>` or `Skill check: none`. Scan the available skills every time;
-prefer one even when the task seems doable directly.
-
-- Obvious or cheap → invoke, announce, proceed.
-- Ambiguous or heavy → propose + why, then wait.
-- Already inside a skill → skip.
-
 ### Issue tracker
 
 Issues and PRDs live as GitHub issues in `spokvulcan/tesseract` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
