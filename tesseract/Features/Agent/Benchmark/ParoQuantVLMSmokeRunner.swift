@@ -181,6 +181,9 @@ final class ParoQuantVLMSmokeRunner {
             try await stackedImageRemainderContinuationMatches(
                 context: context, vlm: vlm, image1: image, image2: image2)
         }
+        await runCheck("unkeyedImageWholeContinuationMatches") {
+            try unkeyedImageWholeContinuationMatches(context: context, vlm: vlm, input: imageInput)
+        }
 
         return TestRunResult(logs: logs, checks: checks)
     }
@@ -809,6 +812,61 @@ final class ParoQuantVLMSmokeRunner {
                     + "image1Patches=\(image1Patches) image1Delta=\(image1Delta)",
                 "  frames=\(frames.map(\.values).map { [$0.0, $0.1, $0.2] }) merge=\(merge)",
             ]
+        )
+    }
+
+    /// The **unkeyed image fallback** (ADR-0007 phase 2, the P2 gap closed in
+    /// `ServerCompletion.makeUnkeyedGeneration`): when cache keying fails on an
+    /// image-bearing request (e.g. a placeholder/grid mismatch), the request
+    /// must not fall back to the vendor's single-shot `[heads, L, L]` `prepare`
+    /// and crash. Instead the *whole* `[0, last)` input — vision tower, image →
+    /// token merge, and text tail — is driven through the windowed
+    /// `prepareContinuation` on a fresh cache anchored at zero (`state: nil`),
+    /// the exact shape `StateThreadedTokenIterator(preparing:prepare:)` injects.
+    ///
+    /// Unlike the remainder checks, nothing is split off; this is the only check
+    /// that runs `prepareContinuation` over a *full* image-bearing prompt from
+    /// zero. It must land the same top token as the single-shot cold `prepare`
+    /// over the same prefix — proving the from-zero whole-input continuation
+    /// positions the image correctly. (Bitwise is impossible: the chunked
+    /// continuation runs different kernel shapes than single-shot `prepare`; see
+    /// `chunkShapeNoiseControl`.) A diverging argmax means the unkeyed fallback
+    /// would serve mis-positioned, wrong tokens.
+    nonisolated private static func unkeyedImageWholeContinuationMatches(
+        context: ModelContext,
+        vlm: Qwen35,
+        input: LMInput
+    ) throws -> (passed: Bool, detail: String, lines: [String]) {
+        let tokens = LLMActor.extractTokenSequence(input.text.tokens)
+
+        // Production-cold reference (argmax target): single-shot prepare over
+        // the whole [0, last) prefix, image included, then a threaded forward.
+        let (coldLogits, _) = try coldLastLogits(context: context, input: input)
+
+        // Unkeyed-fallback shape: the whole prompt through the windowed
+        // continuation on a fresh cache, anchored at zero — the first generated
+        // token is sampled from the final position's logits, exactly as the
+        // iterator's `.logits` branch does.
+        let cache = context.model.newCache(parameters: nil)
+        let wholeTokens = sliced2D(input.text.tokens, to: tokens.count)
+        let wholeInput = LMInput(
+            text: .init(tokens: wholeTokens, mask: ones(like: wholeTokens).asType(.int8)),
+            image: input.image
+        )
+        guard case .logits(let out) = try vlm.prepareContinuation(
+            wholeInput, cache: cache, state: nil, windowSize: 512
+        ) else {
+            return (false, "prepareContinuation returned .tokens", [])
+        }
+        let lastPosition = out.logits[0..., -1, 0...]
+        eval(lastPosition)
+
+        let argmaxWarm = lastPosition.argMax().item(Int32.self)
+        let argmaxCold = coldLogits.argMax().item(Int32.self)
+        return (
+            argmaxWarm == argmaxCold,
+            "argmax wholeContinuation=\(argmaxWarm) cold=\(argmaxCold) (expected equal)",
+            ["  prompt=\(tokens.count) tokens, one prepareContinuation over the whole image+text input from zero"]
         )
     }
 

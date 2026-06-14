@@ -1523,6 +1523,7 @@ nonisolated final class ServerCompletion {
                     parameters: parameters,
                     toolSpecs: canonicalTools,
                     partitionKey: partitionKey,
+                    fullAttentionScratchProfile: fullAttentionScratchProfile,
                     ssdEnabled: ssdEnabled,
                     diagnosticsContext: diagnosticsContext,
                     progressHandler: progressHandler
@@ -1615,9 +1616,10 @@ nonisolated final class ServerCompletion {
             // restore-vs-cold, the suffix checkpoint filter, the transient
             // boundary offsets, and the single `prefillBaseOffset` (which
             // collapses the old `skippedTokens` / `checkpointBaseOffset` pair).
-            // The key space clamps image-bearing requests: hits below the end
-            // of the last image run degrade to cold, and cold checkpoints
-            // inside the image prefix are dropped (uncapturable there).
+            // The key space governs image-bearing requests: a hit below the end
+            // of the last image run is continued warm through that image
+            // (ADR-0007 phase 2), not degraded to cold, while cold checkpoints
+            // inside the image prefix are still dropped (uncapturable there).
             let prefillPlan = PrefillPlanner.plan(
                 boundaries: boundaries,
                 lookupResult: lookupResult,
@@ -1639,15 +1641,20 @@ nonisolated final class ServerCompletion {
             }
 
             // Execute the restore decision (Metal): on a hit, slice the suffix
-            // and restore the KV cache; otherwise run cold. Three shapes:
-            // - warm: restore the snapshot, chunk-prefill the (image-free)
-            //   remainder with a seeded **Position Anchor**;
+            // and restore the KV cache; otherwise run cold. Four shapes:
+            // - warm, image-free remainder: restore the snapshot, chunk-prefill
+            //   the remainder with a seeded **Position Anchor**;
+            // - warm below a new image: restore, continue through the image span
+            //   `[restore, minimumWarmOffset)` with the windowed vision
+            //   continuation anchored at the restored Position Anchor, then
+            //   chunk-prefill the text tail (ADR-0007 phase 2);
             // - cold, text-only: chunk-prefill everything from zero;
-            // - cold with images: one vendor `prepare` over the image prefix
-            //   `[0, minimumWarmOffset)` (pixels in, M-RoPE correct by
-            //   construction), then chunk-prefill the text tail with the
-            //   prepare's state threaded — the spike's bitwise-verified cold
-            //   chain (ADR-0007).
+            // - cold with images: drive the same windowed vision continuation
+            //   over the image prefix `[0, minimumWarmOffset)` anchored at zero
+            //   (pixels in, M-RoPE correct by construction, scratch bounded to
+            //   `[heads, chunk, L]`), then chunk-prefill the text tail with the
+            //   continuation's state threaded — the spike's bitwise-verified
+            //   cold chain (ADR-0007).
             let inputForGeneration: LMInput
             let cacheToUse: [any KVCache]?
             let restoreMs: TimeInterval
@@ -1891,6 +1898,10 @@ nonisolated final class ServerCompletion {
                                 try MLXCheckedEvaluation.eval(liveCache)
                             }
                         }
+                        // Pipeline the image-free text path for TTFT; keep the
+                        // image-text-tail (its cache already holds a large image,
+                        // so the per-chunk score matrix is large) on checked
+                        // synchronous eval so an MLX failure throws not crashes.
                         let warmed = try PrefillExecutor.run(
                             model: context.model,
                             text: inputForGeneration.text,
@@ -1898,7 +1909,8 @@ nonisolated final class ServerCompletion {
                             checkpoints: allCheckpoints,
                             checkpointBaseOffset: executionBaseOffset,
                             prefillStepSize: genParams.prefillStepSize,
-                            initialState: initialState
+                            initialState: initialState,
+                            evalPolicy: imagePrefixInput == nil ? .pipelined : .checkedSynchronous
                         )
                         try error.check()
                         maybeQuantizeKVCache(
@@ -2055,12 +2067,18 @@ nonisolated final class ServerCompletion {
     /// request is served correctly with zero cache participation — no lookup,
     /// no checkpoints, no admission, never a route bounce.
     ///
-    /// The whole prompt goes through the vendor `prepare` (pixels included —
-    /// for the mismatch corner on the vision container this is today's
-    /// uncached image-serving shape), and decode runs on the state-threaded
-    /// iterator so a `.logits` prepare keeps its returned state. `kvBits`
-    /// quantization is skipped on this path — there is no capture to protect,
-    /// and the degraded corner is not worth a per-step quantization loop.
+    /// Image-bearing requests on a `WindowedVisionContinuation` model (today
+    /// only the Qwen3.5/3.6 vision container) prefill through the windowed
+    /// `prepareContinuation` from zero (state nil ⇒ anchored at offset 0),
+    /// bounding the full-attention scratch to `[heads, chunk, L]` under a scoped
+    /// MLX error handler with a `VisionPrefixMemoryGuard` backstop — so the
+    /// mismatch corner can no longer crash on the single-shot `[heads, L, L]`
+    /// allocation (ADR-0007 phase 2). The image-free (or non-conforming)
+    /// fallback runs the vendor single-shot `prepare`. Either way decode runs on
+    /// the state-threaded iterator so a `.logits` prefill keeps its returned
+    /// state. `kvBits` quantization is skipped on this path — there is no
+    /// capture to protect, and the degraded corner is not worth a per-step
+    /// quantization loop.
     private static func makeUnkeyedGeneration(
         context: ModelContext,
         fullInput: LMInput,
@@ -2069,6 +2087,7 @@ nonisolated final class ServerCompletion {
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         partitionKey: CachePartitionKey,
+        fullAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
         ssdEnabled: Bool,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         progressHandler: ServerInferenceProgressHandler?
@@ -2091,12 +2110,61 @@ nonisolated final class ServerCompletion {
         iteratorParams.kvBits = nil
         let cache = context.model.newCache(parameters: parameters)
         let prefillStarted = Date.timeIntervalSinceReferenceDate
-        let iterator = try StateThreadedTokenIterator(
-            preparing: fullInput,
-            model: context.model,
-            cache: cache,
-            parameters: iteratorParams
-        )
+        let iterator: StateThreadedTokenIterator
+        if fullInput.image != nil,
+            let continuation = context.model as? WindowedVisionContinuation
+        {
+            // Image-bearing **Unkeyed Completion** (ADR-0007 phase 2): cache
+            // keying failed (e.g. a placeholder/grid mismatch), but the prompt
+            // still carries pixels — the vendor's single-shot `prepare` would
+            // allocate the crash-prone `[heads, L, L]` full-attention scratch.
+            // Drive the windowed vision continuation from zero instead (state
+            // nil ⇒ anchored at offset 0), so even this fallback prefills in
+            // bounded `[heads, chunk, L]` windows. The backstop guard fires only
+            // if a single window cannot fit (effectively unreachable). The whole
+            // continuation runs under a scoped MLX error handler so a runtime
+            // failure surfaces as a throw, not a process-fatal dispatch.
+            if let rejection = VisionPrefixMemoryGuard.chunkedRejection(
+                windowSize: parameters.prefillStepSize,
+                contextTokens: fullTokenCount,
+                profile: fullAttentionScratchProfile,
+                maxBufferBytes: Self.currentMaxMetalBufferBytes()
+            ) {
+                diagnosticsContext.logSkip(
+                    stage: "prefill",
+                    reason: "vision-prefix-too-large",
+                    level: .warning,
+                    extraFields: [
+                        ("prefixTokens", "\(rejection.prefixTokens)"),
+                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
+                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
+                    ]
+                )
+                throw AgentEngineError.generationFailed(rejection.message)
+            }
+            iterator = try MLXCheckedEvaluation.withErrors { error in
+                let built = try StateThreadedTokenIterator(
+                    preparing: fullInput,
+                    model: context.model,
+                    cache: cache,
+                    parameters: iteratorParams,
+                    prepare: { input, cache, windowSize in
+                        try continuation.prepareContinuation(
+                            input, cache: cache, state: nil, windowSize: windowSize
+                        )
+                    }
+                )
+                try error.check()
+                return built
+            }
+        } else {
+            iterator = try StateThreadedTokenIterator(
+                preparing: fullInput,
+                model: context.model,
+                cache: cache,
+                parameters: iteratorParams
+            )
+        }
         let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStarted
         await progressHandler?(.prefillFinished(.init(
             promptTokens: fullTokenCount,
