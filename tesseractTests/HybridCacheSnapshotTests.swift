@@ -51,6 +51,95 @@ struct HybridCacheSnapshotTests {
         #expect(snapshot.layers[0].state[1].dim(2) == 5)
     }
 
+    // MARK: - Buffer isolation (Invalid Resource crash)
+
+    /// Physical address of an `MLXArray`'s backing buffer. Two arrays that
+    /// share a Metal allocation report the same address; independent copies
+    /// report different ones. `asData(access: .noCopy)` (after `eval`) wraps
+    /// `mlx_array_data_uint8` directly, so the `Data`'s base address is the
+    /// real backing pointer — not a fresh copy.
+    ///
+    /// This is the only thing that distinguishes a deep copy from a
+    /// copy-on-write *alias*: `MLXArray` is a reference type, and an
+    /// `array[.ellipsis]` slice shares the source's buffer until a mutation
+    /// forces a copy. A value-isolation test (mutate one, read the other) can
+    /// **not** catch the alias because COW preserves the un-mutated party's
+    /// values either way — see MLX's own `testCopyEllipsis`. Only the physical
+    /// address discriminates.
+    private func backingAddress(_ array: MLXArray) -> UInt {
+        array.asData(access: .noCopy).data.withUnsafeBytes {
+            UInt(bitPattern: $0.baseAddress)
+        }
+    }
+
+    /// Regression: a captured snapshot must own a private backing buffer, not
+    /// alias the live cache it was captured from.
+    ///
+    /// The previous `array[.ellipsis]` capture shared the live cache's Metal
+    /// buffer with the tree-stored snapshot. Under overlapping image requests,
+    /// the live cache's in-flight command buffers plus the prefix cache's
+    /// eviction/donation lifecycle could free or recycle a buffer still
+    /// referenced in flight → `kIOGPUCommandBufferCallbackErrorInvalidResource`
+    /// thrown uncatchably from MLX `check_error` on the Metal completion queue
+    /// → SIGABRT.
+    @Test func capturedSnapshotDoesNotShareBackingWithLiveCache() throws {
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.ones([1, 1, 6, 64]), MLXArray.ones([1, 1, 6, 64])]
+
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 6, type: .leaf))
+
+        // Same logical contents…
+        #expect(allClose(kv.state[0], snapshot.layers[0].state[0], atol: 0).all().item(Bool.self))
+        // …but distinct physical backing — the whole point of the fix.
+        #expect(backingAddress(snapshot.layers[0].state[0]) != backingAddress(kv.state[0]))
+        #expect(backingAddress(snapshot.layers[0].state[1]) != backingAddress(kv.state[1]))
+    }
+
+    /// Regression: a restored live cache must own private backing buffers, not
+    /// alias the tree-stored snapshot it was rebuilt from. Otherwise the
+    /// restored cache's in-place `KVCacheSimple.update` writes (and its own
+    /// buffer lifecycle) reach the snapshot still living in the radix tree.
+    @Test func restoredCacheDoesNotShareBackingWithSnapshot() throws {
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.ones([1, 1, 6, 64]), MLXArray.ones([1, 1, 6, 64])]
+
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 6, type: .leaf))
+        let restored = try snapshot.restore()
+
+        #expect(
+            allClose(restored[0].state[0], snapshot.layers[0].state[0], atol: 0)
+                .all().item(Bool.self))
+        // All three — source cache, tree snapshot, restored cache — are
+        // distinct allocations.
+        #expect(
+            backingAddress(restored[0].state[0]) != backingAddress(snapshot.layers[0].state[0]))
+        #expect(backingAddress(restored[0].state[0]) != backingAddress(kv.state[0]))
+        #expect(backingAddress(snapshot.layers[0].state[0]) != backingAddress(kv.state[0]))
+    }
+
+    /// End-to-end behavioral guard: an in-place `update` on the live cache
+    /// after capture (the realistic prefill-continuation path) must not
+    /// disturb the snapshot's bytes. COW makes this pass even with an alias,
+    /// so it does not replace the address tests above — it documents the
+    /// observable contract and guards against a future non-COW in-place op.
+    @Test func inPlaceUpdateAfterCaptureLeavesSnapshotBytesIntact() throws {
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.ones([1, 1, 6, 64]), MLXArray.ones([1, 1, 6, 64])]
+
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [kv], offset: 6, type: .leaf))
+        let capturedBytes = snapshot.layers[0].state[0].asData(access: .copy).data
+
+        // Grow the live cache in place, exactly as the decode/prefill loop does.
+        _ = kv.update(keys: MLXArray.zeros([1, 1, 2, 64]), values: MLXArray.zeros([1, 1, 2, 64]))
+        #expect(kv.offset == 8)
+
+        #expect(snapshot.layers[0].state[0].dim(2) == 6)
+        #expect(snapshot.layers[0].state[0].asData(access: .copy).data == capturedBytes)
+    }
+
     @Test func captureRecordsCorrectClassName() throws {
         let kv = KVCacheSimple()
         kv.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
