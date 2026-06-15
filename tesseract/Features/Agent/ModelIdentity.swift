@@ -103,6 +103,16 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// exposes it. `nil` for unrecognized/non-full-attention models.
     let fullAttentionScratchProfile: FullAttentionScratchProfile?
 
+    /// Vision-tower full-attention scratch geometry, when the loaded family
+    /// ships a `vision_config`. The `qwen3_5` ViT attends *globally* over every
+    /// patch of an image (no `window_size`/`fullatt_block_indexes`), so a single
+    /// forward materializes one `[vision_heads, ΣpatchesΣpatches]` bf16 score
+    /// matrix — O(patches²), uncapped, and invisible to the language-model
+    /// `fullAttentionScratchProfile`. This profile lets the patch guard price
+    /// that matrix before the tower runs. `nil` for text-only or unrecognized
+    /// families (ADR-0014).
+    let visionAttentionScratchProfile: FullAttentionScratchProfile?
+
     /// Image-keying facts for the Qwen3.5 vision variant; `nil` for text-only
     /// models and unrecognized families.
     let imageKeying: ImageKeying?
@@ -133,6 +143,9 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         self.declaredTemplateFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
         self.fullAttentionScratchProfile = Self.interpretFullAttentionScratchProfile(
+            configJSON: configJSON
+        )
+        self.visionAttentionScratchProfile = Self.interpretVisionAttentionScratchProfile(
             configJSON: configJSON
         )
         self.imageKeying = Self.interpretImageKeying(configJSON: configJSON)
@@ -264,6 +277,29 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         return FullAttentionScratchProfile(
             attentionHeads: attentionHeads,
             bytesPerElement: bytesPerElement(forActivationDType: textConfig["dtype"] as? String)
+        )
+    }
+
+    /// Vision-tower scratch geometry for the `qwen3_5` vision variant: the ViT's
+    /// `vision_config.num_heads` (16 for PARO), bf16 activations. Gated on the
+    /// same `qwen3_5` family prefix as its language-model sibling, plus a
+    /// `vision_config` block carrying a positive head count — a config without
+    /// one cannot be priced, so the guard stays inert rather than guessing
+    /// (ADR-0014).
+    private static func interpretVisionAttentionScratchProfile(
+        configJSON: [String: Any]?
+    ) -> FullAttentionScratchProfile? {
+        guard let root = configJSON,
+            let modelType = root["model_type"] as? String,
+            modelType.hasPrefix("qwen3_5"),
+            let visionConfig = root["vision_config"] as? [String: Any],
+            let numHeads = visionConfig["num_heads"] as? Int,
+            numHeads > 0
+        else { return nil }
+
+        return FullAttentionScratchProfile(
+            attentionHeads: numHeads,
+            bytesPerElement: bytesPerElement(forActivationDType: visionConfig["dtype"] as? String)
         )
     }
 

@@ -145,16 +145,37 @@ nonisolated enum VisionPrefixMemoryGuard {
 
         var message: String {
             "vision prefill is too large: \(prefixTokens) image-prefix tokens would allocate "
-                + "\(Self.formatBytes(estimatedBytes)) for one Qwen3.5/Qwen3.6 full-attention "
-                + "score matrix, above this Mac's Metal buffer limit of "
-                + "\(Self.formatBytes(maxBufferBytes))"
+                + "\(VisionPrefixMemoryGuard.formatBytes(estimatedBytes)) for one "
+                + "Qwen3.5/Qwen3.6 full-attention score matrix, above this Mac's Metal "
+                + "buffer limit of \(VisionPrefixMemoryGuard.formatBytes(maxBufferBytes))"
         }
+    }
 
-        private static func formatBytes(_ bytes: UInt64) -> String {
-            if bytes == UInt64.max { return "more than \(UInt64.max) bytes" }
-            let gib = Double(bytes) / 1_073_741_824.0
-            return String(format: "%.2f GiB", gib)
+    /// The vision-tower analogue of `Rejection`: the request's *combined* image
+    /// patches would allocate one `[vision_heads, ΣP, ΣP]` global-attention
+    /// score matrix above the Metal single-buffer limit. The per-image cap
+    /// bounds one image, but the global ViT attends over every image's patches
+    /// jointly, so a many-image turn still re-crosses the cliff — this turns
+    /// that corner into a typed, actionable rejection instead of an OOM abort
+    /// (ADR-0014).
+    struct VisionRejection: Equatable, Sendable {
+        let totalPatches: Int
+        let estimatedBytes: UInt64
+        let maxBufferBytes: UInt64
+
+        var message: String {
+            "this image set is too large to process: \(totalPatches) combined image patches "
+                + "would allocate \(VisionPrefixMemoryGuard.formatBytes(estimatedBytes)) for the "
+                + "vision tower's attention, above this Mac's Metal buffer limit of "
+                + "\(VisionPrefixMemoryGuard.formatBytes(maxBufferBytes)). Reduce the number or "
+                + "size of the attached images."
         }
+    }
+
+    static func formatBytes(_ bytes: UInt64) -> String {
+        if bytes == UInt64.max { return "more than \(UInt64.max) bytes" }
+        let gib = Double(bytes) / 1_073_741_824.0
+        return String(format: "%.2f GiB", gib)
     }
 
     static func rejection(
@@ -193,6 +214,29 @@ nonisolated enum VisionPrefixMemoryGuard {
         guard estimatedBytes > maxBufferBytes else { return nil }
         return Rejection(
             prefixTokens: contextTokens,
+            estimatedBytes: estimatedBytes,
+            maxBufferBytes: maxBufferBytes
+        )
+    }
+
+    /// Price the vision tower's global-attention score matrix for a forward over
+    /// `totalPatches` patches: `[vision_heads, totalPatches, totalPatches]` in
+    /// the profile's element size. Rejects when that single buffer would exceed
+    /// the Metal limit, *before* the tower runs. `totalPatches` is the patch
+    /// count of the images actually fed to this forward (the whole request on a
+    /// cold/unkeyed turn; only the newly-added images on a warm continuation,
+    /// since earlier images are already in the restored cache and not re-fed).
+    /// Inert (`nil`) for an unknown profile, mirroring `rejection` (ADR-0014).
+    static func visionRejection(
+        totalPatches: Int,
+        profile: ModelIdentity.FullAttentionScratchProfile?,
+        maxBufferBytes: UInt64
+    ) -> VisionRejection? {
+        guard let profile else { return nil }
+        let estimatedBytes = profile.scoreMatrixBytes(sequenceLength: totalPatches) ?? UInt64.max
+        guard estimatedBytes > maxBufferBytes else { return nil }
+        return VisionRejection(
+            totalPatches: totalPatches,
             estimatedBytes: estimatedBytes,
             maxBufferBytes: maxBufferBytes
         )
@@ -1457,6 +1501,7 @@ nonisolated final class ServerCompletion {
         let imageKeying = self.modelIdentity?.imageKeying
         let flopProfile = self.modelIdentity?.flopProfile ?? .fallback
         let fullAttentionScratchProfile = self.modelIdentity?.fullAttentionScratchProfile
+        let visionAttentionScratchProfile = self.modelIdentity?.visionAttentionScratchProfile
         let ssdEnabled = self.ssdConfig?.enabled == true
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
@@ -1542,6 +1587,7 @@ nonisolated final class ServerCompletion {
                     toolSpecs: canonicalTools,
                     partitionKey: partitionKey,
                     fullAttentionScratchProfile: fullAttentionScratchProfile,
+                    visionAttentionScratchProfile: visionAttentionScratchProfile,
                     ssdEnabled: ssdEnabled,
                     diagnosticsContext: diagnosticsContext,
                     progressHandler: progressHandler
@@ -1856,6 +1902,36 @@ nonisolated final class ServerCompletion {
                         var initialState = executorInitialState
                         var prefixSnapshots: [HybridCacheSnapshot] = []
                         if let imagePrefixInput {
+                            // Vision-tower patch guard (ADR-0014): the continuation
+                            // runs the global ViT once over THIS forward's images,
+                            // materializing one `[vision_heads, ΣP, ΣP]` score
+                            // matrix over their combined patches. The per-image cap
+                            // bounds each image, but a many-image turn re-crosses
+                            // the Metal buffer limit — price the patches actually
+                            // fed here (all images when cold; only the newly-added
+                            // images on a warm restore, since earlier images are
+                            // already in the restored cache and not re-fed) and
+                            // reject before the tower allocates.
+                            let visionPatches = (imagePrefixInput.image?.frames ?? [])
+                                .reduce(0) { $0 + $1.product }
+                            if let rejection = VisionPrefixMemoryGuard.visionRejection(
+                                totalPatches: visionPatches,
+                                profile: visionAttentionScratchProfile,
+                                maxBufferBytes: Self.currentMaxMetalBufferBytes()
+                            ) {
+                                diagnosticsContext.logSkip(
+                                    stage: "prefill",
+                                    reason: "vision-tower-too-large",
+                                    level: .warning,
+                                    extraFields: [
+                                        ("totalPatches", "\(rejection.totalPatches)"),
+                                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
+                                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
+                                    ]
+                                )
+                                throw AgentEngineError.generationFailed(rejection.message)
+                            }
+
                             // Crash-safe by construction: the continuation chunks
                             // the forward, so the peak full-attention scratch is
                             // bounded to `[heads, window, executionBaseOffset]`,
@@ -2124,6 +2200,7 @@ nonisolated final class ServerCompletion {
         toolSpecs: [ToolSpec]?,
         partitionKey: CachePartitionKey,
         fullAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
+        visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
         ssdEnabled: Bool,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         progressHandler: ServerInferenceProgressHandler?
@@ -2152,6 +2229,32 @@ nonisolated final class ServerCompletion {
         if fullInput.image != nil,
             let continuation = context.model as? WindowedVisionContinuation
         {
+            // Vision-tower patch guard (ADR-0014): this unkeyed path prefills the
+            // whole prompt from zero, so the global ViT attends over *every*
+            // image's patches jointly in one `[vision_heads, ΣP, ΣP]` matrix.
+            // Price that combined count and reject before the tower allocates, so
+            // a many-image mismatch corner degrades to a typed error rather than
+            // an OOM abort.
+            let visionPatches = (fullInput.image?.frames ?? [])
+                .reduce(0) { $0 + $1.product }
+            if let rejection = VisionPrefixMemoryGuard.visionRejection(
+                totalPatches: visionPatches,
+                profile: visionAttentionScratchProfile,
+                maxBufferBytes: Self.currentMaxMetalBufferBytes()
+            ) {
+                diagnosticsContext.logSkip(
+                    stage: "prefill",
+                    reason: "vision-tower-too-large",
+                    level: .warning,
+                    extraFields: [
+                        ("totalPatches", "\(rejection.totalPatches)"),
+                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
+                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
+                    ]
+                )
+                throw AgentEngineError.generationFailed(rejection.message)
+            }
+
             // Image-bearing **Unkeyed Completion** (ADR-0007 phase 2): cache
             // keying failed (e.g. a placeholder/grid mismatch), but the prompt
             // still carries pixels — the vendor's single-shot `prepare` would
