@@ -34,7 +34,14 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/ml-explore/mlx-swift.git", .upToNextMajor(from: "0.30.3")),
+        // TODO(mlx-uaf): TEMPORARY fork pin — revert to upstream ml-explore/mlx-swift
+        // once the upstream fix ships in a release.
+        //   Upstream PR:    https://github.com/ml-explore/mlx/pull/3688
+        //   Upstream issue: https://github.com/ml-explore/mlx/issues/3689
+        // Fork carries retained command-buffer references (spokvulcan/mlx@d825d73) that fix
+        // the buffer-cache use-after-free crash. Must match mlx-swift-lm's pin exactly —
+        // SwiftPM requires one consistent location/revision per package identity.
+        .package(url: "https://github.com/spokvulcan/mlx-swift", revision: "2c5365407776c12b75814802ef2ccc0f39e40d47"),
         .package(path: "../mlx-swift-lm"),
         .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMajor(from: "1.1.6")),
         .package(url: "https://github.com/huggingface/swift-huggingface.git", .upToNextMajor(from: "0.6.0"))
