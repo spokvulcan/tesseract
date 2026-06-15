@@ -125,10 +125,18 @@ struct AgentInputStatusStrip: View {
             case .notDownloaded:
                 ("Download an agent model to get started", AnyShapeStyle(.secondary))
             }
+        // Errors carry actionable guidance (e.g. "Reduce the number or size of
+        // the attached images") that must stay readable; transient status lines
+        // stay a single line.
+        let lineLimit: Int =
+            switch status {
+            case .error, .voiceError: 3
+            default: 1
+            }
         return Text(text)
             .font(.caption)
             .foregroundStyle(style)
-            .lineLimit(1)
+            .lineLimit(lineLimit)
     }
 }
 

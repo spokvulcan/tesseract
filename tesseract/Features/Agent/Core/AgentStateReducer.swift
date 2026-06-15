@@ -33,6 +33,11 @@ enum AgentStateReducer {
             // `finishRun` syncs `messages` from the final context; nothing here.
             break
 
+        case .generationError:
+            // The shared error banner is surfaced by the coordinator's event
+            // handler; the reducer holds no separate generation-error state.
+            break
+
         case .turnStart:
             break
 

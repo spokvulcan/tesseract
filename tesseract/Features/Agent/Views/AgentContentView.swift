@@ -74,6 +74,15 @@ struct AgentContentView: View {
             }
         }
         .navigationTitle("Agent")
+        .onChange(of: coordinator.editDraftRestore) { _, restored in
+            // Edit & resend: the edited message's text drops into the composer
+            // (its images are already in `pendingImages`). Consume the one-shot.
+            guard let restored else { return }
+            coordinator.editDraftRestore = nil
+            // Skip an empty restore (an image-only message) so a typed draft is
+            // not blanked to nothing.
+            if !restored.isEmpty { inputText = restored }
+        }
         .background(
             QuickLookContainer(
                 request: coordinator.quickLookRequest,

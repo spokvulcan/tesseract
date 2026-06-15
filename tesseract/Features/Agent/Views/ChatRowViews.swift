@@ -52,7 +52,10 @@ struct UserBubble: View, Equatable {
 
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
     @State private var isHovering = false
+    @Environment(AgentCoordinator.self) private var coordinator
 
+    // Equality compares only `data` — the environment-injected coordinator is
+    // read lazily on user action, never during diffing.
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
 
     var body: some View {
@@ -109,10 +112,29 @@ struct UserBubble: View, Equatable {
                     topTrailingRadius: 18
                 )
             )
+            .contextMenu {
+                Button {
+                    coordinator.beginEditingMessage(data.messageID)
+                } label: {
+                    Label("Edit & resend", systemImage: "pencil")
+                }
+            }
 
-            CopyButton(text: data.content)
-                .opacity(isHovering ? 1 : 0)
-                .animation(.easeInOut(duration: 0.15), value: isHovering)
+            HStack(spacing: 10) {
+                Button {
+                    coordinator.beginEditingMessage(data.messageID)
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Edit & resend — trim the images or text and send again")
+
+                CopyButton(text: data.content)
+            }
+            .opacity(isHovering ? 1 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
         }
         .onHover { isHovering = $0 }
     }
