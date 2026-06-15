@@ -309,6 +309,30 @@ _Avoid_: "vision enabled" as a per-message attribute, conflating it with
 **Vision-Capable Model**, "the toggle loads the image" (the toggle selects the
 container, not an attachment).
 
+**Vision Token Budget**:
+The per-image ceiling on how many vision tokens — and therefore image patches —
+a processed image contributes, applied so the vision tower's *global* attention
+(O(patches²); the `qwen3_5` ViT windows nothing) stays within the GPU's working
+set. A default the app sets, raisable per request by a caller that asks for more.
+It governs the processed grid only: a smaller budget downscales the pixels the
+tower sees, never the stored bytes — so the **Image Digest** is unchanged (the
+same picture stays the same identity) while its placeholder run, and hence its
+**Cache Key Path** length, shrinks. The companion *patch guard* prices the whole
+request's combined patches against the GPU buffer limit and rejects before the
+tower runs, so a many-image turn degrades to a typed error rather than an
+out-of-memory abort (ADR-0014). See ADR-0007 for the language-model-side prefill
+memory bound, which this complements on the tower side.
+_Avoid_: "max pixels" (the processor knob it rides, not the concept), "image
+downscaling" (the mechanism), "resolution cap" (names the input, not the
+vision-token unit the tower and cache both count), conflating the per-image
+budget with the request-wide patch guard.
+
+> **Flagged distinction — budget vs digest.** The **Vision Token Budget**
+> changes how many pad tokens an image expands to (its **Cache Key Path** run
+> length); the **Image Digest** is over the raw received bytes and never moves.
+> A budget change is a cache *miss* on prior snapshots of that image (shorter
+> run ≠ longer run), never a wrong hit.
+
 ### Prefill orchestration
 
 **Prefill Plan**:

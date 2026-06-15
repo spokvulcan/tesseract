@@ -49,6 +49,16 @@ final class BenchmarkTranscript {
         lines.append("")
     }
 
+    // MARK: - Generation Error
+
+    /// Records a turn the engine failed (e.g. a vision-tower guard rejection) so
+    /// the transcript shows WHY the turn produced no answer, instead of leaving a
+    /// blank round that reads as an ordinary wrong answer.
+    func writeGenerationError(_ message: String) {
+        lines.append("⚠️ GENERATION ERROR: \(message)")
+        lines.append("")
+    }
+
     // MARK: - Round Output
 
     /// Writes the reconstructed raw model output for one generation round.

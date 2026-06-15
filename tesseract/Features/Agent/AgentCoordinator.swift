@@ -38,6 +38,12 @@ final class AgentCoordinator {
     /// closure; voice input is the exception — its errors stay in `voiceState`.
     var error: String?
 
+    /// One-shot composer restore for **Edit & resend**. When the user edits a
+    /// sent message, its text lands here for the content view to copy into the
+    /// input field (the images go straight to `pendingImages`); the content view
+    /// clears it on apply. `nil` at rest.
+    var editDraftRestore: String?
+
     /// The pending Quick Look open request (slice #114). Set by `openQuickLook`,
     /// presented by the `QuickLookContainer` host, cleared when the panel closes.
     var quickLookRequest: QuickLookRequest?
@@ -335,6 +341,74 @@ final class AgentCoordinator {
         newConversation()
     }
 
+    // MARK: - Message Editing (Edit & resend)
+    //
+    // Lifting a sent user message back into the composer is the recovery path for
+    // a turn the model can't process (e.g. an over-large image set that trips the
+    // vision-tower guard, bricking every follow-up that re-feeds it). It truncates
+    // the conversation to everything *before* the edited message — the standard
+    // edit-message interaction, which doubles as "discard this message" when the
+    // user sends nothing back.
+
+    /// Truncate the conversation to the turns before `messageID`, then restore the
+    /// edited user message's text and images to the composer for re-sending. A
+    /// no-op while generating, or if the id is missing / not a user message.
+    func beginEditingMessage(_ messageID: UUID) {
+        guard !agentRun.isGenerating else { return }
+        let messages = agent.context.messages
+        guard let index = messages.firstIndex(where: { $0.messageUUID == messageID }),
+            let user = messages[index].asUser
+        else { return }
+
+        let head = Array(messages.prefix(index))
+        agent.loadMessages(head)
+        // `loadMessages` no-ops unless the agent is idle; the `isGenerating` gate
+        // above is only a proxy for that. Verify the truncation actually applied
+        // before mutating the store/composer, so a stale gate can never split the
+        // on-disk conversation from the live transcript.
+        guard agent.context.messages.count == head.count else {
+            Log.agent.error(
+                "beginEditingMessage: agent not idle, truncation did not apply — "
+                    + "aborting to avoid store/transcript divergence")
+            return
+        }
+        // Persist the truncation durably. `saveCurrent` SKIPS a head the store
+        // won't persist (no user message — its `hasUserMessages` guard), so such a
+        // head — an empty conversation, or one truncated to a leading compaction
+        // summary — must DELETE the stored conversation rather than write a head
+        // that silently drops, leaving the bricked turn to reload on next launch.
+        if AgentConversationStore.persists(head) {
+            conversationStore.updateCurrentMessages(head)
+            conversationStore.saveCurrent()
+        } else if let id = conversationStore.currentConversation?.id {
+            conversationStore.delete(id: id)
+        }
+
+        // Edit & resend REPLACES the composer with the edited message: its text and
+        // images become the live draft (the standard edit interaction). Any unsent
+        // draft is intentionally overwritten — the recovery flow this serves starts
+        // from an empty composer.
+        //
+        // Restore the images only if the current model can see them — otherwise
+        // they would render as chips and be silently dropped on send. Mirrors the
+        // paste/drop gate; the vision-rejection recovery flow stays vision-capable,
+        // so this is a no-op there.
+        if imageInputAvailable {
+            pendingImages = user.images
+        } else {
+            pendingImages = []
+            if !user.images.isEmpty { showImageSwitchHint = true }
+        }
+        editDraftRestore = user.content
+        // Leave `error` in place: the rejection banner's guidance ("Reduce the
+        // number or size of the attached images") stays visible while the user
+        // trims; `sendMessage` clears it on the next turn.
+        rebuildTranscript()
+        Log.agent.info(
+            "Editing message \(messageID): truncated to \(head.count) message(s), "
+                + "restored \(pendingImages.count) image(s) to the composer")
+    }
+
     // MARK: - Quick Look Image Viewer (slice #114)
 
     /// Open the full-size Quick Look viewer on the clicked image, navigable
@@ -559,6 +633,12 @@ final class AgentCoordinator {
 
         case .messageEnd:
             rebuildTranscript()
+
+        case .generationError(let message):
+            // Surface the failure in the shared banner. `sendMessage` clears
+            // `error` at the start of the next turn, and the banner has a manual
+            // dismiss, so this is sticky only until the user acts.
+            error = message
 
         case .turnStart, .messageStart, .toolExecutionUpdate, .malformedToolCall:
             break

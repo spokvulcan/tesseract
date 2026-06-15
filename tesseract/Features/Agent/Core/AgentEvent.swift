@@ -43,6 +43,14 @@ enum AgentEvent: Sendable {
     case agentStart
     case agentEnd(messages: [any AgentMessageProtocol & Sendable])
 
+    // -- Failure --
+    /// A generation failure the user must see (e.g. a vision-tower rejection).
+    /// Emitted alongside the terminal turn/agent-end so observers can surface the
+    /// message. The in-app path routes it to the shared error banner; the HTTP
+    /// path surfaces the same failure separately as a thrown error on its
+    /// `AgentGeneration` stream (it does not observe this event).
+    case generationError(message: String)
+
     // -- Turn lifecycle --
     case turnStart
     case turnEnd(

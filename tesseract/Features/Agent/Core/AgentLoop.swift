@@ -162,6 +162,20 @@ private func runLoop(
                 emit(.agentEnd(messages: allNewMessages.snapshot()))
                 return
             case .error(let error):
+                // Surface the failure to observers BEFORE the terminal
+                // turn/agent-end so the UI can show it (the in-app path
+                // historically only logged this, leaving the chat silently
+                // stopped). Prefer the engine error's own message; fall back to
+                // its localized description for anything else.
+                let message: String
+                if let engineError = error as? AgentEngineError,
+                    case .generationFailed(let description) = engineError
+                {
+                    message = description
+                } else {
+                    message = error.localizedDescription
+                }
+                emit(.generationError(message: message))
                 emit(
                     .turnEnd(
                         message: assistantMessage, toolResults: [],

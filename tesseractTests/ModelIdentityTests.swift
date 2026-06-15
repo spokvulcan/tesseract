@@ -261,6 +261,65 @@ struct ModelIdentityTests {
         #expect(identity.fullAttentionScratchProfile == nil)
     }
 
+    // MARK: - Vision-tower scratch profile (ADR-0014)
+
+    /// The Qwen3.5 vision variant (family prefix + `vision_config`) exposes the
+    /// vision tower's head count so the patch guard can price its global
+    /// O(patches²) attention matrix. PARO's ViT declares `num_heads: 16`.
+    @Test func visionScratchProfileReadsVisionConfigHeads() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5",
+                "vision_config": ["num_heads": 16],
+            ],
+            chatTemplate: nil
+        )
+
+        #expect(
+            identity.visionAttentionScratchProfile
+                == ModelIdentity.FullAttentionScratchProfile(
+                    attentionHeads: 16,
+                    bytesPerElement: 2
+                ))
+    }
+
+    /// Text-only Qwen3.5 (no `vision_config`) has no vision tower to guard.
+    @Test func visionScratchProfileIsNilWithoutVisionConfig() {
+        let identity = ModelIdentity(
+            configJSON: ["model_type": "qwen3_5"],
+            chatTemplate: nil
+        )
+
+        #expect(identity.visionAttentionScratchProfile == nil)
+    }
+
+    /// A `vision_config` that omits `num_heads` cannot be priced, so the guard
+    /// stays inert rather than inventing a head count.
+    @Test func visionScratchProfileIsNilWithoutHeadCount() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5",
+                "vision_config": ["spatial_merge_size": 2],
+            ],
+            chatTemplate: nil
+        )
+
+        #expect(identity.visionAttentionScratchProfile == nil)
+    }
+
+    /// Non-Qwen3.5 vision families are not priced by the Qwen3.5-specific guard.
+    @Test func visionScratchProfileIsNilOffTheRecognizedFamily() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen2_vl",
+                "vision_config": ["num_heads": 16],
+            ],
+            chatTemplate: nil
+        )
+
+        #expect(identity.visionAttentionScratchProfile == nil)
+    }
+
     // MARK: - Image keying
 
     /// The Qwen3.5 vision variant (family prefix + `vision_config`) yields the
