@@ -31,6 +31,26 @@ weighing decisions:
 - **Knowing the user is first-class** — persistent memory of goals,
   habits, and preferences is the product, not a feature.
 
+## Evidence before assertion
+
+You have the code, configs, logs, and the tools to run them — so **check before
+you claim.** Any load-bearing statement about how something works must rest on
+something you read or ran *this session* (a file:line, a config value, a log
+line, a measured number), not on what is plausible or what a model "usually"
+does. Reasoning from priors and presenting it as fact is the failure to avoid.
+
+- **Name the evidence, or mark it unverified.** If you can't point to where you
+  checked, you haven't — go check, or say so explicitly.
+- **Keep "I verified X" separate from "I suspect Y."** Never let an inference
+  harden into a stated fact.
+- **A correction means re-derive from evidence, not re-guess.** When pushed back
+  on, return to primary sources and rebuild — don't fire off another unchecked
+  theory. One wrong assumption compounds into a wrong conclusion, and a single
+  unchecked detail (which model, which code path, which layer type) can invert
+  the answer.
+
+Match the ambition above with this rigor.
+
 ## Working here
 
 - **Swift / SwiftUI / macOS work:** invoke the `build-macos-apps:*` skills,
