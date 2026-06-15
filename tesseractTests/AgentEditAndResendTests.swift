@@ -173,6 +173,39 @@ struct AgentEditAndResendTests {
         #expect(store.currentConversation?.messages.isEmpty == true)
     }
 
+    @Test func editingTheFirstUserMessageAfterCompactionDeletesTheUnpersistableHead() {
+        // A leading compaction summary makes `head` non-empty yet carrying no user
+        // message when the first post-summary user turn is edited. The store skips
+        // saving a head with no user message (its `hasUserMessages` guard), so the
+        // truncation must DELETE the stored conversation — not write an
+        // unpersistable head that leaves the (bricked) turn on disk to reload. A
+        // `head.isEmpty` check would miss this; the store's own persist predicate
+        // is the right gate.
+        let target = UserMessage(content: "describe these", images: [image("a")])
+        let conversation = AgentConversation(messages: [
+            CompactionSummaryMessage(summary: "earlier context", tokensBefore: 4_000),
+            CoreMessage.user(target),
+            CoreMessage.assistant(AssistantMessage(content: "an answer")),
+        ])
+        let store = InMemoryAgentConversationStore(seed: [conversation])
+        let coordinator = AgentCoordinator(
+            agent: makeIdleAgent(),
+            conversationStore: store,
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            arbiter: InMemoryInferenceArbiter()
+        )
+        coordinator.imageInputAvailable = true
+
+        coordinator.beginEditingMessage(target.id)
+
+        // The summary-only head is not persistable, so the conversation is deleted
+        // (fresh id), not rewritten to a head the store would silently drop.
+        #expect(store.currentConversation?.id != conversation.id)
+        #expect(store.currentConversation?.messages.isEmpty == true)
+        #expect(coordinator.editDraftRestore == "describe these")
+        #expect(coordinator.pendingImages.map(\.id) == [target.images[0].id])
+    }
+
     @Test func editingAnImageMessageUnderATextOnlyModelDropsImagesAndHints() {
         // On a model that can't see images, restoring the attachments would render
         // chips that get silently dropped on send. Restore only the text and raise

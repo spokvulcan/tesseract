@@ -164,11 +164,13 @@ nonisolated enum VisionPrefixMemoryGuard {
         let maxBufferBytes: UInt64
 
         var message: String {
-            "this image set is too large to process: \(totalPatches) combined image patches "
-                + "would allocate \(VisionPrefixMemoryGuard.formatBytes(estimatedBytes)) for the "
+            // Lead with the problem and the action so neither is clipped if the
+            // banner truncates; the byte/limit detail trails in parentheses.
+            "This image set is too large to process. Reduce the number or size of "
+                + "the attached images. (\(totalPatches) combined image patches would "
+                + "allocate \(VisionPrefixMemoryGuard.formatBytes(estimatedBytes)) for the "
                 + "vision tower's attention, above this Mac's Metal buffer limit of "
-                + "\(VisionPrefixMemoryGuard.formatBytes(maxBufferBytes)). Reduce the number or "
-                + "size of the attached images."
+                + "\(VisionPrefixMemoryGuard.formatBytes(maxBufferBytes)).)"
         }
     }
 
@@ -1912,8 +1914,17 @@ nonisolated final class ServerCompletion {
                             // images on a warm restore, since earlier images are
                             // already in the restored cache and not re-fed) and
                             // reject before the tower allocates.
-                            let visionPatches = (imagePrefixInput.image?.frames ?? [])
-                                .reduce(0) { $0 + $1.product }
+                            let visionFrames = imagePrefixInput.image?.frames ?? []
+                            if imagePrefixInput.image != nil, visionFrames.isEmpty {
+                                // Tripwire: an image with no frames prices as 0
+                                // patches, which would silently disarm this guard
+                                // (fail-open). Both binding paths set frames today;
+                                // log loudly if that ever stops holding.
+                                Log.server.error(
+                                    "vision guard (keyed): image present but no frames "
+                                        + "to price — ViT OOM guard inert this forward")
+                            }
+                            let visionPatches = visionFrames.reduce(0) { $0 + $1.product }
                             if let rejection = VisionPrefixMemoryGuard.visionRejection(
                                 totalPatches: visionPatches,
                                 profile: visionAttentionScratchProfile,
@@ -2225,18 +2236,22 @@ nonisolated final class ServerCompletion {
         iteratorParams.kvBits = nil
         let cache = context.model.newCache(parameters: parameters)
         let prefillStarted = Date.timeIntervalSinceReferenceDate
-        let iterator: StateThreadedTokenIterator
-        if fullInput.image != nil,
-            let continuation = context.model as? WindowedVisionContinuation
-        {
-            // Vision-tower patch guard (ADR-0014): this unkeyed path prefills the
-            // whole prompt from zero, so the global ViT attends over *every*
-            // image's patches jointly in one `[vision_heads, ΣP, ΣP]` matrix.
-            // Price that combined count and reject before the tower allocates, so
-            // a many-image mismatch corner degrades to a typed error rather than
-            // an OOM abort.
-            let visionPatches = (fullInput.image?.frames ?? [])
-                .reduce(0) { $0 + $1.product }
+        // Vision-tower patch guard (ADR-0014) — hoisted ABOVE the
+        // `WindowedVisionContinuation` cast so a vision model that does NOT conform
+        // (and would take the single-shot else-path below) is guarded too: the
+        // global ViT attends over every image's patches jointly in one
+        // `[vision_heads, ΣP, ΣP]` matrix no matter how prefill is driven. This
+        // unkeyed path prefills the whole prompt from zero, so price its combined
+        // patch count and reject before the tower allocates — a many-image
+        // mismatch corner degrades to a typed error instead of an OOM abort.
+        if fullInput.image != nil {
+            let visionFrames = fullInput.image?.frames ?? []
+            if visionFrames.isEmpty {
+                Log.server.error(
+                    "vision guard (unkeyed): image present but no frames to price — "
+                        + "ViT OOM guard inert this forward")
+            }
+            let visionPatches = visionFrames.reduce(0) { $0 + $1.product }
             if let rejection = VisionPrefixMemoryGuard.visionRejection(
                 totalPatches: visionPatches,
                 profile: visionAttentionScratchProfile,
@@ -2254,7 +2269,12 @@ nonisolated final class ServerCompletion {
                 )
                 throw AgentEngineError.generationFailed(rejection.message)
             }
+        }
 
+        let iterator: StateThreadedTokenIterator
+        if fullInput.image != nil,
+            let continuation = context.model as? WindowedVisionContinuation
+        {
             // Image-bearing **Unkeyed Completion** (ADR-0007 phase 2): cache
             // keying failed (e.g. a placeholder/grid mismatch), but the prompt
             // still carries pixels — the vendor's single-shot `prepare` would

@@ -216,16 +216,24 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
 
     // MARK: Save/Load — Synchronous (MessageCodecRegistry is sync-safe for encode/decode)
 
-    /// Synchronous save using direct codec calls.
-    private func saveSync(_ conversation: AgentConversation) {
-        // Only persist conversations that have user messages
-        let hasUserMessages = conversation.messages.contains { msg in
+    /// Whether `saveSync`/`saveCurrent` would actually persist these messages: it
+    /// skips a conversation with no user message. A caller that truncates a
+    /// conversation (Edit & resend) must consult this to choose delete-vs-save —
+    /// writing an unpersistable head silently leaves the prior file on disk. The
+    /// single source of truth for the predicate, so callers can't drift from it.
+    static func persists(_ messages: [any AgentMessageProtocol & Sendable]) -> Bool {
+        messages.contains { msg in
             if let core = msg as? CoreMessage, case .user = core { return true }
             if msg is UserMessage { return true }
             if let chat = msg as? AgentChatMessage, chat.role == .user { return true }
             return false
         }
-        guard hasUserMessages else { return }
+    }
+
+    /// Synchronous save using direct codec calls.
+    private func saveSync(_ conversation: AgentConversation) {
+        // Only persist conversations that have user messages.
+        guard Self.persists(conversation.messages) else { return }
 
         var updated = conversation
         updated.updatedAt = Date()

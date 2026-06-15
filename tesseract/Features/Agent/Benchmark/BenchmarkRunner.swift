@@ -256,6 +256,13 @@ final class BenchmarkRunner {
                 )
             }
 
+            // Surface an engine failure (e.g. a vision-tower guard rejection) into
+            // the transcript so it records WHY the turn produced no answer rather
+            // than a blank round that reads as an ordinary wrong answer.
+            if let generationError = turnCollector.generationError {
+                transcript.writeGenerationError(generationError)
+            }
+
             // Evaluate turn
             let turnResult = BenchmarkEvaluator.evaluate(
                 turnIndex: turnIdx,
@@ -647,6 +654,9 @@ final class TurnEventCollector {
     private(set) var trailingText: String?
     private(set) var toolRoundCount: Int = 0
     private(set) var malformedToolCalls: [String] = []
+    /// The failure reason for a turn the engine errored (vision-tower rejection,
+    /// OOM, context overflow). `nil` when the turn produced output normally.
+    private(set) var generationError: String?
 
     private var currentRound = RoundData()
     private var pendingToolArgs: [String: [String: JSONValue]] = [:]  // toolCallId -> args
@@ -707,7 +717,18 @@ final class TurnEventCollector {
         case .malformedToolCall(let raw):
             malformedToolCalls.append(raw)
 
-        default:
+        case .generationError(let message):
+            // A turn the engine failed (e.g. a vision-tower guard rejection) emits
+            // this before its empty terminal turn/agent-end. Capture the reason so
+            // the runner can record it in the transcript (the turn still scores as
+            // a failure, but WHY is no longer lost to a blank round).
+            generationError = message
+            Log.agent.error("Benchmark turn generation error: \(message)")
+
+        case .agentStart, .turnStart, .contextTransformStart, .contextTransformEnd,
+            .messageStart, .messageEnd, .toolExecutionUpdate:
+            // Not needed for benchmark scoring; enumerated (no `default`) so a new
+            // AgentEvent case forces a decision here too.
             break
         }
     }

@@ -362,19 +362,33 @@ final class AgentCoordinator {
 
         let head = Array(messages.prefix(index))
         agent.loadMessages(head)
-        // Persist the truncation durably. The store's `saveSync` skips an empty
-        // save (its `hasUserMessages` guard), so editing the first/only message
-        // must DELETE the stored conversation rather than write an empty one —
-        // otherwise the bricked turn would reload on the next launch.
-        if head.isEmpty {
-            if let id = conversationStore.currentConversation?.id {
-                conversationStore.delete(id: id)
-            }
-        } else {
+        // `loadMessages` no-ops unless the agent is idle; the `isGenerating` gate
+        // above is only a proxy for that. Verify the truncation actually applied
+        // before mutating the store/composer, so a stale gate can never split the
+        // on-disk conversation from the live transcript.
+        guard agent.context.messages.count == head.count else {
+            Log.agent.error(
+                "beginEditingMessage: agent not idle, truncation did not apply — "
+                    + "aborting to avoid store/transcript divergence")
+            return
+        }
+        // Persist the truncation durably. `saveCurrent` SKIPS a head the store
+        // won't persist (no user message — its `hasUserMessages` guard), so such a
+        // head — an empty conversation, or one truncated to a leading compaction
+        // summary — must DELETE the stored conversation rather than write a head
+        // that silently drops, leaving the bricked turn to reload on next launch.
+        if AgentConversationStore.persists(head) {
             conversationStore.updateCurrentMessages(head)
             conversationStore.saveCurrent()
+        } else if let id = conversationStore.currentConversation?.id {
+            conversationStore.delete(id: id)
         }
 
+        // Edit & resend REPLACES the composer with the edited message: its text and
+        // images become the live draft (the standard edit interaction). Any unsent
+        // draft is intentionally overwritten — the recovery flow this serves starts
+        // from an empty composer.
+        //
         // Restore the images only if the current model can see them — otherwise
         // they would render as chips and be silently dropped on send. Mirrors the
         // paste/drop gate; the vision-rejection recovery flow stays vision-capable,

@@ -74,15 +74,10 @@ struct AgentContentView: View {
             }
         }
         .navigationTitle("Agent")
-        .onChange(of: coordinator.editDraftRestore) { _, restored in
-            // Edit & resend: the edited message's text drops into the composer
-            // (its images are already in `pendingImages`). Consume the one-shot.
-            guard let restored else { return }
-            coordinator.editDraftRestore = nil
-            // Skip an empty restore (an image-only message) so a typed draft is
-            // not blanked to nothing.
-            if !restored.isEmpty { inputText = restored }
+        .onChange(of: coordinator.editDraftRestore) { _, _ in
+            applyEditDraftRestore(allowClobber: true)
         }
+        .onAppear { applyEditDraftRestore(allowClobber: false) }
         .background(
             QuickLookContainer(
                 request: coordinator.quickLookRequest,
@@ -169,6 +164,21 @@ struct AgentContentView: View {
 
     private func selectCommandFromPopup(_ command: SlashCommand) {
         inputText = coordinator.commandPalette.autocompleteCommand(command)
+    }
+
+    /// Consume the one-shot **Edit & resend** text restore. At edit time
+    /// (`onChange`, this view mounted) the composer is REPLACED outright with the
+    /// edited message's text — even empty, for an image-only message, so a stale
+    /// draft is cleared rather than mixed with the restored images. The `onAppear`
+    /// fallback catches a restore set while this view was off-screen (a bare
+    /// `onChange` would miss that transition and strand the text), but must not
+    /// blank a draft the user has typed since, so it declines an empty restore
+    /// over a non-empty composer.
+    private func applyEditDraftRestore(allowClobber: Bool) {
+        guard let restored = coordinator.editDraftRestore else { return }
+        coordinator.editDraftRestore = nil
+        if !allowClobber, restored.isEmpty, !inputText.isEmpty { return }
+        inputText = restored
     }
 
     // MARK: - Conversation History Popover
