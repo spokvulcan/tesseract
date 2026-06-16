@@ -5,8 +5,8 @@ before committing changes to server, caching, or agent engine code.
 
 ## Unit / integration suites
 
-The suite lists below are the recommended *focused* runs for the two hottest
-areas; there are ~100 suites in total — discover the rest with
+The suite lists below are recommended *focused* runs for the hottest areas;
+there are ~100 suites in total — discover the rest with
 `grep -r "@Suite" tesseractTests/`.
 
 ```bash
@@ -15,6 +15,12 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/HTTPPrefixCacheSpikeTests \
   -only-testing:tesseractTests/HTTPPrefixCacheSessionReplayTests \
   -only-testing:tesseractTests/CompletionHandlerTests \
+  -only-testing:tesseractTests/CompletionRouteTests \
+  -only-testing:tesseractTests/ServerInferenceServiceTests \
+  -only-testing:tesseractTests/ServerCompletionDrainTests \
+  -only-testing:tesseractTests/ServerCompletionLeafStoreModeTests \
+  -only-testing:tesseractTests/ServerCompletionLeafSkipLogTests \
+  -only-testing:tesseractTests/CompletionProjectionTests \
   -only-testing:tesseractTests/MessageConverterTests \
   -only-testing:tesseractTests/OpenAITypesTests \
   -only-testing:tesseractTests/AgentEngineToolSpecTests \
@@ -28,8 +34,31 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/PrefixCacheManagerTests \
   -only-testing:tesseractTests/PrefixCacheIntegrationTests \
   -only-testing:tesseractTests/CheckpointCaptureTests \
+  -only-testing:tesseractTests/CacheKeySpaceTests \
+  -only-testing:tesseractTests/PrefillPlannerTests \
+  -only-testing:tesseractTests/LeafAdmissionBuilderTests \
+  -only-testing:tesseractTests/SnapshotResolutionTests \
+  -only-testing:tesseractTests/SnapshotLedgerTests \
+  -only-testing:tesseractTests/SnapshotStateTests \
   -only-testing:tesseractTests/StablePrefixDetectorNonDeterminismTests \
   -only-testing:tesseractTests/JinjaNonDeterminismReproTests
+
+# App bindings, image input, integrations, and model-selection seams:
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -only-testing:tesseractTests/AppBindingsTests \
+  -only-testing:tesseractTests/SettingsManagerModelSelectionTests \
+  -only-testing:tesseractTests/ImageInputAvailabilityTests \
+  -only-testing:tesseractTests/ImageIngestTests \
+  -only-testing:tesseractTests/ImagePreviewSetTests \
+  -only-testing:tesseractTests/ImagePreviewFileCacheTests \
+  -only-testing:tesseractTests/QuickLookPreviewItemTests \
+  -only-testing:tesseractTests/OpenCodeSetupScriptTests \
+  -only-testing:tesseractTests/OpenCodeConfigMergeTests \
+  -only-testing:tesseractTests/OpenCodeIntegrationEndpointTests \
+  -only-testing:tesseractTests/IntegrationSnapshotBuilderTests \
+  -only-testing:tesseractTests/PreserveThinkingRenderTests \
+  -only-testing:tesseractTests/VisionPrefixMemoryGuardTests \
+  -only-testing:tesseractTests/Qwen3VLProcessorCapTests
 
 # Run all tests:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \

@@ -191,13 +191,14 @@ Task { [weak self] in
 }
 ```
 
-The app's long-lived runtime subscriptions *with a rule* — the Whisper auto-load
-gate, the lazy LLM reload guard, the server enable/port reactions, the overlay
-style switch, hotkey re-binding, the dictation-state fan-out — live in **App
-Bindings** (`App/AppBindings.swift`), which also owns the launch ordering: seed
-the glow theme, set up the panels, install every subscription, then run the
-initial Whisper load as an owned child task so the HTTP server never waits on a
-model load. Effects leave through a closure-struct the composition root wires —
+The app's long-lived runtime subscriptions *with a rule* — selected
+speech-to-text model auto-load and hot-swap, the lazy LLM reload guard, the
+server enable/port reactions, the overlay style switch, hotkey re-binding, the
+dictation-state fan-out — live in **App Bindings** (`App/AppBindings.swift`),
+which also owns the launch ordering: seed the glow theme, set up the panels,
+install every subscription, then run the initial dictation-model load as an
+owned child task so the HTTP server never waits on a model load. Effects leave
+through a closure-struct the composition root wires —
 the launch mirror of `AppTerminationCoordinator`'s teardown steps — which makes
 every rule hermetically testable (`AppBindingsTests`). See `CONTEXT.md` → App
 composition.
@@ -353,6 +354,15 @@ The speech model ports (ADR-0003) are the worked example.
 
 **Extensibility**: Packages, Extensions (tool plugins), Skills (markdown with YAML frontmatter), slash commands (built-in + skills + extensions).
 
+**Image input**: The chat composer shows image affordances only when the selected
+agent model is vision-capable and the global "Use vision models when available"
+setting is on. File picker, paste, and window-level drag/drop all flow through
+`ImageIngest`: supported raster types only, 10 MB per image, typed rejections,
+and an eight-image pending queue. Committed and pending images materialize into a
+conversation-wide Quick Look preview set, while the server-side cache keys images
+by **Image Digest** rather than UI attachment identity. Vocabulary: `CONTEXT.md`
+→ Vision capability and mode, Image-aware prefix caching.
+
 ### 5. GPU Lease Arbitration
 
 GPU inference is serialized behind a lease. `GPULeaseQueue` is the pure FIFO
@@ -366,7 +376,13 @@ arbitration.
 ### 6. HTTP Server and Prefix Cache
 
 `Features/Server/` hosts a local OpenAI-compatible HTTP server (`HTTPServer`,
-`CompletionHandler`) that drives the same `LLMActor` through the GPU lease.
+`CompletionHandler`) that drives the same `LLMActor` through the GPU lease. The
+public surface is `/health`, `/v1/models`, `/v1/chat/completions`, plus
+integration endpoints under `/integrations/opencode/`. `/v1/models` lists
+downloaded agent models only; `/v1/chat/completions` honors `request.model` for
+downloaded in-catalog models, falls back to the selected agent model when the
+field is omitted, and returns OpenAI-shaped `model_not_found` for unknown or
+undownloaded IDs.
 `ServerInferenceService` is the dispatcher: it owns the **Completion Route**
 (`CompletionRoute`, the pure request-shape decision) and composes two arms —
 the cache-aware **Server Completion** module (`ServerCompletion`, an
@@ -443,7 +459,7 @@ Key architectural decisions (durable records live in `docs/adr/`):
 - **`Observations` async sequence for non-view code**: Replaces Combine `$property.sink` for observing `@Observable` types outside SwiftUI views.
 - **`AgentFactory` separate from container**: Container wires dependencies; factory orchestrates multi-step bootstrap.
 - **Overlay Panel is publisher-agnostic**: Accepts dictation state via `handleStateChange`; pure view data (`audioLevel`, `glowTheme`) is set directly on its exposed `OverlayState`. The subscription mechanism lives in App Bindings and can change independently.
-- **App Bindings owns the launch sequence and subscription rules**: Carved out of the composition root behind a closure-struct interface — the launch mirror of `AppTerminationCoordinator`. One dictation-state subscription feeds the overlays and the menu bar (no second path, no race), and the initial Whisper load runs as an owned child task so the HTTP server is reachable immediately at launch. The container stays pure wiring and passes the deletion test. See `CONTEXT.md` → App composition.
+- **App Bindings owns the launch sequence and subscription rules**: Carved out of the composition root behind a closure-struct interface — the launch mirror of `AppTerminationCoordinator`. One dictation-state subscription feeds the overlays and the menu bar (no second path, no race), and the initial selected speech-to-text model load runs as an owned child task so the HTTP server is reachable immediately at launch. It also heals a missing dictation-model selection onto a downloaded variant and hot-swaps when the user changes the selection. The container stays pure wiring and passes the deletion test. See `CONTEXT.md` → App composition.
 - **Defer Agent package extraction**: Don't extract `Features/Agent` into a separate Swift package until dependency boundaries are clearer.
 - **Defer separate Settings scene**: Keep settings in the main window sidebar.
 - **Defer UI automation**: Invest in coordinator unit tests first.

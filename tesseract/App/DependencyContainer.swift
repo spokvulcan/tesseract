@@ -359,10 +359,9 @@ final class DependencyContainer: ObservableObject {
                 // List all agent-category models that are downloaded. The
                 // currently-loaded one is reported with `state: "loaded"`;
                 // the rest are `"available"`. Undownloaded models are omitted
-                // because `CompletionHandler` ignores `request.model` for
-                // routing (see docs/HTTP_SERVER_SPEC.md §4.2) — it always
-                // serves whatever `selectedAgentModelID` resolves to — so
-                // advertising an undownloaded id would be misleading.
+                // because `CompletionHandler` validates `request.model` before
+                // entering the lease queue; advertising an undownloaded id would
+                // promise a model that immediately returns `model_not_found`.
                 let loadedID: String? = engine.isModelLoaded ? arbiter.loadedLLMModelID : nil
                 let models: [OpenAI.ModelObject] = ModelDefinition.all
                     .filter { $0.category == .agent }

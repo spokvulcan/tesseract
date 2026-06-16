@@ -309,6 +309,16 @@ _Avoid_: "vision enabled" as a per-message attribute, conflating it with
 **Vision-Capable Model**, "the toggle loads the image" (the toggle selects the
 container, not an attachment).
 
+**Image Input Availability**:
+The chat-composer projection deciding whether image affordances appear: selected
+model is a **Vision-Capable Model** *and* the global "Use vision models when
+available" setting is on. It is a UI/input verdict, not a load request and not a
+property of an attachment. When unavailable, paste and drop show the switch hint
+instead of queueing images; queued images are cleared if availability later turns
+off so the chat never silently drops them at send time.
+_Avoid_: per-turn vision toggle (retired), disabled-but-accepted images,
+attachment capability.
+
 **Vision Token Budget**:
 The per-image ceiling on how many vision tokens — and therefore image patches —
 a processed image contributes, applied so the vision tower's *global* attention
@@ -507,6 +517,15 @@ client's config while preserving everything else in the file untouched.
 Tesseract's block is generated output — owned by the merge, replaced wholesale on
 every run; a backup of the prior file is the escape hatch.
 _Avoid_: config write, config sync, deep merge (explicitly not the policy).
+
+**Request Model Selection**:
+The HTTP server's model-choice contract for `/v1/chat/completions`: an omitted
+`request.model` uses the selected agent model; a downloaded in-catalog model ID
+overrides that selection for the request; an unknown or undownloaded ID returns an
+OpenAI-shaped `model_not_found` before entering the GPU lease queue. `/v1/models`
+therefore advertises only downloaded agent models.
+_Avoid_: ignoring `request.model`, advertising catalog models that are not on
+disk, treating the selected agent model as the only routable server model.
 
 **Example dialogue:**
 
@@ -1133,17 +1152,20 @@ frames).
 **App Bindings**:
 The deep module owning the app's launch sequence and every long-lived runtime
 subscription *with a rule* — carved out of `DependencyContainer.setup()`: the
-Whisper auto-load gate, the lazy LLM reload guard (the initial settings emission
-never forces a model load), the server enable/port reaction, the overlay style
-switch, the glow-theme seed-before-panel-setup ordering, hotkey re-binding, and
-the single dictation-state subscription fanning out to both **Overlay Panel**
-instances and the menu bar — one subscription path, so the overlays and the menu
-bar always see the same emission. The **Settings Facade** comes in concrete;
-effects leave through a closure-struct the container wires — the launch mirror of
-`AppTerminationCoordinator`'s teardown steps. Subscriptions install before the
-initial Whisper load, which runs as an owned child task, so the HTTP server never
-waits on a model load. The container itself stays pure wiring: lazy properties,
-callback forwarding, codec and route registration.
+selected speech-to-text model auto-load and hot-swap rules, the lazy LLM reload
+guard (the initial settings emission never forces a model load), the server
+enable/port reaction, the overlay style switch, the glow-theme
+seed-before-panel-setup ordering, hotkey re-binding, and the single
+dictation-state subscription fanning out to both **Overlay Panel** instances and
+the menu bar — one subscription path, so the overlays and the menu bar always see
+the same emission. It heals a stale or deleted dictation-model selection onto a
+downloaded variant when one exists, but never overrides an available selection.
+The **Settings Facade** comes in concrete; effects leave through a closure-struct
+the container wires — the launch mirror of `AppTerminationCoordinator`'s teardown
+steps. Subscriptions install before the initial dictation-model load, which runs
+as an owned child task, so the HTTP server never waits on a model load. The
+container itself stays pure wiring: lazy properties, callback forwarding, codec
+and route registration.
 _Avoid_: app glue (the pre-carve working name), setup() behaviour, launch
 coordinator, app services, SwiftUI binding (unrelated).
 
