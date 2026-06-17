@@ -191,12 +191,10 @@ final class AppBindings {
     /// model exists on disk. An available selection is never overridden.
     private func healSpeechToTextSelectionIfNeeded(statuses: [String: ModelStatus]) -> Bool {
         let selectedID = settings.selectedSpeechToTextModelID
-        if case .downloaded = statuses[selectedID] { return false }
-        let downloadedVariant = ModelDefinition.all.first { model in
-            guard model.category == .speechToText else { return false }
-            if case .downloaded = statuses[model.id] { return true }
-            return false
-        }
+        if ModelCatalog.isDownloaded(selectedID, statuses: statuses) { return false }
+        let downloadedVariant = ModelCatalog.downloaded(
+            in: .speechToText, definitions: ModelDefinition.all, statuses: statuses
+        ).first
         guard let downloadedVariant else { return false }
         Log.transcription.info(
             "Selected dictation model \(selectedID) is not on disk — switching to \(downloadedVariant.id)"

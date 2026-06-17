@@ -240,7 +240,7 @@ struct AgentInputBarView: View {
         .onChange(of: settings.selectedAgentModelID) { _, _ in
             refreshVisionCapability()
         }
-        .onChange(of: downloadManager.statuses[settings.selectedAgentModelID]) { _, _ in
+        .onChange(of: downloadManager.status(for: settings.selectedAgentModelID)) { _, _ in
             refreshVisionCapability()
         }
         .onAppear {
@@ -311,11 +311,7 @@ struct AgentInputBarView: View {
         if transcriptionEngine.isModelLoaded { return true }
         // Any downloaded speech model counts: selection auto-heals onto a
         // downloaded variant, so voice input is usable the moment one exists.
-        return ModelDefinition.all.contains { model in
-            guard model.category == .speechToText else { return false }
-            if case .downloaded = downloadManager.statuses[model.id] { return true }
-            return false
-        }
+        return !downloadManager.downloadedModels(in: .speechToText).isEmpty
     }
 
     private var canUseVoice: Bool {
@@ -379,14 +375,8 @@ struct AgentInputBarView: View {
     /// changes and on appear — never from the view body — so the `ModelIdentity`
     /// disk read stays off the per-keystroke render path.
     private func refreshVisionCapability() {
-        let modelID = settings.selectedAgentModelID
-        guard case .downloaded = downloadManager.statuses[modelID],
-            let directory = downloadManager.modelPath(for: modelID)
-        else {
-            selectedModelIsVisionCapable = false
-            return
-        }
-        selectedModelIsVisionCapable = ModelVisionCapability.isVisionCapable(directory: directory)
+        selectedModelIsVisionCapable =
+            downloadManager.isVisionCapable(settings.selectedAgentModelID)
     }
 
     // MARK: - Image Switch Hint (slice #115)
@@ -463,12 +453,8 @@ struct AgentInputBarView: View {
 
     /// The first downloaded agent model that can serve images, if any.
     private func firstDownloadedVisionModel() -> ModelDefinition? {
-        ModelDefinition.all.first { model in
-            guard model.category == .agent else { return false }
-            guard case .downloaded = downloadManager.statuses[model.id],
-                let directory = downloadManager.modelPath(for: model.id)
-            else { return false }
-            return ModelVisionCapability.isVisionCapable(directory: directory)
+        downloadManager.downloadedModels(in: .agent).first {
+            downloadManager.isVisionCapable($0.id)
         }
     }
 

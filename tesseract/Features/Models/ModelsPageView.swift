@@ -16,7 +16,7 @@ struct ModelsPageView: View {
                     ForEach(models) { model in
                         ModelCardView(
                             model: model,
-                            status: downloadManager.statuses[model.id] ?? .notDownloaded,
+                            status: downloadManager.status(for: model.id),
                             isMemoryLoaded: isModelLoadedInMemory(model),
                             onDownload: { downloadManager.download(modelID: model.id) },
                             onCancel: { downloadManager.cancelDownload(modelID: model.id) },

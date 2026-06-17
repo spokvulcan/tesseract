@@ -12,10 +12,7 @@ struct AgentInputStatusStrip: View {
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     private var isModelDownloaded: Bool {
-        if case .downloaded = downloadManager.statuses[settings.selectedAgentModelID] {
-            return true
-        }
-        return false
+        downloadManager.isDownloaded(settings.selectedAgentModelID)
     }
 
     private enum Status: Equatable {

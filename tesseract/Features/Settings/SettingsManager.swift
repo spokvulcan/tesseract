@@ -536,18 +536,14 @@ final class SettingsManager {
     private static func normalizedModelID(
         _ candidate: String, category: ModelCategory, defaultID: String
     ) -> String {
-        let knownIDs = Set(
-            ModelDefinition.all
-                .filter { $0.category == category }
-                .map(\.id)
-        )
+        let knownIDs = Set(ModelDefinition.ids(in: category))
         if knownIDs.contains(candidate) {
             return candidate
         }
         if knownIDs.contains(defaultID) {
             return defaultID
         }
-        return ModelDefinition.all.first(where: { $0.category == category })?.id ?? candidate
+        return ModelDefinition.models(in: category).first?.id ?? candidate
     }
 
     func applyDockVisibility() {

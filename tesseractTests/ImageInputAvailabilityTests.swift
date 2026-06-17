@@ -6,7 +6,7 @@
 //  decision the composer uses to show or hide image affordances. No model
 //  loading, no capability probe — the projection takes plain booleans so it is
 //  testable over the full (vision-capable, setting-on) matrix without a
-//  `ModelVisionCapability` fixture.
+//  capability probe or model fixture.
 //
 
 import Testing

@@ -363,12 +363,10 @@ final class DependencyContainer: ObservableObject {
                 // entering the lease queue; advertising an undownloaded id would
                 // promise a model that immediately returns `model_not_found`.
                 let loadedID: String? = engine.isModelLoaded ? arbiter.loadedLLMModelID : nil
-                let models: [OpenAI.ModelObject] = ModelDefinition.all
-                    .filter { $0.category == .agent }
-                    .compactMap { definition -> OpenAI.ModelObject? in
-                        guard case .downloaded = downloads.statuses[definition.id] else {
-                            return nil
-                        }
+                let models: [OpenAI.ModelObject] =
+                    downloads
+                    .downloadedModels(in: .agent)
+                    .map { definition -> OpenAI.ModelObject in
                         let isLoaded = definition.id == loadedID
                         return OpenAI.ModelObject(
                             id: definition.id,
