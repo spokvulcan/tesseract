@@ -25,10 +25,9 @@ At most 5 nits per review; summarize the rest as a count.
 
 ## Skip entirely
 
-- `Vendor/` and `TriAttention/` (inert vendor fork)
-- `.claude/skills/` (vendored, pinned by `skills-lock.json`)
+- `Vendor/` (inert vendor fork)
 - `assets/`, `build/`
-- Lock/manifest churn (`skills-lock.json`, `*.resolved`)
+- Lock/manifest churn (`*.resolved`)
 
 ## Documentation drift
 
