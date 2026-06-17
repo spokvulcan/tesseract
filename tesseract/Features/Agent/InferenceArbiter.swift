@@ -84,7 +84,6 @@ final class InferenceArbiter: InferenceArbitrating {
     private let speechEngine: SpeechEngine
     private let settingsManager: SettingsManager
     private let modelDownloadManager: ModelDownloadManager
-    private let visionCapability: ModelVisionCapability
 
     init(
         agentEngine: AgentEngine,
@@ -96,7 +95,6 @@ final class InferenceArbiter: InferenceArbitrating {
         self.speechEngine = speechEngine
         self.settingsManager = settingsManager
         self.modelDownloadManager = modelDownloadManager
-        self.visionCapability = ModelVisionCapability(downloads: modelDownloadManager)
     }
 
     // MARK: - Public API
@@ -161,7 +159,7 @@ final class InferenceArbiter: InferenceArbitrating {
             let targetModelID = llmModelIDOverride ?? settingsManager.selectedAgentModelID
             let desiredVision = llmVision.wantsVision(
                 useVisionWhenAvailable: settingsManager.useVisionWhenAvailable,
-                isVisionCapable: visionCapability.isVisionCapable(targetModelID)
+                isVisionCapable: modelDownloadManager.isVisionCapable(targetModelID)
             )
             let desired = LoadedLLMState(
                 modelID: targetModelID,
@@ -203,7 +201,7 @@ final class InferenceArbiter: InferenceArbitrating {
             guard let modelID else {
                 throw AgentEngineError.modelNotLoaded
             }
-            guard case .downloaded = modelDownloadManager.statuses[modelID],
+            guard modelDownloadManager.isDownloaded(modelID),
                 let path = modelDownloadManager.modelPath(for: modelID)
             else {
                 Log.general.error("InferenceArbiter: LLM model '\(modelID)' not downloaded")

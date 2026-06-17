@@ -144,13 +144,7 @@ private struct ServerPreserveThinkingSection: View {
     /// Downloaded agent models in catalogue order — the set the server can
     /// serve, mirroring the OpenCode one-liner / `/v1/models`.
     private var downloadedAgentModels: [ModelDefinition] {
-        ModelDefinition.all.filter { definition in
-            guard definition.category == .agent else { return false }
-            if case .downloaded = modelDownloadManager.statuses[definition.id] {
-                return true
-            }
-            return false
-        }
+        modelDownloadManager.downloadedModels(in: .agent)
     }
 
     var body: some View {

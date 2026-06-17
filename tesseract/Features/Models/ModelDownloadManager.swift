@@ -23,6 +23,13 @@ final class ModelDownloadManager: ObservableObject {
 
     private var downloadTasks: [String: Task<Void, Never>] = [:]
 
+    /// Per-id cache of the vision probe (`isVisionCapable`). Capability is
+    /// intrinsic to a model's `config.json`, so a known answer is cached
+    /// permanently; an undownloaded model is answered `false` *uncached* so a
+    /// later download re-probes. The **Vision Capability Memo** — one home,
+    /// shared by every caller. See `CONTEXT.md` → Model catalog.
+    private var visionCache: [String: Bool] = [:]
+
     static let modelStorageURL: URL = {
         let url = URL.applicationSupportDirectory.appendingPathComponent(
             ModelUtils.storageDirectoryName)
@@ -39,6 +46,35 @@ final class ModelDownloadManager: ObservableObject {
 
     init() {
         refreshAllStatuses()
+    }
+
+    // MARK: - Catalog queries
+
+    /// The **Model Catalog** join: downloaded models in a category, in catalogue
+    /// order. The one place callers reach for "which models can I select / serve."
+    func downloadedModels(in category: ModelCategory) -> [ModelDefinition] {
+        ModelCatalog.downloaded(in: category, definitions: ModelDefinition.all, statuses: statuses)
+    }
+
+    /// Whether a model id is present on disk.
+    func isDownloaded(_ id: String) -> Bool {
+        ModelCatalog.isDownloaded(id, statuses: statuses)
+    }
+
+    /// Raw download state for the download UI (progress / verifying / error),
+    /// defaulting to `.notDownloaded`. Not a catalog question.
+    func status(for id: String) -> ModelStatus {
+        statuses[id] ?? .notDownloaded
+    }
+
+    /// Whether a downloaded model can serve images — the memoized **Vision
+    /// Capability Memo**. Replaces the stranded `ModelVisionCapability` class.
+    func isVisionCapable(_ id: String) -> Bool {
+        if let cached = visionCache[id] { return cached }
+        guard isDownloaded(id), let directory = modelPath(for: id) else { return false }
+        let capable = ModelCatalog.isVisionCapable(directory: directory)
+        visionCache[id] = capable
+        return capable
     }
 
     // MARK: - Status

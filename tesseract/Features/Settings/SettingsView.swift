@@ -167,7 +167,7 @@ struct RecordingSettingsSection: View {
     @State private var selectedAgentModelDeclaresPreserveThinking = false
 
     private var selectedAgentModelStatus: ModelStatus {
-        container.modelDownloadManager.statuses[settings.selectedAgentModelID] ?? .notDownloaded
+        container.modelDownloadManager.status(for: settings.selectedAgentModelID)
     }
 
     private func refreshSelectedAgentModelCapabilities() {
@@ -334,13 +334,9 @@ struct RecordingSettingsSection: View {
             }
 
             Section("Agent Model") {
-                let agentModels = ModelDefinition.all.filter { $0.category == .agent }
-                let downloadedAgentModels = agentModels.filter { model in
-                    if case .downloaded = container.modelDownloadManager.statuses[model.id] {
-                        return true
-                    }
-                    return false
-                }
+                let agentModels = ModelDefinition.models(in: .agent)
+                let downloadedAgentModels = container.modelDownloadManager.downloadedModels(
+                    in: .agent)
 
                 if downloadedAgentModels.isEmpty {
                     Text("No agent models downloaded. Download one from the Models page.")
@@ -418,13 +414,8 @@ struct RecordingSettingsSection: View {
             }
 
             Section("Dictation Model") {
-                let speechModels = ModelDefinition.all.filter { $0.category == .speechToText }
-                let downloadedSpeechModels = speechModels.filter { model in
-                    if case .downloaded = container.modelDownloadManager.statuses[model.id] {
-                        return true
-                    }
-                    return false
-                }
+                let downloadedSpeechModels =
+                    container.modelDownloadManager.downloadedModels(in: .speechToText)
 
                 if downloadedSpeechModels.isEmpty {
                     Text("No dictation models downloaded. Download one from the Models page.")

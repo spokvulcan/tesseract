@@ -12,8 +12,8 @@ import Foundation
 ///
 /// Kept `nonisolated` and free of any model-loading or capability-probing
 /// dependency precisely so it is a plain boolean function: the view supplies the
-/// two inputs (capability via `ModelVisionCapability`, the flag via
-/// `SettingsManager`), and this returns the verdict. The probing/loading lives
+/// two inputs (capability via `ModelDownloadManager.isVisionCapable(_:)`, the flag
+/// via `SettingsManager`), and this returns the verdict. The probing/loading lives
 /// at the impure edges; only this verdict is unit-tested over the full matrix.
 nonisolated enum ImageInputAvailability {
 

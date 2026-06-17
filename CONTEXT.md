@@ -343,6 +343,44 @@ budget with the request-wide patch guard.
 > A budget change is a cache *miss* on prior snapshots of that image (shorter
 > run ≠ longer run), never a wrong hit.
 
+### Model catalog
+
+**Model Catalog**:
+The read-model answering which models exist and which are usable — the join of the
+static `ModelDefinition` table (every known model: id, category, repo, the
+vision-detection inputs) with live download state. A pure core folds
+`(definitions, statuses)` into the questions callers ask — downloaded-models-in-a-
+category, is-this-id-downloaded — plus the **Vision-Capable Model** check; the live
+accessors that supply `ModelDefinition.all` and current statuses
+(`downloadedModels(in:)`, `isDownloaded(_:)`, `isVisionCapable(_:)`) sit on the
+download manager, so a view that already observes it re-renders for free. The one
+home for the `filter{category} × case .downloaded` join every caller used to
+re-derive.
+_Avoid_: model registry (registry collides; this is a read-model), the raw
+`statuses` dict (that is download state, not the catalog), download facade, model
+list.
+
+**Catalogue vs download state**:
+What models *exist* is the static `ModelDefinition` table — category and identity,
+no runtime input; what is *on disk* is `ModelStatus` in the manager's `statuses`.
+The **Model Catalog** is their join. Raw `ModelStatus` — `downloading`,
+`verifying`, `error`, progress — stays directly readable for download UI; it is not
+a catalog question.
+
+**Vision Capability Memo**:
+The per-model-id cache of the `isVisionCapable` disk probe
+(`ModelIdentity.imageKeying != nil`), held once on the download manager and shared
+by every caller. Capability is intrinsic to a model's config, so a known answer is
+cached permanently; an undownloaded model answers `false` *uncached* so a later
+download re-probes. Supersedes the stranded per-arbiter `ModelVisionCapability`
+class and the per-view `@State` flag that re-invented it.
+_Avoid_: vision toggle (a **Vision Mode** concept), per-view capability flag.
+
+> **Flagged ambiguity — catalog vs identity vs capability.** **Model Identity** is
+> one model's load-time, directory-derived facts; **Vision-Capable Model** is one
+> model's image-input capability; the **Model Catalog** is the cross-model query
+> layer over the whole `ModelDefinition` table and download state. Say which.
+
 ### Prefill orchestration
 
 **Prefill Plan**:

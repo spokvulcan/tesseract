@@ -192,6 +192,19 @@ extension ModelDefinition {
         all.first { $0.id == id }
     }
 
+    /// Every known model in a category, downloaded or not — the static facet.
+    /// Runtime "which of these are on disk" is the **Model Catalog** join on
+    /// `ModelDownloadManager`, not this. See `CONTEXT.md` → Model catalog.
+    static func models(in category: ModelCategory) -> [ModelDefinition] {
+        all.filter { $0.category == category }
+    }
+
+    /// The ids of every known model in a category — lets a caller tell an
+    /// *unknown* model id from a known-but-not-downloaded one.
+    static func ids(in category: ModelCategory) -> [String] {
+        models(in: category).map(\.id)
+    }
+
     static func byCategory() -> [(ModelCategory, [ModelDefinition])] {
         ModelCategory.allCases.compactMap { category in
             let models = all.filter { $0.category == category }

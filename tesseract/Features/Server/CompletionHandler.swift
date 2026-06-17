@@ -95,7 +95,7 @@ struct CompletionHandler: Sendable {
         let trimmedForEmptinessCheck = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedForEmptinessCheck.isEmpty { return .useSettings }
         guard agentIDs.contains(raw) else { return .unknown(raw) }
-        guard case .downloaded = statuses[raw] else { return .notDownloaded(raw) }
+        guard ModelCatalog.isDownloaded(raw, statuses: statuses) else { return .notDownloaded(raw) }
         return .override(raw)
     }
 
@@ -144,9 +144,7 @@ struct CompletionHandler: Sendable {
         // produce an `llmModelIDOverride` that flows into the lease API so
         // `ensureLoaded` targets it instead of `settingsManager.selectedAgentModelID`.
         let selection: ModelSelection = await MainActor.run {
-            let agentIDs = ModelDefinition.all
-                .filter { $0.category == .agent }
-                .map(\.id)
+            let agentIDs = ModelDefinition.ids(in: .agent)
             return Self.resolveModelSelection(
                 requestModel: completionRequest.model,
                 agentIDs: agentIDs,
