@@ -477,25 +477,44 @@ turn's accumulated state — text, optional thinking, finalized tool calls, the 
 malformed-tool-call buffer, the safeguard's safe-prefix length. A pure value with no
 side effects and no output type; each caller supplies its own loop and its own
 **Generation Projection**. (`thinking == nil` means no `<think>` block ever opened;
-`""` means one opened but is empty so far — never collapse the optionality.)
+`""` means one opened but is empty so far — never collapse the optionality.) Its
+`surfacesMalformedBuffer` query is the single home of the malformed→text fallback
+predicate (empty text, no successful tool calls, non-empty malformed buffer), a
+derived `Bool` — not an output shape — consumed by both **Generation Projection**s.
 _Avoid_: StreamResult, event handler, GenerationFold (names the fold's *operation*,
 not the value — and "fold" also means a reducer); ToolCallParser (the upstream
 source of the events, not the accumulator).
 
 **Generation Projection**:
-The per-caller step that maps a terminal **Generation Accumulator**'s state to one
-caller's output shape (`AssistantMessage`, **CompletionProjection**, the leaf-store
-message, bare text). It is where caller intent lives, kept out of the shared fold;
-it is a concept, not a single type.
+The per-caller step that maps **Generation Accumulator** state to one caller's output
+shape (`AssistantMessage`, **CompletionProjection**, the leaf-store message, bare
+text). It covers both *terminal* projection (the committed message / final response)
+and *intermediate* per-event projection for streaming callers (a snapshot + delta per
+event, as the agent path's **AssistantMessageProjection** emits). It is where caller
+intent lives, kept out of the shared fold; it is a concept, not a single type.
 _Avoid_: conversion, adapter (not a seam adapter), output builder.
 
 **CompletionProjection**:
 The server's concrete **Generation Projection** — the one home for the rules both
 HTTP completion paths (streaming SSE, non-streaming JSON) share when building a
-response from a terminal accumulator, so the two paths differ only in framing.
+response from a terminal accumulator, so the two paths differ only in framing. It
+applies the malformed→text fallback whose predicate lives once on the accumulator
+(`surfacesMalformedBuffer`), shared with **AssistantMessageProjection**.
 _Avoid_: StreamResult (the dissolved server per-path capsule; a same-named *private*
 agent-loop type still exists, so do not reuse it for the server), response builder,
 envelope (the per-path framing it feeds).
+
+**AssistantMessageProjection**:
+The agent path's concrete **Generation Projection** — the sibling to
+**CompletionProjection** that the agent stream driver composes directly (no port).
+A stateful value owning the turn's tool-call *identity* (`ToolCallInfo` with stable
+ids, which the accumulator's raw `[ToolCall]` lacks): `step` maps each folded event
+to the driver's next action (a per-event snapshot + delta, the malformed event, or
+nothing), `snapshot` is the raw partial turn (per-event / cancel / error), and
+`finalize` applies the shared `surfacesMalformedBuffer` fallback for the terminal
+message. Pure — every emit and log stays in the driver.
+_Avoid_: StreamResult, message builder, AssistantMessageFactory; CompletionProjection
+(the server sibling — say which path).
 
 ### Generation stream loop
 

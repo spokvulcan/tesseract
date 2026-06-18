@@ -11,9 +11,11 @@ import MLXLMCommon
 /// A pure `nonisolated Sendable` value: no logging, no I/O, no transport. Each
 /// completion path builds it **once** and keeps only its own framing — the
 /// streaming path chunks SSE, the non-streaming path encodes one JSON body. The
-/// shared rules (finish-reason, malformed→text fallback, empty-payload
-/// diagnostic, safeguard sidecar) live here, so changing one means editing one
-/// place instead of two mirrored paths.
+/// shared rules (finish-reason, empty-payload diagnostic, safeguard sidecar) live
+/// here, so changing one means editing one place instead of two mirrored paths;
+/// the malformed→text fallback *predicate* lives once on the accumulator
+/// (`surfacesMalformedBuffer`), shared with the agent path's
+/// `AssistantMessageProjection`, and this projection applies it to the text.
 ///
 /// The diagnostic is classified **once, on pre-fallback state**, so both paths
 /// classify identically; the caller logs it via `FinishReasonDiagnostic.emit`.
@@ -82,11 +84,9 @@ nonisolated struct CompletionProjection: Sendable {
         )
 
         // 3. THEN apply the malformed→text fallback to produce the surfaced text.
-        let surfaced = Self.malformedFallbackApplies(
-            text: rawText,
-            toolCallCount: calls.count,
-            malformedRaw: malformedRaw
-        )
+        //    The predicate lives once on the accumulator (`surfacesMalformedBuffer`),
+        //    shared with the agent path's `AssistantMessageProjection`.
+        let surfaced = accumulator.surfacesMalformedBuffer
 
         self.finishReason = finishReason
         self.textContent = surfaced ? malformedRaw : rawText
@@ -148,16 +148,6 @@ nonisolated struct CompletionProjection: Sendable {
             return .malformedToolCallDropped
         }
         return .normal
-    }
-
-    /// The malformed→text fallback predicate: surface the dropped buffer as text
-    /// only when the turn is otherwise empty (no text, no successful tool calls).
-    private static func malformedFallbackApplies(
-        text: String,
-        toolCallCount: Int,
-        malformedRaw: String
-    ) -> Bool {
-        toolCallCount == 0 && text.isEmpty && !malformedRaw.isEmpty
     }
 }
 

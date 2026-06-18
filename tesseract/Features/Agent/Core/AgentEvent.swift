@@ -20,7 +20,7 @@ struct ContextTransformResult: Sendable {
 // MARK: - ToolCallDelta
 
 /// Incremental streaming update for a single tool call being parsed.
-struct ToolCallDelta: Sendable {
+nonisolated struct ToolCallDelta: Sendable {
     let toolCallId: String
     let name: String?
     let argumentsDelta: String?
@@ -29,7 +29,7 @@ struct ToolCallDelta: Sendable {
 // MARK: - AssistantStreamDelta
 
 /// A single streaming chunk from the LLM response.
-struct AssistantStreamDelta: Sendable {
+nonisolated struct AssistantStreamDelta: Sendable {
     let textDelta: String?
     let thinkingDelta: String?
     let toolCallDelta: ToolCallDelta?

@@ -255,26 +255,6 @@ private enum StreamResult: Sendable {
     case success(AssistantMessage, StopReason)
 }
 
-/// When the only thing a turn produced was an interrupted / malformed
-/// `<tool_call>` at EOS, surface its raw text as the message content so the turn
-/// is persisted and the user can see a tool call was attempted. Otherwise the
-/// message is empty (no text, no tool calls) and `runLoop`'s `hasContent` check
-/// drops it as contentless — the model's attempt vanishes silently. Mirrors the
-/// server path's `CompletionProjection` malformed→text fallback so the
-/// agent path actually benefits from surfacing the dropped buffer rather than
-/// only recording it in a dead accumulator field.
-private func malformedFallbackContent(
-    text: String,
-    toolCallCount: Int,
-    malformedRaw: String
-) -> String {
-    guard text.isEmpty, toolCallCount == 0, !malformedRaw.isEmpty else { return text }
-    Log.agent.info(
-        "Surfaced dropped tool-call buffer as message content — rawLen=\(malformedRaw.count)"
-    )
-    return malformedRaw
-}
-
 /// Calls the LLM with the current context, streams chunks, and builds the final
 /// assistant message.
 private func streamAssistantResponse(
@@ -305,11 +285,14 @@ private func streamAssistantResponse(
     // c. Start streaming generation
     let stream = generate(context.systemPrompt, llmMessages, context.tools, signal)
 
-    // d-g. Process stream chunks and build the assistant message. Shared
-    // accumulation (text/thinking/…) is folded in one place by the Generation
-    // Accumulator; tool-call identity is this caller's own projection.
+    // d-g. Process stream chunks and build the assistant message as
+    // ingest → step → emit. The shared accumulation (text/thinking/…) is folded
+    // in one place by the Generation Accumulator; this caller's own concrete
+    // Generation Projection (`AssistantMessageProjection`) owns tool-call
+    // identity and maps each folded event to what this driver emits. All side
+    // effects — the emits, the `.malformedToolCall` event, both logs — stay here.
     var accumulator = GenerationAccumulator()
-    var toolCalls: [ToolCallInfo] = []
+    var projection = AssistantMessageProjection()
 
     // Emit messageStart with a placeholder
     let placeholderMessage = AssistantMessage.create(content: "")
@@ -318,106 +301,25 @@ private func streamAssistantResponse(
     do {
         for try await generation in stream {
             if signal?.isCancelled == true {
-                let msg = AssistantMessage.fromStream(
-                    content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
-                )
+                let msg = projection.snapshot(accumulator)
                 emit(.messageEnd(message: msg))
                 return .success(msg, .cancelled)
             }
 
-            // Fold the shared accumulation transitions in one place.
             accumulator.ingest(generation)
 
-            // The switch now drives only this caller's side effects: a
-            // `messageUpdate` snapshot per event (projected from accumulator
-            // state) plus stable tool-call identity assignment.
-            switch generation {
-            case .text(let text):
-                emit(
-                    .messageUpdate(
-                        message: AssistantMessage.fromStream(
-                            content: accumulator.text, thinking: accumulator.thinking,
-                            toolCalls: toolCalls
-                        ),
-                        streamDelta: AssistantStreamDelta(
-                            textDelta: text, thinkingDelta: nil, toolCallDelta: nil
-                        )
-                    ))
-
-            case .thinkStart:
-                break
-
-            case .thinking(let text):
-                emit(
-                    .messageUpdate(
-                        message: AssistantMessage.fromStream(
-                            content: accumulator.text, thinking: accumulator.thinking,
-                            toolCalls: toolCalls
-                        ),
-                        streamDelta: AssistantStreamDelta(
-                            textDelta: nil, thinkingDelta: text, toolCallDelta: nil
-                        )
-                    ))
-
-            case .thinkEnd:
-                break
-
-            case .thinkReclassify, .thinkTruncate:
-                // Reclassify now APPENDS buffered thinking after any pre-think
-                // text (the canonical rule, owned by the accumulator); truncate
-                // resets thinking to the safe prefix. Both just re-snapshot.
-                emit(
-                    .messageUpdate(
-                        message: AssistantMessage.fromStream(
-                            content: accumulator.text, thinking: accumulator.thinking,
-                            toolCalls: toolCalls
-                        ),
-                        streamDelta: AssistantStreamDelta(
-                            textDelta: nil, thinkingDelta: nil, toolCallDelta: nil
-                        )
-                    ))
-
-            case .toolCall(let call):
-                let info = ToolCallInfo(
-                    id: UUID().uuidString,
-                    name: call.function.name,
-                    argumentsJSON: encodeArguments(call.function.arguments)
-                )
-                toolCalls.append(info)
-                emit(
-                    .messageUpdate(
-                        message: AssistantMessage.fromStream(
-                            content: accumulator.text, thinking: accumulator.thinking,
-                            toolCalls: toolCalls
-                        ),
-                        streamDelta: AssistantStreamDelta(
-                            textDelta: nil, thinkingDelta: nil,
-                            toolCallDelta: ToolCallDelta(
-                                toolCallId: info.id, name: info.name, argumentsDelta: nil
-                            )
-                        )
-                    ))
-
-            case .malformedToolCall(let raw):
+            switch projection.step(generation, accumulator) {
+            case .update(let message, let delta):
+                emit(.messageUpdate(message: message, streamDelta: delta))
+            case .malformed(let raw):
                 Log.agent.warning("Malformed tool call ignored: \(raw)")
                 emit(.malformedToolCall(raw: raw))
-
-            case .toolCallDelta:
-                // Progressive tool-call body deltas. The agent double-loop
-                // consumes only the finalized `.toolCall` event emitted when
-                // `</tool_call>` closes — partial JSON is not actionable for
-                // tool execution. These deltas exist for live UI rendering.
-                break
-
-            case .info:
-                // Metrics — useful for logging but don't affect the message
+            case .silent:
                 break
             }
         }
     } catch {
-        let msg = AssistantMessage.fromStream(
-            content: accumulator.text, thinking: accumulator.thinking, toolCalls: toolCalls
-        )
+        let msg = projection.snapshot(accumulator)
         emit(.messageEnd(message: msg))
         if signal?.isCancelled == true {
             return .success(msg, .cancelled)
@@ -426,15 +328,16 @@ private func streamAssistantResponse(
         return .success(msg, .error(error))
     }
 
-    let finalMessage = AssistantMessage.fromStream(
-        content: malformedFallbackContent(
-            text: accumulator.text,
-            toolCallCount: toolCalls.count,
-            malformedRaw: accumulator.malformedToolCallRaw
-        ),
-        thinking: accumulator.thinking,
-        toolCalls: toolCalls
-    )
+    // Terminal end-of-turn: `finalize` applies the malformed→text fallback. Log
+    // the surfacing here (the projection stays pure), gated on the same shared
+    // predicate it consumes.
+    if accumulator.surfacesMalformedBuffer {
+        Log.agent.info(
+            "Surfaced dropped tool-call buffer as message content — "
+                + "rawLen=\(accumulator.malformedToolCallRaw.count)"
+        )
+    }
+    let finalMessage = projection.finalize(accumulator)
     emit(.messageEnd(message: finalMessage))
     return .success(finalMessage, .endOfTurn)
 }
@@ -581,11 +484,6 @@ private func executeToolCalls(
 }
 
 // MARK: - Helpers
-
-/// Encode `[String: JSONValue]` arguments back to a JSON string.
-private func encodeArguments(_ arguments: [String: JSONValue]) -> String {
-    ToolArgumentNormalizer.encode(arguments)
-}
 
 /// Thread-safe accumulator for messages produced during a loop run.
 /// Used to collect all new messages for the `.agentEnd` event.

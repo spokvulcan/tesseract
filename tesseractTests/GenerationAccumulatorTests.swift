@@ -76,6 +76,34 @@ struct GenerationAccumulatorTests {
         #expect(acc.toolCalls.map { $0.function.name } == ["first", "second"])
     }
 
+    /// The single home of the malformed→text fallback predicate, asserted at all
+    /// four corners. True only when the turn produced no text and no successful
+    /// tool calls but did capture a malformed `<tool_call>` buffer; any of those
+    /// conditions failing makes it false. Both **Generation Projection**s consume
+    /// this one query.
+    @Test func surfacesMalformedBufferOnlyWhenOtherwiseEmptyWithBuffer() {
+        // Otherwise-empty turn with a captured buffer → true.
+        var bufferOnly = GenerationAccumulator()
+        bufferOnly.ingest(.malformedToolCall("<tool_call>raw</tool_call>"))
+        #expect(bufferOnly.surfacesMalformedBuffer)
+
+        // Non-empty text → false (real content wins).
+        var withText = GenerationAccumulator()
+        withText.ingest(.text("answer"))
+        withText.ingest(.malformedToolCall("junk"))
+        #expect(!withText.surfacesMalformedBuffer)
+
+        // A successful tool call present → false.
+        var withToolCall = GenerationAccumulator()
+        withToolCall.ingest(.toolCall(GenerationFixtures.toolCall(name: "read")))
+        withToolCall.ingest(.malformedToolCall("junk"))
+        #expect(!withToolCall.surfacesMalformedBuffer)
+
+        // Empty buffer → false (nothing to surface).
+        let empty = GenerationAccumulator()
+        #expect(!empty.surfacesMalformedBuffer)
+    }
+
     /// In-flight tool-call deltas and completion metrics are caller concerns;
     /// they leave accumulated turn content untouched.
     @Test func toolCallDeltaAndInfoAreInert() {
