@@ -4,7 +4,7 @@ import Testing
 @testable import Tesseract_Agent
 
 /// The dispatcher composes two arms — the cache-aware **Server Completion**
-/// arm and the managed arm — and owns the **Completion Route** (ADR-0006).
+/// arm and the managed arm — and owns the **Completion Route** (ADR-0015).
 /// Each test injects a double per arm and asserts exactly one arm serves
 /// each request, model state is attached, and errors propagate.
 @MainActor

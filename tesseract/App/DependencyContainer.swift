@@ -36,7 +36,7 @@ final class DependencyContainer: ObservableObject {
 
     // Agent (LLM). The inference actor is created here and injected into the
     // agent engine; the server dispatcher reaches the same actor for the
-    // cache-aware completion route (ADR-0006). Plumb `settingsManager` so the
+    // cache-aware completion route (ADR-0015). Plumb `settingsManager` so the
     // SSD prefix-cache config is snapshotted from live user settings at each
     // model load. Benchmark and test call sites use `AgentEngine()` to stay
     // SSD-disabled for reproducibility.

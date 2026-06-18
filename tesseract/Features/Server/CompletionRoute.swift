@@ -8,7 +8,7 @@ import MLXLMCommon
 /// Owned by the dispatcher (`ServerInferenceService`). Computed from the
 /// conversation shape only — never from model state — so every bypass case is
 /// unit-testable without a loaded model. The **Server Completion** module never
-/// sees a request it cannot serve (ADR-0006).
+/// sees a request it cannot serve (ADR-0015).
 nonisolated enum CompletionRoute: Equatable, Sendable {
     /// The request canonicalized into the prefix-cache conversation shape and
     /// ends on a non-assistant message — serve it cache-aware.

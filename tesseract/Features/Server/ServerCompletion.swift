@@ -25,7 +25,7 @@ nonisolated final class UnsafeSendableBox<T>: @unchecked Sendable {
 /// stream and capture the final KV cache after generation completes.
 ///
 /// The **Server Completion** module's private cross-step value — it never
-/// crosses the module's interface (ADR-0006).
+/// crosses the module's interface (ADR-0015).
 private nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let stream: AsyncStream<RawGeneration>
     let completion: Task<Void, Never>
@@ -247,14 +247,14 @@ nonisolated enum VisionPrefixMemoryGuard {
 
 /// **Server Completion** — the deep module owning one cache-aware HTTP
 /// completion on `LLMActor`'s isolation (CONTEXT.md → Server completion,
-/// ADR-0006).
+/// ADR-0015).
 ///
 /// Non-`Sendable` and actor-confined: `LLMActor` stores it, installs the
 /// load-time facts (prefix cache budget, SSD config snapshot, model identity)
 /// at model load, and clears it at unload. Every state-touching entry takes an
 /// `isolated LLMActor` parameter so module state and every model-affine step
 /// stay on the actor's executor — this is a module split, not an isolation
-/// split (a second actor was rejected; ADR-0006). The GPU lease, held across
+/// split (a second actor was rejected; ADR-0015). The GPU lease, held across
 /// the whole HTTP request by `CompletionHandler`, remains the primary guard
 /// against unload/reload interleaving.
 ///

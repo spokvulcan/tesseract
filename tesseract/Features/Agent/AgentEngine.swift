@@ -58,7 +58,7 @@ final class AgentEngine {
     private(set) var declaredTemplateFlags: Set<TemplateRenderFlag> = []
 
     /// The shared inference actor. Created by the composition root and
-    /// injected so the server dispatcher can reach the same actor (ADR-0006);
+    /// injected so the server dispatcher can reach the same actor (ADR-0015);
     /// benchmarks and unit tests rely on the `init` default instead.
     let llmActor: LLMActor
     @ObservationIgnored private var activeGenerationID: UUID?

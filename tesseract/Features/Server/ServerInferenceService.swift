@@ -6,7 +6,7 @@ import os
 /// the cache-aware **Server Completion** arm (production adapter: `LLMActor`)
 /// and the managed arm (production adapter: `AgentEngine`) — and owns the
 /// **Completion Route**, the pure request-shape decision between them
-/// (ADR-0006). Deleting this service would scatter that routing into the
+/// (ADR-0015). Deleting this service would scatter that routing into the
 /// completion handler; it earns its keep as the composition point of the two
 /// adapters.
 @MainActor

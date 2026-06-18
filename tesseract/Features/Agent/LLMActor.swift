@@ -18,7 +18,7 @@ import os
 /// for the agent chat path, and the **Server Completion** entry for the HTTP
 /// server's cache-aware path. The server execution itself lives in the
 /// actor-confined ``ServerCompletion`` module (CONTEXT.md → Server completion,
-/// ADR-0006), installed at model load and dropped at unload. The
+/// ADR-0015), installed at model load and dropped at unload. The
 /// thinking-continuation primitives stay here as actor primitives shared by
 /// both paths; the module composes them for the safeguard's continuation swap.
 actor LLMActor {
@@ -454,7 +454,7 @@ actor LLMActor {
     ///
     /// The **Completion Route** guarantees the conversation shape is servable
     /// before this is called — the module never sees a request it cannot
-    /// serve (ADR-0006).
+    /// serve (ADR-0015).
     func startServerCompletion(
         modelID: String,
         conversation: HTTPPrefixCacheConversation,
@@ -524,7 +524,7 @@ actor LLMActor {
     /// request can touch model state during teardown), then drops the module
     /// (prefix cache, load-time snapshot facts, admin state) and the
     /// container. The GPU lease remains the primary guard; this drain is the
-    /// in-actor backstop (ADR-0006).
+    /// in-actor backstop (ADR-0015).
     func unloadModel() async {
         let containerAtEntry = modelContainer
         if let serverCompletion {

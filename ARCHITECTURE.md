@@ -386,7 +386,7 @@ undownloaded IDs.
 `ServerInferenceService` is the dispatcher: it owns the **Completion Route**
 (`CompletionRoute`, the pure request-shape decision) and composes two arms —
 the cache-aware **Server Completion** module (`ServerCompletion`, an
-actor-confined module stored in `LLMActor`; ADR-0006) and the agent engine's
+actor-confined module stored in `LLMActor`; ADR-0015) and the agent engine's
 managed fallback.
 Repeated prompts are accelerated by a tiered KV prefix cache
 (`PrefixCacheManager`): a radix tree of KV-cache snapshots in RAM, spilled to SSD

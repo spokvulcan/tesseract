@@ -2,93 +2,93 @@
 status: accepted
 ---
 
-# The server spends idle GPU after stop-finish answers on speculative canonical prefill
+# The server spends idle GPU after a finished stretch on speculative canonical prefill
 
-This records a decision from the 2026-06-11/12 prompt-caching grilling (see
-`CONTEXT.md` → **Speculative Canonical Prefill**, **Think-Strip Rewind**;
-issue #76). It introduces something the server never did before: GPU work that
-no request asked for, run after the response has already been delivered.
+CONTEXT.md → **Speculative Canonical Prefill**, **Think-Strip Rewind**,
+**Stretch Abandonment**; issues #76, #100. GPU work no request asked for, run
+after the response is delivered.
 
-The trigger: with a thinking template, mid-loop caching is token-perfect, but
-the canonical user leaf can only cover the render up to the think-strip
-divergence — the probe LCP ends where the template will rewrite history once
-the next real user message arrives. Everything past it (the whole tool loop's
-assistant/tool turns, re-rendered without thinks) re-prefills *interactively*
-on that next message: 15,271 tokens / 17.1 s measured live, versus 0.2–0.5 s
-for turns that hit the canonical leaf. The spans are 99%+ precomputable — the
-future token path is fully determined by the stored conversation (a second
-divergent user probe pins the shared prefix through the next user-turn
-header), and the only unknown, the user's actual message, sits past the
-admitted leaf.
+Under a thinking template the canonical user leaf only covers the render up to
+the think-strip divergence; the **Tool Stretch** past it (assistant/tool turns
+re-rendered without thinks) re-prefills *interactively* on the next user
+message — 15,271 tokens / 17.1 s measured live, versus 0.2–0.5 s for a turn
+that hits the leaf. That span is 99%+ precomputable: the future token path is
+fixed by the stored conversation (a second divergent user probe pins the shared
+prefix through the next user-turn header), and the only unknown — the user's
+message — sits past the admitted leaf. So the server restores the just-admitted
+leaf and extends it along that path in the background, admitting a deeper leaf
+the next request hits directly. The GPU-vs-TTFT trade is decided for TTFT: the
+GPU time is reclaimed from a window idle by construction, since the next event
+after a finished stretch is human-paced.
 
-So: after a stop-finish turn that stored a canonical leaf, the server restores
-that leaf and extends it along the future shared path in the background,
-admitting a deeper leaf the next request hits directly. The GPU-vs-TTFT trade
-is real and decided in TTFT's favor because the GPU time is reclaimed from a
-window where it is otherwise idle by construction — the next event after a
-final answer is human-paced.
+## Triggers
 
-Guardrails, in priority order:
+`ServerCompletion.speculativeSeedPlan` maps a finished turn to a pass (nothing
+seeds under the **Preserve-Thinking Render**, #98 — that render is
+append-stable, so there is no rewind span):
 
-- **Interactive work always wins.** Every generation entry (cache-aware start,
-  standard raw path) cancels-and-awaits the pass; the chunk loop observes
-  cancellation between `container.perform` hops with a synchronous per-chunk
-  `eval`, then settles (below), so a preempting request acquires the container
-  actor within ~one chunk plus at most one RAM-only capture. Unload drains it
-  the same way. A pass preempted while still awaiting its probe forwards the
-  cancellation to the probe task explicitly — `Task.value` is not a
-  cancellation point for the waiter, and the probe body is synchronous render
-  work — so its cooperative checks end the wait within one render; seeds that
-  are never scheduled cancel their probe the same way.
-- **Preempted progress is kept, not recomputed.** A preempted pass settles by
-  admitting its partial progress as a leaf when it has prefilled at least
-  2,048 tokens (below that, the capture would rival the re-prefill it saves —
-  the progress is dropped and the cache is left exactly as the canonical leaf
-  left it). The chunk loop keeps the warm cache chunk-aligned to the admit
-  path, so the partial capture needs no trim. The partial leaf is **RAM-only**:
-  its sole purpose is the imminent preempting request, which supersedes it
-  with its own SSD-backed leaf moments later — skipping the SSD payload
-  extraction keeps the settle short and the disk churn (#78) at zero. The
-  preempting entry *awaits* the settle; fire-and-forget cancellation would let
-  its lookup race past the partial admission and re-prefill the very span the
-  pass just computed. This reverses the first revision's "strictly droppable"
-  stance — the first live session preempted a pass at 6,144 of 15,896 tokens
-  (39% of the span) and re-prefilled all of it interactively, exactly the
-  deep-preemption telemetry the revisit clause asked for.
+- **Stop-finish** (canonical-user boundary): seed immediately, durable leaf.
+  The original #76 trigger.
+- **Tool-stretch finish** (**Stretch Abandonment**, #100): arm a timer; the
+  pass starts only if no follow-up lands inside a 5 s idle window — short
+  enough to keep most of a human pause as runway, long enough that an agent
+  loop's next tool-result request (milliseconds-to-seconds) preempts the
+  sleeping pass first. The spine admits **RAM-only**, so a false alarm (the
+  tool result does arrive) costs zero SSD writes; the rewind landing later
+  persists the branch via its own full write.
+- **Client abort / disconnect** (#100): seed immediately from the request's
+  *completed* messages — the half-generated turn never enters the path — also
+  RAM-only, so a reconnect-and-continue wrote nothing to SSD.
+
+## Guardrails
+
+- **Interactive work always wins.** Every generation entry cancels-and-awaits
+  the pass; the chunk loop checks cancellation between `container.perform` hops
+  with a synchronous per-chunk `eval`, then settles (below), so a preempting
+  request acquires the container actor within ~one chunk plus at most one
+  RAM-only capture. Unload drains it the same way. A pass preempted while still
+  awaiting its probe forwards the cancellation explicitly (`Task.value` is not a
+  cancellation point for the waiter); the probe body is synchronous, so its
+  cooperative checks end the wait within one render.
+- **Preempted progress is kept, not recomputed.** A preempted pass admits its
+  progress as a **RAM-only** leaf when it has prefilled ≥ 2,048 tokens (below
+  that, capture rivals the re-prefill it saves). RAM-only fits: the preempting
+  request supersedes it with its own SSD-backed leaf moments later. That request
+  *awaits* the settle — fire-and-forget would let its lookup race past the
+  admission and re-prefill the span just computed. Reverses the first revision's
+  "strictly droppable" stance, after a live session preempted at 6,144 of
+  15,896 tokens and re-prefilled all of it interactively.
 - **Worth-it threshold.** Spans under 512 residual tokens are skipped — the
-  interactive re-prefill is already sub-second, not worth a GPU wake-up plus a
-  leaf admission and its SSD write.
+  interactive re-prefill is already sub-second.
 - **Safety margin.** The admitted path stops 2 tokens short of the probe LCP:
   its final tokens sit at the template→user-content seam where BPE can merge
   across the boundary, and since the deeper leaf supersedes the canonical one
-  (no shallower fallback), overshooting would orphan the leaf entirely.
-  Undershooting costs the next request a few header tokens.
-- **The window starts early.** The future-path probe (two renders plus
-  tokenizations) runs on the CPU concurrently with the canonical leaf's
-  GPU-side store, spawned by the drive task before that store begins — the
-  pass spends none of its human-paced window on its own stage 1. The window
-  is short in the cases that hurt: the measured deep preemption had ~10
-  seconds between answer and next question for an ~18-second span.
+  (no shallower fallback), overshooting would orphan the leaf.
+- **The window starts early.** The future-path probe runs on the CPU
+  concurrently with the canonical leaf's GPU-side store, spawned before it, so
+  the pass spends none of its human-paced window on its own stage 1.
 
-Considered and rejected: *capturing the full think-stripped leaf directly from
-the turn's final cache* — the KV state on device corresponds to the
-think-bearing render, not the stripped one; there is no trim that converts one
-into the other (Mamba state cannot be rewound, and even attention-only trims
-drift sampled decoding — see the normalization-trim skip). *Running the pass
-under the GPU lease* — would make TTS queue behind background work and risk a
-model reload from `ensureLoaded`; the registry drain already covers the
-unload/reload hazard, and TTS lives in a different container, so kernel-level
-timesharing is the worst case. *Dropping all progress on preemption* (the
-first revision's choice, made to keep the preempting request's entry
-zero-cost) — rejected on first-session telemetry; the bounded settle wait
-buys back multiples of itself in skipped re-prefill, and the 2,048-token
-floor keeps the trade a guaranteed win.
+## Rejected alternatives
 
-Consequences: post-answer energy use rises on tool-heavy sessions (bounded by
-the span length, observable via the `speculativePrefill` diagnostics events,
-which carry a `preempted` flag for partial admissions); each background pass
-supersedes the canonical leaf, shortening its SSD lifetime (the churn pattern
-tracked in #78); preempting entries wait out the settle (~one chunk plus at
-most one RAM-only capture) even when they target a different conversation;
-and the speculative leaf is admitted without an `AlphaTuner` request record —
-the tuner models requests, not background passes.
+- *Capturing the think-stripped leaf directly from the turn's final cache* —
+  the on-device KV state is the think-*bearing* render; no trim converts it
+  (Mamba state cannot be rewound, attention-only trims drift sampled decoding).
+- *Running the pass under the GPU lease* — would queue TTS behind background
+  work and risk a reload from `ensureLoaded`; the registry drain covers the
+  reload hazard and TTS lives in a different container, so kernel timesharing
+  is the worst case.
+- *Dropping all progress on preemption* (the first revision) — the bounded
+  settle wait buys back multiples of itself, and the 2,048-token floor keeps
+  the trade a guaranteed win.
+
+## Consequences
+
+- Post-answer energy rises on tool-heavy sessions (bounded by span length,
+  observable via the `speculativePrefill` diagnostics events, which carry a
+  `preempted` flag).
+- Each completed pass supersedes the canonical leaf, shortening its SSD
+  lifetime — the churn ADR-0010 later mostly closes.
+- Preempting entries wait out the settle even when targeting a different
+  conversation.
+- The speculative leaf is admitted without an `AlphaTuner` request record —
+  the tuner models requests, not background passes.

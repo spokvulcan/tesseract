@@ -3,7 +3,7 @@ import Testing
 @testable import Tesseract_Agent
 
 /// The unload drain contract of the **Server Completion** module —
-/// ADR-0006's in-actor backstop. `LLMActor.unloadModel` must cancel-and-await
+/// ADR-0015's in-actor backstop. `LLMActor.unloadModel` must cancel-and-await
 /// the active completion before teardown, concurrent drains must all wait
 /// for the completion to finish (not skip past a slot another drain is
 /// already awaiting), and the natural-finish clear must drop only its own
