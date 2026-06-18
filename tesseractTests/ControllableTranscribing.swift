@@ -52,4 +52,11 @@ final class ControllableTranscribing: Transcribing {
         pending?.resume(throwing: CancellationError())
         pending = nil
     }
+
+    /// Resolve the in-flight `transcribe` by throwing an arbitrary error — models a
+    /// recognizer/engine failure that is neither success nor cancellation.
+    func completeWithFailure(_ error: any Error) {
+        pending?.resume(throwing: error)
+        pending = nil
+    }
 }

@@ -2,12 +2,18 @@
 //  DictationCoordinatorTests.swift
 //  tesseractTests
 //
-//  Exercises `DictationCoordinator`'s full state machine
-//  (idle→recording→processing→idle), history capture, and post-processing — by
-//  composing the existing engine-facing `Transcribing` seam over the *real*
-//  `TranscriptionEngine` with an `InMemorySpeechRecognizer` below it, plus
-//  hermetic fakes for audio capture, text injection, and history. No model files,
-//  no microphone, no `UserDefaults`.
+//  Exercises `DictationCoordinator` as a thin composer over the **Voice Capture
+//  Session**: the `StopResult`/`Outcome` → `DictationState` mapping, the commit
+//  closure's effects (history write + auto-insert text injection with
+//  restore-clipboard), and `DictationError` mapping. The deep staleness/supersede
+//  races now live once in `VoiceCaptureSessionTests`, driven through the session's
+//  own interface — they are no longer duplicated here.
+//
+//  Composes the engine-facing `Transcribing` seam over the *real*
+//  `TranscriptionEngine` with an `InMemorySpeechRecognizer` below it (or the
+//  `ControllableTranscribing` double where a failure must be delivered on demand),
+//  plus hermetic fakes for audio capture, text injection, and history. No model
+//  files, no microphone, no `UserDefaults`.
 //
 
 import Foundation
@@ -45,27 +51,12 @@ final class FakeTextInjector: TextInjecting {
     var restoreClipboard = false
     private(set) var injected: [String] = []
 
-    /// When `gated`, `inject` suspends until `releaseGate()` — lets a test hold
-    /// the success path *inside* the injection await and mutate coordinator state
-    /// meanwhile (the injection-suspension window).
-    var gated = false
-    private var gate: CheckedContinuation<Void, Never>?
-    var isAwaitingGate: Bool { gate != nil }
-
     func inject(_ text: String) async throws {
-        if gated {
-            await withCheckedContinuation { gate = $0 }
-        }
         // Mirror the real `TextInjector`, whose paste is gated behind a
         // cancellation-aware `Task.sleep`: if the processing task is cancelled,
         // the side effect (recording the injection) must NOT happen.
         try Task.checkCancellation()
         injected.append(text)
-    }
-
-    func releaseGate() {
-        gate?.resume()
-        gate = nil
     }
 }
 
@@ -133,7 +124,7 @@ struct DictationCoordinatorTests {
         return engine
     }
 
-    // MARK: - Happy path
+    // MARK: - Happy path (Outcome → state mapping + commit effects)
 
     @Test
     func runsIdleToRecordingToProcessingToIdleWithHistoryAndInjection() async throws {
@@ -180,10 +171,11 @@ struct DictationCoordinatorTests {
                 FakeTranscriptionStore.Entry(text: expected, duration: 2.0, model: "Whisper Turbo")
             ])
         #expect(injector.injected == [expected + " "])
+        #expect(injector.restoreClipboard == settings.restoreClipboard)
         #expect(capture.stopCount == 1)
     }
 
-    // MARK: - Recording too short
+    // MARK: - Recording too short (StopResult.tooShort → error)
 
     @Test
     func recordingShorterThanMinimumGoesToErrorWithoutTranscribing() async throws {
@@ -206,7 +198,7 @@ struct DictationCoordinatorTests {
         coordinator.onHotkeyDown()
         coordinator.onHotkeyUp()
 
-        // handleError runs synchronously for the too-short guard.
+        // The too-short guard maps to an error synchronously.
         #expect(coordinator.state == .error(DictationError.recordingTooShort.localizedDescription))
         #expect(
             coordinator.lastError?.localizedDescription
@@ -214,7 +206,35 @@ struct DictationCoordinatorTests {
         #expect(await recognizer.transcribeCount == 0)
     }
 
-    // MARK: - No speech detected (post-processing yields empty)
+    // MARK: - Microphone busy (StartResult.micBusy → error)
+
+    /// Dictation now refuses to start while the shared capture engine is already
+    /// capturing, surfacing a clear "microphone in use" error instead of silently
+    /// recording nothing. (The guard lives once in the session; dictation gains it.)
+    @Test
+    func startWhileMicrophoneBusyGoesToErrorWithoutRecording() async throws {
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        capture.isCapturing = true  // the shared engine is already in use
+
+        let coordinator = DictationCoordinator(
+            audioCapture: capture,
+            transcriptionEngine: ControllableTranscribing(),
+            textInjector: FakeTextInjector(),
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore())
+        )
+
+        coordinator.onHotkeyDown()
+
+        #expect(coordinator.state == .error(DictationError.microphoneBusy.localizedDescription))
+        #expect(
+            coordinator.lastError?.localizedDescription
+                == DictationError.microphoneBusy.localizedDescription)
+        #expect(capture.startCount == 0)
+    }
+
+    // MARK: - No speech detected (Outcome.empty → noSpeech error)
 
     @Test
     func emptyTranscriptionResultGoesToNoSpeechDetectedError() async throws {
@@ -249,7 +269,41 @@ struct DictationCoordinatorTests {
         #expect(store.entries.isEmpty)
     }
 
-    // MARK: - Cancel
+    // MARK: - Transcription failure (Outcome.failed → DictationError mapping)
+
+    /// A non-`DictationError` failure from the engine maps onto
+    /// `.transcriptionFailed`, surfacing the underlying description.
+    @Test
+    func transcriptionFailureMapsToTranscriptionFailedError() async throws {
+        let engine = ControllableTranscribing()
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine,
+            textInjector: FakeTextInjector(),
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore())
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        #expect(coordinator.state == .processing)
+        while !engine.isAwaiting { await Task.yield() }
+
+        engine.completeWithFailure(FakeModelError(message: "boom"))
+
+        try await waitUntil {
+            if case .error = coordinator.state { return true } else { return false }
+        }
+        if case .transcriptionFailed = coordinator.lastError {
+            // expected mapping
+        } else {
+            Issue.record(
+                "expected .transcriptionFailed, got \(String(describing: coordinator.lastError))")
+        }
+    }
+
+    // MARK: - Cancel (returns to idle, stops capture)
 
     @Test
     func cancelFromRecordingReturnsToIdleAndStopsCapture() async throws {
@@ -276,205 +330,5 @@ struct DictationCoordinatorTests {
         #expect(coordinator.state == .idle)
         #expect(!capture.isCapturing)
         #expect(capture.stopCount == 1)
-    }
-
-    @Test
-    func cancelWhileProcessingStaysIdleAndDoesNotSurfaceAnError() async throws {
-        let bundle = try makeFakeModelBundle()
-        defer { try? FileManager.default.removeItem(at: bundle) }
-
-        // Over-running recognizer so the transcription is still in flight when we
-        // cancel; a long timeout so the timeout race doesn't fire first.
-        let recognizer = InMemorySpeechRecognizer(latency: .seconds(60))
-        let engine = TranscriptionEngine(
-            makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
-        try await engine.loadModel(from: bundle)
-
-        let coordinator = DictationCoordinator(
-            audioCapture: FakeAudioCapture(
-                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
-            transcriptionEngine: engine,
-            textInjector: FakeTextInjector(),
-            history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
-        )
-
-        coordinator.onHotkeyDown()
-        coordinator.onHotkeyUp()
-        #expect(coordinator.state == .processing)
-
-        // Cancel only once the transcription is genuinely in flight below the seam.
-        while await recognizer.transcribeCount == 0 { await Task.yield() }
-        coordinator.cancel()
-        #expect(coordinator.state == .idle)
-
-        // Let the cancelled background transcription task fully unwind: the
-        // CancellationError must NOT be reclassified as a transcription failure.
-        while await recognizer.transcribeWasInterrupted == false { await Task.yield() }
-        for _ in 0..<500 { await Task.yield() }
-
-        #expect(coordinator.state == .idle)
-        #expect(coordinator.lastError == nil)
-    }
-
-    @Test
-    func cancelThenImmediatelyRestartIsNotClobberedByStaleTranscription() async throws {
-        let bundle = try makeFakeModelBundle()
-        defer { try? FileManager.default.removeItem(at: bundle) }
-
-        let recognizer = InMemorySpeechRecognizer(latency: .seconds(60))
-        let engine = TranscriptionEngine(
-            makeRecognizer: { recognizer }, timeout: { _ in .seconds(120) })
-        try await engine.loadModel(from: bundle)
-
-        let capture = FakeAudioCapture(
-            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
-        let coordinator = DictationCoordinator(
-            audioCapture: capture,
-            transcriptionEngine: engine,
-            textInjector: FakeTextInjector(),
-            history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
-        )
-
-        // First attempt reaches processing, then is cancelled.
-        coordinator.onHotkeyDown()
-        coordinator.onHotkeyUp()
-        #expect(coordinator.state == .processing)
-        while await recognizer.transcribeCount == 0 { await Task.yield() }
-        coordinator.cancel()
-        #expect(coordinator.state == .idle)
-
-        // Start a NEW recording synchronously (before the cancelled task unwinds).
-        coordinator.onHotkeyDown()
-        #expect(coordinator.state == .recording)
-
-        // Let the stale task's cancellation fully unwind: it must NOT overwrite the
-        // new operation's .recording state with .idle.
-        while await recognizer.transcribeWasInterrupted == false { await Task.yield() }
-        for _ in 0..<500 { await Task.yield() }
-
-        #expect(coordinator.state == .recording)
-    }
-
-    @Test
-    func successfulTranscriptionArrivingAfterCancelCommitsNothing() async throws {
-        // Engine-facing double that delivers SUCCESS on demand, even after cancel.
-        let engine = ControllableTranscribing(
-            result: TranscriptionResult(
-                text: "late success", segments: [], language: "en", processingTime: 0)
-        )
-        let injector = FakeTextInjector()
-        let store = FakeTranscriptionStore()
-        let coordinator = DictationCoordinator(
-            audioCapture: FakeAudioCapture(
-                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
-            transcriptionEngine: engine,
-            textInjector: injector,
-            history: store,
-            settings: SettingsManager(store: InMemorySettingsStore())
-        )
-
-        coordinator.onHotkeyDown()
-        coordinator.onHotkeyUp()
-        #expect(coordinator.state == .processing)
-        while !engine.isAwaiting { await Task.yield() }
-
-        coordinator.cancel()
-        #expect(coordinator.state == .idle)
-        #expect(engine.cancelCount == 1)
-
-        // The engine returns a successful transcription *after* the cancel.
-        engine.completeWithSuccess()
-        for _ in 0..<500 { await Task.yield() }
-
-        // The stale success must commit nothing.
-        #expect(store.entries.isEmpty)
-        #expect(injector.injected.isEmpty)
-        #expect(coordinator.lastTranscription.isEmpty)
-        #expect(coordinator.state == .idle)
-    }
-
-    @Test
-    func cancelAndRestartDuringInjectionDoesNotClobberNewRecording() async throws {
-        let bundle = try makeFakeModelBundle()
-        defer { try? FileManager.default.removeItem(at: bundle) }
-
-        let recognizer = InMemorySpeechRecognizer(
-            result: TranscriptionResult(
-                text: "done", segments: [], language: "en", processingTime: 0)
-        )
-        let engine = TranscriptionEngine(makeRecognizer: { recognizer })
-        try await engine.loadModel(from: bundle)
-
-        let injector = FakeTextInjector()
-        injector.gated = true
-        let coordinator = DictationCoordinator(
-            audioCapture: FakeAudioCapture(
-                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
-            transcriptionEngine: engine,
-            textInjector: injector,
-            history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
-        )
-
-        coordinator.onHotkeyDown()
-        coordinator.onHotkeyUp()
-
-        // Wait until the success path is suspended inside injection.
-        while !injector.isAwaitingGate { await Task.yield() }
-
-        // Cancel and immediately start a new recording while injection is suspended.
-        coordinator.cancel()
-        coordinator.onHotkeyDown()
-        #expect(coordinator.state == .recording)
-
-        // Resume injection; the stale task must not play success or reset state.
-        injector.releaseGate()
-        for _ in 0..<500 { await Task.yield() }
-
-        #expect(coordinator.state == .recording)
-        #expect(injector.injected.isEmpty)
-    }
-
-    @Test
-    func cancelDuringInjectionAbortsTheInjectionSideEffect() async throws {
-        let bundle = try makeFakeModelBundle()
-        defer { try? FileManager.default.removeItem(at: bundle) }
-
-        let recognizer = InMemorySpeechRecognizer(
-            result: TranscriptionResult(
-                text: "done", segments: [], language: "en", processingTime: 0)
-        )
-        let engine = TranscriptionEngine(makeRecognizer: { recognizer })
-        try await engine.loadModel(from: bundle)
-
-        let injector = FakeTextInjector()
-        injector.gated = true
-        let coordinator = DictationCoordinator(
-            audioCapture: FakeAudioCapture(
-                cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
-            transcriptionEngine: engine,
-            textInjector: injector,
-            history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
-        )
-
-        coordinator.onHotkeyDown()
-        coordinator.onHotkeyUp()
-
-        // Suspend the success path inside injection, then cancel.
-        while !injector.isAwaitingGate { await Task.yield() }
-        coordinator.cancel()
-        #expect(coordinator.state == .idle)
-
-        // Releasing the gate must NOT result in stale text being injected: the
-        // processing task is cancelled, so the cancellation-aware injection aborts
-        // before its side effect (the real injector aborts before the paste).
-        injector.releaseGate()
-        for _ in 0..<500 { await Task.yield() }
-
-        #expect(injector.injected.isEmpty)
-        #expect(coordinator.state == .idle)
     }
 }
