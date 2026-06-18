@@ -11,6 +11,7 @@ enum DictationError: LocalizedError, Sendable {
     case modelNotLoaded
     case modelNotDownloaded
     case audioCaptureFailed(String)
+    case microphoneBusy
     case transcriptionFailed(String)
     case textInjectionFailed(String)
     case noSpeechDetected
@@ -30,6 +31,8 @@ enum DictationError: LocalizedError, Sendable {
             return "Please download a transcription model first."
         case .audioCaptureFailed(let reason):
             return "Audio capture failed: \(reason)"
+        case .microphoneBusy:
+            return "The microphone is already in use."
         case .transcriptionFailed(let reason):
             return "Transcription failed: \(reason)"
         case .textInjectionFailed(let reason):
@@ -57,6 +60,8 @@ enum DictationError: LocalizedError, Sendable {
             return "Go to Settings > Model and download a transcription model."
         case .audioCaptureFailed:
             return "Check your microphone connection and try again."
+        case .microphoneBusy:
+            return "Wait for the current recording to finish, then try again."
         case .transcriptionFailed:
             return "Try again or select a different model."
         case .textInjectionFailed:

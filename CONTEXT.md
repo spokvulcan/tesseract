@@ -569,10 +569,10 @@ own state but never touch the event dispatcher — the *leaves*, as opposed to t
 dispatcher-coupled *spine* (**Agent Run**, **Chat Transcript Controller**).
 
 **Voice Input**:
-The agent chat composer's push-to-talk capture→transcribe→emit module: it hands
-transcribed text to the composer rather than sending, and keeps its errors local
-instead of on the shared banner. Distinct from the spine — it touches no `Agent` and
-no arbiter.
+The agent chat composer's push-to-talk capture→transcribe→emit module: it composes
+the shared **Voice Capture Session**, hands transcribed text to the composer rather
+than sending, and keeps its errors local instead of on the shared banner. Distinct
+from the spine — it touches no `Agent` and no arbiter.
 _Avoid_: dictation (the separate global system-wide overlay — say "agent voice
 input"), mic controller, voice state machine.
 
@@ -605,6 +605,19 @@ not Swift's `guard` statement — say "operation guard".
 The epoch snapshot a coordinator captures when it enters async work; its `isCurrent`
 check, after each `await` resume, decides whether still-running work may commit.
 _Avoid_: operation ID, token (unqualified), snapshot (the prefix-cache concept).
+
+**Voice Capture Session**:
+The one concrete module that owns the push-to-talk capture→transcribe→commit
+lifecycle — the **Operation Guard** ticket discipline, the microphone-busy guard, the
+minimum-duration and empty-text guards, post-processing, the in-flight transcription
+`Task`, and cancellation — behind a small value-returning interface
+(`start`/`stop`/`transcribeAndCommit`/`cancel`), delivering clean text to a
+caller-injected commit closure. Composed *directly* by both `DictationCoordinator` and
+**Voice Input**, which keep only their own state, errors, sounds, and commit. Distinct
+from **Voice Input** (one caller, agent-composer presentation) and from the **Operation
+Guard** it composes (the epoch protocol alone).
+_Avoid_: coordinator (it is composed by the coordinators, not one), capture engine
+(`AudioCaptureEngine`, the mic port below it), voice controller, session (unqualified).
 
 ### GPU lease arbitration
 

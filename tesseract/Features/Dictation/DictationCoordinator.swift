@@ -7,40 +7,28 @@ import Foundation
 import Observation
 import AppKit
 
+/// The global system-wide dictation overlay. A thin composer over the shared
+/// **Voice Capture Session**: it maps the session's `StopResult`/`Outcome` onto
+/// `DictationState` and keeps only what is dictation-specific — its commit
+/// (history + auto-insert text injection), success/error sounds, the
+/// maximum-recording-duration auto-stop, `DictationError` mapping, and the error
+/// auto-reset. Distinct from **Voice Input** (`AgentVoiceInputController`), the
+/// agent composer leaf, which composes the same session for its own presentation.
 @Observable @MainActor
 final class DictationCoordinator {
-    private enum Defaults {
-        static let minimumRecordingDuration: TimeInterval = 0.5
-        static let errorAutoResetDelay: Duration = .seconds(3)
-    }
-
     private(set) var state: DictationState = .idle
     private(set) var lastTranscription: String = ""
     private(set) var lastError: DictationError?
 
-    private let audioCapture: any AudioCapturing
-    private let transcriptionEngine: any Transcribing
+    private let session: VoiceCaptureSession
     private let textInjector: any TextInjecting
-    private let postProcessor: TranscriptionPostProcessor
     private let history: any TranscriptionStoring
     private let settings: SettingsManager
 
+    /// The maximum-recording-duration auto-stop. Caller-owned: it finalizes a stuck
+    /// recording, which is a dictation-presentation concern, not part of the shared
+    /// capture lifecycle.
     private var recordingTask: Task<Void, Never>?
-    private var recordingStartTime: Date?
-
-    /// The in-flight transcribe→inject processing task. Tracked so `cancel()` can
-    /// cancel it: the success path's `await textInjector.inject(...)` is itself the
-    /// side effect, and is cancellation-aware (the real injector aborts before the
-    /// paste). The post-await token guard alone can't stop an injection already
-    /// suspended in flight — cancelling the task does.
-    private var processingTask: Task<Void, Never>?
-
-    /// The **Operation Guard** for this coordinator's dictation operations (a record →
-    /// process attempt). `invalidate()`d when a new operation begins so a background
-    /// transcription task that finishes *after* a cancel-and-restart recognizes it is
-    /// stale (via its `OperationTicket`) and leaves the newer operation's state
-    /// untouched. See CONTEXT.md → "Operation staleness".
-    private let operations = OperationGuard()
 
     init(
         audioCapture: any AudioCapturing,
@@ -49,10 +37,9 @@ final class DictationCoordinator {
         history: any TranscriptionStoring,
         settings: SettingsManager
     ) {
-        self.audioCapture = audioCapture
-        self.transcriptionEngine = transcriptionEngine
+        self.session = VoiceCaptureSession(
+            audioCapture: audioCapture, transcriptionEngine: transcriptionEngine)
         self.textInjector = textInjector
-        self.postProcessor = TranscriptionPostProcessor()
         self.history = history
         self.settings = settings
     }
@@ -88,24 +75,7 @@ final class DictationCoordinator {
     func cancel() {
         recordingTask?.cancel()
         recordingTask = nil
-
-        // Invalidate any in-flight processing so a transcription that completes
-        // (or races cancellation to *success*) after this point is recognized as
-        // stale and commits nothing — no history, no injection, no state change.
-        operations.invalidate()
-
-        // Cancel the processing task itself so a cancellation-aware side effect
-        // suspended mid-flight (text injection) aborts rather than completing
-        // after the user has cancelled. The token guard handles the complementary
-        // case where the recognizer ignores cancellation and returns success.
-        processingTask?.cancel()
-        processingTask = nil
-
-        if audioCapture.isCapturing {
-            _ = audioCapture.stopCapture()
-        }
-
-        transcriptionEngine.cancelTranscription()
+        session.cancel()
         state = .idle
     }
 
@@ -113,18 +83,12 @@ final class DictationCoordinator {
 
     private func startRecording() {
         lastError = nil
-        // Advance the epoch at operation start: this coordinator can begin a new
-        // recording while a prior transcription is still in flight (toggle/hotkey
-        // restart) without cancelling it, so the start-bump is what supersedes that
-        // overlapping prior operation.
-        operations.invalidate()
 
-        do {
-            try audioCapture.startCapture()
+        switch session.start() {
+        case .started:
             state = .recording
-            recordingStartTime = Date()
 
-            // Start timeout task
+            // Start the maximum-duration timeout task.
             recordingTask = Task {
                 let maxDuration = settings.maxRecordingDuration
                 try? await Task.sleep(for: .seconds(maxDuration))
@@ -137,10 +101,14 @@ final class DictationCoordinator {
             if settings.playSounds {
                 playSound(.startRecording)
             }
-        } catch let error as DictationError {
-            handleError(error)
-        } catch {
-            handleError(.audioCaptureFailed(error.localizedDescription))
+        case .micBusy:
+            handleError(.microphoneBusy)
+        case .captureFailed(let error):
+            if let dictationError = error as? DictationError {
+                handleError(dictationError)
+            } else {
+                handleError(.audioCaptureFailed(error.localizedDescription))
+            }
         }
     }
 
@@ -148,82 +116,60 @@ final class DictationCoordinator {
         recordingTask?.cancel()
         recordingTask = nil
 
-        guard let audioData = audioCapture.stopCapture() else {
+        switch session.stop() {
+        case .noAudio:
             handleError(.audioCaptureFailed("No audio captured"))
-            return
-        }
-
-        // Check minimum duration
-        if audioData.duration < Defaults.minimumRecordingDuration {
+        case .tooShort:
             handleError(.recordingTooShort)
-            return
+        case .audio(let audioData):
+            process(audioData)
         }
-
-        processAudio(audioData)
     }
 
-    private func processAudio(_ audioData: AudioData) {
+    private func process(_ audioData: AudioData) {
         state = .processing
-        let ticket = operations.capture()
 
-        processingTask = Task {
-            do {
-                // Transcribe with selected language
-                let result = try await transcriptionEngine.transcribe(
-                    audioData, language: settings.language)
+        // Fire-and-forget: the session owns the in-flight task and its cancellation,
+        // so this outer task is untracked — it only maps the outcome back to state.
+        Task {
+            let outcome = await session.transcribeAndCommit(
+                audioData, language: settings.language
+            ) { [self] text, duration in
+                lastTranscription = text
 
-                // Stale-task guard: a cancel-and-restart since this operation
-                // began means a newer operation owns the coordinator state — drop
-                // this result instead of clobbering it (or injecting stale text).
-                guard ticket.isCurrent else { return }
-
-                // Post-process
-                let processedText = postProcessor.process(result.text)
-
-                guard !processedText.isEmpty else {
-                    handleError(.noSpeechDetected)
-                    return
-                }
-
-                lastTranscription = processedText
-
-                // Add to history
                 history.add(
-                    text: processedText,
-                    duration: audioData.duration,
+                    text: text,
+                    duration: duration,
                     model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
                         ?? settings.selectedSpeechToTextModelID
                 )
 
-                // Inject text if enabled
                 if settings.autoInsertText {
                     textInjector.restoreClipboard = settings.restoreClipboard
-                    try await textInjector.inject(processedText + " ")
-
-                    // Injection suspends; a cancel-and-restart during it means a
-                    // newer operation owns the state — don't play success or
-                    // overwrite it.
-                    guard ticket.isCurrent else { return }
+                    try await textInjector.inject(text + " ")
                 }
+            }
 
+            switch outcome {
+            case .committed:
                 if settings.playSounds {
                     playSound(.success)
                 }
-
                 state = .idle
-
-            } catch is CancellationError {
-                // Cancelled (e.g. `cancel()` while processing) — not a failure.
-                // Only return to idle if this is still the current operation; a
-                // newer recording must not be clobbered by this stale task.
-                guard ticket.isCurrent else { return }
+            case .empty:
+                handleError(.noSpeechDetected)
+            case .failed(let error):
+                if let dictationError = error as? DictationError {
+                    handleError(dictationError)
+                } else {
+                    handleError(.transcriptionFailed(error.localizedDescription))
+                }
+            case .cancelled:
                 state = .idle
-            } catch let error as DictationError {
-                guard ticket.isCurrent else { return }
-                handleError(error)
-            } catch {
-                guard ticket.isCurrent else { return }
-                handleError(.transcriptionFailed(error.localizedDescription))
+            case .superseded:
+                // A cancel-and-restart superseded this operation — the newer
+                // operation owns the state; commit nothing and leave it untouched.
+                break
             }
         }
     }
@@ -236,9 +182,10 @@ final class DictationCoordinator {
             playSound(.error)
         }
 
-        // Auto-reset after a delay
+        // Auto-reset after a delay (shared duration so dictation and agent voice
+        // input don't drift on how long an error lingers).
         Task {
-            try? await Task.sleep(for: Defaults.errorAutoResetDelay)
+            try? await Task.sleep(for: VoiceCaptureSession.errorAutoResetDelay)
             if case .error = state {
                 state = .idle
             }
