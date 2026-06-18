@@ -23,6 +23,8 @@ struct AgentScrollableTextField: NSViewRepresentable {
         scrollView.focusRingType = .none
 
         // Replace with our custom NSTextView that intercepts image paste
+        // AppKit guarantees documentView is the NSTextView we installed.
+        // swiftlint:disable:next force_cast
         let originalTextView = scrollView.documentView as! NSTextView
         let textView = ImagePasteTextView(frame: originalTextView.frame)
         textView.coordinator = context.coordinator
@@ -56,6 +58,8 @@ struct AgentScrollableTextField: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
+        // AppKit guarantees documentView is the NSTextView we installed.
+        // swiftlint:disable:next force_cast
         let textView = nsView.documentView as! NSTextView
 
         if textView.string != text {

@@ -147,7 +147,7 @@ nonisolated enum PrefillPlanner {
             : "<|im_start|>assistant\n"
         let genPromptTokens = tokenizer.encode(text: genPromptStr, addSpecialTokens: false)
         let lastMessageOffset: Int?
-        if genPromptTokens.count > 0,
+        if !genPromptTokens.isEmpty,
             fullTokens.count > genPromptTokens.count,
             Array(fullTokens.suffix(genPromptTokens.count)).elementsEqual(genPromptTokens)
         {

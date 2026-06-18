@@ -39,10 +39,8 @@ nonisolated enum SkillRegistry: Sendable {
         // 1. Scan skill directories (user-global, extension-provided)
         for directory in locations {
             let skills = scanDirectory(directory)
-            for skill in skills {
-                if seenNames.insert(skill.name).inserted {
-                    results.append(skill)
-                }
+            for skill in skills where seenNames.insert(skill.name).inserted {
+                results.append(skill)
             }
         }
 

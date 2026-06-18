@@ -4,7 +4,7 @@ import Testing
 
 // Folded here from `LLMActorWrapMalformedToolCallBufferTests`: the wrapping helper
 // now lives on `GenerationStreamLoop`, which owns malformed-EOS surfacing.
-struct GenerationStreamLoopWrapMalformedToolCallBufferTests {
+struct GenStreamLoopMalformedToolCallBufferTests {
 
     @Test func appendsCloseTagWhenMissing() {
         let input = "<tool_call>\n<read>\n<file_path>/tmp/x</file_path>\n</read>"

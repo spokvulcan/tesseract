@@ -54,6 +54,8 @@ nonisolated enum DuckDuckGoClient: Sendable {
 
     // MARK: - Static Regex Patterns (compiled once)
 
+    // Static literal patterns — compilation cannot fail (matches ToolCallParser precedent).
+    // swiftlint:disable force_try
     /// Matches <a class="result__a" href="URL">TITLE</a>
     private static let titleLinkRegex = try! NSRegularExpression(
         pattern: #"<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>"#,
@@ -65,6 +67,7 @@ nonisolated enum DuckDuckGoClient: Sendable {
         pattern: #"class="result__snippet"[^>]*>([\s\S]*?)</(?:a|td|div)>"#,
         options: []
     )
+    // swiftlint:enable force_try
 
     /// Ephemeral session — no persistent cookies or cache.
     private static let session: URLSession = {

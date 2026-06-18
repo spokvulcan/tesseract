@@ -62,6 +62,8 @@ struct SnapshotStateTests {
 
     @Test func queryTruthTable() {
         // (label, canEvictNode, hasResidentBody, isHittable, committed, hasBody, hasRef)
+        // Test-local tuple; named struct not worth it (evolving MVP, see CLAUDE.md).
+        // swiftlint:disable:next large_tuple
         let expected: [String: (Bool, Bool, Bool, Bool, Bool, Bool)] = [
             "empty": (true, false, false, false, false, false),
             "ramOnly": (true, true, true, false, true, false),
@@ -146,6 +148,8 @@ struct SnapshotStateTests {
 
     @Test func committingMatrix() {
         let id = "ID-1"
+        // Test-local tuple; named struct not worth it (evolving MVP, see CLAUDE.md).
+        // swiftlint:disable:next large_tuple
         let cases: [(label: String, state: SnapshotState, result: String, effect: StateEffect)] = [
             ("empty", .empty, "empty", .ignored(.notPending)),
             ("ramOnly", .ramOnly(body()), "ramOnly", .ignored(.notPending)),
@@ -177,6 +181,8 @@ struct SnapshotStateTests {
 
     @Test func droppingRefMatrix() {
         let id = "ID-2"
+        // Test-local tuple; named struct not worth it (evolving MVP, see CLAUDE.md).
+        // swiftlint:disable:next large_tuple
         let cases: [(label: String, state: SnapshotState, result: String, effect: StateEffect)] = [
             ("empty", .empty, "empty", .ignored(.notPending)),
             ("ramOnly", .ramOnly(body()), "ramOnly", .ignored(.notPending)),
@@ -264,6 +270,8 @@ struct SnapshotStateTests {
     // MARK: - clearingCommittedRefAfterBackingLoss
 
     @Test func clearingCommittedRefAfterBackingLossMatrix() {
+        // Test-local tuple; named struct not worth it (evolving MVP, see CLAUDE.md).
+        // swiftlint:disable:next large_tuple
         let cases: [(label: String, state: SnapshotState, result: String, effect: StateEffect)] = [
             ("empty", .empty, "empty", .ignored(.notResident)),
             ("ramOnly", .ramOnly(body()), "ramOnly", .ignored(.notResident)),
@@ -282,6 +290,8 @@ struct SnapshotStateTests {
     // MARK: - discardingRefAfterExplicitDelete
 
     @Test func discardingRefAfterExplicitDeleteMatrix() {
+        // Test-local tuple; named struct not worth it (evolving MVP, see CLAUDE.md).
+        // swiftlint:disable:next large_tuple
         let cases: [(label: String, state: SnapshotState, result: String, effect: StateEffect)] = [
             ("empty", .empty, "empty", .ignored(.notResident)),
             ("ramOnly", .ramOnly(body()), "ramOnly", .ignored(.notResident)),

@@ -4,6 +4,8 @@ import MLXLMCommon
 import Testing
 @testable import Tesseract_Agent
 
+// Large test suite — splitting deferred (evolving MVP, see CLAUDE.md).
+// swiftlint:disable:next type_body_length
 struct HybridCacheSnapshotTests {
 
     // MARK: - Capture Tests

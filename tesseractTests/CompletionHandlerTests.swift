@@ -672,9 +672,11 @@ struct HTTPServerIntegrationTests {
         let (data, response) = try await URLSession.shared.data(
             from: URL(string: "http://127.0.0.1:\(port)/health")!
         )
-        let http = response as! HTTPURLResponse
+        let http = try #require(response as? HTTPURLResponse)
         #expect(http.statusCode == 200)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: String]
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: String]
+        )
         #expect(json["status"] == "ok")
     }
 
@@ -686,9 +688,11 @@ struct HTTPServerIntegrationTests {
         let (data, response) = try await URLSession.shared.data(
             from: URL(string: "http://127.0.0.1:\(port)/nonexistent")!
         )
-        let http = response as! HTTPURLResponse
+        let http = try #require(response as? HTTPURLResponse)
         #expect(http.statusCode == 404)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
         let error = json["error"] as? [String: Any]
         #expect(error?["code"] as? Int == 404)
     }
@@ -704,7 +708,7 @@ struct HTTPServerIntegrationTests {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/only-post")!)
         request.httpMethod = "GET"
         let (_, response) = try await URLSession.shared.data(for: request)
-        let http = response as! HTTPURLResponse
+        let http = try #require(response as? HTTPURLResponse)
         #expect(http.statusCode == 405)
         #expect(http.value(forHTTPHeaderField: "Allow")?.contains("POST") == true)
     }
@@ -725,7 +729,7 @@ struct HTTPServerIntegrationTests {
         let (bytes, response) = try await URLSession.shared.bytes(
             from: URL(string: "http://127.0.0.1:\(port)/test-sse")!
         )
-        let http = response as! HTTPURLResponse
+        let http = try #require(response as? HTTPURLResponse)
         #expect(http.statusCode == 200)
 
         var lines: [String] = []
@@ -759,7 +763,7 @@ struct HTTPServerIntegrationTests {
         let (bytes, response) = try await URLSession.shared.bytes(
             from: URL(string: "http://127.0.0.1:\(port)/test-reasoning-sse")!
         )
-        let http = response as! HTTPURLResponse
+        let http = try #require(response as? HTTPURLResponse)
         #expect(http.statusCode == 200)
 
         var payloads: [OpenAI.ChatCompletionChunk] = []
@@ -805,8 +809,8 @@ struct HTTPServerIntegrationTests {
             let (bytes, _) = try await URLSession.shared.bytes(
                 from: URL(string: "http://127.0.0.1:\(port)/slow-sse")!
             )
-            for try await line in bytes.lines {
-                if line.hasPrefix("data: {") { break }
+            for try await line in bytes.lines where line.hasPrefix("data: {") {
+                break
             }
         }
 
@@ -877,8 +881,8 @@ struct HTTPServerIntegrationTests {
             let (bytes, _) = try await URLSession.shared.bytes(
                 from: URL(string: "http://127.0.0.1:\(port)/prefill-disconnect")!
             )
-            for try await line in bytes.lines {
-                if line.hasPrefix("data: {") { break }
+            for try await line in bytes.lines where line.hasPrefix("data: {") {
+                break
             }
         }
 
@@ -907,10 +911,12 @@ struct HTTPServerIntegrationTests {
         request.httpBody = Data(#"{"model":"gpt-4","messages":[]}"#.utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        let http = response as! HTTPURLResponse
+        let http = try #require(response as? HTTPURLResponse)
         #expect(http.statusCode == 404)
 
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
         let error = json["error"] as? [String: Any]
         #expect(error != nil)
         #expect(error?["type"] as? String == "invalid_request_error")
@@ -938,10 +944,12 @@ struct HTTPServerIntegrationTests {
         request.httpBody = Data(#"{"model":"qwen3.5-9b-paro","messages":[]}"#.utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        let http = response as! HTTPURLResponse
+        let http = try #require(response as? HTTPURLResponse)
         #expect(http.statusCode == 404)
 
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
         let error = json["error"] as? [String: Any]
         #expect(error?["type"] as? String == "invalid_request_error")
         #expect(error?["code"] as? String == "model_not_found")
@@ -974,11 +982,13 @@ struct HTTPServerIntegrationTests {
         let (data, response) = try await URLSession.shared.data(
             from: URL(string: "http://127.0.0.1:\(port)/custom-error")!
         )
-        let http = response as! HTTPURLResponse
+        let http = try #require(response as? HTTPURLResponse)
         #expect(http.statusCode == 400)
 
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let error = json["error"] as! [String: Any]
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let error = try #require(json["error"] as? [String: Any])
         #expect(error["type"] as? String == "invalid_request_error")
         #expect(error["code"] as? String == "generic_failure")
         // `param` key must exist and be NSNull.

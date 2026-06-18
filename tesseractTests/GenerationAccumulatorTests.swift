@@ -58,9 +58,9 @@ struct GenerationAccumulatorTests {
         var acc = GenerationAccumulator()
         #expect(acc.thinking == nil)
         acc.ingest(.thinkStart)
-        #expect(acc.thinking == "")
+        #expect(acc.thinking?.isEmpty == true)
         acc.ingest(.thinkEnd)
-        #expect(acc.thinking == "")
+        #expect(acc.thinking?.isEmpty == true)
     }
 
     /// Malformed tool-call fragments accumulate raw, and finalized tool calls

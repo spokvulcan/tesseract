@@ -45,7 +45,7 @@ nonisolated struct HTTPRequestLogger: Sendable {
     func logRequest(body: Data, sessionAffinity: String?) -> String {
         let prefix = filenamePrefix()
         let url = rootURL.appendingPathComponent("\(prefix)-request.json")
-        var header = "// session=\(sessionAffinity ?? "nil")\n".data(using: .utf8) ?? Data()
+        var header = Data("// session=\(sessionAffinity ?? "nil")\n".utf8)
         if let parsed = try? JSONSerialization.jsonObject(with: body),
             let pretty = try? JSONSerialization.data(
                 withJSONObject: parsed,

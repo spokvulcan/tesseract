@@ -211,7 +211,7 @@ struct SpeechEngineTests {
         // The facade unwinds its load lifecycle on failure.
         #expect(!engine.isModelLoaded)
         #expect(!engine.isLoading)
-        #expect(engine.loadingStatus == "")
+        #expect(engine.loadingStatus.isEmpty)
         // A subsequent generate still reports not-loaded.
         let genError = await captureSpeechError {
             try await engine.generate(text: "x", voice: nil, language: nil, parameters: .default)
@@ -257,7 +257,7 @@ struct SpeechEngineTests {
 
         engine.unloadModel()
         #expect(!engine.isModelLoaded)
-        #expect(engine.loadingStatus == "")
+        #expect(engine.loadingStatus.isEmpty)
 
         let error = await captureSpeechError {
             try await engine.generate(

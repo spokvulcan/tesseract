@@ -25,6 +25,8 @@ import MLXLMCommon
 @testable import Tesseract_Agent
 
 @MainActor
+// Large test suite — splitting deferred (evolving MVP, see CLAUDE.md).
+// swiftlint:disable:next type_body_length
 struct TieredSnapshotStoreTests {
 
     // MARK: - Scratch fixtures
@@ -145,6 +147,8 @@ struct TieredSnapshotStoreTests {
         return condition()
     }
 
+    // Test-local tuple; named struct not worth it (evolving MVP, see CLAUDE.md).
+    // swiftlint:disable:next large_tuple
     private typealias Fixture = (
         root: URL,
         store: TieredSnapshotStore,

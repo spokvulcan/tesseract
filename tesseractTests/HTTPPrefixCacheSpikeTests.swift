@@ -52,16 +52,16 @@ struct HTTPPrefixCacheSpikeTests {
 
     @Test func assistantContentIsTrimmed() {
         let twoNewlines = HTTPPrefixCacheMessage.assistant(content: "\n\n")
-        #expect(twoNewlines.content == "")
+        #expect(twoNewlines.content.isEmpty)
 
         let threeNewlines = HTTPPrefixCacheMessage.assistant(content: "\n\n\n")
-        #expect(threeNewlines.content == "")
+        #expect(threeNewlines.content.isEmpty)
 
         let mixedWhitespace = HTTPPrefixCacheMessage.assistant(content: "  \n  \t ")
-        #expect(mixedWhitespace.content == "")
+        #expect(mixedWhitespace.content.isEmpty)
 
         let empty = HTTPPrefixCacheMessage.assistant(content: "")
-        #expect(empty.content == "")
+        #expect(empty.content.isEmpty)
 
         let realText = HTTPPrefixCacheMessage.assistant(content: "Hello!")
         #expect(realText.content == "Hello!")

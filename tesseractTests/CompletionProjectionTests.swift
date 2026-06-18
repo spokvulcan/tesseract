@@ -183,8 +183,8 @@ struct CompletionProjectionTests {
         let p2 = CompletionProjection(
             accumulator: opened, info: info, maxTokens: 256, completionID: "o")
 
-        #expect(p1.thinkingContent == "")
-        #expect(p2.thinkingContent == "")
+        #expect(p1.thinkingContent.isEmpty)
+        #expect(p2.thinkingContent.isEmpty)
     }
 
     // MARK: - Safeguard sidecar

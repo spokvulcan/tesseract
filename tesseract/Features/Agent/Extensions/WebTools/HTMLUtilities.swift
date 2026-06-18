@@ -8,11 +8,14 @@ nonisolated enum HTMLUtilities: Sendable {
 
     // MARK: - Regex Patterns
 
+    // Static literal pattern — compilation cannot fail (matches ToolCallParser precedent).
+    // swiftlint:disable force_try
     /// Matches any HTML tag.
     static let htmlTagRegex = try! NSRegularExpression(
         pattern: #"<[^>]+>"#,
         options: []
     )
+    // swiftlint:enable force_try
 
     /// Named HTML entities lookup.
     static let namedEntities: [String: String] = [
@@ -23,11 +26,15 @@ nonisolated enum HTMLUtilities: Sendable {
         "&copy;": "©", "&reg;": "®", "&trade;": "™",
     ]
 
+    // Static literal pattern — compilation cannot fail (matches ToolCallParser precedent).
+    // swiftlint:disable:next force_try
     private static let numericEntityRegex = try! NSRegularExpression(
         pattern: #"&#(\d+);"#,
         options: []
     )
 
+    // Static literal pattern — compilation cannot fail (matches ToolCallParser precedent).
+    // swiftlint:disable:next force_try
     private static let hexEntityRegex = try! NSRegularExpression(
         pattern: #"&#x([0-9a-fA-F]+);"#,
         options: .caseInsensitive

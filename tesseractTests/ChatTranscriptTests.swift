@@ -443,7 +443,7 @@ struct ChatTranscriptTests {
         guard case .user(let userRow) = rows.first?.kind else {
             Issue.record("no user row"); return
         }
-        #expect(userRow.content == "")
+        #expect(userRow.content.isEmpty)
         #expect(userRow.images.count == 1)
     }
 

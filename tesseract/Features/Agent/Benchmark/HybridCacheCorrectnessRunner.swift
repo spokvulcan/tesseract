@@ -8,6 +8,8 @@ import os
 /// manual cache to verify mid-prefill capture/restore round-trips
 /// bit-for-bit. Run via `--hybrid-cache-correctness` on the Tesseract CLI.
 @MainActor
+// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+// swiftlint:disable:next type_body_length
 final class HybridCacheCorrectnessRunner {
 
     private let runner: BenchmarkRunner

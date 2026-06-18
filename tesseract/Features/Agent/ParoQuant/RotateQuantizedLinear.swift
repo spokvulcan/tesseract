@@ -224,7 +224,7 @@ nonisolated open class RotateQuantizedLinear: QuantizedLinear {
             scales: scales, biases: biases,
             transpose: true, groupSize: groupSize, bits: bits
         )
-        if let bias { y = y + bias }
+        if let bias { y += bias }
         return y
     }
 }

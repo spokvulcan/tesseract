@@ -23,11 +23,6 @@ nonisolated enum PromptCacheStorageState: String, Codable, CaseIterable, Sendabl
 nonisolated struct PromptCacheTelemetryField: Codable, Hashable, Sendable {
     let key: String
     let value: String
-
-    nonisolated init(key: String, value: String) {
-        self.key = key
-        self.value = value
-    }
 }
 
 nonisolated struct PromptCacheTelemetryEvent: Identifiable, Codable, Hashable, Sendable {
@@ -149,7 +144,7 @@ nonisolated struct PromptCacheTelemetryAggregate: Codable, Equatable, Sendable {
                 // restore landed at the floor below the request's divergence
                 // (issue #101). `shared > floor` excludes a restore that landed
                 // exactly at the divergence (a hit, but not a rewind).
-                if (chainPrefixRewind || reason == "chainPrefixHit"),
+                if chainPrefixRewind || reason == "chainPrefixHit",
                     let shared = event.intField("sharedPrefixLength"),
                     let floor = event.intField("snapshotOffset"),
                     shared > floor

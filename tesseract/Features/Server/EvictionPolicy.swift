@@ -61,6 +61,8 @@ nonisolated struct ModelFlopProfile: Equatable, Sendable {
         )
     }
 
+    // Name mirrors the HuggingFace repo z-lab/Qwen3.5-4B-PARO.
+    // swiftlint:disable identifier_name
     /// Fallback profile matching the Qwen3.5-4B-PARO `text_config.json`
     /// shipped by `z-lab/Qwen3.5-4B-PARO`. Used when the loaded model's
     /// config can't be parsed.
@@ -71,6 +73,7 @@ nonisolated struct ModelFlopProfile: Equatable, Sendable {
         linearKeyHeadDim: 128,
         fullAttentionInterval: 4
     )
+    // swiftlint:enable identifier_name
 
     /// The profile assumed when the model architecture is unknown — no model
     /// loaded yet, or a config that can't be parsed. The **single home** for
@@ -128,6 +131,9 @@ enum EvictionPolicy {
 
     // MARK: - FLOP formulas (Marconi Appendix A / reference repo `utils.py`)
 
+    // Single-letter names mirror the Marconi FLOP formulas (Appendix A) in the doc comments.
+    // swiftlint:disable identifier_name
+
     /// Parent-relative FLOPs saved by reusing a snapshot at `nodeOffset`.
     ///
     /// SSM term uses the linear delta directly because `F_ssm` is linear in
@@ -183,6 +189,7 @@ enum EvictionPolicy {
         let Nd = Double(N)
         return 12 * Ld * Dd * Dd + 16 * Ld * Dd * Nd + 10 * Ld * Dd
     }
+    // swiftlint:enable identifier_name
 
     // MARK: - Min-max normalization
 

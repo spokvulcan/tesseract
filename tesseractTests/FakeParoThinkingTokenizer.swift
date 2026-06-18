@@ -27,6 +27,8 @@ struct FakeParoThinkingTokenizer: Tokenizer {
         Array(text.utf8).map(Int.init)
     }
     func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        // Lossy UTF-8 decode is intentional in this test fake.
+        // swiftlint:disable:next optional_data_string_conversion
         String(decoding: tokenIds.compactMap { UInt8(exactly: $0) }, as: UTF8.self)
     }
     func tokenize(text: String) -> [String] { [] }

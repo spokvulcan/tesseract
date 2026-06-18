@@ -2,6 +2,13 @@ import SwiftUI
 import Textual
 import os
 
+// In the `var body` ViewBuilders below, `let _ = signposter.emitEvent(...)` is a
+// DEBUG-only profiling idiom: in a result builder `let _ =` is a declaration
+// (skipped), whereas a bare `_ =` is a `Void` expression the builder tries to
+// render ("type '()' cannot conform to 'View'"). The discardable `let` is
+// required here, not redundant.
+// swiftlint:disable redundant_discardable_let
+
 // MARK: - Step Gutter (shared timeline column)
 
 /// Shared timeline gutter: vertical line (when not last) + icon. Used by all step row views.
@@ -145,8 +152,8 @@ struct UserBubble: View, Equatable {
 struct AssistantBubble: View, Equatable {
     let data: AssistantTextRow
     var isSpeaking: Bool = false
-    var onPlay: (() -> Void)? = nil
-    var onStop: (() -> Void)? = nil
+    var onPlay: (() -> Void)?
+    var onStop: (() -> Void)?
 
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
     @State private var isHovering = false
@@ -260,20 +267,23 @@ struct ThinkingRowView: View, Equatable {
             StepGutter(iconName: "brain", isLast: data.isLast)
 
             VStack(alignment: .leading, spacing: 0) {
-                Button(action: { isExpanded.toggle() }) {
-                    HStack(spacing: 8) {
-                        Text("Thinking")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Button(
+                    action: { isExpanded.toggle() },
+                    label: {
+                        HStack(spacing: 8) {
+                            Text("Thinking")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.tertiary)
+                                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        }
+                        .padding(.vertical, 0)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 0)
-                    .contentShape(Rectangle())
-                }
+                )
                 .buttonStyle(.plain)
 
                 if isExpanded {
@@ -328,19 +338,22 @@ struct ToolCallRowView: View, Equatable {
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
-                    Button(action: { coordinator.toggleDetailExpanded(rowID) }) {
-                        HStack(spacing: 8) {
-                            Text(data.displayTitle)
-                                .font(.system(size: 13))
-                                .foregroundStyle(data.isError ? .red : .secondary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.tertiary)
-                                .rotationEffect(.degrees(data.isDetailExpanded ? 90 : 0))
+                    Button(
+                        action: { coordinator.toggleDetailExpanded(rowID) },
+                        label: {
+                            HStack(spacing: 8) {
+                                Text(data.displayTitle)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(data.isError ? .red : .secondary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.tertiary)
+                                    .rotationEffect(.degrees(data.isDetailExpanded ? 90 : 0))
+                            }
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
-                    }
+                    )
                     .buttonStyle(.plain)
 
                     if data.filePath != nil {
@@ -472,25 +485,28 @@ struct TurnHeaderView: View, Equatable {
         #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("TurnHeaderView.body")
         #endif
-        Button(action: { coordinator.toggleTurnExpanded(data.turnID) }) {
-            HStack(spacing: 4) {
-                Text("\(data.stepCount) step\(data.stepCount == 1 ? "" : "s")")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+        Button(
+            action: { coordinator.toggleTurnExpanded(data.turnID) },
+            label: {
+                HStack(spacing: 4) {
+                    Text("\(data.stepCount) step\(data.stepCount == 1 ? "" : "s")")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
 
-                if data.isGenerating {
-                    ProgressView()
-                        .controlSize(.mini)
+                    if data.isGenerating {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(data.isExpanded ? 0 : -90))
                 }
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(data.isExpanded ? 0 : -90))
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
+        )
         .buttonStyle(.plain)
     }
 }
@@ -533,3 +549,5 @@ struct AsyncImageAttachmentView: View {
         }
     }
 }
+
+// swiftlint:enable redundant_discardable_let

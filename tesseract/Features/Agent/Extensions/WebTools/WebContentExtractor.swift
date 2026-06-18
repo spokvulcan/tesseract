@@ -131,6 +131,8 @@ nonisolated enum WebContentExtractor: Sendable {
 
     // MARK: - Regex Fallback Pipeline
 
+    // Static literal patterns — compilation cannot fail (matches ToolCallParser precedent).
+    // swiftlint:disable force_try
     /// Extracts <title>...</title> content.
     private static let titleRegex = try! NSRegularExpression(
         pattern: #"<title[^>]*>([\s\S]*?)</title>"#,
@@ -170,6 +172,7 @@ nonisolated enum WebContentExtractor: Sendable {
         pattern: #"[^\S\n]{2,}"#,
         options: []
     )
+    // swiftlint:enable force_try
 
     /// Regex-based fallback when Readability can't extract article content.
     static func extractBasic(html: String, url: URL) -> ExtractedContent {

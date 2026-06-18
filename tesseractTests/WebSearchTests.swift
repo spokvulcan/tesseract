@@ -187,11 +187,11 @@ struct HTMLTextCleaningTests {
     }
 
     @Test func handlesEmptyInput() {
-        #expect(DuckDuckGoClient.cleanHTMLText("") == "")
+        #expect(DuckDuckGoClient.cleanHTMLText("").isEmpty)
     }
 
     @Test func handlesTagsOnlyInput() {
-        #expect(DuckDuckGoClient.cleanHTMLText("<br/><hr/>") == "")
+        #expect(DuckDuckGoClient.cleanHTMLText("<br/><hr/>").isEmpty)
     }
 }
 

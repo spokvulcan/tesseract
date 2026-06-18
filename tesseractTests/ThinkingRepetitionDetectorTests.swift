@@ -50,7 +50,7 @@ struct ThinkingRepetitionDetectorTests {
         #expect(reason == .duplicateLine)
         // safePrefix is the buffer captured BEFORE the first occurrence — empty
         // in this case because nothing preceded the repeated line.
-        #expect(safePrefix == "")
+        #expect(safePrefix.isEmpty)
     }
 
     @Test func safePrefixIsBufferBeforeFirstDuplicateLine() {
@@ -301,7 +301,7 @@ struct ThinkingRepetitionDetectorTests {
         }
         // safePrefix is content before the pattern's first occurrence — which
         // is the very start, so empty.
-        #expect(safe == "")
+        #expect(safe.isEmpty)
     }
 
     // MARK: - Budget signal
@@ -326,7 +326,7 @@ struct ThinkingRepetitionDetectorTests {
             Issue.record("expected budgetExceeded, got \(decision)")
             return
         }
-        #expect(safe == "")
+        #expect(safe.isEmpty)
     }
 
     @Test func charBudgetActiveByDefault() {
@@ -542,7 +542,7 @@ struct ThinkingRepetitionDetectorTests {
             Issue.record("expected budgetExceeded, got \(decision)")
             return
         }
-        #expect(safe == "")
+        #expect(safe.isEmpty)
     }
 
     @Test func budgetSafePrefixSnapsToLastNewline() {

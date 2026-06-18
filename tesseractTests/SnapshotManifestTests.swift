@@ -694,8 +694,7 @@ struct SnapshotManifestTests {
         // decode in a try/catch and rely on the error message to
         // distinguish "corrupt JSON" from "old schema", which is
         // fragile.
-        let oldJSON = #"{"schemaVersion":0,"partitions":{},"snapshots":{}}"#
-            .data(using: .utf8)!
+        let oldJSON = Data(#"{"schemaVersion":0,"partitions":{},"snapshots":{}}"#.utf8)
         let decoded = try JSONDecoder().decode(SnapshotManifest.self, from: oldJSON)
         #expect(decoded.schemaVersion == 0)
         #expect(!decoded.isSchemaCompatible)
@@ -709,8 +708,7 @@ struct SnapshotManifestTests {
         // still decode cleanly so warm start can detect and wipe it,
         // rather than throwing an opaque decode error that the
         // warm-start path has to pattern-match.
-        let futureJSON = #"{"schemaVersion":999,"partitions":{},"snapshots":{}}"#
-            .data(using: .utf8)!
+        let futureJSON = Data(#"{"schemaVersion":999,"partitions":{},"snapshots":{}}"#.utf8)
         let decoded = try JSONDecoder().decode(SnapshotManifest.self, from: futureJSON)
         #expect(decoded.schemaVersion == 999)
         #expect(!decoded.isSchemaCompatible)
@@ -725,8 +723,8 @@ struct SnapshotManifestTests {
         // Warm start distinguishes these two cases to tell the
         // operator whether the manifest was written by a different
         // version or whether something trampled the file.
-        let brokenJSON = #"{"schemaVersion":"not-an-int","partitions":{},"snapshots":{}}"#
-            .data(using: .utf8)!
+        let brokenJSON = Data(
+            #"{"schemaVersion":"not-an-int","partitions":{},"snapshots":{}}"#.utf8)
         #expect(throws: DecodingError.self) {
             try JSONDecoder().decode(SnapshotManifest.self, from: brokenJSON)
         }

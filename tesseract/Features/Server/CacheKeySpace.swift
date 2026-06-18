@@ -33,11 +33,6 @@ nonisolated struct CacheKeySpace: Sendable {
         /// The image's M-RoPE position span — how many position units its run
         /// occupies (vs `runLength` token/KV slots). See `positionSpan(...)`.
         let positionSpan: Int
-
-        init(digest: ImageDigest, positionSpan: Int) {
-            self.digest = digest
-            self.positionSpan = positionSpan
-        }
     }
 
     struct ImageTableEntry: Hashable, Sendable {

@@ -1,6 +1,13 @@
 import SwiftUI
 import os
 
+// In the `var body` ViewBuilder below, `let _ = signposter.emitEvent(...)` is a
+// DEBUG-only profiling idiom: in a result builder `let _ =` is a declaration
+// (skipped), whereas a bare `_ =` is a `Void` expression the builder tries to
+// render ("type '()' cannot conform to 'View'"). The discardable `let` is
+// required here, not redundant.
+// swiftlint:disable redundant_discardable_let
+
 /// Routes a `ChatRow` to the appropriate leaf view with correct alignment.
 struct ChatRowView: View {
     let row: ChatRow
@@ -87,3 +94,5 @@ struct ChatRowView: View {
         }
     }
 }
+
+// swiftlint:enable redundant_discardable_let

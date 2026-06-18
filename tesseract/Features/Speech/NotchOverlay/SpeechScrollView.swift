@@ -25,7 +25,7 @@ struct SpeechScrollView: View {
     let highlightedCharCount: Int
     var font: NSFont = .systemFont(ofSize: 20, weight: .semibold)
     var highlightColor: Color = .yellow
-    var onWordTap: ((Int) -> Void)? = nil
+    var onWordTap: ((Int) -> Void)?
 
     @State private var scrollOffset: CGFloat = 0
     @State private var manualOffset: CGFloat = 0
@@ -137,7 +137,7 @@ struct WordFlowLayout: View {
     let font: NSFont
     var highlightColor: Color = .yellow
     let containerWidth: CGFloat
-    var onWordTap: ((Int) -> Void)? = nil
+    var onWordTap: ((Int) -> Void)?
 
     private func nextWordIndex() -> Int {
         for (index, word) in timeline.words.enumerated() where !word.isAnnotation {

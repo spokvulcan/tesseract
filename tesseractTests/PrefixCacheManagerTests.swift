@@ -1,3 +1,5 @@
+// Large test file — splitting deferred (evolving MVP, see CLAUDE.md).
+// swiftlint:disable file_length
 import Foundation
 import MLX
 import MLXLMCommon
@@ -7,6 +9,8 @@ import Testing
 
 /// Task 1.5 tests: PrefixCacheManager — public API for radix-tree prefix cache.
 @MainActor
+// Large test suite — splitting deferred (evolving MVP, see CLAUDE.md).
+// swiftlint:disable:next type_body_length
 struct PrefixCacheManagerTests {
 
     // MARK: - Helpers

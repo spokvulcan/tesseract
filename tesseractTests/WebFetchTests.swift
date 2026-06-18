@@ -83,14 +83,14 @@ struct WebContentExtractorTests {
 
     @Test func handlesEmptyHTML() {
         let result = WebContentExtractor.extractBasic(html: "", url: Self.sampleURL)
-        #expect(result.title == "")
-        #expect(result.content == "")
+        #expect(result.title.isEmpty)
+        #expect(result.content.isEmpty)
     }
 
     @Test func handlesHTMLWithNoTitle() {
         let html = "<html><body><p>Just some text.</p></body></html>"
         let result = WebContentExtractor.extractBasic(html: html, url: Self.sampleURL)
-        #expect(result.title == "")
+        #expect(result.title.isEmpty)
         #expect(result.content.contains("Just some text"))
     }
 
@@ -153,7 +153,7 @@ struct TruncationTests {
 
     @Test func handlesEmptyText() {
         let result = truncateAtBoundary("", maxChars: 100)
-        #expect(result == "")
+        #expect(result.isEmpty)
     }
 }
 

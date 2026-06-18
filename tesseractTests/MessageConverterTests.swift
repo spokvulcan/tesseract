@@ -9,6 +9,8 @@ import Testing
 @testable import Tesseract_Agent
 
 @MainActor
+// Large test suite — splitting deferred (evolving MVP, see CLAUDE.md).
+// swiftlint:disable:next type_body_length
 struct MessageConverterTests {
 
     // MARK: - Message Conversion
@@ -185,15 +187,15 @@ struct MessageConverterTests {
 
         #expect(converted.count == 3)
         if case .user(let content, _) = converted[0] {
-            #expect(content == "")
+            #expect(content.isEmpty)
         }
         if case .assistant(let content, let reasoning, let toolCalls) = converted[1] {
-            #expect(content == "")
+            #expect(content.isEmpty)
             #expect(reasoning == nil)
             #expect(toolCalls == nil)
         }
         if case .toolResult(_, let content) = converted[2] {
-            #expect(content == "")
+            #expect(content.isEmpty)
         }
     }
 
@@ -364,7 +366,7 @@ struct MessageConverterTests {
 
         let assistant = try #require(conversation.promptMessages.last)
         #expect(assistant["role"] as? String == "assistant")
-        #expect(assistant["content"] as? String == "")
+        #expect((assistant["content"] as? String)?.isEmpty == true)
         #expect(assistant["reasoning_content"] as? String == "Need to inspect the file first.")
 
         let toolCalls = try #require(assistant["tool_calls"] as? [[String: any Sendable]])

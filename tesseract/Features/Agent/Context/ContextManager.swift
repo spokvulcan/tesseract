@@ -133,10 +133,8 @@ actor ContextManager {
         // Walk backward from candidateIndex to find a valid cut point.
         // This keeps at least keepRecentTokens (may keep more to avoid
         // splitting tool-call/tool-result pairs).
-        for i in stride(from: candidateIndex, through: 1, by: -1) {
-            if !isToolResult(messages[i]) {
-                return i
-            }
+        for i in stride(from: candidateIndex, through: 1, by: -1) where !isToolResult(messages[i]) {
+            return i
         }
 
         // No valid cut point found — don't compact
@@ -246,7 +244,7 @@ nonisolated func makeCompactionTransform(
 ) -> ContextTransformConfig {
     ContextTransformConfig(
         reason: .compaction,
-        transform: { messages, signal in
+        transform: { messages, _ in
             let tokens = TokenEstimator.estimateTotal(messages)
             guard
                 await contextManager.shouldCompact(

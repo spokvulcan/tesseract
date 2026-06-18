@@ -456,8 +456,7 @@ struct ServerInferenceServiceTests {
 
         // Mirrors the provider that `AgentFactory.makeAgent` wires up: each
         // call re-reads the live settings rather than freezing them at init.
-        let provider: @MainActor @Sendable () -> AgentGenerateParameters = {
-            [settings] in
+        let provider: @MainActor @Sendable () -> AgentGenerateParameters = { [settings] in
             AgentGenerateParameters.forModel(settings.selectedAgentModelID)
         }
         let generate = makeServerInferenceGenerateClosure(

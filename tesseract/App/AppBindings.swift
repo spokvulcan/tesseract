@@ -205,8 +205,10 @@ final class AppBindings {
 
     // MARK: - Subscriptions
 
-    /// Every subscription relies on `Observations` emitting the current value at
-    /// subscription time to apply each rule's initial seed.
+    // Every subscription relies on `Observations` emitting the current value at
+    // subscription time to apply each rule's initial seed.
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable:next cyclomatic_complexity
     private func installSubscriptions() {
         // One rule per status emission, two duties in order: heal the
         // dictation model selection onto a model that exists on disk, then
@@ -327,10 +329,9 @@ final class AppBindings {
         observationTasks.append(
             Task { [weak self] in
                 guard let self else { return }
-                for await hotkey in Observations({ self.settings.hotkey }) {
-                    if hotkey != self.inputs.currentDictationHotkey() {
-                        self.effects.updateDictationHotkey(hotkey)
-                    }
+                for await hotkey in Observations({ self.settings.hotkey })
+                where hotkey != self.inputs.currentDictationHotkey() {
+                    self.effects.updateDictationHotkey(hotkey)
                 }
             })
 

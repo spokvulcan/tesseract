@@ -29,8 +29,7 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
     func loadMostRecent() {
         currentConversation =
             stored.values
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .first ?? AgentConversation()
+            .min { $0.updatedAt > $1.updatedAt } ?? AgentConversation()
     }
 
     @discardableResult

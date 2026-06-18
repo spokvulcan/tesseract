@@ -93,7 +93,7 @@ struct ChatTranscriptControllerTests {
         guard case .user(let userRow) = rows.first?.kind else {
             Issue.record("row 0 not a user row: \(String(describing: rows.first?.kind))"); return
         }
-        #expect(userRow.content == "")
+        #expect(userRow.content.isEmpty)
         #expect(userRow.images.count == 1)
         #expect(userRow.images.first?.id == image.id)
     }
@@ -264,7 +264,7 @@ struct ChatTranscriptControllerTests {
         #expect(controller.rows.first?.id == user.id.uuidString)  // stable prefix
         guard case .streamingText(let streamed) = controller.rows.last?.kind else {
             Issue.record(
-                "last row not streamingText: \(String(describing: controller.rows.last?.kind))");
+                "last row not streamingText: \(String(describing: controller.rows.last?.kind))")
             return
         }
         #expect(streamed.content == "partial answer")

@@ -18,6 +18,8 @@ import MLXLMCommon
 
 @testable import Tesseract_Agent
 
+// Large test suite — splitting deferred (evolving MVP, see CLAUDE.md).
+// swiftlint:disable:next type_body_length
 struct SSDSnapshotStoreTests {
 
     // MARK: - Scratch config + payload helpers
@@ -379,7 +381,7 @@ struct SSDSnapshotStoreTests {
     }
 
     @Test
-    func writerWritesFileAtomicallyViaTempRename() async {
+    func writerWritesFileAtomicallyViaTempRename() async throws {
         let (config, root) = makeConfig()
         defer { cleanup(root) }
         let tracker = CallbackTracker()
@@ -413,7 +415,7 @@ struct SSDSnapshotStoreTests {
 
         // File is non-empty and starts with our 8-byte header
         // length prefix — pin the placeholder container format.
-        let data = try! Data(contentsOf: finalURL)
+        let data = try Data(contentsOf: finalURL)
         #expect(data.count > 8)
         let headerLength: UInt64 = data.withUnsafeBytes { buffer in
             buffer.load(fromByteOffset: 0, as: UInt64.self).littleEndian
@@ -554,7 +556,7 @@ struct SSDSnapshotStoreTests {
     // MARK: - registerPartition
 
     @Test
-    func registerPartitionUpsertsIntoManifest() async {
+    func registerPartitionUpsertsIntoManifest() async throws {
         let (config, root) = makeConfig()
         defer { cleanup(root) }
         let store = SSDSnapshotStore(config: config, manifestDebounce: .milliseconds(20))
@@ -569,7 +571,7 @@ struct SSDSnapshotStoreTests {
         }
         #expect(exists)
 
-        var decoded = try! JSONDecoder().decode(
+        var decoded = try JSONDecoder().decode(
             SnapshotManifest.self,
             from: Data(contentsOf: manifestURL)
         )
@@ -583,7 +585,7 @@ struct SSDSnapshotStoreTests {
         store.registerPartition(rotated, digest: "abcd1234")
         store.flushManifestForTesting()
 
-        decoded = try! JSONDecoder().decode(
+        decoded = try JSONDecoder().decode(
             SnapshotManifest.self,
             from: Data(contentsOf: manifestURL)
         )
@@ -594,7 +596,7 @@ struct SSDSnapshotStoreTests {
     // MARK: - Manifest persistence
 
     @Test
-    func manifestIsPersistedAfterCommit() async {
+    func manifestIsPersistedAfterCommit() async throws {
         let (config, root) = makeConfig()
         defer { cleanup(root) }
         let tracker = CallbackTracker()
@@ -618,8 +620,8 @@ struct SSDSnapshotStoreTests {
         }
         #expect(exists)
 
-        let data = try! Data(contentsOf: manifestURL)
-        let decoded = try! JSONDecoder().decode(SnapshotManifest.self, from: data)
+        let data = try Data(contentsOf: manifestURL)
+        let decoded = try JSONDecoder().decode(SnapshotManifest.self, from: data)
         #expect(decoded.isSchemaCompatible)
         #expect(decoded.snapshots[descriptor.snapshotID]?.snapshotID == descriptor.snapshotID)
         // Load-bearing invariant: every snapshot's partition digest

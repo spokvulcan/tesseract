@@ -47,21 +47,19 @@ final class HeadlessRenderer {
         defer { timeoutTask.cancel() }
 
         do {
-            for try await event in navigationEvents {
-                if event == .finished {
-                    // Allow time for SPA framework hydration (React, Vue, Next.js)
-                    try await Task.sleep(for: .milliseconds(1500))
+            for try await event in navigationEvents where event == .finished {
+                // Allow time for SPA framework hydration (React, Vue, Next.js)
+                try await Task.sleep(for: .milliseconds(1500))
 
-                    // Extract fully rendered DOM
-                    guard
-                        let html = try await page.callJavaScript(
-                            "document.documentElement.outerHTML"
-                        ) as? String, !html.isEmpty
-                    else {
-                        throw HeadlessRendererError.emptyResult
-                    }
-                    return html
+                // Extract fully rendered DOM
+                guard
+                    let html = try await page.callJavaScript(
+                        "document.documentElement.outerHTML"
+                    ) as? String, !html.isEmpty
+                else {
+                    throw HeadlessRendererError.emptyResult
                 }
+                return html
             }
             // Navigation sequence ended without reaching .finished
             throw HeadlessRendererError.emptyResult

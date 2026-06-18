@@ -799,6 +799,8 @@ final class TokenRadixTree {
         }
     }
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable:next function_parameter_count
     private func collectTelemetryNode(
         _ node: RadixTreeNode,
         partitionDigest: String,
@@ -816,10 +818,15 @@ final class TokenRadixTree {
         let state = node.state
         let snapshot = state.body
         let checkpointType = state.checkpointType?.wireString
+        // `.map` yields `EvictionScore??` (telemetryEvictionScore is itself
+        // optional); the `?? nil` flattens the double optional and is
+        // load-bearing — not redundant (SwiftLint's heuristic misreads it).
+        // swiftlint:disable redundant_nil_coalescing
         let scores =
             snapshot.map { _ in
                 telemetryEvictionScore(for: node, now: now, config: config)
             } ?? nil
+        // swiftlint:enable redundant_nil_coalescing
 
         nodes.append(
             PromptCacheTreeNodeSnapshot(

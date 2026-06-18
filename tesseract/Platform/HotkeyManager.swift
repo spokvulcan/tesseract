@@ -120,7 +120,7 @@ final class HotkeyManager: ObservableObject {
             place: .headInsertEventTap,
             options: .defaultTap,  // Enables suppression (return nil to suppress)
             eventsOfInterest: CGEventMask(eventMask),
-            callback: { proxy, type, event, refcon -> Unmanaged<CGEvent>? in
+            callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
                 guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
 
                 let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()

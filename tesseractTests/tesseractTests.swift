@@ -5,6 +5,9 @@
 //  Created by Bohdan Ivanchenko on 31.01.2026.
 //
 
+// Large test file — splitting deferred (evolving MVP, see CLAUDE.md).
+// swiftlint:disable file_length
+
 import Foundation
 import Testing
 import MLXLMCommon
@@ -1210,6 +1213,8 @@ private func lsToolArgs(path: String? = nil, limit: Int? = nil) -> [String: JSON
 
 private func readUTF8PreservingBytes(from url: URL) throws -> String {
     let data = try Data(contentsOf: url)
+    // Lossy UTF-8 decode is intentional in this test fake.
+    // swiftlint:disable:next optional_data_string_conversion
     return String(decoding: data, as: UTF8.self)
 }
 

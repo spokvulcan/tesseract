@@ -1,6 +1,8 @@
 import Foundation
 import MLXLMCommon
 
+// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+// swiftlint:disable:next type_body_length
 nonisolated enum PrefixCacheDiagnostics {
     struct Context: Sendable {
         let requestID: UUID

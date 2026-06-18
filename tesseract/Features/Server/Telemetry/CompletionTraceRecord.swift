@@ -161,6 +161,8 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
     /// not change and the pre-#94 incident corpus still replays.
     let rewind: RewindTelemetry?
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable function_parameter_count
     /// Assemble a record for one finished cache-aware completion, or
     /// `nil` for requests that must produce none: any **Unkeyed
     /// Completion** (zero cache participation — no replay signal).
@@ -189,6 +191,7 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
         deviceEstimates: MeasuredSecondsEstimates?,
         rewind: RewindTelemetry? = nil
     ) -> CompletionTraceRecord? {
+        // swiftlint:enable function_parameter_count
         guard unkeyedReason == nil else { return nil }
         return CompletionTraceRecord(
             timestamp: timestamp,

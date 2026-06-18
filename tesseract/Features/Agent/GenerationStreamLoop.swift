@@ -124,6 +124,8 @@ nonisolated struct GenerationStreamLoop {
         }
     }
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable:next function_body_length
     func run(continuation: ContinuationStarter?, sink: Sink) async throws -> Outcome {
         var parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
         let safeguard = ThinkingSafeguardObserver(config: safeguardConfig)
@@ -220,7 +222,7 @@ nonisolated struct GenerationStreamLoop {
             cancelled = true
         } else {
             streamLoop: while true {
-                var intervention: Intervention? = nil
+                var intervention: Intervention?
 
                 for await item in currentStream {
                     if stopRequested() {

@@ -271,7 +271,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         let textConfig = (root["text_config"] as? [String: Any]) ?? root
         guard let attentionHeads = textConfig["num_attention_heads"] as? Int,
             attentionHeads > 0,
-            textConfig["full_attention_interval"] as? Int != nil
+            textConfig["full_attention_interval"] is Int
         else { return nil }
 
         return FullAttentionScratchProfile(

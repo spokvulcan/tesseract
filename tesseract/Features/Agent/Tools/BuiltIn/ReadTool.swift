@@ -78,6 +78,8 @@ nonisolated func createReadTool(sandbox: PathSandbox, readTracker: FileReadTrack
                 )
             }
 
+            // Lossy UTF-8 decode is intentional — a stray invalid byte must not nil the result.
+            // swiftlint:disable:next optional_data_string_conversion
             let content = String(decoding: data, as: UTF8.self)
             return try ReadToolHelper.formatOutput(
                 content: content, offset: offset, limit: limit,

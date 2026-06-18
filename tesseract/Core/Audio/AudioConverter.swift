@@ -107,6 +107,7 @@ enum AudioConverter {
         // Find first non-silent sample
         var startIndex = 0
         for (index, sample) in samples.enumerated() {
+            // swiftlint:disable:next for_where
             if abs(sample) > threshold {
                 startIndex = max(0, index - minSamples)
                 break
@@ -116,6 +117,7 @@ enum AudioConverter {
         // Find last non-silent sample
         var endIndex = samples.count - 1
         for index in stride(from: samples.count - 1, through: 0, by: -1) {
+            // swiftlint:disable:next for_where
             if abs(samples[index]) > threshold {
                 endIndex = min(samples.count - 1, index + minSamples)
                 break

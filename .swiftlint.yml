@@ -32,6 +32,10 @@ disabled_rules:
   - statement_position
   - colon
   - comma
+  # swift-format wraps long `call(args) { params in` signatures onto the next
+  # line, which this rule then flags — an unwinnable fight. Layout is the
+  # formatter's job, so it owns this too.
+  - closure_parameter_position
   # Intentional in this codebase.
   - todo # TODO/FIXME are tracked deliberately, not lint debt.
 

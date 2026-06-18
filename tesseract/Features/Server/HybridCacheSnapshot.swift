@@ -26,18 +26,6 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         /// state setter (inherited from KVCacheSimple) only sets offset = keys.dim(2),
         /// and its metaState setter restores chunkSize/startPosition but not offset.
         let offset: Int
-
-        init(
-            className: String,
-            state: [MLXArray],
-            metaState: [String],
-            offset: Int
-        ) {
-            self.className = className
-            self.state = state
-            self.metaState = metaState
-            self.offset = offset
-        }
     }
 
     let layers: [LayerState]
@@ -46,21 +34,9 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     let memoryBytes: Int
     let createdAt: ContinuousClock.Instant
 
-    /// Memberwise initializer. Task 4.1.9 lazy hydration reads raw payload
-    /// bytes and rebuilds a snapshot in `SSDSnapshotStore.loadSync`.
-    init(
-        tokenOffset: Int,
-        layers: [LayerState],
-        checkpointType: CheckpointType,
-        memoryBytes: Int,
-        createdAt: ContinuousClock.Instant
-    ) {
-        self.tokenOffset = tokenOffset
-        self.layers = layers
-        self.checkpointType = checkpointType
-        self.memoryBytes = memoryBytes
-        self.createdAt = createdAt
-    }
+    // Relies on the compiler-synthesized memberwise initializer. Task 4.1.9 lazy
+    // hydration reads raw payload bytes and rebuilds a snapshot in
+    // `SSDSnapshotStore.loadSync`.
 
     enum CheckpointType: Comparable, Sendable {
         case system  // stable-prefix reuse (system + tools)

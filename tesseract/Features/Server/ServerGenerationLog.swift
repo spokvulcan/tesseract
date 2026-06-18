@@ -34,7 +34,7 @@ final class ServerGenerationLog {
 
     private(set) var traces: [RequestTrace] = []
     private(set) var streamingVersion: Int = 0
-    var selectedTraceID: UUID? = nil
+    var selectedTraceID: UUID?
 
     // MARK: - Private
 

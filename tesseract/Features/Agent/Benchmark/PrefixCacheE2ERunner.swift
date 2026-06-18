@@ -2,6 +2,9 @@ import Foundation
 import MLXLMCommon
 import os
 
+// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+// swiftlint:disable file_length
+
 /// End-to-end verification of the radix-tree prefix cache against a loaded model.
 ///
 /// Implements **Task 1.8 HybridPrefixCacheE2E** from the Marconi Phase 1 plan.
@@ -21,6 +24,8 @@ import os
 /// would almost immediately produce a different sampled token within the
 /// first few steps.
 @MainActor
+// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+// swiftlint:disable:next type_body_length
 final class PrefixCacheE2ERunner {
 
     private let runner: BenchmarkRunner
@@ -33,6 +38,8 @@ final class PrefixCacheE2ERunner {
 
     // MARK: - Entry point
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable:next function_body_length
     func run() async throws {
         setupLogging()
         log("PrefixCacheE2E starting — model=\(runner.resolvedModelName)")
@@ -597,6 +604,8 @@ final class PrefixCacheE2ERunner {
         let requestY3: RequestResult
     }
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable function_body_length
     /// Verifies the direct-leaf path for a `tool_calls` turn and the
     /// canonical user-leaf path after the loop resolves.
     private func runToolLoopScenario(
@@ -908,6 +917,7 @@ final class PrefixCacheE2ERunner {
         let stats = await engine.llmActor.prefixCacheStats()
         return stats?.snapshotsByType[.branchPoint] ?? 0
     }
+    // swiftlint:enable function_body_length
 
     // MARK: - Step X: SSD restart scenario
 
@@ -917,6 +927,8 @@ final class PrefixCacheE2ERunner {
         let requestX3: RequestResult
     }
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable function_body_length
     /// Validate that a committed SSD snapshot survives an engine
     /// unload/reload and serves subsequent requests as warm hits.
     /// Lives on a separate `AgentEngine` so Steps 1–4's
@@ -1146,9 +1158,12 @@ final class PrefixCacheE2ERunner {
             throw error
         }
     }
+    // swiftlint:enable function_body_length
 
     // MARK: - Step Z: Image scenario (PRD #72)
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable function_body_length
     /// Image-aware prefix caching against the loaded model: the image-add
     /// turn serves cold by design, the follow-up turn restores at/past the
     /// image prefix with a seeded Position Anchor (warm output byte-equal to
@@ -1482,6 +1497,7 @@ final class PrefixCacheE2ERunner {
                 """
         }
     }
+    // swiftlint:enable function_body_length
 
     // MARK: - Fixtures
 
@@ -1608,6 +1624,8 @@ final class PrefixCacheE2ERunner {
             .appendingPathComponent("e2e_\(formatter.string(from: Date())).json")
     }
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable:next function_parameter_count
     private func writeReport(
         checks: [CheckResult],
         requestA: RequestResult,

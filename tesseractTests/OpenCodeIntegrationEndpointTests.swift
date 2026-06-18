@@ -14,6 +14,8 @@ struct OpenCodeIntegrationEndpointTests {
 
         #expect(response.statusCode == 200)
         #expect(header(response, "Content-Type") == "text/x-shellscript; charset=utf-8")
+        // Lossy UTF-8 decode is intentional here.
+        // swiftlint:disable:next optional_data_string_conversion
         let body = String(decoding: response.body ?? Data(), as: UTF8.self)
         #expect(body.hasPrefix("#!/bin/sh"))
     }

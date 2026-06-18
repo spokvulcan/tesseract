@@ -34,6 +34,8 @@ import os
 /// A diverging `…Matches` check or a matching `…Diverges` check falsifies the
 /// analysis and reshapes PRD #72.
 @MainActor
+// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+// swiftlint:disable:next type_body_length
 final class ParoQuantVLMSmokeRunner {
 
     private let runner: BenchmarkRunner

@@ -42,7 +42,7 @@ struct ServerGenerationLogToolCallStreamingTests {
         let spans = log.traces[0].spans
         #expect(spans.count == 1)
         if case .toolCallBuilding(_, let name, let args) = spans[0] {
-            #expect(name == "")
+            #expect(name.isEmpty)
             #expect(args == "\n{\"name\":")
         } else {
             Issue.record("expected `.toolCallBuilding` span, got \(spans[0])")

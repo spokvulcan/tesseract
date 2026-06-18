@@ -31,6 +31,8 @@ nonisolated enum OpenCodeConfigMerge {
             // OpenCode parses every config file as JSONC regardless of
             // extension — accept the same, or a legal commented config would
             // be misclassified as corrupt and replaced.
+            // Lossy UTF-8 decode is intentional — a stray invalid byte must not nil the result.
+            // swiftlint:disable:next optional_data_string_conversion
             let sanitized = JSONCSanitizer.sanitize(String(decoding: data, as: UTF8.self))
             if let parsed = (try? JSONSerialization.jsonObject(with: Data(sanitized.utf8)))
                 as? [String: Any]

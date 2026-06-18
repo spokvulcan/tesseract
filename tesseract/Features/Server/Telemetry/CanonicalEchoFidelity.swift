@@ -238,11 +238,6 @@ extension CanonicalEchoFidelity {
     struct RecordedRequest: Sendable {
         let messages: [OpenAI.ChatMessage]
         let tools: [OpenAI.ToolDefinition]?
-
-        init(messages: [OpenAI.ChatMessage], tools: [OpenAI.ToolDefinition]?) {
-            self.messages = messages
-            self.tools = tools
-        }
     }
 
     struct SessionReport: Sendable {

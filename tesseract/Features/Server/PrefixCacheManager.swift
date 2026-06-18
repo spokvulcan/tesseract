@@ -1,6 +1,9 @@
 import Foundation
 import MLXLMCommon
 
+// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+// swiftlint:disable file_length
+
 /// Partition key for isolating radix trees by runtime configuration.
 ///
 /// Tool/system digests are intentionally NOT part of the partition key:
@@ -56,6 +59,8 @@ nonisolated struct CachePartitionKey: Hashable, Sendable, Comparable {
     }
 }
 
+// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+// swiftlint:disable type_body_length
 @MainActor
 final class PrefixCacheManager {
     private enum PendingBootstrapBoundary {
@@ -1693,3 +1698,4 @@ final class PrefixCacheManager {
             }
     }
 }
+// swiftlint:enable type_body_length

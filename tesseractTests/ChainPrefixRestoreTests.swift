@@ -118,6 +118,8 @@ struct ChainPrefixRestoreTreeTests {
 @MainActor
 struct ChainPrefixRestoreRouterTests {
 
+    // Test-local tuple; named struct not worth it (evolving MVP, see CLAUDE.md).
+    // swiftlint:disable:next large_tuple
     private typealias Fixture = (
         root: URL,
         store: TieredSnapshotStore,

@@ -620,7 +620,7 @@ final class AgentCoordinator {
             )
             persistCurrentConversation()
 
-        case .agentEnd(_):
+        case .agentEnd:
             // Terminal transition: flip the busy flag so the view passthroughs
             // settle. `onAgentEnded` rebuilds as not-generating on its own, so the
             // committed transcript no longer depends on `finish()` landing first.

@@ -503,7 +503,7 @@ private struct ImageThumbnailView: View {
     let attachment: ImageAttachment
     let onRemove: () -> Void
     /// Click the thumbnail (not the ✕) to open it full size in Quick Look (#116).
-    var onTap: (() -> Void)? = nil
+    var onTap: (() -> Void)?
 
     var body: some View {
         ZStack(alignment: .topTrailing) {

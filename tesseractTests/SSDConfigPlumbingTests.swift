@@ -36,12 +36,12 @@ struct SSDConfigPlumbingTests {
     }
 
     @Test
-    func factoryReturnsPopulatedConfigWhenEnabled() {
+    func factoryReturnsPopulatedConfigWhenEnabled() throws {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
 
         let config = settings.makeSSDPrefixCacheConfig()
-        let unwrapped = try! #require(config)
+        let unwrapped = try #require(config)
         #expect(unwrapped.enabled == true)
         #expect(unwrapped.budgetBytes == settings.prefixCacheSSDBudgetBytes)
         #expect(unwrapped.rootURL.path.hasSuffix("prefix-cache"))
@@ -58,11 +58,11 @@ struct SSDConfigPlumbingTests {
     }
 
     @Test
-    func maxPendingBytesIsBoundedBy4GiBAndPhysicalMemoryOver16() {
+    func maxPendingBytesIsBoundedBy4GiBAndPhysicalMemoryOver16() throws {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
 
-        let config = try! #require(settings.makeSSDPrefixCacheConfig())
+        let config = try #require(settings.makeSSDPrefixCacheConfig())
         let physicalMemory = Int(clamping: ProcessInfo.processInfo.physicalMemory)
         let expected = min(4 * 1024 * 1024 * 1024, physicalMemory / 16)
         #expect(config.maxPendingBytes == expected)
@@ -74,7 +74,7 @@ struct SSDConfigPlumbingTests {
     }
 
     @Test
-    func directoryOverrideReplacesDefaultRootURL() {
+    func directoryOverrideReplacesDefaultRootURL() throws {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         let customPath = FileManager.default.temporaryDirectory
@@ -82,19 +82,19 @@ struct SSDConfigPlumbingTests {
             .path
         settings.prefixCacheSSDDirectoryOverride = customPath
 
-        let config = try! #require(settings.makeSSDPrefixCacheConfig())
+        let config = try #require(settings.makeSSDPrefixCacheConfig())
         #expect(config.rootURL.path == customPath)
     }
 
     @Test
-    func directoryOverrideAcceptsFileURLStringForm() {
+    func directoryOverrideAcceptsFileURLStringForm() throws {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         let customURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ssd-override-urlform-\(UUID().uuidString)", isDirectory: true)
         settings.prefixCacheSSDDirectoryOverride = customURL.absoluteString
 
-        let config = try! #require(settings.makeSSDPrefixCacheConfig())
+        let config = try #require(settings.makeSSDPrefixCacheConfig())
         #expect(config.rootURL.path == customURL.path)
     }
 
@@ -133,13 +133,13 @@ struct SSDConfigPlumbingTests {
     }
 
     @Test
-    func resolveReturnsSettingsDerivedConfig() {
+    func resolveReturnsSettingsDerivedConfig() throws {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
         settings.prefixCacheSSDBudgetBytes = 8 * 1024 * 1024 * 1024
 
         let engine = AgentEngine(settingsManager: settings)
-        let resolved = try! #require(engine.resolveSSDConfig())
+        let resolved = try #require(engine.resolveSSDConfig())
         #expect(resolved.enabled == true)
         #expect(resolved.budgetBytes == 8 * 1024 * 1024 * 1024)
     }
@@ -168,7 +168,7 @@ struct SSDConfigPlumbingTests {
     }
 
     @Test
-    func resolvePrefersExplicitOverSettings() {
+    func resolvePrefersExplicitOverSettings() throws {
         // When both sources are provided, explicit wins — documented
         // precedence rule. Any future refactor that reverses this must
         // trip this test.
@@ -185,13 +185,13 @@ struct SSDConfigPlumbingTests {
         )
 
         let engine = AgentEngine(settingsManager: settings, ssdConfig: explicit)
-        let resolved = try! #require(engine.resolveSSDConfig())
+        let resolved = try #require(engine.resolveSSDConfig())
         #expect(resolved.budgetBytes == explicit.budgetBytes)
         #expect(resolved == explicit)
     }
 
     @Test
-    func resolveReflectsLiveSettingsChangesBetweenCalls() {
+    func resolveReflectsLiveSettingsChangesBetweenCalls() throws {
         // The "snapshot refresh across loads" property: the resolver
         // reaches back into SettingsManager on every call, so two
         // consecutive calls with a mutation between them produce two
@@ -202,10 +202,10 @@ struct SSDConfigPlumbingTests {
         let engine = AgentEngine(settingsManager: settings)
 
         settings.prefixCacheSSDBudgetBytes = 5 * 1024 * 1024 * 1024
-        let first = try! #require(engine.resolveSSDConfig())
+        let first = try #require(engine.resolveSSDConfig())
 
         settings.prefixCacheSSDBudgetBytes = 15 * 1024 * 1024 * 1024
-        let second = try! #require(engine.resolveSSDConfig())
+        let second = try #require(engine.resolveSSDConfig())
 
         #expect(first.budgetBytes == 5 * 1024 * 1024 * 1024)
         #expect(second.budgetBytes == 15 * 1024 * 1024 * 1024)

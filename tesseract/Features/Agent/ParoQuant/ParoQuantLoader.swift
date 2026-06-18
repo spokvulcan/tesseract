@@ -213,6 +213,8 @@ nonisolated private func rotationModuleSpec(
     weights: [String: MLXArray],
     bits: Int,
     groupSize: Int
+        // Evolving MVP mid-refactor (see CLAUDE.md); named struct not worth it here.
+        // swiftlint:disable:next large_tuple
 ) throws -> (inputDims: Int, outputDims: Int, hasBias: Bool, krot: Int) {
     guard let original = leafModules[prefix] else {
         throw ParoQuantError.rotationLayerNotFound(prefix)

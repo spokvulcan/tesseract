@@ -391,7 +391,7 @@ struct DictationCoordinatorTests {
         // The stale success must commit nothing.
         #expect(store.entries.isEmpty)
         #expect(injector.injected.isEmpty)
-        #expect(coordinator.lastTranscription == "")
+        #expect(coordinator.lastTranscription.isEmpty)
         #expect(coordinator.state == .idle)
     }
 

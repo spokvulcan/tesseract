@@ -187,6 +187,8 @@ private nonisolated enum LsToolHelper: Sendable {
         return lowerCompare == .orderedAscending
     }
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); named struct not worth it here.
+    // swiftlint:disable:next large_tuple
     static func truncateHead(_ content: String, maxBytes: Int) -> (
         content: String,
         truncated: Bool,

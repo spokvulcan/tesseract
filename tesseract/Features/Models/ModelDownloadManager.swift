@@ -126,10 +126,8 @@ final class ModelDownloadManager: ObservableObject {
             )
         else { return false }
 
-        for case let fileURL as URL in enumerator {
-            if fileURL.pathExtension == ext {
-                return true
-            }
+        for case let fileURL as URL in enumerator where fileURL.pathExtension == ext {
+            return true
         }
         return false
     }

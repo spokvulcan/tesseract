@@ -5,6 +5,10 @@
 
 import Foundation
 
+// snake_case names below mirror the OpenAI JSON wire format (decoded via
+// synthesized CodingKeys); renaming would need CodingKeys on every wire struct.
+// swiftlint:disable identifier_name
+
 /// Namespace for OpenAI-compatible API types.
 /// Avoids name collisions with internal types (e.g. `ToolCall` from MLXLMCommon).
 nonisolated enum OpenAI {
@@ -375,3 +379,5 @@ nonisolated enum OpenAI {
         var state: String?
     }
 }
+
+// swiftlint:enable identifier_name

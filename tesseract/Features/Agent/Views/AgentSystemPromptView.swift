@@ -15,29 +15,32 @@ struct AgentSystemPromptView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button(action: {
-                isExpanded.toggle()
-            }) {
-                HStack(spacing: 4) {
-                    Text("System Prompt")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+            Button(
+                action: {
+                    isExpanded.toggle()
+                },
+                label: {
+                    HStack(spacing: 4) {
+                        Text("System Prompt")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
 
-                    if let count = coordinator.systemPromptInspector.systemPromptTokenCount {
-                        Text("(\(count) tokens)")
-                            .font(.system(size: 11))
+                        if let count = coordinator.systemPromptInspector.systemPromptTokenCount {
+                            Text("(\(count) tokens)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.tertiary)
+                        }
+
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                            .animation(.easeInOut(duration: 0.2), value: isExpanded)
                     }
-
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
-                        .animation(.easeInOut(duration: 0.2), value: isExpanded)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
                 }
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
-            }
+            )
             .buttonStyle(.plain)
 
             if isExpanded {

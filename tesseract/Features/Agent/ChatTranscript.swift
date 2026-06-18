@@ -199,6 +199,8 @@ nonisolated enum ChatTranscript {
 
     // MARK: - Per-Turn projection (the single shared fold)
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable:next function_body_length
     private static func projectTurn(
         _ turn: Turn, isActive: Bool, _ ctx: Context
     ) -> (rows: [ChatRow], toolRowIDs: Set<String>) {

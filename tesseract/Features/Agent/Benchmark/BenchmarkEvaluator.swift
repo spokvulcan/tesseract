@@ -4,6 +4,8 @@ import MLXLMCommon
 /// Evaluates a single turn's model output against expectations.
 enum BenchmarkEvaluator {
 
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable:next function_parameter_count
     static func evaluate(
         turnIndex: Int,
         expectation: TurnExpectation,
@@ -323,11 +325,9 @@ enum BenchmarkEvaluator {
         let lower = response.lowercased()
         var relevant = true
 
-        for substring in expected {
-            if !lower.contains(substring.lowercased()) {
-                details.append("Response missing expected substring: '\(substring)'")
-                relevant = false
-            }
+        for substring in expected where !lower.contains(substring.lowercased()) {
+            details.append("Response missing expected substring: '\(substring)'")
+            relevant = false
         }
 
         return relevant
@@ -439,21 +439,19 @@ enum BenchmarkEvaluator {
                 continue
             }
 
-            for substring in assertion.mustContain {
-                if !text.localizedCaseInsensitiveContains(substring) {
-                    details.append(
-                        "File assertion failed: \(assertion.path) missing '\(substring)'")
-                    passed = false
-                }
+            for substring in assertion.mustContain
+            where !text.localizedCaseInsensitiveContains(substring) {
+                details.append(
+                    "File assertion failed: \(assertion.path) missing '\(substring)'")
+                passed = false
             }
 
-            for substring in assertion.mustNotContain {
-                if text.localizedCaseInsensitiveContains(substring) {
-                    details.append(
-                        "File assertion failed: \(assertion.path) unexpectedly contains '\(substring)'"
-                    )
-                    passed = false
-                }
+            for substring in assertion.mustNotContain
+            where text.localizedCaseInsensitiveContains(substring) {
+                details.append(
+                    "File assertion failed: \(assertion.path) unexpectedly contains '\(substring)'"
+                )
+                passed = false
             }
         }
 

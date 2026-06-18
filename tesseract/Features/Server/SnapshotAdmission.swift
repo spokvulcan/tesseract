@@ -78,11 +78,6 @@ nonisolated struct SnapshotAdmission: Sendable {
     struct CheckpointCandidate: Sendable {
         let snapshot: HybridCacheSnapshot
         let storage: Storage
-
-        nonisolated init(snapshot: HybridCacheSnapshot, storage: Storage) {
-            self.snapshot = snapshot
-            self.storage = storage
-        }
     }
 
     struct Entry: Sendable {

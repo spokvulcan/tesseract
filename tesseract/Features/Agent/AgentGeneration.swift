@@ -23,11 +23,11 @@ struct AgentGenerateParameters: Sendable, Codable {
     var topP: Float = 0.95
     var topK: Int = 0
     var minP: Float = 0.0
-    var repetitionPenalty: Float? = nil
+    var repetitionPenalty: Float?
     var repetitionContextSize: Int = 20
-    var presencePenalty: Float? = nil
+    var presencePenalty: Float?
     var presenceContextSize: Int = 20
-    var frequencyPenalty: Float? = nil
+    var frequencyPenalty: Float?
     var frequencyContextSize: Int = 20
 
     /// Thinking-loop safeguard. See ``ThinkingRepetitionDetector/Config``.
