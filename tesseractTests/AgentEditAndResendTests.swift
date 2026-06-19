@@ -59,7 +59,7 @@ struct AgentEditAndResendTests {
         )
         // The composer normally syncs this from the selected model; image-bearing
         // tests represent a vision-capable model unless they opt out.
-        coordinator.imageInputAvailable = visionAvailable
+        coordinator.imageDraft.imageInputAvailable = visionAvailable
         return coordinator
     }
 
@@ -95,7 +95,7 @@ struct AgentEditAndResendTests {
         #expect(assistantContents(coordinator).contains("an earlier answer") == true)
         // Its text and images are back in the composer for editing + re-send.
         #expect(coordinator.editDraftRestore == "describe these")
-        #expect(coordinator.pendingImages.map(\.id) == [imgA.id, imgB.id])
+        #expect(coordinator.imageDraft.pendingImages.map(\.id) == [imgA.id, imgB.id])
     }
 
     @Test func editingAMiddleMessageDropsItAndEverythingAfter() {
@@ -114,7 +114,7 @@ struct AgentEditAndResendTests {
         #expect(userContents(coordinator) == ["first question"])
         #expect(assistantContents(coordinator) == ["first answer"])
         #expect(coordinator.editDraftRestore == "second question")
-        #expect(coordinator.pendingImages.isEmpty)
+        #expect(coordinator.imageDraft.pendingImages.isEmpty)
     }
 
     @Test func editingAnUnknownIdIsANoOp() {
@@ -158,14 +158,14 @@ struct AgentEditAndResendTests {
             settings: SettingsManager(store: InMemorySettingsStore()),
             arbiter: InMemoryInferenceArbiter()
         )
-        coordinator.imageInputAvailable = true
+        coordinator.imageDraft.imageInputAvailable = true
 
         coordinator.beginEditingMessage(target.id)
 
         // Transcript cleared; content restored to the composer.
         #expect(userContents(coordinator).isEmpty)
         #expect(coordinator.editDraftRestore == "describe these")
-        #expect(coordinator.pendingImages.map(\.id) == [target.images[0].id])
+        #expect(coordinator.imageDraft.pendingImages.map(\.id) == [target.images[0].id])
         // The bricked conversation is GONE, not merely emptied in place: `delete`
         // resets `currentConversation` to a fresh one (new id), whereas the buggy
         // empty-write path would keep the same id with cleared messages.
@@ -194,7 +194,7 @@ struct AgentEditAndResendTests {
             settings: SettingsManager(store: InMemorySettingsStore()),
             arbiter: InMemoryInferenceArbiter()
         )
-        coordinator.imageInputAvailable = true
+        coordinator.imageDraft.imageInputAvailable = true
 
         coordinator.beginEditingMessage(target.id)
 
@@ -203,7 +203,7 @@ struct AgentEditAndResendTests {
         #expect(store.currentConversation?.id != conversation.id)
         #expect(store.currentConversation?.messages.isEmpty == true)
         #expect(coordinator.editDraftRestore == "describe these")
-        #expect(coordinator.pendingImages.map(\.id) == [target.images[0].id])
+        #expect(coordinator.imageDraft.pendingImages.map(\.id) == [target.images[0].id])
     }
 
     @Test func editingAnImageMessageUnderATextOnlyModelDropsImagesAndHints() {
@@ -219,7 +219,7 @@ struct AgentEditAndResendTests {
         coordinator.beginEditingMessage(target.id)
 
         #expect(coordinator.editDraftRestore == "describe these")
-        #expect(coordinator.pendingImages.isEmpty)
-        #expect(coordinator.showImageSwitchHint == true)
+        #expect(coordinator.imageDraft.pendingImages.isEmpty)
+        #expect(coordinator.imageDraft.showImageSwitchHint == true)
     }
 }

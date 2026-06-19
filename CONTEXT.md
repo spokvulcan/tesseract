@@ -595,6 +595,16 @@ from the spine — it touches no `Agent` and no arbiter.
 _Avoid_: dictation (the separate global system-wide overlay — say "agent voice
 input"), mic controller, voice state machine.
 
+**Image Draft**:
+The agent chat composer's image queue and preview module: it owns pending
+attachments, full-window image drops, model-capability hinting, and the Quick Look
+request projection. It receives committed conversation images through an injected
+read closure, so it stays a leaf rather than reaching into `Agent` or the
+conversation store.
+_Avoid_: image input (the broader UI affordance/capability concept), image cache
+(the server-side **Image Digest** cache path), Quick Look host (the AppKit bridge it
+feeds).
+
 **System Prompt Inspector**:
 The system-prompt transparency module: it renders the *already-assembled* prompt
 into raw ChatML plus a token count, on demand. Distinct from the prompt builder,

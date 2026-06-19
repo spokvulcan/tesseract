@@ -45,7 +45,7 @@ final class ImageDraftController {
     // MARK: - Dependencies
 
     /// Digest-keyed temp-file cache backing the Quick Look viewer.
-    @ObservationIgnored private let imagePreviewCache = ImagePreviewFileCache()
+    @ObservationIgnored private let imagePreviewCache: ImagePreviewFileCache
 
     /// Every committed image in the conversation, in message order — user
     /// attachments and tool-result images — the navigable set the preview-set
@@ -55,8 +55,12 @@ final class ImageDraftController {
 
     // MARK: - Init
 
-    init(conversationImages: @MainActor @escaping () -> [ImageAttachment]) {
+    init(
+        conversationImages: @MainActor @escaping () -> [ImageAttachment],
+        imagePreviewCache: ImagePreviewFileCache = ImagePreviewFileCache()
+    ) {
         self.conversationImages = conversationImages
+        self.imagePreviewCache = imagePreviewCache
     }
 
     // MARK: - Image Draft
