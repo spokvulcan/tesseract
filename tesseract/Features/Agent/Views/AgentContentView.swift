@@ -80,15 +80,15 @@ struct AgentContentView: View {
         .onAppear { applyEditDraftRestore(allowClobber: false) }
         .background(
             QuickLookContainer(
-                request: coordinator.quickLookRequest,
-                onClose: { coordinator.dismissQuickLook() }
+                request: coordinator.imageDraft.quickLookRequest,
+                onClose: { coordinator.imageDraft.dismissQuickLook() }
             )
         )
         // Full-window image drop (slice #117): dropping an image anywhere lands it
         // in the composer's pending strip. `isTargeted` only flips for drags whose
         // items conform to `.image`, so non-image drags never dim the window.
         .onDrop(of: [.image], isTargeted: $isDropTargeted) { providers in
-            coordinator.handleWindowImageDrop(providers)
+            coordinator.imageDraft.handleWindowImageDrop(providers)
         }
         .overlay {
             if isDropTargeted {

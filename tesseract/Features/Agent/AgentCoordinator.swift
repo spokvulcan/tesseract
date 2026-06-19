@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import UniformTypeIdentifiers
 
 /// Thin **dispatcher spine** over ``Agent`` and five publisher-agnostic
 /// sub-modules. The coordinator owns the single agent-event subscription and
@@ -14,6 +13,8 @@ import UniformTypeIdentifiers
 /// - ``AgentVoiceInputController`` (`voiceInput`) — push-to-talk capture→emit.
 /// - ``AgentSystemPromptInspector`` (`systemPromptInspector`) — the cancellable
 ///   raw-prompt / token-count transparency panel.
+/// - ``ImageDraftController`` (`imageDraft`) — pending-image queue, full-window drop,
+///   and Quick Look preview viewer.
 /// - ``SlashCommandPaletteController`` (`commandPalette`) — slash-command popup.
 ///
 /// The coordinator retains only what is genuinely cross-cutting: event
@@ -29,6 +30,7 @@ final class AgentCoordinator {
     let agentRun: AgentRunController
     let transcript: ChatTranscriptController
     let voiceInput: AgentVoiceInputController
+    let imageDraft: ImageDraftController
     let systemPromptInspector: AgentSystemPromptInspector
     let commandPalette: SlashCommandPaletteController
 
@@ -40,13 +42,9 @@ final class AgentCoordinator {
 
     /// One-shot composer restore for **Edit & resend**. When the user edits a
     /// sent message, its text lands here for the content view to copy into the
-    /// input field (the images go straight to `pendingImages`); the content view
-    /// clears it on apply. `nil` at rest.
+    /// input field (the images go straight to `imageDraft.pendingImages`); the
+    /// content view clears it on apply. `nil` at rest.
     var editDraftRestore: String?
-
-    /// The pending Quick Look open request (slice #114). Set by `openQuickLook`,
-    /// presented by the `QuickLookContainer` host, cleared when the panel closes.
-    var quickLookRequest: QuickLookRequest?
 
     // MARK: - Hot-read passthroughs
 
@@ -68,8 +66,6 @@ final class AgentCoordinator {
     private let contextWindow: Int
     private let summarize: (@Sendable (String) async throws -> String)?
     private let debugLogger = AgentDebugLogger()
-    /// Digest-keyed temp-file cache backing the Quick Look viewer (slice #114).
-    @ObservationIgnored private let imagePreviewCache = ImagePreviewFileCache()
 
     /// Unsubscribe closure for agent event subscription.
     @ObservationIgnored private var unsubscribe: (@MainActor () -> Void)?
@@ -114,6 +110,15 @@ final class AgentCoordinator {
         self.voiceInput = AgentVoiceInputController(
             audioCapture: audioCapture, transcriptionEngine: transcriptionEngine, settings: settings
         )
+        self.imageDraft = ImageDraftController(conversationImages: { [agent] in
+            agent.state.messages.flatMap { message -> [ImageAttachment] in
+                if let user = message.asUser { return user.images }
+                if let tool = message.asToolResult {
+                    return tool.content.imageAttachments(namespace: tool.id)
+                }
+                return []
+            }
+        })
         self.systemPromptInspector = AgentSystemPromptInspector(
             promptSource: { [agent] in (agent.state.systemPrompt, agent.state.tools) },
             formatRawPrompt: formatRawPrompt
@@ -393,12 +398,7 @@ final class AgentCoordinator {
         // they would render as chips and be silently dropped on send. Mirrors the
         // paste/drop gate; the vision-rejection recovery flow stays vision-capable,
         // so this is a no-op there.
-        if imageInputAvailable {
-            pendingImages = user.images
-        } else {
-            pendingImages = []
-            if !user.images.isEmpty { showImageSwitchHint = true }
-        }
+        imageDraft.restoreImages(user.images)
         editDraftRestore = user.content
         // Leave `error` in place: the rejection banner's guidance ("Reduce the
         // number or size of the attached images") stays visible while the user
@@ -406,116 +406,7 @@ final class AgentCoordinator {
         rebuildTranscript()
         Log.agent.info(
             "Editing message \(messageID): truncated to \(head.count) message(s), "
-                + "restored \(pendingImages.count) image(s) to the composer")
-    }
-
-    // MARK: - Quick Look Image Viewer (slice #114)
-
-    /// Open the full-size Quick Look viewer on the clicked image, navigable
-    /// across every image in the conversation in order. Builds the preview-set
-    /// projection, materializes digest-keyed temp files (reused when pre-warmed),
-    /// and hands the host an ordered URL set + start index. A no-op if the clicked
-    /// image is no longer in the conversation or nothing materialized.
-    func openQuickLook(clicked id: UUID, includingPending pending: [ImageAttachment] = []) {
-        let all = conversationImages() + pending
-        guard let set = ImagePreviewSet.project(all: all, clicked: id) else { return }
-        // Materialize each attachment, keeping its original position, so the
-        // opening index tracks the *clicked occurrence* — not the first
-        // byte-identical copy (digest-keyed files give duplicates the same URL,
-        // so matching by URL would jump to index 0) and not a slot misaligned by
-        // a dropped write. A dropped write of the clicked image itself drops its
-        // index from the set, so we open nothing rather than the wrong image.
-        let materialized = set.attachments.enumerated().compactMap { index, attachment in
-            (try? imagePreviewCache.url(for: attachment)).map { (index, $0) }
-        }
-        guard let startIndex = materialized.firstIndex(where: { $0.0 == set.startIndex }) else {
-            return
-        }
-        quickLookRequest = QuickLookRequest(urls: materialized.map(\.1), startIndex: startIndex)
-    }
-
-    /// Pre-warm one image's temp file (called as the transcript decodes it) so a
-    /// later click opens near-instantly.
-    func prewarmImagePreview(_ attachment: ImageAttachment) {
-        imagePreviewCache.prewarm(attachment)
-    }
-
-    /// Clear the pending request when the panel closes so the same image can be
-    /// reopened later.
-    func dismissQuickLook() {
-        quickLookRequest = nil
-    }
-
-    // MARK: - Composer Image Draft (lifted for full-window drop, slice #117)
-
-    /// Images queued in the composer awaiting send. Lifted from the input bar so
-    /// a full-window drop — hosted on the content view, above the composer — lands
-    /// in the same queue. The composer renders/removes them and `send` consumes
-    /// them.
-    var pendingImages: [ImageAttachment] = []
-
-    /// Whether the selected model can serve images, synced from the composer
-    /// (which owns the capability probe). The window-level drop reads this to
-    /// decide between attaching and surfacing the switch hint.
-    var imageInputAvailable = false
-
-    /// Drives the composer's "switch to a vision model" hint — set when an image is
-    /// pasted or dropped onto a model that can't see images.
-    var showImageSwitchHint = false
-
-    /// Max images queued in the composer at once (PRD #112 cap).
-    static let maxPendingImages = 8
-
-    /// Append ingested images, capped to the room remaining under `maxPendingImages`.
-    func attachImages(_ attachments: [ImageAttachment]) {
-        let added = ImageIngest.capBatch(
-            attachments, alreadyQueued: pendingImages.count, limit: Self.maxPendingImages
-        )
-        pendingImages.append(contentsOf: added)
-    }
-
-    /// Handle image item providers dropped anywhere on the window (slice #117).
-    /// When the selected model can't see images, surface the switch hint instead
-    /// of attaching. Each provider is ingested via the shared `ImageIngest` core
-    /// and appended cap-respecting. Returns whether the drop was accepted.
-    @discardableResult
-    func handleWindowImageDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard imageInputAvailable else {
-            showImageSwitchHint = true
-            return false
-        }
-        for provider in providers {
-            let preferredUTI =
-                provider.registeredTypeIdentifiers.first {
-                    UTType($0)?.conforms(to: .image) == true
-                } ?? UTType.image.identifier
-            provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) {
-                [weak self] data, _ in
-                guard let self, let data else { return }
-                guard
-                    case .success(let attachment) = ImageIngest.ingest(
-                        data: data, typeIdentifier: preferredUTI, filename: "dropped-image"
-                    )
-                else { return }
-                Task { @MainActor in self.attachImages([attachment]) }
-            }
-        }
-        return true
-    }
-
-    /// Every committed image in the conversation, in message order — user
-    /// attachments and tool-result images (slice #116) — the navigable set the
-    /// preview-set projection pages through. Pending composer images are merged
-    /// in by `openQuickLook(clicked:includingPending:)` since they aren't yet in
-    /// `agent.state.messages`.
-    private func conversationImages() -> [ImageAttachment] {
-        agent.state.messages.flatMap { message -> [ImageAttachment] in
-            if let user = message.asUser { return user.images }
-            if let tool = message.asToolResult {
-                return tool.content.imageAttachments(namespace: tool.id)
-            }
-            return []
-        }
+                + "restored \(imageDraft.pendingImages.count) image(s) to the composer")
     }
 
     // MARK: - Voice Output
@@ -659,10 +550,7 @@ final class AgentCoordinator {
     private func resetState() {
         transcript.reset()
         agentRun.finish()  // clear isGenerating synchronously
-        quickLookRequest = nil
-        imagePreviewCache.clear()  // drop the previous conversation's temp previews
-        pendingImages = []
-        showImageSwitchHint = false
+        imageDraft.reset()
     }
 
     /// Finds the last assistant message content directly from agent state.
