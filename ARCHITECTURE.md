@@ -119,6 +119,7 @@ tesseract/
 │   │   ├── AgentRunController.swift   # Foreground run: lease + isGenerating + cancel
 │   │   ├── ChatTranscriptController.swift # Drives the pure ChatTranscript fold
 │   │   ├── AgentVoiceInputController.swift  # Composer push-to-talk (leaf)
+│   │   ├── ImageDraftController.swift # Composer image queue/drop/Quick Look (leaf)
 │   │   ├── AgentEngine.swift          # @Observable, wraps LLMActor (chat path)
 │   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
 │   │   ├── LLMActor.swift             # MLX LLM inference actor
