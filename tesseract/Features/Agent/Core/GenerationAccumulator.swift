@@ -31,6 +31,18 @@ nonisolated struct GenerationAccumulator: Sendable {
     /// Whether the thinking-loop safeguard intervened on this turn.
     var safeguardTriggered: Bool { safeguardSafePrefixChars != nil }
 
+    /// The single home of the malformed→text fallback predicate: true when the
+    /// turn produced no text and no successful tool calls but did capture a
+    /// malformed `<tool_call>` buffer — the one case where a **Generation
+    /// Projection** surfaces that raw buffer as the message content instead of
+    /// dropping the turn as contentless. A derived `Bool` query (not an output
+    /// shape), so it honors this value's "no output type" rule. Consumed by both
+    /// `AssistantMessageProjection.finalize` and `CompletionProjection`, so the
+    /// rule has one definition rather than two mirrored copies.
+    var surfacesMalformedBuffer: Bool {
+        toolCalls.isEmpty && text.isEmpty && !malformedToolCallRaw.isEmpty
+    }
+
     /// Folds one generation event into the accumulated turn state.
     mutating func ingest(_ event: AgentGeneration) {
         switch event {
