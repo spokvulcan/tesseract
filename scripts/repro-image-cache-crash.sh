@@ -36,19 +36,19 @@
 #                                      [--request FILE] [--port PORT]
 #
 #   --iterations N   How many rounds to send (default 300).
-#   --concurrent K   Fire K identical requests in parallel each round to force
-#                    overlapping restores of the same node (default 1).
-#   --delay SECONDS  Sleep between rounds (default 0 — maximizes overlap with
-#                    the post-request speculative prefill, the prime suspect).
+#   --concurrent K   Fire K identical requests in parallel each round. The
+#                    server serializes inference, so this increases request
+#                    pressure only; it does not force overlapping restores.
+#   --delay SECONDS  Sleep between rounds (default 0, maximizes load pressure).
 #   --alternate      Rotate between TWO different image requests to force cache
 #                    eviction/supersession (supersedeAncestorLeaves dropBody)
 #                    between identical sends.
 #   --request FILE   Replay this specific recorded request instead of auto-pick.
 #   --port PORT      Server port (default 8321).
 #
-# Remove this script once ml-explore/mlx#3688 ships upstream and the fork pin is
-# dropped (it depends on sandbox-recorded requests, so it is a manual dev tool,
-# not a CI test).
+# Kept after dropping the fork pin as a manual dev load tool. It depends on
+# sandbox-recorded requests and does not reach the historical warm-restore crash
+# path, so it is not a CI test.
 set -uo pipefail
 
 PORT=8321
