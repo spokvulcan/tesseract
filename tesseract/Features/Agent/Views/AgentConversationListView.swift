@@ -18,7 +18,7 @@ struct AgentConversationListView: View {
                 conversationRows
                     .padding(.vertical, 8)
             }
-            .defaultScrollAnchor(.bottom)
+            .defaultScrollAnchor(coordinator.rows.isEmpty ? .top : .bottom)
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentSize.height > 0 && geo.visibleRect.maxY >= geo.contentSize.height - 80
             } action: { _, nearBottom in
@@ -50,6 +50,11 @@ struct AgentConversationListView: View {
                     isNearBottom: isNearBottom
                 )
             }
+            .overlay {
+                if coordinator.rows.isEmpty && !coordinator.isGenerating {
+                    EmptyStateSection()
+                }
+            }
             .onDisappear {
                 pendingScrollTask?.cancel()
                 pendingScrollTask = nil
@@ -78,8 +83,6 @@ struct AgentConversationListView: View {
     @ViewBuilder
     private var conversationRowContents: some View {
         SystemPromptSection()
-
-        EmptyStateSection()
 
         ForEach(coordinator.rows) { row in
             ChatRowView(
@@ -126,25 +129,18 @@ private struct SystemPromptSection: View {
     }
 }
 
-/// Self-contained empty state — keeps logic out of the main List body.
 private struct EmptyStateSection: View {
-    @Environment(AgentCoordinator.self) private var coordinator
-
     var body: some View {
-        if coordinator.rows.isEmpty && !coordinator.isGenerating {
-            VStack(spacing: 8) {
-                Image(systemName: "brain.head.profile")
-                    .font(.system(size: 40))
-                    .foregroundStyle(.quaternary)
-                Text("Start a conversation")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 80)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 2)
+        VStack(spacing: 8) {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: 40))
+                .foregroundStyle(.quaternary)
+            Text("Start a conversation")
+                .font(.title3)
+                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
     }
 }
 
