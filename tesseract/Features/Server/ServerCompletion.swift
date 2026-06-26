@@ -1047,12 +1047,11 @@ nonisolated final class ServerCompletion {
                             // Drive Snapshot Resolution inside `container.perform`
                             // so the SSD `loadSync` stays off-MainActor (ADR-0001).
                             await container.perform { _ in
-                                await SnapshotResolution.resolve(
+                                await prefixCache.resolve(
                                     tokens: tokens,
                                     promptTokenCount: tokens.count,
                                     partitionKey: mlxStart.partitionKey,
                                     modelFingerprint: mlxStart.partitionKey.modelFingerprint,
-                                    prefixCache: prefixCache,
                                     diagnostics: diagnosticsContext
                                 ).lookup.snapshot
                             }
@@ -1664,12 +1663,11 @@ nonisolated final class ServerCompletion {
             // lazy SSD hydration (consumed internally — only `.hit`/miss surface
             // here). `loadSync` stays off-MainActor inside this scope per
             // ADR-0001; promote/clear hop to MainActor inside `resolve`.
-            let resolved = await SnapshotResolution.resolve(
+            let resolved = await prefixCache.resolve(
                 tokens: keySpace.keyPath,
                 promptTokenCount: fullTokenCount,
                 partitionKey: partitionKey,
                 modelFingerprint: modelFingerprint,
-                prefixCache: prefixCache,
                 diagnostics: diagnosticsContext
             )
             let lookupResult = resolved.lookup

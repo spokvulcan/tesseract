@@ -14,12 +14,13 @@ disk read onto the main actor and stall the UI during hydration.
 
 ## Consequences
 
-The single remaining place the SSD store escapes the `TieredSnapshotStore` seam is
-`makeSSDHitContext` / the `SSDHitContext.ssdStore` field. An architecture review
-that finds this leak should treat it as intentional and not "seal" it.
-
-If we ever do want it sealed, the move is a narrow `nonisolated SnapshotHydrating`
-interface that vends just `loadSync` (and `recordHit`), so LLMActor depends on the
-handle instead of the concrete store. That is a one-adapter (hence hypothetical)
-seam today — only worth introducing once a second adapter exists, e.g. an
-in-memory hydrator fake for tests.
+Sealed, as anticipated below. The **Snapshot Resolution** deepening introduced
+the second adapter this section named as the trigger — an in-memory hydrator
+fake for tests — so the narrow `nonisolated SnapshotHydrating` seam is now real,
+not hypothetical. `SSDHitContext` and `ChainPrefixHitContext` carry that handle
+(vending `loadSync`, `loadSyncPrefix`, and `recordHit`) instead of the concrete
+`SSDSnapshotStore`; the off-MainActor `loadSync` discipline above is unchanged.
+A consumer needing broader SSD access still reaches for the concrete store, so
+the seam stays minimal rather than widened speculatively. (The original
+"architecture review should not seal this leak" directive is retired — it was
+conditional on the seam being one-adapter, which no longer holds.)
