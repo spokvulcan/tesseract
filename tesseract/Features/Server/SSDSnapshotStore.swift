@@ -175,7 +175,7 @@ nonisolated struct SSDCommitInfo: Sendable, Equatable {
 
 // MARK: - SSDSnapshotStore
 
-nonisolated final class SSDSnapshotStore: @unchecked Sendable {
+nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating {
 
     // MARK: - Configuration (immutable after init)
 

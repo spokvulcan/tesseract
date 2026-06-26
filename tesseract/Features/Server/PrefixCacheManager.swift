@@ -444,6 +444,274 @@ final class PrefixCacheManager {
         )
     }
 
+    // MARK: - Snapshot Resolution
+
+    /// The resolved lookup plus whether it was materialized from an SSD-only
+    /// committed ref. The caller-facing contract of `resolve` — moves with the
+    /// method unchanged.
+    struct Resolved: Sendable {
+        let lookup: LookupResult
+        let hydratedFromSSD: Bool
+        /// Wall-clock seconds `loadSync` spent materializing the body
+        /// (`0` for RAM hits, misses, and failed hydrations — a failure
+        /// surfaces as a miss and its time is not a hydration cost a
+        /// future hit would pay). Feeds the per-completion trace record.
+        let hydrationSeconds: TimeInterval
+        /// True when served by a **Chain-Prefix Restore** (ADR-0012). The hit's
+        /// reason is rewritten to `.hit` in `hydratedHit` before telemetry sees
+        /// it, so this marker carries the live Think-Strip Rewind signal (issue
+        /// #101) — the aggregate keys off it, not the erased reason string.
+        var wasChainPrefixRestore: Bool = false
+
+        /// The lookup to align checkpoint planning against, or `nil` to skip the
+        /// alignment merge. An SSD-hydrated hit aligns against nothing: the
+        /// pre-resolution ordering planned against the unhydrated `.ssdHit`,
+        /// which never merged an alignment branch-point, so hydrating one must
+        /// not start aligning. Keeps that SSD-timing rule here, where the
+        /// hydration story is known, rather than at the planning call site.
+        var alignmentLookup: LookupResult? { hydratedFromSSD ? nil : lookup }
+
+        nonisolated init(
+            lookup: LookupResult,
+            hydratedFromSSD: Bool,
+            hydrationSeconds: TimeInterval,
+            wasChainPrefixRestore: Bool = false
+        ) {
+            self.lookup = lookup
+            self.hydratedFromSSD = hydratedFromSSD
+            self.hydrationSeconds = hydrationSeconds
+            self.wasChainPrefixRestore = wasChainPrefixRestore
+        }
+    }
+
+    /// Resolve a token path to the best usable cached prefix under a
+    /// `CachePartitionKey`: the radix **lookup** plus lazy **SSD hydration**,
+    /// in one place — the manager's single read-side entry. The read-side
+    /// counterpart to **Snapshot Admission**. Owns the lookup-then-hydrate
+    /// sequencing for both callers (the main prefill path and the canonical-leaf
+    /// fallback), driven from inside the caller's `container.perform` scope.
+    ///
+    /// Surfaces only `.hit` or a miss — the `.ssdHit` / `.chainPrefixHit`
+    /// hydration intermediates are consumed internally (promote on success,
+    /// forgiving clear on failure).
+    ///
+    /// `nonisolated` so it can be awaited from the caller's Metal-affine
+    /// `container.perform` scope. The lookup and the promote/clear hops run on
+    /// the MainActor; `loadSync` stays off-MainActor inside this scope so a disk
+    /// read never stalls the UI (ADR-0001) — the off-main handle is the
+    /// **Snapshot Hydrating** seam the hit context carries.
+    nonisolated func resolve(
+        tokens: [Int],
+        promptTokenCount: Int,
+        partitionKey: CachePartitionKey,
+        modelFingerprint: String?,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) async -> Resolved {
+        // A failed hydration clears the faulted node (its committed ref or
+        // chain-prefix point), which strictly shrinks the body-less hittable
+        // nodes on the path. Re-look-up after a clear so a deep hit whose owner
+        // vanished in the lookup→hydrate window falls back to the next-shallower
+        // resident body instead of degrading straight to offset 0. Each pass
+        // removes one node; the cap is a backstop against a clear storm.
+        var attempt = 0
+        while true {
+            let initial = await MainActor.run {
+                self.lookup(tokens: tokens, partitionKey: partitionKey)
+            }
+
+            guard let fingerprint = modelFingerprint else {
+                if let id = initial.recordedHitSnapshotID {
+                    diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: id))
+                }
+                return Resolved(lookup: initial, hydratedFromSSD: false, hydrationSeconds: 0)
+            }
+
+            // Two body-less hit kinds need hydration — `.ssdHit` (state 5,
+            // committed own ref) and `.chainPrefixHit` (ADR-0012, backed by the
+            // owning chain's leading segments). A nil return means hydration
+            // failed and cleared the node — re-resolve below.
+            switch initial.reason {
+            case .ssdHit(let ctx):
+                if let resolved = await resolveSSDHit(
+                    ctx, initial: initial, promptTokenCount: promptTokenCount,
+                    partitionKey: partitionKey, fingerprint: fingerprint,
+                    diagnostics: diagnostics
+                ) {
+                    return resolved
+                }
+            case .chainPrefixHit(let ctx):
+                if let resolved = await resolveChainPrefixHit(
+                    ctx, initial: initial, promptTokenCount: promptTokenCount,
+                    partitionKey: partitionKey, fingerprint: fingerprint,
+                    diagnostics: diagnostics
+                ) {
+                    return resolved
+                }
+            default:
+                if let id = initial.recordedHitSnapshotID {
+                    diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: id))
+                }
+                return Resolved(lookup: initial, hydratedFromSSD: false, hydrationSeconds: 0)
+            }
+
+            attempt += 1
+            if attempt >= Self.maxHydrationRetries {
+                return missAfterFailedHydration(initial: initial, partitionKey: partitionKey)
+            }
+        }
+    }
+
+    /// Re-lookup attempts after a failed hydration before surfacing a clean
+    /// miss. Each failure clears one body-less node, so two retries cover the
+    /// realistic owner-evicted-mid-resolve race; the cap bounds a pathological
+    /// clear storm.
+    nonisolated private static let maxHydrationRetries = 3
+
+    private nonisolated func resolveSSDHit(
+        _ ctx: SSDHitContext,
+        initial: LookupResult,
+        promptTokenCount: Int,
+        partitionKey: CachePartitionKey,
+        fingerprint: String,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) async -> Resolved? {
+        // Materialize the body from disk on this Metal-affine thread (ADR-0001).
+        let hydrateStart = Date.timeIntervalSinceReferenceDate
+        let hydrated = ctx.hydrating.loadSync(
+            snapshotRef: ctx.snapshotRef, expectedFingerprint: fingerprint
+        )
+        let hydrateSeconds = Date.timeIntervalSinceReferenceDate - hydrateStart
+
+        guard let hydrated else {
+            // Hydration failed: `loadSync` already removed the on-disk file; the
+            // forgiving clear removes the now-bodyless node so the caller's
+            // re-lookup falls back to the next-shallower resident body. A failed
+            // hydration calls neither `recordHit` nor `promote`.
+            await MainActor.run {
+                self.clearCommittedSnapshotRefAfterHydrationFailure(
+                    node: ctx.node, partitionKey: partitionKey
+                )
+            }
+            return nil
+        }
+
+        diagnostics.log(
+            PrefixCacheDiagnostics.SSDHitEvent(
+                id: ctx.snapshotRef.snapshotID, hydrateMs: hydrateSeconds
+            ))
+        let hydratedBytes = ctx.snapshotRef.bytesOnDisk
+        await MainActor.run {
+            // The load-bearing ordering on success: bump SSD recency, then
+            // promote the hydrated body, then fold the measurement.
+            ctx.hydrating.recordHit(id: ctx.snapshotRef.snapshotID)
+            self.promote(node: ctx.node, snapshot: hydrated, partitionKey: partitionKey)
+            // Fold the observed hydration into the rolling bytes/s
+            // estimate — a real measured operation, never a constant.
+            self.recordHydrationMeasurement(bytes: hydratedBytes, seconds: hydrateSeconds)
+        }
+        diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: ctx.snapshotRef.snapshotID))
+
+        return hydratedHit(
+            hydrated, initial: initial, promptTokenCount: promptTokenCount,
+            partitionKey: partitionKey, hydrateSeconds: hydrateSeconds
+        )
+    }
+
+    /// **Chain-Prefix Restore** hydration (ADR-0012): compose the owning
+    /// chain's leading segments into a body at the boundary. Mirrors
+    /// `resolveSSDHit` — same Metal-affine read, same measured-seconds
+    /// fold; the owner chain's recency bumps (a prefix hit keeps the
+    /// whole chain hot), and a failed compose clears the *point*, not a
+    /// committed ref, degrading the next lookup to the next-shallower
+    /// backing.
+    private nonisolated func resolveChainPrefixHit(
+        _ ctx: ChainPrefixHitContext,
+        initial: LookupResult,
+        promptTokenCount: Int,
+        partitionKey: CachePartitionKey,
+        fingerprint: String,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) async -> Resolved? {
+        let hydrateStart = Date.timeIntervalSinceReferenceDate
+        let hydrated = ctx.hydrating.loadSyncPrefix(
+            point: ctx.point, expectedFingerprint: fingerprint
+        )
+        let hydrateSeconds = Date.timeIntervalSinceReferenceDate - hydrateStart
+
+        guard let hydrated else {
+            await MainActor.run {
+                self.clearChainPrefixRestorePointAfterHydrationFailure(
+                    node: ctx.node, partitionKey: partitionKey
+                )
+            }
+            return nil
+        }
+
+        diagnostics.log(
+            PrefixCacheDiagnostics.SSDHitEvent(
+                id: ctx.point.ownerSnapshotID, hydrateMs: hydrateSeconds
+            ))
+        await MainActor.run {
+            ctx.hydrating.recordHit(id: ctx.point.ownerSnapshotID)
+            self.promoteChainPrefix(
+                node: ctx.node, snapshot: hydrated, partitionKey: partitionKey
+            )
+            self.recordHydrationMeasurement(
+                bytes: ctx.point.prefixBytes, seconds: hydrateSeconds
+            )
+        }
+        diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: ctx.point.ownerSnapshotID))
+
+        return hydratedHit(
+            hydrated, initial: initial, promptTokenCount: promptTokenCount,
+            partitionKey: partitionKey, hydrateSeconds: hydrateSeconds,
+            wasChainPrefixRestore: true
+        )
+    }
+
+    private nonisolated func missAfterFailedHydration(
+        initial: LookupResult,
+        partitionKey: CachePartitionKey
+    ) -> Resolved {
+        Resolved(
+            lookup: LookupResult(
+                snapshot: nil,
+                partitionKey: partitionKey,
+                snapshotTokenOffset: 0,
+                sharedPrefixLength: initial.sharedPrefixLength,
+                reason: .missNoSnapshotInPrefix
+            ),
+            hydratedFromSSD: true,
+            hydrationSeconds: 0
+        )
+    }
+
+    private nonisolated func hydratedHit(
+        _ hydrated: HybridCacheSnapshot,
+        initial: LookupResult,
+        promptTokenCount: Int,
+        partitionKey: CachePartitionKey,
+        hydrateSeconds: TimeInterval,
+        wasChainPrefixRestore: Bool = false
+    ) -> Resolved {
+        Resolved(
+            lookup: LookupResult(
+                snapshot: hydrated,
+                partitionKey: partitionKey,
+                snapshotTokenOffset: hydrated.tokenOffset,
+                sharedPrefixLength: initial.sharedPrefixLength,
+                reason: .hit(
+                    snapshotOffset: hydrated.tokenOffset,
+                    totalTokens: promptTokenCount,
+                    type: hydrated.checkpointType
+                )
+            ),
+            hydratedFromSSD: true,
+            hydrationSeconds: hydrateSeconds,
+            wasChainPrefixRestore: wasChainPrefixRestore
+        )
+    }
+
     /// When a lookup restores at `K` but the tree already matches farther to
     /// `M`, synthesize a checkpoint at `M` so the next request can skip the
     /// already-shared gap. This is layered on top of the existing Phase 2
@@ -1038,7 +1306,7 @@ final class PrefixCacheManager {
     /// leading segment). Subsequent lookups degrade to the next-shallower
     /// backing instead of re-attempting a broken compose. The tree
     /// self-heals when the point was all the node had left.
-    func clearChainPrefixRestorePointAfterHydrationFailure(
+    private func clearChainPrefixRestorePointAfterHydrationFailure(
         node: RadixTreeNode,
         partitionKey: CachePartitionKey
     ) {
@@ -1503,6 +1771,15 @@ final class PrefixCacheManager {
     /// deltas from a known baseline.
     func cumulativeCountersResetForTesting() {
         cumulativeCounters = PromptCacheCumulativeCounters()
+    }
+
+    /// Test-only: inject an in-memory **Snapshot Hydrating** peer so the
+    /// SSD-hydration composition in `resolve` (retry cap, clear-on-fail vs
+    /// promote-on-success ordering) is assertable through this manager's own
+    /// interface without a loaded model, a temp directory, or the concrete
+    /// `SSDSnapshotStore`. Production leaves this unset.
+    func setSnapshotHydratingForTesting(_ handle: (any SnapshotHydrating)?) {
+        store.setHydratingOverrideForTesting(handle)
     }
 
     // MARK: - Measured-seconds estimators

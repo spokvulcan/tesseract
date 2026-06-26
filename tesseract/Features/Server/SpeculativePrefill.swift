@@ -255,12 +255,11 @@ nonisolated enum SpeculativeCanonicalPrefill {
             return
         }
         let resolved = await container.perform { _ in
-            await SnapshotResolution.resolve(
+            await prefixCache.resolve(
                 tokens: admitPath,
                 promptTokenCount: admitPath.count,
                 partitionKey: seed.partitionKey,
                 modelFingerprint: seed.partitionKey.modelFingerprint,
-                prefixCache: prefixCache,
                 diagnostics: diagnostics
             ).lookup.snapshot
         }

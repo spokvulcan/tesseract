@@ -76,7 +76,7 @@ nonisolated enum PrefixCacheDiagnostics {
         let restoreMs: TimeInterval
         let plannedCheckpoints: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)]
         /// Resolution rewrites a hydrated `.ssdHit`/`.chainPrefixHit` to `.hit`
-        /// before this event is logged (SnapshotResolution.hydratedHit), so the
+        /// before this event is logged (`PrefixCacheManager`'s `hydratedHit`), so the
         /// hit *kind* and the Think-Strip Rewind marker must travel as explicit
         /// fields, not in `reason`. The aggregate keys off these in production
         /// (where `reason` is always `"hit"`); the raw reasons still appear on

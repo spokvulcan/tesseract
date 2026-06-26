@@ -76,7 +76,6 @@ Match the ambition above with this rigor.
 - Architecture → `ARCHITECTURE.md`
 - Tests & suites → `docs/testing.md`
 - Decisions & domain → `CONTEXT.md`, `docs/adr/`
-- After editing docs, run `scripts/check-docs.sh` (also a CI gate).
 
 ## Agent skills
 

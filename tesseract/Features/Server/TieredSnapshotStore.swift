@@ -177,24 +177,30 @@ final class TieredSnapshotStore: SnapshotStore {
     }
 
     /// Build the off-main hydration context for a body-absent
-    /// `ssdOnly` node, or `nil` when the SSD tier is disabled. The
-    /// returned `SSDHitContext` carries the `nonisolated`
-    /// `SSDSnapshotStore` so `LLMActor` can `loadSync` off the
-    /// MainActor — see the type's note. Constructing it here is what
-    /// keeps the concrete SSD store private to this seam.
+    /// `ssdOnly` node, or `nil` when neither the SSD tier nor a test
+    /// hydrating override is configured. The returned `SSDHitContext`
+    /// carries the `nonisolated` **Snapshot Hydrating** handle so
+    /// **Snapshot Resolution** can `loadSync` off the MainActor — see
+    /// the type's note. Production hands the concrete `SSDSnapshotStore`;
+    /// a test injects an in-memory peer via
+    /// `setHydratingOverrideForTesting` so the composition is assertable
+    /// without a loaded model or a temp directory.
     func makeSSDHitContext(ref: SnapshotRef, node: RadixTreeNode) -> SSDHitContext? {
-        guard let ssdStore else { return nil }
-        return SSDHitContext(snapshotRef: ref, ssdStore: ssdStore, node: node)
+        guard let handle = hydratingOverride ?? ssdStore.map({ $0 as any SnapshotHydrating })
+        else { return nil }
+        return SSDHitContext(snapshotRef: ref, hydrating: handle, node: node)
     }
 
     /// Build the off-main hydration context for a **Chain-Prefix
-    /// Restore** hit (ADR-0012), or `nil` when the SSD tier is disabled.
-    /// Same shape and isolation contract as `makeSSDHitContext`.
+    /// Restore** hit (ADR-0012), or `nil` when neither the SSD tier nor a
+    /// test hydrating override is configured. Same shape and isolation
+    /// contract as `makeSSDHitContext`.
     func makeChainPrefixHitContext(
         point: ChainPrefixRestorePoint, node: RadixTreeNode
     ) -> ChainPrefixHitContext? {
-        guard let ssdStore else { return nil }
-        return ChainPrefixHitContext(point: point, ssdStore: ssdStore, node: node)
+        guard let handle = hydratingOverride ?? ssdStore.map({ $0 as any SnapshotHydrating })
+        else { return nil }
+        return ChainPrefixHitContext(point: point, hydrating: handle, node: node)
     }
 
     // MARK: - SSD lifecycle
@@ -711,36 +717,50 @@ final class TieredSnapshotStore: SnapshotStore {
     /// never reach the `SSDSnapshotStore` directly — tests use this to
     /// assert resident-set / byte-accounting internals.
     var ssdStoreForTesting: SSDSnapshotStore? { ssdStore }
+
+    /// Test-only hydrating override. When set, `makeSSDHitContext` and
+    /// `makeChainPrefixHitContext` hand this peer — not the concrete
+    /// `SSDSnapshotStore` — into the hit context, so **Snapshot Resolution**'s
+    /// SSD-hydration composition is assertable through
+    /// `PrefixCacheManager.resolve` with programmed outcomes and no disk.
+    /// Production leaves this `nil`, so the concrete store remains the sole
+    /// production adapter.
+    private var hydratingOverride: (any SnapshotHydrating)?
+
+    func setHydratingOverrideForTesting(_ handle: (any SnapshotHydrating)?) {
+        hydratingOverride = handle
+    }
 }
 
 // MARK: - SSDHitContext
 
-/// Handle that lets `LLMActor` hydrate a body-absent `ssdOnly` node
-/// from the SSD tier off the MainActor. Carries the `MainActor`-owned
-/// `RadixTreeNode` and the `nonisolated` `SSDSnapshotStore` LLMActor
-/// needs to hydrate a state-5 node. `@unchecked Sendable` because the
-/// node is MainActor-owned — LLMActor only reads the **Snapshot Ref**
-/// off-main and hops back to MainActor before touching the node via
-/// `PrefixCacheManager.promote(node:snapshot:partitionKey:)`.
+/// Handle that lets **Snapshot Resolution** hydrate a body-absent `ssdOnly`
+/// node from the SSD tier off the MainActor. Carries the `MainActor`-owned
+/// `RadixTreeNode` and the `nonisolated` **Snapshot Hydrating** handle
+/// resolution needs to materialize a state-5 node. `@unchecked Sendable`
+/// because the node is MainActor-owned — resolution only reads the
+/// **Snapshot Ref** off-main and hops back to MainActor before touching the
+/// node via `PrefixCacheManager.promote(node:snapshot:partitionKey:)`.
 ///
-/// It deliberately carries the concrete `SSDSnapshotStore` rather than
-/// a narrow hydration interface so the read stays off the MainActor;
-/// see `docs/adr/0001-ssd-hydration-handle-stays-off-main.md`.
+/// It carries the narrow `SnapshotHydrating` handle (`loadSync`,
+/// `loadSyncPrefix`, `recordHit`) rather than the concrete `SSDSnapshotStore`
+/// so the read stays off the MainActor and a second adapter (an in-memory
+/// test peer) could satisfy it — ADR-0001, now sealed.
 struct SSDHitContext: @unchecked Sendable {
     let snapshotRef: SnapshotRef
-    let ssdStore: SSDSnapshotStore
+    let hydrating: any SnapshotHydrating
     let node: RadixTreeNode
 }
 
 // MARK: - ChainPrefixHitContext
 
-/// Handle that lets `LLMActor` hydrate a **Chain-Prefix Restore** hit
-/// (ADR-0012) off the MainActor — the chain-side sibling of
+/// Handle that lets **Snapshot Resolution** hydrate a **Chain-Prefix Restore**
+/// hit (ADR-0012) off the MainActor — the chain-side sibling of
 /// `SSDHitContext`, with the identical isolation contract: the node is
-/// MainActor-owned, only the value-type `point` is read off-main, and
-/// the caller hops back to MainActor to promote or clear.
+/// MainActor-owned, only the value-type `point` is read off-main, and the
+/// caller hops back to MainActor to promote or clear.
 struct ChainPrefixHitContext: @unchecked Sendable {
     let point: ChainPrefixRestorePoint
-    let ssdStore: SSDSnapshotStore
+    let hydrating: any SnapshotHydrating
     let node: RadixTreeNode
 }

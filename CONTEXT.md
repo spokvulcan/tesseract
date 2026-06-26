@@ -46,9 +46,23 @@ The read side of the prefix cache: resolve a token path to the best usable
 snapshot, returning a hit or a miss. The read-side counterpart to **Snapshot
 Admission**; distinct from `restoreCache`, the later model-affine step that applies
 a resolved snapshot into a live cache (resolution picks *which*, restore
-*applies* it).
-_Avoid_: a standalone "hydrator", restore/restoreCache (the apply step, not the
-choose step).
+*applies* it). Owned by the **Prefix Cache Manager** as its single read-side
+entry, never a free-standing module reaching back across the manager's mutation
+seam.
+_Avoid_: a standalone "hydrator" module (the retired shape that reached back into
+the manager — resolution is manager-owned); **Snapshot Hydrating** (a different
+concept: the off-main handle, not the choose step); restore/restoreCache (the
+apply step, not the choose step).
+
+**Snapshot Hydrating**:
+The narrow off-main handle that **Snapshot Resolution** depends on to materialize
+a body-absent snapshot from SSD, satisfied by the concrete `SSDSnapshotStore` and
+an in-memory test peer — the second adapter that made the seam real. Carries only
+`loadSync`, `loadSyncPrefix`, and `recordHit`; a consumer needing broader SSD
+access reaches for the concrete store instead. The ADR-0001 off-MainActor
+hydration discipline lives at this seam.
+_Avoid_: widening it before a second caller needs a member; the concrete store's
+full surface; mock/stub (the in-memory peer is a real adapter).
 
 **State Effect**:
 The topology-only outcome of a **Snapshot State** transition: `settled`,
