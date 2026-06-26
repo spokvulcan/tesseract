@@ -1,27 +1,31 @@
 #!/usr/bin/env bash
-# Repro harness for the image prefix-cache "Invalid Resource" crash.
+# Stress harness targeting the historical image prefix-cache
+# "Invalid Resource" crash. Retained as a manual load/pressure tool.
 #
-# ROOT CAUSE (confirmed): an MLX-core use-after-free, NOT app code. Command
-# buffers are created with commandBufferWithUnretainedReferences(), so Metal
-# does not keep referenced MTLBuffers alive. Under the memory pressure of warm
-# prefix-cache restore + re-prefill on a 27B vision model, the allocator's
-# buffer-cache trim (malloc -> release_cached_buffers -> buf->release) frees an
-# MTLBuffer that an in-flight command buffer still references ->
-# kIOGPUCommandBufferCallbackErrorInvalidResource -> SIGABRT on
-# com.Metal.CompletionQueueDispatch. Timing-sensitive: any slowdown hides it.
+# ROOT CAUSE (corrected): the crash was originally attributed to an MLX-core
+# allocator use-after-free (closed upstream PR
+# https://github.com/ml-explore/mlx/pull/3688 / issue #3689) and consumed via a
+# retained-command-buffer fork (spokvulcan/mlx-swift). That diagnosis was wrong:
+# mlx::core::gpu::eval() already retains each op's inputs/siblings
+# (shared_ptr<array::Data>) in the CB completion handler, so a tracked buffer
+# cannot be freed mid-flight. The real cause was app-side —
+# HybridCacheSnapshot.capture()/restore() aliased live KV buffers
+# (array[.ellipsis]); under memory pressure the allocator could recycle such a
+# buffer while an in-flight CB still referenced it. Fixed app-side by
+# HybridCacheSnapshot.deepCopyState (true deep copy). With that fix the
+# retained-CB fork has been dropped and mlx-swift tracks upstream.
 #
-# FIX: retained-reference command buffers in the MLX Metal backend.
-#   Upstream PR:    https://github.com/ml-explore/mlx/pull/3688
-#   Upstream issue: https://github.com/ml-explore/mlx/issues/3689
-# We currently consume this via a fork pin (Vendor/mlx-{swift-lm,audio-swift}/
-# Package.swift -> spokvulcan/mlx-swift). Kept for reproducibility/discussion
-# while the upstream PR is in review; remove once it ships (see the TODO(mlx-uaf)
-# markers in those Package.swift files).
+# KNOWN LIMITATION: replaying a multi-image request almost always logs
+# reason=missNoSnapshotInPrefix (image prefixes are un-cacheable by design —
+# reason=inside-image-prefix), so this does NOT exercise the warm-restore path
+# the bug needs, and the server serializes requests (single inference actor), so
+# --concurrent does not create in-flight overlap. In practice this script could
+# not reproduce the crash even on a pre-fix build; it is kept only for manual
+# load testing, not as a CI gate. (A cacheable TEXT prompt sent twice does reach
+# reason=hit, but only a 1-token branchPoint restore — insufficient pressure.)
 #
 # This replays a REAL recorded image request against the LIVE app server in a
 # tight loop and watches for the app to die. Fully automated: no GUI clicking.
-# To VERIFY THE CRASH still exists (e.g. on upstream/unfixed mlx-swift), point
-# the Package.swift deps back at ml-explore/mlx-swift and rebuild.
 #
 # Requirements: the Tesseract Agent app is RUNNING with the HTTP server enabled
 # (scripts/dev.sh dev-release, then confirm `curl 127.0.0.1:8321/health`).
@@ -32,19 +36,19 @@
 #                                      [--request FILE] [--port PORT]
 #
 #   --iterations N   How many rounds to send (default 300).
-#   --concurrent K   Fire K identical requests in parallel each round to force
-#                    overlapping restores of the same node (default 1).
-#   --delay SECONDS  Sleep between rounds (default 0 — maximizes overlap with
-#                    the post-request speculative prefill, the prime suspect).
+#   --concurrent K   Fire K identical requests in parallel each round. The
+#                    server serializes inference, so this increases request
+#                    pressure only; it does not force overlapping restores.
+#   --delay SECONDS  Sleep between rounds (default 0, maximizes load pressure).
 #   --alternate      Rotate between TWO different image requests to force cache
 #                    eviction/supersession (supersedeAncestorLeaves dropBody)
 #                    between identical sends.
 #   --request FILE   Replay this specific recorded request instead of auto-pick.
 #   --port PORT      Server port (default 8321).
 #
-# Remove this script once ml-explore/mlx#3688 ships upstream and the fork pin is
-# dropped (it depends on sandbox-recorded requests, so it is a manual dev tool,
-# not a CI test).
+# Kept after dropping the fork pin as a manual dev load tool. It depends on
+# sandbox-recorded requests and does not reach the historical warm-restore crash
+# path, so it is not a CI test.
 set -uo pipefail
 
 PORT=8321

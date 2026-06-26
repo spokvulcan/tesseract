@@ -21,7 +21,7 @@ struct FakeModelError: Error, Sendable, Equatable {
     let message: String
 }
 
-actor InMemorySpeechRecognizer: SpeechRecognizer {
+actor InMemorySpeechRecognizer {
     // MARK: Programmed behavior
     private let cannedResult: TranscriptionResult
     private var latency: Duration?
@@ -84,3 +84,12 @@ actor InMemorySpeechRecognizer: SpeechRecognizer {
         cancelCount += 1
     }
 }
+
+// Conformance declared in a separate extension: declaring it on the actor decl
+// (under the test target's nonisolated-default isolation) made the compiler
+// infer `nonisolated` onto the actor's synchronous initializer, which is
+// invalid. The app target avoids this via SWIFT_DEFAULT_ACTOR_ISOLATION =
+// MainActor; the test target is nonisolated-default, so isolate the conformance
+// here instead. The methods are actor-isolated and satisfy the nonisolated
+// protocol's async requirements via the usual async-hop witnesses.
+extension InMemorySpeechRecognizer: SpeechRecognizer {}
