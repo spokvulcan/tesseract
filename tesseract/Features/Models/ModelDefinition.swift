@@ -186,6 +186,32 @@ extension ModelDefinition {
             sizeDescription: "~16 GB",
             dependencies: []
         ),
+        ModelDefinition(
+            id: "ornith-9b",
+            displayName: "Ornith 1.0 9B (MLX 6-bit)",
+            description:
+                "Compact agentic-coding agent from DeepReinforce (Qwen3.5 dense, text-only).",
+            category: .agent,
+            source: .huggingFace(
+                repo: "AtomicChat/ornith-9b-MLX-6bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~7.3 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "ornith-35b",
+            displayName: "Ornith 1.0 35B (MLX 4-bit)",
+            description:
+                "Large vision-capable MoE agent from DeepReinforce (Qwen3.5-A3B). Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5_moe.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "leonsarmiento/Ornith-1.0-35B-4bit-mlx",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~21 GB",
+            dependencies: []
+        ),
     ]
 
     static func withID(_ id: String) -> ModelDefinition? {

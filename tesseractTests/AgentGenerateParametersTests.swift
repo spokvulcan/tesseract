@@ -35,6 +35,32 @@ struct AgentGenerateParametersTests {
     }
 
     @MainActor
+    @Test func ornith9bIdMapsToOrnith9bPreset() {
+        let params = AgentGenerateParameters.forModel("ornith-9b")
+        #expect(params.temperature == AgentGenerateParameters.ornith9b.temperature)
+        #expect(params.topP == AgentGenerateParameters.ornith9b.topP)
+        #expect(params.topK == AgentGenerateParameters.ornith9b.topK)
+        #expect(params.presencePenalty == nil)
+        #expect(params.repetitionPenalty == nil)
+        #expect(params.thinkingSafeguard.enabled == true)
+    }
+
+    @MainActor
+    @Test func ornith35bIdMapsToOrnith35bPreset() {
+        // Honors the vendor's Terminal-Bench recipe verbatim, including
+        // repetitionPenalty 1.05 on a thinking template — see the preset's
+        // note on the documented premature-EOS trade-off.
+        let params = AgentGenerateParameters.forModel("ornith-35b")
+        #expect(params.temperature == 1.0)
+        #expect(params.topP == 1.0)
+        #expect(params.topK == 40)
+        #expect(params.minP == 0.01)
+        #expect(params.repetitionPenalty == 1.05)
+        #expect(params.presencePenalty == nil)
+        #expect(params.thinkingSafeguard.enabled == true)
+    }
+
+    @MainActor
     @Test func qwen36ThinkingPresetHasNoPresencePenalty() {
         #expect(AgentGenerateParameters.qwen36Thinking.temperature == 0.6)
         #expect(AgentGenerateParameters.qwen36Thinking.topP == 0.95)

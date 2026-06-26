@@ -95,10 +95,39 @@ struct AgentGenerateParameters: Sendable, Codable {
         topK: 20
     )
 
+    /// Ornith 1.0 9B (DeepReinforce; Qwen3.5-dense `qwen3_5`, text-only).
+    /// Vendor-recommended sampling. Values coincide with `.qwen36Thinking`;
+    /// kept as its own preset so Ornith is isolated from future Qwen-preset
+    /// changes. The thinking-loop safeguard stays at its default — it is inert
+    /// unless the shipped chat template opens a `<think>` block.
+    static let ornith9b = AgentGenerateParameters(
+        temperature: 0.6,
+        topP: 0.95,
+        topK: 20
+    )
+
+    /// Ornith 1.0 35B (DeepReinforce; Qwen3.5-A3B MoE `qwen3_5_moe`,
+    /// vision-capable). The vendor's Terminal-Bench recipe, taken verbatim.
+    /// NOTE: this model ships the Qwen3.5 hybrid thinking template (it opens
+    /// `<think>` by default), and the recipe sets `repetitionPenalty = 1.05` —
+    /// exactly what ``qwen3Thinking``'s comment warns causes premature EOS in
+    /// think blocks. Honored here per an explicit decision; the thinking-loop
+    /// safeguard stays armed as the backstop. Revisit if generation truncates
+    /// mid-think.
+    static let ornith35b = AgentGenerateParameters(
+        temperature: 1.0,
+        topP: 1.0,
+        topK: 40,
+        minP: 0.01,
+        repetitionPenalty: 1.05
+    )
+
     /// Returns the recommended parameters for a given model ID.
     static func forModel(_ modelID: String) -> AgentGenerateParameters {
         if modelID.contains("opus-distill") { return .qwen3OpusDistill }
         if modelID.contains("thinking") { return .qwen3Thinking }
+        if modelID.hasPrefix("ornith-9b") { return .ornith9b }
+        if modelID.hasPrefix("ornith-35b") { return .ornith35b }
         if modelID.hasPrefix("qwen3.5") { return .qwen35 }
         if modelID.hasPrefix("qwen3.6") { return .qwen36Thinking }
         if modelID.hasPrefix("qwen3") { return .qwen3 }
