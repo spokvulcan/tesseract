@@ -88,6 +88,18 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let futureSharedPrefixProbe:
             Task<Result<[Int], CacheKeySpace.TranslationFailure>?, any Error>
 
+        /// The **Asymmetric-State Restore** plan (issue #134), carried in
+        /// addition to the speculative fields above. When present and ASR is
+        /// enabled, the pass attempts synthesis first — deriving a
+        /// stripped-path snapshot from the bearing capture by pure array
+        /// surgery — in place of the restore + chunked-extension re-prefill.
+        /// On a preflight `.unavailable` outcome it falls through to the
+        /// existing re-prefill below; on `.admitted`/`.aborted` it returns.
+        /// `nil` keeps today's behavior exactly. The plan's stripped token
+        /// path is the probe's product (`futureSharedPrefixProbe`), so this
+        /// carries only the three inputs today's seed lacks.
+        var asrPlan: AsymmetricStateRestore.Plan?
+
         /// Cancel the probe when this seed will never be scheduled (failed
         /// leaf store, not-idle schedule, unloaded model) — the builder's
         /// cooperative checks stop its remaining render work.
@@ -139,7 +151,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
             idleDelay: idleDelay,
             ramOnlySpine: ramOnlySpine,
             diagnostics: diagnostics,
-            futureSharedPrefixProbe: probe
+            futureSharedPrefixProbe: probe,
+            asrPlan: nil
         )
     }
 
@@ -243,6 +256,34 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 ]
             )
             return
+        }
+
+        // 2a. **Asymmetric-State Restore** (issue #134): when the seed carries
+        //     an ASR plan and the spike is enabled, attempt to *synthesize*
+        //     the stripped-path snapshot from the bearing capture by pure
+        //     array surgery instead of restore + chunked-extension prefill.
+        //     Preflight declines (`.unavailable`) fall through to the existing
+        //     re-prefill below (user story #12); `.admitted`/`.aborted` end
+        //     the pass — a synthesized leaf was admitted, or synthesis aborted
+        //     and admitting nothing deeper than the canonical leaf is the safe
+        //     default (user story #14). Reuses this pass's scheduling,
+        //     quiescence gate, and RAM-only spine wholesale; only the body is
+        //     swapped. `nil` plan keeps today's re-prefill exactly.
+        if AsymmetricStateRestore.enabled, let asrPlan = seed.asrPlan {
+            let outcome = await AsymmetricStateRestore.synthesizeAndAdmit(
+                bearingSnapshot: asrPlan.bearingSnapshot,
+                strippedTokens: admitPath,
+                thinkSpans: asrPlan.thinkSpans,
+                ropeMetadataByLayer: asrPlan.ropeMetadataByLayer,
+                partitionKey: seed.partitionKey,
+                requestID: diagnostics.requestID,
+                container: container,
+                prefixCache: prefixCache,
+                diagnostics: diagnostics)
+            if outcome != .unavailable {
+                return
+            }
+            // Preflight-unavailable: fall through to the re-prefill body.
         }
 
         // 3. Resolve the restore boundary against the live tree — usually

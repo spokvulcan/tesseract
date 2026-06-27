@@ -38,7 +38,7 @@ final class HybridCacheCorrectnessRunner {
 
         let testRun = try await engine.llmActor.withModelContainer { container in
             await container.perform { context in
-                Self.runAllTests(context: context)
+                Self.runAllTests(context: context, modelDirectory: modelDir)
             }
         }
 
@@ -72,7 +72,9 @@ final class HybridCacheCorrectnessRunner {
         let checks: [CheckResult]
     }
 
-    private nonisolated static func runAllTests(context: ModelContext) -> TestRunResult {
+    private nonisolated static func runAllTests(
+        context: ModelContext, modelDirectory: URL
+    ) -> TestRunResult {
         var logs: [String] = []
         var checks: [CheckResult] = []
 
@@ -164,6 +166,10 @@ final class HybridCacheCorrectnessRunner {
             try test11_twoPassAlignmentPrefill(
                 context: context, tokens: shortPrompt, fullLogits: shortFullLogits
             )
+        }
+        runTest("asymmetricStateRestoreRestoresWithoutCrashing") {
+            try test12_asymmetricStateRestoreSmoke(
+                context: context, modelDirectory: modelDirectory)
         }
 
         return TestRunResult(logs: logs, checks: checks)
@@ -605,6 +611,275 @@ final class HybridCacheCorrectnessRunner {
             "trim=1 argmaxStable=\(argmaxStableAt1) trimmedLayers=\(trimmedLayerCount)",
             lines
         )
+    }
+
+    // MARK: - Asymmetric-State Restore (issue #134 acceptance gate)
+
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient.
+    // swiftlint:disable function_body_length
+    /// The **Asymmetric-State Restore** spike's acceptance seam: render a real
+    /// captured thinking conversation through the real chat template (the
+    /// shared **Conversation Render** contract), capture the think-bearing
+    /// render, synthesize the stripped-path snapshot, restore it through the
+    /// real restore path, and measure ASR vs gold (a full, consistent
+    /// re-prefill of the stripped stretch) at the real serving temperature.
+    ///
+    /// Three artifacts per the PRD's acceptance gate:
+    /// 1. **Smoke** — the synthesized snapshot restores without crashing
+    ///    (free from the seam).
+    /// 2. **Distributional divergence** — per-token KL + top-k agreement at
+    ///    the first divergence position, at the serving temperature. Argmax
+    ///    alone is explicitly not a pass (ADR-0009's false-success mode).
+    /// 3. **Side-by-side vs gold** — short greedy continuations from the
+    ///    ASR-restored and gold caches, logged for the researcher's
+    ///    qualitative call.
+    ///
+    /// This is a research spike: correctness is unproven by construction
+    /// (recurrent state is stale by design), so the check reports the
+    /// measurements rather than asserting a tight bound — the verdict is the
+    /// researcher's qualitative call against gold, not a green checkmark.
+    private nonisolated static func test12_asymmetricStateRestoreSmoke(
+        context: ModelContext, modelDirectory: URL
+    ) throws -> (passed: Bool, detail: String, lines: [String]) {
+        let servingTemperature: Float = 1.0  // Qwen3.5 serving temp (0.6 for 3.6)
+        var lines: [String] = []
+
+        // 1. A real multi-turn thinking conversation with substantial think
+        //    blocks — the hazard must be genuinely exercised, not masked by a
+        //    toy input (user story #16). The conversation ENDS at an assistant
+        //    turn: that assistant turn (and any since the last real user
+        //    message) is the **Tool Stretch**, which the template renders with
+        //    `<think>` kept in the bearing render. Ending on a user turn would
+        //    make that user the last query and strip the stretch's thinks,
+        //    defeating the exercise.
+        let messages: [[String: any Sendable]] = [
+            [
+                "role": "system",
+                "content":
+                    "You are a careful coding agent. Think step by step, then call a tool or answer.",
+            ],
+            ["role": "user", "content": "What is 17 times 23? Show your reasoning."],
+            [
+                "role": "assistant",
+                "reasoning_content":
+                    "I need to compute 17 * 23. Break it: 17 * 20 = 340, 17 * 3 = 51, total 391. "
+                    + "Double-check: 23 * 17 = 23 * 10 + 23 * 7 = 230 + 161 = 391. Confirmed.",
+                "content": "The answer is 391.",
+            ],
+            [
+                "role": "user",
+                "content": "Now subtract 91 and tell me what you get.",
+            ],
+            [
+                "role": "assistant",
+                "reasoning_content":
+                    "391 minus 91: 391 - 90 = 301, then 301 - 1 = 300. Verify: 300 + 91 = 391. Correct.",
+                "content": "391 minus 91 is 300.",
+            ],
+        ]
+
+        // 2. Render the bearing path (the stretch keeps its `<think>` blocks)
+        //    through the real chat template. The stripped path is, by the
+        //    ASR definition (issue #134: "the think-stripped token path is
+        //    almost the think-bearing path with the `<think>` spans removed"),
+        //    the bearing tokens with the think spans excised — NOT a separate
+        //    template render, whose common prefix with the bearing would stop
+        //    at the first `<think>` and grossly under-length the stretch.
+        let bearingTokens: [Int]
+        do {
+            bearingTokens = try context.tokenizer.applyChatTemplate(
+                messages: messages,
+                tools: nil,
+                additionalContext: ["add_generation_prompt": false]
+            )
+        } catch {
+            return (false, "template render failed: \(error)", lines)
+        }
+        guard bearingTokens.count > 1 else {
+            return (false, "bearing render too short (no thinking template?)", lines)
+        }
+        lines.append("  bearingTokens=\(bearingTokens.count)")
+
+        // 3. Scan the bearing render for `<think>`/`</think>` delimiters.
+        let openThink = context.tokenizer.encode(text: "<think>", addSpecialTokens: false)
+        let closeThink = context.tokenizer.encode(text: "</think>", addSpecialTokens: false)
+        let thinkSpans = AsymmetricStateRestore.thinkSpans(
+            in: bearingTokens, openThinkTokens: openThink, closeThinkTokens: closeThink)
+        guard !thinkSpans.isEmpty else {
+            return (
+                true,
+                "no <think> delimiters found in the bearing render — skipped",
+                ["  (template did not retain thinks; ASR not exercised)"]
+            )
+        }
+        let excised = thinkSpans.reduce(0) { $0 + $1.length }
+        lines.append("  thinkSpans=\(thinkSpans.count) excisedTokens=\(excised)")
+
+        // The stripped token path = the bearing tokens with the think spans
+        // excised — the ASR input contract, and byte-identical to what the
+        // canonical next-request render will restore.
+        let survivingRanges = AsymmetricStateRestore.survivingRanges(
+            spans: thinkSpans, bearingLength: bearingTokens.count)
+        let strippedTokens = survivingRanges.flatMap { bearingTokens[$0] }
+        let expectedStripped = bearingTokens.count - excised
+        precondition(
+            strippedTokens.count == expectedStripped,
+            "stripped reconstruction \(strippedTokens.count) != expected \(expectedStripped)")
+
+        // 4. Capture the bearing snapshot through the real model.
+        let bearingCache = context.model.newCache(parameters: nil)
+        try prefill(context: context, tokens: bearingTokens, checkpoints: [:], cache: bearingCache)
+        guard
+            let bearingSnapshot = HybridCacheSnapshot.capture(
+                cache: bearingCache, offset: bearingTokens.count, type: .leaf)
+        else {
+            return (false, "bearing capture nil", lines)
+        }
+
+        // 5. Read per-layer RoPE metadata from the model config (user story
+        //    #11), falling back to the Qwen3.5-family constants if the config
+        //    lacks the scalars ASR needs.
+        let layerClasses = bearingSnapshot.layers.map { $0.className }
+        let ropeMetadata =
+            AsymmetricStateRestore.RopeMetadata.readFromConfigDirectory(
+                modelDirectory, layerClassNames: layerClasses)
+            ?? AsymmetricStateRestore.RopeMetadata.mapByLayer(
+                for: layerClasses,
+                ropeDims: 32,  // Qwen3.5-4B-PARO: headDim 128 × partial 0.25
+                ropeTheta: 100_000.0,
+                scale: 1.0,
+                traditional: false
+            )
+        guard !ropeMetadata.isEmpty else {
+            return (false, "no sliceable attention layers in the bearing snapshot", lines)
+        }
+
+        // 6. Synthesize. `expectedStripped` (bearing − excised) equals
+        //    `strippedTokens.count` by the reconstruction above.
+        let synthesized: HybridCacheSnapshot
+        do {
+            synthesized = try AsymmetricStateRestore.synthesize(
+                bearingSnapshot: bearingSnapshot,
+                strippedTokenCount: expectedStripped,
+                thinkSpans: thinkSpans,
+                ropeMetadataByLayer: ropeMetadata
+            )
+        } catch {
+            return (false, "synthesis failed: \(error)", lines)
+        }
+        lines.append(
+            "  synthesized offset=\(synthesized.tokenOffset) "
+                + "(bearing \(bearingSnapshot.tokenOffset) → stripped \(expectedStripped))")
+
+        // 7. Smoke: restore through the real path without crashing.
+        let asrCache = try synthesized.restore()
+
+        // 8. Gold: cold prefill of the stripped stretch (the same tokens the
+        //    ASR snapshot claims to align to), then forward the new-user-turn
+        //    header — the real suffix the next request will feed past the
+        //    divergence — to measure per-token KL/top-k at the first divergence
+        //    positions.
+        let goldCache = context.model.newCache(parameters: nil)
+        try prefill(context: context, tokens: strippedTokens, checkpoints: [:], cache: goldCache)
+
+        // The suffix is the new-user turn the next real request appends. Render
+        // messages + a fresh user probe and take the tokens past the stripped
+        // stretch as the suffix (optionally cross-checking the prefix matches
+        // the stripped reconstruction — the ASR assumption).
+        var nextRequestMessages = messages
+        nextRequestMessages.append(["role": "user", "content": "Thanks — now double it."])
+        let nextRender = try context.tokenizer.applyChatTemplate(
+            messages: nextRequestMessages,
+            tools: nil,
+            additionalContext: ["add_generation_prompt": false]
+        )
+        let prefixMatch = zip(nextRender.prefix(expectedStripped), strippedTokens)
+            .allSatisfy { $0 == $1 }
+        lines.append("  next-render prefix matches stripped reconstruction: \(prefixMatch)")
+        let suffixCount = min(8, max(0, nextRender.count - expectedStripped))
+        let suffix = Array(nextRender[expectedStripped..<(expectedStripped + suffixCount)])
+        guard !suffix.isEmpty else {
+            return (true, "no suffix past the stripped stretch — skipped", lines)
+        }
+        func forward(_ token: Int, on cache: [any KVCache]) -> MLXArray {
+            let input = LMInput.Text(
+                tokens: MLXArray([Int32(token)]).expandedDimensions(axis: 0), mask: nil)
+            let output = context.model(input, cache: cache, state: nil)
+            eval(output.logits)
+            return output.logits[0, 0]
+        }
+        var klSeries: [Float] = []
+        var topKSeries: [Float] = []
+        var argmaxStable = 0
+        for token in suffix {
+            let asrLogits = forward(token, on: asrCache)
+            let goldLogits = forward(token, on: goldCache)
+            if let kl = TokenDistributionDivergence.klDivergence(
+                gold: goldLogits, asr: asrLogits, temperature: servingTemperature)
+            {
+                klSeries.append(kl)
+            }
+            if let agree = TokenDistributionDivergence.topKAgreement(
+                gold: goldLogits, asr: asrLogits, k: 5)
+            {
+                topKSeries.append(agree)
+            }
+            if TokenDistributionDivergence.argmaxAgrees(gold: goldLogits, asr: asrLogits) {
+                argmaxStable += 1
+            }
+        }
+        let meanKL = klSeries.isEmpty ? Float.nan : klSeries.reduce(0, +) / Float(klSeries.count)
+        let meanTopK =
+            topKSeries.isEmpty ? Float.nan : topKSeries.reduce(0, +) / Float(topKSeries.count)
+        lines.append(
+            "  KL(p‖q) series @ T=\(servingTemperature): "
+                + klSeries.map { String(format: "%.4f", $0) }.joined(separator: ", "))
+        lines.append(
+            "  mean KL=\(String(format: "%.4f", meanKL)) meanTopK(5)=\(String(format: "%.3f", meanTopK))"
+        )
+        lines.append(
+            "  argmax stable \(argmaxStable)/\(suffix.count) (lower bound only — not the verdict)")
+
+        // 9. Side-by-side: short greedy continuation from each cache. Both
+        //    caches sit at the same offset, primed with the last suffix token.
+        let primer = suffix.last ?? strippedTokens.last ?? 0
+        let asrContinuation = greedyDecode(
+            cache: asrCache, primer: primer, count: 12, context: context,
+            tokenizer: context.tokenizer)
+        let goldContinuation = greedyDecode(
+            cache: goldCache, primer: primer, count: 12, context: context,
+            tokenizer: context.tokenizer)
+        lines.append("  ASR  greedy: \(asrContinuation)")
+        lines.append("  GOLD greedy: \(goldContinuation)")
+
+        // The check passes iff the smoke artifact held (restore without
+        // crashing) — the spike's verdict is the researcher's qualitative read
+        // of the KL/top-k series and the side-by-side, not a numeric threshold.
+        let detail =
+            "smoke=OK spans=\(thinkSpans.count) excised=\(excised) "
+            + "meanKL=\(String(format: "%.4f", meanKL)) meanTopK=\(String(format: "%.3f", meanTopK))"
+        return (true, detail, lines)
+    }
+    // swiftlint:enable function_body_length
+
+    /// Greedy-decode `count` tokens from `cache` (primed with `primer`) and
+    /// decode them to a string for the side-by-side artifact. Mutates `cache`
+    /// (advances its offset).
+    private nonisolated static func greedyDecode(
+        cache: [any KVCache], primer: Int, count: Int,
+        context: ModelContext, tokenizer: any Tokenizer
+    ) -> String {
+        var ids: [Int] = []
+        var last = MLXArray([Int32(primer)]).expandedDimensions(axis: 0)
+        for _ in 0..<count {
+            let output = context.model(
+                LMInput.Text(tokens: last, mask: nil), cache: cache, state: nil)
+            eval(output.logits)
+            let nextId = Int(output.logits[0, 0].argMax().item(Int32.self))
+            ids.append(nextId)
+            last = MLXArray([Int32(nextId)]).expandedDimensions(axis: 0)
+        }
+        return tokenizer.decode(tokenIds: ids, skipSpecialTokens: true)
     }
 
     // MARK: - Helpers — model invocation

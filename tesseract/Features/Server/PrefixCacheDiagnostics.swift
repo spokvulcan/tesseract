@@ -213,6 +213,56 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// One **Asymmetric-State Restore** pass (issue #134, ADR-0009): the
+    /// experimental single-prefill counter to the **Think-Strip Rewind** that
+    /// derives a stripped-path snapshot from the think-bearing capture by pure
+    /// array surgery, plugged into the **Speculative Canonical Prefill**
+    /// scheduling. The outcome surfaces whether synthesis produced a usable
+    /// snapshot (`synthesized`), declined preflight (`unavailable`, fell back
+    /// to the speculative prefill), or aborted mid-synthesis (`midSynthesis`,
+    /// admitted nothing deeper than the canonical leaf). Per ADR-0009's
+    /// performance gate, each phase is reported separately so a
+    /// capture-dominated outcome is visible rather than hidden behind a fast
+    /// synthesis number.
+    struct AsymmetricStateRestoreEvent: Payload {
+        enum Outcome: String, Sendable {
+            case synthesized
+            case unavailable
+            case midSynthesis
+            case disabled
+        }
+
+        let outcome: Outcome
+        let bearingOffset: Int
+        let strippedOffset: Int
+        let spanCount: Int
+        let excisedTokens: Int
+        /// End-to-end pass cost (bearing capture + span scan + surgery +
+        /// admission) — the figure the 5 s Stretch-Abandonment window gates on.
+        let totalSeconds: TimeInterval
+        let captureSeconds: TimeInterval
+        let synthesisSeconds: TimeInterval
+        /// Preflight decline reason (only meaningful when `outcome == unavailable`).
+        let unavailableReason: String?
+
+        let eventName = "asymmetricStateRestore"
+
+        var fields: [(String, String)] {
+            var pairs: [(String, String)] = [
+                ("outcome", outcome.rawValue),
+                ("bearingOffset", "\(bearingOffset)"),
+                ("strippedOffset", "\(strippedOffset)"),
+                ("spanCount", "\(spanCount)"),
+                ("excisedTokens", "\(excisedTokens)"),
+                ("totalMs", PrefixCacheDiagnostics.milliseconds(totalSeconds)),
+                ("captureMs", PrefixCacheDiagnostics.milliseconds(captureSeconds)),
+                ("synthesisMs", PrefixCacheDiagnostics.milliseconds(synthesisSeconds)),
+            ]
+            if let unavailableReason { pairs.append(("unavailableReason", unavailableReason)) }
+            return pairs
+        }
+    }
+
     struct EvictionEvent: Payload {
         let strategy: PrefixCacheManager.EvictionEvent.Strategy
         let offset: Int

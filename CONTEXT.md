@@ -333,6 +333,24 @@ context.
 _Avoid_: think retention hack (vendor-sanctioned where the template declares it);
 template patching (vendor templates are never edited); global setting (per-model).
 
+**Asymmetric-State Restore**:
+The experimental single-prefill counter to the **Think-Strip Rewind**: rather than
+re-prefilling the think-stripped **Tool Stretch** (the **Speculative Canonical
+Prefill** path), derive a snapshot for the stripped token path from the
+think-bearing snapshot by excising each `<think>` span from the sliceable
+(attention) layers, re-rotating the retained keys to their shifted positions, and
+leaving the non-sliceable recurrent (**MambaCache**) state as-is — advanced
+through the stretch (thinks included), since recurrent state is irreversible.
+The two layer kinds then serve different renders — attention aligned to the
+stripped path, recurrent state still carrying the bearing render — hence
+*asymmetric*.
+Correctness is unproven (the recurrent state is stale by construction, and
+recurrent state is irreversible — ADR-0009); it is research, not a shipped
+mechanism.
+_Avoid_: stale-state hit / think-stripped hit / trimmed-think hit (the rejected
+and colliding earlier names); conflating it with the sliceable/non-sliceable
+layer distinction it exploits.
+
 ### Server completion
 
 **Server Completion**:
