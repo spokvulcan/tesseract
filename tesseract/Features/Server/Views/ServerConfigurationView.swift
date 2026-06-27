@@ -87,6 +87,17 @@ struct ServerConfigurationView: View {
             }
 
             ServerPreserveThinkingSection()
+
+            Section {
+                Toggle("Asymmetric-State Restore", isOn: $settings.asymmetricStateRestoreEnabled)
+                    .disabled(!settings.isServerEnabled)
+            } header: {
+                Text("Experimental")
+            } footer: {
+                Text(
+                    "After a thinking turn finishes, the background speculative prefill tries to synthesize the think-stripped cache from the bearing capture by tensor surgery instead of re-prefilling. Research feature — serving fidelity is measured, not guaranteed. Applies to new requests after the next model reload."
+                )
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Configuration")

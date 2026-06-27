@@ -90,15 +90,22 @@ nonisolated enum SpeculativeCanonicalPrefill {
 
         /// The **Asymmetric-State Restore** plan (issue #134), carried in
         /// addition to the speculative fields above. When present and ASR is
-        /// enabled, the pass attempts synthesis first — deriving a
-        /// stripped-path snapshot from the bearing capture by pure array
-        /// surgery — in place of the restore + chunked-extension re-prefill.
-        /// On a preflight `.unavailable` outcome it falls through to the
-        /// existing re-prefill below; on `.admitted`/`.aborted` it returns.
-        /// `nil` keeps today's behavior exactly. The plan's stripped token
-        /// path is the probe's product (`futureSharedPrefixProbe`), so this
-        /// carries only the three inputs today's seed lacks.
-        var asrPlan: AsymmetricStateRestore.Plan?
+        /// enabled, the pass synthesizes a stripped-path snapshot from the
+        /// bearing capture by pure array surgery and uses it as the restore
+        /// boundary — in place of resolving one from the live tree — so the
+        /// existing restore + chunked-extension tail re-prefills only the
+        /// small next-user-turn header residual rather than the whole stripped
+        /// conversation. On a preflight `.unavailable` outcome it falls through
+        /// to the resolve below; on `.aborted` it returns. `nil` keeps today's
+        /// behavior exactly.
+        let asrPlan: AsymmetricStateRestore.Plan?
+        /// The **Asymmetric-State Restore** global enable, snapshotted from
+        /// `SettingsManager.asymmetricStateRestoreEnabled` at model load (the
+        /// seed is constructed on-actor; the setting must not be re-sampled
+        /// inside the off-actor speculative pass). `false` keeps ASR entirely
+        /// out of the way so it can be A/B'd against the gold (full-re-prefill)
+        /// path — `asrPlan` is then ignored.
+        let asrEnabled: Bool
 
         /// Cancel the probe when this seed will never be scheduled (failed
         /// leaf store, not-idle schedule, unloaded model) — the builder's
@@ -129,6 +136,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
         renderContext: TemplateRenderContext = .canonical,
         idleDelay: Duration = .zero,
         ramOnlySpine: Bool = false,
+        asrEnabled: Bool = false,
+        asrPlan: AsymmetricStateRestore.Plan? = nil,
         diagnostics: PrefixCacheDiagnostics.Context
     ) -> Seed {
         // swiftlint:enable function_parameter_count
@@ -152,7 +161,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
             ramOnlySpine: ramOnlySpine,
             diagnostics: diagnostics,
             futureSharedPrefixProbe: probe,
-            asrPlan: nil
+            asrPlan: asrPlan,
+            asrEnabled: asrEnabled
         )
     }
 
@@ -181,6 +191,23 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let offset = boundaryOffset + consumedTokens
         guard offset > canonicalLeafOffset else { return nil }
         return offset
+    }
+
+    /// Whether a synthesized ASR boundary belongs to the exact future shared
+    /// path this pass is going to admit. Pure: the runtime checks this before
+    /// tensor surgery so an incompatible chat-template render falls back to the
+    /// ordinary speculative prefill.
+    static func asrBoundaryCompatible(
+        strippedTokens: [Int],
+        admitPath: [Int],
+        minimumWarmOffset: Int
+    ) -> Bool {
+        guard !strippedTokens.isEmpty,
+            strippedTokens.count < admitPath.count,
+            strippedTokens.count >= minimumWarmOffset,
+            strippedTokens.count <= admitPath.count
+        else { return false }
+        return admitPath.prefix(strippedTokens.count).elementsEqual(strippedTokens)
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
@@ -259,65 +286,100 @@ nonisolated enum SpeculativeCanonicalPrefill {
         }
 
         // 2a. **Asymmetric-State Restore** (issue #134): when the seed carries
-        //     an ASR plan and the spike is enabled, attempt to *synthesize*
-        //     the stripped-path snapshot from the bearing capture by pure
-        //     array surgery instead of restore + chunked-extension prefill.
-        //     Preflight declines (`.unavailable`) fall through to the existing
-        //     re-prefill below (user story #12); `.admitted`/`.aborted` end
-        //     the pass — a synthesized leaf was admitted, or synthesis aborted
-        //     and admitting nothing deeper than the canonical leaf is the safe
-        //     default (user story #14). Reuses this pass's scheduling,
-        //     quiescence gate, and RAM-only spine wholesale; only the body is
-        //     swapped. `nil` plan keeps today's re-prefill exactly.
-        if AsymmetricStateRestore.enabled, let asrPlan = seed.asrPlan {
-            let outcome = await AsymmetricStateRestore.synthesizeAndAdmit(
-                bearingSnapshot: asrPlan.bearingSnapshot,
-                strippedTokens: admitPath,
-                thinkSpans: asrPlan.thinkSpans,
-                ropeMetadataByLayer: asrPlan.ropeMetadataByLayer,
-                partitionKey: seed.partitionKey,
-                requestID: diagnostics.requestID,
-                container: container,
-                prefixCache: prefixCache,
-                diagnostics: diagnostics)
-            if outcome != .unavailable {
-                return
+        //     an ASR plan and the feature is enabled, *synthesize* a
+        //     stripped-path boundary from the bearing capture by pure array
+        //     surgery. The synthesized snapshot sits at `strippedConversation
+        //     Offset` (bearing − excised); step 3 then uses it as the restore
+        //     boundary, and the chunked-extension tail below re-prefills only
+        //     the small next-user-turn header residual in `admitPath` (the
+        //     stripped conversation itself is recovered by the surgery, not
+        //     re-prefilled). A preflight `.unavailable` decline falls through
+        //     to the live-tree resolve below (user story #12); `.aborted`
+        //     admits nothing deeper than the canonical leaf and returns (user
+        //     story #14). A pass with no plan, or with the feature off, keeps
+        //     today's resolve-and-prefill exactly.
+        var asrBoundary: HybridCacheSnapshot?
+        if seed.asrEnabled, let asrPlan = seed.asrPlan, !Task.isCancelled {
+            let strippedTokens = asrPlan.strippedTokens
+            let compatible = asrBoundaryCompatible(
+                strippedTokens: strippedTokens,
+                admitPath: admitPath,
+                minimumWarmOffset: seed.keySpace.minimumWarmOffset)
+            if compatible {
+                switch AsymmetricStateRestore.synthesizeBoundary(
+                    plan: asrPlan, diagnostics: diagnostics)
+                {
+                case .synthesized(let snap):
+                    asrBoundary = snap
+                case .unavailable:
+                    asrBoundary = nil  // fall through to the live-tree resolve
+                case .aborted:
+                    return
+                }
+            } else {
+                let excisedTokens = asrPlan.thinkSpans.reduce(0) { $0 + $1.length }
+                diagnostics.log(
+                    PrefixCacheDiagnostics.AsymmetricStateRestoreEvent(
+                        outcome: .unavailable,
+                        bearingOffset: asrPlan.bearingSnapshot.tokenOffset,
+                        strippedOffset: strippedTokens.count,
+                        spanCount: asrPlan.thinkSpans.count,
+                        excisedTokens: excisedTokens,
+                        captureSeconds: asrPlan.bearingCaptureSeconds,
+                        synthesisSeconds: 0,
+                        unavailableReason:
+                            "future-prefix-incompatible(stripped=\(strippedTokens.count),admit=\(admitPath.count))"
+                    ))
             }
-            // Preflight-unavailable: fall through to the re-prefill body.
         }
 
-        // 3. Resolve the restore boundary against the live tree — usually
-        // the canonical leaf admitted moments ago, but whatever Snapshot
-        // Resolution surfaces works (a shallower hit just re-prefills more).
-        // Driven inside `container.perform` so an SSD `loadSync` stays
-        // off-MainActor (ADR-0001).
-        if Task.isCancelled {
-            logPreempted(diagnostics, prefilledTokens: 0, residualTokens: 0)
-            return
-        }
-        let resolved = await container.perform { _ in
-            await prefixCache.resolve(
-                tokens: admitPath,
-                promptTokenCount: admitPath.count,
-                partitionKey: seed.partitionKey,
-                modelFingerprint: seed.partitionKey.modelFingerprint,
-                diagnostics: diagnostics
-            ).lookup.snapshot
-        }
-        // The boundary guards mirror the canonical-leaf arm: a usable
-        // boundary is inside the path and past the image prefix (the
-        // residual doubles as the reprefill input, so it must be image-free).
-        guard let boundary = resolved,
-            boundary.tokenOffset > 0,
-            boundary.tokenOffset < admitPath.count,
-            boundary.tokenOffset >= seed.keySpace.minimumWarmOffset
-        else {
-            diagnostics.logSkip(
-                stage: "speculativePrefill",
-                reason: "no-resolved-boundary",
-                extraFields: [("admitLen", "\(admitPath.count)")]
-            )
-            return
+        // 3. Resolve the restore boundary — the synthesized ASR snapshot when
+        //    one was produced (and still satisfies the boundary guards),
+        //    otherwise the live tree. Usually the canonical leaf admitted
+        //    moments ago, but whatever Snapshot Resolution surfaces works (a
+        //    shallower hit just re-prefills more). Driven inside
+        //    `container.perform` so an SSD `loadSync` stays off-MainActor
+        //    (ADR-0001).
+        let boundary: HybridCacheSnapshot
+        if let asrBoundary,
+            asrBoundary.tokenOffset > 0,
+            asrBoundary.tokenOffset < admitPath.count,
+            asrBoundary.tokenOffset >= seed.keySpace.minimumWarmOffset
+        {
+            // ASR recovered the stripped conversation up to
+            // `asrBoundary.tokenOffset`; the residual re-prefill is the
+            // user-header tail only.
+            boundary = asrBoundary
+        } else {
+            if Task.isCancelled {
+                logPreempted(diagnostics, prefilledTokens: 0, residualTokens: 0)
+                return
+            }
+            let resolved = await container.perform { _ in
+                await prefixCache.resolve(
+                    tokens: admitPath,
+                    promptTokenCount: admitPath.count,
+                    partitionKey: seed.partitionKey,
+                    modelFingerprint: seed.partitionKey.modelFingerprint,
+                    diagnostics: diagnostics
+                ).lookup.snapshot
+            }
+            // The boundary guards mirror the canonical-leaf arm: a usable
+            // boundary is inside the path and past the image prefix (the
+            // residual doubles as the reprefill input, so it must be image-free).
+            guard let resolved,
+                resolved.tokenOffset > 0,
+                resolved.tokenOffset < admitPath.count,
+                resolved.tokenOffset >= seed.keySpace.minimumWarmOffset
+            else {
+                diagnostics.logSkip(
+                    stage: "speculativePrefill",
+                    reason: "no-resolved-boundary",
+                    extraFields: [("admitLen", "\(admitPath.count)")]
+                )
+                return
+            }
+            boundary = resolved
         }
         let anchorDelta: Int?
         if seed.seedsPositionAnchor {

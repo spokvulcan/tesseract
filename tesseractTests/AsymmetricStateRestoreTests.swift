@@ -129,6 +129,19 @@ struct AsymmetricStateRestoreTests {
         #expect(ranges == [0..<2, 5..<8, 9..<12])
     }
 
+    @Test func thinkSpansCanIncludePostCloseSeparator() {
+        let tokens = [1, 10, 2, 3, 11, 4, 4, 5]
+        let spans = AsymmetricStateRestore.thinkSpans(
+            in: tokens,
+            openThinkTokens: [10],
+            closeThinkTokens: [11],
+            postCloseTokens: [4, 4]
+        )
+
+        #expect(spans == [AsymmetricStateRestore.ThinkSpan(start: 1, end: 7)])
+        #expect(AsymmetricStateRestore.strippedTokens(in: tokens, spans: spans) == [1, 5])
+    }
+
     @Test func retainedBearingPositionsAreInStrippedOrder() {
         let ranges = [0..<2, 5..<8]
         #expect(

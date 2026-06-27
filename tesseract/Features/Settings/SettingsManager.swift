@@ -335,6 +335,17 @@ final class SettingsManager {
         }
     }
 
+    // MARK: - Speculative Prefill
+
+    // Changes to this setting take effect on the next model unload/reload,
+    // like the SSD settings above — `LLMActor` snapshots it at load.
+    var asymmetricStateRestoreEnabled: Bool {
+        didSet {
+            SettingsCatalogue.asymmetricStateRestoreEnabled.write(
+                asymmetricStateRestoreEnabled, to: store)
+        }
+    }
+
     // MARK: - Onboarding
 
     var hasCompletedOnboarding: Bool {
@@ -389,6 +400,8 @@ final class SettingsManager {
         self.prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.load(
             from: store)
         self.prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride
+            .load(from: store)
+        self.asymmetricStateRestoreEnabled = SettingsCatalogue.asymmetricStateRestoreEnabled
             .load(from: store)
         self.hasCompletedOnboarding = SettingsCatalogue.hasCompletedOnboarding.load(from: store)
 

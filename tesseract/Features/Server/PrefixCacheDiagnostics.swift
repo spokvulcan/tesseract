@@ -229,7 +229,6 @@ nonisolated enum PrefixCacheDiagnostics {
             case synthesized
             case unavailable
             case midSynthesis
-            case disabled
         }
 
         let outcome: Outcome
@@ -237,10 +236,13 @@ nonisolated enum PrefixCacheDiagnostics {
         let strippedOffset: Int
         let spanCount: Int
         let excisedTokens: Int
-        /// End-to-end pass cost (bearing capture + span scan + surgery +
-        /// admission) — the figure the 5 s Stretch-Abandonment window gates on.
-        let totalSeconds: TimeInterval
+        /// Wall-clock seconds the trigger spent capturing the bearing snapshot
+        /// (the deep-copy of the live final cache) — the figure the PRD's
+        /// "bearing capture may be dominant" gate watches. Reported separately
+        /// from synthesis so a capture-dominated outcome is visible.
         let captureSeconds: TimeInterval
+        /// Wall-clock seconds for the tensor-surgery itself (span scan +
+        /// excision + delta-RoPE), measured inside `synthesizeBoundary`.
         let synthesisSeconds: TimeInterval
         /// Preflight decline reason (only meaningful when `outcome == unavailable`).
         let unavailableReason: String?
@@ -254,7 +256,6 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("strippedOffset", "\(strippedOffset)"),
                 ("spanCount", "\(spanCount)"),
                 ("excisedTokens", "\(excisedTokens)"),
-                ("totalMs", PrefixCacheDiagnostics.milliseconds(totalSeconds)),
                 ("captureMs", PrefixCacheDiagnostics.milliseconds(captureSeconds)),
                 ("synthesisMs", PrefixCacheDiagnostics.milliseconds(synthesisSeconds)),
             ]

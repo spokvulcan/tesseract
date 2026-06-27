@@ -109,6 +109,38 @@ struct SpeculativeCanonicalPrefillTests {
         #expect(offset == nil)
     }
 
+    // MARK: - ASR prefix compatibility (issue #134)
+
+    @Test func asrBoundaryCompatibleRequiresExactAdmitPrefix() {
+        #expect(
+            SpeculativeCanonicalPrefill.asrBoundaryCompatible(
+                strippedTokens: [10, 11, 12],
+                admitPath: [10, 11, 12, 13],
+                minimumWarmOffset: 2
+            ))
+        #expect(
+            !SpeculativeCanonicalPrefill.asrBoundaryCompatible(
+                strippedTokens: [10, 99, 12],
+                admitPath: [10, 11, 12, 13],
+                minimumWarmOffset: 2
+            ))
+    }
+
+    @Test func asrBoundaryCompatibleRequiresUsableInteriorBoundary() {
+        #expect(
+            !SpeculativeCanonicalPrefill.asrBoundaryCompatible(
+                strippedTokens: [10],
+                admitPath: [10, 11, 12],
+                minimumWarmOffset: 2
+            ))
+        #expect(
+            !SpeculativeCanonicalPrefill.asrBoundaryCompatible(
+                strippedTokens: [10, 11, 12],
+                admitPath: [10, 11, 12],
+                minimumWarmOffset: 2
+            ))
+    }
+
     // MARK: - Stretch Abandonment trigger table (issue #100)
 
     @Test func stopFinishSeedsImmediatelyAndDurably() {

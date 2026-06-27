@@ -116,6 +116,18 @@ final class AgentEngine {
         }
     }
 
+    /// Resolve the **Asymmetric-State Restore** enable at the moment of the
+    /// call. Sampled at load (like the SSD config) so the off-actor
+    /// speculative pass never awaits MainActor for the setting; a change takes
+    /// effect on the next unload/reload.
+    func resolveAsrEnabled() -> Bool {
+        switch ssdConfigSource {
+        case .none: return false
+        case .settings(let manager): return manager.asymmetricStateRestoreEnabled
+        case .explicit: return false
+        }
+    }
+
     /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
     ///
     /// - Parameters:
@@ -142,7 +154,8 @@ final class AgentEngine {
             let (tokenizer, startsThinking) = try await llmActor.loadModel(
                 from: directory,
                 visionMode: visionMode,
-                ssdConfig: resolveSSDConfig()
+                ssdConfig: resolveSSDConfig(),
+                asrEnabled: resolveAsrEnabled()
             )
 
             let st = tokenizer.specialTokens

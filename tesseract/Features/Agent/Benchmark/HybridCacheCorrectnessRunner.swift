@@ -32,13 +32,17 @@ final class HybridCacheCorrectnessRunner {
 
         let engine = AgentEngine()
         let modelDir = try runner.resolveModelDirectory()
+        let modelID = runner.activeConfig.resolvedModelID
+        let servingTemperature = AgentGenerateParameters.forModel(modelID).temperature
         log("Loading model from: \(modelDir.path)")
         try await engine.loadModel(from: modelDir, visionMode: false)
         log("Model loaded.")
 
         let testRun = try await engine.llmActor.withModelContainer { container in
             await container.perform { context in
-                Self.runAllTests(context: context, modelDirectory: modelDir)
+                Self.runAllTests(
+                    context: context, modelDirectory: modelDir, modelID: modelID,
+                    servingTemperature: servingTemperature)
             }
         }
 
@@ -73,7 +77,7 @@ final class HybridCacheCorrectnessRunner {
     }
 
     private nonisolated static func runAllTests(
-        context: ModelContext, modelDirectory: URL
+        context: ModelContext, modelDirectory: URL, modelID: String, servingTemperature: Float
     ) -> TestRunResult {
         var logs: [String] = []
         var checks: [CheckResult] = []
@@ -169,7 +173,8 @@ final class HybridCacheCorrectnessRunner {
         }
         runTest("asymmetricStateRestoreRestoresWithoutCrashing") {
             try test12_asymmetricStateRestoreSmoke(
-                context: context, modelDirectory: modelDirectory)
+                context: context, modelDirectory: modelDirectory, modelID: modelID,
+                servingTemperature: servingTemperature)
         }
 
         return TestRunResult(logs: logs, checks: checks)
@@ -639,10 +644,10 @@ final class HybridCacheCorrectnessRunner {
     /// measurements rather than asserting a tight bound — the verdict is the
     /// researcher's qualitative call against gold, not a green checkmark.
     private nonisolated static func test12_asymmetricStateRestoreSmoke(
-        context: ModelContext, modelDirectory: URL
+        context: ModelContext, modelDirectory: URL, modelID: String, servingTemperature: Float
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
-        let servingTemperature: Float = 1.0  // Qwen3.5 serving temp (0.6 for 3.6)
         var lines: [String] = []
+        lines.append("  modelID=\(modelID) servingTemperature=\(servingTemperature)")
 
         // 1. A real multi-turn thinking conversation with substantial think
         //    blocks — the hazard must be genuinely exercised, not masked by a
@@ -703,13 +708,15 @@ final class HybridCacheCorrectnessRunner {
         // 3. Scan the bearing render for `<think>`/`</think>` delimiters.
         let openThink = context.tokenizer.encode(text: "<think>", addSpecialTokens: false)
         let closeThink = context.tokenizer.encode(text: "</think>", addSpecialTokens: false)
+        let postThinkSeparator = context.tokenizer.encode(text: "\n\n", addSpecialTokens: false)
         let thinkSpans = AsymmetricStateRestore.thinkSpans(
-            in: bearingTokens, openThinkTokens: openThink, closeThinkTokens: closeThink)
+            in: bearingTokens, openThinkTokens: openThink, closeThinkTokens: closeThink,
+            postCloseTokens: postThinkSeparator)
         guard !thinkSpans.isEmpty else {
             return (
-                true,
-                "no <think> delimiters found in the bearing render — skipped",
-                ["  (template did not retain thinks; ASR not exercised)"]
+                false,
+                "no <think> delimiters found in the bearing render; ASR not exercised",
+                lines + ["  template did not retain thinks; failing the ASR acceptance gate"]
             )
         }
         let excised = thinkSpans.reduce(0) { $0 + $1.length }
@@ -718,9 +725,8 @@ final class HybridCacheCorrectnessRunner {
         // The stripped token path = the bearing tokens with the think spans
         // excised — the ASR input contract, and byte-identical to what the
         // canonical next-request render will restore.
-        let survivingRanges = AsymmetricStateRestore.survivingRanges(
-            spans: thinkSpans, bearingLength: bearingTokens.count)
-        let strippedTokens = survivingRanges.flatMap { bearingTokens[$0] }
+        let strippedTokens = AsymmetricStateRestore.strippedTokens(
+            in: bearingTokens, spans: thinkSpans)
         let expectedStripped = bearingTokens.count - excised
         precondition(
             strippedTokens.count == expectedStripped,
@@ -737,22 +743,20 @@ final class HybridCacheCorrectnessRunner {
         }
 
         // 5. Read per-layer RoPE metadata from the model config (user story
-        //    #11), falling back to the Qwen3.5-family constants if the config
-        //    lacks the scalars ASR needs.
+        //    #11). Missing metadata is a gate failure: hard-coded family
+        //    constants would let the harness pass while testing a different
+        //    geometry than the loaded checkpoint.
         let layerClasses = bearingSnapshot.layers.map { $0.className }
-        let ropeMetadata =
-            AsymmetricStateRestore.RopeMetadata.readFromConfigDirectory(
+        guard
+            let ropeMetadata = AsymmetricStateRestore.RopeMetadata.readFromConfigDirectory(
                 modelDirectory, layerClassNames: layerClasses)
-            ?? AsymmetricStateRestore.RopeMetadata.mapByLayer(
-                for: layerClasses,
-                ropeDims: 32,  // Qwen3.5-4B-PARO: headDim 128 × partial 0.25
-                ropeTheta: 100_000.0,
-                scale: 1.0,
-                traditional: false
-            )
+        else {
+            return (false, "missing RoPE metadata in loaded model config", lines)
+        }
         guard !ropeMetadata.isEmpty else {
             return (false, "no sliceable attention layers in the bearing snapshot", lines)
         }
+        lines.append("  ropeMetadataLayers=\(ropeMetadata.count)/\(layerClasses.count)")
 
         // 6. Synthesize. `expectedStripped` (bearing − excised) equals
         //    `strippedTokens.count` by the reconstruction above.
@@ -793,13 +797,19 @@ final class HybridCacheCorrectnessRunner {
             tools: nil,
             additionalContext: ["add_generation_prompt": false]
         )
-        let prefixMatch = zip(nextRender.prefix(expectedStripped), strippedTokens)
-            .allSatisfy { $0 == $1 }
+        let prefixMatch =
+            zip(nextRender.prefix(expectedStripped), strippedTokens)
+            .allSatisfy { $0 == $1 } && nextRender.count >= expectedStripped
         lines.append("  next-render prefix matches stripped reconstruction: \(prefixMatch)")
+        guard prefixMatch else {
+            return (false, "next render prefix did not match stripped reconstruction", lines)
+        }
         let suffixCount = min(8, max(0, nextRender.count - expectedStripped))
         let suffix = Array(nextRender[expectedStripped..<(expectedStripped + suffixCount)])
         guard !suffix.isEmpty else {
-            return (true, "no suffix past the stripped stretch — skipped", lines)
+            return (
+                false, "no suffix past the stripped stretch; ASR comparison not exercised", lines
+            )
         }
         func forward(_ token: Int, on cache: [any KVCache]) -> MLXArray {
             let input = LMInput.Text(
@@ -811,9 +821,13 @@ final class HybridCacheCorrectnessRunner {
         var klSeries: [Float] = []
         var topKSeries: [Float] = []
         var argmaxStable = 0
+        var lastASRLogits: MLXArray?
+        var lastGoldLogits: MLXArray?
         for token in suffix {
             let asrLogits = forward(token, on: asrCache)
             let goldLogits = forward(token, on: goldCache)
+            lastASRLogits = asrLogits
+            lastGoldLogits = goldLogits
             if let kl = TokenDistributionDivergence.klDivergence(
                 gold: goldLogits, asr: asrLogits, temperature: servingTemperature)
             {
@@ -841,13 +855,17 @@ final class HybridCacheCorrectnessRunner {
             "  argmax stable \(argmaxStable)/\(suffix.count) (lower bound only — not the verdict)")
 
         // 9. Side-by-side: short greedy continuation from each cache. Both
-        //    caches sit at the same offset, primed with the last suffix token.
-        let primer = suffix.last ?? strippedTokens.last ?? 0
-        let asrContinuation = greedyDecode(
-            cache: asrCache, primer: primer, count: 12, context: context,
+        //    caches sit after the same suffix. Decode from the logits already
+        //    produced by the final suffix token so we do not feed that suffix
+        //    token twice before comparing continuations.
+        guard let asrSeed = lastASRLogits, let goldSeed = lastGoldLogits else {
+            return (false, "missing suffix logits; ASR comparison not exercised", lines)
+        }
+        let asrContinuation = greedyDecodeFromLogits(
+            seedLogits: asrSeed, cache: asrCache, count: 12, context: context,
             tokenizer: context.tokenizer)
-        let goldContinuation = greedyDecode(
-            cache: goldCache, primer: primer, count: 12, context: context,
+        let goldContinuation = greedyDecodeFromLogits(
+            seedLogits: goldSeed, cache: goldCache, count: 12, context: context,
             tokenizer: context.tokenizer)
         lines.append("  ASR  greedy: \(asrContinuation)")
         lines.append("  GOLD greedy: \(goldContinuation)")
@@ -862,22 +880,22 @@ final class HybridCacheCorrectnessRunner {
     }
     // swiftlint:enable function_body_length
 
-    /// Greedy-decode `count` tokens from `cache` (primed with `primer`) and
-    /// decode them to a string for the side-by-side artifact. Mutates `cache`
-    /// (advances its offset).
-    private nonisolated static func greedyDecode(
-        cache: [any KVCache], primer: Int, count: Int,
+    /// Greedy-decode `count` tokens from a cache whose latest logits were already
+    /// computed, and decode them to a string for the side-by-side artifact.
+    /// Mutates `cache` (advances its offset).
+    private nonisolated static func greedyDecodeFromLogits(
+        seedLogits: MLXArray, cache: [any KVCache], count: Int,
         context: ModelContext, tokenizer: any Tokenizer
     ) -> String {
         var ids: [Int] = []
-        var last = MLXArray([Int32(primer)]).expandedDimensions(axis: 0)
+        var nextId = Int(seedLogits.argMax().item(Int32.self))
         for _ in 0..<count {
+            ids.append(nextId)
+            let last = MLXArray([Int32(nextId)]).expandedDimensions(axis: 0)
             let output = context.model(
                 LMInput.Text(tokens: last, mask: nil), cache: cache, state: nil)
             eval(output.logits)
-            let nextId = Int(output.logits[0, 0].argMax().item(Int32.self))
-            ids.append(nextId)
-            last = MLXArray([Int32(nextId)]).expandedDimensions(axis: 0)
+            nextId = Int(output.logits[0, 0].argMax().item(Int32.self))
         }
         return tokenizer.decode(tokenIds: ids, skipSpecialTokens: true)
     }

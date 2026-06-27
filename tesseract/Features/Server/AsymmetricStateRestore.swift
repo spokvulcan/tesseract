@@ -84,7 +84,18 @@ nonisolated enum AsymmetricStateRestore {
             return map
         }
 
-        /// Read the RoPE metadata from a Qwen3.5/3.6 model directory's
+        /// The RoPE scalars extracted from a model config, decoupled from the
+        /// per-layer map so the live path can read them once at model load
+        /// (from the config directory) and rebuild the layer-keyed map per
+        /// bearing snapshot's layer classes. Pure value, no I/O.
+        struct RopeScalars: Sendable, Equatable {
+            let ropeDims: Int
+            let ropeTheta: Float
+            let scale: Float
+            let traditional: Bool
+        }
+
+        /// Read the RoPE scalars from a Qwen3.5/3.6 model directory's
         /// `config.json`, walking the VLM `text_config` nesting and the
         /// `rope_parameters` merge the vendor decoder performs. Returns `nil`
         /// when the config lacks the scalars ASR needs (the caller treats that
@@ -92,10 +103,7 @@ nonisolated enum AsymmetricStateRestore {
         /// rope type (`scale = 1.0`, `traditional = false`) is fully modeled
         /// here, which is what Qwen3.5/3.6 ship; a linear `rope_scaling.factor`
         /// folds into `scale = 1 / factor`.
-        static func readFromConfigDirectory(
-            _ modelDirectory: URL,
-            layerClassNames: [String]
-        ) -> [Int: AsymmetricStateRestore.RopeMetadata]? {
+        static func scalars(from modelDirectory: URL) -> RopeScalars? {
             let configURL = modelDirectory.appendingPathComponent("config.json")
             guard let data = try? Data(contentsOf: configURL),
                 let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -129,9 +137,22 @@ nonisolated enum AsymmetricStateRestore {
             {
                 scale = 1.0 / factor
             }
+            return RopeScalars(
+                ropeDims: ropeDims, ropeTheta: Float(theta),
+                scale: Float(scale), traditional: false)
+        }
+
+        /// Convenience: read the scalars and build the layer-keyed map in one
+        /// call (the path the loaded-model harness uses).
+        static func readFromConfigDirectory(
+            _ modelDirectory: URL,
+            layerClassNames: [String]
+        ) -> [Int: AsymmetricStateRestore.RopeMetadata]? {
+            guard let scalars = scalars(from: modelDirectory) else { return nil }
             return mapByLayer(
-                for: layerClassNames, ropeDims: ropeDims,
-                ropeTheta: Float(theta), scale: Float(scale), traditional: false)
+                for: layerClassNames, ropeDims: scalars.ropeDims,
+                ropeTheta: scalars.ropeTheta, scale: scalars.scale,
+                traditional: scalars.traditional)
         }
 
         /// Resolve a config scalar that may be serialized as Double, Int, or
@@ -161,11 +182,11 @@ nonisolated enum AsymmetricStateRestore {
     }
 
     /// One `<think>…</think>` span to excise, in **bearing-path** token
-    /// offsets. Half-open `[start, end)` — the delimiters and everything
-    /// between them are removed from each sliceable layer's K/V, exactly as
-    /// the chat template strips them in the canonical (non-preserve-thinking)
-    /// render. Found by scanning the bearing render for the
-    /// `<think>`/`</think>` delimiter tokens.
+    /// offsets. Half-open `[start, end)` — the delimiters, everything between
+    /// them, and any template-owned post-close separator are removed from each
+    /// sliceable layer's K/V, exactly as the chat template strips them in the
+    /// canonical (non-preserve-thinking) render. Found by scanning the bearing
+    /// render for the `<think>`/`</think>` delimiter tokens.
     struct ThinkSpan: Sendable, Equatable, Hashable {
         let start: Int
         let end: Int
@@ -636,52 +657,53 @@ nonisolated enum AsymmetricStateRestore {
         /// Per-assistant-turn `<think>`/`</think>` delimiter offsets, in
         /// bearing-path token coordinates.
         let thinkSpans: [ThinkSpan]
+        /// The token path produced by excising `thinkSpans` from the bearing
+        /// render. The speculative pass verifies this is an actual prefix of
+        /// the future shared path before synthesis, so ASR cannot restore a
+        /// boundary that belongs to a different template render.
+        let strippedTokens: [Int]
         /// Per-attention-layer RoPE metadata (read from the live model config,
         /// not hard-coded — user story #11).
         let ropeMetadataByLayer: [Int: RopeMetadata]
+        /// Wall-clock seconds the trigger spent capturing the bearing snapshot
+        /// (the deep-copy of the live final cache). Reported in the
+        /// `AsymmetricStateRestoreEvent` so the PRD's "bearing capture may be
+        /// dominant" gate is measurable (issue #134). Synthesis itself is timed
+        /// inside `synthesizeBoundary`.
+        let bearingCaptureSeconds: TimeInterval
     }
 
-    /// The tri-state outcome of one ASR pass — drives the speculative-prefill
-    /// body's fallback decision.
-    enum PassOutcome: Sendable {
-        /// A synthesized leaf was admitted; the next request hits it at full
-        /// depth. The re-prefill is skipped.
-        case admitted
+    /// The tri-state outcome of an ASR boundary synthesis — drives the
+    /// speculative-prefill body's fallback decision.
+    enum BoundaryOutcome: Sendable {
+        /// A stripped-path snapshot was synthesized; the speculative pass
+        /// restores it and extends through the residual next-user-turn header,
+        /// admitting the deeper leaf at `admitPath.count`. The full re-prefill
+        /// of the stripped conversation is skipped.
+        case synthesized(HybridCacheSnapshot)
         /// Preflight declined before any surgery — the caller falls back to the
         /// existing speculative prefill in full (user story #12).
         case unavailable
-        /// Synthesis began or admission was rejected — admit nothing deeper
-        /// than the canonical leaf and do not chain a re-prefill on top of the
-        /// sunk cost (user story #14).
+        /// Synthesis began then failed — admit nothing deeper than the canonical
+        /// leaf and do not chain a re-prefill on top of the sunk cost (user
+        /// story #14).
         case aborted
     }
 
-    /// Process-global enable/disable (user story #13): `false` keeps ASR
-    /// entirely out of the way so it can be A/B'd against the gold
-    /// (full-re-prefill) path — the speculative prefill then runs unchanged.
-    /// Defaults `true`. The correctness harness ignores it (it exercises
-    /// synthesis directly).
-    ///
-    /// Spike status: this flag and the `run`-body branch are in place, but the
-    /// speculative-prefill seed's `asrPlan` is not yet populated by the trigger
-    /// (the bearing-capture + think-span + RoPE-metadata plumbing through
-    /// `ServerCompletion`'s leaf-store path is the remaining integration step
-    /// PRD #134 calls for). Until then the speculative pass behaves exactly as
-    /// before; the spike's verdict is measured through the
-    /// `HybridCacheCorrectnessRunner` seam, not live firing.
-    nonisolated(unsafe) static var enabled: Bool = true
-
     /// Scan a bearing token path for `<think>…</think>` delimiter runs and
     /// return the think spans to excise — one per matched open/close pair, in
-    /// bearing-path offsets. The delimiter token runs come from the
-    /// tokenizer's own encoding of `<think>` and `</think>` (so it tracks BPE
-    /// merges rather than assuming single-token delimiters). Unmatched
-    /// delimiters are ignored; a missing close is treated as closing at the
-    /// path end.
+    /// bearing-path offsets. The delimiter token runs come from the tokenizer's
+    /// own encoding of `<think>` and `</think>` (so it tracks BPE merges rather
+    /// than assuming single-token delimiters). `postCloseTokens` lets callers
+    /// include template-owned separators such as Qwen's `\n\n` after
+    /// `</think>`, because historical canonical renders remove those separators
+    /// with the think block. Unmatched delimiters are ignored; a missing close is
+    /// treated as closing at the path end.
     static func thinkSpans(
         in bearingTokens: [Int],
         openThinkTokens: [Int],
-        closeThinkTokens: [Int]
+        closeThinkTokens: [Int],
+        postCloseTokens: [Int] = []
     ) -> [ThinkSpan] {
         guard !openThinkTokens.isEmpty, !closeThinkTokens.isEmpty else { return [] }
         var spans: [ThinkSpan] = []
@@ -696,11 +718,12 @@ nonisolated enum AsymmetricStateRestore {
             if let closeIndex = firstRun(
                 in: bearingTokens, run: closeThinkTokens, from: afterOpen)
             {
-                spans.append(
-                    ThinkSpan(
-                        start: spanStart,
-                        end: closeIndex + closeThinkTokens.count))
-                searchStart = closeIndex + closeThinkTokens.count
+                var spanEnd = closeIndex + closeThinkTokens.count
+                if matchesRun(in: bearingTokens, run: postCloseTokens, at: spanEnd) {
+                    spanEnd += postCloseTokens.count
+                }
+                spans.append(ThinkSpan(start: spanStart, end: spanEnd))
+                searchStart = spanEnd
             } else {
                 // Truncated think block (no close in the path): close at end.
                 spans.append(ThinkSpan(start: spanStart, end: bearingTokens.count))
@@ -708,6 +731,25 @@ nonisolated enum AsymmetricStateRestore {
             }
         }
         return spans
+    }
+
+    /// The token path left after excising the bearing-path think spans.
+    static func strippedTokens(
+        in bearingTokens: [Int],
+        spans: [ThinkSpan]
+    ) -> [Int] {
+        survivingRanges(spans: spans, bearingLength: bearingTokens.count)
+            .flatMap { bearingTokens[$0] }
+    }
+
+    private static func matchesRun(in tokens: [Int], run: [Int], at index: Int) -> Bool {
+        guard !run.isEmpty, index >= 0, index + run.count <= tokens.count else {
+            return false
+        }
+        for j in 0..<run.count where tokens[index + j] != run[j] {
+            return false
+        }
+        return true
     }
 
     private static func firstRun(
@@ -727,119 +769,92 @@ nonisolated enum AsymmetricStateRestore {
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient.
-    // swiftlint:disable function_parameter_count
-    /// The cohesive ASR pass body the **Speculative Canonical Prefill** trigger
-    /// calls in place of the re-prefill: synthesize a stripped-path snapshot
-    /// from the bearing capture and admit it **RAM-only** (synthesized
-    /// snapshots are a concatenation of non-contiguous pieces that do not fit
-    /// the segment-chain model — ADR-0010; SSD durability is deferred).
+    /// The cohesive ASR body the **Speculative Canonical Prefill** trigger
+    /// calls in place of resolving a restore boundary: synthesize a
+    /// stripped-path snapshot from the bearing capture by pure tensor surgery.
+    /// The synthesized snapshot sits at `strippedConversationOffset`
+    /// (bearing − excised); the speculative pass then restores it and extends
+    /// through the residual next-user-turn header in `admitPath`, admitting the
+    /// deeper leaf at `admitPath.count` — so only the small header residual is
+    /// re-prefilled, not the whole stripped conversation.
     ///
     /// Runs entirely off the request critical path (inside the background
     /// speculative pass), so a failure can never corrupt a live turn (user
     /// story #22): a `.midSynthesis` failure admits nothing and leaves the
     /// cache exactly as the canonical leaf left it; a `.unavailable` decline is
-    /// surfaced so the caller can fall back to the full re-prefill (user story
-    /// #12). Each phase is timed for the ADR-0009 performance gate.
-    ///
-    /// `captureSeconds` is reported `0` here because the bearing capture is
-    /// produced by the trigger before this entry point (it is a model forward
-    /// over the bearing render); the spike reports it from the call site once
-    /// the trigger's bearing-capture plumbing lands. Synthesis + admission are
-    /// timed end-to-end below.
-    ///
-    /// Returns `true` when a synthesized leaf was admitted.
-    static func synthesizeAndAdmit(
-        bearingSnapshot: HybridCacheSnapshot,
-        strippedTokens: [Int],
-        thinkSpans spans: [ThinkSpan],
-        ropeMetadataByLayer: [Int: RopeMetadata],
-        partitionKey: CachePartitionKey,
-        requestID: UUID,
-        container: ModelContainer,
-        prefixCache: PrefixCacheManager,
+    /// surfaced so the caller falls back to the full re-prefill (user story
+    /// #12). Synthesis is timed for the ADR-0009 performance gate; the bearing
+    /// capture cost is carried in `plan.bearingCaptureSeconds` and reported
+    /// alongside it (the PRD's "bearing capture may be dominant" gate).
+    static func synthesizeBoundary(
+        plan: Plan,
         diagnostics: PrefixCacheDiagnostics.Context
-    ) async -> PassOutcome {
+    ) -> BoundaryOutcome {
+        let bearingSnapshot = plan.bearingSnapshot
+        let spans = plan.thinkSpans
         let excisedTokens = spans.reduce(0) { $0 + $1.length }
+        // The stripped-conversation token count the snapshot must align to:
+        // bearing − excised, materialized in the plan. This is the ASR input
+        // contract — NOT the full `admitPath` (which appends the next-user-turn
+        // header); passing `admitPath.count` here is the length-mismatch decline
+        // the synthesized boundary is immune to by construction (issue #134
+        // review).
+        let strippedConversationOffset = plan.strippedTokens.count
+
         func logOutcome(
             _ outcome: PrefixCacheDiagnostics.AsymmetricStateRestoreEvent.Outcome,
-            synthesis: TimeInterval, total: TimeInterval,
+            synthesisSeconds: TimeInterval,
             unavailableReason: String? = nil
         ) {
             diagnostics.log(
                 PrefixCacheDiagnostics.AsymmetricStateRestoreEvent(
                     outcome: outcome,
                     bearingOffset: bearingSnapshot.tokenOffset,
-                    strippedOffset: strippedTokens.count,
+                    strippedOffset: strippedConversationOffset,
                     spanCount: spans.count,
                     excisedTokens: excisedTokens,
-                    totalSeconds: total,
-                    captureSeconds: 0,
-                    synthesisSeconds: synthesis,
+                    captureSeconds: plan.bearingCaptureSeconds,
+                    synthesisSeconds: synthesisSeconds,
                     unavailableReason: unavailableReason))
         }
 
-        guard enabled else {
-            logOutcome(.disabled, synthesis: 0, total: 0)
-            return .unavailable
-        }
-        let passStart = Date.timeIntervalSinceReferenceDate
+        let synthesisStart = Date.timeIntervalSinceReferenceDate
         let synthesized: HybridCacheSnapshot
         do {
             synthesized = try synthesize(
                 bearingSnapshot: bearingSnapshot,
-                strippedTokenCount: strippedTokens.count,
+                strippedTokenCount: strippedConversationOffset,
                 thinkSpans: spans,
-                ropeMetadataByLayer: ropeMetadataByLayer
+                ropeMetadataByLayer: plan.ropeMetadataByLayer
             )
         } catch AsymmetricStateRestore.SynthesisError.unavailable(let reason) {
             // Preflight: no idle-window budget spent — the caller falls back
             // to the existing speculative prefill in full.
-            let elapsed = Date.timeIntervalSinceReferenceDate - passStart
+            let elapsed = Date.timeIntervalSinceReferenceDate - synthesisStart
             logOutcome(
-                .unavailable, synthesis: elapsed, total: elapsed,
+                .unavailable,
+                synthesisSeconds: elapsed,
                 unavailableReason: String(describing: reason))
             return .unavailable
         } catch AsymmetricStateRestore.SynthesisError.midSynthesis(let failure) {
             // Sunk some idle-window budget; safer to abort than chain a full
             // re-prefill on top. Admit nothing deeper than the canonical leaf.
-            let elapsed = Date.timeIntervalSinceReferenceDate - passStart
+            let elapsed = Date.timeIntervalSinceReferenceDate - synthesisStart
             logOutcome(
-                .midSynthesis, synthesis: elapsed, total: elapsed,
+                .midSynthesis,
+                synthesisSeconds: elapsed,
                 unavailableReason: failure.detail)
             return .aborted
         } catch {
-            let elapsed = Date.timeIntervalSinceReferenceDate - passStart
+            let elapsed = Date.timeIntervalSinceReferenceDate - synthesisStart
             logOutcome(
-                .midSynthesis, synthesis: elapsed, total: elapsed,
+                .midSynthesis,
+                synthesisSeconds: elapsed,
                 unavailableReason: error.localizedDescription)
             return .aborted
         }
-        let synthesisSeconds = Date.timeIntervalSinceReferenceDate - passStart
-
-        // Admit the synthesized leaf RAM-only. The synthesized snapshot is
-        // deep-copied by `restore()` into the leaf's own buffers on admission;
-        // we hold nothing live here.
-        let admitted = await container.perform { _ in
-            await ServerCompletion.admitStructuredLeaf(
-                synthesized,
-                storedTokens: strippedTokens,
-                storage: .ramOnly,
-                partitionKey: partitionKey,
-                requestID: requestID,
-                prefixCache: prefixCache,
-                diagnostics: diagnostics,
-                admissionStage: "asymmetricStateRestore",
-                captureSource: "asymmetricStateRestore"
-            )
-        }
-        Memory.clearCache()
-        let total = Date.timeIntervalSinceReferenceDate - passStart
-        logOutcome(
-            admitted ? .synthesized : .midSynthesis,
-            synthesis: synthesisSeconds,
-            total: total,
-            unavailableReason: admitted ? nil : "admission-rejected")
-        return admitted ? .admitted : .aborted
+        let synthesisSeconds = Date.timeIntervalSinceReferenceDate - synthesisStart
+        logOutcome(.synthesized, synthesisSeconds: synthesisSeconds)
+        return .synthesized(synthesized)
     }
-    // swiftlint:enable function_parameter_count
 }
