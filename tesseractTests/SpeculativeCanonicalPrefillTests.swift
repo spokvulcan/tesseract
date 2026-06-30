@@ -151,6 +151,18 @@ struct SpeculativeCanonicalPrefillTests {
         #expect(plan?.ramOnlySpine == false)
     }
 
+    @Test func asrArmedCanonicalSeedStaysRamOnly() {
+        // ASR-synthesized leaves can't enter the SSD segment chain
+        // (ADR-0010): a stripped-path K/V must never be chained onto a
+        // bearing-path base. The canonical trigger stays RAM-only when ASR
+        // is armed so the restore can't assemble an incompatible chain.
+        let plan = ServerCompletion.speculativeSeedPlan(
+            boundaryMode: .canonical, renderContext: .canonical, asrArmed: true
+        )
+        #expect(plan?.idleDelay == .zero)
+        #expect(plan?.ramOnlySpine == true)
+    }
+
     @Test func toolStretchArmsTheIdleTimerAndStaysRamOnly() {
         let plan = ServerCompletion.speculativeSeedPlan(
             boundaryMode: .directTool, renderContext: .canonical

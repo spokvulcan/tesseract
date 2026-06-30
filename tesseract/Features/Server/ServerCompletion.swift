@@ -104,6 +104,9 @@ private nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// ASR needs (the trigger then declines synthesis). Carried here so the
     /// static `driveCompletion` can build the layer-keyed map without `self`.
     let asrRopeScalars: AsymmetricStateRestore.RopeMetadata.RopeScalars?
+    /// Same stop-token set used by the decode loop. ASR uses it only for the
+    /// single trailing-token render/cache alignment allowance.
+    let stopTokenIDs: Set<Int>
     /// Partition key used for cache routing.
     let partitionKey: CachePartitionKey
     /// Request-local helper snapshot captured at the end of the last history
@@ -1163,6 +1166,7 @@ nonisolated final class ServerCompletion {
                                 bearingSnapshot: bearingSnapshot,
                                 bearingCaptureSeconds: captureSeconds,
                                 tokenizer: leafTokenizer,
+                                stopTokenIDs: mlxStart.stopTokenIDs,
                                 diagnostics: diagnosticsContext
                             )
                         }
@@ -1176,7 +1180,8 @@ nonisolated final class ServerCompletion {
                         // its rewind span from the last-user boundary.
                         let seedPlan = Self.speculativeSeedPlan(
                             boundaryMode: boundaryMode,
-                            renderContext: renderContext
+                            renderContext: renderContext,
+                            asrArmed: asrPlan != nil
                         )
                         let pendingSeed: SpeculativeCanonicalPrefill.Seed? =
                             seedPlan.map { plan in
@@ -2263,6 +2268,10 @@ nonisolated final class ServerCompletion {
                 ssdEnabled: ssdEnabled,
                 asrEnabled: asrEnabled,
                 asrRopeScalars: asrRopeScalars,
+                stopTokenIDs: Self.stopTokenIDs(
+                    modelConfiguration: context.configuration,
+                    tokenizer: context.tokenizer
+                ),
                 partitionKey: partitionKey,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
@@ -2457,6 +2466,10 @@ nonisolated final class ServerCompletion {
             ssdEnabled: ssdEnabled,
             asrEnabled: false,
             asrRopeScalars: nil,
+            stopTokenIDs: Self.stopTokenIDs(
+                modelConfiguration: context.configuration,
+                tokenizer: context.tokenizer
+            ),
             partitionKey: partitionKey,
             transientLastMessageBoundarySnapshot: nil,
             transientLastUserBoundarySnapshot: nil,
@@ -3104,14 +3117,10 @@ nonisolated final class ServerCompletion {
         bearingSnapshot: HybridCacheSnapshot?,
         bearingCaptureSeconds: TimeInterval,
         tokenizer: any MLXLMCommon.Tokenizer,
+        stopTokenIDs: Set<Int>,
         diagnostics: PrefixCacheDiagnostics.Context
     ) -> AsymmetricStateRestore.Plan? {
         guard let ropeScalars, let bearingSnapshot else { return nil }
-        // Fidelity gate: the rendered bearing path must align with the final
-        // cache's offset, else excise positions would not match snapshot
-        // positions. A mismatch (vision, prior-think drift, BPE seam) declines
-        // safely and the re-prefill handles the turn.
-        let bearingTokens = storedRenderTokens
         func decline(_ reason: String) {
             diagnostics.log(
                 PrefixCacheDiagnostics.AsymmetricStateRestoreEvent(
@@ -3123,11 +3132,31 @@ nonisolated final class ServerCompletion {
                     synthesisSeconds: 0,
                     unavailableReason: reason))
         }
-        guard bearingSnapshot.tokenOffset == bearingTokens.count else {
-            decline("bearing-offset-mismatch(render=\(bearingTokens.count))")
+        // Fidelity gate: the rendered bearing path must align with the final
+        // cache's offset, else excise positions would not match snapshot
+        // positions. A completed assistant render may be one token longer than
+        // the live decode cache when the extra token is the template's EOS /
+        // end-of-message marker, or a template separator (a single "\n" or a
+        // merged "\n\n") immediately after such a marker. That tail is template
+        // scaffolding around the stop condition; the speculative pass prefills
+        // it as residual after restoring the synthesized boundary. Any other
+        // mismatch (vision, prior-think drift, BPE seam) still declines safely.
+        guard
+            let alignment = Self.asrBearingTokenAlignment(
+                storedRenderTokens: storedRenderTokens,
+                bearingOffset: bearingSnapshot.tokenOffset,
+                tokenizer: tokenizer,
+                stopTokenIDs: stopTokenIDs
+            )
+        else {
+            let safeStart = min(bearingSnapshot.tokenOffset, storedRenderTokens.count)
+            let trailing = Array(storedRenderTokens[safeStart...])
+            decline(
+                "bearing-offset-mismatch(render=\(storedRenderTokens.count), bearing=\(bearingSnapshot.tokenOffset), gap=\(trailing.count), trailing=\(trailing))"
+            )
             return nil
         }
-
+        let bearingTokens = alignment.tokens
         // Scan the bearing render for `<think>`/`</think>` delimiter runs.
         let openThink = tokenizer.encode(text: "<think>", addSpecialTokens: false)
         let closeThink = tokenizer.encode(text: "</think>", addSpecialTokens: false)
@@ -3160,10 +3189,111 @@ nonisolated final class ServerCompletion {
             bearingCaptureSeconds: bearingCaptureSeconds)
     }
 
+    struct ASRBearingTokenAlignment: Sendable, Equatable {
+        let tokens: [Int]
+        let ignoredTrailingTokenCount: Int
+    }
+
+    static func asrBearingTokenAlignment(
+        storedRenderTokens: [Int],
+        bearingOffset: Int,
+        tokenizer: any MLXLMCommon.Tokenizer,
+        stopTokenIDs: Set<Int> = []
+    ) -> ASRBearingTokenAlignment? {
+        guard bearingOffset >= 0, bearingOffset <= storedRenderTokens.count else {
+            return nil
+        }
+        if bearingOffset == storedRenderTokens.count {
+            return ASRBearingTokenAlignment(
+                tokens: storedRenderTokens,
+                ignoredTrailingTokenCount: 0
+            )
+        }
+
+        guard storedRenderTokens.count == bearingOffset + 1 else {
+            return nil
+        }
+        let trailingToken = storedRenderTokens[bearingOffset]
+        let endOfMessageTokenIDs = Self.asrEndOfMessageTokenIDs(
+            tokenizer: tokenizer,
+            stopTokenIDs: stopTokenIDs
+        )
+        if !endOfMessageTokenIDs.contains(trailingToken) {
+            let precededByEndOfMessage =
+                bearingOffset > 0
+                && endOfMessageTokenIDs.contains(storedRenderTokens[bearingOffset - 1])
+            guard
+                precededByEndOfMessage,
+                Self.asrTrailingTemplateSeparatorTokenIDs(tokenizer: tokenizer).contains(
+                    trailingToken)
+            else {
+                return nil
+            }
+        }
+        return ASRBearingTokenAlignment(
+            tokens: Array(storedRenderTokens.prefix(bearingOffset)),
+            ignoredTrailingTokenCount: 1
+        )
+    }
+
+    private static func asrEndOfMessageTokenIDs(
+        tokenizer: any MLXLMCommon.Tokenizer,
+        stopTokenIDs: Set<Int>
+    ) -> Set<Int> {
+        var ids = stopTokenIDs
+        if let eosTokenId = tokenizer.eosTokenId {
+            ids.insert(eosTokenId)
+        }
+        if let eosToken = tokenizer.eosToken {
+            let encoded = tokenizer.encode(text: eosToken, addSpecialTokens: false)
+            if encoded.count == 1, let id = encoded.first {
+                ids.insert(id)
+            }
+        }
+        return ids
+    }
+
+    private static func asrTrailingTemplateSeparatorTokenIDs(
+        tokenizer: any MLXLMCommon.Tokenizer
+    ) -> Set<Int> {
+        // Template-owned whitespace after the end-of-message marker: a single
+        // "\n" (tool-call turn) or a merged "\n\n" (final-answer turn, where
+        // the template's `<|im_end|>\n` meets its trailing newline). Both are
+        // scaffolding around the stop condition, tolerated by the Render–Cache
+        // Offset Contract; any other trailing token declines.
+        var ids: Set<Int> = []
+        for separator in ["\n", "\n\n"] {
+            let encoded = tokenizer.encode(text: separator, addSpecialTokens: false)
+            if encoded.count == 1, let id = encoded.first { ids.insert(id) }
+        }
+        return ids
+    }
+
+    private static func stopTokenIDs(
+        modelConfiguration: ModelConfiguration,
+        tokenizer: any MLXLMCommon.Tokenizer
+    ) -> Set<Int> {
+        var ids = modelConfiguration.eosTokenIds
+        if let eosTokenID = tokenizer.eosTokenId {
+            ids.insert(eosTokenID)
+        }
+        for token in modelConfiguration.extraEOSTokens {
+            if let id = tokenizer.convertTokenToId(token) {
+                ids.insert(id)
+            }
+        }
+        return ids
+    }
+
     /// How a finished turn seeds the **Speculative Canonical Prefill** —
     /// the trigger table (issues #76, #100):
-    /// - A canonical-user boundary (stop-finish answer) seeds immediately,
-    ///   durable — the original #76 trigger.
+    /// - A canonical-user boundary (stop-finish answer) seeds immediately —
+    ///   the original #76 trigger. Durable (SSD) unless ASR is armed, in
+    ///   which case the spine stays RAM-only: an ASR-synthesized leaf is a
+    ///   concatenation of non-contiguous token-axis pieces that does not fit
+    ///   the segment-chain contiguous-suffix model (ADR-0010), so admitting
+    ///   it to SSD would chain a stripped-path K/V onto a bearing-path base
+    ///   and corrupt the restore (issue #134 crash).
     /// - A tool-call boundary arms **Stretch Abandonment**'s timer: the
     ///   pass starts only if no follow-up request lands inside the idle
     ///   window, and its spine admits RAM-only so a false alarm (the tool
@@ -3179,12 +3309,14 @@ nonisolated final class ServerCompletion {
 
     static func speculativeSeedPlan(
         boundaryMode: BoundaryLeafMode,
-        renderContext: TemplateRenderContext
+        renderContext: TemplateRenderContext,
+        asrArmed: Bool = false
     ) -> SpeculativeSeedPlan? {
         guard !renderContext.preservesThinking else { return nil }
         switch boundaryMode {
         case .canonical:
-            return SpeculativeSeedPlan(idleDelay: .zero, ramOnlySpine: false)
+            return SpeculativeSeedPlan(
+                idleDelay: .zero, ramOnlySpine: asrArmed)
         case .directTool:
             return SpeculativeSeedPlan(
                 idleDelay: SpeculativeCanonicalPrefill.stretchAbandonmentIdleWindow,

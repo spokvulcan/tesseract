@@ -498,6 +498,7 @@ final class SettingsManager {
         prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.default
         prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.default
         prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.default
+        asymmetricStateRestoreEnabled = SettingsCatalogue.asymmetricStateRestoreEnabled.default
         // Dynamic per-model keys are minted on demand and aren't in the static
         // enumeration above; sweep their prefix so a reset truly clears them. A
         // stale `preserveThinkingRender.<modelID> = true` would otherwise keep

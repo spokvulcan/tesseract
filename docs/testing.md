@@ -7,7 +7,7 @@ before committing changes to server, caching, or agent engine code.
 
 The suite lists below are recommended *focused* runs for the hottest areas;
 there are ~100 suites in total — discover the rest with
-`grep -r "@Suite" tesseractTests/`.
+`rg "@Suite|@Test" tesseractTests/`.
 
 ```bash
 # Server + agent suites (recommended for fast, focused runs):
@@ -20,9 +20,11 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ServerCompletionDrainTests \
   -only-testing:tesseractTests/ServerCompletionLeafStoreModeTests \
   -only-testing:tesseractTests/ServerCompletionLeafSkipLogTests \
+  -only-testing:tesseractTests/ServerCompletionASRAlignmentTests \
   -only-testing:tesseractTests/CompletionProjectionTests \
   -only-testing:tesseractTests/MessageConverterTests \
   -only-testing:tesseractTests/OpenAITypesTests \
+  -only-testing:tesseractTests/AgentGenerateParametersTests \
   -only-testing:tesseractTests/AgentEngineToolSpecTests \
   -only-testing:tesseractTests/EditToolTests
 
@@ -38,6 +40,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/PrefillPlannerTests \
   -only-testing:tesseractTests/LeafAdmissionBuilderTests \
   -only-testing:tesseractTests/SnapshotResolutionTests \
+  -only-testing:tesseractTests/SpeculativeCanonicalPrefillTests \
+  -only-testing:tesseractTests/AsymmetricStateRestoreTests \
   -only-testing:tesseractTests/SnapshotLedgerTests \
   -only-testing:tesseractTests/SnapshotStateTests \
   -only-testing:tesseractTests/StablePrefixDetectorNonDeterminismTests \
@@ -128,6 +132,13 @@ or `StablePrefixDetector`. The correctness runner is the stronger gate (bitwise
 tensor comparison via raw `ModelContainer.perform` access); the e2e runner
 exercises the full HTTP path and is the right shape for catching pipeline
 regressions the correctness runner can't see.
+
+`HybridCacheCorrectnessRunner` also carries the loaded-model
+**Asymmetric-State Restore** gate: it compares the synthesized stripped-path
+snapshot against a gold full re-prefill and reports KL divergence, top-k
+agreement, and greedy side-by-side output. Treat that as the fidelity signal for
+the experimental ASR toggle; the unit suites only prove the tensor surgery and
+trigger arithmetic.
 
 Benchmark-shaped siblings (informational, not gates):
 `scripts/dev.sh prefill-step-benchmark` and `scripts/dev.sh paroquant-vlm-smoke`.

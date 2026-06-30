@@ -27,8 +27,8 @@ after a finished stretch is human-paced.
 seeds under the **Preserve-Thinking Render**, #98 — that render is
 append-stable, so there is no rewind span):
 
-- **Stop-finish** (canonical-user boundary): seed immediately, durable leaf.
-  The original #76 trigger.
+- **Stop-finish** (canonical-user boundary): seed immediately, durable leaf
+  by default. The original #76 trigger.
 - **Tool-stretch finish** (**Stretch Abandonment**, #100): arm a timer; the
   pass starts only if no follow-up lands inside a 5 s idle window — short
   enough to keep most of a human pause as runway, long enough that an agent
@@ -68,11 +68,38 @@ append-stable, so there is no rewind span):
   concurrently with the canonical leaf's GPU-side store, spawned before it, so
   the pass spends none of its human-paced window on its own stage 1.
 
+## Experimental Asymmetric-State Restore
+
+Issue #134 adds an opt-in, disabled-by-default experimental body for the
+stop-finish trigger: **Asymmetric-State Restore**. Instead of restoring the
+canonical leaf and re-prefilling the whole think-stripped stretch, the pass can
+capture the think-bearing final cache, excise each `<think>` span from
+sliceable attention layers, re-rotate retained keys to their shifted positions,
+and leave non-sliceable recurrent state at the bearing render. The result is a
+synthetic stripped-path boundary; the ordinary speculative tail then only
+prefills the small future-user-header residual.
+
+This is deliberately not the default path. The recurrent state is stale by
+construction, so correctness is measured, not assumed: the unit suite pins the
+array surgery and the loaded-model `HybridCacheCorrectnessRunner` reports
+KL/top-k/greedy divergence against a gold full re-prefill. If preflight cannot
+prove the render/cache offset contract, the pass falls back to ordinary
+speculative prefill; if synthesis fails after surgery starts, it admits nothing
+deeper than the canonical leaf.
+
+When Asymmetric-State Restore is armed, the canonical speculative spine stays
+**RAM-only**. A synthesized snapshot is built from non-contiguous token-axis
+pieces and does not fit ADR-0010's contiguous segment-chain model; persisting it
+as an SSD extension would chain stripped-path K/V onto a bearing-path base.
+
 ## Rejected alternatives
 
 - *Capturing the think-stripped leaf directly from the turn's final cache* —
-  the on-device KV state is the think-*bearing* render; no trim converts it
-  (Mamba state cannot be rewound, attention-only trims drift sampled decoding).
+  the on-device KV state is the think-*bearing* render; a plain trim does not
+  convert it. Asymmetric-State Restore is the later experimental exception: it
+  performs explicit attention-layer excision plus delta-RoPE, leaves recurrent
+  state stale, stays off by default, and reports distributional drift rather
+  than claiming correctness.
 - *Running the pass under the GPU lease* — would queue TTS behind background
   work and risk a reload from `ensureLoaded`; the registry drain covers the
   reload hazard and TTS lives in a different container, so kernel timesharing
@@ -86,6 +113,9 @@ append-stable, so there is no rewind span):
 - Post-answer energy rises on tool-heavy sessions (bounded by span length,
   observable via the `speculativePrefill` diagnostics events, which carry a
   `preempted` flag).
+- When Asymmetric-State Restore is enabled, `asymmetricStateRestore`
+  diagnostics report synthesized/unavailable/mid-synthesis outcomes plus
+  bearing-capture and synthesis timings.
 - Each completed pass supersedes the canonical leaf, shortening its SSD
   lifetime — the churn ADR-0010 later mostly closes.
 - Preempting entries wait out the settle even when targeting a different

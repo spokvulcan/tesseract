@@ -140,8 +140,11 @@ tesseract/
 │   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
+│   │   ├── SnapshotHydrating.swift    # Narrow off-main SSD hydration handle
 │   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions
 │   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
+│   │   ├── SpeculativePrefill.swift   # Idle-window Think-Strip Rewind recovery
+│   │   ├── AsymmetricStateRestore.swift # Experimental stripped-path synthesis
 │   │   ├── EvictionPolicy.swift       # Pure eviction scoring + AlphaTuner
 │   │   └── Telemetry/                 # Prompt-cache telemetry store
 │   ├── Settings/
@@ -395,6 +398,14 @@ Repeated prompts are accelerated by a tiered KV prefix cache
 (`EvictionPolicy`, `AlphaTuner`). Vocabulary: CONTEXT.md → Prefix cache snapshot
 lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
 Verification gates: docs/testing.md → Loaded-model verification.
+Thinking-template conversations add one more server-side recovery path: after a
+finished answer or **Stretch Abandonment**, **Speculative Canonical Prefill**
+spends otherwise-idle GPU time to prefill the think-stripped future path so the
+next user request does not pay the **Think-Strip Rewind** interactively
+(ADR-0009). The experimental **Asymmetric-State Restore** toggle swaps the body of
+that pass for synthesized stripped-path state from a think-bearing capture; it is
+off by default, RAM-only when armed, and treated as measured research rather than
+guaranteed correctness. Vocabulary: CONTEXT.md → Prefill orchestration.
 `Features/Server/Integrations/` configures external clients against the live
 server: the server itself serves a setup script whose one-liner runs the
 **Config Merge** (`OpenCodeConfigMerge`, a pure function over an

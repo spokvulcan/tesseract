@@ -190,6 +190,21 @@ identical to the shape prepare uses, so a probe render cannot drift from prepare
 _Avoid_: re-render (unqualified), probe tokenization, per-call-site
 `applyChatTemplate` (the rendering it standardizes, not a synonym for it).
 
+**Render–Cache Offset Contract**:
+The length-agreement a write-side cache manipulation assumes between a canonical
+**Conversation Render** of a completed turn and the live decode cache of that same
+turn: the render may exceed the cache only by template scaffolding around the stop
+condition (an end-of-message marker, then a trailing separator), because the cache
+stops at the decoded stop token while the render re-tokenizes the stored text
+through the template. The canonical leaf store relies on it; **Asymmetric-State
+Restore**'s bearing capture reuses the same contract to locate its excision
+offsets. A drift beyond scaffolding (vision expansion, prior-think re-render, a BPE
+seam) means the re-tokenized path no longer matches the cached path, and the
+operation declines rather than mis-align.
+_Avoid_: token-count match (implementation-level), offset guard (one check that
+enforces it, not the concept); re-tokenization contract (the code comment's working
+name — say the contract).
+
 **Position Anchor**:
 The M-RoPE continuation state a warm-restored conversation resumes generation at —
 the restore offset plus the rope delta the cached prefix accumulated —
@@ -345,11 +360,14 @@ The two layer kinds then serve different renders — attention aligned to the
 stripped path, recurrent state still carrying the bearing render — hence
 *asymmetric*.
 Correctness is unproven (the recurrent state is stale by construction, and
-recurrent state is irreversible — ADR-0009); it is research, not a shipped
-mechanism.
+recurrent state is irreversible — ADR-0009); it is a shipped experimental
+mechanism only when the user opts in, off by default, with serving fidelity
+measured rather than guaranteed.
 _Avoid_: stale-state hit / think-stripped hit / trimmed-think hit (the rejected
 and colliding earlier names); conflating it with the sliceable/non-sliceable
-layer distinction it exploits.
+layer distinction it exploits; **ASR** unqualified — it also means Automatic
+Speech Recognition (the **Speech Recognizer** domain; see that entry's _Avoid_),
+so say "Asymmetric-State Restore" in full wherever the speech sense could apply.
 
 ### Server completion
 
