@@ -316,13 +316,21 @@ nonisolated enum SpeculativeCanonicalPrefill {
         //     the feature off, keeps today's resolve-and-prefill exactly.
         var asrBoundary: HybridCacheSnapshot?
         if seed.asrEnabled, let asrPlan = seed.asrPlan, !Task.isCancelled {
-            switch AsymmetricStateRestore.synthesizeBoundary(
-                plan: asrPlan,
-                admitPath: admitPath,
-                minimumWarmOffset: seed.keySpace.minimumWarmOffset,
-                testMode: seed.asrTestMode,
-                diagnostics: diagnostics)
-            {
+            // Synthesis evaluates MLX graphs (the surgery kernels plus
+            // `deepCopyState`'s materializing `eval`), so it must run on the
+            // model's Metal-affine executor like every other GPU-touching
+            // step — an off-actor `eval` races the actor's in-flight GPU work
+            // and intermittently hangs the GPU (CDM Kill watchdog restart,
+            // observed live 2026-07-02).
+            let outcome = await container.perform { _ in
+                AsymmetricStateRestore.synthesizeBoundary(
+                    plan: asrPlan,
+                    admitPath: admitPath,
+                    minimumWarmOffset: seed.keySpace.minimumWarmOffset,
+                    testMode: seed.asrTestMode,
+                    diagnostics: diagnostics)
+            }
+            switch outcome {
             case .synthesized(let snap):
                 asrBoundary = snap
             case .unavailable:
