@@ -87,6 +87,22 @@ struct ServerConfigurationView: View {
             }
 
             ServerPreserveThinkingSection()
+
+            Section {
+                Toggle("Asymmetric-State Restore", isOn: $settings.asymmetricStateRestoreEnabled)
+                    .disabled(!settings.isServerEnabled)
+                Toggle(
+                    "Asymmetric-State Restore test mode",
+                    isOn: $settings.asymmetricStateRestoreTestMode
+                )
+                .disabled(!settings.isServerEnabled || !settings.asymmetricStateRestoreEnabled)
+            } header: {
+                Text("Experimental")
+            } footer: {
+                Text(
+                    "After a thinking turn finishes, the background speculative prefill tries to synthesize the think-stripped cache from the bearing capture by tensor surgery instead of re-prefilling. Research feature — serving fidelity is measured, not guaranteed. Test mode drops the background pass's worth-it floor to one token — any context or reasoning length fires it — and logs divergence forensics on every decline; leave it off outside development. Both apply to new requests after the next model reload."
+                )
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Configuration")

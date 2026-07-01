@@ -116,6 +116,27 @@ enum SettingsCatalogue {
     static let prefixCacheSSDDirectoryOverride = Setting.optionalString(
         "prefixCacheSSDDirectoryOverride")
 
+    // MARK: - Speculative Prefill
+
+    /// **Asymmetric-State Restore** (issue #134): after a stop-finish under a
+    /// thinking template, the background **Speculative Canonical Prefill**
+    /// attempts to *synthesize* the think-stripped snapshot from the bearing
+    /// capture by pure tensor surgery, instead of restore + chunked re-prefill.
+    /// A research feature whose serving fidelity the loaded-model harness
+    /// measures (not guarantees) — opt-in, off by default. Sampled at model
+    /// load like the SSD config, so a change takes effect on the next
+    /// unload/reload.
+    static let asymmetricStateRestoreEnabled = Setting.bool(
+        "asymmetricStateRestoreEnabled", default: false)
+
+    /// **Asymmetric-State Restore test mode** — a developer knob: the
+    /// speculative pass's worth-it floor drops to one token (any context or
+    /// reasoning length triggers it) and Asymmetric-State Restore declines
+    /// log first-divergence forensics. Production behavior when off.
+    /// Snapshotted at model load like the enable above.
+    static let asymmetricStateRestoreTestMode = Setting.bool(
+        "asymmetricStateRestoreTestMode", default: false)
+
     // MARK: - Onboarding
 
     static let hasCompletedOnboarding = Setting.bool("hasCompletedOnboarding", default: false)

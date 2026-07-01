@@ -335,6 +335,25 @@ final class SettingsManager {
         }
     }
 
+    // MARK: - Speculative Prefill
+
+    // Changes to this setting take effect on the next model unload/reload,
+    // like the SSD settings above — `LLMActor` snapshots it at load.
+    var asymmetricStateRestoreEnabled: Bool {
+        didSet {
+            SettingsCatalogue.asymmetricStateRestoreEnabled.write(
+                asymmetricStateRestoreEnabled, to: store)
+        }
+    }
+
+    // Developer knob; same load-time snapshot lifecycle as the enable above.
+    var asymmetricStateRestoreTestMode: Bool {
+        didSet {
+            SettingsCatalogue.asymmetricStateRestoreTestMode.write(
+                asymmetricStateRestoreTestMode, to: store)
+        }
+    }
+
     // MARK: - Onboarding
 
     var hasCompletedOnboarding: Bool {
@@ -389,6 +408,10 @@ final class SettingsManager {
         self.prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.load(
             from: store)
         self.prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride
+            .load(from: store)
+        self.asymmetricStateRestoreEnabled = SettingsCatalogue.asymmetricStateRestoreEnabled
+            .load(from: store)
+        self.asymmetricStateRestoreTestMode = SettingsCatalogue.asymmetricStateRestoreTestMode
             .load(from: store)
         self.hasCompletedOnboarding = SettingsCatalogue.hasCompletedOnboarding.load(from: store)
 
@@ -485,6 +508,8 @@ final class SettingsManager {
         prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.default
         prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.default
         prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.default
+        asymmetricStateRestoreEnabled = SettingsCatalogue.asymmetricStateRestoreEnabled.default
+        asymmetricStateRestoreTestMode = SettingsCatalogue.asymmetricStateRestoreTestMode.default
         // Dynamic per-model keys are minted on demand and aren't in the static
         // enumeration above; sweep their prefix so a reset truly clears them. A
         // stale `preserveThinkingRender.<modelID> = true` would otherwise keep

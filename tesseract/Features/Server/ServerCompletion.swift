@@ -95,6 +95,22 @@ private nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// the module's `ssdConfig`, which they cannot do without crossing
     /// the Metal-affine scope boundary.
     let ssdEnabled: Bool
+    /// **Asymmetric-State Restore** enable, snapshotted at load. Read through
+    /// the captured `mlxStart` instead of the module's field so the leaf-store
+    /// path stays inside the Metal-affine scope (mirrors `ssdEnabled`).
+    let asrEnabled: Bool
+    /// **Asymmetric-State Restore test mode**, snapshotted at load like
+    /// `asrEnabled`: drops the speculative pass's worth-it floor to one token
+    /// and turns on decline forensics. Production behavior when `false`.
+    let asrTestMode: Bool
+    /// **Asymmetric-State Restore** per-model RoPE scalars, read once from the
+    /// loaded model's `config.json`. `nil` when the config lacks the scalars
+    /// ASR needs (the trigger then declines synthesis). Carried here so the
+    /// static `driveCompletion` can build the layer-keyed map without `self`.
+    let asrRopeScalars: AsymmetricStateRestore.RopeMetadata.RopeScalars?
+    /// Same stop-token set used by the decode loop. ASR uses it only for the
+    /// single trailing-token render/cache alignment allowance.
+    let stopTokenIDs: Set<Int>
     /// Partition key used for cache routing.
     let partitionKey: CachePartitionKey
     /// Request-local helper snapshot captured at the end of the last history
@@ -290,6 +306,32 @@ nonisolated final class ServerCompletion {
     /// await MainActor.
     private(set) var ssdConfig: SSDPrefixCacheConfig?
 
+    /// Directory of the loaded model. Installed at load so the ASR trigger can
+    /// read per-layer RoPE metadata from `config.json` without a directory
+    /// lookup on the hot path.
+    private(set) var modelDirectory: URL?
+
+    /// **Asymmetric-State Restore** enable, snapshotted at load from
+    /// `SettingsManager.asymmetricStateRestoreEnabled`. Read it here (not the
+    /// live setting) because the off-actor speculative pass cannot await
+    /// MainActor. A change takes effect on the next unload/reload, like the
+    /// SSD config.
+    private(set) var asrEnabled: Bool = false
+
+    /// **Asymmetric-State Restore test mode**, snapshotted at load from
+    /// `SettingsManager.asymmetricStateRestoreTestMode` (same lifecycle as
+    /// `asrEnabled`). When `true` the speculative pass's worth-it floor drops
+    /// to one token — any context or reasoning length triggers it — and ASR
+    /// declines log first-divergence forensics.
+    private(set) var asrTestMode: Bool = false
+
+    /// Per-layer RoPE scalars for the loaded model, read once from
+    /// `modelDirectory/config.json` at load. The ASR trigger rebuilds the
+    /// layer-keyed map per bearing snapshot's layer classes from this. `nil`
+    /// before load, when the model directory is unknown, or when the config
+    /// lacks the scalars ASR needs (the trigger then declines synthesis).
+    private(set) var asrRopeScalars: AsymmetricStateRestore.RopeMetadata.RopeScalars?
+
     /// Whether the loaded model's template starts generation inside a
     /// `<think>` block. Installed after the container verify.
     private var promptStartsThinking = false
@@ -354,11 +396,20 @@ nonisolated final class ServerCompletion {
     func installLoadTimeState(
         modelIdentity: ModelIdentity,
         fingerprint: String,
-        ssdConfig: SSDPrefixCacheConfig?
+        ssdConfig: SSDPrefixCacheConfig?,
+        modelDirectory: URL?,
+        asrEnabled: Bool,
+        asrTestMode: Bool = false
     ) {
         self.modelIdentity = modelIdentity
         self.modelFingerprint = fingerprint
         self.ssdConfig = ssdConfig
+        self.modelDirectory = modelDirectory
+        self.asrEnabled = asrEnabled
+        self.asrTestMode = asrTestMode
+        self.asrRopeScalars = modelDirectory.flatMap {
+            AsymmetricStateRestore.RopeMetadata.scalars(from: $0)
+        }
     }
 
     /// Container-derived facts, installed by the actor's `verifyAndStore`
@@ -1093,6 +1144,47 @@ nonisolated final class ServerCompletion {
                             positionAnchorRopeDelta = delta
                         }
                         let stages = Self.leafStages(for: boundaryMode)
+                        // Build the **Asymmetric-State Restore** plan
+                        // (canonical thinking stop-finish only): capture the
+                        // bearing snapshot from the live final cache and pair
+                        // the aligned bearing tokens with the live per-model
+                        // RoPE scalars; the excision spans themselves are
+                        // derived later against the actual future render
+                        // (**Render-Diff Excision**). `nil` on any
+                        // precondition miss — today's resolve-and-prefill runs
+                        // unchanged; the synthesize preflight is the final
+                        // correctness gate (issue #134).
+                        var asrPlan: AsymmetricStateRestore.Plan?
+                        if mlxStart.asrEnabled, boundaryMode == .canonical {
+                            // Capture the bearing snapshot (deep-copy of the
+                            // think-present state the generation left behind),
+                            // timed for the PRD's "bearing capture may be
+                            // dominant" gate. `mlxStart.finalCache` is the
+                            // Sendable-bridged source the `nonSendable:`
+                            // channel accepts (same pattern as the directLeaf
+                            // capture below).
+                            let bearingFinalCache = mlxStart.finalCache
+                            let bearingOffset =
+                                httpPrefixCacheReportedTokenCount(bearingFinalCache)
+                            let captureStart = Date.timeIntervalSinceReferenceDate
+                            let bearingSnapshot = await container.perform(
+                                nonSendable: bearingFinalCache
+                            ) { _, cache in
+                                HybridCacheSnapshot.capture(
+                                    cache: cache, offset: bearingOffset, type: .leaf)
+                            }
+                            let captureSeconds =
+                                Date.timeIntervalSinceReferenceDate - captureStart
+                            asrPlan = Self.makeAsymmetricStateRestorePlan(
+                                ropeScalars: mlxStart.asrRopeScalars,
+                                storedRenderTokens: storedRenderTokens,
+                                bearingSnapshot: bearingSnapshot,
+                                bearingCaptureSeconds: captureSeconds,
+                                tokenizer: leafTokenizer,
+                                stopTokenIDs: mlxStart.stopTokenIDs,
+                                diagnostics: diagnosticsContext
+                            )
+                        }
                         // Seed the **Speculative Canonical Prefill** before
                         // the GPU-side boundary store: the seed spawns the
                         // future-path probe immediately, so its CPU
@@ -1123,6 +1215,9 @@ nonisolated final class ServerCompletion {
                                     renderContext: renderContext,
                                     idleDelay: plan.idleDelay,
                                     ramOnlySpine: plan.ramOnlySpine,
+                                    asrEnabled: mlxStart.asrEnabled,
+                                    asrTestMode: mlxStart.asrTestMode,
+                                    asrPlan: asrPlan,
                                     diagnostics: diagnosticsContext
                                 )
                             }
@@ -1515,6 +1610,9 @@ nonisolated final class ServerCompletion {
         let fullAttentionScratchProfile = self.modelIdentity?.fullAttentionScratchProfile
         let visionAttentionScratchProfile = self.modelIdentity?.visionAttentionScratchProfile
         let ssdEnabled = self.ssdConfig?.enabled == true
+        let asrEnabled = self.asrEnabled
+        let asrTestMode = self.asrTestMode
+        let asrRopeScalars = self.asrRopeScalars
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
             modelID: modelID,
@@ -2184,6 +2282,13 @@ nonisolated final class ServerCompletion {
                 seedsPositionAnchor: seedsPositionAnchor,
                 snapshotAdmission: snapshotAdmission,
                 ssdEnabled: ssdEnabled,
+                asrEnabled: asrEnabled,
+                asrTestMode: asrTestMode,
+                asrRopeScalars: asrRopeScalars,
+                stopTokenIDs: Self.stopTokenIDs(
+                    modelConfiguration: context.configuration,
+                    tokenizer: context.tokenizer
+                ),
                 partitionKey: partitionKey,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
@@ -2376,6 +2481,13 @@ nonisolated final class ServerCompletion {
             seedsPositionAnchor: false,
             snapshotAdmission: nil,
             ssdEnabled: ssdEnabled,
+            asrEnabled: false,
+            asrTestMode: false,
+            asrRopeScalars: nil,
+            stopTokenIDs: Self.stopTokenIDs(
+                modelConfiguration: context.configuration,
+                tokenizer: context.tokenizer
+            ),
             partitionKey: partitionKey,
             transientLastMessageBoundarySnapshot: nil,
             transientLastUserBoundarySnapshot: nil,
@@ -3001,10 +3113,200 @@ nonisolated final class ServerCompletion {
         )
     }
 
+    /// Build the **Asymmetric-State Restore** plan the speculative seed
+    /// carries (issue #134), from an already-captured bearing snapshot.
+    /// Canonical thinking stop-finish only. Pure (no Metal, no I/O): the
+    /// bearing capture — which needs `container.perform` over the non-Sendable
+    /// live final cache — happens at the call site, where `mlxStart.finalCache`
+    /// is the Sendable-bridged source the `nonSendable:` channel accepts.
+    ///
+    /// The bearing token path is the canonical stored render of the just-
+    /// finished conversation: under the canonical (non-preserve-thinking)
+    /// render the assistant turn's `reasoning_content` is rendered as a
+    /// `<think>` block (the same render the loaded-model harness scans —
+    /// `HybridCacheCorrectnessRunner.test12`), so it lines up with the live
+    /// final cache by the same re-tokenization contract the canonical leaf
+    /// store already relies on. The offset-match gate declines safely on any
+    /// drift (vision image expansion, multi-turn prior-think re-render
+    /// differences) — the re-prefill handles those turns.
+    private static func makeAsymmetricStateRestorePlan(
+        ropeScalars: AsymmetricStateRestore.RopeMetadata.RopeScalars?,
+        storedRenderTokens: [Int],
+        bearingSnapshot: HybridCacheSnapshot?,
+        bearingCaptureSeconds: TimeInterval,
+        tokenizer: any MLXLMCommon.Tokenizer,
+        stopTokenIDs: Set<Int>,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) -> AsymmetricStateRestore.Plan? {
+        guard let ropeScalars, let bearingSnapshot else { return nil }
+        func decline(_ reason: String) {
+            diagnostics.log(
+                PrefixCacheDiagnostics.AsymmetricStateRestoreEvent(
+                    outcome: .unavailable,
+                    bearingOffset: bearingSnapshot.tokenOffset,
+                    strippedOffset: bearingSnapshot.tokenOffset,
+                    spanCount: 0, excisedTokens: 0,
+                    captureSeconds: bearingCaptureSeconds,
+                    synthesisSeconds: 0,
+                    unavailableReason: reason))
+        }
+        // Fidelity gate: the rendered bearing path must align with the final
+        // cache's offset, else excise positions would not match snapshot
+        // positions. A completed assistant render may be one token longer than
+        // the live decode cache when the extra token is the template's EOS /
+        // end-of-message marker, or a template separator (a single "\n" or a
+        // merged "\n\n") immediately after such a marker. That tail is template
+        // scaffolding around the stop condition; the speculative pass prefills
+        // it as residual after restoring the synthesized boundary. Any other
+        // mismatch (vision, prior-think drift, BPE seam) still declines safely.
+        guard
+            let alignment = Self.asrBearingTokenAlignment(
+                storedRenderTokens: storedRenderTokens,
+                bearingOffset: bearingSnapshot.tokenOffset,
+                tokenizer: tokenizer,
+                stopTokenIDs: stopTokenIDs
+            )
+        else {
+            let safeStart = min(bearingSnapshot.tokenOffset, storedRenderTokens.count)
+            let trailing = Array(storedRenderTokens[safeStart...])
+            decline(
+                "bearing-offset-mismatch(render=\(storedRenderTokens.count), bearing=\(bearingSnapshot.tokenOffset), gap=\(trailing.count), trailing=\(trailing))"
+            )
+            return nil
+        }
+        let bearingTokens = alignment.tokens
+        // Excision spans are NOT derived here: only the actual future render
+        // says what the template drops, and the future-shared-path probe
+        // resolves inside the speculative pass. The pass derives them by
+        // **Render-Diff Excision** (`AsymmetricStateRestore.synthesizeBoundary`)
+        // — never by scanning for literal `<think>` delimiters, which
+        // conversation content can carry as data (the issue #134 live
+        // declines: a tool `read` of CONTEXT.md poisoned the span scan).
+
+        // Build the per-attention-layer RoPE map from the live scalars and the
+        // bearing's layer classes.
+        let layerClassNames = bearingSnapshot.layers.map { $0.className }
+        let ropeMetadataByLayer = AsymmetricStateRestore.RopeMetadata.mapByLayer(
+            for: layerClassNames,
+            ropeDims: ropeScalars.ropeDims,
+            ropeTheta: ropeScalars.ropeTheta,
+            scale: ropeScalars.scale,
+            traditional: ropeScalars.traditional)
+
+        return AsymmetricStateRestore.Plan(
+            bearingSnapshot: bearingSnapshot,
+            bearingTokens: bearingTokens,
+            ropeMetadataByLayer: ropeMetadataByLayer,
+            bearingCaptureSeconds: bearingCaptureSeconds)
+    }
+
+    struct ASRBearingTokenAlignment: Sendable, Equatable {
+        let tokens: [Int]
+        let ignoredTrailingTokenCount: Int
+    }
+
+    static func asrBearingTokenAlignment(
+        storedRenderTokens: [Int],
+        bearingOffset: Int,
+        tokenizer: any MLXLMCommon.Tokenizer,
+        stopTokenIDs: Set<Int> = []
+    ) -> ASRBearingTokenAlignment? {
+        guard bearingOffset >= 0, bearingOffset <= storedRenderTokens.count else {
+            return nil
+        }
+        if bearingOffset == storedRenderTokens.count {
+            return ASRBearingTokenAlignment(
+                tokens: storedRenderTokens,
+                ignoredTrailingTokenCount: 0
+            )
+        }
+
+        guard storedRenderTokens.count == bearingOffset + 1 else {
+            return nil
+        }
+        let trailingToken = storedRenderTokens[bearingOffset]
+        let endOfMessageTokenIDs = Self.asrEndOfMessageTokenIDs(
+            tokenizer: tokenizer,
+            stopTokenIDs: stopTokenIDs
+        )
+        if !endOfMessageTokenIDs.contains(trailingToken) {
+            let precededByEndOfMessage =
+                bearingOffset > 0
+                && endOfMessageTokenIDs.contains(storedRenderTokens[bearingOffset - 1])
+            guard
+                precededByEndOfMessage,
+                Self.asrTrailingTemplateSeparatorTokenIDs(tokenizer: tokenizer).contains(
+                    trailingToken)
+            else {
+                return nil
+            }
+        }
+        return ASRBearingTokenAlignment(
+            tokens: Array(storedRenderTokens.prefix(bearingOffset)),
+            ignoredTrailingTokenCount: 1
+        )
+    }
+
+    private static func asrEndOfMessageTokenIDs(
+        tokenizer: any MLXLMCommon.Tokenizer,
+        stopTokenIDs: Set<Int>
+    ) -> Set<Int> {
+        var ids = stopTokenIDs
+        if let eosTokenId = tokenizer.eosTokenId {
+            ids.insert(eosTokenId)
+        }
+        if let eosToken = tokenizer.eosToken {
+            let encoded = tokenizer.encode(text: eosToken, addSpecialTokens: false)
+            if encoded.count == 1, let id = encoded.first {
+                ids.insert(id)
+            }
+        }
+        return ids
+    }
+
+    private static func asrTrailingTemplateSeparatorTokenIDs(
+        tokenizer: any MLXLMCommon.Tokenizer
+    ) -> Set<Int> {
+        // Template-owned whitespace after the end-of-message marker: a single
+        // "\n" (tool-call turn) or a merged "\n\n" (final-answer turn, where
+        // the template's `<|im_end|>\n` meets its trailing newline). Both are
+        // scaffolding around the stop condition, tolerated by the Render–Cache
+        // Offset Contract; any other trailing token declines.
+        var ids: Set<Int> = []
+        for separator in ["\n", "\n\n"] {
+            let encoded = tokenizer.encode(text: separator, addSpecialTokens: false)
+            if encoded.count == 1, let id = encoded.first { ids.insert(id) }
+        }
+        return ids
+    }
+
+    private static func stopTokenIDs(
+        modelConfiguration: ModelConfiguration,
+        tokenizer: any MLXLMCommon.Tokenizer
+    ) -> Set<Int> {
+        var ids = modelConfiguration.eosTokenIds
+        if let eosTokenID = tokenizer.eosTokenId {
+            ids.insert(eosTokenID)
+        }
+        for token in modelConfiguration.extraEOSTokens {
+            if let id = tokenizer.convertTokenToId(token) {
+                ids.insert(id)
+            }
+        }
+        return ids
+    }
+
     /// How a finished turn seeds the **Speculative Canonical Prefill** —
     /// the trigger table (issues #76, #100):
-    /// - A canonical-user boundary (stop-finish answer) seeds immediately,
-    ///   durable — the original #76 trigger.
+    /// - A canonical-user boundary (stop-finish answer) seeds immediately —
+    ///   the original #76 trigger. Durable (SSD) by default; when the pass
+    ///   actually uses an **Asymmetric-State Restore** boundary, the pass
+    ///   itself forces the admission RAM-only
+    ///   (`SpeculativeCanonicalPrefill.admissionIsRamOnly`) — the storage
+    ///   decision is made *after* the synthesis outcome is known, so an
+    ///   ASR-derived leaf never enters the SSD segment-chain (ADR-0010; the
+    ///   issue #134 crash) while a declined-ASR fallback keeps #76's
+    ///   durability.
     /// - A tool-call boundary arms **Stretch Abandonment**'s timer: the
     ///   pass starts only if no follow-up request lands inside the idle
     ///   window, and its spine admits RAM-only so a false alarm (the tool
@@ -3025,7 +3327,8 @@ nonisolated final class ServerCompletion {
         guard !renderContext.preservesThinking else { return nil }
         switch boundaryMode {
         case .canonical:
-            return SpeculativeSeedPlan(idleDelay: .zero, ramOnlySpine: false)
+            return SpeculativeSeedPlan(
+                idleDelay: .zero, ramOnlySpine: false)
         case .directTool:
             return SpeculativeSeedPlan(
                 idleDelay: SpeculativeCanonicalPrefill.stretchAbandonmentIdleWindow,

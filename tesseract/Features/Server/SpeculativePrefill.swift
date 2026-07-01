@@ -88,6 +88,31 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let futureSharedPrefixProbe:
             Task<Result<[Int], CacheKeySpace.TranslationFailure>?, any Error>
 
+        /// The **Asymmetric-State Restore** plan (issue #134), carried in
+        /// addition to the speculative fields above. When present and ASR is
+        /// enabled, the pass synthesizes a stripped-path snapshot from the
+        /// bearing capture by pure array surgery and uses it as the restore
+        /// boundary — in place of resolving one from the live tree — so the
+        /// existing restore + chunked-extension tail re-prefills only the
+        /// small next-user-turn header residual rather than the whole stripped
+        /// conversation. On a preflight `.unavailable` outcome it falls through
+        /// to the resolve below; on `.aborted` it returns. `nil` keeps today's
+        /// behavior exactly.
+        let asrPlan: AsymmetricStateRestore.Plan?
+        /// The **Asymmetric-State Restore** global enable, snapshotted from
+        /// `SettingsManager.asymmetricStateRestoreEnabled` at model load (the
+        /// seed is constructed on-actor; the setting must not be re-sampled
+        /// inside the off-actor speculative pass). `false` keeps ASR entirely
+        /// out of the way so it can be A/B'd against the gold (full-re-prefill)
+        /// path — `asrPlan` is then ignored.
+        let asrEnabled: Bool
+        /// **Asymmetric-State Restore test mode**, snapshotted at model load
+        /// like `asrEnabled`. When `true` the pass drops the worth-it floor
+        /// to one token — any rewind span, any context or reasoning length,
+        /// triggers it — and ASR declines log first-divergence forensics.
+        /// Production behavior is untouched when `false`.
+        let asrTestMode: Bool
+
         /// Cancel the probe when this seed will never be scheduled (failed
         /// leaf store, not-idle schedule, unloaded model) — the builder's
         /// cooperative checks stop its remaining render work.
@@ -117,6 +142,9 @@ nonisolated enum SpeculativeCanonicalPrefill {
         renderContext: TemplateRenderContext = .canonical,
         idleDelay: Duration = .zero,
         ramOnlySpine: Bool = false,
+        asrEnabled: Bool = false,
+        asrTestMode: Bool = false,
+        asrPlan: AsymmetricStateRestore.Plan? = nil,
         diagnostics: PrefixCacheDiagnostics.Context
     ) -> Seed {
         // swiftlint:enable function_parameter_count
@@ -139,16 +167,23 @@ nonisolated enum SpeculativeCanonicalPrefill {
             idleDelay: idleDelay,
             ramOnlySpine: ramOnlySpine,
             diagnostics: diagnostics,
-            futureSharedPrefixProbe: probe
+            futureSharedPrefixProbe: probe,
+            asrPlan: asrPlan,
+            asrEnabled: asrEnabled,
+            asrTestMode: asrTestMode
         )
     }
 
     /// The admitted token path for a future shared prefix: the margin-trimmed
     /// probe LCP, or `nil` when the trimmed span past the canonical leaf is
-    /// below the worth-it threshold. Pure — unit-tested directly.
+    /// below the worth-it threshold. The threshold parameterizes so
+    /// **Asymmetric-State Restore test mode** can drop it to one token
+    /// (testing at any context/reasoning length); production callers pass the
+    /// default. Pure — unit-tested directly.
     static func admitPath(
         futureSharedPrefix: [Int],
-        canonicalLeafOffset: Int
+        canonicalLeafOffset: Int,
+        minimumResidualTokens: Int = SpeculativeCanonicalPrefill.minimumResidualTokens
     ) -> [Int]? {
         let end = futureSharedPrefix.count - futureBoundarySafetyMarginTokens
         guard end - canonicalLeafOffset >= minimumResidualTokens else { return nil }
@@ -168,6 +203,22 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let offset = boundaryOffset + consumedTokens
         guard offset > canonicalLeafOffset else { return nil }
         return offset
+    }
+
+    /// Whether this pass's admission must stay RAM-only. Storage is decided
+    /// *after* the pass knows its outcome (issue #134 follow-up): an
+    /// ASR-derived leaf — synthesized boundary plus anything extended on top
+    /// of it — must never enter the SSD segment-chain (ADR-0010; chaining a
+    /// stripped-path K/V onto a bearing-path base was the issue #134 GPU
+    /// crash), while a pass whose ASR declined and fell back to the ordinary
+    /// re-prefill keeps issue #76's SSD durability. Pure — unit-tested
+    /// directly.
+    static func admissionIsRamOnly(
+        preempted: Bool,
+        ramOnlySpine: Bool,
+        asrDerived: Bool
+    ) -> Bool {
+        preempted || ramOnlySpine || asrDerived
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
@@ -227,11 +278,14 @@ nonisolated enum SpeculativeCanonicalPrefill {
             return
         }
 
-        // 2. Pure: safety margin + worth-it threshold.
+        // 2. Pure: safety margin + worth-it threshold (dropped to one token
+        //    under Asymmetric-State Restore test mode, so any rewind span —
+        //    any context or reasoning length — triggers the pass).
         guard
             let admitPath = admitPath(
                 futureSharedPrefix: futurePrefix,
-                canonicalLeafOffset: seed.canonicalLeafOffset
+                canonicalLeafOffset: seed.canonicalLeafOffset,
+                minimumResidualTokens: seed.asrTestMode ? 1 : minimumResidualTokens
             )
         else {
             diagnostics.logSkip(
@@ -245,38 +299,100 @@ nonisolated enum SpeculativeCanonicalPrefill {
             return
         }
 
-        // 3. Resolve the restore boundary against the live tree — usually
-        // the canonical leaf admitted moments ago, but whatever Snapshot
-        // Resolution surfaces works (a shallower hit just re-prefills more).
-        // Driven inside `container.perform` so an SSD `loadSync` stays
-        // off-MainActor (ADR-0001).
-        if Task.isCancelled {
-            logPreempted(diagnostics, prefilledTokens: 0, residualTokens: 0)
-            return
+        // 2a. **Asymmetric-State Restore** (issue #134): when the seed carries
+        //     an ASR plan and the feature is enabled, derive the excision
+        //     spans from the actual future path (**Render-Diff Excision** —
+        //     alignment inside `synthesizeBoundary`, so future-path
+        //     compatibility holds by construction) and *synthesize* a
+        //     stripped-path boundary from the bearing capture by pure array
+        //     surgery. The synthesized snapshot sits at the aligned depth;
+        //     step 3 then uses it as the restore boundary, and the
+        //     chunked-extension tail below re-prefills only the residual in
+        //     `admitPath` (the stripped conversation itself is recovered by
+        //     the surgery, not re-prefilled). A preflight `.unavailable`
+        //     decline falls through to the live-tree resolve below (user
+        //     story #12); `.aborted` admits nothing deeper than the canonical
+        //     leaf and returns (user story #14). A pass with no plan, or with
+        //     the feature off, keeps today's resolve-and-prefill exactly.
+        var asrBoundary: HybridCacheSnapshot?
+        if seed.asrEnabled, let asrPlan = seed.asrPlan, !Task.isCancelled {
+            // Synthesis evaluates MLX graphs (the surgery kernels plus
+            // `deepCopyState`'s materializing `eval`), so it must run on the
+            // model's Metal-affine executor like every other GPU-touching
+            // step — an off-actor `eval` races the actor's in-flight GPU work
+            // and intermittently hangs the GPU (CDM Kill watchdog restart,
+            // observed live 2026-07-02).
+            let outcome = await container.perform { _ in
+                AsymmetricStateRestore.synthesizeBoundary(
+                    plan: asrPlan,
+                    admitPath: admitPath,
+                    minimumWarmOffset: seed.keySpace.minimumWarmOffset,
+                    testMode: seed.asrTestMode,
+                    diagnostics: diagnostics)
+            }
+            switch outcome {
+            case .synthesized(let snap):
+                asrBoundary = snap
+            case .unavailable:
+                asrBoundary = nil  // fall through to the live-tree resolve
+            case .aborted:
+                return
+            }
         }
-        let resolved = await container.perform { _ in
-            await prefixCache.resolve(
-                tokens: admitPath,
-                promptTokenCount: admitPath.count,
-                partitionKey: seed.partitionKey,
-                modelFingerprint: seed.partitionKey.modelFingerprint,
-                diagnostics: diagnostics
-            ).lookup.snapshot
-        }
-        // The boundary guards mirror the canonical-leaf arm: a usable
-        // boundary is inside the path and past the image prefix (the
-        // residual doubles as the reprefill input, so it must be image-free).
-        guard let boundary = resolved,
-            boundary.tokenOffset > 0,
-            boundary.tokenOffset < admitPath.count,
-            boundary.tokenOffset >= seed.keySpace.minimumWarmOffset
-        else {
-            diagnostics.logSkip(
-                stage: "speculativePrefill",
-                reason: "no-resolved-boundary",
-                extraFields: [("admitLen", "\(admitPath.count)")]
-            )
-            return
+
+        // 3. Resolve the restore boundary — the synthesized ASR snapshot when
+        //    one was produced (and still satisfies the boundary guards),
+        //    otherwise the live tree. Usually the canonical leaf admitted
+        //    moments ago, but whatever Snapshot Resolution surfaces works (a
+        //    shallower hit just re-prefills more). Driven inside
+        //    `container.perform` so an SSD `loadSync` stays off-MainActor
+        //    (ADR-0001).
+        let boundary: HybridCacheSnapshot
+        let boundaryIsASRDerived: Bool
+        if let asrBoundary,
+            asrBoundary.tokenOffset > 0,
+            asrBoundary.tokenOffset < admitPath.count,
+            asrBoundary.tokenOffset >= seed.keySpace.minimumWarmOffset
+        {
+            // ASR recovered the stripped conversation up to
+            // `asrBoundary.tokenOffset`; the residual re-prefill is the
+            // user-header tail only. Everything this pass admits on top is
+            // ASR-derived and must stay RAM-only (ADR-0010: the synthesized
+            // K/V is a concatenation of non-contiguous pieces that must never
+            // enter the SSD segment-chain — the issue #134 crash).
+            boundary = asrBoundary
+            boundaryIsASRDerived = true
+        } else {
+            boundaryIsASRDerived = false
+            if Task.isCancelled {
+                logPreempted(diagnostics, prefilledTokens: 0, residualTokens: 0)
+                return
+            }
+            let resolved = await container.perform { _ in
+                await prefixCache.resolve(
+                    tokens: admitPath,
+                    promptTokenCount: admitPath.count,
+                    partitionKey: seed.partitionKey,
+                    modelFingerprint: seed.partitionKey.modelFingerprint,
+                    diagnostics: diagnostics
+                ).lookup.snapshot
+            }
+            // The boundary guards mirror the canonical-leaf arm: a usable
+            // boundary is inside the path and past the image prefix (the
+            // residual doubles as the reprefill input, so it must be image-free).
+            guard let resolved,
+                resolved.tokenOffset > 0,
+                resolved.tokenOffset < admitPath.count,
+                resolved.tokenOffset >= seed.keySpace.minimumWarmOffset
+            else {
+                diagnostics.logSkip(
+                    stage: "speculativePrefill",
+                    reason: "no-resolved-boundary",
+                    extraFields: [("admitLen", "\(admitPath.count)")]
+                )
+                return
+            }
+            boundary = resolved
         }
         let anchorDelta: Int?
         if seed.seedsPositionAnchor {
@@ -359,7 +475,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 admitPath: admitPath,
                 boundaryOffset: boundary.tokenOffset,
                 warm: warm,
-                prefillStart: prefillStart
+                prefillStart: prefillStart,
+                asrDerived: boundaryIsASRDerived
             )
             return
         }
@@ -377,7 +494,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
             prefixCache: prefixCache,
             boundaryOffset: boundary.tokenOffset,
             prefillSeconds: prefillSeconds,
-            preempted: false
+            preempted: false,
+            asrDerived: boundaryIsASRDerived
         )
         Memory.clearCache()
     }
@@ -398,7 +516,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
         admitPath: [Int],
         boundaryOffset: Int,
         warm: WarmState,
-        prefillStart: TimeInterval
+        prefillStart: TimeInterval,
+        asrDerived: Bool
     ) async {
         guard
             let offset = preemptCaptureOffset(
@@ -422,10 +541,12 @@ nonisolated enum SpeculativeCanonicalPrefill {
             prefixCache: prefixCache,
             boundaryOffset: boundaryOffset,
             prefillSeconds: Date.timeIntervalSinceReferenceDate - prefillStart,
-            preempted: true
+            preempted: true,
+            asrDerived: asrDerived
         )
     }
 
+    // swiftlint:disable function_parameter_count
     /// Shared capture tail for both exits: snapshot the warm cache at
     /// `storedTokens.count` and admit it via the structured-leaf admission
     /// (`ServerCompletion.admitStructuredLeaf`). Completed passes persist
@@ -444,13 +565,20 @@ nonisolated enum SpeculativeCanonicalPrefill {
         prefixCache: PrefixCacheManager,
         boundaryOffset: Int,
         prefillSeconds: TimeInterval,
-        preempted: Bool
+        preempted: Bool,
+        asrDerived: Bool
     ) async {
+        // swiftlint:enable function_parameter_count
         let diagnostics = seed.diagnostics
-        // Preempted partial leaves and abandonment spines are RAM-only
-        // and never consult the extension base.
+        // Preempted partial leaves, abandonment spines, and ASR-derived
+        // leaves are RAM-only and never consult the extension base.
+        let ramOnly = admissionIsRamOnly(
+            preempted: preempted,
+            ramOnlySpine: seed.ramOnlySpine,
+            asrDerived: asrDerived
+        )
         let extensionBase = await ServerCompletion.resolveExtensionBase(
-            ssdEnabled: seed.ssdEnabled && !preempted && !seed.ramOnlySpine,
+            ssdEnabled: seed.ssdEnabled && !ramOnly,
             tokens: storedTokens,
             partitionKey: seed.partitionKey,
             prefixCache: prefixCache
@@ -474,7 +602,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 return
             }
             let storage: SnapshotAdmission.Storage =
-                preempted || seed.ramOnlySpine
+                ramOnly
                 ? .ramOnly
                 : ServerCompletion.snapshotAdmissionStorage(
                     for: leaf,

@@ -190,6 +190,21 @@ identical to the shape prepare uses, so a probe render cannot drift from prepare
 _Avoid_: re-render (unqualified), probe tokenization, per-call-site
 `applyChatTemplate` (the rendering it standardizes, not a synonym for it).
 
+**Render–Cache Offset Contract**:
+The length-agreement a write-side cache manipulation assumes between a canonical
+**Conversation Render** of a completed turn and the live decode cache of that same
+turn: the render may exceed the cache only by template scaffolding around the stop
+condition (an end-of-message marker, then a trailing separator), because the cache
+stops at the decoded stop token while the render re-tokenizes the stored text
+through the template. The canonical leaf store relies on it; **Asymmetric-State
+Restore**'s bearing capture reuses the same contract to locate its excision
+offsets. A drift beyond scaffolding (vision expansion, prior-think re-render, a BPE
+seam) means the re-tokenized path no longer matches the cached path, and the
+operation declines rather than mis-align.
+_Avoid_: token-count match (implementation-level), offset guard (one check that
+enforces it, not the concept); re-tokenization contract (the code comment's working
+name — say the contract).
+
 **Position Anchor**:
 The M-RoPE continuation state a warm-restored conversation resumes generation at —
 the restore offset plus the rope delta the cached prefix accumulated —
@@ -332,6 +347,41 @@ is part of the cache partition, and retained reasoning permanently occupies
 context.
 _Avoid_: think retention hack (vendor-sanctioned where the template declares it);
 template patching (vendor templates are never edited); global setting (per-model).
+
+**Asymmetric-State Restore**:
+The experimental single-prefill counter to the **Think-Strip Rewind**: rather than
+re-prefilling the think-stripped **Tool Stretch** (the **Speculative Canonical
+Prefill** path), derive a snapshot for the stripped token path from the
+think-bearing snapshot by excising the spans the canonical future render drops
+(**Render-Diff Excision**) from the sliceable
+(attention) layers, re-rotating the retained keys to their shifted positions, and
+leaving the non-sliceable recurrent (**MambaCache**) state as-is — advanced
+through the stretch (thinks included), since recurrent state is irreversible.
+The two layer kinds then serve different renders — attention aligned to the
+stripped path, recurrent state still carrying the bearing render — hence
+*asymmetric*.
+Correctness is unproven (the recurrent state is stale by construction, and
+recurrent state is irreversible — ADR-0009); it is a shipped experimental
+mechanism only when the user opts in, off by default, with serving fidelity
+measured rather than guaranteed.
+_Avoid_: stale-state hit / think-stripped hit / trimmed-think hit (the rejected
+and colliding earlier names); conflating it with the sliceable/non-sliceable
+layer distinction it exploits; **ASR** unqualified — it also means Automatic
+Speech Recognition (the **Speech Recognizer** domain; see that entry's _Avoid_),
+so say "Asymmetric-State Restore" in full wherever the speech sense could apply.
+
+**Render-Diff Excision**:
+How **Asymmetric-State Restore** finds what to cut: the excision spans are
+derived by aligning the think-bearing render's tokens against the canonical
+future render, excising exactly the token runs the future render drops.
+Alignment ends at the first token the bearing cache never held (a re-tokenized
+seam); synthesis then stops at that aligned depth and the ordinary residual
+re-prefill covers the tail. Replaces scanning for literal `<think>` delimiters,
+which assumed the future render strips every think span — an assumption real
+templates and clients violate.
+_Avoid_: think-span scan (the predecessor it replaces); token diff (it aligns
+ordered middle-excisions, not a general edit script); future-prefix
+compatibility gate (the after-the-fact check this makes hold by construction).
 
 ### Server completion
 

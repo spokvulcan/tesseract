@@ -213,6 +213,67 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// One **Asymmetric-State Restore** pass (issue #134, ADR-0009): the
+    /// experimental single-prefill counter to the **Think-Strip Rewind** that
+    /// derives a stripped-path snapshot from the think-bearing capture by pure
+    /// array surgery, plugged into the **Speculative Canonical Prefill**
+    /// scheduling. The outcome surfaces whether synthesis produced a usable
+    /// snapshot (`synthesized`), declined preflight (`unavailable`, fell back
+    /// to the speculative prefill), or aborted mid-synthesis (`midSynthesis`,
+    /// admitted nothing deeper than the canonical leaf). Per ADR-0009's
+    /// performance gate, each phase is reported separately so a
+    /// capture-dominated outcome is visible rather than hidden behind a fast
+    /// synthesis number.
+    struct AsymmetricStateRestoreEvent: Payload {
+        enum Outcome: String, Sendable {
+            case synthesized
+            case unavailable
+            case midSynthesis
+        }
+
+        let outcome: Outcome
+        let bearingOffset: Int
+        let strippedOffset: Int
+        let spanCount: Int
+        let excisedTokens: Int
+        /// Wall-clock seconds the trigger spent capturing the bearing snapshot
+        /// (the deep-copy of the live final cache) — the figure the PRD's
+        /// "bearing capture may be dominant" gate watches. Reported separately
+        /// from synthesis so a capture-dominated outcome is visible.
+        let captureSeconds: TimeInterval
+        /// Wall-clock seconds for the alignment + tensor surgery (Render-Diff
+        /// Excision + excision + delta-RoPE), measured inside
+        /// `synthesizeBoundary`.
+        let synthesisSeconds: TimeInterval
+        /// `true` when Render-Diff alignment ended at a re-tokenized seam and
+        /// synthesis proceeded at the shallower aligned depth (partial
+        /// synthesis) — `strippedOffset` then reads the aligned depth.
+        var seamCut: Bool = false
+        /// Length of the future shared path the alignment ran against —
+        /// `strippedOffset / admitPathLength` reads as the recovered fraction.
+        var admitPathLength: Int?
+        /// Preflight decline reason (only meaningful when `outcome == unavailable`).
+        let unavailableReason: String?
+
+        let eventName = "asymmetricStateRestore"
+
+        var fields: [(String, String)] {
+            var pairs: [(String, String)] = [
+                ("outcome", outcome.rawValue),
+                ("bearingOffset", "\(bearingOffset)"),
+                ("strippedOffset", "\(strippedOffset)"),
+                ("spanCount", "\(spanCount)"),
+                ("excisedTokens", "\(excisedTokens)"),
+                ("captureMs", PrefixCacheDiagnostics.milliseconds(captureSeconds)),
+                ("synthesisMs", PrefixCacheDiagnostics.milliseconds(synthesisSeconds)),
+            ]
+            if seamCut { pairs.append(("seamCut", "true")) }
+            if let admitPathLength { pairs.append(("admitLen", "\(admitPathLength)")) }
+            if let unavailableReason { pairs.append(("unavailableReason", unavailableReason)) }
+            return pairs
+        }
+    }
+
     struct EvictionEvent: Payload {
         let strategy: PrefixCacheManager.EvictionEvent.Strategy
         let offset: Int

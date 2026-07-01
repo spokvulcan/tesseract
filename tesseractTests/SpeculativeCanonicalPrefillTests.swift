@@ -109,6 +109,42 @@ struct SpeculativeCanonicalPrefillTests {
         #expect(offset == nil)
     }
 
+    // MARK: - ASR test mode floor + outcome-based storage (issue #134)
+
+    /// **Asymmetric-State Restore test mode** drops the worth-it floor to one
+    /// token: a rewind span far below the production 512 still admits.
+    @Test func admitPathAcceptsTinySpansUnderTestModeFloor() {
+        let prefix = Array(0..<20)
+        #expect(
+            SpeculativeCanonicalPrefill.admitPath(
+                futureSharedPrefix: prefix, canonicalLeafOffset: 10
+            ) == nil)
+        #expect(
+            SpeculativeCanonicalPrefill.admitPath(
+                futureSharedPrefix: prefix, canonicalLeafOffset: 10,
+                minimumResidualTokens: 1
+            ) == Array(prefix[0..<18]))
+    }
+
+    /// Storage is decided after the pass knows its outcome: an ASR-derived
+    /// admission (synthesized boundary or anything extended on it) must stay
+    /// RAM-only (ADR-0010 — the issue #134 GPU crash), while a declined-ASR
+    /// fallback keeps issue #76's SSD durability.
+    @Test func asrDerivedAdmissionsStayRamOnlyFallbacksStayDurable() {
+        #expect(
+            SpeculativeCanonicalPrefill.admissionIsRamOnly(
+                preempted: false, ramOnlySpine: false, asrDerived: true))
+        #expect(
+            !SpeculativeCanonicalPrefill.admissionIsRamOnly(
+                preempted: false, ramOnlySpine: false, asrDerived: false))
+        #expect(
+            SpeculativeCanonicalPrefill.admissionIsRamOnly(
+                preempted: true, ramOnlySpine: false, asrDerived: false))
+        #expect(
+            SpeculativeCanonicalPrefill.admissionIsRamOnly(
+                preempted: false, ramOnlySpine: true, asrDerived: false))
+    }
+
     // MARK: - Stretch Abandonment trigger table (issue #100)
 
     @Test func stopFinishSeedsImmediatelyAndDurably() {
