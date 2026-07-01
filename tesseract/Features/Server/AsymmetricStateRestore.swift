@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXLMCommon
 
+// swiftlint:disable type_body_length
 /// **Asymmetric-State Restore** (ASR) — CONTEXT.md, ADR-0009, issue #134.
 ///
 /// The experimental single-prefill counter to the **Think-Strip Rewind**.
@@ -10,7 +11,11 @@ import MLXLMCommon
 /// grow), ASR *derives* a snapshot for the stripped token path from the
 /// think-bearing snapshot by pure array surgery — no model forward pass:
 ///
-/// 1. **N middle-excisions** — one per assistant turn's `<think>` span —
+/// 1. **N middle-excisions** — one per span the canonical future render
+///    drops, derived by **Render-Diff Excision** (aligning the bearing token
+///    path against the future shared path — never by scanning for literal
+///    `<think>` delimiters, which conversation *content* can carry as data;
+///    the 2026-06-27 live declines in issue #134 were exactly that) —
 ///    cutting those K/V ranges out of each sliceable (attention) layer along
 ///    the token axis and concatenating the survivors.
 /// 2. **Cumulative delta-RoPE** on the retained attention keys: every retained
@@ -181,13 +186,14 @@ nonisolated enum AsymmetricStateRestore {
         }
     }
 
-    /// One `<think>…</think>` span to excise, in **bearing-path** token
-    /// offsets. Half-open `[start, end)` — the delimiters, everything between
-    /// them, and any template-owned post-close separator are removed from each
-    /// sliceable layer's K/V, exactly as the chat template strips them in the
-    /// canonical (non-preserve-thinking) render. Found by scanning the bearing
-    /// render for the `<think>`/`</think>` delimiter tokens.
-    struct ThinkSpan: Sendable, Equatable, Hashable {
+    /// One token span to excise, in **bearing-path** token offsets. Half-open
+    /// `[start, end)` — removed from each sliceable layer's K/V. Derived by
+    /// **Render-Diff Excision** (`renderDiffExcision`): a span is a token run
+    /// the canonical future render drops, typically a `<think>` block plus its
+    /// template-owned separators, but defined by the render diff — never by
+    /// scanning for literal delimiter text, which conversation content can
+    /// carry as data (issue #134's live declines).
+    struct ExcisionSpan: Sendable, Equatable, Hashable {
         let start: Int
         let end: Int
 
@@ -201,9 +207,19 @@ nonisolated enum AsymmetricStateRestore {
     /// speculative prefill in full (user story #12). Distinct from a
     /// mid-synthesis failure, which throws after some budget is spent.
     enum UnavailableReason: Sendable, Equatable {
-        /// Nothing to excise — no single-prefill benefit, and synthesis would
-        /// just copy the bearing capture.
-        case noThinkSpans
+        /// The render diff dropped nothing — the future path extends the
+        /// bearing path unchanged, so there is no single-prefill benefit and
+        /// synthesis would just copy the bearing capture.
+        case nothingExcised
+        /// Alignment found no shared prefix at all between the bearing path
+        /// and the future path (a different render entirely).
+        case noAlignedPrefix
+        /// The aligned depth sits inside the image prefix — a restore there
+        /// has no valid boundary (mirrors the pass's boundary guards).
+        case belowWarmOffset(aligned: Int, minimum: Int)
+        /// The aligned depth consumed the whole future path — no residual for
+        /// the extension prefill to cover, so no admissible deeper leaf.
+        case noResidual(aligned: Int, admit: Int)
         /// Spans not sorted, overlapping, empty, or out of the bearing path.
         case invalidSpans(detail: String)
         /// `strippedTokenCount` does not equal `bearingLength − Σ span lengths`.
@@ -257,18 +273,18 @@ nonisolated enum AsymmetricStateRestore {
     static func synthesize(
         bearingSnapshot: HybridCacheSnapshot,
         strippedTokenCount: Int,
-        thinkSpans: [ThinkSpan],
+        spans: [ExcisionSpan],
         ropeMetadataByLayer: [Int: RopeMetadata]
     ) throws -> HybridCacheSnapshot {
         // 1. Preflight — spans.
         guard !bearingSnapshot.layers.isEmpty else {
             throw SynthesisError.unavailable(.emptySnapshot)
         }
-        guard !thinkSpans.isEmpty else {
-            throw SynthesisError.unavailable(.noThinkSpans)
+        guard !spans.isEmpty else {
+            throw SynthesisError.unavailable(.nothingExcised)
         }
         let sortedSpans = try validateSpans(
-            thinkSpans, bearingLength: bearingSnapshot.tokenOffset
+            spans, bearingLength: bearingSnapshot.tokenOffset
         )
         let excisedTotal = sortedSpans.reduce(0) { $0 + $1.length }
         let expectedStripped = bearingSnapshot.tokenOffset - excisedTotal
@@ -380,9 +396,9 @@ nonisolated enum AsymmetricStateRestore {
     /// Sort, bounds-check, and de-duplicate the spans. Returns them sorted by
     /// `start` or throws `.unavailable(.invalidSpans(...))`.
     private static func validateSpans(
-        _ thinkSpans: [ThinkSpan], bearingLength: Int
-    ) throws -> [ThinkSpan] {
-        let sorted = thinkSpans.sorted { $0.start < $1.start }
+        _ spans: [ExcisionSpan], bearingLength: Int
+    ) throws -> [ExcisionSpan] {
+        let sorted = spans.sorted { $0.start < $1.start }
         var previousEnd = 0
         for span in sorted {
             guard span.start < span.end else {
@@ -436,7 +452,7 @@ nonisolated enum AsymmetricStateRestore {
     /// The half-open `[start, end)` token ranges that *survive* excision,
     /// i.e. the complement of the think spans within `[0, bearingLength)`.
     static func survivingRanges(
-        spans: [ThinkSpan], bearingLength: Int
+        spans: [ExcisionSpan], bearingLength: Int
     ) -> [Range<Int>] {
         var ranges: [Range<Int>] = []
         var cursor = 0
@@ -654,14 +670,13 @@ nonisolated enum AsymmetricStateRestore {
         /// sits at the Think-Strip Rewind divergence and covers none of the
         /// stretch — PRD issue #134).
         let bearingSnapshot: HybridCacheSnapshot
-        /// Per-assistant-turn `<think>`/`</think>` delimiter offsets, in
-        /// bearing-path token coordinates.
-        let thinkSpans: [ThinkSpan]
-        /// The token path produced by excising `thinkSpans` from the bearing
-        /// render. The speculative pass verifies this is an actual prefix of
-        /// the future shared path before synthesis, so ASR cannot restore a
-        /// boundary that belongs to a different template render.
-        let strippedTokens: [Int]
+        /// The bearing render's token path, aligned to `bearingSnapshot`
+        /// (`count == bearingSnapshot.tokenOffset`, guaranteed by the arm-time
+        /// offset-match gate). The pass derives the excision spans from it by
+        /// **Render-Diff Excision** against the future shared path once the
+        /// probe resolves — spans are *not* precomputed at arm time, because
+        /// only the actual future render says what the template drops.
+        let bearingTokens: [Int]
         /// Per-attention-layer RoPE metadata (read from the live model config,
         /// not hard-coded — user story #11).
         let ropeMetadataByLayer: [Int: RopeMetadata]
@@ -690,92 +705,123 @@ nonisolated enum AsymmetricStateRestore {
         case aborted
     }
 
-    /// Scan a bearing token path for `<think>…</think>` delimiter runs and
-    /// return the think spans to excise — one per matched open/close pair, in
-    /// bearing-path offsets. The delimiter token runs come from the tokenizer's
-    /// own encoding of `<think>` and `</think>` (so it tracks BPE merges rather
-    /// than assuming single-token delimiters). `postCloseTokens` lets callers
-    /// include template-owned separators such as Qwen's `\n\n` after
-    /// `</think>`, because historical canonical renders remove those separators
-    /// with the think block. Unmatched delimiters are ignored; a missing close is
-    /// treated as closing at the path end.
-    static func thinkSpans(
-        in bearingTokens: [Int],
-        openThinkTokens: [Int],
-        closeThinkTokens: [Int],
-        postCloseTokens: [Int] = []
-    ) -> [ThinkSpan] {
-        guard !openThinkTokens.isEmpty, !closeThinkTokens.isEmpty else { return [] }
-        var spans: [ThinkSpan] = []
-        var searchStart = 0
-        while searchStart < bearingTokens.count,
-            let openIndex = firstRun(
-                in: bearingTokens, run: openThinkTokens, from: searchStart)
-        {
-            let spanStart = openIndex
-            let afterOpen = openIndex + openThinkTokens.count
-            guard afterOpen <= bearingTokens.count else { break }
-            if let closeIndex = firstRun(
-                in: bearingTokens, run: closeThinkTokens, from: afterOpen)
-            {
-                var spanEnd = closeIndex + closeThinkTokens.count
-                if matchesRun(in: bearingTokens, run: postCloseTokens, at: spanEnd) {
-                    spanEnd += postCloseTokens.count
-                }
-                spans.append(ThinkSpan(start: spanStart, end: spanEnd))
-                searchStart = spanEnd
-            } else {
-                // Truncated think block (no close in the path): close at end.
-                spans.append(ThinkSpan(start: spanStart, end: bearingTokens.count))
-                break
-            }
-        }
-        return spans
+    // MARK: - Render-Diff Excision
+
+    /// The product of aligning the bearing token path against the future
+    /// shared path (**Render-Diff Excision**, CONTEXT.md): the spans the
+    /// future render drops, the depth of the future path the retained tokens
+    /// reconstruct, and whether alignment ended early at a re-tokenized seam.
+    struct RenderDiffAlignment: Sendable, Equatable {
+        /// Excisions in bearing-path coordinates, sorted, non-overlapping.
+        /// Includes the tail cut when alignment ends before the bearing end
+        /// (a seam, or the future path running out). Invariant: excising
+        /// these from `bearingTokens` yields exactly
+        /// `admitPath[0..<alignedDepth]`.
+        let spans: [ExcisionSpan]
+        /// Number of future-path tokens the retained bearing tokens
+        /// reconstruct — the synthesized snapshot's token offset.
+        let alignedDepth: Int
+        /// `true` when alignment stopped at a token the bearing cache never
+        /// held (a re-tokenized seam, e.g. a `"\n"+"\n"` pair the stripped
+        /// render merges into one `"\n\n"` token). Synthesis then proceeds at
+        /// the shallower `alignedDepth` (**partial synthesis**) and the
+        /// residual re-prefill covers the tail.
+        let seamCut: Bool
     }
 
-    /// The token path left after excising the bearing-path think spans.
+    /// Derive the excision spans by aligning the bearing render against the
+    /// actual future shared path. Two-pointer walk: matching tokens advance
+    /// both cursors; on a mismatch, the smallest bearing skip whose next
+    /// `resyncWindow` tokens re-match the future path becomes an excision
+    /// span. Unresolvable mismatches end the alignment (partial synthesis).
+    ///
+    /// This replaces scanning for literal `<think>` delimiters — conversation
+    /// content can carry those as data (a tool `read` of CONTEXT.md did, live
+    /// on 2026-06-27, poisoning the span set and forcing the pass's decline).
+    /// Deriving from the render diff makes future-path compatibility hold by
+    /// construction: content-borne delimiters appear in both renders and
+    /// align away, and a render that strips nothing yields no spans (a
+    /// correct no-op). Pure — unit-tested directly.
+    static func renderDiffExcision(
+        bearingTokens: [Int],
+        admitPath: [Int],
+        resyncWindow: Int = 16
+    ) -> RenderDiffAlignment {
+        var spans: [ExcisionSpan] = []
+        var b = 0
+        var f = 0
+        while b < bearingTokens.count, f < admitPath.count {
+            if bearingTokens[b] == admitPath[f] {
+                b += 1
+                f += 1
+                continue
+            }
+            guard
+                let resync = resyncIndex(
+                    bearingTokens: bearingTokens, from: b + 1,
+                    admitPath: admitPath, at: f, window: resyncWindow)
+            else {
+                // Unresolvable seam: cut the bearing tail and stop here.
+                spans.append(ExcisionSpan(start: b, end: bearingTokens.count))
+                return RenderDiffAlignment(spans: spans, alignedDepth: f, seamCut: true)
+            }
+            spans.append(ExcisionSpan(start: b, end: resync))
+            b = resync
+        }
+        if f == admitPath.count, b < bearingTokens.count {
+            // The future path ran out with bearing tokens left (the admit
+            // path's LCP ended early): trim the tail so the retained tokens
+            // are exactly the aligned prefix.
+            spans.append(ExcisionSpan(start: b, end: bearingTokens.count))
+        }
+        return RenderDiffAlignment(spans: spans, alignedDepth: f, seamCut: false)
+    }
+
+    /// The smallest bearing index `e ≥ from` where the bearing path re-matches
+    /// `admitPath[at...]` for `window` consecutive tokens (clamped near the
+    /// ends, minimum one token). `nil` when no such index exists.
+    private static func resyncIndex(
+        bearingTokens: [Int], from: Int,
+        admitPath: [Int], at futureIndex: Int,
+        window: Int
+    ) -> Int? {
+        guard from < bearingTokens.count, futureIndex < admitPath.count else { return nil }
+        for e in from..<bearingTokens.count {
+            let width = min(
+                max(1, window),
+                bearingTokens.count - e,
+                admitPath.count - futureIndex
+            )
+            var match = true
+            for j in 0..<width where bearingTokens[e + j] != admitPath[futureIndex + j] {
+                match = false
+                break
+            }
+            if match { return e }
+        }
+        return nil
+    }
+
+    /// The token path left after excising the given spans.
     static func strippedTokens(
         in bearingTokens: [Int],
-        spans: [ThinkSpan]
+        spans: [ExcisionSpan]
     ) -> [Int] {
         survivingRanges(spans: spans, bearingLength: bearingTokens.count)
             .flatMap { bearingTokens[$0] }
     }
 
-    private static func matchesRun(in tokens: [Int], run: [Int], at index: Int) -> Bool {
-        guard !run.isEmpty, index >= 0, index + run.count <= tokens.count else {
-            return false
-        }
-        for j in 0..<run.count where tokens[index + j] != run[j] {
-            return false
-        }
-        return true
-    }
-
-    private static func firstRun(
-        in tokens: [Int], run: [Int], from start: Int
-    ) -> Int? {
-        guard !run.isEmpty, start + run.count <= tokens.count else { return nil }
-        let limit = tokens.count - run.count
-        for i in start...limit {
-            var match = true
-            for j in 0..<run.count where tokens[i + j] != run[j] {
-                match = false
-                break
-            }
-            if match { return i }
-        }
-        return nil
-    }
-
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient.
     /// The cohesive ASR body the **Speculative Canonical Prefill** trigger
-    /// calls in place of resolving a restore boundary: synthesize a
-    /// stripped-path snapshot from the bearing capture by pure tensor surgery.
-    /// The synthesized snapshot sits at `strippedConversationOffset`
-    /// (bearing − excised); the speculative pass then restores it and extends
-    /// through the residual next-user-turn header in `admitPath`, admitting the
-    /// deeper leaf at `admitPath.count` — so only the small header residual is
+    /// calls in place of resolving a restore boundary: derive the excision
+    /// spans from the actual future path (**Render-Diff Excision**), then
+    /// synthesize a stripped-path snapshot from the bearing capture by pure
+    /// tensor surgery. The synthesized snapshot sits at the alignment's
+    /// `alignedDepth` (the future-path prefix the retained tokens
+    /// reconstruct — the full stripped conversation when alignment runs
+    /// clean, shallower on a re-tokenized seam); the speculative pass then
+    /// restores it and extends through the residual in `admitPath`, admitting
+    /// the deeper leaf at `admitPath.count` — so only the residual is
     /// re-prefilled, not the whole stripped conversation.
     ///
     /// Runs entirely off the request critical path (inside the background
@@ -788,18 +834,24 @@ nonisolated enum AsymmetricStateRestore {
     /// alongside it (the PRD's "bearing capture may be dominant" gate).
     static func synthesizeBoundary(
         plan: Plan,
+        admitPath: [Int],
+        minimumWarmOffset: Int,
+        testMode: Bool = false,
         diagnostics: PrefixCacheDiagnostics.Context
     ) -> BoundaryOutcome {
         let bearingSnapshot = plan.bearingSnapshot
-        let spans = plan.thinkSpans
+        let synthesisStart = Date.timeIntervalSinceReferenceDate
+
+        // Render-Diff Excision: derive the spans from the actual future path.
+        // Alignment is part of the timed synthesis (it walks the whole
+        // bearing path), but it is preflight in budget terms — pure integer
+        // work, no tensor touched yet.
+        let alignment = renderDiffExcision(
+            bearingTokens: plan.bearingTokens, admitPath: admitPath
+        )
+        let spans = alignment.spans
         let excisedTokens = spans.reduce(0) { $0 + $1.length }
-        // The stripped-conversation token count the snapshot must align to:
-        // bearing − excised, materialized in the plan. This is the ASR input
-        // contract — NOT the full `admitPath` (which appends the next-user-turn
-        // header); passing `admitPath.count` here is the length-mismatch decline
-        // the synthesized boundary is immune to by construction (issue #134
-        // review).
-        let strippedConversationOffset = plan.strippedTokens.count
+        let alignedDepth = alignment.alignedDepth
 
         func logOutcome(
             _ outcome: PrefixCacheDiagnostics.AsymmetricStateRestoreEvent.Outcome,
@@ -810,21 +862,53 @@ nonisolated enum AsymmetricStateRestore {
                 PrefixCacheDiagnostics.AsymmetricStateRestoreEvent(
                     outcome: outcome,
                     bearingOffset: bearingSnapshot.tokenOffset,
-                    strippedOffset: strippedConversationOffset,
+                    strippedOffset: alignedDepth,
                     spanCount: spans.count,
                     excisedTokens: excisedTokens,
                     captureSeconds: plan.bearingCaptureSeconds,
                     synthesisSeconds: synthesisSeconds,
+                    seamCut: alignment.seamCut,
+                    admitPathLength: admitPath.count,
                     unavailableReason: unavailableReason))
         }
 
-        let synthesisStart = Date.timeIntervalSinceReferenceDate
+        func decline(_ reason: UnavailableReason) -> BoundaryOutcome {
+            let elapsed = Date.timeIntervalSinceReferenceDate - synthesisStart
+            logOutcome(
+                .unavailable, synthesisSeconds: elapsed,
+                unavailableReason: String(describing: reason))
+            if testMode {
+                logAlignmentForensics(
+                    plan: plan, admitPath: admitPath, alignment: alignment,
+                    diagnostics: diagnostics)
+            }
+            return .unavailable
+        }
+
+        // Alignment guards — mirror the pass's boundary guards so a decline
+        // here spends no tensor budget and the caller falls back cleanly.
+        guard !spans.isEmpty else { return decline(.nothingExcised) }
+        guard alignedDepth > 0 else { return decline(.noAlignedPrefix) }
+        guard alignedDepth >= minimumWarmOffset else {
+            return decline(.belowWarmOffset(aligned: alignedDepth, minimum: minimumWarmOffset))
+        }
+        guard alignedDepth < admitPath.count else {
+            return decline(.noResidual(aligned: alignedDepth, admit: admitPath.count))
+        }
+        if testMode, alignment.seamCut {
+            // A seam ended alignment early: still synthesizable at the
+            // shallower depth, but the divergence is worth a forensics line.
+            logAlignmentForensics(
+                plan: plan, admitPath: admitPath, alignment: alignment,
+                diagnostics: diagnostics)
+        }
+
         let synthesized: HybridCacheSnapshot
         do {
             synthesized = try synthesize(
                 bearingSnapshot: bearingSnapshot,
-                strippedTokenCount: strippedConversationOffset,
-                thinkSpans: spans,
+                strippedTokenCount: alignedDepth,
+                spans: spans,
                 ropeMetadataByLayer: plan.ropeMetadataByLayer
             )
         } catch AsymmetricStateRestore.SynthesisError.unavailable(let reason) {
@@ -857,4 +941,44 @@ nonisolated enum AsymmetricStateRestore {
         logOutcome(.synthesized, synthesisSeconds: synthesisSeconds)
         return .synthesized(synthesized)
     }
+
+    /// **Asymmetric-State Restore test mode** forensics: on a decline or a
+    /// seam cut, log the token-ID windows around the first divergence so the
+    /// mismatch is diagnosable from the JSONL alone (with the tokenizer
+    /// offline) — no more archaeology sessions to explain a decline. Token
+    /// IDs, not text: the pass has no tokenizer, and IDs are exactly what the
+    /// alignment compared.
+    private static func logAlignmentForensics(
+        plan: Plan,
+        admitPath: [Int],
+        alignment: RenderDiffAlignment,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) {
+        let f = alignment.alignedDepth
+        // The bearing-side cursor where alignment stopped: the start of the
+        // last span when it was a seam/tail cut, else the bearing end.
+        let b = alignment.spans.last.map(\.start) ?? plan.bearingTokens.count
+        func window(_ tokens: [Int], around index: Int) -> String {
+            let lo = max(0, index - 8)
+            let hi = min(tokens.count, index + 8)
+            return "\(lo)..<\(hi):\(Array(tokens[lo..<hi]))"
+        }
+        diagnostics.logSkip(
+            stage: "asymmetricStateRestoreForensics",
+            reason: alignment.seamCut ? "seam-cut" : "declined",
+            extraFields: [
+                ("alignedDepth", "\(f)"),
+                ("bearingCursor", "\(b)"),
+                ("spanCount", "\(alignment.spans.count)"),
+                (
+                    "spans",
+                    alignment.spans.prefix(8).map { "[\($0.start),\($0.end))" }
+                        .joined(separator: " ")
+                ),
+                ("bearingWindow", window(plan.bearingTokens, around: b)),
+                ("admitWindow", window(admitPath, around: f)),
+            ]
+        )
+    }
 }
+// swiftlint:enable type_body_length

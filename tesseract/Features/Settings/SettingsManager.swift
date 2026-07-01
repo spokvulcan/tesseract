@@ -346,6 +346,14 @@ final class SettingsManager {
         }
     }
 
+    // Developer knob; same load-time snapshot lifecycle as the enable above.
+    var asymmetricStateRestoreTestMode: Bool {
+        didSet {
+            SettingsCatalogue.asymmetricStateRestoreTestMode.write(
+                asymmetricStateRestoreTestMode, to: store)
+        }
+    }
+
     // MARK: - Onboarding
 
     var hasCompletedOnboarding: Bool {
@@ -402,6 +410,8 @@ final class SettingsManager {
         self.prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride
             .load(from: store)
         self.asymmetricStateRestoreEnabled = SettingsCatalogue.asymmetricStateRestoreEnabled
+            .load(from: store)
+        self.asymmetricStateRestoreTestMode = SettingsCatalogue.asymmetricStateRestoreTestMode
             .load(from: store)
         self.hasCompletedOnboarding = SettingsCatalogue.hasCompletedOnboarding.load(from: store)
 
@@ -499,6 +509,7 @@ final class SettingsManager {
         prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.default
         prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.default
         asymmetricStateRestoreEnabled = SettingsCatalogue.asymmetricStateRestoreEnabled.default
+        asymmetricStateRestoreTestMode = SettingsCatalogue.asymmetricStateRestoreTestMode.default
         // Dynamic per-model keys are minted on demand and aren't in the static
         // enumeration above; sweep their prefix so a reset truly clears them. A
         // stale `preserveThinkingRender.<modelID> = true` would otherwise keep

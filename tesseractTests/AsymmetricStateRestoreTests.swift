@@ -122,24 +122,137 @@ struct AsymmetricStateRestoreTests {
 
     @Test func survivingRangesComplementTheSpans() {
         let spans = [
-            AsymmetricStateRestore.ThinkSpan(start: 2, end: 5),
-            AsymmetricStateRestore.ThinkSpan(start: 8, end: 9),
+            AsymmetricStateRestore.ExcisionSpan(start: 2, end: 5),
+            AsymmetricStateRestore.ExcisionSpan(start: 8, end: 9),
         ]
         let ranges = AsymmetricStateRestore.survivingRanges(spans: spans, bearingLength: 12)
         #expect(ranges == [0..<2, 5..<8, 9..<12])
     }
 
-    @Test func thinkSpansCanIncludePostCloseSeparator() {
-        let tokens = [1, 10, 2, 3, 11, 4, 4, 5]
-        let spans = AsymmetricStateRestore.thinkSpans(
-            in: tokens,
-            openThinkTokens: [10],
-            closeThinkTokens: [11],
-            postCloseTokens: [4, 4]
-        )
+    // MARK: - Render-Diff Excision
 
-        #expect(spans == [AsymmetricStateRestore.ThinkSpan(start: 1, end: 7)])
-        #expect(AsymmetricStateRestore.strippedTokens(in: tokens, spans: spans) == [1, 5])
+    /// The alignment invariant every case below re-asserts: excising the
+    /// derived spans from the bearing path yields exactly the future path's
+    /// aligned prefix.
+    private func assertAlignmentInvariant(
+        bearing: [Int], admit: [Int],
+        _ alignment: AsymmetricStateRestore.RenderDiffAlignment
+    ) {
+        let stripped = AsymmetricStateRestore.strippedTokens(
+            in: bearing, spans: alignment.spans)
+        #expect(stripped == Array(admit.prefix(alignment.alignedDepth)))
+    }
+
+    @Test func renderDiffExcisionDerivesTheStrippedSpan() {
+        // bearing = prefix + think block + suffix; the future render drops
+        // the block and appends the next-user header.
+        let bearing = [1, 2, 100, 101, 102, 3, 4]
+        let admit = [1, 2, 3, 4, 50, 51]
+        let alignment = AsymmetricStateRestore.renderDiffExcision(
+            bearingTokens: bearing, admitPath: admit)
+        #expect(alignment.spans == [AsymmetricStateRestore.ExcisionSpan(start: 2, end: 5)])
+        #expect(alignment.alignedDepth == 4)
+        #expect(!alignment.seamCut)
+        assertAlignmentInvariant(bearing: bearing, admit: admit, alignment)
+    }
+
+    @Test func renderDiffExcisionHandlesMultipleSeparatedSpans() {
+        // Two think blocks separated by more than the resync window (16),
+        // as real assistant turns are.
+        let turnA = Array(1...20)
+        let thinkA = Array(100...110)
+        let turnB = Array(21...40)
+        let thinkB = Array(120...130)
+        let turnC = Array(41...50)
+        let header = [900, 901]
+        let bearing = turnA + thinkA + turnB + thinkB + turnC
+        let admit = turnA + turnB + turnC + header
+        let alignment = AsymmetricStateRestore.renderDiffExcision(
+            bearingTokens: bearing, admitPath: admit)
+        #expect(
+            alignment.spans == [
+                AsymmetricStateRestore.ExcisionSpan(start: 20, end: 31),
+                AsymmetricStateRestore.ExcisionSpan(start: 51, end: 62),
+            ])
+        #expect(alignment.alignedDepth == 50)
+        #expect(!alignment.seamCut)
+        assertAlignmentInvariant(bearing: bearing, admit: admit, alignment)
+    }
+
+    /// The issue #134 live-decline scenario at token level: conversation
+    /// *content* carries think-delimiter-looking tokens (a tool `read` of
+    /// CONTEXT.md). They appear in **both** renders, so alignment walks
+    /// straight through them — no bogus span, unlike the delimiter scan this
+    /// replaced.
+    @Test func renderDiffExcisionIgnoresContentSharedByBothRenders() {
+        let contentWithDelimiterTokens = Array(1...10) + [100, 101] + Array(11...30)
+        let realThink = Array(200...220)
+        let tail = Array(31...40)
+        let header = [900]
+        let bearing = contentWithDelimiterTokens + realThink + tail
+        let admit = contentWithDelimiterTokens + tail + header
+        let alignment = AsymmetricStateRestore.renderDiffExcision(
+            bearingTokens: bearing, admitPath: admit)
+        #expect(
+            alignment.spans == [
+                AsymmetricStateRestore.ExcisionSpan(start: 32, end: 53)
+            ])
+        #expect(alignment.alignedDepth == 42)
+        #expect(!alignment.seamCut)
+        assertAlignmentInvariant(bearing: bearing, admit: admit, alignment)
+    }
+
+    /// A re-tokenized seam: the future render contains a token the bearing
+    /// cache never held. Alignment cuts there (partial synthesis) instead of
+    /// declining outright.
+    @Test func renderDiffExcisionSeamCutsOnUnresolvableMismatch() {
+        let bearing = Array(1...20) + [100, 101] + Array(21...30)
+        // The future render merges tokens at the seam: 999 never appears in
+        // the bearing path.
+        let admit = Array(1...20) + [999] + Array(21...30)
+        let alignment = AsymmetricStateRestore.renderDiffExcision(
+            bearingTokens: bearing, admitPath: admit)
+        #expect(alignment.seamCut)
+        #expect(alignment.alignedDepth == 20)
+        #expect(alignment.spans == [AsymmetricStateRestore.ExcisionSpan(start: 20, end: 32)])
+        assertAlignmentInvariant(bearing: bearing, admit: admit, alignment)
+    }
+
+    /// A render that drops nothing (the future path extends the bearing path
+    /// unchanged) yields no spans — the correct no-op, where the old
+    /// delimiter scan could fabricate spans from content.
+    @Test func renderDiffExcisionNoOpsWhenNothingDropped() {
+        let bearing = Array(1...30)
+        let admit = Array(1...30) + [900, 901]
+        let alignment = AsymmetricStateRestore.renderDiffExcision(
+            bearingTokens: bearing, admitPath: admit)
+        #expect(alignment.spans.isEmpty)
+        #expect(alignment.alignedDepth == 30)
+        #expect(!alignment.seamCut)
+    }
+
+    @Test func renderDiffExcisionTrimsTheBearingTailWhenAdmitEndsEarly() {
+        let bearing = Array(1...30)
+        let admit = Array(1...25)
+        let alignment = AsymmetricStateRestore.renderDiffExcision(
+            bearingTokens: bearing, admitPath: admit)
+        #expect(alignment.spans == [AsymmetricStateRestore.ExcisionSpan(start: 25, end: 30)])
+        #expect(alignment.alignedDepth == 25)
+        #expect(!alignment.seamCut)
+        assertAlignmentInvariant(bearing: bearing, admit: admit, alignment)
+    }
+
+    /// Spans packed closer than the resync window degrade to a shallow seam
+    /// cut rather than a wrong excision — graceful, never incorrect. Real
+    /// renders separate spans by whole assistant turns, far beyond the
+    /// window.
+    @Test func renderDiffExcisionCutsShallowOnAdjacentSpans() {
+        let bearing = [1, 100, 2, 200, 201, 3]
+        let admit = [1, 2, 3, 900]
+        let alignment = AsymmetricStateRestore.renderDiffExcision(
+            bearingTokens: bearing, admitPath: admit)
+        #expect(alignment.seamCut)
+        assertAlignmentInvariant(bearing: bearing, admit: admit, alignment)
     }
 
     @Test func retainedBearingPositionsAreInStrippedOrder() {
@@ -158,7 +271,7 @@ struct AsymmetricStateRestoreTests {
     @Test func synthesizeProducesAsymmetricSnapshot() throws {
         let bearingLen = 12
         let strippedLen = 9  // excise [3,6)
-        let span = AsymmetricStateRestore.ThinkSpan(start: 3, end: 6)
+        let span = AsymmetricStateRestore.ExcisionSpan(start: 3, end: 6)
 
         // Float KV layer: keys = goldRoPE(random) at positions [0..11],
         // values = position-index marker.
@@ -183,7 +296,7 @@ struct AsymmetricStateRestoreTests {
         let synthesized = try AsymmetricStateRestore.synthesize(
             bearingSnapshot: bearing,
             strippedTokenCount: strippedLen,
-            thinkSpans: [span],
+            spans: [span],
             ropeMetadataByLayer: [0: meta()]
         )
         #expect(synthesized.tokenOffset == strippedLen)
@@ -211,12 +324,12 @@ struct AsymmetricStateRestoreTests {
 
     // MARK: - Preflight declines
 
-    @Test func preflightNoThinkSpans() {
+    @Test func preflightNothingExcised() {
         let bearing = makeTrivialBearingSnapshot()
-        #expect(throws: AsymmetricStateRestore.SynthesisError.unavailable(.noThinkSpans)) {
+        #expect(throws: AsymmetricStateRestore.SynthesisError.unavailable(.nothingExcised)) {
             try AsymmetricStateRestore.synthesize(
                 bearingSnapshot: bearing, strippedTokenCount: 4,
-                thinkSpans: [], ropeMetadataByLayer: [0: meta()])
+                spans: [], ropeMetadataByLayer: [0: meta()])
         }
     }
 
@@ -228,7 +341,7 @@ struct AsymmetricStateRestoreTests {
         ) {
             try AsymmetricStateRestore.synthesize(
                 bearingSnapshot: bearing, strippedTokenCount: 1,  // genuine mismatch
-                thinkSpans: [AsymmetricStateRestore.ThinkSpan(start: 0, end: 2)],
+                spans: [AsymmetricStateRestore.ExcisionSpan(start: 0, end: 2)],
                 ropeMetadataByLayer: [0: meta()])
         }
     }
@@ -241,7 +354,7 @@ struct AsymmetricStateRestoreTests {
         ) {
             try AsymmetricStateRestore.synthesize(
                 bearingSnapshot: bearing, strippedTokenCount: 2,
-                thinkSpans: [AsymmetricStateRestore.ThinkSpan(start: 0, end: 2)],
+                spans: [AsymmetricStateRestore.ExcisionSpan(start: 0, end: 2)],
                 ropeMetadataByLayer: [:])  // no metadata for the KV layer
         }
     }
@@ -251,9 +364,9 @@ struct AsymmetricStateRestoreTests {
         do {
             _ = try AsymmetricStateRestore.synthesize(
                 bearingSnapshot: bearing, strippedTokenCount: 0,
-                thinkSpans: [
-                    AsymmetricStateRestore.ThinkSpan(start: 0, end: 3),
-                    AsymmetricStateRestore.ThinkSpan(start: 2, end: 4),  // overlap
+                spans: [
+                    AsymmetricStateRestore.ExcisionSpan(start: 0, end: 3),
+                    AsymmetricStateRestore.ExcisionSpan(start: 2, end: 4),  // overlap
                 ],
                 ropeMetadataByLayer: [0: meta()])
             Issue.record("expected .unavailable(.invalidSpans)")
@@ -271,7 +384,7 @@ struct AsymmetricStateRestoreTests {
     @Test func quantizedSynthesisRestoresWithoutCrashing() throws {
         let bearingLen = 16
         let strippedLen = 12
-        let span = AsymmetricStateRestore.ThinkSpan(start: 2, end: 6)
+        let span = AsymmetricStateRestore.ExcisionSpan(start: 2, end: 6)
 
         let raw = randomKeys(tokenCount: bearingLen, headDim: 64)
         let keys = goldRoPE64(raw)
@@ -290,7 +403,7 @@ struct AsymmetricStateRestoreTests {
 
         let synthesized = try AsymmetricStateRestore.synthesize(
             bearingSnapshot: bearing, strippedTokenCount: strippedLen,
-            thinkSpans: [span], ropeMetadataByLayer: [0: quantMeta])
+            spans: [span], ropeMetadataByLayer: [0: quantMeta])
         #expect(synthesized.tokenOffset == strippedLen)
         #expect(synthesized.layers[0].offset == strippedLen)
         #expect(synthesized.layers[0].state[0].dim(2) == strippedLen)  // wq keys

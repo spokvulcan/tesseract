@@ -1,3 +1,4 @@
+import Foundation
 import MLXLMCommon
 import Testing
 
@@ -5,7 +6,7 @@ import Testing
 
 struct ServerCompletionASRAlignmentTests {
 
-    @Test func bearingAlignmentDropsSingleTrailingEOSBeforeThinkScan() {
+    @Test func bearingAlignmentDropsSingleTrailingEOSBeforeExcision() {
         let tokenizer = SingleTokenEOSTokenizer()
         let storedRender =
             [1]
@@ -24,18 +25,21 @@ struct ServerCompletionASRAlignmentTests {
         #expect(alignment?.tokens == Array(storedRender.dropLast()))
         #expect(alignment?.ignoredTrailingTokenCount == 1)
 
-        let spans = AsymmetricStateRestore.thinkSpans(
-            in: alignment?.tokens ?? [],
-            openThinkTokens: tokenizer.encode(text: "<think>", addSpecialTokens: false),
-            closeThinkTokens: tokenizer.encode(text: "</think>", addSpecialTokens: false),
-            postCloseTokens: tokenizer.encode(text: "\n\n", addSpecialTokens: false)
+        // The aligned bearing tokens feed Render-Diff Excision against the
+        // canonical future render (think block dropped, next turn appended).
+        let futureRender = [1, 4, 50, 51]
+        let excision = AsymmetricStateRestore.renderDiffExcision(
+            bearingTokens: alignment?.tokens ?? [],
+            admitPath: futureRender
         )
 
-        #expect(spans == [AsymmetricStateRestore.ThinkSpan(start: 1, end: 6)])
+        #expect(excision.spans == [AsymmetricStateRestore.ExcisionSpan(start: 1, end: 6)])
+        #expect(excision.alignedDepth == 2)
+        #expect(!excision.seamCut)
         #expect(
-            AsymmetricStateRestore.strippedTokens(in: alignment?.tokens ?? [], spans: spans) == [
-                1, 4,
-            ])
+            AsymmetricStateRestore.strippedTokens(
+                in: alignment?.tokens ?? [], spans: excision.spans
+            ) == [1, 4])
     }
 
     @Test func bearingAlignmentAcceptsModelConfigStopToken() {
@@ -158,7 +162,7 @@ private struct SingleTokenEOSTokenizer: Tokenizer {
     }
 
     func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
-        String(decoding: tokenIds.compactMap { UInt8(exactly: $0) }, as: UTF8.self)
+        String(bytes: tokenIds.compactMap { UInt8(exactly: $0) }, encoding: .utf8) ?? ""
     }
 
     func tokenize(text: String) -> [String] { [] }
@@ -189,7 +193,7 @@ private struct ConfigStopOnlyTokenizer: Tokenizer {
     }
 
     func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
-        String(decoding: tokenIds.compactMap { UInt8(exactly: $0) }, as: UTF8.self)
+        String(bytes: tokenIds.compactMap { UInt8(exactly: $0) }, encoding: .utf8) ?? ""
     }
 
     func tokenize(text: String) -> [String] { [] }

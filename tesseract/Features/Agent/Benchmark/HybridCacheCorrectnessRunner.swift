@@ -684,16 +684,21 @@ final class HybridCacheCorrectnessRunner {
         ]
 
         // 2. Render the bearing path (the stretch keeps its `<think>` blocks)
-        //    through the real chat template. The stripped path is, by the
-        //    ASR definition (issue #134: "the think-stripped token path is
-        //    almost the think-bearing path with the `<think>` spans removed"),
-        //    the bearing tokens with the think spans excised — NOT a separate
-        //    template render, whose common prefix with the bearing would stop
-        //    at the first `<think>` and grossly under-length the stretch.
+        //    and the future path (the next real request's render: the same
+        //    conversation plus a fresh user turn — the template strips the
+        //    stretch's thinks in it) through the real chat template.
         let bearingTokens: [Int]
+        let nextRender: [Int]
         do {
             bearingTokens = try context.tokenizer.applyChatTemplate(
                 messages: messages,
+                tools: nil,
+                additionalContext: ["add_generation_prompt": false]
+            )
+            var nextRequestMessages = messages
+            nextRequestMessages.append(["role": "user", "content": "Thanks — now double it."])
+            nextRender = try context.tokenizer.applyChatTemplate(
+                messages: nextRequestMessages,
                 tools: nil,
                 additionalContext: ["add_generation_prompt": false]
             )
@@ -703,34 +708,37 @@ final class HybridCacheCorrectnessRunner {
         guard bearingTokens.count > 1 else {
             return (false, "bearing render too short (no thinking template?)", lines)
         }
-        lines.append("  bearingTokens=\(bearingTokens.count)")
+        lines.append("  bearingTokens=\(bearingTokens.count) nextRender=\(nextRender.count)")
 
-        // 3. Scan the bearing render for `<think>`/`</think>` delimiters.
-        let openThink = context.tokenizer.encode(text: "<think>", addSpecialTokens: false)
-        let closeThink = context.tokenizer.encode(text: "</think>", addSpecialTokens: false)
-        let postThinkSeparator = context.tokenizer.encode(text: "\n\n", addSpecialTokens: false)
-        let thinkSpans = AsymmetricStateRestore.thinkSpans(
-            in: bearingTokens, openThinkTokens: openThink, closeThinkTokens: closeThink,
-            postCloseTokens: postThinkSeparator)
-        guard !thinkSpans.isEmpty else {
+        // 3. Derive the excision spans by **Render-Diff Excision** — aligning
+        //    the bearing render against the future render, exactly as the
+        //    production pass does (never by scanning for literal `<think>`
+        //    delimiters, which conversation content can carry as data — the
+        //    issue #134 live declines).
+        let alignment = AsymmetricStateRestore.renderDiffExcision(
+            bearingTokens: bearingTokens, admitPath: nextRender)
+        guard !alignment.spans.isEmpty else {
             return (
                 false,
-                "no <think> delimiters found in the bearing render; ASR not exercised",
-                lines + ["  template did not retain thinks; failing the ASR acceptance gate"]
+                "render diff dropped nothing; ASR not exercised",
+                lines + ["  template did not strip thinks; failing the ASR acceptance gate"]
             )
         }
-        let excised = thinkSpans.reduce(0) { $0 + $1.length }
-        lines.append("  thinkSpans=\(thinkSpans.count) excisedTokens=\(excised)")
+        let excised = alignment.spans.reduce(0) { $0 + $1.length }
+        let alignedDepth = alignment.alignedDepth
+        lines.append(
+            "  excisionSpans=\(alignment.spans.count) excisedTokens=\(excised) "
+                + "alignedDepth=\(alignedDepth) seamCut=\(alignment.seamCut)")
 
-        // The stripped token path = the bearing tokens with the think spans
-        // excised — the ASR input contract, and byte-identical to what the
-        // canonical next-request render will restore.
+        // The stripped token path the synthesized snapshot aligns to. By the
+        // alignment invariant this equals `nextRender[0..<alignedDepth]` —
+        // asserted below as an internal consistency check.
         let strippedTokens = AsymmetricStateRestore.strippedTokens(
-            in: bearingTokens, spans: thinkSpans)
-        let expectedStripped = bearingTokens.count - excised
+            in: bearingTokens, spans: alignment.spans)
+        let expectedStripped = alignedDepth
         precondition(
             strippedTokens.count == expectedStripped,
-            "stripped reconstruction \(strippedTokens.count) != expected \(expectedStripped)")
+            "stripped reconstruction \(strippedTokens.count) != aligned depth \(expectedStripped)")
 
         // 4. Capture the bearing snapshot through the real model.
         let bearingCache = context.model.newCache(parameters: nil)
@@ -758,14 +766,14 @@ final class HybridCacheCorrectnessRunner {
         }
         lines.append("  ropeMetadataLayers=\(ropeMetadata.count)/\(layerClasses.count)")
 
-        // 6. Synthesize. `expectedStripped` (bearing − excised) equals
+        // 6. Synthesize. `expectedStripped` (the aligned depth) equals
         //    `strippedTokens.count` by the reconstruction above.
         let synthesized: HybridCacheSnapshot
         do {
             synthesized = try AsymmetricStateRestore.synthesize(
                 bearingSnapshot: bearingSnapshot,
                 strippedTokenCount: expectedStripped,
-                thinkSpans: thinkSpans,
+                spans: alignment.spans,
                 ropeMetadataByLayer: ropeMetadata
             )
         } catch {
@@ -786,23 +794,16 @@ final class HybridCacheCorrectnessRunner {
         let goldCache = context.model.newCache(parameters: nil)
         try prefill(context: context, tokens: strippedTokens, checkpoints: [:], cache: goldCache)
 
-        // The suffix is the new-user turn the next real request appends. Render
-        // messages + a fresh user probe and take the tokens past the stripped
-        // stretch as the suffix (optionally cross-checking the prefix matches
-        // the stripped reconstruction — the ASR assumption).
-        var nextRequestMessages = messages
-        nextRequestMessages.append(["role": "user", "content": "Thanks — now double it."])
-        let nextRender = try context.tokenizer.applyChatTemplate(
-            messages: nextRequestMessages,
-            tools: nil,
-            additionalContext: ["add_generation_prompt": false]
-        )
+        // The suffix is the new-user turn the next real request appends —
+        // the tokens of the future render past the aligned depth. The prefix
+        // match against the stripped reconstruction holds by the alignment
+        // invariant; asserted as an internal consistency check.
         let prefixMatch =
             zip(nextRender.prefix(expectedStripped), strippedTokens)
             .allSatisfy { $0 == $1 } && nextRender.count >= expectedStripped
         lines.append("  next-render prefix matches stripped reconstruction: \(prefixMatch)")
         guard prefixMatch else {
-            return (false, "next render prefix did not match stripped reconstruction", lines)
+            return (false, "alignment invariant violated: stripped ≠ future prefix", lines)
         }
         let suffixCount = min(8, max(0, nextRender.count - expectedStripped))
         let suffix = Array(nextRender[expectedStripped..<(expectedStripped + suffixCount)])
@@ -874,7 +875,7 @@ final class HybridCacheCorrectnessRunner {
         // crashing) — the spike's verdict is the researcher's qualitative read
         // of the KL/top-k series and the side-by-side, not a numeric threshold.
         let detail =
-            "smoke=OK spans=\(thinkSpans.count) excised=\(excised) "
+            "smoke=OK spans=\(alignment.spans.count) excised=\(excised) "
             + "meanKL=\(String(format: "%.4f", meanKL)) meanTopK=\(String(format: "%.3f", meanTopK))"
         return (true, detail, lines)
     }

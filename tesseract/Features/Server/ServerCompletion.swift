@@ -99,6 +99,10 @@ private nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// the captured `mlxStart` instead of the module's field so the leaf-store
     /// path stays inside the Metal-affine scope (mirrors `ssdEnabled`).
     let asrEnabled: Bool
+    /// **Asymmetric-State Restore test mode**, snapshotted at load like
+    /// `asrEnabled`: drops the speculative pass's worth-it floor to one token
+    /// and turns on decline forensics. Production behavior when `false`.
+    let asrTestMode: Bool
     /// **Asymmetric-State Restore** per-model RoPE scalars, read once from the
     /// loaded model's `config.json`. `nil` when the config lacks the scalars
     /// ASR needs (the trigger then declines synthesis). Carried here so the
@@ -314,6 +318,13 @@ nonisolated final class ServerCompletion {
     /// SSD config.
     private(set) var asrEnabled: Bool = false
 
+    /// **Asymmetric-State Restore test mode**, snapshotted at load from
+    /// `SettingsManager.asymmetricStateRestoreTestMode` (same lifecycle as
+    /// `asrEnabled`). When `true` the speculative pass's worth-it floor drops
+    /// to one token — any context or reasoning length triggers it — and ASR
+    /// declines log first-divergence forensics.
+    private(set) var asrTestMode: Bool = false
+
     /// Per-layer RoPE scalars for the loaded model, read once from
     /// `modelDirectory/config.json` at load. The ASR trigger rebuilds the
     /// layer-keyed map per bearing snapshot's layer classes from this. `nil`
@@ -387,13 +398,15 @@ nonisolated final class ServerCompletion {
         fingerprint: String,
         ssdConfig: SSDPrefixCacheConfig?,
         modelDirectory: URL?,
-        asrEnabled: Bool
+        asrEnabled: Bool,
+        asrTestMode: Bool = false
     ) {
         self.modelIdentity = modelIdentity
         self.modelFingerprint = fingerprint
         self.ssdConfig = ssdConfig
         self.modelDirectory = modelDirectory
         self.asrEnabled = asrEnabled
+        self.asrTestMode = asrTestMode
         self.asrRopeScalars = modelDirectory.flatMap {
             AsymmetricStateRestore.RopeMetadata.scalars(from: $0)
         }
@@ -1133,13 +1146,15 @@ nonisolated final class ServerCompletion {
                         let stages = Self.leafStages(for: boundaryMode)
                         // Build the **Asymmetric-State Restore** plan
                         // (canonical thinking stop-finish only): capture the
-                        // bearing snapshot from the live final cache, scan the
-                        // stored render for `<think>` spans, and pair them
-                        // with the live per-model RoPE scalars. `nil` on any
+                        // bearing snapshot from the live final cache and pair
+                        // the aligned bearing tokens with the live per-model
+                        // RoPE scalars; the excision spans themselves are
+                        // derived later against the actual future render
+                        // (**Render-Diff Excision**). `nil` on any
                         // precondition miss — today's resolve-and-prefill runs
                         // unchanged; the synthesize preflight is the final
                         // correctness gate (issue #134).
-                        var asrPlan: AsymmetricStateRestore.Plan? = nil
+                        var asrPlan: AsymmetricStateRestore.Plan?
                         if mlxStart.asrEnabled, boundaryMode == .canonical {
                             // Capture the bearing snapshot (deep-copy of the
                             // think-present state the generation left behind),
@@ -1180,8 +1195,7 @@ nonisolated final class ServerCompletion {
                         // its rewind span from the last-user boundary.
                         let seedPlan = Self.speculativeSeedPlan(
                             boundaryMode: boundaryMode,
-                            renderContext: renderContext,
-                            asrArmed: asrPlan != nil
+                            renderContext: renderContext
                         )
                         let pendingSeed: SpeculativeCanonicalPrefill.Seed? =
                             seedPlan.map { plan in
@@ -1202,6 +1216,7 @@ nonisolated final class ServerCompletion {
                                     idleDelay: plan.idleDelay,
                                     ramOnlySpine: plan.ramOnlySpine,
                                     asrEnabled: mlxStart.asrEnabled,
+                                    asrTestMode: mlxStart.asrTestMode,
                                     asrPlan: asrPlan,
                                     diagnostics: diagnosticsContext
                                 )
@@ -1596,6 +1611,7 @@ nonisolated final class ServerCompletion {
         let visionAttentionScratchProfile = self.modelIdentity?.visionAttentionScratchProfile
         let ssdEnabled = self.ssdConfig?.enabled == true
         let asrEnabled = self.asrEnabled
+        let asrTestMode = self.asrTestMode
         let asrRopeScalars = self.asrRopeScalars
         let diagnosticsContext = PrefixCacheDiagnostics.Context(
             requestID: requestID,
@@ -2267,6 +2283,7 @@ nonisolated final class ServerCompletion {
                 snapshotAdmission: snapshotAdmission,
                 ssdEnabled: ssdEnabled,
                 asrEnabled: asrEnabled,
+                asrTestMode: asrTestMode,
                 asrRopeScalars: asrRopeScalars,
                 stopTokenIDs: Self.stopTokenIDs(
                     modelConfiguration: context.configuration,
@@ -2465,6 +2482,7 @@ nonisolated final class ServerCompletion {
             snapshotAdmission: nil,
             ssdEnabled: ssdEnabled,
             asrEnabled: false,
+            asrTestMode: false,
             asrRopeScalars: nil,
             stopTokenIDs: Self.stopTokenIDs(
                 modelConfiguration: context.configuration,
@@ -3157,19 +3175,13 @@ nonisolated final class ServerCompletion {
             return nil
         }
         let bearingTokens = alignment.tokens
-        // Scan the bearing render for `<think>`/`</think>` delimiter runs.
-        let openThink = tokenizer.encode(text: "<think>", addSpecialTokens: false)
-        let closeThink = tokenizer.encode(text: "</think>", addSpecialTokens: false)
-        let postThinkSeparator = tokenizer.encode(text: "\n\n", addSpecialTokens: false)
-        let thinkSpans = AsymmetricStateRestore.thinkSpans(
-            in: bearingTokens, openThinkTokens: openThink,
-            closeThinkTokens: closeThink, postCloseTokens: postThinkSeparator)
-        guard !thinkSpans.isEmpty else {
-            decline("no-think-spans")
-            return nil
-        }
-        let strippedTokens = AsymmetricStateRestore.strippedTokens(
-            in: bearingTokens, spans: thinkSpans)
+        // Excision spans are NOT derived here: only the actual future render
+        // says what the template drops, and the future-shared-path probe
+        // resolves inside the speculative pass. The pass derives them by
+        // **Render-Diff Excision** (`AsymmetricStateRestore.synthesizeBoundary`)
+        // — never by scanning for literal `<think>` delimiters, which
+        // conversation content can carry as data (the issue #134 live
+        // declines: a tool `read` of CONTEXT.md poisoned the span scan).
 
         // Build the per-attention-layer RoPE map from the live scalars and the
         // bearing's layer classes.
@@ -3183,8 +3195,7 @@ nonisolated final class ServerCompletion {
 
         return AsymmetricStateRestore.Plan(
             bearingSnapshot: bearingSnapshot,
-            thinkSpans: thinkSpans,
-            strippedTokens: strippedTokens,
+            bearingTokens: bearingTokens,
             ropeMetadataByLayer: ropeMetadataByLayer,
             bearingCaptureSeconds: bearingCaptureSeconds)
     }
@@ -3288,12 +3299,14 @@ nonisolated final class ServerCompletion {
     /// How a finished turn seeds the **Speculative Canonical Prefill** —
     /// the trigger table (issues #76, #100):
     /// - A canonical-user boundary (stop-finish answer) seeds immediately —
-    ///   the original #76 trigger. Durable (SSD) unless ASR is armed, in
-    ///   which case the spine stays RAM-only: an ASR-synthesized leaf is a
-    ///   concatenation of non-contiguous token-axis pieces that does not fit
-    ///   the segment-chain contiguous-suffix model (ADR-0010), so admitting
-    ///   it to SSD would chain a stripped-path K/V onto a bearing-path base
-    ///   and corrupt the restore (issue #134 crash).
+    ///   the original #76 trigger. Durable (SSD) by default; when the pass
+    ///   actually uses an **Asymmetric-State Restore** boundary, the pass
+    ///   itself forces the admission RAM-only
+    ///   (`SpeculativeCanonicalPrefill.admissionIsRamOnly`) — the storage
+    ///   decision is made *after* the synthesis outcome is known, so an
+    ///   ASR-derived leaf never enters the SSD segment-chain (ADR-0010; the
+    ///   issue #134 crash) while a declined-ASR fallback keeps #76's
+    ///   durability.
     /// - A tool-call boundary arms **Stretch Abandonment**'s timer: the
     ///   pass starts only if no follow-up request lands inside the idle
     ///   window, and its spine admits RAM-only so a false alarm (the tool
@@ -3309,14 +3322,13 @@ nonisolated final class ServerCompletion {
 
     static func speculativeSeedPlan(
         boundaryMode: BoundaryLeafMode,
-        renderContext: TemplateRenderContext,
-        asrArmed: Bool = false
+        renderContext: TemplateRenderContext
     ) -> SpeculativeSeedPlan? {
         guard !renderContext.preservesThinking else { return nil }
         switch boundaryMode {
         case .canonical:
             return SpeculativeSeedPlan(
-                idleDelay: .zero, ramOnlySpine: asrArmed)
+                idleDelay: .zero, ramOnlySpine: false)
         case .directTool:
             return SpeculativeSeedPlan(
                 idleDelay: SpeculativeCanonicalPrefill.stretchAbandonmentIdleWindow,

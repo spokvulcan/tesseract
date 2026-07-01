@@ -109,36 +109,40 @@ struct SpeculativeCanonicalPrefillTests {
         #expect(offset == nil)
     }
 
-    // MARK: - ASR prefix compatibility (issue #134)
+    // MARK: - ASR test mode floor + outcome-based storage (issue #134)
 
-    @Test func asrBoundaryCompatibleRequiresExactAdmitPrefix() {
+    /// **Asymmetric-State Restore test mode** drops the worth-it floor to one
+    /// token: a rewind span far below the production 512 still admits.
+    @Test func admitPathAcceptsTinySpansUnderTestModeFloor() {
+        let prefix = Array(0..<20)
         #expect(
-            SpeculativeCanonicalPrefill.asrBoundaryCompatible(
-                strippedTokens: [10, 11, 12],
-                admitPath: [10, 11, 12, 13],
-                minimumWarmOffset: 2
-            ))
+            SpeculativeCanonicalPrefill.admitPath(
+                futureSharedPrefix: prefix, canonicalLeafOffset: 10
+            ) == nil)
         #expect(
-            !SpeculativeCanonicalPrefill.asrBoundaryCompatible(
-                strippedTokens: [10, 99, 12],
-                admitPath: [10, 11, 12, 13],
-                minimumWarmOffset: 2
-            ))
+            SpeculativeCanonicalPrefill.admitPath(
+                futureSharedPrefix: prefix, canonicalLeafOffset: 10,
+                minimumResidualTokens: 1
+            ) == Array(prefix[0..<18]))
     }
 
-    @Test func asrBoundaryCompatibleRequiresUsableInteriorBoundary() {
+    /// Storage is decided after the pass knows its outcome: an ASR-derived
+    /// admission (synthesized boundary or anything extended on it) must stay
+    /// RAM-only (ADR-0010 — the issue #134 GPU crash), while a declined-ASR
+    /// fallback keeps issue #76's SSD durability.
+    @Test func asrDerivedAdmissionsStayRamOnlyFallbacksStayDurable() {
         #expect(
-            !SpeculativeCanonicalPrefill.asrBoundaryCompatible(
-                strippedTokens: [10],
-                admitPath: [10, 11, 12],
-                minimumWarmOffset: 2
-            ))
+            SpeculativeCanonicalPrefill.admissionIsRamOnly(
+                preempted: false, ramOnlySpine: false, asrDerived: true))
         #expect(
-            !SpeculativeCanonicalPrefill.asrBoundaryCompatible(
-                strippedTokens: [10, 11, 12],
-                admitPath: [10, 11, 12],
-                minimumWarmOffset: 2
-            ))
+            !SpeculativeCanonicalPrefill.admissionIsRamOnly(
+                preempted: false, ramOnlySpine: false, asrDerived: false))
+        #expect(
+            SpeculativeCanonicalPrefill.admissionIsRamOnly(
+                preempted: true, ramOnlySpine: false, asrDerived: false))
+        #expect(
+            SpeculativeCanonicalPrefill.admissionIsRamOnly(
+                preempted: false, ramOnlySpine: true, asrDerived: false))
     }
 
     // MARK: - Stretch Abandonment trigger table (issue #100)
@@ -149,18 +153,6 @@ struct SpeculativeCanonicalPrefillTests {
         )
         #expect(plan?.idleDelay == .zero)
         #expect(plan?.ramOnlySpine == false)
-    }
-
-    @Test func asrArmedCanonicalSeedStaysRamOnly() {
-        // ASR-synthesized leaves can't enter the SSD segment chain
-        // (ADR-0010): a stripped-path K/V must never be chained onto a
-        // bearing-path base. The canonical trigger stays RAM-only when ASR
-        // is armed so the restore can't assemble an incompatible chain.
-        let plan = ServerCompletion.speculativeSeedPlan(
-            boundaryMode: .canonical, renderContext: .canonical, asrArmed: true
-        )
-        #expect(plan?.idleDelay == .zero)
-        #expect(plan?.ramOnlySpine == true)
     }
 
     @Test func toolStretchArmsTheIdleTimerAndStaysRamOnly() {

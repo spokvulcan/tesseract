@@ -90,6 +90,7 @@ struct SettingsManagerTests {
         settings.prefixCacheSSDBudgetBytes = 1
         settings.prefixCacheSSDDirectoryOverride = "/tmp/x"
         settings.asymmetricStateRestoreEnabled = true
+        settings.asymmetricStateRestoreTestMode = true
 
         settings.resetToDefaults()
         #expect(settings.showInDock == true)
@@ -97,6 +98,7 @@ struct SettingsManagerTests {
         #expect(settings.prefixCacheSSDBudgetBytes == 20 * 1024 * 1024 * 1024)
         #expect(settings.prefixCacheSSDDirectoryOverride == nil)
         #expect(settings.asymmetricStateRestoreEnabled == false)
+        #expect(settings.asymmetricStateRestoreTestMode == false)
 
         // Reset persists: a relaunch on the same store sees the defaults, never
         // the stale values (i.e. reset wrote through the store).
@@ -106,6 +108,7 @@ struct SettingsManagerTests {
         #expect(relaunched.prefixCacheSSDBudgetBytes == 20 * 1024 * 1024 * 1024)
         #expect(relaunched.prefixCacheSSDDirectoryOverride == nil)
         #expect(relaunched.asymmetricStateRestoreEnabled == false)
+        #expect(relaunched.asymmetricStateRestoreTestMode == false)
     }
 
     @Test
@@ -120,6 +123,7 @@ struct SettingsManagerTests {
         #expect(store.writes.contains("prefixCacheSSDBudgetBytes"))
         #expect(store.writes.contains("serverPort"))
         #expect(store.writes.contains("asymmetricStateRestoreEnabled"))
+        #expect(store.writes.contains("asymmetricStateRestoreTestMode"))
     }
 
     @Test

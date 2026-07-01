@@ -73,11 +73,16 @@ append-stable, so there is no rewind span):
 Issue #134 adds an opt-in, disabled-by-default experimental body for the
 stop-finish trigger: **Asymmetric-State Restore**. Instead of restoring the
 canonical leaf and re-prefilling the whole think-stripped stretch, the pass can
-capture the think-bearing final cache, excise each `<think>` span from
-sliceable attention layers, re-rotate retained keys to their shifted positions,
-and leave non-sliceable recurrent state at the bearing render. The result is a
-synthetic stripped-path boundary; the ordinary speculative tail then only
-prefills the small future-user-header residual.
+capture the think-bearing final cache, excise from sliceable attention layers
+the token runs the future render drops (**Render-Diff Excision**: spans come
+from aligning the bearing tokens against the pass's actual admit path, never
+from scanning for literal `<think>` delimiters, which conversation content can
+carry as data), re-rotate retained keys to their shifted positions, and leave
+non-sliceable recurrent state at the bearing render. The result is a synthetic
+stripped-path boundary; the ordinary speculative tail then only prefills the
+small future-user-header residual. When alignment ends at a re-tokenized seam,
+synthesis proceeds at the shallower aligned depth (partial synthesis) rather
+than declining outright.
 
 This is deliberately not the default path. The recurrent state is stale by
 construction, so correctness is measured, not assumed: the unit suite pins the
@@ -85,12 +90,16 @@ array surgery and the loaded-model `HybridCacheCorrectnessRunner` reports
 KL/top-k/greedy divergence against a gold full re-prefill. If preflight cannot
 prove the render/cache offset contract, the pass falls back to ordinary
 speculative prefill; if synthesis fails after surgery starts, it admits nothing
-deeper than the canonical leaf.
+deeper than the canonical leaf. A debug **test mode** setting drops the pass's
+worth-it floor to one token and logs first-divergence forensics on declines, so
+the path is exercisable at any context or reasoning length.
 
-When Asymmetric-State Restore is armed, the canonical speculative spine stays
-**RAM-only**. A synthesized snapshot is built from non-contiguous token-axis
-pieces and does not fit ADR-0010's contiguous segment-chain model; persisting it
-as an SSD extension would chain stripped-path K/V onto a bearing-path base.
+Storage is decided after the pass knows its outcome: an ASR-derived admission
+(a synthesized boundary, or anything extended on one) stays **RAM-only**, while
+a declined-ASR fallback keeps the ordinary durable RAM+SSD admission. A
+synthesized snapshot is built from non-contiguous token-axis pieces and does
+not fit ADR-0010's contiguous segment-chain model; persisting it as an SSD
+extension would chain stripped-path K/V onto a bearing-path base.
 
 ## Rejected alternatives
 

@@ -124,7 +124,8 @@ actor LLMActor {
         from directory: URL,
         visionMode: Bool,
         ssdConfig: SSDPrefixCacheConfig? = nil,
-        asrEnabled: Bool = false
+        asrEnabled: Bool = false,
+        asrTestMode: Bool = false
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let identity = ModelIdentity(directory: directory)
         let format = identity.toolCallFormat
@@ -159,7 +160,8 @@ actor LLMActor {
             fingerprint: fingerprint,
             ssdConfig: ssdConfig,
             modelDirectory: directory,
-            asrEnabled: asrEnabled
+            asrEnabled: asrEnabled,
+            asrTestMode: asrTestMode
         )
 
         if isParoModel {
@@ -821,14 +823,16 @@ actor LLMActor {
         fingerprint: String,
         ssdConfig: SSDPrefixCacheConfig?,
         modelDirectory: URL,
-        asrEnabled: Bool
+        asrEnabled: Bool,
+        asrTestMode: Bool
     ) {
         ensureServerCompletion().installLoadTimeState(
             modelIdentity: modelIdentity,
             fingerprint: fingerprint,
             ssdConfig: ssdConfig,
             modelDirectory: modelDirectory,
-            asrEnabled: asrEnabled
+            asrEnabled: asrEnabled,
+            asrTestMode: asrTestMode
         )
     }
 

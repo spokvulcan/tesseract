@@ -128,6 +128,16 @@ final class AgentEngine {
         }
     }
 
+    /// Resolve the **Asymmetric-State Restore test mode** at the moment of
+    /// the call — same load-time snapshot lifecycle as `resolveAsrEnabled`.
+    func resolveAsrTestMode() -> Bool {
+        switch ssdConfigSource {
+        case .none: return false
+        case .settings(let manager): return manager.asymmetricStateRestoreTestMode
+        case .explicit: return false
+        }
+    }
+
     /// Loads model weights from a local directory into memory and verifies with a 1-token generation.
     ///
     /// - Parameters:
@@ -155,7 +165,8 @@ final class AgentEngine {
                 from: directory,
                 visionMode: visionMode,
                 ssdConfig: resolveSSDConfig(),
-                asrEnabled: resolveAsrEnabled()
+                asrEnabled: resolveAsrEnabled(),
+                asrTestMode: resolveAsrTestMode()
             )
 
             let st = tokenizer.specialTokens

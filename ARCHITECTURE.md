@@ -403,9 +403,11 @@ finished answer or **Stretch Abandonment**, **Speculative Canonical Prefill**
 spends otherwise-idle GPU time to prefill the think-stripped future path so the
 next user request does not pay the **Think-Strip Rewind** interactively
 (ADR-0009). The experimental **Asymmetric-State Restore** toggle swaps the body of
-that pass for synthesized stripped-path state from a think-bearing capture; it is
-off by default, RAM-only when armed, and treated as measured research rather than
-guaranteed correctness. Vocabulary: CONTEXT.md → Prefill orchestration.
+that pass for synthesized stripped-path state from a think-bearing capture
+(spans derived by **Render-Diff Excision** against the pass's actual admit
+path); it is off by default, its derived admissions stay RAM-only, and it is
+treated as measured research rather than guaranteed correctness. Vocabulary:
+CONTEXT.md → Prefill orchestration.
 `Features/Server/Integrations/` configures external clients against the live
 server: the server itself serves a setup script whose one-liner runs the
 **Config Merge** (`OpenCodeConfigMerge`, a pure function over an

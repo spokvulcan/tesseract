@@ -129,6 +129,14 @@ enum SettingsCatalogue {
     static let asymmetricStateRestoreEnabled = Setting.bool(
         "asymmetricStateRestoreEnabled", default: false)
 
+    /// **Asymmetric-State Restore test mode** — a developer knob: the
+    /// speculative pass's worth-it floor drops to one token (any context or
+    /// reasoning length triggers it) and Asymmetric-State Restore declines
+    /// log first-divergence forensics. Production behavior when off.
+    /// Snapshotted at model load like the enable above.
+    static let asymmetricStateRestoreTestMode = Setting.bool(
+        "asymmetricStateRestoreTestMode", default: false)
+
     // MARK: - Onboarding
 
     static let hasCompletedOnboarding = Setting.bool("hasCompletedOnboarding", default: false)

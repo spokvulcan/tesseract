@@ -352,7 +352,8 @@ template patching (vendor templates are never edited); global setting (per-model
 The experimental single-prefill counter to the **Think-Strip Rewind**: rather than
 re-prefilling the think-stripped **Tool Stretch** (the **Speculative Canonical
 Prefill** path), derive a snapshot for the stripped token path from the
-think-bearing snapshot by excising each `<think>` span from the sliceable
+think-bearing snapshot by excising the spans the canonical future render drops
+(**Render-Diff Excision**) from the sliceable
 (attention) layers, re-rotating the retained keys to their shifted positions, and
 leaving the non-sliceable recurrent (**MambaCache**) state as-is — advanced
 through the stretch (thinks included), since recurrent state is irreversible.
@@ -368,6 +369,19 @@ and colliding earlier names); conflating it with the sliceable/non-sliceable
 layer distinction it exploits; **ASR** unqualified — it also means Automatic
 Speech Recognition (the **Speech Recognizer** domain; see that entry's _Avoid_),
 so say "Asymmetric-State Restore" in full wherever the speech sense could apply.
+
+**Render-Diff Excision**:
+How **Asymmetric-State Restore** finds what to cut: the excision spans are
+derived by aligning the think-bearing render's tokens against the canonical
+future render, excising exactly the token runs the future render drops.
+Alignment ends at the first token the bearing cache never held (a re-tokenized
+seam); synthesis then stops at that aligned depth and the ordinary residual
+re-prefill covers the tail. Replaces scanning for literal `<think>` delimiters,
+which assumed the future render strips every think span — an assumption real
+templates and clients violate.
+_Avoid_: think-span scan (the predecessor it replaces); token diff (it aligns
+ordered middle-excisions, not a general edit script); future-prefix
+compatibility gate (the after-the-fact check this makes hold by construction).
 
 ### Server completion
 

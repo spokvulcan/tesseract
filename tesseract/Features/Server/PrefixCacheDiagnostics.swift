@@ -241,9 +241,17 @@ nonisolated enum PrefixCacheDiagnostics {
         /// "bearing capture may be dominant" gate watches. Reported separately
         /// from synthesis so a capture-dominated outcome is visible.
         let captureSeconds: TimeInterval
-        /// Wall-clock seconds for the tensor-surgery itself (span scan +
-        /// excision + delta-RoPE), measured inside `synthesizeBoundary`.
+        /// Wall-clock seconds for the alignment + tensor surgery (Render-Diff
+        /// Excision + excision + delta-RoPE), measured inside
+        /// `synthesizeBoundary`.
         let synthesisSeconds: TimeInterval
+        /// `true` when Render-Diff alignment ended at a re-tokenized seam and
+        /// synthesis proceeded at the shallower aligned depth (partial
+        /// synthesis) — `strippedOffset` then reads the aligned depth.
+        var seamCut: Bool = false
+        /// Length of the future shared path the alignment ran against —
+        /// `strippedOffset / admitPathLength` reads as the recovered fraction.
+        var admitPathLength: Int?
         /// Preflight decline reason (only meaningful when `outcome == unavailable`).
         let unavailableReason: String?
 
@@ -259,6 +267,8 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("captureMs", PrefixCacheDiagnostics.milliseconds(captureSeconds)),
                 ("synthesisMs", PrefixCacheDiagnostics.milliseconds(synthesisSeconds)),
             ]
+            if seamCut { pairs.append(("seamCut", "true")) }
+            if let admitPathLength { pairs.append(("admitLen", "\(admitPathLength)")) }
             if let unavailableReason { pairs.append(("unavailableReason", unavailableReason)) }
             return pairs
         }
