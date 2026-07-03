@@ -149,8 +149,7 @@ struct EvictionPolicyTests {
         #expect(mgr.stats.snapshotCount == 4)
 
         let snapBytes = makeUniformSnapshot(offset: 10).memoryBytes
-        mgr.memoryBudgetBytes = snapBytes * 3
-        mgr.evictToFitBudget()
+        mgr.setMemoryBudget(snapBytes * 3)
 
         #expect(mgr.stats.snapshotCount == 3)
 
@@ -255,8 +254,7 @@ struct EvictionPolicyTests {
             )!)
         #expect(mgr.stats.snapshotCount == 2)
 
-        mgr.memoryBudgetBytes = snapBytes
-        mgr.evictToFitBudget()
+        mgr.setMemoryBudget(snapBytes)
 
         #expect(mgr.stats.snapshotCount == 1)
         let resultA = mgr.lookup(tokens: Array(1...100), partitionKey: keyA)
@@ -294,8 +292,7 @@ struct EvictionPolicyTests {
             )!)
         let nodeCountBefore = mgr.stats.totalNodeCount
 
-        mgr.memoryBudgetBytes = snapBytes
-        mgr.evictToFitBudget()
+        mgr.setMemoryBudget(snapBytes)
 
         let result = mgr.lookup(tokens: leafTokens, partitionKey: defaultKey)
         #expect(result.snapshotTokenOffset == 20)
@@ -545,8 +542,7 @@ struct EvictionPolicyTests {
                 lastAccessTime: .now - .seconds(1)
             )
             // Tighten to one snapshot's worth so exactly one node drops.
-            mgr.memoryBudgetBytes = snapBytes
-            mgr.evictToFitBudget()
+            mgr.setMemoryBudget(snapBytes)
             return mgr.lookup(tokens: tallPath, partitionKey: defaultKey).snapshot != nil
         }
 

@@ -255,8 +255,66 @@ struct PressureReactiveBudgetManagerTests {
         admit(manager, tokens: Array(1...10), type: .system)
         admit(manager, tokens: Array(20...29), type: .leaf)
 
-        manager.memoryBudgetBytes = 0
-        manager.evictToFitBudget()
+        manager.setMemoryBudget(0)
         #expect(manager.stats.snapshotCount == 0)
+    }
+
+    // MARK: - Band-consistent overrides (PRD #137, user story 16)
+
+    /// A budget override rebuilds the band around the new value, so the
+    /// stale-band window is unrepresentable: subsequent pressure regrowth
+    /// converges to the override, never back to the pre-override ceiling.
+    /// (The retired direct-write path left the band at the old ceiling —
+    /// the next `.normal` event silently clobbered the override.)
+    @Test func budgetOverrideRebuildsTheBandSoRegrowthConvergesToTheOverride() {
+        let snapBytes = PrefixCacheTestFixtures.makeUniformSnapshot(
+            offset: 10, type: .leaf
+        ).memoryBytes
+        let pressure = InMemoryMemoryPressureSource()
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: snapBytes * 100,
+            pressureSource: pressure
+        )
+        admit(manager, tokens: Array(1...10), type: .leaf)
+
+        // Shrink first, so the override lands mid-band — the exact state
+        // the old direct write left inconsistent.
+        pressure.send(.warning)
+        #expect(manager.memoryBudgetBytes == snapBytes * 50)
+
+        manager.setMemoryBudget(snapBytes * 10)
+        #expect(manager.memoryBudgetBytes == snapBytes * 10)
+        #expect(manager.budgetBand.ceilingBytes == snapBytes * 10)
+        #expect(manager.budgetBand.currentBytes == snapBytes * 10)
+
+        // Pressure clears: regrowth saturates at the OVERRIDE, not the
+        // original 100-snapshot ceiling.
+        for _ in 0..<20 { pressure.send(.normal) }
+        #expect(manager.memoryBudgetBytes == snapBytes * 10)
+    }
+
+    /// The override drains immediately and hands back the evictions —
+    /// the E2E runner's "tighten and observe pressure" step in one call.
+    @Test func budgetOverrideEvictsImmediatelyAndReturnsTheEvictions() {
+        let snapBytes = PrefixCacheTestFixtures.makeUniformSnapshot(
+            offset: 10, type: .leaf
+        ).memoryBytes
+        let manager = PrefixCacheManager(memoryBudgetBytes: snapBytes * 100)
+        admit(manager, tokens: Array(1...10), type: .leaf)
+        admit(manager, tokens: Array(20...29), type: .leaf)
+        admit(manager, tokens: Array(40...49), type: .leaf)
+
+        let evictions = manager.setMemoryBudget(snapBytes)
+        #expect(evictions.count == 2)
+        #expect(manager.stats.snapshotCount == 1)
+    }
+
+    /// The alpha override writes the **Eviction Configuration** through
+    /// the manager's one mutation entry.
+    @Test func alphaOverrideWritesTheEvictionConfiguration() {
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1 << 20)
+        #expect(manager.evictionConfig.alpha == 0.0)
+        manager.setEvictionAlpha(2.0)
+        #expect(manager.evictionConfig.alpha == 2.0)
     }
 }

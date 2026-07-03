@@ -2515,8 +2515,7 @@ nonisolated final class ServerCompletion {
     func setPrefixCacheBudgetBytes(_ bytes: Int, on actor: isolated LLMActor) async {
         let cache = await ensurePrefixCache(on: actor)
         await MainActor.run {
-            cache.memoryBudgetBytes = bytes
-            cache.evictToFitBudget()
+            cache.setMemoryBudget(bytes)
         }
     }
 
@@ -2529,7 +2528,7 @@ nonisolated final class ServerCompletion {
     func setEvictionAlpha(_ alpha: Double, on actor: isolated LLMActor) async {
         let cache = await ensurePrefixCache(on: actor)
         await MainActor.run {
-            cache.evictionConfig.alpha = alpha
+            cache.setEvictionAlpha(alpha)
         }
     }
 
