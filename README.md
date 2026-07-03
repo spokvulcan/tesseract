@@ -1,29 +1,46 @@
-# Tesseract
+<p align="center">
+  <img src="assets/icon.png" width="120" alt="Tesseract app icon">
+</p>
 
-A personal AI assistant that runs entirely on your Mac. No cloud. No accounts. No telemetry. Your data never leaves your device, and you give up nothing for it. Tesseract is living proof that frontier AI runs on hardware you already own. We intend to keep pushing that frontier.
+<h1 align="center">Tesseract</h1>
 
-## Features
+<p align="center"><b>A personal AI assistant that runs entirely on your Mac.</b><br>
+No cloud. No accounts. No telemetry.</p>
 
-- **Personal AI Assistant** — An on-device tool-calling LLM agent that remembers you across conversations. Helps you achieve your goals, build habits, and stay on track. Sets reminders. Learns your preferences. Talk to it by voice or text, attach screenshots and images, and preview them full-size. You can trust it with your whole life precisely because it never leaves your Mac.
-- **Inference Server** — The foundation the agent stands on, and a product in its own right. An OpenAI-compatible server with `/v1/chat/completions`, `/v1/models`, and tiered RAM + SSD radix prefix caching delivers cache hit rates no other on-device stack matches. Wire it into any OpenAI-compatible agent harness (opencode, OpenClaw, or your own) as a fully local backend for coding agents; the built-in OpenCode setup command configures downloaded models and image input from the live server.
-- **Dictation** — Push-to-talk voice-to-text. Hold a hotkey, speak, release. Your words are typed into whatever app you're using. Choose between the default Whisper Turbo model and a compact variant. Fully offline.
-- **Text-to-Speech** — Natural, consistent speech synthesis with voice anchoring for long-form content. State-of-the-art quality, entirely on device.
-- **100% offline** — Powered by open models via MLX. Works without internet after the initial model download.
+<p align="center">
+  <a href="https://github.com/spokvulcan/tesseract/releases/latest"><img src="https://img.shields.io/github/v/release/spokvulcan/tesseract?label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/macOS%2026%2B-blue" alt="macOS 26+">
+  <img src="https://img.shields.io/badge/Apple%20Silicon-black" alt="Apple Silicon">
+  <img src="https://img.shields.io/badge/100%25%20offline-success" alt="100% offline">
+</p>
 
-## Requirements
+<p align="center">
+  <a href="https://github.com/spokvulcan/tesseract/releases/latest/download/Tesseract.dmg"><b>⬇&nbsp; Download for Mac</b></a>
+  &nbsp;·&nbsp;
+  <a href="https://thetesseract.app">Website</a>
+  &nbsp;·&nbsp;
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-- macOS 26+
-- Apple Silicon (M1 or later)
+---
+
+Frontier AI on hardware you already own. Every model runs locally on Apple Silicon via [MLX](https://github.com/ml-explore/mlx) — an assistant you can trust with your whole life precisely because your data never leaves your Mac.
+
+| | |
+|:---:|---|
+| 🧠 | **Agent** — a tool-calling assistant that remembers you across conversations. Voice or text, images and screenshots, reminders, goals, habits. |
+| ⚡ | **Inference server** — OpenAI-compatible `/v1/chat/completions` with tiered RAM + SSD prefix caching. Plug any coding-agent harness into a fully local backend. |
+| 🎙️ | **Dictation** — hold a hotkey, speak, release. Whisper types your words into any app, fully offline. |
+| 🗣️ | **Text-to-speech** — natural long-form voice synthesis, state-of-the-art quality on device. |
+
+## Getting started
+
+[Download the DMG](https://github.com/spokvulcan/tesseract/releases/latest/download/Tesseract.dmg) (signed & notarized), drag it to Applications, and follow onboarding. Works without internet after the one-time model download. Requires macOS 26+ on Apple Silicon.
 
 ## Development
 
 ```bash
-scripts/dev.sh dev          # Build Debug, kill running app, launch new build
-scripts/dev.sh dev-release  # Same, with the Release configuration
-scripts/dev.sh log          # Tail app logs
-scripts/dev.sh clean        # Clean build artifacts
+scripts/dev.sh dev-release   # Build & launch — run with no args for all commands
 ```
 
-Run `scripts/dev.sh` with no arguments for the full command list. See
-[CLAUDE.md](CLAUDE.md) for working conventions, [ARCHITECTURE.md](ARCHITECTURE.md)
-for design, and [CONTEXT.md](CONTEXT.md) for domain vocabulary.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for design, [CONTEXT.md](CONTEXT.md) for domain vocabulary, and [CLAUDE.md](CLAUDE.md) for working conventions.
