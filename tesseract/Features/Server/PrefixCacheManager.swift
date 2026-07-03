@@ -68,11 +68,9 @@ final class PrefixCacheManager {
         case request(UUID)
     }
 
-    /// Per-partition tree collection. Typed as the concrete
-    /// `TieredSnapshotStore` (rather than the `SnapshotStore`
-    /// protocol) so the manager can reach `admitSnapshot` and the
-    /// storage-ref lifecycle callbacks — those are not part of the
-    /// read-only protocol.
+    /// Per-partition tree collection — the concrete `TieredSnapshotStore`,
+    /// owned openly: the manager reaches its tree lookups, `admitSnapshot`,
+    /// and the storage-ref lifecycle callbacks directly.
     private let store: TieredSnapshotStore
     /// Set by `evictToFitBudget` when the first-ever drain happens
     /// inside an in-flight request. Production passes a per-request ID
