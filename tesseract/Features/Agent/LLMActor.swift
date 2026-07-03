@@ -68,6 +68,14 @@ actor LLMActor {
     /// dropped wholesale at `unloadModel()`.
     private var serverCompletion: ServerCompletion?
 
+    /// The MainActor **current-cache accessor**: prefix-cache admin (stats,
+    /// telemetry, budget/alpha overrides, SSD flush) goes straight to the
+    /// live `PrefixCacheManager` here instead of tunnelling through this
+    /// actor. The Server Completion module publishes each manager it builds
+    /// into this accessor; `nonisolated let`, so MainActor callers reach it
+    /// without an actor hop.
+    nonisolated let prefixCacheAdmin = PrefixCacheAdmin()
+
     var isLoaded: Bool { modelContainer != nil }
 
     /// Internal read-only accessor for the load-time SSD config snapshot.
@@ -94,13 +102,6 @@ actor LLMActor {
     /// by `installLoadTimeState`.
     func setModelIdentityForTesting(_ identity: ModelIdentity?) {
         ensureServerCompletion().setModelIdentityForTesting(identity)
-    }
-
-    /// Test-only: the eviction configuration of the live prefix cache, or
-    /// `nil` if the cache hasn't been built.
-    func currentEvictionConfigForTesting() async -> EvictionConfiguration? {
-        guard let serverCompletion else { return nil }
-        return await serverCompletion.currentEvictionConfigForTesting(on: self)
     }
 
     /// Loads model weights, verifies with a 1-token generation, and resolves the tokenizer.
@@ -596,58 +597,9 @@ actor LLMActor {
         Memory.clearCache()
     }
 
-    /// Block until any pending SSD-tier writes have drained and the
-    /// manifest is durably persisted. Callers must invoke this
-    /// before `unloadModel()` when they need the on-disk state to
-    /// survive the teardown (benchmark restart scenarios, manual
-    /// "flush before shutdown" flows). No-op when SSD is disabled
-    /// or the prefix cache was never instantiated.
-    func flushPrefixCache() async {
-        guard let serverCompletion else { return }
-        await serverCompletion.flushPrefixCache(on: self)
-    }
-
     /// Returns current MLX memory usage in MB.
     func memoryStats() -> (activeMB: Float, peakMB: Float) {
         (Float(Memory.activeMemory) / 1e6, Float(Memory.peakMemory) / 1e6)
-    }
-
-    // MARK: - Prefix Cache Admin (forwarded to the Server Completion module)
-
-    /// Snapshot of the live prefix-cache state, or `nil` if the cache hasn't
-    /// been instantiated. Used by the loaded-model E2E runner to verify
-    /// branch-point capture and survival.
-    func prefixCacheStats() async -> PrefixCacheManager.CacheStats? {
-        guard let serverCompletion else { return nil }
-        return await serverCompletion.prefixCacheStats(on: self)
-    }
-
-    func promptCacheTelemetrySnapshot() async -> PromptCacheTelemetrySnapshot? {
-        guard let serverCompletion else { return nil }
-        return await serverCompletion.promptCacheTelemetrySnapshot(on: self)
-    }
-
-    /// Override the prefix-cache memory budget at runtime. Used by the
-    /// loaded-model E2E runner to deliberately trigger eviction pressure.
-    func setPrefixCacheBudgetBytes(_ bytes: Int) async {
-        await ensureServerCompletion().setPrefixCacheBudgetBytes(bytes, on: self)
-    }
-
-    /// Override the prefix-cache eviction weighting (`alpha`). Used by the
-    /// loaded-model E2E runner to force F/B-weighted eviction for the
-    /// branch-point survival check. Production code should not call this;
-    /// the `AlphaTuner` owns `alpha` after warmup.
-    func setEvictionAlpha(_ alpha: Double) async {
-        await ensureServerCompletion().setEvictionAlpha(alpha, on: self)
-    }
-
-    /// Current prefix-cache eviction weighting (`alpha`), or `nil` if the
-    /// cache hasn't been built. Symmetric with `setEvictionAlpha`, so the E2E
-    /// runner can save and restore the weighting around its forced-pressure
-    /// step instead of leaving the cache mutated.
-    func evictionAlpha() async -> Double? {
-        guard let serverCompletion else { return nil }
-        return await serverCompletion.evictionAlpha(on: self)
     }
 
     /// Extract a flat `[Int]` token sequence from an MLXArray that may be 1D `[seq]`
@@ -746,7 +698,7 @@ actor LLMActor {
     /// the real identity — the same semantics the actor-resident fields had.
     private func ensureServerCompletion() -> ServerCompletion {
         if let existing = serverCompletion { return existing }
-        let module = ServerCompletion()
+        let module = ServerCompletion(cacheAdmin: prefixCacheAdmin)
         serverCompletion = module
         return module
     }

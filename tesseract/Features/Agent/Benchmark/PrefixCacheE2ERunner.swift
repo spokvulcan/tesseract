@@ -849,10 +849,10 @@ final class PrefixCacheE2ERunner {
         // per-cache Eviction Configuration. Capture the prior weighting so the
         // step restores it before every exit and stays self-contained, rather
         // than leaving the engine's cache at alpha=2.0 for any later step.
-        let priorAlpha = await engine.llmActor.evictionAlpha() ?? 0.0
-        await engine.llmActor.setEvictionAlpha(2.0)
+        let priorAlpha = await engine.llmActor.prefixCacheAdmin.evictionAlpha ?? 0.0
+        await engine.llmActor.prefixCacheAdmin.setEvictionAlpha(2.0)
 
-        guard let preStats = await engine.llmActor.prefixCacheStats(),
+        guard let preStats = await engine.llmActor.prefixCacheAdmin.stats,
             preStats.snapshotCount > 0
         else {
             log("  skipping — prefix cache empty")
@@ -862,7 +862,7 @@ final class PrefixCacheE2ERunner {
                     passed: false,
                     detail: "prefix cache empty before pressure step"
                 ))
-            await engine.llmActor.setEvictionAlpha(priorAlpha)
+            await engine.llmActor.prefixCacheAdmin.setEvictionAlpha(priorAlpha)
             return
         }
 
@@ -876,7 +876,7 @@ final class PrefixCacheE2ERunner {
         // branch-point regardless of F/B).
         let avgBytes = preStats.totalSnapshotBytes / preStats.snapshotCount
         let tightBudget = max(preStats.totalSnapshotBytes - avgBytes, avgBytes)
-        await engine.llmActor.setPrefixCacheBudgetBytes(tightBudget)
+        await engine.llmActor.prefixCacheAdmin.setMemoryBudget(tightBudget)
         log(
             "  tight budget = \(tightBudget) bytes "
                 + "(pre-pressure total = \(preStats.totalSnapshotBytes), "
@@ -894,7 +894,7 @@ final class PrefixCacheE2ERunner {
             )
         }
 
-        let postStats = await engine.llmActor.prefixCacheStats()
+        let postStats = await engine.llmActor.prefixCacheAdmin.stats
         let postBranchCount = postStats?.snapshotsByType[.branchPoint] ?? 0
         let postTotalBytes = postStats?.totalSnapshotBytes ?? 0
         log(
@@ -910,11 +910,11 @@ final class PrefixCacheE2ERunner {
             ))
 
         // Restore the pre-step weighting so the step is self-contained.
-        await engine.llmActor.setEvictionAlpha(priorAlpha)
+        await engine.llmActor.prefixCacheAdmin.setEvictionAlpha(priorAlpha)
     }
 
     private func branchPointCount(engine: AgentEngine) async -> Int {
-        let stats = await engine.llmActor.prefixCacheStats()
+        let stats = await engine.llmActor.prefixCacheAdmin.stats
         return stats?.snapshotsByType[.branchPoint] ?? 0
     }
     // swiftlint:enable function_body_length
@@ -1082,7 +1082,7 @@ final class PrefixCacheE2ERunner {
             // The follow-up continuation request then hits at depth
             // again, served by hydration instead of re-prefill.
             log("\n── Step Y: Snapshot Demotion (budget shrink → hydration re-hit) ──")
-            let preShrink = await ssdEngine.llmActor.promptCacheTelemetrySnapshot()
+            let preShrink = await ssdEngine.llmActor.prefixCacheAdmin.makeTelemetrySnapshot()
             let priorBudget = preShrink?.memoryBudgetBytes ?? ssdConfig.budgetBytes
             let preCounters = preShrink?.counters ?? PromptCacheCumulativeCounters()
             log(
@@ -1090,15 +1090,15 @@ final class PrefixCacheE2ERunner {
                     + "budget=\(priorBudget) recovered=\(preCounters.recoveredEvictions) "
                     + "terminal=\(preCounters.terminalEvictions)")
 
-            await ssdEngine.llmActor.setPrefixCacheBudgetBytes(1)
+            await ssdEngine.llmActor.prefixCacheAdmin.setMemoryBudget(1)
             // Drain demotion writes and let the writer's MainActor commit
             // callbacks land (state 3 → 5) so the re-hit below sees
             // committed, hydratable refs.
-            await ssdEngine.llmActor.flushPrefixCache()
+            await ssdEngine.llmActor.prefixCacheAdmin.flushSSDWrites()
             try? await Task.sleep(for: .milliseconds(200))
-            await ssdEngine.llmActor.setPrefixCacheBudgetBytes(priorBudget)
+            await ssdEngine.llmActor.prefixCacheAdmin.setMemoryBudget(priorBudget)
 
-            let postShrink = await ssdEngine.llmActor.promptCacheTelemetrySnapshot()
+            let postShrink = await ssdEngine.llmActor.prefixCacheAdmin.makeTelemetrySnapshot()
             let postCounters = postShrink?.counters ?? PromptCacheCumulativeCounters()
             let recoveredDelta = postCounters.recoveredEvictions - preCounters.recoveredEvictions
             let terminalDelta = postCounters.terminalEvictions - preCounters.terminalEvictions
@@ -1129,7 +1129,7 @@ final class PrefixCacheE2ERunner {
                 toolSpecs: toolSpecs,
                 parameters: params
             )
-            let postY = await ssdEngine.llmActor.promptCacheTelemetrySnapshot()
+            let postY = await ssdEngine.llmActor.prefixCacheAdmin.makeTelemetrySnapshot()
             let hydrationsDelta = (postY?.counters.hydrations ?? 0) - postCounters.hydrations
             log(
                 "  Y cachedTokens=\(requestY.cachedTokens) "

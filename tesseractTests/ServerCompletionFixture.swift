@@ -14,7 +14,8 @@ import Testing
 /// the module's real config-resolution chain.
 nonisolated final class ServerCompletionFixture: @unchecked Sendable {
     let actor = LLMActor()
-    let module = ServerCompletion()
+    let cacheAdmin = PrefixCacheAdmin()
+    let module: ServerCompletion
     let provider: ToyModelSessionProvider
 
     init(
@@ -24,6 +25,7 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
         identity: ModelIdentity? = nil
     ) {
         self.provider = provider
+        self.module = ServerCompletion(cacheAdmin: cacheAdmin)
         if fingerprint != nil || identity != nil {
             module.installLoadTimeState(
                 modelIdentity: identity ?? ModelIdentity(configJSON: nil, chatTemplate: nil),
@@ -59,7 +61,7 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
     /// Block until pending SSD-tier writes have drained and the manifest is
     /// durably persisted — the pre-teardown flush a warm-start scenario needs.
     func flush() async {
-        await module.flushPrefixCache(on: actor)
+        await cacheAdmin.flushSSDWrites()
     }
 }
 

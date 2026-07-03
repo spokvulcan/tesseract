@@ -274,6 +274,16 @@ nonisolated enum VisionPrefixMemoryGuard {
 /// safeguard's continuation swap.
 nonisolated final class ServerCompletion {
 
+    /// The MainActor **current-cache accessor** this module publishes each
+    /// freshly built `PrefixCacheManager` into, so cache admin (stats,
+    /// telemetry, budget/alpha, flush) reaches the live manager without
+    /// tunnelling through the inference actor.
+    let cacheAdmin: PrefixCacheAdmin
+
+    init(cacheAdmin: PrefixCacheAdmin = PrefixCacheAdmin()) {
+        self.cacheAdmin = cacheAdmin
+    }
+
     // MARK: - Load-time facts
 
     /// Load-time, directory-derived facts about the current model — tool-call
@@ -2461,9 +2471,10 @@ nonisolated final class ServerCompletion {
                     + "using the fallback FLOP profile; the cache is rebuilt after load."
             )
         }
+        let admin = cacheAdmin
         let cache = await MainActor.run { () -> PrefixCacheManager in
             let tieredStore = TieredSnapshotStore(ssdConfig: ssdConfigSnapshot)
-            return PrefixCacheManager(
+            let cache = PrefixCacheManager(
                 memoryBudgetBytes: budget,
                 evictionConfig: EvictionConfiguration(flopProfile: flopProfile),
                 alphaTuner: AlphaTuner(flopProfile: flopProfile),
@@ -2481,6 +2492,10 @@ nonisolated final class ServerCompletion {
                 // drops the cache) cancels the OS dispatch source too.
                 pressureSource: DispatchMemoryPressureSource()
             )
+            // The current-cache accessor holds it weakly: dropping this
+            // module (model unload) reads as "no live cache" over there.
+            admin.publish(cache)
+            return cache
         }
         if ssdConfigSnapshot?.enabled == true, let fingerprint {
             do {
@@ -2493,73 +2508,6 @@ nonisolated final class ServerCompletion {
         }
         _prefixCache = cache
         return cache
-    }
-
-    /// Snapshot of the live prefix-cache state, or `nil` if the cache hasn't
-    /// been instantiated. Used by the loaded-model E2E runner to verify
-    /// branch-point capture and survival.
-    func prefixCacheStats(on actor: isolated LLMActor) async -> PrefixCacheManager.CacheStats? {
-        guard let cache = _prefixCache else { return nil }
-        return await cache.stats
-    }
-
-    func promptCacheTelemetrySnapshot(
-        on actor: isolated LLMActor
-    ) async -> PromptCacheTelemetrySnapshot? {
-        guard let cache = _prefixCache else { return nil }
-        return await cache.makeTelemetrySnapshot()
-    }
-
-    /// Override the prefix-cache memory budget at runtime. Used by the
-    /// loaded-model E2E runner to deliberately trigger eviction pressure.
-    func setPrefixCacheBudgetBytes(_ bytes: Int, on actor: isolated LLMActor) async {
-        let cache = await ensurePrefixCache(on: actor)
-        await MainActor.run {
-            cache.setMemoryBudget(bytes)
-        }
-    }
-
-    /// Override the prefix-cache eviction weighting (`alpha`) by writing
-    /// the manager's **Eviction Configuration**. Used by the loaded-model
-    /// E2E runner to force F/B-weighted eviction for the branch-point
-    /// survival check — it replaces the retired `EvictionPolicy.alpha`
-    /// global. Production code should not call this; the `AlphaTuner` owns
-    /// `alpha` after warmup.
-    func setEvictionAlpha(_ alpha: Double, on actor: isolated LLMActor) async {
-        let cache = await ensurePrefixCache(on: actor)
-        await MainActor.run {
-            cache.setEvictionAlpha(alpha)
-        }
-    }
-
-    /// Current prefix-cache eviction weighting (`alpha`), or `nil` if the
-    /// cache hasn't been built. Symmetric with `setEvictionAlpha`, so the E2E
-    /// runner can save and restore the weighting around its forced-pressure
-    /// step instead of leaving the cache mutated.
-    func evictionAlpha(on actor: isolated LLMActor) async -> Double? {
-        guard let cache = _prefixCache else { return nil }
-        return await MainActor.run { cache.evictionConfig.alpha }
-    }
-
-    /// Test-only: the eviction configuration of the live prefix cache, or
-    /// `nil` if the cache hasn't been built. Lets tests assert that
-    /// `ensurePrefixCache` folds the model's `flopProfile` into the cache.
-    func currentEvictionConfigForTesting(
-        on actor: isolated LLMActor
-    ) async -> EvictionConfiguration? {
-        guard let cache = _prefixCache else { return nil }
-        return await MainActor.run { cache.evictionConfig }
-    }
-
-    /// Block until any pending SSD-tier writes have drained and the
-    /// manifest is durably persisted. Callers must invoke this
-    /// before `unloadModel()` when they need the on-disk state to
-    /// survive the teardown (benchmark restart scenarios, manual
-    /// "flush before shutdown" flows). No-op when SSD is disabled
-    /// or the prefix cache was never instantiated.
-    func flushPrefixCache(on actor: isolated LLMActor) async {
-        guard let cache = _prefixCache else { return }
-        await cache.flushSSDWrites()
     }
 
     // MARK: - Snapshot payload extraction statics
