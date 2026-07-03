@@ -8,11 +8,14 @@ How Tesseract ships. Decision record: `docs/adr/0017-release-please-signed-notar
    Conventional Commit (enforced by `pr-title.yml`) because it becomes the
    commit on `main` and, from there, the changelog line.
 2. `release-please.yml` keeps a **Release PR** open with the next version and
-   accumulated changelog. **Merging that PR is the release.**
+   accumulated changelog. **Merging that PR is the release.** (Release PRs
+   and their merge commits change only version files and skip CI — the code
+   was already tested when it landed on `main`.)
 3. On merge, Release Please creates the tag (`vX.Y.Z`) and the GitHub
    Release, then dispatches `release-build.yml`.
-4. `release-build.yml` waits for CI (`build-release`, `test`, `lint`) to be
-   green on the released commit, then: archives with Developer ID signing,
+4. `release-build.yml` requires CI (`build-release`, `test`, `lint`) to be
+   green for the release's code state (the tagged commit's parent — normally
+   already finished, so the gate is instant), then: archives with Developer ID signing,
    verifies the signature, packages a DMG, notarizes + staples it, and
    uploads to the Release:
    - `Tesseract-<version>.dmg`
@@ -57,11 +60,6 @@ gh secret set ASC_API_KEY_ID       # e.g. ABC123DEFG
 gh secret set ASC_API_ISSUER_ID    # UUID from the page header
 gh secret set ASC_API_KEY_P8 < AuthKey_ABC123DEFG.p8
 ```
-
-### 3. After v1.0.0 ships
-
-Remove the `"release-as": "1.0.0"` line from `release-please-config.json`
-(it pins the first release; leaving it would pin every release to 1.0.0).
 
 ## Secrets inventory
 
