@@ -66,7 +66,7 @@ actor LLMActor {
     /// and the load-time snapshot facts. Created lazily (pre-load admin
     /// callers like the E2E budget/alpha tooling) or by the load path;
     /// dropped wholesale at `unloadModel()`.
-    private var serverCompletion: ServerCompletion?
+    private(set) var serverCompletion: ServerCompletion?
 
     /// The MainActor **current-cache accessor**: prefix-cache admin (stats,
     /// telemetry, budget/alpha overrides, SSD flush) goes straight to the
@@ -77,32 +77,6 @@ actor LLMActor {
     nonisolated let prefixCacheAdmin = PrefixCacheAdmin()
 
     var isLoaded: Bool { modelContainer != nil }
-
-    /// Internal read-only accessor for the load-time SSD config snapshot.
-    /// Production reads happen inside the Server Completion module; this
-    /// accessor exists so tests can assert the load/unload lifecycle across
-    /// the actor boundary.
-    var currentSSDConfigForTesting: SSDPrefixCacheConfig? {
-        serverCompletion?.ssdConfig
-    }
-
-    /// Internal read-only accessor for the load-time model fingerprint.
-    var currentModelFingerprintForTesting: String? {
-        serverCompletion?.modelFingerprint
-    }
-
-    /// Internal read-only accessor for the load-time model identity.
-    var currentModelIdentityForTesting: ModelIdentity? {
-        serverCompletion?.modelIdentity
-    }
-
-    /// Test-only: install a `ModelIdentity` without a full model load, so
-    /// tests can exercise identity-derived wiring (notably the prefix cache's
-    /// FLOP profile) at the actor seam. Production identity is installed only
-    /// by `installLoadTimeState`.
-    func setModelIdentityForTesting(_ identity: ModelIdentity?) {
-        ensureServerCompletion().setModelIdentityForTesting(identity)
-    }
 
     /// Loads model weights, verifies with a 1-token generation, and resolves the tokenizer.
     ///
@@ -810,28 +784,6 @@ actor LLMActor {
             frequencyPenalty: parameters.frequencyPenalty,
             frequencyContextSize: parameters.frequencyContextSize,
             prefillStepSize: parameters.prefillStepSize
-        )
-    }
-
-    /// Test-only: register a fake server-completion handle so the unit suite
-    /// can exercise the unload drain contract without a loaded model.
-    func registerServerCompletionForTesting(
-        _ handle: HTTPServerGenerationStart,
-        id: UUID
-    ) {
-        ensureServerCompletion().registerActiveCompletionForTesting(
-            handle, id: id, on: self
-        )
-    }
-
-    /// Test-only: occupy the speculative-prefill slot so the unit suite can
-    /// exercise its drain contract without a loaded model.
-    func registerSpeculativePrefillForTesting(
-        _ task: Task<Void, Never>,
-        id: UUID
-    ) {
-        ensureServerCompletion().registerSpeculativePrefillForTesting(
-            task, id: id, on: self
         )
     }
 

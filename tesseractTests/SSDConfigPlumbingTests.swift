@@ -223,8 +223,8 @@ struct SSDConfigPlumbingTests {
         // Fresh engine → the inner LLMActor holds no load-time state.
         let settings = SettingsManager(store: InMemorySettingsStore())
         let engine = AgentEngine(settingsManager: settings)
-        let config = await engine.llmActor.currentSSDConfigForTesting
-        let fingerprint = await engine.llmActor.currentModelFingerprintForTesting
+        let config = await engine.llmActor.installedSSDConfig
+        let fingerprint = await engine.llmActor.installedModelFingerprint
         #expect(config == nil)
         #expect(fingerprint == nil)
     }
@@ -266,8 +266,8 @@ struct SSDConfigPlumbingTests {
             // Expected — container load fails on a directory without weights.
         }
 
-        let installedConfig = await engine.llmActor.currentSSDConfigForTesting
-        let installedFingerprint = await engine.llmActor.currentModelFingerprintForTesting
+        let installedConfig = await engine.llmActor.installedSSDConfig
+        let installedFingerprint = await engine.llmActor.installedModelFingerprint
         let unwrappedConfig = try #require(installedConfig)
         #expect(unwrappedConfig.enabled == true)
         #expect(unwrappedConfig.budgetBytes == 7 * 1024 * 1024 * 1024)
@@ -276,7 +276,7 @@ struct SSDConfigPlumbingTests {
 
         // Model identity rides the same single install site and is populated
         // even though the container load failed.
-        #expect(await engine.llmActor.currentModelIdentityForTesting != nil)
+        #expect(await engine.llmActor.installedModelIdentity != nil)
     }
 
     @Test
@@ -297,8 +297,8 @@ struct SSDConfigPlumbingTests {
             // Expected.
         }
 
-        #expect(await engine.llmActor.currentSSDConfigForTesting == nil)
-        let fingerprint = await engine.llmActor.currentModelFingerprintForTesting
+        #expect(await engine.llmActor.installedSSDConfig == nil)
+        let fingerprint = await engine.llmActor.installedModelFingerprint
         #expect(fingerprint != nil)
     }
 
@@ -325,16 +325,16 @@ struct SSDConfigPlumbingTests {
         }
 
         // Sanity: state was installed.
-        #expect(await engine.llmActor.currentSSDConfigForTesting != nil)
-        #expect(await engine.llmActor.currentModelFingerprintForTesting != nil)
-        #expect(await engine.llmActor.currentModelIdentityForTesting != nil)
+        #expect(await engine.llmActor.installedSSDConfig != nil)
+        #expect(await engine.llmActor.installedModelFingerprint != nil)
+        #expect(await engine.llmActor.installedModelIdentity != nil)
 
         engine.unloadModel()
         await engine.awaitPendingUnload()
 
-        #expect(await engine.llmActor.currentSSDConfigForTesting == nil)
-        #expect(await engine.llmActor.currentModelFingerprintForTesting == nil)
-        #expect(await engine.llmActor.currentModelIdentityForTesting == nil)
+        #expect(await engine.llmActor.installedSSDConfig == nil)
+        #expect(await engine.llmActor.installedModelFingerprint == nil)
+        #expect(await engine.llmActor.installedModelIdentity == nil)
     }
 
     // MARK: - CachePartitionKey fingerprint folding
@@ -392,5 +392,21 @@ struct SSDConfigPlumbingTests {
         )
         #expect(a < b)
         #expect(!(b < a))
+    }
+}
+
+/// Test-side windows into the actor-owned module's load-time facts: the
+/// production actor no longer carries accessor shims (PRD #137, story 13),
+/// and the non-Sendable module cannot exit its isolation, so the reads live
+/// here as actor-isolated extension members of the test target.
+extension LLMActor {
+    fileprivate var installedSSDConfig: SSDPrefixCacheConfig? {
+        serverCompletion?.ssdConfig
+    }
+    fileprivate var installedModelFingerprint: String? {
+        serverCompletion?.modelFingerprint
+    }
+    fileprivate var installedModelIdentity: ModelIdentity? {
+        serverCompletion?.modelIdentity
     }
 }

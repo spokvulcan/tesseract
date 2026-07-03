@@ -387,14 +387,6 @@ nonisolated final class ServerCompletion {
         self._prefixCache = nil
     }
 
-    /// Test-only: install a `ModelIdentity` without a full model load, so
-    /// tests can exercise identity-derived wiring (notably the prefix cache's
-    /// FLOP profile) at the actor seam. Production identity is installed only
-    /// by `installLoadTimeState`.
-    func setModelIdentityForTesting(_ identity: ModelIdentity?) {
-        self.modelIdentity = identity
-    }
-
     /// Cancel-and-await every cache-aware completion the module knows about:
     /// the registered handle plus any `start` still in its pre-registration
     /// restore/prefill phase. Called by `LLMActor.unloadModel` (and by the
@@ -432,16 +424,6 @@ nonisolated final class ServerCompletion {
         if activeCompletion?.id == requestID {
             activeCompletion = nil
         }
-    }
-
-    /// Test-only: register a handle in the active-completion slot without a
-    /// model load, so the unit suite can exercise the drain contract.
-    func registerActiveCompletionForTesting(
-        _ handle: HTTPServerGenerationStart,
-        id: UUID,
-        on actor: isolated LLMActor
-    ) {
-        activeCompletion = (id: id, handle: handle)
     }
 
     // MARK: - Speculative Canonical Prefill lifecycle
@@ -523,16 +505,6 @@ nonisolated final class ServerCompletion {
         if speculativePrefill?.id == id {
             speculativePrefill = nil
         }
-    }
-
-    /// Test-only: occupy the speculative slot with an arbitrary task so the
-    /// unit suite can pin the drain/preempt contract without a model load.
-    func registerSpeculativePrefillForTesting(
-        _ task: Task<Void, Never>,
-        id: UUID,
-        on actor: isolated LLMActor
-    ) {
-        speculativePrefill = (id: id, task: task)
     }
 
     // MARK: - Cache-aware completion

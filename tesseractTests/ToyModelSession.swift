@@ -159,17 +159,24 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
 /// One-shot gate for the toy model's forward hook: pauses the model thread
 /// the first time a forward starts at or past `threshold`, so a test can
 /// land a deterministic cancel at a chunk boundary, then releases it.
+/// Construct with `armed: false` and call `arm()` when a setup phase must
+/// run over the same offsets without tripping the gate.
 nonisolated final class ForwardGate: @unchecked Sendable {
     private let lock = NSLock()
-    private var armed = true
+    private var armed: Bool
     private let threshold: Int
     private let release = DispatchSemaphore(value: 0)
     private let reachedStream: AsyncStream<Void>
     private let reachedContinuation: AsyncStream<Void>.Continuation
 
-    init(threshold: Int) {
+    init(threshold: Int, armed: Bool = true) {
         self.threshold = threshold
+        self.armed = armed
         (reachedStream, reachedContinuation) = AsyncStream.makeStream()
+    }
+
+    func arm() {
+        lock.withLock { armed = true }
     }
 
     func onForward(offset: Int) {
