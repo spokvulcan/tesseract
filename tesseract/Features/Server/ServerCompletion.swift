@@ -2168,7 +2168,6 @@ nonisolated final class ServerCompletion {
                     newTokensToPrefill: promptTokens - cachedTokens,
                     prefillMs: nil
                 )))
-        let cache = restoredCache ?? session.newCache(parameters: parameters)
         if let pricedImage {
             let visionFrames = pricedImage.frames ?? []
             if visionFrames.isEmpty {
@@ -2195,6 +2194,7 @@ nonisolated final class ServerCompletion {
                 throw AgentEngineError.generationFailed(rejection.message)
             }
         }
+        let cache = restoredCache ?? session.newCache(parameters: parameters)
         return (cache: cache, startedAt: Date.timeIntervalSinceReferenceDate)
     }
 

@@ -100,10 +100,10 @@ private nonisolated final class ForwardCounter: @unchecked Sendable {
             // The ADR-0014 typed rejection.
         }
 
-        // Reject before allocate: the guard fired after cache creation but
-        // before the vision continuation was even queried — and the model
-        // never ran a forward.
-        #expect(provider.recorder.verbs == [.prepare, .newCache])
+        // Reject before allocate: the guard fired before the KV cache was
+        // created or the vision continuation was even queried — and the
+        // model never ran a forward.
+        #expect(provider.recorder.verbs == [.prepare])
         #expect(forwards.hasForwarded == false)
         await fixture.drain()
     }
@@ -157,7 +157,7 @@ private nonisolated final class ForwardCounter: @unchecked Sendable {
             }
         }
 
-        #expect(provider.recorder.verbs == [.prepare, .newCache])
+        #expect(provider.recorder.verbs == [.prepare])
         #expect(forwards.hasForwarded == false)
     }
 }
