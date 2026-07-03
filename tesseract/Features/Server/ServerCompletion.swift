@@ -28,8 +28,10 @@ nonisolated final class UnsafeSendableBox<T>: @unchecked Sendable {
 /// stream and capture the final KV cache after generation completes.
 ///
 /// The **Server Completion** module's private cross-step value — it never
-/// crosses the module's interface (ADR-0015).
-private nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
+/// crosses the module's interface (ADR-0015). Internal (not `private`) only
+/// so the sequencing suite can drive a converted arm with a toy-backed
+/// **Model Session** and read the resulting handles (ADR-0016).
+nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let stream: AsyncStream<RawGeneration>
     let completion: Task<Void, Never>
     /// The app-owned KV cache array the generation runs on. The module
@@ -1591,7 +1593,7 @@ nonisolated final class ServerCompletion {
                 keySpace = space
             case .failure(let reason):
                 return try await Self.makeUnkeyedGeneration(
-                    context: context,
+                    session: ContextBackedModelSession(context: context),
                     fullInput: fullInput,
                     fullTokens: fullTokens,
                     reason: reason,
@@ -2213,8 +2215,13 @@ nonisolated final class ServerCompletion {
     /// state. `kvBits` quantization is skipped on this path — there is no
     /// capture to protect, and the degraded corner is not worth a per-step
     /// quantization loop.
-    private static func makeUnkeyedGeneration(
-        context: ModelContext,
+    ///
+    /// Converted to the **Model Session** seam (ADR-0016): the arm consumes
+    /// the port's verbs, so the sequencing suite drives it with the
+    /// toy-model-backed session. Internal (not `private`) for that suite;
+    /// production reaches it only through `makeHTTPPrefixCacheGeneration`.
+    static func makeUnkeyedGeneration(
+        session: any ModelSession,
         fullInput: LMInput,
         fullTokens: [Int],
         reason: CacheKeySpace.UnkeyedReason,
@@ -2246,7 +2253,7 @@ nonisolated final class ServerCompletion {
                 )))
         var iteratorParams = parameters
         iteratorParams.kvBits = nil
-        let cache = context.model.newCache(parameters: parameters)
+        let cache = session.newCache(parameters: parameters)
         let prefillStarted = Date.timeIntervalSinceReferenceDate
         // Vision-tower patch guard (ADR-0014) — hoisted ABOVE the
         // `WindowedVisionContinuation` cast so a vision model that does NOT conform
@@ -2285,7 +2292,7 @@ nonisolated final class ServerCompletion {
 
         let iterator: StateThreadedTokenIterator
         if fullInput.image != nil,
-            let continuation = context.model as? WindowedVisionContinuation
+            let continuation = session.windowedVisionContinuation
         {
             // Image-bearing **Unkeyed Completion** (ADR-0007 phase 2): cache
             // keying failed (e.g. a placeholder/grid mismatch), but the prompt
@@ -2316,9 +2323,8 @@ nonisolated final class ServerCompletion {
                 throw AgentEngineError.generationFailed(rejection.message)
             }
             iterator = try MLXCheckedEvaluation.withErrors { error in
-                let built = try StateThreadedTokenIterator(
-                    preparing: fullInput,
-                    model: context.model,
+                let built = try session.makePreparingDecodeIterator(
+                    fullInput,
                     cache: cache,
                     parameters: iteratorParams,
                     prepare: { input, cache, windowSize in
@@ -2331,11 +2337,11 @@ nonisolated final class ServerCompletion {
                 return built
             }
         } else {
-            iterator = try StateThreadedTokenIterator(
-                preparing: fullInput,
-                model: context.model,
+            iterator = try session.makePreparingDecodeIterator(
+                fullInput,
                 cache: cache,
-                parameters: iteratorParams
+                parameters: iteratorParams,
+                prepare: nil
             )
         }
         let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStarted
@@ -2350,8 +2356,8 @@ nonisolated final class ServerCompletion {
 
         let (stream, task) = TokenGenerationLoop.start(
             promptTokenCount: fullTokenCount,
-            modelConfiguration: context.configuration,
-            tokenizer: context.tokenizer,
+            modelConfiguration: session.configuration,
+            tokenizer: session.tokenizer,
             iterator: iterator,
             tools: toolSpecs
         )
