@@ -53,7 +53,7 @@ enum GenerationFixtures {
         )
     }
 
-    static func toolCall(name: String) -> ToolCall {
-        ToolCall(function: .init(name: name, arguments: [:]))
+    static func toolCall(name: String, arguments: [String: JSONValue] = [:]) -> ToolCall {
+        ToolCall(function: .init(name: name, arguments: arguments))
     }
 }

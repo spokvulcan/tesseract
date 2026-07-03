@@ -357,21 +357,29 @@ private func executeToolCalls(
     var results: [ToolResultMessage] = []
     var steeringMessages: [any AgentMessageProtocol & Sendable] = []
 
+    // The single commit step for a tool outcome — every branch (unknown tool,
+    // unparseable arguments, missing parameters, normal result, steering skip)
+    // lands its result through this exact append×3 + emit×2 sequence, the
+    // counterpart of pi-mono's `emitToolCallOutcome`.
+    func commit(_ result: ToolResultMessage) {
+        results.append(result)
+        context.messages.append(result)
+        allNewMessages.append(result)
+        emit(.messageStart(message: result))
+        emit(.messageEnd(message: result))
+    }
+
     for (index, call) in toolCalls.enumerated() {
         // Check cancellation
         if signal?.isCancelled == true { break }
 
         // Look up tool
         guard let tool = tools.first(where: { $0.name == call.name }) else {
-            let errorResult = ToolResultMessage.skipped(
-                toolCallId: call.id, toolName: call.name,
-                reason: "Unknown tool: \(call.name)"
-            )
-            results.append(errorResult)
-            context.messages.append(errorResult)
-            allNewMessages.append(errorResult)
-            emit(.messageStart(message: errorResult))
-            emit(.messageEnd(message: errorResult))
+            commit(
+                ToolResultMessage.skipped(
+                    toolCallId: call.id, toolName: call.name,
+                    reason: "Unknown tool: \(call.name)"
+                ))
             continue
         }
 
@@ -382,33 +390,25 @@ private func executeToolCalls(
         } else if let parsed = ToolArgumentNormalizer.decode(call.argumentsJSON) {
             args = parsed
         } else {
-            let errorResult = ToolResultMessage.create(
-                toolCallId: call.id, toolName: call.name,
-                result: .error("Failed to parse tool arguments as JSON"),
-                isError: true
-            )
-            results.append(errorResult)
-            context.messages.append(errorResult)
-            allNewMessages.append(errorResult)
-            emit(.messageStart(message: errorResult))
-            emit(.messageEnd(message: errorResult))
+            commit(
+                ToolResultMessage.create(
+                    toolCallId: call.id, toolName: call.name,
+                    result: .error("Failed to parse tool arguments as JSON"),
+                    isError: true
+                ))
             continue
         }
 
         // Validate required parameters
         let missingParams = tool.parameterSchema.required.filter { args[$0] == nil }
         if !missingParams.isEmpty {
-            let errorResult = ToolResultMessage.create(
-                toolCallId: call.id, toolName: call.name,
-                result: .error(
-                    "Missing required parameters: \(missingParams.joined(separator: ", "))"),
-                isError: true
-            )
-            results.append(errorResult)
-            context.messages.append(errorResult)
-            allNewMessages.append(errorResult)
-            emit(.messageStart(message: errorResult))
-            emit(.messageEnd(message: errorResult))
+            commit(
+                ToolResultMessage.create(
+                    toolCallId: call.id, toolName: call.name,
+                    result: .error(
+                        "Missing required parameters: \(missingParams.joined(separator: ", "))"),
+                    isError: true
+                ))
             continue
         }
 
@@ -452,11 +452,7 @@ private func executeToolCalls(
             toolCallId: call.id, toolName: call.name,
             result: toolResult, isError: isError
         )
-        results.append(resultMessage)
-        context.messages.append(resultMessage)
-        allNewMessages.append(resultMessage)
-        emit(.messageStart(message: resultMessage))
-        emit(.messageEnd(message: resultMessage))
+        commit(resultMessage)
 
         // Check steering — skip remaining tools if steering arrived
         if let getSteering = getSteeringMessages {
@@ -465,15 +461,11 @@ private func executeToolCalls(
                 steeringMessages = steering
                 // Skip remaining tool calls
                 for skippedCall in toolCalls[(index + 1)...] {
-                    let skipped = ToolResultMessage.skipped(
-                        toolCallId: skippedCall.id, toolName: skippedCall.name,
-                        reason: "Skipped due to queued user message"
-                    )
-                    results.append(skipped)
-                    context.messages.append(skipped)
-                    allNewMessages.append(skipped)
-                    emit(.messageStart(message: skipped))
-                    emit(.messageEnd(message: skipped))
+                    commit(
+                        ToolResultMessage.skipped(
+                            toolCallId: skippedCall.id, toolName: skippedCall.name,
+                            reason: "Skipped due to queued user message"
+                        ))
                 }
                 break
             }
