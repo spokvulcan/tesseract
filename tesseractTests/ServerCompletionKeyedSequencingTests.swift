@@ -69,43 +69,6 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     }
 }
 
-/// Owns the bare `LLMActor` + directly-constructed **Server Completion**
-/// module the keyed suites drive. `@unchecked Sendable`: every module use
-/// goes through the actor's executor via the `isolated` parameter — the same
-/// confinement production has (ADR-0015).
-private nonisolated final class ServerCompletionFixture: @unchecked Sendable {
-    let actor = LLMActor()
-    let module = ServerCompletion()
-    let provider: ToyModelSessionProvider
-
-    init(provider: ToyModelSessionProvider) {
-        self.provider = provider
-        module.installLoadedModelFacts(
-            promptStartsThinking: false,
-            modelWeightBytes: 0,
-            prefixCacheBudgetBytes: 1 << 30
-        )
-    }
-
-    func start(
-        conversation: HTTPPrefixCacheConversation,
-        parameters: AgentGenerateParameters
-    ) async throws -> HTTPServerGenerationStart {
-        try await module.start(
-            on: actor,
-            sessions: provider,
-            modelID: "toy/model",
-            conversation: conversation,
-            toolSpecs: nil,
-            parameters: parameters
-        )
-    }
-
-    func drain() async {
-        await module.drainActiveCompletion(on: actor)
-    }
-}
-
 /// PR B gating coverage (PRD #137, ADR-0016): the keyed spine — Snapshot
 /// Resolution → restore → suffix prefill → drive → leaf capture → Snapshot
 /// Admission — and the cancellation orderings, all through the module's
@@ -126,22 +89,6 @@ private nonisolated final class ServerCompletionFixture: @unchecked Sendable {
         // KV quantization stays a recorded no-op verb in these suites.
         parameters.kvBits = nil
         return parameters
-    }
-
-    private static func collectText(
-        _ handle: HTTPServerGenerationStart
-    ) async throws -> (text: String, info: AgentGeneration.Info?) {
-        var text = ""
-        var info: AgentGeneration.Info?
-        for try await event in handle.stream {
-            switch event {
-            case .text(let chunk): text += chunk
-            case .info(let value): info = value
-            default: break
-            }
-        }
-        await handle.waitForCompletion()
-        return (text, info)
     }
 
     /// The keyed spine, cold then warm. Round 1 (cold miss) must run
@@ -182,7 +129,7 @@ private nonisolated final class ServerCompletionFixture: @unchecked Sendable {
             conversation: round1, parameters: Self.parameters()
         )
         #expect(handle1.cachedTokenCount == 0)
-        let (text1, info1) = try await Self.collectText(handle1)
+        let (text1, info1) = try await collectServerText(handle1)
         #expect(text1 == "Hello!")
         #expect(try #require(info1).promptTokenCount == render1.count)
         let round1Verbs = fixture.provider.recorder.verbs
@@ -208,7 +155,7 @@ private nonisolated final class ServerCompletionFixture: @unchecked Sendable {
             conversation: round2, parameters: Self.parameters()
         )
         #expect(handle2.cachedTokenCount == storedTokens1.count)
-        let (text2, info2) = try await Self.collectText(handle2)
+        let (text2, info2) = try await collectServerText(handle2)
         #expect(text2 == "Sure.")
         #expect(try #require(info2).promptTokenCount == render2.count)
         let round2Verbs = Array(fixture.provider.recorder.verbs.dropFirst(round1Verbs.count))
@@ -272,7 +219,7 @@ private nonisolated final class ServerCompletionFixture: @unchecked Sendable {
         )
         #expect(retry.cachedTokenCount >= 2048)
         #expect(retry.cachedTokenCount < render.count)
-        let (text, _) = try await Self.collectText(retry)
+        let (text, _) = try await collectServerText(retry)
         #expect(text == "OK")
         await fixture.drain()
     }
@@ -319,7 +266,7 @@ private nonisolated final class ServerCompletionFixture: @unchecked Sendable {
             conversation: conversation, parameters: Self.parameters()
         )
         #expect(retry.cachedTokenCount == 0)
-        let (text, _) = try await Self.collectText(retry)
+        let (text, _) = try await collectServerText(retry)
         #expect(text == completion)
         await fixture.drain()
     }
