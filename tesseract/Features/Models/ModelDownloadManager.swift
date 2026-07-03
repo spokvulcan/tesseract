@@ -7,7 +7,6 @@ import Foundation
 import Combine
 import os
 import MLXAudioCore
-import HuggingFace
 
 enum ModelStatus: Equatable, Sendable {
     case notDownloaded
@@ -22,6 +21,10 @@ final class ModelDownloadManager: ObservableObject {
     @Published private(set) var statuses: [String: ModelStatus] = [:]
 
     private var downloadTasks: [String: Task<Void, Never>] = [:]
+
+    private let fetching: any ModelFetching
+    private let storageRoot: URL
+    private let definitions: [ModelDefinition]
 
     /// Per-id cache of the vision probe (`isVisionCapable`). Capability is
     /// intrinsic to a model's `config.json`, so a known answer is cached
@@ -44,7 +47,14 @@ final class ModelDownloadManager: ObservableObject {
         return url
     }()
 
-    init() {
+    init(
+        fetching: any ModelFetching = HuggingFaceModelFetching(),
+        storageRoot: URL = ModelDownloadManager.modelStorageURL,
+        definitions: [ModelDefinition] = ModelDefinition.all
+    ) {
+        self.fetching = fetching
+        self.storageRoot = storageRoot
+        self.definitions = definitions
         refreshAllStatuses()
     }
 
@@ -53,7 +63,7 @@ final class ModelDownloadManager: ObservableObject {
     /// The **Model Catalog** join: downloaded models in a category, in catalogue
     /// order. The one place callers reach for "which models can I select / serve."
     func downloadedModels(in category: ModelCategory) -> [ModelDefinition] {
-        ModelCatalog.downloaded(in: category, definitions: ModelDefinition.all, statuses: statuses)
+        ModelCatalog.downloaded(in: category, definitions: definitions, statuses: statuses)
     }
 
     /// Whether a model id is present on disk.
@@ -80,7 +90,7 @@ final class ModelDownloadManager: ObservableObject {
     // MARK: - Status
 
     func refreshAllStatuses() {
-        for model in ModelDefinition.all {
+        for model in definitions {
             // Don't overwrite in-progress download or error states
             if let existing = statuses[model.id] {
                 switch existing {
@@ -90,17 +100,22 @@ final class ModelDownloadManager: ObservableObject {
                     break
                 }
             }
-            statuses[model.id] = Self.computeStatus(for: model)
+            statuses[model.id] = computeStatus(for: model)
         }
     }
 
-    private static func computeStatus(for model: ModelDefinition) -> ModelStatus {
+    /// Disk truth: status recomputed from what is actually on disk.
+    private func recomputeStatus(for model: ModelDefinition) {
+        statuses[model.id] = computeStatus(for: model)
+    }
+
+    private func computeStatus(for model: ModelDefinition) -> ModelStatus {
         guard case .huggingFace(_, let requiredExtension, let pathPrefix) = model.source else {
             return .notDownloaded
         }
         guard let subdir = model.cacheSubdirectory else { return .notDownloaded }
 
-        var checkDir = modelStorageURL.appendingPathComponent(subdir)
+        var checkDir = storageRoot.appendingPathComponent(subdir)
         if let pathPrefix {
             checkDir = checkDir.appendingPathComponent(pathPrefix)
         }
@@ -110,10 +125,10 @@ final class ModelDownloadManager: ObservableObject {
         }
 
         // Search recursively for required files (handles nested dirs like transformer/)
-        let hasRequired = hasFileRecursively(in: checkDir, withExtension: requiredExtension)
+        let hasRequired = Self.hasFileRecursively(in: checkDir, withExtension: requiredExtension)
         guard hasRequired else { return .notDownloaded }
 
-        let totalSize = directorySize(at: checkDir)
+        let totalSize = Self.directorySize(at: checkDir)
         return .downloaded(sizeOnDisk: totalSize)
     }
 
@@ -152,14 +167,57 @@ final class ModelDownloadManager: ObservableObject {
         return total
     }
 
+    // MARK: - Lifecycle
+
+    /// The one download/verify lifecycle both public entries parameterize:
+    /// occupancy guard → in-progress status → tracked task running `body` →
+    /// shared tail (companion files → recompute status from disk → task
+    /// removal) — with a single cancellation arm. Cancel semantics unify on
+    /// disk truth: any cancellation recomputes status from what is actually
+    /// on disk, so a cancelled fresh download returns to "not downloaded"
+    /// while a cancelled verify of a downloaded model stays "downloaded".
+    private func runLifecycle(
+        for model: ModelDefinition,
+        occupiedWhen isOccupied: (ModelStatus) -> Bool,
+        inProgress: ModelStatus,
+        failureLabel: String,
+        body: @escaping @MainActor () async throws -> Void
+    ) {
+        if let existing = statuses[model.id], isOccupied(existing) { return }
+
+        statuses[model.id] = inProgress
+
+        let task = Task { [weak self] in
+            do {
+                try await body()
+                try await self?.ensureCompanionFiles(for: model)
+                self?.recomputeStatus(for: model)
+            } catch is CancellationError {
+                self?.recomputeStatus(for: model)
+            } catch {
+                self?.statuses[model.id] = .error(error.localizedDescription)
+                Log.general.error("\(failureLabel) failed for \(model.displayName): \(error)")
+            }
+
+            self?.downloadTasks.removeValue(forKey: model.id)
+        }
+        downloadTasks[model.id] = task
+    }
+
     // MARK: - Download
 
     func download(modelID: String) {
-        guard let model = ModelDefinition.all.first(where: { $0.id == modelID }) else { return }
+        guard let model = definitions.first(where: { $0.id == modelID }) else { return }
         guard case .huggingFace(let repo, let requiredExtension, let pathPrefix) = model.source
         else { return }
 
-        if case .downloading = statuses[modelID] { return }
+        let occupied: (ModelStatus) -> Bool = {
+            if case .downloading = $0 { return true }
+            return false
+        }
+        // Checked here as well as in the lifecycle so dependencies don't kick
+        // off when this model's own download is already in flight.
+        if let existing = statuses[modelID], occupied(existing) { return }
 
         // Auto-download dependencies
         for depID in model.dependencies {
@@ -169,114 +227,78 @@ final class ModelDownloadManager: ObservableObject {
             }
         }
 
-        statuses[modelID] = .downloading(progress: 0)
-
-        let task = Task { [weak self] in
-            do {
-                guard let repoID = Repo.ID(rawValue: repo) else {
-                    self?.statuses[modelID] = .error("Invalid repository ID")
-                    return
-                }
-
-                if let pathPrefix {
-                    try await self?.downloadFileByFile(
-                        modelID: modelID,
-                        repoID: repoID,
-                        pathPrefix: pathPrefix
-                    )
-                } else if requiredExtension == "safetensors" {
-                    // Repos with nested directories (transformer/, vae/, scheduler/
-                    // subdirs) fail with downloadSnapshot due to file/directory
-                    // naming conflicts. Download files individually instead.
-                    try await self?.downloadFileByFile(
-                        modelID: modelID,
-                        repoID: repoID,
-                        pathPrefix: nil
-                    )
-                } else {
-                    let weakSelf = self
-                    _ = try await ModelUtils.resolveOrDownloadModel(
-                        repoID: repoID,
-                        requiredExtension: requiredExtension,
-                        progressHandler: { @Sendable progress in
-                            let fraction = progress.fractionCompleted
-                            Task { @MainActor in
-                                weakSelf?.statuses[modelID] = .downloading(progress: fraction)
-                            }
-                        }
-                    )
-                }
-
-                try await self?.ensureCompanionFiles(for: model)
-
-                let status = Self.computeStatus(for: model)
-                self?.statuses[modelID] = status
-                Log.general.info("Model downloaded: \(model.displayName)")
-            } catch is CancellationError {
-                self?.statuses[modelID] = .notDownloaded
-            } catch {
-                self?.statuses[modelID] = .error(error.localizedDescription)
-                Log.general.error("Download failed for \(model.displayName): \(error)")
+        runLifecycle(
+            for: model,
+            occupiedWhen: occupied,
+            inProgress: .downloading(progress: 0),
+            failureLabel: "Download"
+        ) { [weak self] in
+            if pathPrefix != nil || requiredExtension == "safetensors" {
+                // Repos with nested directories (transformer/, vae/, scheduler/
+                // subdirs) fail with snapshot resolution due to file/directory
+                // naming conflicts. Download files individually instead.
+                try await self?.downloadFileByFile(
+                    model: model, repo: repo, pathPrefix: pathPrefix)
+            } else {
+                try await self?.fetching.resolveSnapshot(
+                    of: repo,
+                    requiredExtension: requiredExtension,
+                    onProgress: { [weak self] fraction in
+                        self?.statuses[modelID] = .downloading(progress: fraction)
+                    }
+                )
             }
-
-            self?.downloadTasks.removeValue(forKey: modelID)
+            Log.general.info("Model downloaded: \(model.displayName)")
         }
-        downloadTasks[modelID] = task
     }
 
     // MARK: - File Check
 
     private struct FileCheckResult {
-        let filtered: [Git.TreeEntry]
-        let pending: [(index: Int, entry: Git.TreeEntry)]
+        let totalFiles: Int
+        let pending: [RemoteModelFile]
         let modelDir: URL
 
-        var totalFiles: Int { filtered.count }
         var validFiles: Int { totalFiles - pending.count }
         var needsRepair: Bool { !pending.isEmpty }
     }
 
     private func checkFiles(
-        modelID: String,
-        repoID: Repo.ID,
+        model: ModelDefinition,
+        repo: String,
         pathPrefix: String?
     ) async throws -> FileCheckResult {
-        let client = HubClient.default
-
-        let allEntries = try await client.listFiles(in: repoID, recursive: true)
-        let filtered: [Git.TreeEntry]
+        let allFiles = try await fetching.listFiles(in: repo, recursive: true)
+        let filtered: [RemoteModelFile]
         if let pathPrefix {
-            filtered = allEntries.filter { entry in
-                entry.path.hasPrefix(pathPrefix + "/") && entry.type == .file
-            }
+            filtered = allFiles.filter { $0.path.hasPrefix(pathPrefix + "/") }
         } else {
-            filtered = allEntries.filter { $0.type == .file }
+            filtered = allFiles
         }
 
         guard !filtered.isEmpty else {
             let desc =
-                pathPrefix.map { "No files found for prefix '\($0)' in \(repoID)" }
-                ?? "No files found in \(repoID)"
+                pathPrefix.map { "No files found for prefix '\($0)' in \(repo)" }
+                ?? "No files found in \(repo)"
             throw NSError(
                 domain: "ModelDownload", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: desc]
             )
         }
 
-        guard let subdir = ModelDefinition.all.first(where: { $0.id == modelID })?.cacheSubdirectory
-        else {
+        guard let subdir = model.cacheSubdirectory else {
             throw NSError(
                 domain: "ModelDownload", code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "No cache subdirectory for \(modelID)"]
+                userInfo: [NSLocalizedDescriptionKey: "No cache subdirectory for \(model.id)"]
             )
         }
-        let modelDir = Self.modelStorageURL.appendingPathComponent(subdir)
+        let modelDir = storageRoot.appendingPathComponent(subdir)
 
-        var pending = [(index: Int, entry: Git.TreeEntry)]()
-        for (index, entry) in filtered.enumerated() {
-            let targetFile = modelDir.appendingPathComponent(entry.path)
+        var pending = [RemoteModelFile]()
+        for file in filtered {
+            let targetFile = modelDir.appendingPathComponent(file.path)
             if FileManager.default.fileExists(atPath: targetFile.path) {
-                if let expectedSize = entry.size {
+                if let expectedSize = file.size {
                     let attrs = try? FileManager.default.attributesOfItem(atPath: targetFile.path)
                     let localSize = (attrs?[.size] as? Int64) ?? 0
                     if localSize >= Int64(expectedSize) {
@@ -286,18 +308,17 @@ final class ModelDownloadManager: ObservableObject {
                     continue
                 }
             }
-            pending.append((index, entry))
+            pending.append(file)
         }
 
-        return FileCheckResult(filtered: filtered, pending: pending, modelDir: modelDir)
+        return FileCheckResult(totalFiles: filtered.count, pending: pending, modelDir: modelDir)
     }
 
     private func downloadPendingFiles(
         modelID: String,
-        repoID: Repo.ID,
+        repo: String,
         result: FileCheckResult
     ) async throws {
-        let client = HubClient.default
         let totalFiles = result.totalFiles
         let alreadyDone = result.validFiles
 
@@ -305,10 +326,10 @@ final class ModelDownloadManager: ObservableObject {
             statuses[modelID] = .downloading(progress: Double(alreadyDone) / Double(totalFiles))
         }
 
-        for (i, (_, entry)) in result.pending.enumerated() {
+        for (index, file) in result.pending.enumerated() {
             try Task.checkCancellation()
 
-            let targetFile = result.modelDir.appendingPathComponent(entry.path)
+            let targetFile = result.modelDir.appendingPathComponent(file.path)
 
             let parentDir = targetFile.deletingLastPathComponent()
             if !FileManager.default.fileExists(atPath: parentDir.path) {
@@ -316,24 +337,20 @@ final class ModelDownloadManager: ObservableObject {
                     at: parentDir, withIntermediateDirectories: true)
             }
 
-            _ = try await client.downloadFile(
-                at: entry.path,
-                from: repoID,
-                to: targetFile
-            )
+            try await fetching.fetchFile(at: file.path, from: repo, to: targetFile)
 
             statuses[modelID] = .downloading(
-                progress: Double(alreadyDone + i + 1) / Double(totalFiles)
+                progress: Double(alreadyDone + index + 1) / Double(totalFiles)
             )
         }
     }
 
     private func downloadFileByFile(
-        modelID: String,
-        repoID: Repo.ID,
+        model: ModelDefinition,
+        repo: String,
         pathPrefix: String?
     ) async throws {
-        let result = try await checkFiles(modelID: modelID, repoID: repoID, pathPrefix: pathPrefix)
+        let result = try await checkFiles(model: model, repo: repo, pathPrefix: pathPrefix)
 
         // Clean up stale file left by a previous failed download
         var isDir: ObjCBool = false
@@ -344,11 +361,11 @@ final class ModelDownloadManager: ObservableObject {
         }
 
         if result.pending.isEmpty {
-            statuses[modelID] = .downloading(progress: 1.0)
+            statuses[model.id] = .downloading(progress: 1.0)
             return
         }
 
-        try await downloadPendingFiles(modelID: modelID, repoID: repoID, result: result)
+        try await downloadPendingFiles(modelID: model.id, repo: repo, result: result)
     }
 
     // MARK: - Companion Files
@@ -356,20 +373,11 @@ final class ModelDownloadManager: ObservableObject {
     /// Fetches the model's companion files (see `CompanionFile`) into the
     /// model folder. Idempotent: files already present at their expected size
     /// are skipped, truncated leftovers are re-downloaded.
-    func ensureCompanionFiles(for model: ModelDefinition) async throws {
+    private func ensureCompanionFiles(for model: ModelDefinition) async throws {
         guard !model.companionFiles.isEmpty, let folder = modelPath(for: model.id) else { return }
-        let client = HubClient.default
 
         for (repo, files) in Dictionary(grouping: model.companionFiles, by: \.repo) {
-            guard let repoID = Repo.ID(rawValue: repo) else {
-                throw NSError(
-                    domain: "ModelDownload", code: 3,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: "Invalid companion repository ID: \(repo)"
-                    ]
-                )
-            }
-            let entries = try await client.listFiles(in: repoID, recursive: false)
+            let entries = try await fetching.listFiles(in: repo, recursive: false)
 
             for file in files {
                 try Task.checkCancellation()
@@ -387,7 +395,7 @@ final class ModelDownloadManager: ObservableObject {
                     }
                 }
 
-                _ = try await client.downloadFile(at: file.path, from: repoID, to: target)
+                try await fetching.fetchFile(at: file.path, from: repo, to: target)
                 Log.general.info("Companion file downloaded: \(file.path) for \(model.displayName)")
             }
         }
@@ -396,86 +404,58 @@ final class ModelDownloadManager: ObservableObject {
     // MARK: - Verify & Repair
 
     func verifyAndRepair(modelID: String) {
-        guard let model = ModelDefinition.all.first(where: { $0.id == modelID }) else { return }
+        guard let model = definitions.first(where: { $0.id == modelID }) else { return }
         guard case .huggingFace(let repo, _, let pathPrefix) = model.source else { return }
 
-        // Don't verify if already verifying or downloading
-        if let existing = statuses[modelID] {
-            switch existing {
-            case .downloading, .verifying:
-                return
-            default:
-                break
-            }
-        }
-
-        statuses[modelID] = .verifying(progress: 0)
-
-        let task = Task { [weak self] in
-            do {
-                guard let repoID = Repo.ID(rawValue: repo) else {
-                    self?.statuses[modelID] = .error("Invalid repository ID")
-                    return
+        runLifecycle(
+            for: model,
+            occupiedWhen: { status in
+                switch status {
+                case .downloading, .verifying: true
+                default: false
                 }
+            },
+            inProgress: .verifying(progress: 0),
+            failureLabel: "Verify",
+            body: { [weak self] in
+                guard let self else { return }
+                let result = try await self.checkFiles(
+                    model: model, repo: repo, pathPrefix: pathPrefix)
 
-                let result = try await self?.checkFiles(
-                    modelID: modelID,
-                    repoID: repoID,
-                    pathPrefix: pathPrefix
-                )
+                self.statuses[modelID] = .verifying(progress: 1.0)
 
-                guard let result else { return }
-
-                self?.statuses[modelID] = .verifying(progress: 1.0)
-
-                if !result.needsRepair {
-                    try await self?.ensureCompanionFiles(for: model)
-                    let status = Self.computeStatus(for: model)
-                    self?.statuses[modelID] = status
-                    Log.general.info(
-                        "Verify OK: \(model.displayName) — \(result.totalFiles) files valid")
-                } else {
+                if result.needsRepair {
                     Log.general.info(
                         "Verify: \(model.displayName) — \(result.pending.count)/\(result.totalFiles) files need repair"
                     )
-                    try await self?.downloadPendingFiles(
-                        modelID: modelID,
-                        repoID: repoID,
-                        result: result
-                    )
-                    try await self?.ensureCompanionFiles(for: model)
-                    let status = Self.computeStatus(for: model)
-                    self?.statuses[modelID] = status
+                    try await self.downloadPendingFiles(
+                        modelID: modelID, repo: repo, result: result)
                     Log.general.info("Repair complete: \(model.displayName)")
+                } else {
+                    Log.general.info(
+                        "Verify OK: \(model.displayName) — \(result.totalFiles) files valid")
                 }
-            } catch is CancellationError {
-                let status = Self.computeStatus(for: model)
-                self?.statuses[modelID] = status
-            } catch {
-                self?.statuses[modelID] = .error(error.localizedDescription)
-                Log.general.error("Verify failed for \(model.displayName): \(error)")
             }
-
-            self?.downloadTasks.removeValue(forKey: modelID)
-        }
-        downloadTasks[modelID] = task
+        )
     }
 
     // MARK: - Cancel
 
+    /// Cancels the in-flight operation. The final status is owned by the
+    /// lifecycle's single cancellation arm, which recomputes it from disk —
+    /// cancel never hard-codes a status, so a cancelled verify of a
+    /// downloaded model keeps showing "downloaded".
     func cancelDownload(modelID: String) {
         downloadTasks[modelID]?.cancel()
-        downloadTasks.removeValue(forKey: modelID)
-        statuses[modelID] = .notDownloaded
     }
 
     // MARK: - Delete
 
     func deleteModel(modelID: String) {
-        guard let model = ModelDefinition.all.first(where: { $0.id == modelID }) else { return }
+        guard let model = definitions.first(where: { $0.id == modelID }) else { return }
         guard let subdir = model.cacheSubdirectory else { return }
 
-        var deleteDir = Self.modelStorageURL.appendingPathComponent(subdir)
+        var deleteDir = storageRoot.appendingPathComponent(subdir)
         if let prefix = model.pathPrefix {
             deleteDir = deleteDir.appendingPathComponent(prefix)
         }
@@ -489,10 +469,10 @@ final class ModelDownloadManager: ObservableObject {
     // MARK: - Path Resolution
 
     func modelPath(for modelID: String) -> URL? {
-        guard let model = ModelDefinition.all.first(where: { $0.id == modelID }) else { return nil }
+        guard let model = definitions.first(where: { $0.id == modelID }) else { return nil }
         guard let subdir = model.cacheSubdirectory else { return nil }
 
-        var path = Self.modelStorageURL.appendingPathComponent(subdir)
+        var path = storageRoot.appendingPathComponent(subdir)
         if let prefix = model.pathPrefix {
             path = path.appendingPathComponent(prefix)
         }
