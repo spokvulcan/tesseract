@@ -107,8 +107,22 @@ nonisolated enum ToyVocabulary {
 
 /// Toy `UserInputProcessor`: renders messages through the given tokenizer's
 /// chat template and returns 1D prepared tokens — the pure-LLM prepare shape.
+///
+/// With a `VisionStub` installed it becomes the 2D-token toy variant (PRD
+/// #137, user story 12): image-bearing input appends one placeholder pad run
+/// per image and returns a `ProcessedImage` whose frames carry the stub's
+/// grid — the prepared shape the **Cache Key Space** and the ADR-0014 patch
+/// guard price, with no vision tower behind it.
 nonisolated struct ToyUserInputProcessor: UserInputProcessor {
+    /// The image-keying facts the stub fabricates per attached image.
+    struct VisionStub {
+        let padTokenId: Int
+        let padRunLength: Int
+        let frame: THW
+    }
+
     let tokenizer: any Tokenizer
+    var vision: VisionStub?
 
     func prepare(input: UserInput) async throws -> LMInput {
         let messages: [Message]
@@ -120,12 +134,25 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
         case .chat(let chat):
             messages = chat.map { ["role": "\($0.role)", "content": $0.content] }
         }
-        let tokens = try tokenizer.applyChatTemplate(
+        var tokens = try tokenizer.applyChatTemplate(
             messages: messages,
             tools: input.tools,
             additionalContext: input.additionalContext
         )
-        return LMInput(tokens: MLXArray(tokens.map(Int32.init)))
+        guard let vision, !input.images.isEmpty else {
+            return LMInput(tokens: MLXArray(tokens.map(Int32.init)))
+        }
+        var frames: [THW] = []
+        for _ in input.images {
+            tokens += Array(repeating: vision.padTokenId, count: vision.padRunLength)
+            frames.append(vision.frame)
+        }
+        // Image-bearing prepares emit the VLM 2D `[batch, seq]` token shape —
+        // the keyed arm's image-span slicing indexes both axes.
+        return LMInput(
+            text: .init(tokens: MLXArray(tokens.map(Int32.init))[.newAxis], mask: nil),
+            image: LMInput.ProcessedImage(pixels: MLXArray.zeros([4, 3]), frames: frames)
+        )
     }
 }
 
@@ -305,13 +332,14 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     init(
         model: ToyLanguageModel,
         tokenizer: any Tokenizer = FakeChatMLTokenizer(),
-        configuration: ModelConfiguration = ToyVocabulary.configuration()
+        configuration: ModelConfiguration = ToyVocabulary.configuration(),
+        vision: ToyUserInputProcessor.VisionStub? = nil
     ) {
         self.container = ModelContainer(
             context: ModelContext(
                 configuration: configuration,
                 model: model,
-                processor: ToyUserInputProcessor(tokenizer: tokenizer),
+                processor: ToyUserInputProcessor(tokenizer: tokenizer, vision: vision),
                 tokenizer: tokenizer
             )
         )

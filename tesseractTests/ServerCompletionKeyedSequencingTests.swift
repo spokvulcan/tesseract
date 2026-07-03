@@ -58,7 +58,16 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         var tokens: [Int] = []
         for message in messages {
             tokens.append(roleMark(message["role"] as? String ?? "user"))
-            tokens += encode(text: message["content"] as? String ?? "", addSpecialTokens: false)
+            // Image-bearing messages arrive in the content-array form; the
+            // toy renders their text parts (images ride only through the
+            // processor's prepared tokens, as in production).
+            if let text = message["content"] as? String {
+                tokens += encode(text: text, addSpecialTokens: false)
+            } else if let parts = message["content"] as? [[String: any Sendable]] {
+                for part in parts where part["type"] as? String == "text" {
+                    tokens += encode(text: part["text"] as? String ?? "", addSpecialTokens: false)
+                }
+            }
             tokens.append(Self.eotTokenId)
         }
         let addGenerationPrompt = (additionalContext?["add_generation_prompt"] as? Bool) ?? true

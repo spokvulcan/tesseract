@@ -20,13 +20,14 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
     init(
         provider: ToyModelSessionProvider,
         fingerprint: String? = nil,
-        ssdConfig: SSDPrefixCacheConfig? = nil
+        ssdConfig: SSDPrefixCacheConfig? = nil,
+        identity: ModelIdentity? = nil
     ) {
         self.provider = provider
-        if let fingerprint {
+        if fingerprint != nil || identity != nil {
             module.installLoadTimeState(
-                modelIdentity: ModelIdentity(configJSON: nil, chatTemplate: nil),
-                fingerprint: fingerprint,
+                modelIdentity: identity ?? ModelIdentity(configJSON: nil, chatTemplate: nil),
+                fingerprint: fingerprint ?? "toy-fingerprint",
                 ssdConfig: ssdConfig
             )
         }
