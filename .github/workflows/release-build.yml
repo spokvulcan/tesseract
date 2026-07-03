@@ -21,9 +21,10 @@ permissions:
   contents: write
 
 jobs:
-  # CI on the release commit starts on the same push that triggered
-  # release-please, so it is usually still running when we get dispatched —
-  # poll until every gate check completes.
+  # Release commits are version-files-only and skip CI (ci.yml paths-ignore),
+  # so the gate checks the commit that last changed code: for a release
+  # commit, its parent — the main state whose CI already ran when the feature
+  # merged. Usually those checks finished long ago and the gate is instant.
   gate-on-green:
     name: gate-on-green
     runs-on: ubuntu-latest
@@ -37,6 +38,19 @@ jobs:
         run: |
           set -euo pipefail
           SHA=$(gh api "repos/$REPO/commits/$TAG" --jq .sha)
+          # Version-only commits carry no CI of their own — gate on the parent.
+          VERSION_FILES="version.txt CHANGELOG.md .release-please-manifest.json"
+          CODE_CHANGED=false
+          for F in $(gh api "repos/$REPO/commits/$SHA" --jq '.files[].filename'); do
+            case " $VERSION_FILES " in
+              *" $F "*) ;;
+              *) CODE_CHANGED=true ;;
+            esac
+          done
+          if [ "$CODE_CHANGED" = "false" ]; then
+            SHA=$(gh api "repos/$REPO/commits/$SHA" --jq '.parents[0].sha')
+            echo "Tagged commit is version-files-only; gating on its parent instead."
+          fi
           echo "Gating release $TAG on CI for commit $SHA"
           REQUIRED="build-release test lint"
           DEADLINE=$(( $(date +%s) + 140*60 ))

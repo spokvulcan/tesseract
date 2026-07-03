@@ -10,11 +10,22 @@
 
 name: CI
 
+# Version-only changes (Release PRs and their merge commits) skip CI: the
+# code is byte-identical to a main state CI already tested, and the release
+# gate reads the parent commit's results instead (release-build.yml).
 on:
   pull_request:
     branches: [main]
+    paths-ignore:
+      - version.txt
+      - CHANGELOG.md
+      - .release-please-manifest.json
   push:
     branches: [main]
+    paths-ignore:
+      - version.txt
+      - CHANGELOG.md
+      - .release-please-manifest.json
 
 env:
   # Semver range so a runner-image refresh doesn't brick CI; keep the floor
