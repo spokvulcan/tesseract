@@ -1,0 +1,22 @@
+# PR titles must be Conventional Commits: with squash-only merges the PR
+# title becomes the commit on main, and Release Please builds the changelog
+# and version bumps from exactly those lines. A non-conventional title would
+# silently vanish from the changelog (see ADR-0017).
+
+name: PR Title
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional-title:
+    name: conventional-title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

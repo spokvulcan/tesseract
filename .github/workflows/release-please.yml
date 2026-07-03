@@ -1,0 +1,37 @@
+# Release Please maintains the Release PR on main; merging that PR makes it
+# create the tag + GitHub Release, after which this workflow explicitly
+# dispatches the asset build. The explicit dispatch is required: releases
+# created with the default GITHUB_TOKEN never trigger other workflows
+# (ADR-0017 — chosen over a long-lived PAT).
+
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Dispatch release build
+        if: ${{ steps.rp.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.rp.outputs.tag_name }}
+        run: |
+          gh workflow run release-build.yml \
+            --repo "${{ github.repository }}" \
+            --ref "$TAG" \
+            -f tag="$TAG"

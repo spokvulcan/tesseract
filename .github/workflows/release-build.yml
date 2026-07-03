@@ -1,0 +1,135 @@
+# Release Build — dispatched by release-please.yml after a GitHub Release is
+# created (or manually re-run: gh workflow run release-build.yml --ref vX.Y.Z
+# -f tag=vX.Y.Z). Gates on the released commit's CI, then builds, signs
+# (Developer ID), notarizes, staples, and uploads the DMG + dSYMs to the
+# existing Release. Secrets and one-time setup: docs/releasing.md.
+
+name: Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.0.0); its GitHub Release must already exist"
+        required: true
+        type: string
+
+env:
+  XCODE_VERSION: "^26.4" # keep in sync with ci.yml
+
+permissions:
+  contents: write
+
+jobs:
+  # CI on the release commit starts on the same push that triggered
+  # release-please, so it is usually still running when we get dispatched —
+  # poll until every gate check completes.
+  gate-on-green:
+    name: gate-on-green
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Wait for CI checks on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          SHA=$(gh api "repos/$REPO/commits/$TAG" --jq .sha)
+          echo "Gating release $TAG on CI for commit $SHA"
+          REQUIRED="build-release test lint"
+          DEADLINE=$(( $(date +%s) + 140*60 ))
+          while true; do
+            RUNS=$(gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
+              --jq '.check_runs[] | [.name, .status, (.conclusion // "pending")] | @tsv')
+            ALL_GREEN=true
+            for NAME in $REQUIRED; do
+              # check-runs are returned newest-first; take the latest attempt
+              LINE=$(awk -F'\t' -v n="$NAME" '$1 == n { print; exit }' <<<"$RUNS" || true)
+              if [ -z "$LINE" ]; then
+                echo "… $NAME: not started yet"; ALL_GREEN=false; continue
+              fi
+              STATUS=$(cut -f2 <<<"$LINE"); CONCLUSION=$(cut -f3 <<<"$LINE")
+              if [ "$STATUS" != "completed" ]; then
+                echo "… $NAME: $STATUS"; ALL_GREEN=false
+              elif [ "$CONCLUSION" != "success" ]; then
+                echo "✗ $NAME concluded '$CONCLUSION' — refusing to release from a red commit."
+                exit 1
+              else
+                echo "✓ $NAME"
+              fi
+            done
+            $ALL_GREEN && { echo "All gate checks green."; break; }
+            if [ "$(date +%s)" -gt "$DEADLINE" ]; then
+              echo "Timed out waiting for CI on $SHA."; exit 1
+            fi
+            sleep 90
+          done
+
+  build:
+    name: build-sign-notarize
+    needs: gate-on-green
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Install Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Derive version from tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Install Developer ID certificate
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: scripts/release/install-certificates.sh
+
+      - name: Archive (Developer ID signed)
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/release/archive.sh "$VERSION" "$GITHUB_RUN_NUMBER"
+
+      - name: Verify code signature
+        run: scripts/release/verify-signing.sh
+
+      - name: Package DMG and dSYMs
+        run: scripts/release/package.sh "$VERSION"
+
+      - name: Notarize and staple
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: scripts/release/notarize.sh "dist/Tesseract-$VERSION.dmg"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          cp "dist/Tesseract-$VERSION.dmg" dist/Tesseract.dmg
+          gh release upload "$TAG" \
+            "dist/Tesseract-$VERSION.dmg" \
+            dist/Tesseract.dmg \
+            "dist/Tesseract-$VERSION-dSYMs.zip" \
+            --clobber
+
+      - name: Upload build artifacts (debugging aid)
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-dist
+          path: dist/
+          retention-days: 7
