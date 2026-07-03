@@ -815,3 +815,19 @@ launch-time mirror of the teardown-owning termination coordinator. Distinct from
 composition root, which stays pure wiring with no behaviour.
 _Avoid_: app glue (pre-carve working name), setup() behaviour, launch coordinator,
 app services, a SwiftUI `Binding` (view data flow, unrelated).
+
+### Release and distribution
+
+**Release PR**:
+The rolling pull request that automation keeps open against `main`, holding the
+next semantic version and its accumulated changelog. Merging it *is* the release
+decision — the tag, the GitHub Release, and the signed build all follow
+mechanically from that one merge.
+_Avoid_: version-bump PR, release branch (no such branch exists), draft release.
+
+**Release Pipeline**:
+The automated path from a merged **Release PR** to a downloadable, notarized
+disk image attached to the GitHub Release — gated on the released commit's CI
+being green, with no human step inside it.
+_Avoid_: deploy (nothing is deployed to a server), publish flow, the CI workflow
+that builds pull requests (a gate the pipeline consumes, not the pipeline).

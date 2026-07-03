@@ -4,8 +4,9 @@
 	# pin while it is upstreamed in parallel (ADR-0006, amended). The fork
 	# mirrors ml-explore/mlx-swift-lm on `main`; feature branches carry the
 	# pinned commits until they merge upstream.
-	url = git@github.com:spokvulcan/mlx-swift-lm.git
+	# https (not ssh) so CI checkout can fetch the public fork anonymously.
+	url = https://github.com/spokvulcan/mlx-swift-lm.git
 	# The pinned commit rides this feature branch until it merges upstream;
 	# `--remote` must track it, not the fork's `main` (which mirrors upstream
 	# and would revert the pin). Re-point to `main` once the change lands.
-	branch = feat/warm-image-continuation
+	branch = pin-upstream-mlx-swift

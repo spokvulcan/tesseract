@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "3acc6992ff97c981619632356b8dca5b784f2807",
+  "include-v-in-tag": true,
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "tesseract",
+      "include-component-in-tag": false,
+      "release-as": "1.0.0"
+    }
+  }
+}

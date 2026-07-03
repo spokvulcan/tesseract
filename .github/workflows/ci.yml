@@ -1,0 +1,126 @@
+# CI — build, test, lint on every PR and every push to main.
+#
+# The release pipeline (release-build.yml) gates on these exact check names
+# for the released commit: build-release, test, lint. Rename them only in
+# lockstep with the gate list there.
+#
+# Signing: CI builds use ad-hoc signing (CODE_SIGN_IDENTITY=-) — no
+# certificates exist on PR runners. Real Developer ID signing happens only in
+# release-build.yml.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  # Semver range so a runner-image refresh doesn't brick CI; keep the floor
+  # roughly in sync with the local toolchain (currently Xcode 26.6).
+  XCODE_VERSION: "^26.4"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-release:
+    name: build-release
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true # Vendor/mlx-swift-lm is a submodule (local SPM package)
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Install Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Cache SPM checkouts
+        uses: actions/cache@v4
+        with:
+          path: DerivedData/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('tesseract.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Build (Release)
+        run: |
+          set -o pipefail
+          FILTER="cat"; command -v xcbeautify >/dev/null && FILTER="xcbeautify"
+          xcodebuild build \
+            -project tesseract.xcodeproj \
+            -scheme tesseract \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath DerivedData \
+            -skipPackagePluginValidation \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            2>&1 | "$FILTER"
+
+  test:
+    name: test
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true # Vendor/mlx-swift-lm is a submodule (local SPM package)
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Install Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Cache SPM checkouts
+        uses: actions/cache@v4
+        with:
+          path: DerivedData/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('tesseract.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      # Tests must run in Debug: Release lacks ENABLE_TESTABILITY for
+      # @testable imports. -parallel-testing-enabled NO because state-mutating
+      # suites are not safe under the scheme's parallel twin processes
+      # (docs/testing.md).
+      - name: Test (Debug)
+        run: |
+          set -o pipefail
+          FILTER="cat"; command -v xcbeautify >/dev/null && FILTER="xcbeautify"
+          xcodebuild test \
+            -project tesseract.xcodeproj \
+            -scheme tesseract \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath DerivedData \
+            -resultBundlePath TestResults.xcresult \
+            -parallel-testing-enabled NO \
+            -skipPackagePluginValidation \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            2>&1 | "$FILTER"
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: test-results
+          path: TestResults.xcresult
+          retention-days: 7
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    container: ghcr.io/realm/swiftlint:0.63.2 # keep in sync with local `swiftlint version`
+    steps:
+      - uses: actions/checkout@v5
+      - name: SwiftLint
+        run: swiftlint lint --reporter github-actions-logging
