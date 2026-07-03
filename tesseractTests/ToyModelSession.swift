@@ -28,14 +28,20 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
     let vocabSize: Int
     let script: [Int]
     let eosTokenId: Int
+    /// Test hook, fired at the top of every forward with the pre-update
+    /// cache offset — the cancellation suites use it to pause the prefill at
+    /// a deterministic point and land a cancel at a chunk boundary.
+    let onForward: (@Sendable (Int) -> Void)?
 
     init(
         script: [Int],
         eosTokenId: Int = ToyVocabulary.eosTokenId,
         vocabSize: Int = ToyVocabulary.size,
         layers: Int = 2,
-        headDim: Int = 4
+        headDim: Int = 4,
+        onForward: (@Sendable (Int) -> Void)? = nil
     ) {
+        self.onForward = onForward
         precondition(
             script.allSatisfy { $0 >= 0 && $0 < vocabSize },
             "script tokens must fit the toy vocabulary"
@@ -65,6 +71,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         let batched = inputs.ndim >= 2 ? inputs : inputs[.newAxis]
         let tokenCount = batched.dim(-1)
         let offset = cache?.first?.offset ?? 0
+        onForward?(offset)
 
         if let cache {
             // Content-derived K/V — one head, `headDim` copies of the token
@@ -98,10 +105,10 @@ nonisolated enum ToyVocabulary {
     }
 }
 
-/// Toy `UserInputProcessor`: renders messages through the byte-level ChatML
-/// template and returns 1D prepared tokens — the pure-LLM prepare shape.
+/// Toy `UserInputProcessor`: renders messages through the given tokenizer's
+/// chat template and returns 1D prepared tokens — the pure-LLM prepare shape.
 nonisolated struct ToyUserInputProcessor: UserInputProcessor {
-    let tokenizer: FakeChatMLTokenizer
+    let tokenizer: any Tokenizer
 
     func prepare(input: UserInput) async throws -> LMInput {
         let messages: [Message]
@@ -260,7 +267,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
 
     init(
         model: ToyLanguageModel,
-        tokenizer: FakeChatMLTokenizer = FakeChatMLTokenizer(),
+        tokenizer: any Tokenizer = FakeChatMLTokenizer(),
         configuration: ModelConfiguration = ToyVocabulary.configuration()
     ) {
         self.container = ModelContainer(

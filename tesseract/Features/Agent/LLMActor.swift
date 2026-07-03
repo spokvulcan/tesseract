@@ -468,7 +468,7 @@ actor LLMActor {
         }
         return try await ensureServerCompletion().start(
             on: self,
-            container: container,
+            sessions: ContainerModelSessionProvider(container: container),
             modelID: modelID,
             conversation: conversation,
             toolSpecs: toolSpecs,

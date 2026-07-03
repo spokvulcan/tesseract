@@ -534,7 +534,7 @@ nonisolated final class ServerCompletion {
     /// assistant-last), so there is no bypass here.
     func start(
         on actor: isolated LLMActor,
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         modelID: String,
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
@@ -578,7 +578,7 @@ nonisolated final class ServerCompletion {
         let canonicalTools = LLMActor.canonicalizeToolSpecs(toolSpecs)
         let mlxStart = try await makeHTTPPrefixCacheGeneration(
             on: actor,
-            container: container,
+            sessions: sessions,
             conversation: conversation,
             requestID: requestID,
             modelID: modelID,
@@ -662,7 +662,7 @@ nonisolated final class ServerCompletion {
             await Self.driveCompletion(
                 mlxStartBox: mlxStartBox,
                 conversation: conversation,
-                container: container,
+                sessions: sessions,
                 canonicalTools: canonicalTools,
                 requestID: requestID,
                 loadedModelWeightBytes: loadedModelWeightBytes,
@@ -723,7 +723,7 @@ nonisolated final class ServerCompletion {
     private static func driveCompletion(
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
         conversation: HTTPPrefixCacheConversation,
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         canonicalTools: [ToolSpec]?,
         requestID: UUID,
         loadedModelWeightBytes: Int64,
@@ -978,7 +978,7 @@ nonisolated final class ServerCompletion {
                 // key index == KV offset holds.
                 guard
                     let storedRenderTokens = await Self.measureStoredTokenSequence(
-                        container: container,
+                        sessions: sessions,
                         conversation: storedConversation,
                         toolSpecs: canonicalTools,
                         renderContext: renderContext
@@ -1035,7 +1035,7 @@ nonisolated final class ServerCompletion {
                         case .directTool: mlxStart.transientLastMessageBoundarySnapshot
                         case .canonical: mlxStart.transientLastUserBoundarySnapshot
                         }
-                    let leafTokenizer = await container.perform { $0.tokenizer }
+                    let leafTokenizer = try await sessions.withSession { $0.tokenizer }
                     let leafPlan = await LeafAdmissionBuilder.plan(
                         mode: boundaryMode,
                         storedConversation: storedConversation,
@@ -1046,9 +1046,12 @@ nonisolated final class ServerCompletion {
                         keySpace: mlxStart.keySpace,
                         renderContext: renderContext,
                         resolveBoundary: { tokens in
-                            // Drive Snapshot Resolution inside `container.perform`
-                            // so the SSD `loadSync` stays off-MainActor (ADR-0001).
-                            await container.perform { _ in
+                            // Drive Snapshot Resolution inside the Model
+                            // Session so the SSD `loadSync` stays
+                            // off-MainActor (ADR-0001). Session entry cannot
+                            // fail with a non-throwing body; the hypothetical
+                            // failure degrades to "no boundary snapshot".
+                            let resolved = try? await sessions.withSession { _ in
                                 await prefixCache.resolve(
                                     tokens: tokens,
                                     promptTokenCount: tokens.count,
@@ -1057,6 +1060,7 @@ nonisolated final class ServerCompletion {
                                     diagnostics: diagnosticsContext
                                 ).lookup.snapshot
                             }
+                            return resolved.flatMap { $0 }
                         }
                     )
 
@@ -1129,7 +1133,7 @@ nonisolated final class ServerCompletion {
                                 )
                             }
                         leafStoreForTuner = await Self.captureStructuredLeafFromBoundary(
-                            container: container,
+                            sessions: sessions,
                             storedTokens: boundaryStoredTokens,
                             boundarySnapshot: boundarySnapshot,
                             positionAnchorRopeDelta: positionAnchorRopeDelta,
@@ -1215,11 +1219,11 @@ nonisolated final class ServerCompletion {
                 }
 
                 // 4. Capture leaf snapshot and derive its admission
-                //    storage inside a Metal-affine `container.perform`
-                //    so any per-array `asData()` calls run on the
-                //    inference thread. `finalCache` is non-`Sendable`
-                //    `[any KVCache]` — routed through the vendor's
-                //    `nonSendable` perform overload. The offset
+                //    storage inside a Metal-affine Model Session so any
+                //    per-array `asData()` calls run on the inference
+                //    thread. `finalCache` is non-`Sendable`
+                //    `[any KVCache]` — reached through the boxed
+                //    `mlxStart` instead of a direct capture. The offset
                 //    guard above ensures no per-layer trimming is
                 //    needed before capture.
                 let ssdEnabled = mlxStart.ssdEnabled
@@ -1230,11 +1234,10 @@ nonisolated final class ServerCompletion {
                     prefixCache: prefixCache
                 )
                 let (maybeLeaf, maybeLeafAdmission): (HybridCacheSnapshot?, SnapshotAdmission?) =
-                    await container.perform(
-                        nonSendable: finalCache
-                    ) { _, cache in
+                    try await sessions.withSession { session in
+                        let cache = mlxStartBox.value.finalCache
                         guard
-                            let snap = HybridCacheSnapshot.capture(
+                            let snap = session.captureSnapshot(
                                 cache: cache,
                                 offset: storedTokens.count,
                                 type: .leaf
@@ -1447,22 +1450,26 @@ nonisolated final class ServerCompletion {
             mlxStart.transientLastUserBoundarySnapshot != nil,
             !renderContext.preservesThinking
         {
-            let abortTokenizer = await container.perform { $0.tokenizer }
-            speculativeSeed = SpeculativeCanonicalPrefill.makeSeed(
-                storedConversation: conversation,
-                toolSpecs: canonicalTools,
-                tokenizer: abortTokenizer,
-                keySpace: mlxStart.keySpace,
-                partitionKey: mlxStart.partitionKey,
-                prefillStepSize: mlxStart.prefillStepSize,
-                ssdEnabled: mlxStart.ssdEnabled,
-                seedsPositionAnchor: mlxStart.seedsPositionAnchor,
-                canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
-                    .tokenOffset ?? 0,
-                renderContext: renderContext,
-                ramOnlySpine: true,
-                diagnostics: diagnosticsContext
-            )
+            // Session entry cannot fail with a non-throwing body; the
+            // hypothetical failure just skips the abort-arm seed.
+            let abortTokenizer = try? await sessions.withSession { $0.tokenizer }
+            if let abortTokenizer {
+                speculativeSeed = SpeculativeCanonicalPrefill.makeSeed(
+                    storedConversation: conversation,
+                    toolSpecs: canonicalTools,
+                    tokenizer: abortTokenizer,
+                    keySpace: mlxStart.keySpace,
+                    partitionKey: mlxStart.partitionKey,
+                    prefillStepSize: mlxStart.prefillStepSize,
+                    ssdEnabled: mlxStart.ssdEnabled,
+                    seedsPositionAnchor: mlxStart.seedsPositionAnchor,
+                    canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
+                        .tokenOffset ?? 0,
+                    renderContext: renderContext,
+                    ramOnlySpine: true,
+                    diagnostics: diagnosticsContext
+                )
+            }
         }
 
         await finishHook()
@@ -1490,7 +1497,7 @@ nonisolated final class ServerCompletion {
     /// most recent turn.
     private func makeHTTPPrefixCacheGeneration(
         on actor: isolated LLMActor,
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         conversation: HTTPPrefixCacheConversation,
         requestID: UUID,
         modelID: String,
@@ -1508,7 +1515,7 @@ nonisolated final class ServerCompletion {
         let canonicalTools = LLMActor.canonicalizeToolSpecs(toolSpecs)
 
         // Capture module state for the non-MainActor closure below —
-        // the closure runs on `ModelContainer`'s isolation and cannot
+        // the closure runs on the **Model Session**'s isolation and cannot
         // sync-read the actor-confined module.
         let promptStartsThinking = self.promptStartsThinking
         let modelFingerprint = self.modelFingerprint
@@ -1524,7 +1531,7 @@ nonisolated final class ServerCompletion {
             kvGroupSize: parameters.kvGroupSize
         )
 
-        return try await container.perform { context in
+        return try await sessions.withSession { session in
             func measure<T>(_ work: () throws -> T) rethrows -> (T, TimeInterval) {
                 let started = Date.timeIntervalSinceReferenceDate
                 let value = try work()
@@ -1544,8 +1551,8 @@ nonisolated final class ServerCompletion {
                 }
                 return .ciImage(decoded)
             }
-            let fullInput = try await context.processor.prepare(
-                input: UserInput(
+            let fullInput = try await session.prepare(
+                UserInput(
                     messages: conversation.promptMessages,
                     images: userInputImages,
                     tools: canonicalTools,
@@ -1593,7 +1600,7 @@ nonisolated final class ServerCompletion {
                 keySpace = space
             case .failure(let reason):
                 return try await Self.makeUnkeyedGeneration(
-                    session: ContextBackedModelSession(context: context),
+                    session: session,
                     fullInput: fullInput,
                     fullTokens: fullTokens,
                     reason: reason,
@@ -1641,7 +1648,7 @@ nonisolated final class ServerCompletion {
                 conversation: conversation,
                 toolSpecs: canonicalTools,
                 promptStartsThinking: promptStartsThinking,
-                tokenizer: context.tokenizer,
+                tokenizer: session.tokenizer,
                 keySpace: keySpace,
                 renderContext: renderContext
             )
@@ -1785,7 +1792,7 @@ nonisolated final class ServerCompletion {
             switch prefillPlan.restore {
             case .restore(let cacheOffset, let anchorDelta):
                 let (restoredCache, measuredRestoreMs) = measure {
-                    lookupResult.restoreCache()
+                    Self.restoreCache(lookupResult, session: session)
                 }
                 cacheToUse = restoredCache
                 restoreMs = measuredRestoreMs
@@ -1897,87 +1904,42 @@ nonisolated final class ServerCompletion {
             // parameters) guarantees the iterator never swaps cache elements
             // during decode, so the array this module retains stays the live
             // final cache for the post-generation leaf capture.
-            await progressHandler?(
-                .prefillStarted(
-                    .init(
-                        promptTokens: fullTokenCount,
-                        cachedTokens: skippedTokens,
-                        newTokensToPrefill: newTokensToPrefill,
-                        prefillMs: nil
-                    )))
-            var liveCache = cacheToUse ?? context.model.newCache(parameters: genParams)
+            // Shared begin-prefill step. The ADR-0014 guard prices the
+            // patches actually fed THIS forward: all images when cold; only
+            // the newly-added images on a warm restore, since earlier images
+            // are already in the restored cache and not re-fed.
+            let begin = try await Self.beginPrefill(
+                session: session,
+                restoredCache: cacheToUse,
+                parameters: genParams,
+                promptTokens: fullTokenCount,
+                cachedTokens: skippedTokens,
+                pricedImage: imagePrefixInput?.image,
+                visionAttentionScratchProfile: visionAttentionScratchProfile,
+                guardLabel: "keyed",
+                diagnosticsContext: diagnosticsContext,
+                progressHandler: progressHandler
+            )
+            var liveCache = begin.cache
             let prefillResult:
                 (iterator: StateThreadedTokenIterator, snapshots: [HybridCacheSnapshot])
-            let prefillMs: TimeInterval
             do {
-                (prefillResult, prefillMs) = try measure {
+                prefillResult =
                     try MLXCheckedEvaluation.withErrors { error in
                         var initialState = executorInitialState
                         var prefixSnapshots: [HybridCacheSnapshot] = []
                         if let imagePrefixInput {
-                            // Vision-tower patch guard (ADR-0014): the continuation
-                            // runs the global ViT once over THIS forward's images,
-                            // materializing one `[vision_heads, ΣP, ΣP]` score
-                            // matrix over their combined patches. The per-image cap
-                            // bounds each image, but a many-image turn re-crosses
-                            // the Metal buffer limit — price the patches actually
-                            // fed here (all images when cold; only the newly-added
-                            // images on a warm restore, since earlier images are
-                            // already in the restored cache and not re-fed) and
-                            // reject before the tower allocates.
-                            let visionFrames = imagePrefixInput.image?.frames ?? []
-                            if imagePrefixInput.image != nil, visionFrames.isEmpty {
-                                // Tripwire: an image with no frames prices as 0
-                                // patches, which would silently disarm this guard
-                                // (fail-open). Both binding paths set frames today;
-                                // log loudly if that ever stops holding.
-                                Log.server.error(
-                                    "vision guard (keyed): image present but no frames "
-                                        + "to price — ViT OOM guard inert this forward")
-                            }
-                            let visionPatches = visionFrames.reduce(0) { $0 + $1.product }
-                            if let rejection = VisionPrefixMemoryGuard.visionRejection(
-                                totalPatches: visionPatches,
-                                profile: visionAttentionScratchProfile,
-                                maxBufferBytes: Self.currentMaxMetalBufferBytes()
-                            ) {
-                                diagnosticsContext.logSkip(
-                                    stage: "prefill",
-                                    reason: "vision-tower-too-large",
-                                    level: .warning,
-                                    extraFields: [
-                                        ("totalPatches", "\(rejection.totalPatches)"),
-                                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
-                                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
-                                    ]
-                                )
-                                throw AgentEngineError.generationFailed(rejection.message)
-                            }
 
                             // Crash-safe by construction: the continuation chunks
                             // the forward, so the peak full-attention scratch is
                             // bounded to `[heads, window, executionBaseOffset]`,
-                            // not the single-shot `[heads, L, L]`. The guard is now
-                            // a rarely-fired backstop against a genuinely
-                            // impossible single window (effectively unreachable).
-                            if let rejection = VisionPrefixMemoryGuard.chunkedRejection(
+                            // not the single-shot `[heads, L, L]`.
+                            try Self.checkChunkedVisionBackstop(
                                 windowSize: genParams.prefillStepSize,
                                 contextTokens: executionBaseOffset,
                                 profile: fullAttentionScratchProfile,
-                                maxBufferBytes: Self.currentMaxMetalBufferBytes()
-                            ) {
-                                diagnosticsContext.logSkip(
-                                    stage: "prefill",
-                                    reason: "vision-prefix-too-large",
-                                    level: .warning,
-                                    extraFields: [
-                                        ("prefixTokens", "\(rejection.prefixTokens)"),
-                                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
-                                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
-                                    ]
-                                )
-                                throw AgentEngineError.generationFailed(rejection.message)
-                            }
+                                diagnosticsContext: diagnosticsContext
+                            )
 
                             // Warm/cold image span (ADR-0007 phase 2): the windowed
                             // continuation runs the vision tower once, positions the
@@ -1988,7 +1950,7 @@ nonisolated final class ServerCompletion {
                             // chunked text tail. A non-identity key space implies the
                             // recognized vision container, which conforms to
                             // `WindowedVisionContinuation`.
-                            guard let continuation = context.model as? WindowedVisionContinuation
+                            guard let continuation = session.windowedVisionContinuation
                             else {
                                 throw AgentEngineError.generationFailed(
                                     "loaded model does not support windowed vision continuation"
@@ -2018,7 +1980,7 @@ nonisolated final class ServerCompletion {
                             // synchronous evaluation so failures become throws.
                             if let type = allCheckpoints[executionBaseOffset] {
                                 try MLXCheckedEvaluation.eval(liveCache)
-                                if let snap = HybridCacheSnapshot.capture(
+                                if let snap = session.captureSnapshot(
                                     cache: liveCache, offset: executionBaseOffset, type: type
                                 ) {
                                     prefixSnapshots.append(snap)
@@ -2031,23 +1993,18 @@ nonisolated final class ServerCompletion {
                         // image-text-tail (its cache already holds a large image,
                         // so the per-chunk score matrix is large) on checked
                         // synchronous eval so an MLX failure throws not crashes.
-                        let warmed = try PrefillExecutor.run(
-                            model: context.model,
+                        let warmed = try session.prefill(
                             text: inputForGeneration.text,
                             cache: liveCache,
                             checkpoints: allCheckpoints,
                             checkpointBaseOffset: executionBaseOffset,
                             prefillStepSize: genParams.prefillStepSize,
+                            consumeAll: false,
                             initialState: initialState,
                             evalPolicy: imagePrefixInput == nil ? .pipelined : .checkedSynchronous
                         )
                         try error.check()
-                        maybeQuantizeKVCache(
-                            cache: &liveCache,
-                            kvBits: genParams.kvBits,
-                            kvGroupSize: genParams.kvGroupSize,
-                            quantizedKVStart: genParams.quantizedKVStart
-                        )
+                        session.quantizeKVCache(&liveCache, parameters: genParams)
                         var iteratorParams = genParams
                         iteratorParams.kvBits = nil
                         // The iterator seeds any configured penalty processors with
@@ -2056,17 +2013,15 @@ nonisolated final class ServerCompletion {
                         // repetition/presence/frequency context. It threads the last
                         // prefill chunk's state through the prime forward and every
                         // decode step (PRD #72 — upstream's iterator drops it).
-                        let iterator = StateThreadedTokenIterator(
+                        let iterator = session.makeDecodeIterator(
                             remainder: warmed.remainder,
                             fullText: inputForGeneration.text,
-                            model: context.model,
                             cache: liveCache,
                             state: warmed.state,
                             parameters: iteratorParams
                         )
                         return (iterator: iterator, snapshots: prefixSnapshots + warmed.snapshots)
                     }
-                }
             } catch is CancellationError {
                 // **Salvage-on-cancel** (issue #97): the client is gone and
                 // the GPU just went idle at a chunk boundary — keep the
@@ -2087,6 +2042,7 @@ nonisolated final class ServerCompletion {
                 Memory.clearCache()
                 throw CancellationError()
             }
+            let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
             let iterator = prefillResult.iterator
             await progressHandler?(
                 .prefillFinished(
@@ -2160,8 +2116,8 @@ nonisolated final class ServerCompletion {
             // 11. Start the app-owned generation stream.
             let (stream, task) = TokenGenerationLoop.start(
                 promptTokenCount: fullTokenCount,
-                modelConfiguration: context.configuration,
-                tokenizer: context.tokenizer,
+                modelConfiguration: session.configuration,
+                tokenizer: session.tokenizer,
                 iterator: iterator,
                 tools: canonicalTools
             )
@@ -2192,6 +2148,122 @@ nonisolated final class ServerCompletion {
                 prefillStepSize: parameters.prefillStepSize,
                 tokenNDim: tokenNDim
             )
+        }
+    }
+
+    /// The shared **begin-prefill step** (PRD #137, PR B): progress event,
+    /// cache creation, the vision-tower patch guard, and the prefill timer —
+    /// one place for both generation arms, so the ADR-0014 guard invariant
+    /// lives once: the global ViT attends over every fed image's patches
+    /// jointly in one `[vision_heads, ΣP, ΣP]` matrix no matter how prefill
+    /// is driven, so price the combined patch count of THIS forward's images
+    /// and reject *before* the tower allocates — a many-image corner
+    /// degrades to a typed error instead of an OOM abort.
+    ///
+    /// `pricedImage` is the image actually fed to this forward (`nil` for a
+    /// text-only forward, or when a warm restore already covers every image);
+    /// an image with no frames prices as 0 patches, which would silently
+    /// disarm the guard — the fail-open tripwire logs loudly instead.
+    // Shared preamble mirrors both arms' parameter needs one-to-one.
+    // swiftlint:disable:next function_parameter_count
+    private static func beginPrefill(
+        session: any ModelSession,
+        restoredCache: [any KVCache]?,
+        parameters: GenerateParameters,
+        promptTokens: Int,
+        cachedTokens: Int,
+        pricedImage: LMInput.ProcessedImage?,
+        visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
+        guardLabel: String,
+        diagnosticsContext: PrefixCacheDiagnostics.Context,
+        progressHandler: ServerInferenceProgressHandler?
+    ) async throws -> (cache: [any KVCache], startedAt: TimeInterval) {
+        await progressHandler?(
+            .prefillStarted(
+                .init(
+                    promptTokens: promptTokens,
+                    cachedTokens: cachedTokens,
+                    newTokensToPrefill: promptTokens - cachedTokens,
+                    prefillMs: nil
+                )))
+        let cache = restoredCache ?? session.newCache(parameters: parameters)
+        if let pricedImage {
+            let visionFrames = pricedImage.frames ?? []
+            if visionFrames.isEmpty {
+                Log.server.error(
+                    "vision guard (\(guardLabel)): image present but no frames to price — "
+                        + "ViT OOM guard inert this forward")
+            }
+            let visionPatches = visionFrames.reduce(0) { $0 + $1.product }
+            if let rejection = VisionPrefixMemoryGuard.visionRejection(
+                totalPatches: visionPatches,
+                profile: visionAttentionScratchProfile,
+                maxBufferBytes: Self.currentMaxMetalBufferBytes()
+            ) {
+                diagnosticsContext.logSkip(
+                    stage: "prefill",
+                    reason: "vision-tower-too-large",
+                    level: .warning,
+                    extraFields: [
+                        ("totalPatches", "\(rejection.totalPatches)"),
+                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
+                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
+                    ]
+                )
+                throw AgentEngineError.generationFailed(rejection.message)
+            }
+        }
+        return (cache: cache, startedAt: Date.timeIntervalSinceReferenceDate)
+    }
+
+    /// The windowed-continuation backstop (ADR-0007 phase 2): reject when
+    /// even a single `[heads, window, context]` chunk cannot fit the Metal
+    /// buffer limit. Effectively unreachable — the continuation exists to
+    /// bound the scratch — but both arms keep it, so the pricing+diagnostic
+    /// shape lives once.
+    private static func checkChunkedVisionBackstop(
+        windowSize: Int,
+        contextTokens: Int,
+        profile: ModelIdentity.FullAttentionScratchProfile?,
+        diagnosticsContext: PrefixCacheDiagnostics.Context
+    ) throws {
+        guard
+            let rejection = VisionPrefixMemoryGuard.chunkedRejection(
+                windowSize: windowSize,
+                contextTokens: contextTokens,
+                profile: profile,
+                maxBufferBytes: Self.currentMaxMetalBufferBytes()
+            )
+        else { return }
+        diagnosticsContext.logSkip(
+            stage: "prefill",
+            reason: "vision-prefix-too-large",
+            level: .warning,
+            extraFields: [
+                ("prefixTokens", "\(rejection.prefixTokens)"),
+                ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
+                ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
+            ]
+        )
+        throw AgentEngineError.generationFailed(rejection.message)
+    }
+
+    /// The restore verb with `LookupResult.restoreCache`'s degrade-to-miss
+    /// contract: a snapshot whose persisted layers fail restoration is a
+    /// cache miss (`nil`), never a crashed request — routed through the
+    /// **Model Session** so the sequencing suite observes restore ordering.
+    private static func restoreCache(
+        _ lookup: PrefixCacheManager.LookupResult,
+        session: any ModelSession
+    ) -> [any KVCache]? {
+        guard let snapshot = lookup.snapshot, lookup.partitionKey != nil else { return nil }
+        do {
+            return try session.restore(snapshot)
+        } catch {
+            Log.server.error(
+                "snapshot restore failed — treating as cache miss: \(error)"
+            )
+            return nil
         }
     }
 
@@ -2243,52 +2315,26 @@ nonisolated final class ServerCompletion {
         )
 
         let fullTokenCount = fullInput.text.tokens.dim(-1)
-        await progressHandler?(
-            .prefillStarted(
-                .init(
-                    promptTokens: fullTokenCount,
-                    cachedTokens: 0,
-                    newTokensToPrefill: fullTokenCount,
-                    prefillMs: nil
-                )))
         var iteratorParams = parameters
         iteratorParams.kvBits = nil
-        let cache = session.newCache(parameters: parameters)
-        let prefillStarted = Date.timeIntervalSinceReferenceDate
-        // Vision-tower patch guard (ADR-0014) — hoisted ABOVE the
-        // `WindowedVisionContinuation` cast so a vision model that does NOT conform
-        // (and would take the single-shot else-path below) is guarded too: the
-        // global ViT attends over every image's patches jointly in one
-        // `[vision_heads, ΣP, ΣP]` matrix no matter how prefill is driven. This
-        // unkeyed path prefills the whole prompt from zero, so price its combined
-        // patch count and reject before the tower allocates — a many-image
-        // mismatch corner degrades to a typed error instead of an OOM abort.
-        if fullInput.image != nil {
-            let visionFrames = fullInput.image?.frames ?? []
-            if visionFrames.isEmpty {
-                Log.server.error(
-                    "vision guard (unkeyed): image present but no frames to price — "
-                        + "ViT OOM guard inert this forward")
-            }
-            let visionPatches = visionFrames.reduce(0) { $0 + $1.product }
-            if let rejection = VisionPrefixMemoryGuard.visionRejection(
-                totalPatches: visionPatches,
-                profile: visionAttentionScratchProfile,
-                maxBufferBytes: Self.currentMaxMetalBufferBytes()
-            ) {
-                diagnosticsContext.logSkip(
-                    stage: "prefill",
-                    reason: "vision-tower-too-large",
-                    level: .warning,
-                    extraFields: [
-                        ("totalPatches", "\(rejection.totalPatches)"),
-                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
-                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
-                    ]
-                )
-                throw AgentEngineError.generationFailed(rejection.message)
-            }
-        }
+        // Shared begin-prefill step. The ADR-0014 guard runs here — ABOVE the
+        // `WindowedVisionContinuation` cast, so a vision model that does NOT
+        // conform (and takes the single-shot else-path below) is guarded too.
+        // This unkeyed path prefills the whole prompt from zero, so the whole
+        // prompt's image is priced.
+        let begin = try await beginPrefill(
+            session: session,
+            restoredCache: nil,
+            parameters: parameters,
+            promptTokens: fullTokenCount,
+            cachedTokens: 0,
+            pricedImage: fullInput.image,
+            visionAttentionScratchProfile: visionAttentionScratchProfile,
+            guardLabel: "unkeyed",
+            diagnosticsContext: diagnosticsContext,
+            progressHandler: progressHandler
+        )
+        let cache = begin.cache
 
         let iterator: StateThreadedTokenIterator
         if fullInput.image != nil,
@@ -2304,24 +2350,12 @@ nonisolated final class ServerCompletion {
             // if a single window cannot fit (effectively unreachable). The whole
             // continuation runs under a scoped MLX error handler so a runtime
             // failure surfaces as a throw, not a process-fatal dispatch.
-            if let rejection = VisionPrefixMemoryGuard.chunkedRejection(
+            try checkChunkedVisionBackstop(
                 windowSize: parameters.prefillStepSize,
                 contextTokens: fullTokenCount,
                 profile: fullAttentionScratchProfile,
-                maxBufferBytes: Self.currentMaxMetalBufferBytes()
-            ) {
-                diagnosticsContext.logSkip(
-                    stage: "prefill",
-                    reason: "vision-prefix-too-large",
-                    level: .warning,
-                    extraFields: [
-                        ("prefixTokens", "\(rejection.prefixTokens)"),
-                        ("estimatedAttentionBytes", "\(rejection.estimatedBytes)"),
-                        ("maxBufferBytes", "\(rejection.maxBufferBytes)"),
-                    ]
-                )
-                throw AgentEngineError.generationFailed(rejection.message)
-            }
+                diagnosticsContext: diagnosticsContext
+            )
             iterator = try MLXCheckedEvaluation.withErrors { error in
                 let built = try session.makePreparingDecodeIterator(
                     fullInput,
@@ -2344,7 +2378,7 @@ nonisolated final class ServerCompletion {
                 prepare: nil
             )
         }
-        let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStarted
+        let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
         await progressHandler?(
             .prefillFinished(
                 .init(
@@ -3046,14 +3080,14 @@ nonisolated final class ServerCompletion {
     /// Used for storing the leaf snapshot under the correct radix path.
     /// Returns `nil` on tokenization failure.
     private static func measureStoredTokenSequence(
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         renderContext: TemplateRenderContext = .canonical
     ) async -> [Int]? {
         do {
-            return try await container.perform { context in
-                try context.tokenizer.applyChatTemplate(
+            return try await sessions.withSession { session in
+                try session.tokenizer.applyChatTemplate(
                     messages: conversation.promptMessages,
                     tools: toolSpecs,
                     additionalContext: renderContext.additionalContext(
@@ -3084,7 +3118,7 @@ nonisolated final class ServerCompletion {
     /// each cache type's `update(...)` extends its own state at the absolute
     /// offset.
     private static func captureStructuredLeafFromBoundary(
-        container: ModelContainer,
+        sessions: any ModelSessionProviding,
         storedTokens: [Int],
         boundarySnapshot: HybridCacheSnapshot,
         positionAnchorRopeDelta: Int?,
@@ -3113,8 +3147,8 @@ nonisolated final class ServerCompletion {
         )
 
         do {
-            return try await container.perform { context in
-                let restoredCache = try boundarySnapshot.restore()
+            return try await sessions.withSession { session in
+                let restoredCache = try session.restore(boundarySnapshot)
 
                 let residual = Array(storedTokens[boundaryOffset...])
                 let prefillStart = Date.timeIntervalSinceReferenceDate
@@ -3130,19 +3164,20 @@ nonisolated final class ServerCompletion {
                     tokenNDim >= 2
                     ? flatInput.expandedDimensions(axis: 0)
                     : flatInput
-                _ = try PrefillExecutor.run(
-                    model: context.model,
+                _ = try session.prefill(
                     text: .init(tokens: inputArr, mask: nil),
                     cache: restoredCache,
+                    checkpoints: [:],
                     checkpointBaseOffset: boundaryOffset,
                     prefillStepSize: prefillStepSize,
                     consumeAll: true,
-                    initialState: positionAnchorRopeDelta.map(PositionAnchor.seededState)
+                    initialState: positionAnchorRopeDelta.map(PositionAnchor.seededState),
+                    evalPolicy: .pipelined
                 )
                 let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStart
 
                 guard
-                    let leaf = HybridCacheSnapshot.capture(
+                    let leaf = session.captureSnapshot(
                         cache: restoredCache,
                         offset: storedTokens.count,
                         type: .leaf
