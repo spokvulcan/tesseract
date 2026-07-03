@@ -971,8 +971,7 @@ struct PrefixCacheManagerTests {
         )
 
         // Tighten budget to one snapshot and evict
-        mgr.memoryBudgetBytes = snapBytes
-        mgr.evictToFitBudget()
+        mgr.setMemoryBudget(snapBytes)
 
         // Both are .leaf → recency decides. A is older → A evicted, B survives.
         // If planCheckpoints refreshed A, A would be newer → B evicted instead → fail.
@@ -1023,16 +1022,14 @@ struct PrefixCacheManagerTests {
 
         // Tighten to one snapshot — the eligible leaf is evicted by utility
         // scoring, leaving only the branch-node system snapshot.
-        mgr.memoryBudgetBytes = snapBytes
-        let utilityEvictions = mgr.evictToFitBudget()
+        let utilityEvictions = mgr.setMemoryBudget(snapBytes)
         #expect(utilityEvictions.count == 1)
         #expect(utilityEvictions[0].strategy == .utility)
         #expect(mgr.stats.snapshotCount == 1)
 
         // Tighten to zero. The remaining snapshot is on a multi-child node
         // (not in the eligible set), so the fallback drops it.
-        mgr.memoryBudgetBytes = 0
-        let fallbackEvictions = mgr.evictToFitBudget()
+        let fallbackEvictions = mgr.setMemoryBudget(0)
         #expect(fallbackEvictions.count == 1)
         let fallback = fallbackEvictions[0]
         #expect(fallback.strategy == .fallback)

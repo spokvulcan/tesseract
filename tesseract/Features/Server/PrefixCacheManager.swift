@@ -68,11 +68,9 @@ final class PrefixCacheManager {
         case request(UUID)
     }
 
-    /// Per-partition tree collection. Typed as the concrete
-    /// `TieredSnapshotStore` (rather than the `SnapshotStore`
-    /// protocol) so the manager can reach `admitSnapshot` and the
-    /// storage-ref lifecycle callbacks — those are not part of the
-    /// read-only protocol.
+    /// Per-partition tree collection — the concrete `TieredSnapshotStore`,
+    /// owned openly: the manager reaches its tree lookups, `admitSnapshot`,
+    /// and the storage-ref lifecycle callbacks directly.
     private let store: TieredSnapshotStore
     /// Set by `evictToFitBudget` when the first-ever drain happens
     /// inside an in-flight request. Production passes a per-request ID
@@ -82,9 +80,10 @@ final class PrefixCacheManager {
     private var pendingBootstrapBoundary: PendingBootstrapBoundary?
     /// The live RAM-tier budget — the **Pressure-Reactive Budget**'s
     /// *current* value. Pressure events move it inside `budgetBand`;
-    /// tests and the E2E hooks may still set it directly (the band then
-    /// reasserts itself on the next pressure event).
-    var memoryBudgetBytes: Int
+    /// external overrides go through `setMemoryBudget(_:)`, which rebuilds
+    /// the band around the new value — a stale band (an override the next
+    /// pressure event would clobber) is unrepresentable.
+    private(set) var memoryBudgetBytes: Int
     /// The ceiling/current band the pressure events fold
     /// (`PrefixCacheBudgetBand`). The floor is content-defined and
     /// computed per event — see `budgetFloorBytes()`.
@@ -101,10 +100,11 @@ final class PrefixCacheManager {
     /// The one mutable cell holding the eviction weighting. `flopProfile`
     /// is fixed for this cache's model; `alpha` rides the LRU default
     /// until the attached `AlphaTuner` returns a tuned winner from
-    /// `recordRequest`. Every eviction and telemetry score reads it by
-    /// value — there is no process global. See `CONTEXT.md` → Eviction
+    /// `recordRequest`, and external overrides go through
+    /// `setEvictionAlpha(_:)`. Every eviction and telemetry score reads it
+    /// by value — there is no process global. See `CONTEXT.md` → Eviction
     /// tuning (**Eviction Configuration**).
-    var evictionConfig: EvictionConfiguration
+    private(set) var evictionConfig: EvictionConfiguration
 
     /// Lifetime telemetry counters for this cache: hit tokens served,
     /// recovered-vs-terminal eviction outcomes, hydrations. Surfaced on
@@ -1557,6 +1557,30 @@ final class PrefixCacheManager {
     /// pressure event, never a stored constant.
     func budgetFloorBytes() -> Int {
         floorContents().bytes
+    }
+
+    /// Override the RAM-tier budget, band-consistently: the band is
+    /// rebuilt around the new value (ceiling and current alike), so a
+    /// subsequent pressure regrowth converges to the override instead of
+    /// the pre-override ceiling — the "reasserted on the next pressure
+    /// event" stale-band window is unrepresentable. Evicts immediately
+    /// when the live contents exceed the new budget, returning the
+    /// evictions. Used by the loaded-model E2E runner to deliberately
+    /// trigger eviction pressure.
+    @discardableResult
+    func setMemoryBudget(_ bytes: Int) -> [EvictionEvent] {
+        budgetBand = PrefixCacheBudgetBand(ceilingBytes: bytes)
+        memoryBudgetBytes = budgetBand.currentBytes
+        return evictToFitBudget()
+    }
+
+    /// Override the eviction weighting (`alpha`) in the **Eviction
+    /// Configuration**. Used by the loaded-model E2E runner to force
+    /// F/B-weighted eviction for the branch-point survival check.
+    /// Production code should not call this; the `AlphaTuner` owns
+    /// `alpha` after warmup and overwrites overrides on its next tune.
+    func setEvictionAlpha(_ alpha: Double) {
+        evictionConfig.alpha = alpha
     }
 
     /// The floor's membership and cost in one walk: every `.system`

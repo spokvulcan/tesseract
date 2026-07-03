@@ -262,6 +262,16 @@ runtime input; what is *on disk* is per-id download status. The **Model Catalog*
 is their join; raw download status (downloading, verifying, error, progress) stays
 directly readable for download UI and is not a catalog question.
 
+**Model Fetching**:
+The narrow hub port below the model download lifecycle — list a repo's files,
+fetch one file, resolve-or-download a snapshot — satisfied by the
+HuggingFace-backed production adapter and a scripted in-memory test peer. Disk
+stays outside the seam: file checks and status computation run against the real
+file system.
+_Avoid_: hub client (one adapter, not the seam), download client/backend, model
+fetcher; widening it past the three verbs before a second consumer needs a
+member.
+
 **Vision Capability Memo**:
 The per-model-id cache of the **Vision-Capable Model** disk probe, held once and
 shared by every caller; a known answer is cached permanently while an undownloaded
@@ -352,6 +362,18 @@ state. Image-bearing requests route cache-aware; only video/audio (or undecodabl
 images) yield a no-usable-conversation reason.
 _Avoid_: prefix-cache bypass (the retired in-actor `nil` returns); fallback flag;
 image bypass (decodable images are keyed, not bypassed).
+
+**Model Session**:
+The scoped, Metal-affine model handle **Server Completion** enters for one batch of
+model verbs (prepare, cache creation, restore, prefill, decode iteration, snapshot
+capture) — one session is one Metal-affine batch, so the ADR-0015 affinity
+discipline lives at this seam. Two adapters make it real: the container-backed
+production adapter and the toy-model-backed test peer that runs the module's
+sequencing without a downloaded model.
+_Avoid_: session (unqualified); Generation Session (the Generation* family is the
+token-stream vocabulary, not the model handle); Inference Session (collides with
+**Inference Arbiter**); model surface / perform wrapper (the mechanism, not the
+concept); widening it before a second consumer needs a member.
 
 ### Client integrations
 

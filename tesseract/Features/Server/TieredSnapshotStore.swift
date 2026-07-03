@@ -2,9 +2,9 @@
 //  TieredSnapshotStore.swift
 //  tesseract
 //
-//  Composes the RAM tier (`InMemorySnapshotTier`) with `SSDSnapshotStore`
-//  behind a single `SnapshotStore` conformance, and acts as the SSD
-//  **router**: it resolves the writer's global `snapshotID` callbacks to
+//  Composes the RAM tier (an inline per-partition `TokenRadixTree`
+//  dictionary) with `SSDSnapshotStore` behind one interface, and acts as
+//  the SSD **router**: it resolves the writer's global `snapshotID` callbacks to
 //  the owning `(node, tree)` and forwards them to the tree's transition
 //  methods. It is **not** a mutator of node state — that is the tree's
 //  job alone. The cross-partition ref indexes (`pendingRefsByID`,
@@ -36,17 +36,17 @@ import MLXLMCommon
 
 // MARK: - TieredSnapshotStore
 
-/// Two-tier snapshot store. The RAM tier is an inline
-/// `InMemorySnapshotTier` — identical behavior to the RAM-only
-/// `PrefixCacheManager` configuration. The SSD tier is an optional
-/// `SSDSnapshotStore` that takes ownership of payload write-through,
-/// the admission-time LRU cut, and the debounced manifest persist.
-/// When `ssdConfig == nil` (or `ssdConfig.enabled == false`) the
-/// store collapses to pure RAM-only behavior: the `SnapshotStore`
-/// protocol conformance forwards to the RAM tier, and
-/// `admitSnapshot` is a no-op that returns `nil`.
+/// Two-tier snapshot store — `PrefixCacheManager`'s per-partition
+/// `TokenRadixTree` collection. The RAM tier is a plain dictionary:
+/// partitions spring into existence on first write and live for the
+/// process lifetime (explicit discard is a tiered concern, not a
+/// RAM-tier one). The SSD tier is an optional `SSDSnapshotStore` that
+/// takes ownership of payload write-through, the admission-time LRU
+/// cut, and the debounced manifest persist. When `ssdConfig == nil`
+/// (or `ssdConfig.enabled == false`) the store collapses to pure
+/// RAM-only behavior: `admitSnapshot` is a no-op that returns `nil`.
 @MainActor
-final class TieredSnapshotStore: SnapshotStore {
+final class TieredSnapshotStore {
 
     // MARK: - Types
 
@@ -75,7 +75,9 @@ final class TieredSnapshotStore: SnapshotStore {
 
     // MARK: - Stored state
 
-    private let ramTier: InMemorySnapshotTier
+    /// The RAM tier: every live per-partition tree, keyed by its
+    /// **Cache Partition Key**.
+    private var trees: [CachePartitionKey: TokenRadixTree] = [:]
     /// The SSD tier. Fully private: callers drive SSD behaviour through
     /// this store's own interface (`noteLookupHit`, `flush`,
     /// `warmStartLoad`, `makeSSDHitContext`, `isSSDEnabled`) and never
@@ -97,9 +99,8 @@ final class TieredSnapshotStore: SnapshotStore {
 
     /// Construct a tiered store. Passing `nil` (or an
     /// `SSDPrefixCacheConfig` whose `enabled == false`) produces a
-    /// RAM-only store that behaves identically to a bare
-    /// `InMemorySnapshotTier` — every `admitSnapshot` call returns
-    /// `nil`, and the writer callbacks never fire.
+    /// RAM-only store — every `admitSnapshot` call returns `nil`, and
+    /// the writer callbacks never fire.
     /// `writerDrainPreludeForTesting` forwards to the SSD tier's writer
     /// gate — test-only, nil in production. It lets a manager-level test
     /// hold a write pending (e.g. to keep an extension base shielded
@@ -109,7 +110,6 @@ final class TieredSnapshotStore: SnapshotStore {
         ssdConfig: SSDPrefixCacheConfig? = nil,
         writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
     ) {
-        self.ramTier = InMemorySnapshotTier()
         self.ssdStore = nil
 
         guard let ssdConfig, ssdConfig.enabled else { return }
@@ -134,23 +134,41 @@ final class TieredSnapshotStore: SnapshotStore {
         )
     }
 
-    // MARK: - SnapshotStore protocol (forwards to RAM tier)
+    // MARK: - RAM tier (per-partition tree collection)
 
+    /// Lookup-only; returns `nil` for partitions that have no tree.
     func tree(for key: CachePartitionKey) -> TokenRadixTree? {
-        ramTier.tree(for: key)
+        trees[key]
     }
 
+    /// Lookup-or-allocate. Used on the write path before the first
+    /// insertion into a freshly seen partition.
     func getOrCreateTree(for key: CachePartitionKey) -> TokenRadixTree {
-        ramTier.getOrCreateTree(for: key)
+        if let existing = trees[key] { return existing }
+        let fresh = TokenRadixTree()
+        trees[key] = fresh
+        return fresh
     }
 
+    /// Deterministic key-sorted iteration. The eviction drain pins a
+    /// single ordered list across all rounds of `findEvictionCandidate`
+    /// so tie-breaks stay stable; callers rely on the ordering being
+    /// consistent across calls within one drain.
     func orderedPartitions() -> [(key: CachePartitionKey, tree: TokenRadixTree)] {
-        ramTier.orderedPartitions()
+        trees
+            .sorted { $0.key < $1.key }
+            .map { (key: $0.key, tree: $0.value) }
     }
 
-    var partitionCount: Int { ramTier.partitionCount }
+    /// Live partition count.
+    var partitionCount: Int { trees.count }
 
-    var totalSnapshotBytes: Int { ramTier.totalSnapshotBytes }
+    /// Sum of every partition's RAM-resident snapshot bytes. Invoked
+    /// inside the eviction drain loop condition — must stay
+    /// O(partitions) or cheaper.
+    var totalSnapshotBytes: Int {
+        trees.values.reduce(0) { $0 + $1.totalSnapshotBytes }
+    }
 
     func ssdDiagnosticsSnapshot() -> PromptCacheSSDSnapshot {
         ssdStore?.diagnosticsSnapshot() ?? .disabled

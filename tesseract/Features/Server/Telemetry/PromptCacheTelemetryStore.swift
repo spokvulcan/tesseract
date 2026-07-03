@@ -137,7 +137,7 @@ final class PromptCacheTelemetryStore {
     }
 
     func refreshSnapshot(llmActor: LLMActor) async {
-        snapshot = await llmActor.promptCacheTelemetrySnapshot()
+        snapshot = llmActor.prefixCacheAdmin.makeTelemetrySnapshot()
         lastRefreshError = nil
         appendSample()
         normalizeSelection()

@@ -251,16 +251,48 @@ struct AlphaTunerTests {
         #expect(mgr.evictionConfig.flopProfile == .fallback)
     }
 
-    /// `ensurePrefixCache` folds the model's `flopProfile` into the cache's
-    /// **Eviction Configuration**. Before a model loads there is no identity,
-    /// so the cache gets the shared `ModelFlopProfile.fallback` and the LRU
-    /// default `alpha`. Drives the real actor construction path, not a
-    /// hand-built manager.
-    @Test func ensurePrefixCacheUsesFallbackProfileBeforeLoad() async {
-        let actor = LLMActor()
-        // setPrefixCacheBudgetBytes builds the cache through ensurePrefixCache.
-        await actor.setPrefixCacheBudgetBytes(4096)
-        let config = await actor.currentEvictionConfigForTesting()
+    /// Drive one toy-backed completion through the module so its real
+    /// cache-construction path (`ensurePrefixCache`) runs, then read the
+    /// built cache's **Eviction Configuration** off the current-cache
+    /// accessor the module publishes into.
+    private func evictionConfigAfterOneCompletion(
+        identity: ModelIdentity?
+    ) async throws -> EvictionConfiguration? {
+        let tokenizer = ToySequencingTokenizer()
+        let render = try tokenizer.applyChatTemplate(
+            messages: [["role": "user", "content": "Hi"]], tools: nil, additionalContext: nil
+        )
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(script: render), tokenizer: tokenizer
+            ),
+            identity: identity
+        )
+        let parameters = await MainActor.run {
+            var parameters = AgentGenerateParameters()
+            parameters.temperature = 0
+            parameters.kvBits = nil
+            return parameters
+        }
+        let handle = try await fixture.start(
+            conversation: HTTPPrefixCacheConversation(
+                systemPrompt: nil,
+                messages: [HTTPPrefixCacheMessage(role: .user, content: "Hi")]
+            ),
+            parameters: parameters
+        )
+        for try await _ in handle.stream {}
+        await handle.waitForCompletion()
+        await fixture.drain()
+        return await fixture.cacheAdmin.evictionConfig
+    }
+
+    /// The module's cache construction folds the model's `flopProfile` into
+    /// the cache's **Eviction Configuration**. With no identity installed
+    /// (no model loaded) the cache gets the shared `ModelFlopProfile.fallback`
+    /// and the LRU default `alpha`.
+    @Test func ensurePrefixCacheUsesFallbackProfileBeforeLoad() async throws {
+        let config = try await evictionConfigAfterOneCompletion(identity: nil)
         #expect(config?.flopProfile == .fallback)
         #expect(config?.alpha == 0.0)
     }
@@ -270,7 +302,7 @@ struct AlphaTunerTests {
     /// wiring this change adds. Without this assertion a regression that
     /// ignored the identity (always using the fallback, or wiring the budget
     /// in place of the profile) would compile and ship green.
-    @Test func ensurePrefixCacheSourcesProfileFromModelIdentity() async {
+    @Test func ensurePrefixCacheSourcesProfileFromModelIdentity() async throws {
         // A Qwen3.5 config whose dimensions differ from the PARO fallback.
         let identity = ModelIdentity(
             configJSON: [
@@ -285,11 +317,7 @@ struct AlphaTunerTests {
         )
         #expect(identity.flopProfile != .fallback)  // sanity: distinct profile
 
-        let actor = LLMActor()
-        await actor.setModelIdentityForTesting(identity)
-        await actor.setPrefixCacheBudgetBytes(4096)
-
-        let config = await actor.currentEvictionConfigForTesting()
+        let config = try await evictionConfigAfterOneCompletion(identity: identity)
         #expect(config?.flopProfile == identity.flopProfile)
     }
 

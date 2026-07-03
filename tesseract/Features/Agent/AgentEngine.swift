@@ -325,7 +325,7 @@ final class AgentEngine {
             // the `cancelGeneration()` above does not cover them. The drain
             // inside `unloadModel` remains the backstop.
             await llmActor.drainServerCompletion()
-            await llmActor.flushPrefixCache()
+            await llmActor.prefixCacheAdmin.flushSSDWrites()
             await llmActor.unloadModel()
         }
         Log.agent.info("Model unloaded")
