@@ -280,7 +280,7 @@ nonisolated final class ServerCompletion {
     /// tunnelling through the inference actor.
     let cacheAdmin: PrefixCacheAdmin
 
-    init(cacheAdmin: PrefixCacheAdmin = PrefixCacheAdmin()) {
+    init(cacheAdmin: PrefixCacheAdmin) {
         self.cacheAdmin = cacheAdmin
     }
 
