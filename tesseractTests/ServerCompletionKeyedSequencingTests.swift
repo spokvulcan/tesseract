@@ -69,43 +69,6 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     }
 }
 
-/// One-shot gate for the toy model's forward hook: pauses the prefill thread
-/// the first time a forward starts at or past `threshold`, so the test can
-/// land a deterministic cancel at a chunk boundary, then releases it.
-private nonisolated final class ForwardGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var armed = true
-    private let threshold: Int
-    private let release = DispatchSemaphore(value: 0)
-    private let reachedStream: AsyncStream<Void>
-    private let reachedContinuation: AsyncStream<Void>.Continuation
-
-    init(threshold: Int) {
-        self.threshold = threshold
-        (reachedStream, reachedContinuation) = AsyncStream.makeStream()
-    }
-
-    func onForward(offset: Int) {
-        let shouldBlock = lock.withLock {
-            guard armed, offset >= threshold else { return false }
-            armed = false
-            return true
-        }
-        guard shouldBlock else { return }
-        reachedContinuation.yield()
-        release.wait()
-    }
-
-    /// Awaits the gate being reached (async-safe for the test's isolation).
-    func reached() async {
-        for await _ in reachedStream { break }
-    }
-
-    func open() {
-        release.signal()
-    }
-}
-
 /// Owns the bare `LLMActor` + directly-constructed **Server Completion**
 /// module the keyed suites drive. `@unchecked Sendable`: every module use
 /// goes through the actor's executor via the `isolated` parameter — the same

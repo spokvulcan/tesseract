@@ -129,6 +129,43 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
     }
 }
 
+/// One-shot gate for the toy model's forward hook: pauses the model thread
+/// the first time a forward starts at or past `threshold`, so a test can
+/// land a deterministic cancel at a chunk boundary, then releases it.
+nonisolated final class ForwardGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var armed = true
+    private let threshold: Int
+    private let release = DispatchSemaphore(value: 0)
+    private let reachedStream: AsyncStream<Void>
+    private let reachedContinuation: AsyncStream<Void>.Continuation
+
+    init(threshold: Int) {
+        self.threshold = threshold
+        (reachedStream, reachedContinuation) = AsyncStream.makeStream()
+    }
+
+    func onForward(offset: Int) {
+        let shouldBlock = lock.withLock {
+            guard armed, offset >= threshold else { return false }
+            armed = false
+            return true
+        }
+        guard shouldBlock else { return }
+        reachedContinuation.yield()
+        release.wait()
+    }
+
+    /// Awaits the gate being reached (async-safe for the test's isolation).
+    func reached() async {
+        for await _ in reachedStream { break }
+    }
+
+    func open() {
+        release.signal()
+    }
+}
+
 /// The verbs a **Model Session** exposes, as recordable facts — the
 /// sequencing suites assert their order (the seam's contract).
 nonisolated enum ModelVerb: String, Equatable, Sendable {
