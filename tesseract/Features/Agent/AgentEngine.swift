@@ -57,6 +57,12 @@ final class AgentEngine {
     /// synchronously on the MainActor (issue #98). Empty when unloaded.
     private(set) var declaredTemplateFlags: Set<TemplateRenderFlag> = []
 
+    /// The loaded model's tool-call format (`ModelIdentity.toolCallFormat`) —
+    /// cached at load like `declaredTemplateFlags` so the server's Argument
+    /// Transcoder keys off the same identity the parser uses. `nil` when
+    /// unloaded or when the model has no override (vendor JSON default).
+    private(set) var toolCallFormat: ToolCallFormat?
+
     /// The shared inference actor. Created by the composition root and
     /// injected so the server dispatcher can reach the same actor (ADR-0015);
     /// benchmarks and unit tests rely on the `init` default instead.
@@ -155,6 +161,7 @@ final class AgentEngine {
             agentTokenizer = tokenizer
             promptStartsThinking = startsThinking
             declaredTemplateFlags = await llmActor.loadedDeclaredTemplateFlags()
+            toolCallFormat = await llmActor.loadedToolCallFormat()
             isModelLoaded = true
             loadingStatus = ""
             Log.agent.info("Model loaded — promptStartsThinking=\(promptStartsThinking)")
@@ -316,6 +323,7 @@ final class AgentEngine {
         agentTokenizer = nil
         promptStartsThinking = false
         declaredTemplateFlags = []
+        toolCallFormat = nil
         isModelLoaded = false
         loadingStatus = ""
         unloadTask = Task { [llmActor] in

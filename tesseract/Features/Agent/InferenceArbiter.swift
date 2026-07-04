@@ -73,6 +73,11 @@ final class InferenceArbiter: InferenceArbitrating {
     /// Empty when nothing is loaded.
     var loadedDeclaredTemplateFlags: Set<TemplateRenderFlag> { agentEngine.declaredTemplateFlags }
 
+    /// Tool-call format of the loaded `.llm` model — the identity the server's
+    /// Argument Transcoder keys off. `nil` when nothing is loaded or the model
+    /// has no override (vendor JSON default).
+    var loadedToolCallFormat: ToolCallFormat? { agentEngine.toolCallFormat }
+
     /// The GPU mutual-exclusion lease — FIFO queue, atomic handoff, cancellation
     /// protocol. Owned and tested as its own module (`GPULeaseQueueTests`); the
     /// arbiter composes it with model loading.

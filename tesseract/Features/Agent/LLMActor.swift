@@ -460,6 +460,15 @@ actor LLMActor {
         serverCompletion?.modelIdentity?.declaredTemplateFlags ?? []
     }
 
+    /// Tool-call format of the loaded model, read from the same load-time
+    /// identity snapshot as the render flags. `nil` before a load installs
+    /// one, or when the model has no override (vendor JSON default) — the
+    /// same value `loadModel` writes into the container configuration, so
+    /// the server-side Argument Transcoder and the parser always agree.
+    func loadedToolCallFormat() -> ToolCallFormat? {
+        serverCompletion?.modelIdentity?.toolCallFormat
+    }
+
     /// Renders messages and tools through the Jinja chat template, returning the exact
     /// ChatML string the model receives as input (including `<|im_start|>`, tool definitions, etc.).
     func formatRawPrompt(
