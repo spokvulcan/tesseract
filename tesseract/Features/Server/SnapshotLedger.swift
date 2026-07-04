@@ -166,9 +166,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         self.budgetBytes = budgetBytes
         self.budgetCapBytes = budgetCapBytes
         self.freeDiskBytesProvider = freeDiskBytesProvider
-        self.dynamicBudgetBytes =
-            budgetCapBytes.map { min(budgetBytes, max($0, 0)) }
-            ?? budgetBytes
+        self.dynamicBudgetBytes = applyBudgetCap(budgetBytes, cap: budgetCapBytes)
         self.manifestDebounce = manifestDebounce
     }
 

@@ -175,11 +175,7 @@ private struct ServerPromptCacheBudgetSection: View {
         return Picker(title, selection: selection) {
             Text("Automatic (recommended)").tag(Int?.none)
             ForEach(resolved, id: \.self) { bytes in
-                Text(
-                    ByteCountFormatter.string(
-                        fromByteCount: Int64(bytes), countStyle: .binary
-                    )
-                ).tag(Int?.some(bytes))
+                Text(PromptCacheFormatting.bytes(bytes)).tag(Int?.some(bytes))
             }
         }
     }

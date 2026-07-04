@@ -41,8 +41,7 @@ nonisolated enum SSDBudgetPolicy {
             Double(max(freeDiskBytes + currentTierBytes, 0)) * freeDiskFraction
         )
         let measured = max(floorBytes, min(absoluteCapBytes, claimable))
-        guard let capBytes else { return measured }
-        return min(measured, max(capBytes, 0))
+        return applyBudgetCap(measured, cap: capBytes)
     }
 
     /// Production free-space probe for the volume holding `rootURL`.

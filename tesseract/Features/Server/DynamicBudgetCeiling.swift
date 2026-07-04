@@ -151,6 +151,16 @@ nonisolated struct ActiveInferenceReserve: Sendable, Equatable {
 /// invariant's other half) falls out of the same accounting: work is
 /// never rejected for cache fullness, the ceiling just contracts and
 /// the drain demotes (Recoverable Eviction, ADR-0019).
+/// Apply a user budget cap that **only ever lowers** the value — caps,
+/// never floors (ADR-0018, "Automatic (recommended)" default is `nil`).
+/// A negative cap is treated as zero. Shared by both tiers' budget
+/// policies and their bootstrap inits so the "cap, never floor" rule
+/// lives in one place.
+nonisolated func applyBudgetCap(_ value: Int, cap: Int?) -> Int {
+    guard let cap else { return value }
+    return min(value, max(cap, 0))
+}
+
 nonisolated enum DynamicCeilingPolicy {
     /// Fraction of measured headroom the cache may claim. Not a sizing
     /// constant in the old sense — it scales with the machine — but a
@@ -169,7 +179,6 @@ nonisolated enum DynamicCeilingPolicy {
     ) -> Int {
         let claimable = Int(Double(max(measuredHeadroomBytes, 0)) * headroomFraction)
         let uncapped = max(0, max(residentBytes, 0) + claimable - max(reserveBytes, 0))
-        guard let capBytes else { return uncapped }
-        return min(uncapped, max(capBytes, 0))
+        return applyBudgetCap(uncapped, cap: capBytes)
     }
 }

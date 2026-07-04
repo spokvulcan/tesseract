@@ -158,9 +158,7 @@ final class PrefixCacheManager {
         // The passed-in budget is the *bootstrap* ceiling (ADR-0018):
         // the old constants' formula, replaced by the first headroom
         // measurement. The user cap binds from the first byte.
-        let bootstrap =
-            ramBudgetCapBytes.map { min(memoryBudgetBytes, max($0, 0)) }
-            ?? memoryBudgetBytes
+        let bootstrap = applyBudgetCap(memoryBudgetBytes, cap: ramBudgetCapBytes)
         self.memoryBudgetBytes = bootstrap
         self.budgetBand = PrefixCacheBudgetBand(ceilingBytes: bootstrap)
         self.evictionConfig = evictionConfig
@@ -850,14 +848,10 @@ final class PrefixCacheManager {
                 ]
             )
             let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
-            // Serve the alternative as a real hit (this time bumping
-            // access), mirroring the resident-body branch of lookup.
-            guard
-                let (node, _) = tree.findBestSnapshot(
-                    tokens: tokens, includeSnapshotRefs: false
-                ),
-                let body = node.state.body
-            else {
+            // Serve the peeked alternative as a real hit — the same node the
+            // gate priced against (identical `tokens`, `includeSnapshotRefs`),
+            // so bump its access directly rather than re-walking the tree.
+            guard let (node, _) = alternative, let body = node.state.body else {
                 return Resolved(
                     lookup: LookupResult(
                         snapshot: nil, partitionKey: partitionKey,
@@ -867,6 +861,7 @@ final class PrefixCacheManager {
                     hydratedFromSSD: false, hydrationSeconds: 0
                 )
             }
+            node.lastAccessTime = .now
             let recordedHitID = self.store.noteLookupHit(on: node)
             self.recordHitSavings(restoredOffset: body.tokenOffset)
             if let pinRequestID {
@@ -1882,8 +1877,9 @@ final class PrefixCacheManager {
         let reserveBytes = activeInferenceReserve.reserveBytes(lanes: lanes)
         let previousCeiling = budgetBand.ceilingBytes
         let previous = budgetBand.currentBytes
+        let residentBytes = totalSnapshotBytes
         let ceiling = DynamicCeilingPolicy.ceilingBytes(
-            residentBytes: totalSnapshotBytes,
+            residentBytes: residentBytes,
             measuredHeadroomBytes: sample.headroomBytes,
             reserveBytes: reserveBytes,
             capBytes: ramBudgetCapBytes
@@ -1896,7 +1892,7 @@ final class PrefixCacheManager {
                 headroomBytes: sample.headroomBytes,
                 reserveBytes: reserveBytes,
                 lanes: lanes,
-                residentBytes: totalSnapshotBytes,
+                residentBytes: residentBytes,
                 capBytes: ramBudgetCapBytes,
                 ceilingBytes: budgetBand.ceilingBytes,
                 previousCeilingBytes: previousCeiling
