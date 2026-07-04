@@ -36,11 +36,15 @@ final class NotchFrameTracker {
 // MARK: - TTSNotchOverlayView
 
 struct TTSNotchOverlayView: View {
-    @Bindable var wordTracker: TTSWordTracker
+    let wordTracker: TTSWordTracker
     let menuBarHeight: CGFloat
     let baseTextHeight: CGFloat
     let maxExtraHeight: CGFloat
     var frameTracker: NotchFrameTracker
+    /// Dismissal intent, delivered as a call: routes to the panel controller's single
+    /// owned `beginDismissal`. The view never writes dismissal or fade state — it
+    /// animates out on the tracker's read-only `isFadingOut`.
+    let requestDismiss: () -> Void
 
     @State private var expansion: CGFloat = 0
     @State private var contentVisible = false
@@ -110,7 +114,7 @@ struct TTSNotchOverlayView: View {
                             Log.speech.info(
                                 "[NotchView] swipe-up dismiss (dy=\(String(format: "%.0f", dy)), vel=\(String(format: "%.0f", velocity)))"
                             )
-                            wordTracker.shouldDismiss = true
+                            requestDismiss()
                         } else {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                                 swipeOffset = 0
@@ -134,9 +138,9 @@ struct TTSNotchOverlayView: View {
                 }
             }
         }
-        .onChange(of: wordTracker.shouldDismiss) { oldVal, shouldDismiss in
-            Log.speech.info("[NotchView] shouldDismiss changed: \(oldVal) → \(shouldDismiss)")
-            if shouldDismiss {
+        .onChange(of: wordTracker.isFadingOut) { oldVal, isFadingOut in
+            Log.speech.info("[NotchView] isFadingOut changed: \(oldVal) → \(isFadingOut)")
+            if isFadingOut {
                 Log.speech.info("[NotchView] triggering dismiss animation")
                 withAnimation(.easeIn(duration: 0.15)) {
                     contentVisible = false
@@ -149,30 +153,11 @@ struct TTSNotchOverlayView: View {
                 }
             }
         }
-        .onChange(of: wordTracker.recognizedCharCount) { _, charCount in
-            if wordTracker.isGenerationComplete && wordTracker.timeline.totalCharCount > 0
-                && charCount >= wordTracker.timeline.totalCharCount && !wordTracker.shouldDismiss
-            {
-                Log.speech.info("[NotchView] all text highlighted, scheduling auto-dismiss in 0.5s")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    guard !wordTracker.shouldDismiss else { return }
-                    wordTracker.shouldDismiss = true
-                }
-            }
+        .onChange(of: wordTracker.recognizedCharCount) { _, _ in
+            scheduleAutoDismissIfFullyHighlighted()
         }
-        .onChange(of: wordTracker.isGenerationComplete) { _, complete in
-            if complete && wordTracker.timeline.totalCharCount > 0
-                && wordTracker.recognizedCharCount >= wordTracker.timeline.totalCharCount
-                && !wordTracker.shouldDismiss
-            {
-                Log.speech.info(
-                    "[NotchView] generation complete with all text highlighted, scheduling auto-dismiss in 0.5s"
-                )
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    guard !wordTracker.shouldDismiss else { return }
-                    wordTracker.shouldDismiss = true
-                }
-            }
+        .onChange(of: wordTracker.isGenerationComplete) { _, _ in
+            scheduleAutoDismissIfFullyHighlighted()
         }
         .onChange(of: expansion) { oldVal, newVal in
             if abs(oldVal - newVal) > 0.4 {
@@ -183,6 +168,22 @@ struct TTSNotchOverlayView: View {
         }
         .onChange(of: contentVisible) { _, visible in
             Log.speech.info("[NotchView] contentVisible: \(visible)")
+        }
+    }
+
+    /// The two auto-dismiss triggers — the highlight reaching the end, and generation
+    /// completing after it already has — share this one gate: everything spoken and
+    /// lit, and no fade already underway.
+    private func scheduleAutoDismissIfFullyHighlighted() {
+        guard wordTracker.isGenerationComplete,
+            wordTracker.timeline.totalCharCount > 0,
+            wordTracker.recognizedCharCount >= wordTracker.timeline.totalCharCount,
+            !wordTracker.isFadingOut
+        else { return }
+        Log.speech.info("[NotchView] all text highlighted, scheduling auto-dismiss in 0.5s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard !wordTracker.isFadingOut else { return }
+            requestDismiss()
         }
     }
 

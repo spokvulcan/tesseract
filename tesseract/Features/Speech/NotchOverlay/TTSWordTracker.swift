@@ -5,7 +5,7 @@
 //  The @Observable @MainActor stateful driver of the pure `WordTimeline`. It owns
 //  the 60fps Timer, the injected `playbackTimeProvider` clock seam, the monotonic
 //  `recognizedCharCount` and the other published view state the notch overlay reads,
-//  and the per-segment carry-over (the smoothing `Pacing`, the static learned
+//  and the per-segment carry-over (the smoothing `Pacing`, the instance-learned
 //  chars/sec, the segment time window). It delegates the per-tick pacing *fold* to
 //  `WordTimeline`, keeping only the cross-segment estimate model here (the duration
 //  seed, the learned chars/sec, the smoothing carry) — the Chat Transcript / Chat
@@ -22,11 +22,16 @@ final class TTSWordTracker {
 
     private(set) var recognizedCharCount: Int = 0
     private(set) var isGenerationComplete: Bool = false
-    var shouldDismiss: Bool = false {
+    /// Fade-out state the overlay view animates on. Read-only for consumers: it is
+    /// written only via `beginFadeOut()` (driven by the panel controller's single
+    /// owned teardown) and cleared by `start()`/`stop()`. Dismissal *intent* travels
+    /// the other way — the view calls the controller's dismiss-request closure; this
+    /// is not a control bit for someone else's lifecycle.
+    private(set) var isFadingOut: Bool = false {
         didSet {
-            if shouldDismiss != oldValue {
+            if isFadingOut != oldValue {
                 Log.speech.info(
-                    "[WordTracker] shouldDismiss changed: \(oldValue) → \(self.shouldDismiss)")
+                    "[WordTracker] isFadingOut changed: \(oldValue) → \(self.isFadingOut)")
             }
         }
     }
@@ -66,10 +71,13 @@ final class TTSWordTracker {
     /// `markSegmentComplete`. Fed into the pacing fold; never stored on the timeline.
     private var estimatedFinalDuration: TimeInterval = 0
 
-    /// Adaptive chars/sec rate, learned from previous generations.
-    /// Persisted across show() calls on the same controller instance.
-    /// Default of 15 is a reasonable starting point for English TTS.
-    private static var learnedCharsPerSec: Double = 15.0
+    /// Adaptive chars/sec rate, learned from previous generations — instance state,
+    /// deliberately NOT reset by `stop()` so it persists across show() calls.
+    /// Production behaviour matches the old process-global: there is exactly one
+    /// tracker (the panel controller's), alive for the app's lifetime — but tests
+    /// no longer share a mutable static. Default of 15 is a reasonable starting
+    /// point for English TTS.
+    private var learnedCharsPerSec: Double = 15.0
 
     // MARK: - Public API
 
@@ -85,7 +93,7 @@ final class TTSWordTracker {
         self.playbackTimeProvider = playbackTimeProvider
         recognizedCharCount = 0
         isGenerationComplete = false
-        shouldDismiss = false
+        isFadingOut = false
         isActive = true
         segmentBase = 0
 
@@ -123,7 +131,7 @@ final class TTSWordTracker {
     /// segment start: chars over the learned chars/sec. One home for `start` /
     /// `updateText` so the seed formula can't drift between them.
     private func seededEstimate() -> TimeInterval {
-        Double(timeline.totalCharCount) / Self.learnedCharsPerSec
+        Double(timeline.totalCharCount) / learnedCharsPerSec
     }
 
     /// Called when a single segment's generation finishes (but more segments remain).
@@ -144,15 +152,22 @@ final class TTSWordTracker {
         // Learn the actual chars/sec for future duration estimates
         if totalDuration > 0 && timeline.totalCharCount > 0 {
             let actualRate = Double(timeline.totalCharCount) / totalDuration
-            Self.learnedCharsPerSec = actualRate * 0.7 + Self.learnedCharsPerSec * 0.3
+            learnedCharsPerSec = actualRate * 0.7 + learnedCharsPerSec * 0.3
             Log.speech.info(
-                "[WordTracker] markGenerationComplete() — actualRate=\(String(format: "%.1f", actualRate)) c/s, learnedRate=\(String(format: "%.1f", Self.learnedCharsPerSec)) c/s, totalDuration=\(String(format: "%.1f", self.totalDuration))s"
+                "[WordTracker] markGenerationComplete() — actualRate=\(String(format: "%.1f", actualRate)) c/s, learnedRate=\(String(format: "%.1f", self.learnedCharsPerSec)) c/s, totalDuration=\(String(format: "%.1f", self.totalDuration))s"
             )
         }
     }
 
     func jumpTo(charOffset: Int) {
         recognizedCharCount = max(0, min(charOffset, timeline.totalCharCount))
+    }
+
+    /// The tracker's own fade transition — the only writer of `isFadingOut`. Called
+    /// by the panel controller's `beginDismissal` after `stop()`, so the fade state
+    /// survives the reset and the view animates out on it.
+    func beginFadeOut() {
+        isFadingOut = true
     }
 
     func stop() {
@@ -166,6 +181,7 @@ final class TTSWordTracker {
         pacing = WordTimeline.Pacing(seed: 0)
         estimatedFinalDuration = 0
         segmentBase = 0
+        isFadingOut = false
         if wasActive {
             Log.speech.info("[WordTracker] stop() — was active, now stopped")
         }
@@ -189,7 +205,11 @@ final class TTSWordTracker {
         timer = nil
     }
 
-    private func tick() {
+    /// One frame of the pacing fold. Internal (not private) on purpose: production
+    /// drives it only from the 60 fps Timer above, and tests pump it directly with a
+    /// scripted `playbackTimeProvider` — the injected clock is already the seam, so
+    /// no frame-source abstraction is needed.
+    func tick() {
         guard isActive,
             totalDuration > 0,
             timeline.totalCharCount > 0,

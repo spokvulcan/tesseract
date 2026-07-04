@@ -14,13 +14,16 @@ import os
 final class TTSNotchPanelController: WordHighlightSurface {
     private var panel: NSPanel?
     private let wordTracker = TTSWordTracker()
+    /// Re-entrancy guard for `beginDismissal` — every dismissal path converges there,
+    /// so the teardown can only be scheduled once per dismissal.
     private var isDismissing = false
-    private var dismissObserver: Timer?
 
     private enum Defaults {
         static let notchWidth: CGFloat = 500
         static let textAreaHeight: CGFloat = 200
         static let maxExtraHeight: CGFloat = 350
+        /// Must outlast the overlay view's fade-out (0.15 s content + 0.3 s collapse).
+        static let teardownDelay: TimeInterval = 0.4
     }
 
     // MARK: - Public API
@@ -54,7 +57,8 @@ final class TTSNotchPanelController: WordHighlightSurface {
             menuBarHeight: menuBarHeight,
             baseTextHeight: Defaults.textAreaHeight,
             maxExtraHeight: Defaults.maxExtraHeight,
-            frameTracker: frameTracker
+            frameTracker: frameTracker,
+            requestDismiss: { [weak self] in self?.beginDismissal() }
         )
         let contentView = NSHostingView(rootView: overlayView)
 
@@ -92,7 +96,6 @@ final class TTSNotchPanelController: WordHighlightSurface {
         wordTracker.start(
             text: text, tokenCharOffsets: tokenCharOffsets,
             playbackTimeProvider: playbackTimeProvider)
-        observeDismiss()
         Log.speech.info("[NotchPanel] show() complete — panel visible, tracker started")
     }
 
@@ -120,19 +123,7 @@ final class TTSNotchPanelController: WordHighlightSurface {
         Log.speech.info(
             "[NotchPanel] dismiss() called — panel=\(self.panel != nil), isDismissing=\(self.isDismissing)"
         )
-        guard panel != nil else {
-            Log.speech.info("[NotchPanel] dismiss() — no panel, skipping")
-            return
-        }
-        wordTracker.shouldDismiss = true
-        wordTracker.stop()
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            Log.speech.info("[NotchPanel] dismiss() deferred cleanup — removing panel")
-            self?.panel?.orderOut(nil)
-            self?.panel = nil
-            self?.wordTracker.shouldDismiss = false
-        }
+        beginDismissal()
     }
 
     var isShowing: Bool {
@@ -141,41 +132,37 @@ final class TTSNotchPanelController: WordHighlightSurface {
 
     // MARK: - Private
 
+    /// The single owned dismissal transition. The port's `dismiss()` and the overlay
+    /// view's dismiss requests (close swipe, auto-dismiss after completion) all
+    /// converge here: stop the tracker, set its fade state (the view animates on it),
+    /// and schedule exactly one deferred teardown, protected by the re-entrancy
+    /// guard. The teardown captures the panel it was scheduled for and re-checks
+    /// identity, so a `show()` (or a full show-and-dismiss) racing the teardown
+    /// window can never have a stale teardown take down the fresh panel.
+    private func beginDismissal() {
+        guard let dismissingPanel = panel, !isDismissing else {
+            Log.speech.info(
+                "[NotchPanel] beginDismissal() — skipped (panel=\(self.panel != nil), isDismissing=\(self.isDismissing))"
+            )
+            return
+        }
+        isDismissing = true
+        wordTracker.stop()
+        wordTracker.beginFadeOut()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Defaults.teardownDelay) { [weak self] in
+            guard let self, self.panel === dismissingPanel else { return }
+            Log.speech.info("[NotchPanel] beginDismissal() deferred teardown — removing panel")
+            self.panel?.orderOut(nil)
+            self.panel = nil
+            self.isDismissing = false
+        }
+    }
+
     private func forceClose() {
         Log.speech.info("[NotchPanel] forceClose() — panel=\(self.panel != nil)")
-        dismissObserver?.invalidate()
-        dismissObserver = nil
         wordTracker.stop()
         panel?.orderOut(nil)
         panel = nil
-        wordTracker.shouldDismiss = false
-    }
-
-    private func observeDismiss() {
-        dismissObserver?.invalidate()
-        dismissObserver = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) {
-            [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let shouldDismiss = self.wordTracker.shouldDismiss
-                if shouldDismiss && !self.isDismissing {
-                    Log.speech.info(
-                        "[NotchPanel] observeDismiss timer detected shouldDismiss=true, triggering cleanup"
-                    )
-                    self.isDismissing = true
-                    self.wordTracker.stop()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                        Log.speech.info(
-                            "[NotchPanel] observeDismiss deferred cleanup — removing panel")
-                        self?.dismissObserver?.invalidate()
-                        self?.dismissObserver = nil
-                        self?.panel?.orderOut(nil)
-                        self?.panel = nil
-                        self?.wordTracker.shouldDismiss = false
-                        self?.isDismissing = false
-                    }
-                }
-            }
-        }
     }
 }
