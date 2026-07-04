@@ -4,6 +4,22 @@ import MLXLMCommon
 
 @testable import Tesseract_Agent
 
+/// Poll `condition` on MainActor until true or timeout — the SSD
+/// writer's commit/drop callbacks hop back to MainActor asynchronously.
+/// Shared by every suite that awaits a writer-side transition.
+@MainActor
+func waitUntil(
+    timeout: Duration = .seconds(5),
+    _ condition: @MainActor () -> Bool
+) async -> Bool {
+    let start = ContinuousClock.now
+    while ContinuousClock.now - start < timeout {
+        if condition() { return true }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return condition()
+}
+
 /// Shared snapshot factories for prefix-cache test files. Centralizes
 /// construction so eviction tests across `PrefixCacheManagerTests`,
 /// `EvictionPolicyTests`, and `AlphaTunerTests` produce the same shapes.

@@ -386,7 +386,8 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// lock.
     func admit(
         _ descriptor: PersistedSnapshotDescriptor,
-        scoring config: EvictionConfiguration = EvictionConfiguration()
+        scoring config: EvictionConfiguration = EvictionConfiguration(),
+        condemned: Set<String> = []
     ) -> (decision: AdmissionDecision, evicted: [EvictedResident]) {
         var evicted: [EvictedResident] = []
 
@@ -399,6 +400,35 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         let spaceNeeded = descriptor.totalBytes
         if currentSSDBytes + spaceNeeded <= budgetBytes {
             return (.admit, evicted)
+        }
+
+        // A payload larger than the whole budget can NEVER fit — reject
+        // it before any eviction runs. Without this guard the cut would
+        // destroy residents (condemned and eligible alike) to make room
+        // that still isn't enough, then drop the incoming anyway.
+        if spaceNeeded > budgetBytes {
+            return (.drop(.exceedsBudget), evicted)
+        }
+
+        // Pass 0 — residents this write supersedes (enqueue-before-delete,
+        // ADR-0019: their deletion is deferred to this write's commit, so
+        // they still occupy budget here). They are doomed either way, so
+        // a near-full cut must consume them before touching an unrelated
+        // resident. Shielded transfer bases never ride in `condemned` —
+        // the manager's supersession walk excludes them.
+        if !condemned.isEmpty {
+            evictUnderLock(
+                order: manifest.snapshots.values
+                    .filter { condemned.contains($0.snapshotID) }
+                    .sorted {
+                        ($0.lastAccessAt, $0.snapshotID) < ($1.lastAccessAt, $1.snapshotID)
+                    },
+                until: spaceNeeded,
+                into: &evicted
+            )
+            if currentSSDBytes + spaceNeeded <= budgetBytes {
+                return (.admit, evicted)
+            }
         }
 
         // Unrecognized wire strings are treated as non-system so they

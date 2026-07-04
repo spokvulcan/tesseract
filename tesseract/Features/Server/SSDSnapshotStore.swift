@@ -175,6 +175,8 @@ nonisolated struct SSDCommitInfo: Sendable, Equatable {
 
 // MARK: - SSDSnapshotStore
 
+// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+// swiftlint:disable:next type_body_length
 nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating {
 
     // MARK: - Configuration (immutable after init)
@@ -304,11 +306,21 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// `scoringConfig` rides the queue to the ledger's admission cut —
     /// see `PendingWrite.scoringConfig`. The default (α = 0) keeps the
     /// cut at plain type-protected LRU.
+    ///
+    /// `mandatory: true` marks a guarantee-class write — the end-of-turn
+    /// leaf whose SSD copy the **Leaf Home Guarantee** (ADR-0019)
+    /// promises. It is exempt from the `maxPendingBytes` size rejection
+    /// and is never a back-pressure victim; the pending total may
+    /// transiently exceed the cap by at most the guarantee payloads in
+    /// flight. Its remaining rejection paths are hard errors, logged at
+    /// error level with `mandatory=true` on the `ssdAdmit` event.
     func tryEnqueue(
         payload: SnapshotPayload,
         descriptor: PersistedSnapshotDescriptor,
         refreshRecencyAtCommit: Bool = true,
-        scoringConfig: EvictionConfiguration = EvictionConfiguration()
+        scoringConfig: EvictionConfiguration = EvictionConfiguration(),
+        condemnedResidentIDs: Set<String> = [],
+        mandatory: Bool = false
     ) -> TryEnqueueResult {
         // Parse the wire-format checkpoint type before taking the lock;
         // no sense holding the lock for a parse that can fail.
@@ -321,23 +333,38 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                 PrefixCacheDiagnostics.SSDAdmitEvent(
                     id: descriptor.snapshotID,
                     bytes: descriptor.bytes,
-                    outcome: .droppedInvalidCheckpointType
-                ))
+                    outcome: .droppedInvalidCheckpointType,
+                    mandatory: mandatory
+                ),
+                level: mandatory ? .error : .info
+            )
             return .rejectedInvalidCheckpointType
         }
 
         let payloadBytes = payload.totalBytes
 
-        // A single payload larger than the cap cannot be queued at
-        // all; no amount of back-pressure eviction can create room.
+        // A single payload larger than the cap cannot be queued at all
+        // for an opportunistic write; no amount of back-pressure
+        // eviction can create room. A guarantee-class write is exempt
+        // (ADR-0019): bouncing the end-of-turn leaf off a RAM-sized
+        // pending cap was defect 3 of the 2026-07-04 incident — it
+        // enqueues regardless, and the writer drains the transient
+        // overshoot.
         if payloadBytes > maxPendingBytes {
-            PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.SSDAdmitEvent(
-                    id: descriptor.snapshotID,
-                    bytes: payloadBytes,
-                    outcome: .droppedTooLargeForBudget
-                ))
-            return .rejectedTooLargeForBudget
+            guard mandatory else {
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.SSDAdmitEvent(
+                        id: descriptor.snapshotID,
+                        bytes: payloadBytes,
+                        outcome: .droppedTooLargeForBudget
+                    ))
+                return .rejectedTooLargeForBudget
+            }
+            Log.agent.warning(
+                "SSD guarantee-class write \(descriptor.snapshotID.prefix(8)) exceeds "
+                    + "maxPendingBytes (\(payloadBytes) > \(maxPendingBytes)) — "
+                    + "enqueuing anyway (Leaf Home Guarantee, ADR-0019)"
+            )
         }
 
         // Enforce the manifest invariant that every snapshots entry
@@ -353,8 +380,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                 PrefixCacheDiagnostics.SSDAdmitEvent(
                     id: descriptor.snapshotID,
                     bytes: payloadBytes,
-                    outcome: .droppedUnregisteredPartition
-                ))
+                    outcome: .droppedUnregisteredPartition,
+                    mandatory: mandatory
+                ),
+                level: mandatory ? .error : .info
+            )
             return .rejectedUnregisteredPartition
         }
 
@@ -388,62 +418,16 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             }
         }
 
-        var droppedItems: [(id: String, bytes: Int, extendingBaseID: String?)] = []
-
-        queueLock.lock()
-
-        // Drop-oldest-pending until the new payload fits under the
-        // cap. Record dropped IDs and fire the callbacks AFTER
-        // releasing the lock so the callback body can take other
-        // locks without risking a deadlock.
-        while pendingBytes + payloadBytes > maxPendingBytes,
-            let oldest = pending.first
-        {
-            pending.removeFirst()
-            pendingBytes -= oldest.payload.totalBytes
-            droppedItems.append(
-                (
-                    id: oldest.descriptor.snapshotID,
-                    bytes: oldest.payload.totalBytes,
-                    extendingBaseID: oldest.extendingBaseID
-                ))
-        }
-
-        pending.append(
+        enqueueApplyingBackPressure(
             PendingWrite(
                 payload: payload,
                 descriptor: descriptor,
                 extendingBaseID: extendingBaseID,
                 refreshRecencyAtCommit: refreshRecencyAtCommit,
-                scoringConfig: scoringConfig
+                scoringConfig: scoringConfig,
+                condemnedResidentIDs: condemnedResidentIDs,
+                mandatory: mandatory
             ))
-        pendingBytes += payloadBytes
-
-        queueLock.unlock()
-
-        for item in droppedItems {
-            if let baseID = item.extendingBaseID {
-                ledger.releaseExtensionTransfer(baseID: baseID)
-            }
-            // Both events fire per bumped item: the admission outcome
-            // (`droppedByteBudget` is the terminal verdict for that
-            // earlier `tryEnqueue` call), and the lifecycle callback
-            // (`storageRefDropCallback`, the stable telemetry name, so
-            // the radix node sees its pending ref cleared).
-            PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.SSDAdmitEvent(
-                    id: item.id,
-                    bytes: item.bytes,
-                    outcome: .droppedByteBudget
-                ))
-            PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
-                    id: item.id,
-                    reason: .backpressureOldest
-                )
-            )
-            onDrop(item.id, .backpressureOldest)
-        }
 
         wakeupContinuation.yield()
 
@@ -456,6 +440,68 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                 bytesOnDisk: descriptor.bytes
             )
         )
+    }
+
+    /// Append `item` to the pending queue, first dropping the oldest
+    /// NON-mandatory pending entries until it fits under the cap.
+    /// Guarantee-class items are never back-pressure victims
+    /// (ADR-0019) — when only they remain the queue transiently
+    /// overshoots the cap instead, bounded by the guarantee payloads in
+    /// flight. Dropped IDs are recorded under the lock and their
+    /// callbacks fire AFTER releasing it, so a callback body can take
+    /// other locks without risking a deadlock.
+    private func enqueueApplyingBackPressure(_ item: PendingWrite) {
+        var droppedItems: [(id: String, bytes: Int, extendingBaseID: String?)] = []
+        let payloadBytes = item.payload.totalBytes
+
+        queueLock.lock()
+
+        var scanIndex = 0
+        while pendingBytes + payloadBytes > maxPendingBytes,
+            scanIndex < pending.count
+        {
+            guard !pending[scanIndex].mandatory else {
+                scanIndex += 1
+                continue
+            }
+            let oldest = pending.remove(at: scanIndex)
+            pendingBytes -= oldest.payload.totalBytes
+            droppedItems.append(
+                (
+                    id: oldest.descriptor.snapshotID,
+                    bytes: oldest.payload.totalBytes,
+                    extendingBaseID: oldest.extendingBaseID
+                ))
+        }
+
+        pending.append(item)
+        pendingBytes += payloadBytes
+
+        queueLock.unlock()
+
+        for dropped in droppedItems {
+            if let baseID = dropped.extendingBaseID {
+                ledger.releaseExtensionTransfer(baseID: baseID)
+            }
+            // Both events fire per bumped item: the admission outcome
+            // (`droppedByteBudget` is the terminal verdict for that
+            // earlier `tryEnqueue` call), and the lifecycle callback
+            // (`storageRefDropCallback`, the stable telemetry name, so
+            // the radix node sees its pending ref cleared).
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDAdmitEvent(
+                    id: dropped.id,
+                    bytes: dropped.bytes,
+                    outcome: .droppedByteBudget
+                ))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
+                    id: dropped.id,
+                    reason: .backpressureOldest
+                )
+            )
+            onDrop(dropped.id, .backpressureOldest)
+        }
     }
 
     nonisolated func diagnosticsSnapshot() -> PromptCacheSSDSnapshot {
@@ -657,7 +703,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         //    callbacks happen here, outside that lock.
         let (admission, evicted) = ledger.admit(
             item.descriptor,
-            scoring: item.scoringConfig
+            scoring: item.scoringConfig,
+            condemned: item.condemnedResidentIDs
         )
         // Each evicted resident gets its own admission-cut event
         // before the file delete + drop callback fire. The pair
@@ -685,7 +732,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             emitWriterDrop(
                 id: item.descriptor.snapshotID,
                 bytes: item.payload.totalBytes,
-                reason: reason
+                reason: reason,
+                mandatory: item.mandatory
             )
         }
 
@@ -828,7 +876,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     private func emitWriterDrop(
         id: String,
         bytes: Int,
-        reason: SSDDropReason
+        reason: SSDDropReason,
+        mandatory: Bool = false
     ) {
         let outcome: PrefixCacheDiagnostics.SSDAdmitOutcome
         switch reason {
@@ -847,12 +896,19 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             )
             outcome = .droppedWriterIOError
         }
+        // A dropped guarantee-class write is a hard error (ADR-0019):
+        // the Leaf Home Guarantee expected this copy to land. Legal only
+        // for disk-full / I/O error / explicit invalidation — anything
+        // else surfacing here at error level is a defect to triage.
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.SSDAdmitEvent(
                 id: id,
                 bytes: bytes,
-                outcome: outcome
-            ))
+                outcome: outcome,
+                mandatory: mandatory
+            ),
+            level: mandatory ? .error : .info
+        )
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                 id: id,
@@ -1075,6 +1131,16 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         /// manager's live configuration is unreachable; millisecond
         /// staleness is irrelevant to a damped α.
         let scoringConfig: EvictionConfiguration
+        /// Residents this write supersedes (enqueue-before-delete,
+        /// ADR-0019): their deletion is deferred to this write's commit,
+        /// so the ledger's admission cut consumes them first — a
+        /// near-full tier must not evict an unrelated resident to make
+        /// room for a write whose own ancestors are already doomed.
+        let condemnedResidentIDs: Set<String>
+        /// Guarantee-class marker (the Leaf Home Guarantee write,
+        /// ADR-0019): never a back-pressure victim, and any writer-side
+        /// drop is a hard error logged at error level.
+        let mandatory: Bool
     }
 }
 

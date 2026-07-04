@@ -2,7 +2,7 @@ import Foundation
 
 /// Always-on durable sink for prefix-cache diagnostics: every
 /// `PromptCacheTelemetryEvent` is appended as one JSON line to
-/// `tmp/tesseract-debug/cache-diagnostics/<yyyy-MM-dd>.jsonl`.
+/// `Application Support/CacheDiagnostics/<yyyy-MM-dd>.jsonl`.
 ///
 /// Exists because the unified-logging copy of these events (`Log.agent.info`)
 /// lives in a memory-only buffer — after the process moves on, `log show`
@@ -11,10 +11,12 @@ import Foundation
 /// so an always-on file is safe.
 ///
 /// The file machinery (serial-queue confinement, day roll, size-cap rotation
-/// to `.old`, failing-disk handle drop) is `RotatingJSONLWriter`; this type
-/// owns the event encoding and the telemetry-sink registration.
+/// to `.old`, day-file retention pruning, failing-disk handle drop) is
+/// `RotatingJSONLWriter`; this type owns the event encoding and the
+/// telemetry-sink registration.
 nonisolated final class PromptCacheDiagnosticsFileSink: @unchecked Sendable {
-    static let maxFileBytes = 64 * 1024 * 1024
+    static let maxFileBytes = 8 * 1024 * 1024
+    static let retainedDayFiles = 7
 
     private let writer: RotatingJSONLWriter
     private var sinkHandle: PrefixCacheDiagnostics.TelemetrySinkHandle?
@@ -26,16 +28,27 @@ nonisolated final class PromptCacheDiagnosticsFileSink: @unchecked Sendable {
         return encoder
     }()
 
+    /// Durable home (#148, scope item 5): Application Support, not the
+    /// tmp debug root — the sandbox tmp directory is OS-purged, which
+    /// is exactly why the original leaf-loss incident left no evidence
+    /// to diagnose from. Bounded by `retainedDayFiles`.
+    static var defaultDirectory: URL {
+        let base =
+            FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("CacheDiagnostics", isDirectory: true)
+    }
+
     init(
-        directory: URL = DebugPaths.root.appendingPathComponent(
-            "cache-diagnostics", isDirectory: true
-        ),
+        directory: URL = PromptCacheDiagnosticsFileSink.defaultDirectory,
         registerSink: Bool = true
     ) {
         writer = RotatingJSONLWriter(
             directory: directory,
             queueLabel: "app.tesseract.agent.cache-diagnostics-file-sink",
-            maxFileBytes: Self.maxFileBytes
+            maxFileBytes: Self.maxFileBytes,
+            retainedDayFiles: Self.retainedDayFiles
         )
         if registerSink {
             sinkHandle = PrefixCacheDiagnostics.addTelemetrySink { [weak self] event in

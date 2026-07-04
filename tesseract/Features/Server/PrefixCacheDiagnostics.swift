@@ -392,14 +392,48 @@ nonisolated enum PrefixCacheDiagnostics {
         let id: String
         let bytes: Int
         let outcome: SSDAdmitOutcome
+        /// `true` for a guarantee-class write (the end-of-turn leaf,
+        /// ADR-0019). Emitted as a field only when set, so existing
+        /// pinned wire lines stay stable; a non-`accepted` outcome with
+        /// this flag is a hard error, logged at error level.
+        var mandatory: Bool = false
 
         let eventName = "ssdAdmit"
 
         var fields: [(String, String)] {
-            [
+            var fields: [(String, String)] = [
                 ("id", id),
                 ("bytes", "\(bytes)"),
                 ("outcome", outcome.rawValue),
+            ]
+            if mandatory {
+                fields.append(("mandatory", "true"))
+            }
+            return fields
+        }
+    }
+
+    /// One RAM-tier budget movement (ADR-0019: budget changes used to
+    /// be invisible — a pressure collapse that emptied the cache left
+    /// no trace to diagnose from). Emitted on every effective change:
+    /// pressure folds (`reason=pressure:<level>`) and explicit
+    /// overrides (`reason=override`).
+    struct BudgetChangeEvent: Payload {
+        let reason: String
+        let previousBytes: Int
+        let currentBytes: Int
+        let ceilingBytes: Int
+        let floorBytes: Int
+
+        let eventName = "budgetChange"
+
+        var fields: [(String, String)] {
+            [
+                ("reason", reason),
+                ("previousBytes", "\(previousBytes)"),
+                ("currentBytes", "\(currentBytes)"),
+                ("ceilingBytes", "\(ceilingBytes)"),
+                ("floorBytes", "\(floorBytes)"),
             ]
         }
     }
@@ -461,7 +495,10 @@ nonisolated enum PrefixCacheDiagnostics {
         let snapshotRefID: String?
         /// What happened to the superseded leaf's SSD backing:
         /// `transferred` (a **Leaf Extension Admission** took the
-        /// chain), `deleted` (a full write replaced it), or
+        /// chain), `deferredDelete` (a full write superseded it — the
+        /// backing stays alive until the new write commits, ADR-0019's
+        /// enqueue-before-delete), `deleted` (immediate — only for a
+        /// stale ancestor whose backing nothing depends on), or
         /// `preserved` (a RAM-only admission kept it for warm start).
         let mode: PrefixCacheManager.LeafSupersession.Mode
 
@@ -574,13 +611,22 @@ nonisolated enum PrefixCacheDiagnostics {
             .joined(separator: " ")
     }
 
-    /// Emit a system-scope event to `Log.agent.info` and forward the
-    /// rendered line to the test sink (if installed). Safe to call
-    /// from any thread / actor; both `Log.agent` and the sink hop
-    /// internally as needed.
-    nonisolated static func logSystem(_ payload: some Payload) {
+    /// Emit a system-scope event to `Log.agent` (at `level`, default
+    /// info) and forward the rendered line to the test sink (if
+    /// installed). Safe to call from any thread / actor; both
+    /// `Log.agent` and the sink hop internally as needed.
+    nonisolated static func logSystem(_ payload: some Payload, level: Level = .info) {
         let line = renderSystem(payload)
-        Log.agent.info(line)
+        switch level {
+        case .debug:
+            Log.agent.debug(line)
+        case .info:
+            Log.agent.info(line)
+        case .warning:
+            Log.agent.warning(line)
+        case .error:
+            Log.agent.error(line)
+        }
         forwardToSink(line)
         forwardTelemetryEvent(telemetrySystemEvent(payload))
     }

@@ -769,6 +769,30 @@ never a silent policy outcome.
 _Avoid_: demote-if-possible (the old best-effort reading), terminal drop as an
 eviction strategy, survival-gate veto of a demotion.
 
+**Restore Pin**:
+An in-flight request's claim on the node it restored from: pinned into the **Budget
+Floor** at resolve, released at the completion drive's all-exit-paths tail, so no
+drain may evict the body a running generation depends on. Weak by reference — a pin
+protects, it does not own.
+_Avoid_: node lock, refcount, lease; leaf pinning (pins hold restore *paths*, not the
+newest leaf — that floor member is recency-defined).
+
+**Guarantee-Class Write**:
+The mandatory SSD write of the newest end-of-turn leaf — the write the **Leaf Home
+Guarantee** promises. Exempt from the pending-queue size cap and never a back-pressure
+victim; its remaining rejection paths are hard errors surfaced to telemetry, never
+silent.
+_Avoid_: mandatory flag (wire detail, not the concept), priority write (no queue-jump
+— FIFO order holds), best-effort write.
+
+**Condemned Resident**:
+A superseded ancestor's SSD backing that a pending replacement write has marked as the
+first victim of its own admission cut — evicted before any innocent resident, but only
+once the cut actually needs the room, and never for a write that cannot fit at all.
+_Avoid_: doomed/stale backing (it is still live and hittable until evicted),
+enqueue-before-delete (the ordering invariant; condemnation is the budget-efficiency
+half).
+
 ### Eviction tuning
 
 **Recovery Cost**:

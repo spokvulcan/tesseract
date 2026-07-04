@@ -1039,7 +1039,8 @@ nonisolated final class ServerCompletion {
                                     promptTokenCount: tokens.count,
                                     partitionKey: mlxStart.partitionKey,
                                     modelFingerprint: mlxStart.partitionKey.modelFingerprint,
-                                    diagnostics: diagnosticsContext
+                                    diagnostics: diagnosticsContext,
+                                    pinningRestorePathFor: diagnosticsContext.requestID
                                 ).lookup.snapshot
                             }
                             return resolved.flatMap { $0 }
@@ -1454,6 +1455,12 @@ nonisolated final class ServerCompletion {
             }
         }
 
+        // Release this request's Budget Floor restore pins on every exit
+        // path (this tail runs after natural finish, cancellation, and
+        // error alike — same guarantee as `finishHook`). From here on the
+        // turn's protection is the freshest-leaf floor member, not the
+        // in-flight pin (ADR-0019).
+        await MainActor.run { prefixCache.completeRequest(requestID: requestID) }
         await finishHook()
         // After the registry slot is released: hand the speculative seed to
         // the actor, which schedules it only if the module is still quiescent
@@ -1659,7 +1666,8 @@ nonisolated final class ServerCompletion {
                 promptTokenCount: fullTokenCount,
                 partitionKey: partitionKey,
                 modelFingerprint: modelFingerprint,
-                diagnostics: diagnosticsContext
+                diagnostics: diagnosticsContext,
+                pinningRestorePathFor: diagnosticsContext.requestID
             )
             let lookupResult = resolved.lookup
             // Plan AFTER resolution, against the settled tree: any promote or

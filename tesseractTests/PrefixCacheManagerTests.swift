@@ -431,7 +431,11 @@ struct PrefixCacheManagerTests {
     /// test for the new-user-turn cold-prefill pathology.
     @Test func systemSnapshotProtectedFromUtilityEviction() {
         let snapBytes = makeUniformSnapshot(offset: 10).memoryBytes
-        let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes)
+        // Budget holds two snapshots: system + one leaf. The freshest
+        // leaf is a Budget Floor member (ADR-0019), so the utility
+        // comparison plays out between the system body and the OLDER
+        // leaf.
+        let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 2)
 
         // Older `.system` snapshot — would be the LRU victim under pure
         // recency without the type-protection guard.
@@ -442,11 +446,20 @@ struct PrefixCacheManagerTests {
                 candidates: [.ramOnly(makeUniformSnapshot(offset: 10, type: .system))],
                 partitionKey: defaultKey
             )!)
-        #expect(mgr.stats.snapshotCount == 1)
+        let staleLeafTokens = Array(20...29)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: staleLeafTokens,
+                snapshot: makeUniformSnapshot(offset: staleLeafTokens.count, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: defaultKey
+            )!)
+        #expect(mgr.stats.snapshotCount == 2)
 
-        // Newer `.leaf` on an independent path. The leaf is the only
-        // eligible candidate; the system snapshot is protected.
-        let leafTokens = Array(20...29)
+        // Newer `.leaf` on an independent path pushes past the budget.
+        // The stale leaf is the only eligible candidate: the system
+        // snapshot is type-protected and the fresh leaf is the floor.
+        let leafTokens = Array(40...49)
         let diagnostics = mgr.admit(
             SnapshotAdmission.leaf(
                 storedTokens: leafTokens,
@@ -460,11 +473,11 @@ struct PrefixCacheManagerTests {
         #expect(diagnostics.evictions[0].checkpointType == .leaf)
 
         // The protected `.system` snapshot must still be reachable; the
-        // newer `.leaf` was evicted instead.
+        // older `.leaf` was evicted instead.
         let sysResult = mgr.lookup(tokens: sysTokens, partitionKey: defaultKey)
         #expect(sysResult.snapshotTokenOffset == 10)
-        let leafResult = mgr.lookup(tokens: leafTokens, partitionKey: defaultKey)
-        #expect(leafResult.snapshot == nil)
+        #expect(mgr.lookup(tokens: staleLeafTokens, partitionKey: defaultKey).snapshot == nil)
+        #expect(mgr.lookup(tokens: leafTokens, partitionKey: defaultKey).snapshot != nil)
     }
 
     /// Only the newest leaf on a structural branch survives. Storing a
@@ -668,8 +681,11 @@ struct PrefixCacheManagerTests {
                     partitionKey: defaultKey)!)
         }
 
-        // Budget enforced — not all snapshots survive
-        #expect(mgr.totalSnapshotBytes <= 1)
+        // Budget enforced down to the Budget Floor: only the freshest
+        // leaf (the floor member, ADR-0019) survives a 1-byte budget.
+        #expect(mgr.stats.snapshotCount == 1)
+        #expect(
+            mgr.lookup(tokens: Array(900..<1000), partitionKey: defaultKey).snapshot != nil)
     }
 
     // MARK: - 9. planCheckpointsIncludesSystemBoundary
@@ -893,8 +909,12 @@ struct PrefixCacheManagerTests {
                 storedTokens: Array(100...149), snapshot: snapB, storage: .ramOnly,
                 partitionKey: keyB)!)
 
-        // Budget is 1 byte — eviction must cross partitions
-        #expect(mgr.totalSnapshotBytes <= 1)
+        // Budget is 1 byte — B's admission drain must cross into
+        // partition A for its victim (B itself is the freshest-leaf
+        // floor member and survives, ADR-0019).
+        #expect(mgr.stats.snapshotCount == 1)
+        #expect(mgr.lookup(tokens: Array(1...50), partitionKey: keyA).snapshot == nil)
+        #expect(mgr.lookup(tokens: Array(100...149), partitionKey: keyB).snapshot != nil)
     }
 
     // MARK: - Leaf Snapshot Admission validation
@@ -984,22 +1004,27 @@ struct PrefixCacheManagerTests {
     /// Multi-child branch snapshots are protected from utility scoring
     /// (Marconi rule: candidates must have `childCount <= 1`). The hard
     /// budget invariant is preserved by a fallback that drops the oldest
-    /// snapshot regardless of `childCount` when the eligible set is empty.
+    /// unprotected snapshot regardless of `childCount` when the eligible
+    /// set is empty — while the freshest leaf (the Budget Floor member,
+    /// ADR-0019) survives even the zero-budget drain.
     @Test func branchNodeFallbackHonorsHardBudget() {
-        let snapBytes = makeSnapshot(offset: 10, type: .system).memoryBytes
-        let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 100)
+        let sysBytes = makeSnapshot(offset: 10, type: .system).memoryBytes
+        let leafBytes = makeSnapshot(offset: 15, type: .leaf).memoryBytes
+        let mgr = PrefixCacheManager(memoryBudgetBytes: sysBytes * 100)
 
         // root → [1..10] (system snap)
         //            → [11..15]
-        //            → [21..25] (leaf)
+        //            → [21..25] (stale leaf)
         //            → [31..35]
+        //            → [41..45] (fresh leaf — the floor member)
         //
         // The extra snapshot-less suffix keeps the system node multi-child
-        // even after the leaf snapshot is evicted, so the second drain is
+        // even after the leaf snapshots are evicted, so the second drain is
         // forced onto the fallback path.
         let pathA = Array(1...15)
         let pathB = Array(1...10) + Array(21...25)
         let pathC = Array(1...10) + Array(31...35)
+        let pathD = Array(1...10) + Array(41...45)
         mgr.admit(
             SnapshotAdmission.checkpoints(
                 fullPromptTokens: pathA,
@@ -1019,16 +1044,25 @@ struct PrefixCacheManagerTests {
                 candidates: [.ramOnly(makeSnapshot(offset: 10, type: .system))],
                 partitionKey: defaultKey
             )!)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: pathD,
+                snapshot: makeSnapshot(offset: pathD.count, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: defaultKey
+            )!)
 
-        // Tighten to one snapshot — the eligible leaf is evicted by utility
-        // scoring, leaving only the branch-node system snapshot.
-        let utilityEvictions = mgr.setMemoryBudget(snapBytes)
+        // Tighten to system + fresh leaf — the stale leaf is the one
+        // eligible candidate (the fresh leaf is the floor) and is evicted
+        // by utility scoring.
+        let utilityEvictions = mgr.setMemoryBudget(sysBytes + leafBytes)
         #expect(utilityEvictions.count == 1)
         #expect(utilityEvictions[0].strategy == .utility)
-        #expect(mgr.stats.snapshotCount == 1)
+        #expect(mgr.stats.snapshotCount == 2)
 
-        // Tighten to zero. The remaining snapshot is on a multi-child node
-        // (not in the eligible set), so the fallback drops it.
+        // Tighten to zero. The remaining unprotected snapshot sits on a
+        // multi-child node (not in the eligible set), so the fallback
+        // drops it; the floor keeps the fresh leaf.
         let fallbackEvictions = mgr.setMemoryBudget(0)
         #expect(fallbackEvictions.count == 1)
         let fallback = fallbackEvictions[0]
@@ -1037,8 +1071,9 @@ struct PrefixCacheManagerTests {
         #expect(fallback.normalizedRecency == nil)
         #expect(fallback.normalizedFlopEfficiency == nil)
         #expect(fallback.utility == nil)
-        #expect(mgr.totalSnapshotBytes == 0)
-        #expect(mgr.stats.snapshotCount == 0)
+        #expect(mgr.totalSnapshotBytes == leafBytes)
+        #expect(mgr.lookup(tokens: pathD, partitionKey: defaultKey).snapshot != nil)
+        #expect(mgr.stats.snapshotCount == 1)
     }
 
     @Test func planCheckpointsRequiresSystemType() {
@@ -1449,8 +1484,9 @@ struct PrefixCacheManagerTests {
     /// spills over to other model partitions via the global path.
     @Test func preferredPartitionSpillsToGlobalWhenExhausted() {
         let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
-        // Budget fits 1 snapshot.
-        let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes)
+        // Budget fits 2 snapshots: the freshest leaf (floor-protected,
+        // ADR-0019) plus one — the spill victim comes from what remains.
+        let mgr = PrefixCacheManager(memoryBudgetBytes: snapBytes * 2)
 
         let idleKey = CachePartitionKey(
             modelID: "idle-model", kvBits: nil, kvGroupSize: 64
@@ -1459,7 +1495,8 @@ struct PrefixCacheManagerTests {
             modelID: "writing-model", kvBits: nil, kvGroupSize: 64
         )
 
-        // Idle partition: one evictable leaf.
+        // Idle partition: one evictable stale leaf plus the freshest
+        // leaf (the floor member the drain must never touch).
         let idleTokens = Array(1...10)
         mgr.admit(
             SnapshotAdmission.leaf(
@@ -1468,7 +1505,15 @@ struct PrefixCacheManagerTests {
                 storage: .ramOnly,
                 partitionKey: idleKey
             )!)
-        #expect(mgr.stats.snapshotCount == 1)
+        let freshTokens = Array(500...509)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: freshTokens,
+                snapshot: makeUniformSnapshot(offset: freshTokens.count, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: idleKey
+            )!)
+        #expect(mgr.stats.snapshotCount == 2)
 
         // Writing partition: two `.system` snapshots (type-protected,
         // ineligible in the preferred-utility path) on distinct linear
@@ -1491,13 +1536,13 @@ struct PrefixCacheManagerTests {
             )!)
 
         // Budget must still be respected.
-        #expect(mgr.totalSnapshotBytes <= snapBytes)
+        #expect(mgr.totalSnapshotBytes <= snapBytes * 2)
 
-        // The idle partition's leaf was evicted to make room — spill
-        // path worked. At least one of the writing partition's system
-        // snapshots survived.
+        // The idle partition's stale leaf was evicted to make room —
+        // spill path worked; the floor kept the freshest leaf.
         let idleResult = mgr.lookup(tokens: idleTokens, partitionKey: idleKey)
-        #expect(idleResult.snapshot == nil, "Idle leaf should have been evicted via spill")
+        #expect(idleResult.snapshot == nil, "Idle stale leaf should have been evicted via spill")
+        #expect(mgr.lookup(tokens: freshTokens, partitionKey: idleKey).snapshot != nil)
     }
 
     // MARK: - Task 4.1.8: Eviction body-drop + cleanup-suppression guards
@@ -1641,13 +1686,14 @@ struct PrefixCacheManagerTests {
     }
 
     /// `.system` type protection still applies even when the system
-    /// node carries a committed Snapshot Ref. The `.leaf` victim is
-    /// hard-deleted; the `.system` body + ref are preserved.
+    /// node carries a committed Snapshot Ref. The stale `.leaf` victim
+    /// is hard-deleted; the `.system` body + ref are preserved (and the
+    /// freshest leaf rides the Budget Floor, ADR-0019).
     @Test func systemTypeProtectionHoldsWithSnapshotRef() {
         let snapBytes = makeUniformSnapshot(offset: 10, type: .leaf).memoryBytes
         let tieredStore = TieredSnapshotStore(ssdConfig: nil)
         let mgr = PrefixCacheManager(
-            memoryBudgetBytes: snapBytes,
+            memoryBudgetBytes: snapBytes * 2,
             tieredStore: tieredStore
         )
 
@@ -1669,7 +1715,15 @@ struct PrefixCacheManagerTests {
         tree.admit(node: sysNode, ref: ref)
         tree.commitRef(node: sysNode, expectedID: ref.snapshotID)
 
-        let leafTokens = Array(20...29)
+        let staleLeafTokens = Array(20...29)
+        mgr.admit(
+            SnapshotAdmission.leaf(
+                storedTokens: staleLeafTokens,
+                snapshot: makeUniformSnapshot(offset: staleLeafTokens.count, type: .leaf),
+                storage: .ramOnly,
+                partitionKey: defaultKey
+            )!)
+        let leafTokens = Array(40...49)
         mgr.admit(
             SnapshotAdmission.leaf(
                 storedTokens: leafTokens,
@@ -1681,8 +1735,8 @@ struct PrefixCacheManagerTests {
         #expect(sysNode.state.body != nil)
         #expect(sysNode.state.ref != nil)
         #expect(sysNode.state.committed)
-        let leafResult = mgr.lookup(tokens: leafTokens, partitionKey: defaultKey)
-        #expect(leafResult.snapshot == nil)
+        #expect(mgr.lookup(tokens: staleLeafTokens, partitionKey: defaultKey).snapshot == nil)
+        #expect(mgr.lookup(tokens: leafTokens, partitionKey: defaultKey).snapshot != nil)
     }
 
     // MARK: - SSD hydration: lookup / promote / clearCommittedSnapshotRefAfterHydrationFailure

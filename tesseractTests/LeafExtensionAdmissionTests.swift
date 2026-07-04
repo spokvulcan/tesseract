@@ -927,7 +927,12 @@ struct LeafExtensionSupersessionPolicyTests {
         #expect(nextBase.baseSnapshotID == baseID)
     }
 
-    @Test func fullSSDAdmissionDeletesAncestorBacking() async throws {
+    /// A full (non-extension) SSD admission supersedes the ancestor's
+    /// backing via **deferred deletion** (ADR-0019, enqueue-before-delete):
+    /// the old backing dies only once the replacing write commits — never
+    /// before, so a rejected write leaves it alive as the warm-start
+    /// fallback (that half is pinned in `LeafHomeGuaranteeTests`).
+    @Test func fullSSDAdmissionDeletesAncestorBackingAtCommit() async throws {
         let fixture = makeFixture()
         defer { cleanup(fixture.root) }
         let ancestorTokens = Array(1...5)
@@ -944,10 +949,13 @@ struct LeafExtensionSupersessionPolicyTests {
         let diagnostics = fixture.manager.admit(descendant)
 
         #expect(diagnostics.supersededLeaves.count == 1)
-        #expect(diagnostics.supersededLeaves[0].mode == .deleted)
-        #expect(
+        #expect(diagnostics.supersededLeaves[0].mode == .deferredDelete)
+
+        await fixture.store.ssdStoreForTesting!.flushAsync()
+        let deleted = await waitUntil {
             fixture.store.ssdStoreForTesting?.residentDescriptorForTesting(id: baseID) == nil
-        )
+        }
+        #expect(deleted, "the superseded backing dies once the replacing write commits")
     }
 
     @Test func extensionAdmissionTransfersAncestorBacking() async throws {

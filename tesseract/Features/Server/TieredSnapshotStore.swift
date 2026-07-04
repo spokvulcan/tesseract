@@ -86,6 +86,23 @@ final class TieredSnapshotStore {
     private var ssdStore: SSDSnapshotStore?
     private var pendingRefsByID: [String: PendingRef] = [:]
     private var committedRefsByID: [String: CommittedRefOwner] = [:]
+    /// New snapshot ID → the superseded ancestor backings whose deletion
+    /// waits for that write's durable commit (enqueue-before-delete,
+    /// ADR-0019 — the vLLM offload-safety invariant: never free the
+    /// source until the save is durable). A writer drop forgets the
+    /// record, degrading the ancestors to `preserved` (the warm-start
+    /// fallback stays alive); a commit executes the deletions here.
+    private var deferredSupersessionsByID: [String: [DeferredSupersession]] = [:]
+
+    /// One superseded ancestor awaiting its replacement's commit. Weak
+    /// node/tree ends, same rationale as `CommittedRefOwner`: a dead
+    /// entry means the tree already moved on — only the ledger-side
+    /// backing still needs the delete.
+    private struct DeferredSupersession {
+        weak var node: RadixTreeNode?
+        weak var tree: TokenRadixTree?
+        let supersededRefID: String
+    }
     /// Owner chain head → the nodes holding **Chain-Prefix Restore**
     /// points into its chain (ADR-0012). The eager-clear counterpart of
     /// `committedRefsByID` for the chain-side backing channel: when the
@@ -319,7 +336,9 @@ final class TieredSnapshotStore {
         snapshot: HybridCacheSnapshot,
         payload: SnapshotPayload,
         demotionLastAccessAt: TimeInterval? = nil,
-        scoringConfig: EvictionConfiguration = EvictionConfiguration()
+        scoringConfig: EvictionConfiguration = EvictionConfiguration(),
+        condemnedResidentIDs: Set<String> = [],
+        mandatory: Bool = false
     ) -> SnapshotRef? {
         guard let ssdStore else { return nil }
 
@@ -342,7 +361,9 @@ final class TieredSnapshotStore {
                 payload: payload,
                 descriptor: descriptor,
                 refreshRecencyAtCommit: demotionLastAccessAt == nil,
-                scoringConfig: scoringConfig
+                scoringConfig: scoringConfig,
+                condemnedResidentIDs: condemnedResidentIDs,
+                mandatory: mandatory
             )
         else {
             return nil
@@ -367,12 +388,53 @@ final class TieredSnapshotStore {
     /// supersession when a newly stored descendant leaf makes an older
     /// ancestor leaf obsolete. Safe for pending and committed refs.
     /// Deleting a chain head also clears every restore point into its
-    /// chain — the files are about to be unlinked.
+    /// chain — the files are about to be unlinked. A deleted snapshot's
+    /// own deferred supersessions are forgotten too: its replacement is
+    /// gone, so the ancestors it condemned stay preserved.
     func deleteSnapshot(snapshotID: String) {
         pendingRefsByID.removeValue(forKey: snapshotID)
         committedRefsByID.removeValue(forKey: snapshotID)
+        deferredSupersessionsByID.removeValue(forKey: snapshotID)
         clearChainPrefixDependents(ownerID: snapshotID)
         ssdStore?.deleteSnapshot(snapshotID: snapshotID)
+    }
+
+    /// Record that `supersededRefID`'s backing is replaced by the write
+    /// `newSnapshotID` and must be deleted only when that write COMMITS
+    /// (enqueue-before-delete, ADR-0019). Until then — and permanently,
+    /// if the writer drops the new write — the superseded backing stays
+    /// reachable: it is the warm-start fallback and the hit target for
+    /// the whole pending window.
+    func deferSupersededBackingDeletion(
+        until newSnapshotID: String,
+        node: RadixTreeNode,
+        tree: TokenRadixTree,
+        supersededRefID: String
+    ) {
+        deferredSupersessionsByID[newSnapshotID, default: []].append(
+            DeferredSupersession(
+                node: node, tree: tree, supersededRefID: supersededRefID
+            ))
+    }
+
+    /// Execute (on commit) the deferred deletions recorded for a newly
+    /// durable write: delete each superseded backing and discard its
+    /// tree ref. A ref already gone (SSD-tier eviction consumed the
+    /// condemned resident first, or an explicit delete raced) is a
+    /// legitimate no-op — `deleteSnapshot` tolerates missing IDs and the
+    /// node guard skips a ref the tree already replaced.
+    private func executeDeferredSupersessions(for snapshotID: String) {
+        guard
+            let deferred = deferredSupersessionsByID.removeValue(forKey: snapshotID)
+        else { return }
+        for entry in deferred {
+            deleteSnapshot(snapshotID: entry.supersededRefID)
+            guard let node = entry.node,
+                let tree = entry.tree,
+                node.state.refID == entry.supersededRefID
+            else { continue }
+            tree.discardSnapshotRefAfterExplicitDelete(node: node)
+        }
     }
 
     /// Whether `snapshotID` is a base currently shielded by a pending
@@ -471,6 +533,12 @@ final class TieredSnapshotStore {
                 tree: pending.tree
             )
         }
+
+        // The write is durable — NOW the ancestor backings it replaced
+        // may be deleted (enqueue-before-delete, ADR-0019). Runs after
+        // the commit transition so the node's new committed ref is
+        // already the warm-start authority the deletions leave behind.
+        executeDeferredSupersessions(for: info.snapshotID)
     }
 
     /// The fold's tree-side ownership conversion (ADR-0012). Find the
@@ -673,6 +741,11 @@ final class TieredSnapshotStore {
     /// "backed", so a stale committed ref misprices the node, skips its
     /// demotion, and miscounts a terminal loss as recovered.
     func markSnapshotRefDropped(id: String, reason: SSDDropReason) {
+        // A dropped write never deletes what it superseded: forget its
+        // deferred supersessions so the ancestors degrade to `preserved`
+        // — the warm-start fallback and the next turn's extension base
+        // stay alive (enqueue-before-delete, ADR-0019).
+        deferredSupersessionsByID.removeValue(forKey: id)
         guard let pending = pendingRefsByID.removeValue(forKey: id) else {
             clearCommittedResidentRef(id: id, reason: reason)
             return

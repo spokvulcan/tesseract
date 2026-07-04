@@ -127,10 +127,11 @@ struct PressureReactiveBudgetManagerTests {
         }
     }
 
-    /// Critical pressure drains to exactly the floor: the `.system`
-    /// chain and the most-recently-extended leaf survive; every other
-    /// body is gone. Subsequent `normal` events regrow the live budget
-    /// without touching contents.
+    /// Critical pressure drains to exactly the floor: the
+    /// most-recently-extended leaf survives; every other body — the
+    /// `.system` chain included (ADR-0019: `.system` is SSD-protected,
+    /// not RAM-pinned) — is gone. Subsequent `normal` events regrow the
+    /// live budget without touching contents.
     @Test func criticalShrinkStopsAtTheFloorAndRegrows() {
         let snapBytes = PrefixCacheTestFixtures.makeUniformSnapshot(
             offset: 10, type: .leaf
@@ -148,14 +149,14 @@ struct PressureReactiveBudgetManagerTests {
         #expect(manager.stats.snapshotCount == 4)
 
         let floor = manager.budgetFloorBytes()
-        #expect(floor == snapBytes * 2, "floor = system + freshest leaf")
+        #expect(floor == snapBytes, "floor = the freshest leaf")
 
         pressure.send(.critical)
         #expect(manager.memoryBudgetBytes == floor)
         #expect(manager.totalSnapshotBytes == floor)
-        // Floor membership: the system chain and the freshest leaf.
-        #expect(manager.lookup(tokens: Array(1...10), partitionKey: key).snapshot != nil)
+        // Floor membership: the freshest leaf, nothing else.
         #expect(manager.lookup(tokens: Array(40...49), partitionKey: key).snapshot != nil)
+        #expect(manager.lookup(tokens: Array(1...10), partitionKey: key).snapshot == nil)
         #expect(manager.lookup(tokens: Array(20...29), partitionKey: key).snapshot == nil)
         #expect(manager.lookup(tokens: Array(60...69), partitionKey: key).snapshot == nil)
 
@@ -241,13 +242,13 @@ struct PressureReactiveBudgetManagerTests {
         let snapshot = manager.makeTelemetrySnapshot()
         #expect(snapshot.budgetCeilingBytes == snapBytes * 100)
         #expect(snapshot.memoryBudgetBytes == snapBytes * 50)
-        #expect(snapshot.budgetFloorBytes == snapBytes * 2)
+        #expect(snapshot.budgetFloorBytes == snapBytes, "floor = the freshest leaf")
     }
 
-    /// The floor never starves an ordinary admission drain: a plain
-    /// (non-pressure) `evictToFitBudget` keeps the unconditional
-    /// semantics, including the zero-budget full drain tests rely on.
-    @Test func ordinaryDrainsIgnoreTheFloor() {
+    /// The floor is honored on EVERY drain (ADR-0019), the explicit
+    /// zero-budget override included: the freshest leaf is never a
+    /// victim, so a full drain leaves exactly the survival set.
+    @Test func ordinaryDrainsHonorTheFloor() {
         let snapBytes = PrefixCacheTestFixtures.makeUniformSnapshot(
             offset: 10, type: .leaf
         ).memoryBytes
@@ -256,7 +257,8 @@ struct PressureReactiveBudgetManagerTests {
         admit(manager, tokens: Array(20...29), type: .leaf)
 
         manager.setMemoryBudget(0)
-        #expect(manager.stats.snapshotCount == 0)
+        #expect(manager.stats.snapshotCount == 1)
+        #expect(manager.lookup(tokens: Array(20...29), partitionKey: key).snapshot != nil)
     }
 
     // MARK: - Band-consistent overrides (PRD #137, user story 16)
@@ -307,6 +309,68 @@ struct PressureReactiveBudgetManagerTests {
         let evictions = manager.setMemoryBudget(snapBytes)
         #expect(evictions.count == 2)
         #expect(manager.stats.snapshotCount == 1)
+    }
+
+    // MARK: - Budget-change diagnostics (#148, scope item 5)
+
+    /// Every effective budget movement leaves a durable trace: pressure
+    /// folds emit `budgetChange reason=pressure:<level>` and explicit
+    /// overrides emit `reason=override`, each with the full band
+    /// context. A fold that moves nothing (a `normal` event at the
+    /// ceiling) emits nothing.
+    @Test func budgetChangesEmitDiagnostics() {
+        let snapBytes = PrefixCacheTestFixtures.makeUniformSnapshot(
+            offset: 10, type: .leaf
+        ).memoryBytes
+        let pressure = InMemoryMemoryPressureSource()
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: snapBytes * 100,
+            pressureSource: pressure
+        )
+        admit(manager, tokens: Array(1...10), type: .leaf)
+
+        let sink = RecordingLineSink()
+        let handle = PrefixCacheDiagnostics.addTestSink(sink.handler)
+        defer { PrefixCacheDiagnostics.removeTestSink(handle) }
+
+        pressure.send(.normal)  // already at the ceiling — no movement
+        pressure.send(.warning)
+        manager.setMemoryBudget(snapBytes * 10)
+        manager.setMemoryBudget(snapBytes * 10)  // no movement
+
+        let changes = sink.drain().filter { $0.contains("event=budgetChange") }
+        #expect(changes.count == 2)
+        #expect(changes[0].contains("reason=pressure:warning"))
+        #expect(changes[0].contains("previousBytes=\(snapBytes * 100)"))
+        #expect(changes[0].contains("currentBytes=\(snapBytes * 50)"))
+        #expect(changes[0].contains("ceilingBytes=\(snapBytes * 100)"))
+        #expect(changes[0].contains("floorBytes=\(snapBytes)"))
+        #expect(changes[1].contains("reason=override"))
+        #expect(changes[1].contains("previousBytes=\(snapBytes * 50)"))
+        #expect(changes[1].contains("currentBytes=\(snapBytes * 10)"))
+        #expect(changes[1].contains("ceilingBytes=\(snapBytes * 10)"))
+    }
+
+    private final class RecordingLineSink: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lines: [String] = []
+
+        var handler: @Sendable (String) -> Void {
+            { [weak self] line in
+                guard let self else { return }
+                self.lock.lock()
+                self.lines.append(line)
+                self.lock.unlock()
+            }
+        }
+
+        func drain() -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            let copy = lines
+            lines.removeAll()
+            return copy
+        }
     }
 
     /// The alpha override writes the **Eviction Configuration** through

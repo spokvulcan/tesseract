@@ -40,6 +40,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/SnapshotResolutionTests \
   -only-testing:tesseractTests/SnapshotLedgerTests \
   -only-testing:tesseractTests/SnapshotStateTests \
+  -only-testing:tesseractTests/LeafHomeGuaranteeTests \
   -only-testing:tesseractTests/StablePrefixDetectorNonDeterminismTests \
   -only-testing:tesseractTests/JinjaNonDeterminismReproTests
 

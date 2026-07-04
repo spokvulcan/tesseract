@@ -5,12 +5,14 @@ import Testing
 
 @testable import Tesseract_Agent
 
-/// Slice #90 (PRD #82): the **Survival Gate** — SSD writes happen only
-/// when the incoming chain would survive the eviction its own admission
-/// triggers. End-of-turn leaves bypass; a gated demotion terminal-drops;
-/// a gated leaf degrades to RAM-only with supersession *preserve*; an
-/// unfilled ledger admits everything. Hermetic — per-test scratch SSD
-/// roots.
+/// Slice #90 (PRD #82), narrowed by ADR-0019: the **Survival Gate** now
+/// guards only checkpoint write-throughs — a skip there costs redundancy,
+/// not data. End-of-turn leaves bypass; demotions always enqueue (a gate
+/// veto used to terminal-drop the victim, a **Recoverable Eviction**
+/// violation) and the ledger's admission cut is the remaining authority;
+/// a gated non-end-of-turn leaf degrades to RAM-only with supersession
+/// *preserve*; an unfilled ledger admits everything. Hermetic — per-test
+/// scratch SSD roots.
 @MainActor
 struct SurvivalGateTests {
 
@@ -92,10 +94,12 @@ struct SurvivalGateTests {
 
     // MARK: - Demotion gating
 
-    /// The headline case: a cold (ancient-recency) demotion against a
-    /// full ledger of warmer chains skips the SSD write entirely — no
-    /// pending write, no churn — and the RAM drop settles terminal.
-    @Test func coldDemotionAgainstWarmerChainsSkipsTheWrite() {
+    /// The headline case, inverted by ADR-0019: a cold (ancient-recency)
+    /// demotion against a full ledger of warmer chains still enqueues —
+    /// the veto used to terminal-drop the victim. The drop settles
+    /// recovered, the writer's cut evicts the warmer resident to fit,
+    /// and the victim comes back as an SSD hit.
+    @Test func coldDemotionAgainstWarmerChainsStillWrites() async {
         let snapBytes = PrefixCacheTestFixtures.makeUniformSnapshot(
             offset: 10, type: .leaf
         ).memoryBytes
@@ -117,11 +121,20 @@ struct SurvivalGateTests {
 
         _ = admitLeaf(manager, tokens: Array(20...29))
 
-        #expect(manager.cumulativeCounters.survivalGateSkips == 1)
-        #expect(manager.cumulativeCounters.terminalEvictions == 1)
-        #expect(manager.cumulativeCounters.recoveredEvictions == 0)
-        #expect(store.pendingRefCountForTesting == 0)
-        #expect(manager.lookup(tokens: victimTokens, partitionKey: key).snapshot == nil)
+        #expect(manager.cumulativeCounters.survivalGateSkips == 0)
+        #expect(manager.cumulativeCounters.terminalEvictions == 0)
+        #expect(manager.cumulativeCounters.recoveredEvictions == 1)
+
+        await store.ssdStoreForTesting!.flushAsync()
+        let committed = await waitUntil {
+            if case .ssdHit = manager.lookup(
+                tokens: victimTokens, partitionKey: key
+            ).reason {
+                return true
+            }
+            return false
+        }
+        #expect(committed, "the demoted victim must come back as an SSD hit")
     }
 
     /// A demotion that *would* survive (the ledger is unfilled) writes

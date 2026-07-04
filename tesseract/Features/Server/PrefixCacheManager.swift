@@ -235,8 +235,15 @@ final class PrefixCacheManager {
             /// extension — the backing behaves as `preserved`.
             case transferred
             /// The backing (or the whole node, when it had none) was
-            /// deleted — a full SSD write replaced it.
+            /// deleted — a stale SSD-backed ancestor under an accepted
+            /// **Leaf Extension Admission** (the fold base itself rides
+            /// `transferred`).
             case deleted
+            /// A full SSD write replaced the backing, but its deletion
+            /// waits for that write's durable commit
+            /// (enqueue-before-delete, ADR-0019). A writer drop
+            /// degrades this to `preserved` — the fallback stays alive.
+            case deferredDelete
             /// The backing was kept (body dropped, ref retained) — the
             /// new leaf has no SSD copy, so the ancestor remains the
             /// warm-start fallback and the next extension base.
@@ -251,8 +258,11 @@ final class PrefixCacheManager {
     /// How `supersedeAncestorLeaves` treats the SSD backings of the
     /// ancestor leaves a fresh leaf admission supersedes.
     private enum LeafSupersessionPolicy {
-        /// Full SSD write accepted — ancestor backings are replaced.
-        case deleteBackings
+        /// Full SSD write accepted — ancestor backings are replaced,
+        /// but deletion is deferred to the write's durable commit
+        /// (enqueue-before-delete, ADR-0019). A writer drop degrades
+        /// them to `preserved`.
+        case deleteBackingsAtCommit(newSnapshotID: String)
         /// **Leaf Extension Admission** accepted — the matching base
         /// transfers its chain; any other (stale) SSD-backed ancestor
         /// is deleted.
@@ -356,11 +366,23 @@ final class PrefixCacheManager {
     }
 
     func lookup(tokens: [Int], partitionKey: CachePartitionKey) -> LookupResult {
+        lookupReturningNode(tokens: tokens, partitionKey: partitionKey).result
+    }
+
+    /// `lookup` plus the hit node itself, for callers inside this
+    /// MainActor context that need the node identity — `resolve` pins it
+    /// into the **Budget Floor** for the requesting completion
+    /// (ADR-0019). `nil` node on every miss.
+    private func lookupReturningNode(
+        tokens: [Int], partitionKey: CachePartitionKey
+    ) -> (result: LookupResult, node: RadixTreeNode?) {
         guard let tree = store.tree(for: partitionKey) else {
-            return LookupResult(
-                snapshot: nil, partitionKey: nil,
-                snapshotTokenOffset: 0, sharedPrefixLength: 0,
-                reason: .missNoEntries
+            return (
+                LookupResult(
+                    snapshot: nil, partitionKey: nil,
+                    snapshotTokenOffset: 0, sharedPrefixLength: 0,
+                    reason: .missNoEntries
+                ), nil
             )
         }
 
@@ -373,10 +395,12 @@ final class PrefixCacheManager {
             )
         else {
             let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
-            return LookupResult(
-                snapshot: nil, partitionKey: partitionKey,
-                snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
-                reason: .missNoSnapshotInPrefix
+            return (
+                LookupResult(
+                    snapshot: nil, partitionKey: partitionKey,
+                    snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
+                    reason: .missNoSnapshotInPrefix
+                ), nil
             )
         }
 
@@ -390,17 +414,19 @@ final class PrefixCacheManager {
             // the bumped snapshot ID, or nil for non-committed states.
             let recordedHitID = store.noteLookupHit(on: node)
             cumulativeCounters.hitTokens += snapshot.tokenOffset
-            return LookupResult(
-                snapshot: snapshot,
-                partitionKey: partitionKey,
-                snapshotTokenOffset: snapshot.tokenOffset,
-                sharedPrefixLength: treeMatchDepth,
-                reason: .hit(
-                    snapshotOffset: snapshot.tokenOffset,
-                    totalTokens: tokens.count,
-                    type: snapshot.checkpointType
-                ),
-                recordedHitSnapshotID: recordedHitID
+            return (
+                LookupResult(
+                    snapshot: snapshot,
+                    partitionKey: partitionKey,
+                    snapshotTokenOffset: snapshot.tokenOffset,
+                    sharedPrefixLength: treeMatchDepth,
+                    reason: .hit(
+                        snapshotOffset: snapshot.tokenOffset,
+                        totalTokens: tokens.count,
+                        type: snapshot.checkpointType
+                    ),
+                    recordedHitSnapshotID: recordedHitID
+                ), node
             )
         }
 
@@ -412,12 +438,14 @@ final class PrefixCacheManager {
         if case .ssdOnly(let ref) = node.state,
             let context = store.makeSSDHitContext(ref: ref, node: node)
         {
-            return LookupResult(
-                snapshot: nil,
-                partitionKey: partitionKey,
-                snapshotTokenOffset: ref.tokenOffset,
-                sharedPrefixLength: treeMatchDepth,
-                reason: .ssdHit(context)
+            return (
+                LookupResult(
+                    snapshot: nil,
+                    partitionKey: partitionKey,
+                    snapshotTokenOffset: ref.tokenOffset,
+                    sharedPrefixLength: treeMatchDepth,
+                    reason: .ssdHit(context)
+                ), node
             )
         }
 
@@ -428,19 +456,23 @@ final class PrefixCacheManager {
         if let point = node.chainPrefixRestorePoint,
             let context = store.makeChainPrefixHitContext(point: point, node: node)
         {
-            return LookupResult(
-                snapshot: nil,
-                partitionKey: partitionKey,
-                snapshotTokenOffset: point.boundaryOffset,
-                sharedPrefixLength: treeMatchDepth,
-                reason: .chainPrefixHit(context)
+            return (
+                LookupResult(
+                    snapshot: nil,
+                    partitionKey: partitionKey,
+                    snapshotTokenOffset: point.boundaryOffset,
+                    sharedPrefixLength: treeMatchDepth,
+                    reason: .chainPrefixHit(context)
+                ), node
             )
         }
 
-        return LookupResult(
-            snapshot: nil, partitionKey: partitionKey,
-            snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
-            reason: .missNoSnapshotInPrefix
+        return (
+            LookupResult(
+                snapshot: nil, partitionKey: partitionKey,
+                snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
+                reason: .missNoSnapshotInPrefix
+            ), nil
         )
     }
 
@@ -500,12 +532,20 @@ final class PrefixCacheManager {
     /// the MainActor; `loadSync` stays off-MainActor inside this scope so a disk
     /// read never stalls the UI (ADR-0001) — the off-main handle is the
     /// **Snapshot Hydrating** seam the hit context carries.
+    ///
+    /// `pinningRestorePathFor` — the requesting completion's ID, or `nil`
+    /// for callers whose restores need no floor protection (the
+    /// preemptible speculative pass, tests). When set, the hit node is
+    /// pinned into the **Budget Floor** until `completeRequest` releases
+    /// it: no drain may evict the body an in-flight request restored
+    /// from (ADR-0019).
     nonisolated func resolve(
         tokens: [Int],
         promptTokenCount: Int,
         partitionKey: CachePartitionKey,
         modelFingerprint: String?,
-        diagnostics: PrefixCacheDiagnostics.Context
+        diagnostics: PrefixCacheDiagnostics.Context,
+        pinningRestorePathFor pinRequestID: UUID? = nil
     ) async -> Resolved {
         // A failed hydration clears the faulted node (its committed ref or
         // chain-prefix point), which strictly shrinks the body-less hittable
@@ -516,7 +556,13 @@ final class PrefixCacheManager {
         var attempt = 0
         while true {
             let initial = await MainActor.run {
-                self.lookup(tokens: tokens, partitionKey: partitionKey)
+                let (result, node) = self.lookupReturningNode(
+                    tokens: tokens, partitionKey: partitionKey
+                )
+                if let pinRequestID, let node {
+                    self.pinRestorePath(node: node, requestID: pinRequestID)
+                }
+                return result
             }
 
             guard let fingerprint = modelFingerprint else {
@@ -879,18 +925,22 @@ final class PrefixCacheManager {
         func admitSSDEntry(
             _ entry: SnapshotAdmission.Entry,
             node: RadixTreeNode,
-            path: [Int]
+            path: [Int],
+            condemnedResidentIDs: Set<String> = []
         ) -> SnapshotRef? {
             guard case .ramAndSSD(let payload) = entry.storage else {
                 return nil
             }
+            // The end-of-turn leaf is the guarantee-class write (Leaf
+            // Home Guarantee, ADR-0019): it bypasses the Survival Gate
+            // AND the front door's incidental caps — the just-finished
+            // leaf is the highest-reuse object in the system, and no
+            // gate or cap may reject its home.
+            let guaranteeWrite = admission.kind == .leaf && admission.leafIsEndOfTurn
             // The Survival Gate: checkpoint write-throughs (and any
             // leaf declared non-end-of-turn) only write if the chain
             // would survive the cut its own admission triggers.
-            // End-of-turn leaves bypass — the just-finished leaf is
-            // the highest-reuse object in the system.
-            let bypassesGate = admission.kind == .leaf && admission.leafIsEndOfTurn
-            if !bypassesGate,
+            if !guaranteeWrite,
                 !store.survivalGateAdmits(
                     snapshot: entry.snapshot,
                     payloadTotalBytes: payload.totalBytes,
@@ -911,7 +961,9 @@ final class PrefixCacheManager {
                 pathFromRoot: path,
                 snapshot: entry.snapshot,
                 payload: payload,
-                scoringConfig: evictionConfig
+                scoringConfig: evictionConfig,
+                condemnedResidentIDs: condemnedResidentIDs,
+                mandatory: guaranteeWrite
             )
         }
 
@@ -925,62 +977,49 @@ final class PrefixCacheManager {
         case .leaf:
             let entry = admission.entries.first
             let stored = storeRAMEntry(entry)
-            // The supersession walk and the SSD enqueue need opposite
-            // orders depending on the payload:
-            // - **Leaf Extension Admission** and gated (non-end-of-turn)
-            //   full writes: enqueue FIRST — the front door must
-            //   validate (and, for extensions, shield the base) while
-            //   the backings are untouched, and the walk's policy is
-            //   read off whether the enqueue was accepted. An accepted
-            //   extension transfers the base's backing; an accepted full
-            //   write replaces history; any rejection (gate skip,
-            //   budget, back-pressure) preserves the ancestor backing as
-            //   the warm-start fallback and the next turn's extension
-            //   base.
-            // - End-of-turn full SSD write (and RAM-only): supersede
-            //   FIRST, so the doomed ancestor backings free their budget
-            //   before the writer's admission cut sizes up the incoming
-            //   write — a near-full tier would otherwise evict an
-            //   unrelated resident that didn't need to go.
-            if case .ramAndSSD(let payload) = entry.storage,
-                payload.extending != nil || !admission.leafIsEndOfTurn
-            {
-                let acceptedRef = admitSSDEntry(entry, node: stored.node, path: stored.path)
-                let policy: LeafSupersessionPolicy =
-                    acceptedRef == nil
-                    ? .preserveBackings
-                    : payload.extending.map { .transferBacking(baseID: $0.baseSnapshotID) }
-                        ?? .deleteBackings
-                supersededLeaves.append(
-                    contentsOf: supersedeAncestorLeaves(
-                        for: stored.node,
-                        in: tree,
-                        policy: policy
-                    ))
-            } else {
-                let policy: LeafSupersessionPolicy
-                switch entry.storage {
-                case .ramOnly:
+            // Enqueue-before-delete (ADR-0019; vLLM's offload-safety
+            // invariant: never free the source until the save is
+            // durable). Every leaf admission enqueues its SSD write
+            // BEFORE the supersession walk touches any ancestor
+            // backing, and the walk's policy is read off the actual
+            // admission outcome:
+            // - accepted extension → the matching base transfers its
+            //   chain (`markSnapshotRefCommitted` completes it);
+            // - accepted full write → ancestor backings are condemned:
+            //   the writer's admission cut consumes them first (its
+            //   Pass 0, so a near-full tier never evicts an unrelated
+            //   resident for a write whose own ancestors are doomed),
+            //   and whatever survives to the durable commit is deleted
+            //   there — a writer drop leaves them preserved;
+            // - rejection (gate skip, budget, back-pressure) or
+            //   RAM-only → ancestor backings stay preserved as the
+            //   warm-start fallback and the next turn's extension base.
+            let policy: LeafSupersessionPolicy
+            if case .ramAndSSD(let payload) = entry.storage {
+                let condemned =
+                    payload.extending == nil
+                    ? condemnedAncestorRefIDs(for: stored.node) : []
+                let acceptedRef = admitSSDEntry(
+                    entry, node: stored.node, path: stored.path,
+                    condemnedResidentIDs: condemned
+                )
+                if let acceptedRef {
+                    policy =
+                        payload.extending
+                        .map { .transferBacking(baseID: $0.baseSnapshotID) }
+                        ?? .deleteBackingsAtCommit(newSnapshotID: acceptedRef.snapshotID)
+                } else {
                     policy = .preserveBackings
-                case .ramAndSSD:
-                    // Unconditional delete, even if the enqueue below is
-                    // then rejected — the pre-extension behavior. A full
-                    // write declares the ancestor history replaced; the
-                    // rare rejection (oversized payload, unregistered
-                    // partition) costs the warm-start fallback, never
-                    // correctness. (End-of-turn leaves bypass the
-                    // Survival Gate, so a gate skip can never be the
-                    // rejection here.)
-                    policy = .deleteBackings
                 }
-                supersededLeaves.append(
-                    contentsOf: supersedeAncestorLeaves(
-                        for: stored.node,
-                        in: tree,
-                        policy: policy
-                    ))
-                admitSSDEntry(entry, node: stored.node, path: stored.path)
+            } else {
+                policy = .preserveBackings
             }
+            supersededLeaves.append(
+                contentsOf: supersedeAncestorLeaves(
+                    for: stored.node,
+                    in: tree,
+                    policy: policy
+                ))
         }
 
         let evictions = evictToFitBudget(
@@ -992,6 +1031,28 @@ final class PrefixCacheManager {
             supersededLeaves: supersededLeaves,
             stats: stats
         )
+    }
+
+    /// The SSD-backed ancestor leaves a full-write admission for `node`
+    /// will supersede — the write's *condemned* set, computed BEFORE the
+    /// enqueue so the writer's admission cut can consume these residents
+    /// first (its Pass 0) instead of evicting an unrelated one. Shielded
+    /// transfer bases are excluded: a still-pending extension owns them.
+    /// Read-only; the authoritative fate of each backing is decided by
+    /// `supersedeAncestorLeaves` after the enqueue outcome is known.
+    private func condemnedAncestorRefIDs(for node: RadixTreeNode) -> Set<String> {
+        var ids: Set<String> = []
+        var current = node.parent
+        while let ancestor = current {
+            if ancestor.state.checkpointType == .leaf,
+                let refID = ancestor.state.refID,
+                !store.isTransferringBase(refID)
+            {
+                ids.insert(refID)
+            }
+            current = ancestor.parent
+        }
+        return ids
     }
 
     private func supersedeAncestorLeaves(
@@ -1042,9 +1103,15 @@ final class PrefixCacheManager {
             //   in (discarding this ref via `markSnapshotRefCommitted`), or
             //   its drop leaves it resident as the fallback — the same
             //   shield the LRU cut already honors.
-            // - delete: the pre-extension behavior — delete the SSD
-            //   backing first so discarding the ref cannot orphan a
-            //   file + manifest entry.
+            // - deferred delete: an accepted full write replaces this
+            //   backing, but the deletion waits for that write's durable
+            //   commit (enqueue-before-delete, ADR-0019) — a rejected or
+            //   dropped write must leave the fallback alive. Until the
+            //   commit the ref stays live and hittable, exactly like a
+            //   transfer base.
+            // - delete: a stale (non-base) SSD-backed ancestor under an
+            //   accepted extension — delete the SSD backing first so
+            //   discarding the ref cannot orphan a file + manifest entry.
             if let snapshotRefID {
                 switch policy {
                 case .transferBacking(let baseID) where snapshotRefID == baseID:
@@ -1053,6 +1120,14 @@ final class PrefixCacheManager {
                     mode = .preserved
                 case _ where store.isTransferringBase(snapshotRefID):
                     mode = .preserved
+                case .deleteBackingsAtCommit(let newSnapshotID):
+                    store.deferSupersededBackingDeletion(
+                        until: newSnapshotID,
+                        node: ancestor,
+                        tree: tree,
+                        supersededRefID: snapshotRefID
+                    )
+                    mode = .deferredDelete
                 default:
                     store.deleteSnapshot(snapshotID: snapshotRefID)
                     tree.discardSnapshotRefAfterExplicitDelete(node: ancestor)
@@ -1547,8 +1622,16 @@ final class PrefixCacheManager {
         budgetBand = budgetBand.folding(level, floorBytes: floor)
         guard budgetBand.currentBytes != previous else { return }
         memoryBudgetBytes = budgetBand.currentBytes
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.BudgetChangeEvent(
+                reason: "pressure:\(level.rawValue)",
+                previousBytes: previous,
+                currentBytes: budgetBand.currentBytes,
+                ceilingBytes: budgetBand.ceilingBytes,
+                floorBytes: floor
+            ))
         if budgetBand.currentBytes < previous {
-            evictToFitBudget(respectingFloor: true)
+            evictToFitBudget()
         }
     }
 
@@ -1569,8 +1652,19 @@ final class PrefixCacheManager {
     /// trigger eviction pressure.
     @discardableResult
     func setMemoryBudget(_ bytes: Int) -> [EvictionEvent] {
+        let previous = memoryBudgetBytes
         budgetBand = PrefixCacheBudgetBand(ceilingBytes: bytes)
         memoryBudgetBytes = budgetBand.currentBytes
+        if memoryBudgetBytes != previous {
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.BudgetChangeEvent(
+                    reason: "override",
+                    previousBytes: previous,
+                    currentBytes: memoryBudgetBytes,
+                    ceilingBytes: budgetBand.ceilingBytes,
+                    floorBytes: floorContents().bytes
+                ))
+        }
         return evictToFitBudget()
     }
 
@@ -1583,39 +1677,101 @@ final class PrefixCacheManager {
         evictionConfig.alpha = alpha
     }
 
-    /// The floor's membership and cost in one walk: every `.system`
-    /// body (the cross-conversation chains every tree is built on) plus
-    /// the single most-recently-extended `.leaf` body across all
-    /// partitions (the snapshot that buys the next turn's near-instant
-    /// TTFT). Deliberately minimal and dumb — a last-resort survival
-    /// set, never the protection mechanism (ADR-0011).
+    /// The floor's membership and cost in one walk (ADR-0019): the
+    /// in-flight requests' pinned restore-path nodes plus the single
+    /// most-recently-extended `.leaf` body across all partitions (the
+    /// snapshot that buys the next turn's near-instant TTFT).
+    /// Deliberately minimal and dumb — a last-resort survival set,
+    /// never the protection mechanism (ADR-0011). `.system` bodies are
+    /// *not* members: their loss is a hydration on the next cold
+    /// conversation, and their SSD protection lives where loss is
+    /// actually expensive — the ledger's type-protected cut.
     private func floorContents() -> (nodes: Set<ObjectIdentifier>, bytes: Int) {
         var nodes: Set<ObjectIdentifier> = []
         var bytes = 0
         var freshestLeaf: RadixTreeNode?
         for (_, tree) in store.orderedPartitions() {
             for node in tree.allSnapshotNodes() {
-                guard let body = node.state.body else { continue }
-                switch body.checkpointType {
-                case .system:
-                    nodes.insert(ObjectIdentifier(node))
-                    bytes += body.memoryBytes
-                case .leaf:
-                    if freshestLeaf == nil
-                        || node.lastAccessTime > freshestLeaf!.lastAccessTime
-                    {
-                        freshestLeaf = node
-                    }
-                case .branchPoint:
-                    break
+                guard let body = node.state.body, body.checkpointType == .leaf
+                else { continue }
+                if freshestLeaf == nil
+                    || node.lastAccessTime > freshestLeaf!.lastAccessTime
+                {
+                    freshestLeaf = node
                 }
             }
         }
-        if let freshestLeaf, let body = freshestLeaf.state.body {
-            nodes.insert(ObjectIdentifier(freshestLeaf))
+        if let freshestLeaf, let body = freshestLeaf.state.body,
+            nodes.insert(ObjectIdentifier(freshestLeaf)).inserted
+        {
             bytes += body.memoryBytes
         }
+        for entry in restorePins {
+            for pin in entry.pins {
+                guard let node = pin.node,
+                    let body = node.state.body,
+                    nodes.insert(ObjectIdentifier(node)).inserted
+                else { continue }
+                bytes += body.memoryBytes
+            }
+        }
         return (nodes, bytes)
+    }
+
+    // MARK: - In-flight restore pins (Budget Floor membership, ADR-0019)
+
+    /// One pinned restore-path node. Weak: the tree owns node lifetime —
+    /// a pin must keep a node out of eviction, never keep a detached
+    /// node alive.
+    private struct RestorePin {
+        weak var node: RadixTreeNode?
+    }
+
+    private struct RequestRestorePins {
+        let requestID: UUID
+        var pins: [RestorePin]
+    }
+
+    /// Insertion-ordered pin sets, one per in-flight request. Bounded by
+    /// `maxPinnedRequests` as a leak backstop: a request whose release
+    /// hook never fires (a crashed drive path) ages out instead of
+    /// inflating the floor forever.
+    private var restorePins: [RequestRestorePins] = []
+    private static let maxPinnedRequests = 8
+
+    /// Pin a resolved restore-path node into the **Budget Floor** for
+    /// the duration of its request: no drain may evict the body an
+    /// in-flight request restored from (ADR-0019). Called by `resolve`
+    /// when the caller passes its request ID; released by
+    /// `completeRequest`.
+    func pinRestorePath(node: RadixTreeNode, requestID: UUID) {
+        if let index = restorePins.firstIndex(where: { $0.requestID == requestID }) {
+            restorePins[index].pins.append(RestorePin(node: node))
+            return
+        }
+        if restorePins.count >= Self.maxPinnedRequests {
+            // Ageing out a pin set removes that request's restore path
+            // from the floor while it may still be in flight — a floor
+            // breach, so it is surfaced (ADR-0019: never a silent policy
+            // outcome), not just absorbed. Reaching here at all means
+            // more concurrent requests than the backstop expects.
+            let evicted = restorePins.removeFirst()
+            Log.agent.error(
+                "restore-pin backstop overflow: dropping pins for request "
+                    + "\(evicted.requestID.uuidString) (>\(Self.maxPinnedRequests) in flight) — "
+                    + "its restore path leaves the Budget Floor early (ADR-0019)"
+            )
+        }
+        restorePins.append(
+            RequestRestorePins(requestID: requestID, pins: [RestorePin(node: node)])
+        )
+    }
+
+    /// Release a request's restore pins. Idempotent; called from the
+    /// completion drive's all-exit-paths tail. From here on the turn's
+    /// protection is the freshest-leaf floor member, not the pin.
+    func completeRequest(requestID: UUID) {
+        restorePins.removeAll { $0.requestID == requestID }
     }
 
     // MARK: - Eviction
@@ -1637,16 +1793,16 @@ final class PrefixCacheManager {
     /// before touching other partitions. When `nil`, behaves globally
     /// (Marconi default).
     ///
-    /// `respectingFloor` — `true` only for pressure-driven drains: the
-    /// **Budget Floor** members (`.system` bodies + the single
-    /// most-recently-extended leaf) are never victims, so a critical
-    /// shrink stops at the survival set. Ordinary admission drains and
-    /// the zero-budget test/E2E drains keep the unconditional semantics.
+    /// The **Budget Floor** members (in-flight restore pins + the single
+    /// most-recently-extended leaf) are never victims — on *every*
+    /// drain, admission included (ADR-0019). The admission drain was the
+    /// one most likely to kill the just-captured leaf: it used to run
+    /// unconditionally, so the fresh leaf could be evicted by its own
+    /// admission (`capturedThenEvicted`).
     @discardableResult
     func evictToFitBudget(
         requestID: UUID? = nil,
-        preferredPartitionKey: CachePartitionKey? = nil,
-        respectingFloor: Bool = false
+        preferredPartitionKey: CachePartitionKey? = nil
     ) -> [EvictionEvent] {
         // Pin a single clock reading and a single sorted tree order so all
         // iterations in one drain share the same recency anchor and
@@ -1656,7 +1812,7 @@ final class PrefixCacheManager {
         let preferred = preferredPartitionKey.flatMap { key in
             store.tree(for: key).map { (key: key, tree: $0) }
         }
-        let protected = respectingFloor ? floorContents().nodes : []
+        let protected = floorContents().nodes
         var events: [EvictionEvent] = []
         while totalSnapshotBytes > memoryBudgetBytes {
             guard
@@ -1859,26 +2015,15 @@ final class PrefixCacheManager {
         let ageSeconds = (now - candidate.node.lastAccessTime).seconds
         let lastAccessAt = Date().timeIntervalSinceReferenceDate - ageSeconds
 
-        // The Survival Gate: a cold demotion that would not survive the
-        // SSD cut its own admission triggers skips the write entirely —
-        // churning warmer chains off the tier to store a colder one is
-        // a pure loss. The drop then settles terminal, which is the
-        // honest outcome. The gate scores the node's real (stale)
-        // recency, the same stamp the descriptor would carry. It runs
-        // *before* payload extraction: a demotion payload is always the
-        // full body, so its byte count is `memoryBytes` — gating on that
-        // spares a rejected victim the body-sized tensor copy.
-        guard
-            store.survivalGateAdmits(
-                snapshot: snapshot,
-                payloadTotalBytes: snapshot.memoryBytes,
-                lastAccessAt: lastAccessAt,
-                scoringConfig: evictionConfig
-            )
-        else {
-            cumulativeCounters.survivalGateSkips += 1
-            return
-        }
+        // No Survival Gate here (ADR-0019, **Recoverable Eviction**): a
+        // gate veto of a demotion produced a terminal drop — a policy
+        // outcome the ADR reclassifies as a defect. The write always
+        // enqueues; the ledger's admission cut remains the final
+        // authority and may still drop it (budget, type protection),
+        // which then surfaces as the honest terminal outcome in the
+        // `ssdAdmit` diagnostics rather than a silent skip. The gate
+        // still guards checkpoint write-throughs at admission, where a
+        // skip costs redundancy, not data.
         guard let payload = demotionPayloadExtractor(snapshot) else { return }
 
         store.admitSnapshot(

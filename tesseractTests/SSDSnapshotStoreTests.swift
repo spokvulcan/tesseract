@@ -322,6 +322,88 @@ struct SSDSnapshotStoreTests {
         }
     }
 
+    // MARK: - Guarantee-class (mandatory) writes — Leaf Home Guarantee (ADR-0019)
+
+    @Test
+    func mandatoryWriteBypassesThePendingSizeCap() async {
+        let (config, root) = makeConfig(maxPendingBytes: 1_024)
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        // The identical payload is size-rejected as an opportunistic
+        // write and accepted as a guarantee-class one.
+        let payload = makePayload(bytes: 4_096)
+        let descriptor = makeDescriptor(id: "guarantee", bytes: payload.totalBytes)
+        #expect(
+            store.tryEnqueue(payload: payload, descriptor: descriptor)
+                == .rejectedTooLargeForBudget)
+        let mandatoryResult = store.tryEnqueue(
+            payload: payload, descriptor: descriptor, mandatory: true
+        )
+        guard case .accepted = mandatoryResult else {
+            Issue.record("expected .accepted for mandatory oversized write, got \(mandatoryResult)")
+            return
+        }
+
+        await store.flushAsync()
+        let committed = await waitUntil { tracker.committed.contains("guarantee") }
+        #expect(committed)
+    }
+
+    @Test
+    func backPressureNeverDropsMandatoryPendingItems() async {
+        // Deterministic: the writer is gated shut while the queue state
+        // is built, so back-pressure decisions are observable without
+        // racing the drain.
+        let (config, root) = makeConfig(
+            budgetBytes: 10_000_000,
+            maxPendingBytes: 1_200
+        )
+        defer { cleanup(root) }
+        let gate = DrainGate()
+        let tracker = CallbackTracker()
+        let store = SSDSnapshotStore(
+            config: config,
+            manifestDebounce: .milliseconds(20),
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop,
+            writerDrainPreludeForTesting: { await gate.wait() }
+        )
+        store.registerPartition(makePartitionMeta(), digest: "abcd1234")
+
+        // A mandatory item and an opportunistic item fill the cap; a
+        // second opportunistic enqueue must evict the opportunistic
+        // one, never the guarantee-class one.
+        _ = store.tryEnqueue(
+            payload: makePayload(bytes: 600),
+            descriptor: makeDescriptor(id: "guarantee", bytes: 600),
+            mandatory: true
+        )
+        _ = store.tryEnqueue(
+            payload: makePayload(bytes: 600),
+            descriptor: makeDescriptor(id: "opportunistic-old", bytes: 600)
+        )
+        _ = store.tryEnqueue(
+            payload: makePayload(bytes: 600),
+            descriptor: makeDescriptor(id: "opportunistic-new", bytes: 600)
+        )
+
+        #expect(tracker.dropped.map(\.id) == ["opportunistic-old"])
+        #expect(tracker.dropped.map(\.reason) == [.backpressureOldest])
+
+        await gate.open()
+        await store.flushAsync()
+        let settled = await waitUntil {
+            Set(tracker.committed) == Set(["guarantee", "opportunistic-new"])
+        }
+        #expect(settled)
+    }
+
     // MARK: - Writer: files, FIFO, atomic rename
 
     @Test

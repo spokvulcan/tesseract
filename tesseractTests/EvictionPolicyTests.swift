@@ -522,11 +522,12 @@ struct EvictionPolicyTests {
     @Test func injectedConfigSteersManagerEviction() {
         let tallPath = Array(1...200)
         let shortPath = Array(1000...1019)
+        let freshestPath = Array(2000...2019)
         let snapBytes = makeUniformSnapshot(offset: 200, type: .leaf).memoryBytes
 
         func tallSurvives(alpha: Double) -> Bool {
             let mgr = PrefixCacheManager(
-                memoryBudgetBytes: snapBytes * 2,
+                memoryBudgetBytes: snapBytes * 3,
                 evictionConfig: EvictionConfiguration(alpha: alpha)
             )
             mgr.restoreSnapshot(
@@ -541,8 +542,17 @@ struct EvictionPolicyTests {
                 partitionKey: defaultKey,
                 lastAccessTime: .now - .seconds(1)
             )
-            // Tighten to one snapshot's worth so exactly one node drops.
-            mgr.setMemoryBudget(snapBytes)
+            // A third, freshest leaf absorbs the Budget Floor's
+            // freshest-leaf protection (ADR-0019), so the α comparison
+            // plays out between the tall and short candidates alone.
+            mgr.restoreSnapshot(
+                path: freshestPath,
+                snapshot: makeUniformSnapshot(offset: freshestPath.count, type: .leaf),
+                partitionKey: defaultKey,
+                lastAccessTime: .now
+            )
+            // Tighten to two snapshots' worth so exactly one node drops.
+            mgr.setMemoryBudget(snapBytes * 2)
             return mgr.lookup(tokens: tallPath, partitionKey: defaultKey).snapshot != nil
         }
 

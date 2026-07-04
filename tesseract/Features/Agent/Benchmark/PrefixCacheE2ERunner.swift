@@ -1076,11 +1076,13 @@ final class PrefixCacheE2ERunner {
 
             // ── Step Y: Snapshot Demotion (PRD #82 slice #87) ──
             // Shrink the RAM budget to force every resident body out of
-            // RAM. With the SSD tier on, every drop must settle
-            // recoverable — Snapshot Demotion for unbacked bodies, plain
-            // body drop for write-through-backed ones — never terminal.
-            // The follow-up continuation request then hits at depth
-            // again, served by hydration instead of re-prefill.
+            // RAM except the Budget Floor — the freshest leaf survives
+            // every drain (ADR-0019). With the SSD tier on, every drop
+            // must settle recoverable — Snapshot Demotion for unbacked
+            // bodies, plain body drop for write-through-backed ones —
+            // never terminal. The follow-up continuation request then
+            // hits at depth again, served by hydration instead of
+            // re-prefill.
             log("\n── Step Y: Snapshot Demotion (budget shrink → hydration re-hit) ──")
             let preShrink = await ssdEngine.llmActor.prefixCacheAdmin.makeTelemetrySnapshot()
             let priorBudget = preShrink?.memoryBudgetBytes ?? ssdConfig.budgetBytes

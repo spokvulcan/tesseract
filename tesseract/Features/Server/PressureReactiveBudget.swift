@@ -133,8 +133,9 @@ nonisolated struct PrefixCacheBudgetBand: Sendable, Equatable {
 
     /// Fold one pressure event. `floorBytes` is the **Budget Floor**
     /// computed by the caller at event time (content-defined — the
-    /// `.system` chains plus the most-recently-extended leaf), clamped
-    /// into `[0, ceiling]` here so a floor that momentarily exceeds the
+    /// in-flight requests' pinned restore paths plus the single
+    /// most-recently-extended leaf, ADR-0019), clamped into
+    /// `[0, ceiling]` here so a floor that momentarily exceeds the
     /// ceiling cannot invert the band.
     func folding(
         _ level: MemoryPressureLevel,
