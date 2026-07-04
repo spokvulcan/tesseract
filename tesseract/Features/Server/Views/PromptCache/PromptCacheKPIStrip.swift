@@ -242,7 +242,9 @@ private struct KPIBlock: View {
         }
         .padding(Theme.Spacing.sm)
         .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-        .glassEffect(
-            .regular, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+        // Content-layer stat block: plain fill, not glass (HIG — Liquid
+        // Glass belongs to the functional layer, never the content layer).
+        .background(
+            .quinary, in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
     }
 }

@@ -17,6 +17,12 @@ final class ServerGenerationLog {
     /// check and the slicing consistent.
     static let textHeadBytes: Int = 8 * 1024
     static let textTailBytes: Int = 24 * 1024
+    /// Hysteresis on top of the head+tail budget before an over-budget text
+    /// span is re-sliced. Without slack, a span that has crossed the budget
+    /// re-slices (a full head+marker+tail string rebuild, and a full Text
+    /// re-layout downstream) on every coalesced flush; with it, the rebuild
+    /// happens once per this many bytes of new text.
+    static let textSliceSlackBytes: Int = 4 * 1024
     /// Minimum interval between streaming-version bumps during decode.
     /// Kept for compatibility with tests and any non-dashboard consumers;
     /// the dashboard no longer observes this as a scroll driver.
@@ -47,9 +53,20 @@ final class ServerGenerationLog {
     @ObservationIgnored
     private var pendingAppends: [UUID: PendingAppend] = [:]
 
+    /// Transport-level cancel closures for in-flight generations, keyed by
+    /// trace id. Kept off `@Observable` storage — registering a closure must
+    /// not notify SwiftUI. The closure is the same one client-disconnect
+    /// handling fires, so a UI cancel takes an already-supported path.
+    @ObservationIgnored
+    private var cancelActions: [UUID: @Sendable () -> Void] = [:]
+
     private struct PendingAppend {
         var pendingText: String = ""
         var pendingThinking: String = ""
+        /// Number of streamed chunk events buffered since the last flush.
+        /// One chunk ≈ one token on the MLX detokenizer path, so this drives
+        /// the live output-token estimate during decode.
+        var pendingChunkCount: Int = 0
         /// Accumulated tool-call body text since the last flush. Paired with
         /// `pendingToolCallName` for name-update propagation. Separate from
         /// text/thinking because tool-call spans live in their own building
@@ -86,6 +103,9 @@ final class ServerGenerationLog {
         traces.append(trace)
         if traces.count > Self.maxTraces {
             let overflow = traces.count - Self.maxTraces
+            for dropped in traces.prefix(overflow) {
+                cancelActions.removeValue(forKey: dropped.id)
+            }
             traces.removeFirst(overflow)
         }
         selectedTraceID = trace.id
@@ -219,19 +239,34 @@ final class ServerGenerationLog {
 
     func complete(handle: TraceHandle, finishReason: String, at: Date = Date()) {
         flushPending(handle: handle)
+        cancelActions.removeValue(forKey: handle.id)
         update(handle) { trace in
-            trace.phase = .completed
+            // A generation cancelled mid-stream can still terminate through
+            // the normal completion path (final chunk + DONE). Honor the
+            // user's intent over the pipeline's exit route.
+            trace.phase = trace.cancelRequested ? .cancelled : .completed
+            trace.isCancellable = false
             trace.finishReason = finishReason
             trace.completedAt = at
+            // Close the sparkline on the exact terminal rate when we got one.
+            if trace.tokensPerSecond > 0 {
+                trace.rateSamples.append(trace.tokensPerSecond)
+            }
         }
         bumpStreamingVersion()
     }
 
     func fail(handle: TraceHandle, error: String, at: Date = Date()) {
         flushPending(handle: handle)
+        cancelActions.removeValue(forKey: handle.id)
         update(handle) { trace in
-            trace.phase = .failed
-            trace.errorMessage = error
+            if trace.cancelRequested {
+                trace.phase = .cancelled
+            } else {
+                trace.phase = .failed
+                trace.errorMessage = error
+            }
+            trace.isCancellable = false
             trace.completedAt = at
         }
         bumpStreamingVersion()
@@ -239,8 +274,10 @@ final class ServerGenerationLog {
 
     func cancel(handle: TraceHandle, at: Date = Date()) {
         flushPending(handle: handle)
+        cancelActions.removeValue(forKey: handle.id)
         update(handle) { trace in
             trace.phase = .cancelled
+            trace.isCancellable = false
             trace.completedAt = at
         }
         bumpStreamingVersion()
@@ -248,9 +285,39 @@ final class ServerGenerationLog {
 
     func clear() {
         pendingAppends.removeAll()
+        cancelActions.removeAll()
         traces.removeAll()
         selectedTraceID = nil
         bumpStreamingVersion()
+    }
+
+    // MARK: - In-app cancellation
+
+    /// Make an in-flight generation cancellable from the dashboard. `action`
+    /// is the transport-level cancel used by client-disconnect handling;
+    /// invoking it stops the generation and lets the pipeline's normal
+    /// terminal event (`complete`/`fail`/`cancel`) close out the trace.
+    func registerCancelAction(
+        handle: TraceHandle,
+        _ action: @escaping @Sendable () -> Void
+    ) {
+        guard let idx = traces.firstIndex(where: { $0.id == handle.id }),
+            traces[idx].isActive
+        else { return }
+        cancelActions[handle.id] = action
+        traces[idx].isCancellable = true
+    }
+
+    /// User-initiated cancel from the dashboard. Fires the registered
+    /// transport cancel and marks the trace so its terminal event renders
+    /// as cancelled regardless of which exit route the pipeline takes.
+    func requestCancel(traceID: UUID) {
+        guard let action = cancelActions.removeValue(forKey: traceID) else { return }
+        if let idx = traces.firstIndex(where: { $0.id == traceID }) {
+            traces[idx].cancelRequested = true
+            traces[idx].isCancellable = false
+        }
+        action()
     }
 
     // MARK: - Helpers
@@ -286,6 +353,7 @@ final class ServerGenerationLog {
         } else {
             pending.pendingText += chunk
         }
+        pending.pendingChunkCount += 1
         let needsSchedule = !pending.flushScheduled
         pending.flushScheduled = true
         pendingAppends[handle.id] = pending
@@ -321,6 +389,7 @@ final class ServerGenerationLog {
         var pending = pendingAppends[handle.id] ?? PendingAppend()
         pending.pendingToolCallDelta += delta
         if let name { pending.pendingToolCallName = name }
+        if !delta.isEmpty { pending.pendingChunkCount += 1 }
         let needsSchedule = !pending.flushScheduled
         pending.flushScheduled = true
         pendingAppends[handle.id] = pending
@@ -347,6 +416,7 @@ final class ServerGenerationLog {
         let text = pending.pendingText
         let toolCallDelta = pending.pendingToolCallDelta
         let toolCallName = pending.pendingToolCallName
+        let chunkCount = pending.pendingChunkCount
         let hasToolCallUpdate = !toolCallDelta.isEmpty || toolCallName != nil
         guard !thinking.isEmpty || !text.isEmpty || hasToolCallUpdate else { return }
 
@@ -363,6 +433,8 @@ final class ServerGenerationLog {
                 trace.markFirstTokenIfNeeded()
                 trace.appendToolCallDelta(name: toolCallName, delta: toolCallDelta)
             }
+            trace.liveOutputTokens += chunkCount
+            trace.sampleRateIfDue()
         }
         throttledStreamingVersionBump()
     }
@@ -458,6 +530,20 @@ struct RequestTrace: Identifiable, Equatable {
     var generationTokens: Int = 0
     var tokensPerSecond: Double = 0
 
+    /// Streamed-chunk count during decode — a live estimate of output tokens
+    /// (one chunk ≈ one token on the MLX detokenizer path). Superseded by
+    /// the exact `generationTokens` from the terminal `.info` event.
+    var liveOutputTokens: Int = 0
+    /// ~1 Hz samples of the live decode rate, for the dashboard sparkline.
+    var rateSamples: [Double] = []
+    var lastRateSampleAt: Date?
+    /// True while a transport-level cancel closure is registered for this
+    /// trace — i.e. the dashboard can stop the generation.
+    var isCancellable: Bool = false
+    /// Set when the user requested a cancel from the dashboard, so the
+    /// terminal event renders as cancelled whichever exit path fires.
+    var cancelRequested: Bool = false
+
     var finishReason: String?
     var errorMessage: String?
 
@@ -472,6 +558,58 @@ struct RequestTrace: Identifiable, Equatable {
 
     var elapsedFromStart: TimeInterval {
         (completedAt ?? Date()).timeIntervalSince(startedAt)
+    }
+
+    /// Output tokens for display: exact once the terminal `.info` lands,
+    /// live estimate while decoding.
+    var displayOutputTokens: Int {
+        generationTokens > 0 ? generationTokens : liveOutputTokens
+    }
+
+    /// Decode rate estimated from chunk arrival since the first token —
+    /// live while decoding, frozen at the completion timestamp for terminal
+    /// traces (a cancelled generation never gets an exact terminal rate).
+    /// Nil until enough signal exists; superseded by the exact terminal
+    /// `tokensPerSecond` when the `.info` event provides one.
+    func liveTokensPerSecond(at now: Date = Date()) -> Double? {
+        guard let firstTokenAt, liveOutputTokens > 1 else { return nil }
+        let end: Date
+        switch phase {
+        case .decoding:
+            end = now
+        case .completed, .failed, .cancelled:
+            guard let completedAt else { return nil }
+            end = completedAt
+        case .queued, .lookingUp, .prefilling:
+            return nil
+        }
+        let elapsed = end.timeIntervalSince(firstTokenAt)
+        guard elapsed > 0.3 else { return nil }
+        return Double(liveOutputTokens - 1) / elapsed
+    }
+
+    /// Prompt-processing rate over the uncached prefix, available once
+    /// prefill has finished.
+    var prefillTokensPerSecond: Double? {
+        guard let prefillMs, prefillMs > 0,
+            let newTokensToPrefill, newTokensToPrefill > 0
+        else { return nil }
+        return Double(newTokensToPrefill) / (prefillMs / 1000)
+    }
+
+    static let maxRateSamples = 120
+
+    /// Record a decode-rate sample if at least a second has passed since the
+    /// last one. Called from the coalesced flush, so it costs nothing on the
+    /// per-chunk path.
+    mutating func sampleRateIfDue(at now: Date = Date()) {
+        guard let rate = liveTokensPerSecond(at: now) else { return }
+        if let last = lastRateSampleAt, now.timeIntervalSince(last) < 1 { return }
+        lastRateSampleAt = now
+        rateSamples.append(rate)
+        if rateSamples.count > Self.maxRateSamples {
+            rateSamples.removeFirst(rateSamples.count - Self.maxRateSamples)
+        }
     }
 
     mutating func markFirstTokenIfNeeded() {
@@ -595,8 +733,12 @@ struct RequestTrace: Identifiable, Equatable {
         let tailBytes = ServerGenerationLog.textTailBytes
         let budget = headBytes + tailBytes
 
-        // Fast path: under budget. Covers the common case on every token.
-        if current.utf8.count + chunk.utf8.count <= budget {
+        // Fast path: within budget + slack. Covers the common case on every
+        // token, and — via the slack — keeps an over-budget span growing
+        // append-only between slices instead of rebuilding head+tail on
+        // every coalesced flush.
+        if current.utf8.count + chunk.utf8.count <= budget + ServerGenerationLog.textSliceSlackBytes
+        {
             return current + chunk
         }
 

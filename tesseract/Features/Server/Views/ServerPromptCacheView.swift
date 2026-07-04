@@ -271,7 +271,8 @@ struct ServerPromptCacheView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .glassEffect(.regular, in: Capsule())
+        // Content-layer status chip: plain fill, not glass.
+        .background(.quinary, in: Capsule())
     }
 
     private var sectionBinding: Binding<PromptCacheSection> {

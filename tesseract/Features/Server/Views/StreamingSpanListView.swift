@@ -3,7 +3,9 @@ import SwiftUI
 /// Passive monospace span list for a single `RequestTrace`.
 /// This view intentionally avoids lazy stacks, scroll readers, geometry
 /// callbacks, timeline ticks, and programmatic scrolling; it is rendered from
-/// the current trace snapshot only.
+/// the current trace snapshot only. Follow-the-stream behavior comes from the
+/// declarative `defaultScrollAnchor(.bottom, for: .sizeChanges)` — the system
+/// keeps the bottom pinned only while the user is already there.
 struct StreamingSpanListView: View {
     private static let maxRenderedSpans = 200
 
@@ -25,7 +27,13 @@ struct StreamingSpanListView: View {
             .padding(Theme.Spacing.md)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .defaultScrollAnchor(trace.isActive ? .bottom : .top)
+        .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .background(.background)
+        // Fresh scroll state per trace so the initial anchor applies when
+        // the selection changes, instead of inheriting the previous trace's
+        // scroll offset.
+        .id(trace.id)
     }
 
     @ViewBuilder
@@ -37,13 +45,10 @@ struct StreamingSpanListView: View {
                 OmittedSpanNotice(count: hiddenSpanCount)
             }
 
+            let liveSpanID = trace.phase == .decoding ? displayedSpans.last?.id : nil
             ForEach(displayedSpans) { span in
-                SpanView(span: span)
+                SpanView(span: span, isLive: span.id == liveSpanID)
             }
-        }
-
-        if trace.phase == .decoding {
-            DecodingMarker()
         }
     }
 }
@@ -52,54 +57,45 @@ struct StreamingSpanListView: View {
 
 private struct SpanView: View {
     let span: RequestTrace.Span
+    var isLive: Bool = false
 
     var body: some View {
         switch span {
         case .text(_, let content):
-            Text(content)
-                .font(.system(.body, design: .monospaced))
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if isLive {
+                LiveStreamingText(content: content, isThinking: false)
+            } else {
+                Text(content)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
         case .thinking(_, let content):
             VStack(alignment: .leading, spacing: 2) {
                 Text("<think>")
                     .font(.caption2.monospaced())
                     .foregroundStyle(.tertiary)
-                Text(content)
-                    .font(.system(.body, design: .monospaced).italic())
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 8)
-                Text("</think>")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
+                Group {
+                    if isLive {
+                        LiveStreamingText(content: content, isThinking: true)
+                    } else {
+                        Text(content)
+                            .font(.system(.body, design: .monospaced).italic())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.leading, 8)
+                if !isLive {
+                    Text("</think>")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
         case .toolCall(_, let name, let argumentsJSON):
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Image(systemName: "wrench.and.screwdriver.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                    Text("tool_call")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.orange)
-                    Text(name)
-                        .font(.caption.monospaced().weight(.semibold))
-                        .foregroundStyle(.orange)
-                }
-                Text(argumentsJSON)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 8)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(6)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.orange.opacity(0.06))
-            )
+            ToolCallBox(name: name, argumentsJSON: argumentsJSON, malformed: false)
 
         case .toolCallBuilding(_, let name, let argumentsJSON):
             // Visually identical to `.toolCall` — the only difference is
@@ -107,47 +103,99 @@ private struct SpanView: View {
             // On `</tool_call>` close the span transitions to `.toolCall`
             // (or `.malformedToolCall` on parse failure) with the same
             // span id, so SwiftUI preserves position and styling.
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Image(systemName: "wrench.and.screwdriver.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                    Text("tool_call")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.orange)
-                    Text(name.isEmpty ? "…" : name)
-                        .font(.caption.monospaced().weight(.semibold))
-                        .foregroundStyle(.orange)
-                }
-                Text(argumentsJSON)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 8)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(6)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.orange.opacity(0.06))
+            ToolCallBox(
+                name: name.isEmpty ? "…" : name,
+                argumentsJSON: argumentsJSON,
+                malformed: false
             )
 
         case .malformedToolCall(_, let raw):
-            VStack(alignment: .leading, spacing: 2) {
-                Text("malformed tool_call")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.red)
-                Text(raw)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 8)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(6)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.red.opacity(0.06))
-            )
+            ToolCallBox(name: nil, argumentsJSON: raw, malformed: true)
         }
+    }
+}
+
+// MARK: - Live streaming text
+
+/// Streaming text split at the last newline: the stable prefix `Text`
+/// receives an unchanged string on most coalesced flushes, so SwiftUI skips
+/// its (large, monospaced) re-layout — only the short live tail lays out per
+/// flush. The split is at a paragraph boundary, so stacking the two `Text`s
+/// at zero spacing renders identically to one combined `Text`.
+private struct LiveStreamingText: View {
+    let content: String
+    let isThinking: Bool
+
+    var body: some View {
+        let split = Self.splitAtLastNewline(content)
+        VStack(alignment: .leading, spacing: 0) {
+            if !split.stable.isEmpty {
+                styled(Text(split.stable))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            styled(Text(split.live) + Text("▍").foregroundColor(.green))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func styled(_ text: Text) -> Text {
+        if isThinking {
+            return
+                text
+                .font(.system(.body, design: .monospaced).italic())
+                .foregroundColor(.secondary)
+        }
+        return
+            text
+            .font(.system(.body, design: .monospaced))
+    }
+
+    static func splitAtLastNewline(_ content: String) -> (stable: String, live: String) {
+        guard let idx = content.lastIndex(of: "\n") else { return ("", content) }
+        return (
+            stable: String(content[..<idx]),
+            live: String(content[content.index(after: idx)...])
+        )
+    }
+}
+
+// MARK: - Tool call box
+
+private struct ToolCallBox: View {
+    let name: String?
+    let argumentsJSON: String
+    let malformed: Bool
+
+    private var tint: Color { malformed ? .red : .orange }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                if !malformed {
+                    Image(systemName: "wrench.and.screwdriver.fill")
+                        .font(.caption2)
+                        .foregroundStyle(tint)
+                }
+                Text(malformed ? "malformed tool_call" : "tool_call")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(tint)
+                if let name {
+                    Text(name)
+                        .font(.caption.monospaced().weight(.semibold))
+                        .foregroundStyle(tint)
+                }
+            }
+            Text(argumentsJSON)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .padding(.leading, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(tint.opacity(0.06))
+        )
     }
 }
 
@@ -214,16 +262,5 @@ private struct PhaseHint: View {
         default:
             return ""
         }
-    }
-}
-
-// MARK: - Decoding marker
-
-private struct DecodingMarker: View {
-    var body: some View {
-        Text("decoding...")
-            .font(.caption.monospaced())
-            .foregroundStyle(.tertiary)
-            .padding(.top, Theme.Spacing.xs)
     }
 }

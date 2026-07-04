@@ -428,6 +428,11 @@ struct CompletionHandler: Sendable {
             return
         }
 
+        // Expose the transport-level cancel to the dashboard so an in-flight
+        // generation can be stopped from inside the app, not just by client
+        // disconnect.
+        await activityLog.registerCancelAction(handle: logHandle, start.cancel)
+
         await recordCacheLookup(start: start, logHandle: logHandle)
 
         var accumulator = GenerationAccumulator()
@@ -556,6 +561,11 @@ struct CompletionHandler: Sendable {
                 .serviceUnavailable("Generation failed: \(error.localizedDescription)"))
             return
         }
+
+        // Expose the transport-level cancel to the dashboard so an in-flight
+        // generation can be stopped from inside the app, not just by client
+        // disconnect.
+        await activityLog.registerCancelAction(handle: logHandle, start.cancel)
 
         await recordCacheLookup(start: start, logHandle: logHandle)
 
