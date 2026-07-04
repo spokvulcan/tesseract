@@ -43,16 +43,24 @@ struct SSDConfigPlumbingTests {
         let config = settings.makeSSDPrefixCacheConfig()
         let unwrapped = try #require(config)
         #expect(unwrapped.enabled == true)
-        #expect(unwrapped.budgetBytes == settings.prefixCacheSSDBudgetBytes)
+        // ADR-0018: the config's budgetBytes is the *bootstrap* (the old
+        // 20 GiB constant, now the measured default's floor), the user
+        // setting is a cap (nil = Automatic), and production configs
+        // measure free disk.
+        #expect(unwrapped.budgetBytes == SSDBudgetPolicy.floorBytes)
+        #expect(unwrapped.budgetCapBytes == nil)
+        #expect(unwrapped.measuresFreeDisk == true)
         #expect(unwrapped.rootURL.path.hasSuffix("prefix-cache"))
     }
 
     @Test
-    func defaultBudgetIsTwentyGiB() {
-        // A fresh SettingsManager on an empty store must read the single-sourced
-        // catalogue defaults (20 GiB, enabled, no override) via default-on-read.
+    func defaultCapsAreAutomatic() {
+        // A fresh SettingsManager on an empty store must read the
+        // single-sourced catalogue defaults via default-on-read: both
+        // budget caps "Automatic" (nil), SSD enabled, no dir override.
         let settings = SettingsManager(store: InMemorySettingsStore())
-        #expect(settings.prefixCacheSSDBudgetBytes == 20 * 1024 * 1024 * 1024)
+        #expect(settings.prefixCacheRAMBudgetCapBytes == nil)
+        #expect(settings.prefixCacheSSDBudgetCapBytes == nil)
         #expect(settings.prefixCacheSSDEnabled == true)
         #expect(settings.prefixCacheSSDDirectoryOverride == nil)
     }
@@ -105,12 +113,14 @@ struct SSDConfigPlumbingTests {
         let store = InMemorySettingsStore()
         let first = SettingsManager(store: store)
         first.prefixCacheSSDEnabled = true
-        first.prefixCacheSSDBudgetBytes = 12 * 1024 * 1024 * 1024
+        first.prefixCacheRAMBudgetCapBytes = 6 * 1024 * 1024 * 1024
+        first.prefixCacheSSDBudgetCapBytes = 12 * 1024 * 1024 * 1024
         first.prefixCacheSSDDirectoryOverride = "/tmp/roundtrip-test"
 
         let second = SettingsManager(store: store)
         #expect(second.prefixCacheSSDEnabled == true)
-        #expect(second.prefixCacheSSDBudgetBytes == 12 * 1024 * 1024 * 1024)
+        #expect(second.prefixCacheRAMBudgetCapBytes == 6 * 1024 * 1024 * 1024)
+        #expect(second.prefixCacheSSDBudgetCapBytes == 12 * 1024 * 1024 * 1024)
         #expect(second.prefixCacheSSDDirectoryOverride == "/tmp/roundtrip-test")
     }
 
@@ -136,12 +146,12 @@ struct SSDConfigPlumbingTests {
     func resolveReturnsSettingsDerivedConfig() throws {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
-        settings.prefixCacheSSDBudgetBytes = 8 * 1024 * 1024 * 1024
+        settings.prefixCacheSSDBudgetCapBytes = 8 * 1024 * 1024 * 1024
 
         let engine = AgentEngine(settingsManager: settings)
         let resolved = try #require(engine.resolveSSDConfig())
         #expect(resolved.enabled == true)
-        #expect(resolved.budgetBytes == 8 * 1024 * 1024 * 1024)
+        #expect(resolved.budgetCapBytes == 8 * 1024 * 1024 * 1024)
     }
 
     @Test
@@ -174,7 +184,7 @@ struct SSDConfigPlumbingTests {
         // trip this test.
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
-        settings.prefixCacheSSDBudgetBytes = 8 * 1024 * 1024 * 1024
+        settings.prefixCacheSSDBudgetCapBytes = 8 * 1024 * 1024 * 1024
 
         let explicit = SSDPrefixCacheConfig(
             enabled: true,
@@ -201,14 +211,14 @@ struct SSDConfigPlumbingTests {
         settings.prefixCacheSSDEnabled = true
         let engine = AgentEngine(settingsManager: settings)
 
-        settings.prefixCacheSSDBudgetBytes = 5 * 1024 * 1024 * 1024
+        settings.prefixCacheSSDBudgetCapBytes = 5 * 1024 * 1024 * 1024
         let first = try #require(engine.resolveSSDConfig())
 
-        settings.prefixCacheSSDBudgetBytes = 15 * 1024 * 1024 * 1024
+        settings.prefixCacheSSDBudgetCapBytes = 15 * 1024 * 1024 * 1024
         let second = try #require(engine.resolveSSDConfig())
 
-        #expect(first.budgetBytes == 5 * 1024 * 1024 * 1024)
-        #expect(second.budgetBytes == 15 * 1024 * 1024 * 1024)
+        #expect(first.budgetCapBytes == 5 * 1024 * 1024 * 1024)
+        #expect(second.budgetCapBytes == 15 * 1024 * 1024 * 1024)
         #expect(first != second)
 
         // Flipping the toggle off must make subsequent resolves return nil.
@@ -254,7 +264,7 @@ struct SSDConfigPlumbingTests {
         // passing the resolved config down the chain is caught here.
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.prefixCacheSSDEnabled = true
-        settings.prefixCacheSSDBudgetBytes = 7 * 1024 * 1024 * 1024
+        settings.prefixCacheSSDBudgetCapBytes = 7 * 1024 * 1024 * 1024
         let engine = AgentEngine(settingsManager: settings)
         let fakeDir = try makeFakeModelDirectory()
         defer { try? FileManager.default.removeItem(at: fakeDir) }
@@ -270,7 +280,7 @@ struct SSDConfigPlumbingTests {
         let installedFingerprint = await engine.llmActor.installedModelFingerprint
         let unwrappedConfig = try #require(installedConfig)
         #expect(unwrappedConfig.enabled == true)
-        #expect(unwrappedConfig.budgetBytes == 7 * 1024 * 1024 * 1024)
+        #expect(unwrappedConfig.budgetCapBytes == 7 * 1024 * 1024 * 1024)
         #expect(installedFingerprint != nil)
         #expect(installedFingerprint?.count == 64)
 

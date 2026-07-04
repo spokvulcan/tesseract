@@ -103,16 +103,22 @@ enum SettingsCatalogue {
     static let isServerEnabled = Setting.bool("isServerEnabled", default: false)
     static let serverPort = Setting.int("serverPort", default: 8321)
 
-    // MARK: - SSD Prefix Cache
+    // MARK: - Prefix Cache
 
     static let prefixCacheSSDEnabled = Setting.bool("prefixCacheSSDEnabled", default: true)
-    /// Hard top-level byte budget for the SSD tier. Single-sourced to **20 GiB**
-    /// — the value the old `register(defaults:)` made effective at runtime.
-    /// (The pre-refactor property literal and doc comment said 50 GiB, but the
-    /// registered 20 GiB won on read; resolved here to preserve observed
-    /// behaviour. See issue #16.)
-    static let prefixCacheSSDBudgetBytes = Setting.int(
-        "prefixCacheSSDBudgetBytes", default: 20 * 1024 * 1024 * 1024)
+    /// User cap on the RAM-tier cache budget (ADR-0018). `nil` =
+    /// "Automatic (recommended)": the ceiling tracks measured headroom.
+    /// A custom value only ever lowers the effective ceiling — caps,
+    /// never floors; pressure retreat always wins.
+    static let prefixCacheRAMBudgetCapBytes = Setting.optionalInt(
+        "prefixCacheRAMBudgetCapBytes")
+    /// User cap on the SSD-tier budget (ADR-0018). `nil` = "Automatic
+    /// (recommended)": the budget tracks measured free disk space
+    /// (`SSDBudgetPolicy` — fraction, absolute cap, floored at the old
+    /// 20 GiB default, which replaced the retired fixed
+    /// `prefixCacheSSDBudgetBytes` setting).
+    static let prefixCacheSSDBudgetCapBytes = Setting.optionalInt(
+        "prefixCacheSSDBudgetCapBytes")
     static let prefixCacheSSDDirectoryOverride = Setting.optionalString(
         "prefixCacheSSDDirectoryOverride")
 

@@ -260,7 +260,12 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 promptTokenCount: admitPath.count,
                 partitionKey: seed.partitionKey,
                 modelFingerprint: seed.partitionKey.modelFingerprint,
-                diagnostics: diagnostics
+                diagnostics: diagnostics,
+                // Yield to a preempting foreground request at the
+                // hydration read's segment boundaries (PRD #149 item 7)
+                // — a background pass must never make a user wait out a
+                // multi-second chain read it can abandon.
+                interruption: { Task.isCancelled }
             ).lookup.snapshot
         }
         // The boundary guards mirror the canonical-leaf arm: a usable

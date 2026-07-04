@@ -17,14 +17,18 @@ import Testing
 struct SettingsCatalogueTests {
 
     @Test
-    func ssdBudgetDefaultIsSingleSourcedAtTwentyGiB() {
-        // The motivating drift bug: 50 GiB in the property literal/doc vs 20 GiB
-        // in register/reset, with 20 GiB winning at runtime. Now declared once.
+    func budgetCapsDefaultToAutomatic() {
+        // ADR-0018: both prefix-cache budgets are measured; the user
+        // settings are caps whose default is "Automatic" (nil). The old
+        // fixed 20 GiB SSD budget survives only as
+        // `SSDBudgetPolicy.floorBytes` (the drift bug of issue #16 stays
+        // single-sourced there).
         let store = InMemorySettingsStore()
-        #expect(SettingsCatalogue.prefixCacheSSDBudgetBytes.default == 20 * 1024 * 1024 * 1024)
-        #expect(
-            SettingsCatalogue.prefixCacheSSDBudgetBytes.load(from: store) == 20 * 1024 * 1024 * 1024
-        )
+        #expect(SettingsCatalogue.prefixCacheRAMBudgetCapBytes.default == nil)
+        #expect(SettingsCatalogue.prefixCacheRAMBudgetCapBytes.load(from: store) == nil)
+        #expect(SettingsCatalogue.prefixCacheSSDBudgetCapBytes.default == nil)
+        #expect(SettingsCatalogue.prefixCacheSSDBudgetCapBytes.load(from: store) == nil)
+        #expect(SSDBudgetPolicy.floorBytes == 20 * 1024 * 1024 * 1024)
     }
 
     @Test

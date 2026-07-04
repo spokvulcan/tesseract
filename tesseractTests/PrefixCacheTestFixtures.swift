@@ -54,14 +54,15 @@ enum PrefixCacheTestFixtures {
     /// callers attach the ref via `node.state = .ssdOnly(ref)` etc.
     static func makeRef(
         type: HybridCacheSnapshot.CheckpointType = .leaf,
-        tokenOffset: Int = 0
+        tokenOffset: Int = 0,
+        bytesOnDisk: Int = 1024
     ) -> SnapshotRef {
         SnapshotRef(
             snapshotID: UUID().uuidString,
             partitionDigest: "deadbeef",
             tokenOffset: tokenOffset,
             checkpointType: type,
-            bytesOnDisk: 1024
+            bytesOnDisk: bytesOnDisk
         )
     }
 

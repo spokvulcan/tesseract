@@ -48,11 +48,24 @@ struct UserDefaultsSettingsStore: SettingsStore {
         defaults.string(forKey: key)
     }
 
+    func optionalInt(for key: String) -> Int? {
+        guard defaults.object(forKey: key) != nil else { return nil }
+        return defaults.integer(forKey: key)
+    }
+
     func set<V>(_ value: V, for key: String) {
         defaults.set(value, forKey: key)
     }
 
     func setOptional(_ value: String?, for key: String) {
+        if let value {
+            defaults.set(value, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    func setOptional(_ value: Int?, for key: String) {
         if let value {
             defaults.set(value, forKey: key)
         } else {

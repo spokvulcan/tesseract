@@ -438,6 +438,60 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// One measured ceiling recomputation (ADR-0018): every input the
+    /// `DynamicCeilingPolicy` fold saw, so a later incident replay can
+    /// reconstruct *why* the ceiling landed where it did — the phase-1
+    /// lesson (#148) that an unexplained budget is undiagnosable.
+    /// Emitted on every recomputation, changed or not; the paired
+    /// `budgetChange reason=measurement` fires only on movement.
+    struct BudgetMeasurementEvent: Payload {
+        let headroomBytes: Int
+        let reserveBytes: Int
+        let lanes: Int
+        let residentBytes: Int
+        let capBytes: Int?
+        let ceilingBytes: Int
+        let previousCeilingBytes: Int
+
+        let eventName = "budgetMeasure"
+
+        var fields: [(String, String)] {
+            [
+                ("headroomBytes", "\(headroomBytes)"),
+                ("reserveBytes", "\(reserveBytes)"),
+                ("lanes", "\(lanes)"),
+                ("residentBytes", "\(residentBytes)"),
+                ("capBytes", capBytes.map { "\($0)" } ?? "auto"),
+                ("ceilingBytes", "\(ceilingBytes)"),
+                ("previousCeilingBytes", "\(previousCeilingBytes)"),
+            ]
+        }
+    }
+
+    /// One SSD-tier budget movement (ADR-0018): the measured free-disk
+    /// re-derivation landed on a new value. Mirrors `budgetChange` for
+    /// the RAM tier — same diagnosability rule: a budget that moved
+    /// invisibly is a budget that cannot be debugged two weeks later.
+    struct SSDBudgetChangeEvent: Payload {
+        let previousBytes: Int
+        let currentBytes: Int
+        let freeDiskBytes: Int
+        let tierBytes: Int
+        let capBytes: Int?
+
+        let eventName = "ssdBudgetChange"
+
+        var fields: [(String, String)] {
+            [
+                ("previousBytes", "\(previousBytes)"),
+                ("currentBytes", "\(currentBytes)"),
+                ("freeDiskBytes", "\(freeDiskBytes)"),
+                ("tierBytes", "\(tierBytes)"),
+                ("capBytes", capBytes.map { "\($0)" } ?? "auto"),
+            ]
+        }
+    }
+
     struct SSDEvictAtAdmissionEvent: Payload {
         let victimID: String
         let incomingID: String

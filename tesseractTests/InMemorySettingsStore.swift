@@ -32,6 +32,7 @@ final class InMemorySettingsStore: SettingsStore {
     func double(for key: String, default def: Double) -> Double { storage[key] as? Double ?? def }
     func string(for key: String, default def: String) -> String { storage[key] as? String ?? def }
     func optionalString(for key: String) -> String? { storage[key] as? String }
+    func optionalInt(for key: String) -> Int? { storage[key] as? Int }
 
     func set<V>(_ value: V, for key: String) {
         storage[key] = value
@@ -39,6 +40,15 @@ final class InMemorySettingsStore: SettingsStore {
     }
 
     func setOptional(_ value: String?, for key: String) {
+        if let value {
+            storage[key] = value
+        } else {
+            storage.removeValue(forKey: key)
+        }
+        writes.append(key)
+    }
+
+    func setOptional(_ value: Int?, for key: String) {
         if let value {
             storage[key] = value
         } else {

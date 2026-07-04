@@ -302,6 +302,18 @@ nonisolated final class ServerCompletion {
     /// await MainActor.
     private(set) var ssdConfig: SSDPrefixCacheConfig?
 
+    /// User RAM-budget cap snapshot captured at load time (ADR-0018:
+    /// caps, never floors). `nil` = "Automatic (recommended)".
+    private(set) var ramBudgetCapBytes: Int?
+
+    /// Headroom source for dynamic ceiling measurement (ADR-0018).
+    /// Injected at install time: production (`LLMActor.loadModel`) passes
+    /// `MachMemoryHeadroomSource`; the default `nil` disables measurement
+    /// so test fixtures keep their exact static budgets — measuring the
+    /// live machine inside a unit test collapses the ceiling whenever the
+    /// host is short on free RAM (mirrors `SSDPrefixCacheConfig.measuresFreeDisk`).
+    private(set) var headroomSource: (any MemoryHeadroomSource)?
+
     /// Whether the loaded model's template starts generation inside a
     /// `<think>` block. Installed after the container verify.
     private var promptStartsThinking = false
@@ -366,11 +378,15 @@ nonisolated final class ServerCompletion {
     func installLoadTimeState(
         modelIdentity: ModelIdentity,
         fingerprint: String,
-        ssdConfig: SSDPrefixCacheConfig?
+        ssdConfig: SSDPrefixCacheConfig?,
+        ramBudgetCapBytes: Int? = nil,
+        headroomSource: (any MemoryHeadroomSource)? = nil
     ) {
         self.modelIdentity = modelIdentity
         self.modelFingerprint = fingerprint
         self.ssdConfig = ssdConfig
+        self.ramBudgetCapBytes = ramBudgetCapBytes
+        self.headroomSource = headroomSource
     }
 
     /// Container-derived facts, installed by the actor's `verifyAndStore`
@@ -2452,6 +2468,8 @@ nonisolated final class ServerCompletion {
             )
         }
         let admin = cacheAdmin
+        let ramCap = ramBudgetCapBytes
+        let headroom = headroomSource
         let cache = await MainActor.run { () -> PrefixCacheManager in
             let tieredStore = TieredSnapshotStore(ssdConfig: ssdConfigSnapshot)
             let cache = PrefixCacheManager(
@@ -2470,7 +2488,13 @@ nonisolated final class ServerCompletion {
                 // The Pressure-Reactive Budget's event feed. The manager
                 // holds the adapter strongly, so a model unload (which
                 // drops the cache) cancels the OS dispatch source too.
-                pressureSource: DispatchMemoryPressureSource()
+                pressureSource: DispatchMemoryPressureSource(),
+                // Dynamic Budget Ceilings (ADR-0018): the load-time
+                // `budget` above is only the bootstrap — the first
+                // admission-driven headroom measurement replaces it.
+                // `nil` (test fixtures) keeps the bootstrap static.
+                headroomSource: headroom,
+                ramBudgetCapBytes: ramCap
             )
             // The current-cache accessor holds it weakly: dropping this
             // module (model unload) reads as "no live cache" over there.

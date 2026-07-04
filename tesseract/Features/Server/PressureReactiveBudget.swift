@@ -154,4 +154,25 @@ nonisolated struct PrefixCacheBudgetBand: Sendable, Equatable {
         }
         return next
     }
+
+    /// Rebuild the band around a freshly *measured* ceiling
+    /// (ADR-0018): the periodic headroom re-evaluation is the slow-up
+    /// clock, OS pressure events stay the fast-down one.
+    ///
+    /// A saturated band (current == ceiling, no retreat in progress)
+    /// follows the new ceiling outright — the cache is greedy when RAM
+    /// is idle. A retreated band carries its current value over
+    /// (clamped into the new band) and regrows exactly one `.normal`
+    /// step, so a measurement can never undo a pressure retreat faster
+    /// than the hysteresis allows.
+    func rebasingCeiling(
+        _ newCeilingBytes: Int,
+        floorBytes: Int
+    ) -> PrefixCacheBudgetBand {
+        var rebased = PrefixCacheBudgetBand(ceilingBytes: max(newCeilingBytes, 0))
+        guard currentBytes < ceilingBytes else { return rebased }
+        let floor = min(max(floorBytes, 0), rebased.ceilingBytes)
+        rebased.currentBytes = max(min(currentBytes, rebased.ceilingBytes), floor)
+        return rebased.folding(.normal, floorBytes: floor)
+    }
 }

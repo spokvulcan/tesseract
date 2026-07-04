@@ -104,11 +104,12 @@ struct EvictionPolicyTests {
 
     // MARK: - Tests
 
-    /// Marconi rule: nodes with `2+` children represent shared prefixes and
-    /// are excluded from the utility-scored candidate set. Setup leaves the
-    /// branch with `childCount == 2` after the single forced eviction so it
-    /// stays protected for the life of the test.
-    @Test func candidateSetExcludesMultiChildNodes() {
+    /// Uniform eviction (ADR-0019 / PRD #149): multi-child branch nodes are
+    /// first-class utility candidates — the old Marconi `childCount <= 1`
+    /// shield is gone. Here the shared-prefix `.system` snapshot is the
+    /// oldest candidate and drains first; the leaves (including the
+    /// floor-protected freshest one) survive the same cut.
+    @Test func candidateSetIncludesMultiChildNodes() {
         let mgr = makeManager(budgetMB: 1000)
 
         // root → [1..10] (system snap)
@@ -153,9 +154,15 @@ struct EvictionPolicyTests {
 
         #expect(mgr.stats.snapshotCount == 3)
 
+        // The branch-node system snapshot was the utility victim: a probe
+        // sharing only the [1..10] prefix no longer finds it…
         let probe = Array(1...10) + [999]
         let result = mgr.lookup(tokens: probe, partitionKey: defaultKey)
-        #expect(result.snapshotTokenOffset == 10)
+        #expect(result.snapshotTokenOffset == 0)
+        // …while all three leaves survived the cut.
+        #expect(mgr.lookup(tokens: pathA, partitionKey: defaultKey).snapshot != nil)
+        #expect(mgr.lookup(tokens: pathB, partitionKey: defaultKey).snapshot != nil)
+        #expect(mgr.lookup(tokens: pathC, partitionKey: defaultKey).snapshot != nil)
     }
 
     /// `deltaF` is parent-relative: holding `nodeOffset` constant, a

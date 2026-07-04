@@ -618,19 +618,19 @@ final class TokenRadixTree {
         }
     }
 
-    /// Snapshot-bearing nodes eligible for Marconi utility scoring:
-    /// node has a snapshot AND `childCount <= 1` AND `checkpointType !=
-    /// .system`. Multi-child nodes are protected because they hold shared
-    /// cache state. **Only** `.system` (stable prefix) snapshots are
-    /// type-protected — they sit linearly on the path from root in
-    /// single-conversation usage and represent the cross-conversation hot
-    /// prefix that the entire tree is built on. `.leaf` and
-    /// `.branchPoint` snapshots remain fully eligible so the utility
-    /// scorer can trade off deeper conversation reuse against shared
-    /// prefix protection.
-    /// The hard budget invariant is preserved by `findEvictionCandidate`'s
-    /// fallback path, which drops the oldest snapshot from
-    /// `allSnapshotNodes()` when the eligible set is empty.
+    /// Snapshot-bearing nodes eligible for Marconi utility scoring —
+    /// every body-bearing node, no type or topology shielding
+    /// (ADR-0019, PRD #149: **no RAM type-shielding**). `.system` and
+    /// multi-child bodies used to be excluded here, which let them
+    /// survive above a pressure-collapsed budget while the fresh leaf
+    /// died; now one recovery-cost policy prices every body, dropping
+    /// a body is recoverable (Snapshot Demotion persists unbacked
+    /// victims first), and `.system` protection lives where loss is
+    /// actually expensive — the SSD ledger's type-protected cut. The
+    /// remaining RAM protection is the **Budget Floor** (in-flight
+    /// restore pins + the freshest leaf), applied by the caller.
+    /// `findEvictionCandidate`'s oldest-first fallback still backstops
+    /// the degenerate case where utility scoring yields no victim.
     func eligibleEvictionNodes() -> [RadixTreeNode] {
         var result: [RadixTreeNode] = []
         collectEligible(node: root, into: &result)
@@ -788,10 +788,7 @@ final class TokenRadixTree {
     }
 
     private func collectEligible(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
-        if let snapshot = node.state.body,
-            node.childCount <= 1,
-            snapshot.checkpointType != .system
-        {
+        if node.state.body != nil {
             result.append(node)
         }
         for child in node.children.values {
@@ -880,10 +877,9 @@ final class TokenRadixTree {
         now: ContinuousClock.Instant,
         config: EvictionConfiguration
     ) -> EvictionScore? {
-        guard let body = node.state.body,
-            node.childCount <= 1,
-            body.checkpointType != .system
-        else { return nil }
+        // Mirrors `collectEligible`: every body scores (no type or
+        // topology shielding, ADR-0019 / PRD #149).
+        guard node.state.body != nil else { return nil }
         return EvictionPolicy.computeScores(
             candidates: [node], now: now, config: config
         ).first
