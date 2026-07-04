@@ -10,7 +10,11 @@ How Tesseract ships. Decision record: `docs/adr/0017-release-please-signed-notar
 2. `release-please.yml` keeps a **Release PR** open with the next version and
    accumulated changelog. **Merging that PR is the release.** (Release PRs
    and their merge commits change only version files and skip CI — the code
-   was already tested when it landed on `main`.)
+   was already tested when it landed on `main`.) Every conventional commit
+   type counts as release-worthy — `docs:`/`refactor:`/`ci:` alone still
+   produce a Release PR (all types are non-hidden via `changelog-sections`
+   in `release-please-config.json`; release-please's default would release
+   only on `feat`/`fix`/`deps`).
 3. On merge, Release Please creates the tag (`vX.Y.Z`) and the GitHub
    Release, then dispatches `release-build.yml`.
 4. `release-build.yml` requires CI (`build-release`, `test`, `lint`) to be
