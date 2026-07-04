@@ -364,7 +364,9 @@ nonisolated struct PromptCacheTreeSnapshot: Identifiable, Codable, Equatable, Se
 
 nonisolated struct PromptCacheTreeNodeSnapshot: Identifiable, Codable, Equatable, Sendable {
     let id: String
-    let parentID: String?
+    /// Mutable so tree filtering can re-parent a survivor to its nearest
+    /// visible ancestor when the nodes in between are filtered out.
+    var parentID: String?
     let pathHash: String
     let tokenOffset: Int
     let pathTokenCount: Int

@@ -203,6 +203,183 @@ struct PromptCacheTelemetryStoreTests {
         #expect(PromptCacheEventDisplay.requestSummary(lookup) == "11111111")
     }
 
+    // MARK: - Tree filtering
+    //
+    // Fixture topology (offsets in parentheses):
+    //
+    //   root(0, empty)
+    //    ├─ a(100, empty)
+    //    │   └─ b(200, leaf, ramOnly)
+    //    │       └─ c(300, empty)            ← empty tail
+    //    └─ d(150, branchPoint, ramOnly)
+    //        └─ e(400, ssdOnly)
+
+    @Test func emptyNodesAreHiddenByDefaultAndSurvivorsReparent() throws {
+        let store = storeWithFixtureTree()
+
+        let tree = try #require(store.selectedTree)
+        let ids = Set(tree.nodes.map(\.id))
+        #expect(ids == ["root", "b", "d", "e"])
+
+        // b's empty parent `a` is gone — b re-parents to root with an
+        // edge spanning the hidden run.
+        let b = tree.nodes.first { $0.id == "b" }
+        #expect(b?.parentID == "root")
+        let rootToB = tree.edges.first { $0.childID == "b" }
+        #expect(rootToB?.parentID == "root")
+        #expect(rootToB?.tokenCount == 200)
+
+        // The empty tail `c` is simply gone.
+        #expect(!tree.edges.contains { $0.childID == "c" })
+    }
+
+    @Test func hidingACheckpointTypeContractsPastIt() throws {
+        let store = storeWithFixtureTree()
+        store.visibleCheckpointTypes.remove("branchPoint")
+
+        let tree = try #require(store.selectedTree)
+        // Before the contraction fix, `d` was pulled back in as an
+        // ancestor of `e`, making the toggle a no-op for interior nodes.
+        #expect(!tree.nodes.contains { $0.id == "d" })
+        let e = tree.nodes.first { $0.id == "e" }
+        #expect(e?.parentID == "root")
+        #expect(tree.edges.first { $0.childID == "e" }?.tokenCount == 400)
+    }
+
+    @Test func showingAllStorageStatesRestoresTheFullTopology() throws {
+        let store = storeWithFixtureTree()
+        store.visibleStorageStates = Set(PromptCacheStorageState.allCases)
+
+        let tree = try #require(store.selectedTree)
+        #expect(tree.nodes.count == 6)
+        #expect(tree.nodes.first { $0.id == "b" }?.parentID == "a")
+        // Direct edges keep their original spans.
+        #expect(tree.edges.first { $0.childID == "b" }?.tokenCount == 100)
+    }
+
+    @Test func searchKeepsMatchesTheirVisibleAncestorsAndTheRoot() throws {
+        let store = storeWithFixtureTree()
+        store.searchText = "200"
+
+        let tree = try #require(store.selectedTree)
+        let ids = Set(tree.nodes.map(\.id))
+        // b matches by offset; root anchors; d/e don't match and drop out.
+        #expect(ids == ["root", "b"])
+    }
+
+    @Test func resetFiltersRestoresTheEmptyHiddenDefault() {
+        let store = storeWithFixtureTree()
+        store.visibleStorageStates = Set(PromptCacheStorageState.allCases)
+        store.visibleCheckpointTypes = []
+        store.searchText = "junk"
+
+        store.resetFilters()
+
+        #expect(store.searchText.isEmpty)
+        #expect(!store.visibleStorageStates.contains(.empty))
+        #expect(store.visibleCheckpointTypes == ["system", "leaf", "branchPoint"])
+    }
+
+    @Test func normalizeSelectionPreservesFirstAvailableAndDeselection() {
+        let store = storeWithFixtureTree()
+        // "First available" (nil) partition and no node selection must
+        // survive a refresh — not snap to a concrete partition/root.
+        #expect(store.selectedPartitionID == nil)
+        #expect(store.selectedNodeID == nil)
+
+        // A valid selection survives; a stale one is dropped.
+        store.selectNode("b")
+        store.replaceSnapshotForTesting(fixtureSnapshot())
+        #expect(store.selectedNodeID == "b")
+        store.selectNode("no-such-node")
+        store.replaceSnapshotForTesting(fixtureSnapshot())
+        #expect(store.selectedNodeID == nil)
+    }
+
+    private func storeWithFixtureTree() -> PromptCacheTelemetryStore {
+        let store = PromptCacheTelemetryStore(registerDiagnosticsSink: false)
+        store.replaceSnapshotForTesting(fixtureSnapshot())
+        return store
+    }
+
+    private func fixtureSnapshot() -> PromptCacheTelemetrySnapshot {
+        let nodes = [
+            treeNode("root", parent: nil, offset: 0),
+            treeNode("a", parent: "root", offset: 100),
+            treeNode("b", parent: "a", offset: 200, storage: .ramOnly, checkpoint: "leaf"),
+            treeNode("c", parent: "b", offset: 300),
+            treeNode(
+                "d", parent: "root", offset: 150, storage: .ramOnly, checkpoint: "branchPoint"),
+            treeNode("e", parent: "d", offset: 400, storage: .ssdOnly),
+        ]
+        let nodesByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        let edges: [PromptCacheTreeEdgeSnapshot] = nodes.compactMap { node in
+            guard let parentID = node.parentID, let parent = nodesByID[parentID] else { return nil }
+            return PromptCacheTreeEdgeSnapshot(
+                id: "\(parentID)->\(node.id)",
+                parentID: parentID,
+                childID: node.id,
+                tokenCount: node.tokenOffset - parent.tokenOffset
+            )
+        }
+        let tree = PromptCacheTreeSnapshot(
+            id: "partition-0",
+            partitionDigest: "partition-0",
+            partitionSummary: "fixture",
+            nodeCount: nodes.count,
+            totalSnapshotBytes: 2048,
+            snapshotCount: 2,
+            snapshotsByType: ["leaf": 1, "branchPoint": 1],
+            nodes: nodes,
+            edges: edges
+        )
+        return PromptCacheTelemetrySnapshot(
+            capturedAt: Date(timeIntervalSince1970: 100),
+            memoryBudgetBytes: 0,
+            budgetCeilingBytes: 0,
+            budgetFloorBytes: 0,
+            residentSnapshotBytes: 0,
+            partitionCount: 1,
+            totalNodeCount: nodes.count,
+            snapshotCount: 2,
+            snapshotsByType: ["leaf": 1, "branchPoint": 1],
+            ssd: .disabled,
+            tuner: .unavailable,
+            counters: PromptCacheCumulativeCounters(),
+            estimates: MeasuredSecondsEstimates(),
+            trees: [tree]
+        )
+    }
+
+    private func treeNode(
+        _ id: String,
+        parent: String?,
+        offset: Int,
+        storage: PromptCacheStorageState = .empty,
+        checkpoint: String? = nil
+    ) -> PromptCacheTreeNodeSnapshot {
+        PromptCacheTreeNodeSnapshot(
+            id: id,
+            parentID: parent,
+            pathHash: "hash-\(id)",
+            tokenOffset: offset,
+            pathTokenCount: offset,
+            edgeTokenCount: 0,
+            childCount: 0,
+            depth: 0,
+            hasSnapshot: storage == .ramOnly,
+            checkpointType: checkpoint,
+            snapshotBytes: storage == .ramOnly ? 1024 : 0,
+            storageState: storage,
+            snapshotRefID: nil,
+            storageBytes: 0,
+            lastAccessAgeSeconds: 0,
+            normalizedRecency: nil,
+            normalizedFlopEfficiency: nil,
+            utility: nil
+        )
+    }
+
     private func event(
         _ name: String,
         requestID: UUID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,

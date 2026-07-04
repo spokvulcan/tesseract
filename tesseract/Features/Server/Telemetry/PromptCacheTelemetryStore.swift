@@ -21,8 +21,14 @@ final class PromptCacheTelemetryStore {
     var selectedPartitionID: String?
     var selectedNodeID: String?
     var selectedEventID: UUID?
-    var visibleCheckpointTypes: Set<String> = ["system", "leaf", "branchPoint"]
-    var visibleStorageStates: Set<PromptCacheStorageState> = Set(PromptCacheStorageState.allCases)
+    var visibleCheckpointTypes = PromptCacheTelemetryStore.defaultVisibleCheckpointTypes
+    var visibleStorageStates = PromptCacheTelemetryStore.defaultVisibleStorageStates
+
+    static let defaultVisibleCheckpointTypes: Set<String> = ["system", "leaf", "branchPoint"]
+    /// Empty nodes are pure topology — path skeleton with no snapshot —
+    /// and they dominate the node count, so they are hidden by default.
+    static let defaultVisibleStorageStates =
+        Set(PromptCacheStorageState.allCases).subtracting([.empty])
 
     @ObservationIgnored private var diagnosticsHandle: PrefixCacheDiagnostics.TelemetrySinkHandle?
     @ObservationIgnored private var pendingEvents: [PromptCacheTelemetryEvent] = []
@@ -63,39 +69,83 @@ final class PromptCacheTelemetryStore {
     var filteredTrees: [PromptCacheTreeSnapshot] {
         guard let snapshot else { return [] }
         let query = normalizedQuery
-        return snapshot.trees.map { tree in
-            let nodesByID = Dictionary(uniqueKeysWithValues: tree.nodes.map { ($0.id, $0) })
-            var includedNodeIDs: Set<String> = []
+        return snapshot.trees.map { filteredTree(from: $0, query: query) }
+    }
 
+    /// Filtering *contracts* the tree: a hidden node disappears and its
+    /// visible descendants re-parent to their nearest visible ancestor,
+    /// with a synthesized edge spanning the hidden run. Re-including the
+    /// hidden ancestors instead would neuter the filters entirely — in a
+    /// radix tree almost every empty node is an ancestor of some
+    /// snapshot-bearing node. The root always survives as the anchor.
+    private func filteredTree(
+        from tree: PromptCacheTreeSnapshot,
+        query: String
+    ) -> PromptCacheTreeSnapshot {
+        let nodesByID = Dictionary(uniqueKeysWithValues: tree.nodes.map { ($0.id, $0) })
+
+        var visibleIDs: Set<String> = []
+        for node in tree.nodes
+        where node.parentID == nil || (checkpointAllowed(node) && storageAllowed(node)) {
+            visibleIDs.insert(node.id)
+        }
+
+        // The search query narrows further, keeping each match's visible
+        // ancestors so the path context survives.
+        if !query.isEmpty {
+            var kept: Set<String> = []
             for node in tree.nodes
             where
-                checkpointAllowed(node) && storageAllowed(node)
-                && queryMatches(node, in: tree, query: query)
+                node.parentID == nil
+                || (visibleIDs.contains(node.id) && queryMatches(node, in: tree, query: query))
             {
                 var current: PromptCacheTreeNodeSnapshot? = node
                 while let ancestor = current {
-                    includedNodeIDs.insert(ancestor.id)
+                    if visibleIDs.contains(ancestor.id) { kept.insert(ancestor.id) }
                     current = ancestor.parentID.flatMap { nodesByID[$0] }
                 }
             }
-
-            let nodes = tree.nodes.filter { includedNodeIDs.contains($0.id) }
-            let nodeIDs = Set(nodes.map(\.id))
-            let edges = tree.edges.filter {
-                nodeIDs.contains($0.parentID) && nodeIDs.contains($0.childID)
-            }
-            return PromptCacheTreeSnapshot(
-                id: tree.id,
-                partitionDigest: tree.partitionDigest,
-                partitionSummary: tree.partitionSummary,
-                nodeCount: tree.nodeCount,
-                totalSnapshotBytes: tree.totalSnapshotBytes,
-                snapshotCount: tree.snapshotCount,
-                snapshotsByType: tree.snapshotsByType,
-                nodes: nodes,
-                edges: edges
-            )
+            visibleIDs = kept
         }
+
+        func nearestVisibleAncestorID(of node: PromptCacheTreeNodeSnapshot) -> String? {
+            var current = node.parentID.flatMap { nodesByID[$0] }
+            while let ancestor = current {
+                if visibleIDs.contains(ancestor.id) { return ancestor.id }
+                current = ancestor.parentID.flatMap { nodesByID[$0] }
+            }
+            return nil
+        }
+
+        var nodes: [PromptCacheTreeNodeSnapshot] = []
+        var edges: [PromptCacheTreeEdgeSnapshot] = []
+        for var node in tree.nodes where visibleIDs.contains(node.id) {
+            let parentID = nearestVisibleAncestorID(of: node)
+            node.parentID = parentID
+            nodes.append(node)
+            if let parentID {
+                let parentOffset = nodesByID[parentID]?.tokenOffset ?? 0
+                edges.append(
+                    PromptCacheTreeEdgeSnapshot(
+                        id: "\(parentID)->\(node.id)",
+                        parentID: parentID,
+                        childID: node.id,
+                        tokenCount: max(node.tokenOffset - parentOffset, 0)
+                    ))
+            }
+        }
+
+        return PromptCacheTreeSnapshot(
+            id: tree.id,
+            partitionDigest: tree.partitionDigest,
+            partitionSummary: tree.partitionSummary,
+            nodeCount: tree.nodeCount,
+            totalSnapshotBytes: tree.totalSnapshotBytes,
+            snapshotCount: tree.snapshotCount,
+            snapshotsByType: tree.snapshotsByType,
+            nodes: nodes,
+            edges: edges
+        )
     }
 
     var selectedTree: PromptCacheTreeSnapshot? {
@@ -154,6 +204,11 @@ final class PromptCacheTelemetryStore {
         }
     }
 
+    func replaceSnapshotForTesting(_ snapshot: PromptCacheTelemetrySnapshot) {
+        self.snapshot = snapshot
+        normalizeSelection()
+    }
+
     func recordForTesting(_ incoming: [PromptCacheTelemetryEvent]) {
         events.append(contentsOf: incoming)
         trimEvents()
@@ -202,8 +257,8 @@ final class PromptCacheTelemetryStore {
 
     func resetFilters() {
         searchText = ""
-        visibleCheckpointTypes = ["system", "leaf", "branchPoint"]
-        visibleStorageStates = Set(PromptCacheStorageState.allCases)
+        visibleCheckpointTypes = Self.defaultVisibleCheckpointTypes
+        visibleStorageStates = Self.defaultVisibleStorageStates
     }
 
     private var normalizedQuery: String {
@@ -269,24 +324,21 @@ final class PromptCacheTelemetryStore {
         }
     }
 
+    /// Drop selections that no longer resolve — never invent new ones.
+    /// `nil` partition means "first available" and must survive a refresh;
+    /// `nil` node means "nothing selected" (the HUD shows the tree
+    /// summary) and must not snap back to the root on the next poll.
     private func normalizeSelection() {
-        let trees = filteredTrees
-        if selectedPartitionID == nil || !trees.contains(where: { $0.id == selectedPartitionID }) {
-            selectedPartitionID = trees.first?.id
-            selectedNodeID = nil
-        }
-
-        guard let selectedTree else {
-            selectedNodeID = nil
-            return
+        if let selectedPartitionID,
+            !filteredTrees.contains(where: { $0.id == selectedPartitionID })
+        {
+            self.selectedPartitionID = nil
         }
         if let selectedNodeID,
-            selectedTree.nodes.contains(where: { $0.id == selectedNodeID })
+            selectedTree?.nodes.contains(where: { $0.id == selectedNodeID }) != true
         {
-            return
+            self.selectedNodeID = nil
         }
-        selectedNodeID =
-            selectedTree.nodes.first { $0.parentID == nil }?.id ?? selectedTree.nodes.first?.id
     }
 
     private func checkpointAllowed(_ node: PromptCacheTreeNodeSnapshot) -> Bool {
