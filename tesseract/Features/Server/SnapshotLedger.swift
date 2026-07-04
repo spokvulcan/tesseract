@@ -97,8 +97,25 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// owns the `.safetensors` bodies under the same root.
     let rootURL: URL
 
-    /// Hard SSD byte budget the type-protected LRU cut enforces.
+    /// Bootstrap SSD byte budget (ADR-0018): in force before the first
+    /// free-disk measurement, and the floor of the measured value. When
+    /// no `freeDiskBytesProvider` is injected this *is* the budget for
+    /// the ledger's lifetime — the pre-dynamic behavior every test
+    /// fixture pins.
     let budgetBytes: Int
+
+    /// User cap on the dynamic budget (nil = "Automatic"). Caps the
+    /// measured value, never raises it (ADR-0018: caps, never floors).
+    private let budgetCapBytes: Int?
+
+    /// Free-disk probe for the volume under `rootURL`; `nil` disables
+    /// dynamic budgeting. Injected so tests can script disk sizes.
+    private let freeDiskBytesProvider: ((URL) -> Int?)?
+
+    /// Minimum spacing between free-disk measurements. Consulted at the
+    /// admission cut — the only place the budget matters — so an idle
+    /// tier measures nothing.
+    static let budgetReevaluationMinimumInterval: Duration = .seconds(60)
 
     /// Minimum idle time before the in-memory manifest is persisted.
     /// Injected so tests can shorten it; production uses 500 ms.
@@ -109,6 +126,11 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var manifest: SnapshotManifest = .empty()
     private var currentSSDBytes: Int = 0
+    /// The budget currently in force (ADR-0018): starts at the
+    /// (cap-clamped) bootstrap, re-derived from measured free disk by
+    /// `reevaluateBudgetIfDueLocked`.
+    private var dynamicBudgetBytes: Int
+    private var lastBudgetReevaluation: ContinuousClock.Instant?
     private var manifestDirty: Bool = false
     private var manifestPersistTask: Task<Void, Never>?
     /// Manifest file writes currently in flight. Claimed under `lock`
@@ -133,10 +155,60 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// writer drop / tombstone path).
     private var transferringBaseIDs: Set<String> = []
 
-    init(rootURL: URL, budgetBytes: Int, manifestDebounce: Duration) {
+    init(
+        rootURL: URL,
+        budgetBytes: Int,
+        manifestDebounce: Duration,
+        budgetCapBytes: Int? = nil,
+        freeDiskBytesProvider: ((URL) -> Int?)? = nil
+    ) {
         self.rootURL = rootURL
         self.budgetBytes = budgetBytes
+        self.budgetCapBytes = budgetCapBytes
+        self.freeDiskBytesProvider = freeDiskBytesProvider
+        self.dynamicBudgetBytes = applyBudgetCap(budgetBytes, cap: budgetCapBytes)
         self.manifestDebounce = manifestDebounce
+    }
+
+    /// The budget currently in force — the bootstrap until the first
+    /// measurement, then the measured value. Exposed for diagnostics.
+    func currentBudgetBytes() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return dynamicBudgetBytes
+    }
+
+    /// Re-derive the budget from measured free disk space, throttled
+    /// (ADR-0018). Must be called with `lock` held — it sits at the top
+    /// of the admission cut, the one consumer of the budget. A failed
+    /// probe keeps the current value.
+    private func reevaluateBudgetIfDueLocked() {
+        guard let freeDiskBytesProvider else { return }
+        let now: ContinuousClock.Instant = .now
+        if let last = lastBudgetReevaluation,
+            now - last < Self.budgetReevaluationMinimumInterval
+        {
+            return
+        }
+        lastBudgetReevaluation = now
+        guard let freeDiskBytes = freeDiskBytesProvider(rootURL) else { return }
+        let next = SSDBudgetPolicy.budgetBytes(
+            freeDiskBytes: freeDiskBytes,
+            currentTierBytes: currentSSDBytes,
+            floorBytes: budgetBytes,
+            capBytes: budgetCapBytes
+        )
+        guard next != dynamicBudgetBytes else { return }
+        let previous = dynamicBudgetBytes
+        dynamicBudgetBytes = next
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.SSDBudgetChangeEvent(
+                previousBytes: previous,
+                currentBytes: next,
+                freeDiskBytes: freeDiskBytes,
+                tierBytes: currentSSDBytes,
+                capBytes: budgetCapBytes
+            ))
     }
 
     deinit {
@@ -402,11 +474,15 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        // The budget matters exactly here — re-derive it from measured
+        // free disk first (throttled; ADR-0018).
+        reevaluateBudgetIfDueLocked()
+
         // For a pending extension this is the own-file bytes only —
         // the inherited chain is still counted under the (shielded)
         // base entry, so the net post-fold growth is exactly this.
         let spaceNeeded = descriptor.totalBytes
-        if currentSSDBytes + spaceNeeded <= budgetBytes {
+        if currentSSDBytes + spaceNeeded <= dynamicBudgetBytes {
             return (.admit, evicted)
         }
 
@@ -414,7 +490,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         // it before any eviction runs. Without this guard the cut would
         // destroy residents (condemned and eligible alike) to make room
         // that still isn't enough, then drop the incoming anyway.
-        if spaceNeeded > budgetBytes {
+        if spaceNeeded > dynamicBudgetBytes {
             return (.drop(.exceedsBudget), evicted)
         }
 
@@ -434,7 +510,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
                 until: spaceNeeded,
                 into: &evicted
             )
-            if currentSSDBytes + spaceNeeded <= budgetBytes {
+            if currentSSDBytes + spaceNeeded <= dynamicBudgetBytes {
                 return (.admit, evicted)
             }
         }
@@ -459,7 +535,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
             into: &evicted
         )
 
-        if currentSSDBytes + spaceNeeded <= budgetBytes {
+        if currentSSDBytes + spaceNeeded <= dynamicBudgetBytes {
             return (.admit, evicted)
         }
 
@@ -475,7 +551,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
                 until: spaceNeeded,
                 into: &evicted
             )
-            if currentSSDBytes + spaceNeeded <= budgetBytes {
+            if currentSSDBytes + spaceNeeded <= dynamicBudgetBytes {
                 return (.admit, evicted)
             }
             // Every resident is gone and the incoming still doesn't fit
@@ -526,7 +602,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         into evicted: inout [EvictedResident]
     ) {
         for victim in order {
-            if currentSSDBytes + spaceNeeded <= budgetBytes {
+            if currentSSDBytes + spaceNeeded <= dynamicBudgetBytes {
                 return
             }
             if let resident = removeResidentUnderLock(snapshotID: victim.snapshotID) {
@@ -625,7 +701,10 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        if currentSSDBytes + totalBytes <= budgetBytes { return true }
+        // Same budget the cut it simulates would see (ADR-0018).
+        reevaluateBudgetIfDueLocked()
+
+        if currentSSDBytes + totalBytes <= dynamicBudgetBytes { return true }
         if checkpointType == .system { return true }
 
         // Stand-in descriptor carrying exactly the fields scoring
@@ -649,11 +728,11 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         )
         var simulatedBytes = currentSSDBytes
         for victim in pool {
-            if simulatedBytes + totalBytes <= budgetBytes { return true }
+            if simulatedBytes + totalBytes <= dynamicBudgetBytes { return true }
             if victim.snapshotID == incoming.snapshotID { return false }
             simulatedBytes -= victim.totalBytes
         }
-        return simulatedBytes + totalBytes <= budgetBytes
+        return simulatedBytes + totalBytes <= dynamicBudgetBytes
     }
 
     /// The subset of manifest descriptors whose parsed checkpoint type

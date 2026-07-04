@@ -29,7 +29,8 @@ struct SettingsManagerTests {
         #expect(settings.prefixCacheSSDEnabled == true)
         #expect(settings.ttsStreamingEnabled == true)
         #expect(settings.playSounds == true)
-        #expect(settings.prefixCacheSSDBudgetBytes == 20 * 1024 * 1024 * 1024)
+        #expect(settings.prefixCacheRAMBudgetCapBytes == nil)
+        #expect(settings.prefixCacheSSDBudgetCapBytes == nil)
         #expect(settings.prefixCacheSSDDirectoryOverride == nil)
         #expect(settings.selectedAgentModelID == ModelDefinition.defaultAgentModelID)
         #expect(settings.useVisionWhenAvailable == true)
@@ -57,14 +58,14 @@ struct SettingsManagerTests {
         let first = SettingsManager(store: store)
         first.playSounds = false
         first.serverPort = 9000
-        first.prefixCacheSSDBudgetBytes = 12 * 1024 * 1024 * 1024
+        first.prefixCacheSSDBudgetCapBytes = 12 * 1024 * 1024 * 1024
         first.prefixCacheSSDDirectoryOverride = "/tmp/roundtrip"
 
         // A fresh facade on the same store is the relaunch.
         let second = SettingsManager(store: store)
         #expect(second.playSounds == false)
         #expect(second.serverPort == 9000)
-        #expect(second.prefixCacheSSDBudgetBytes == 12 * 1024 * 1024 * 1024)
+        #expect(second.prefixCacheSSDBudgetCapBytes == 12 * 1024 * 1024 * 1024)
         #expect(second.prefixCacheSSDDirectoryOverride == "/tmp/roundtrip")
     }
 
@@ -87,13 +88,13 @@ struct SettingsManagerTests {
         let settings = SettingsManager(store: store)
         settings.showInDock = false
         settings.serverPort = 9000
-        settings.prefixCacheSSDBudgetBytes = 1
+        settings.prefixCacheSSDBudgetCapBytes = 1
         settings.prefixCacheSSDDirectoryOverride = "/tmp/x"
 
         settings.resetToDefaults()
         #expect(settings.showInDock == true)
         #expect(settings.serverPort == 8321)
-        #expect(settings.prefixCacheSSDBudgetBytes == 20 * 1024 * 1024 * 1024)
+        #expect(settings.prefixCacheSSDBudgetCapBytes == nil)
         #expect(settings.prefixCacheSSDDirectoryOverride == nil)
 
         // Reset persists: a relaunch on the same store sees the defaults, never
@@ -101,7 +102,7 @@ struct SettingsManagerTests {
         let relaunched = SettingsManager(store: store)
         #expect(relaunched.showInDock == true)
         #expect(relaunched.serverPort == 8321)
-        #expect(relaunched.prefixCacheSSDBudgetBytes == 20 * 1024 * 1024 * 1024)
+        #expect(relaunched.prefixCacheSSDBudgetCapBytes == nil)
         #expect(relaunched.prefixCacheSSDDirectoryOverride == nil)
     }
 
@@ -114,7 +115,7 @@ struct SettingsManagerTests {
         store.resetWriteRecording()
         settings.resetToDefaults()
         #expect(store.writes.contains("showInDock"))
-        #expect(store.writes.contains("prefixCacheSSDBudgetBytes"))
+        #expect(store.writes.contains("prefixCacheSSDBudgetCapBytes"))
         #expect(store.writes.contains("serverPort"))
     }
 

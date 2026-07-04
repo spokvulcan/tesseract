@@ -234,15 +234,16 @@ struct TokenRadixTreeTests {
         #expect(result?.sharedPrefixLength == 50_000)
     }
 
-    // MARK: - 14. eligibleEvictionNodesExcludeMultiChildNodes
+    // MARK: - 14. eligibleEvictionNodesIncludeMultiChildNodes
 
-    @Test func eligibleEvictionNodesExcludeMultiChildNodes() {
+    /// **No RAM type-shielding** (ADR-0019, PRD #149): multi-child
+    /// nodes join the eligible set — one recovery-cost policy prices
+    /// every body. (Pre-#149 they were excluded, which let shared
+    /// branch bodies survive above a pressure-collapsed budget while
+    /// the fresh leaf died.)
+    @Test func eligibleEvictionNodesIncludeMultiChildNodes() {
         let tree = TokenRadixTree()
 
-        // Distinct lengths to avoid offset ambiguity. Use `.leaf` for the
-        // leaf snapshots so they're not also excluded by the `.system`
-        // type-protection guard — this test is about multi-child
-        // protection, exercised in isolation.
         tree.insertPath(tokens: [1, 2, 3, 4, 5])
         tree.insertPath(tokens: [1, 2, 6, 7])
         let midNode = tree.insertPath(tokens: [1, 2])
@@ -255,22 +256,20 @@ struct TokenRadixTreeTests {
 
         #expect(offsets.contains(5))
         #expect(offsets.contains(4))
-        #expect(!offsets.contains(2))  // multi-child node protected
+        #expect(offsets.contains(2))  // multi-child node is eligible too
     }
 
-    // MARK: - 14b. eligibleEvictionNodesExcludeSystemSnapshots
+    // MARK: - 14b. eligibleEvictionNodesIncludeSystemSnapshots
 
-    /// Regression test for the new-user-turn cold-prefill pathology.
-    /// `.system` snapshots (stable prefix + last-message boundary) are
-    /// excluded from the utility-eviction candidate set even when their
-    /// node has `childCount <= 1`. The hard budget invariant is preserved
-    /// by `PrefixCacheManager.findEvictionCandidate`'s fallback path
-    /// (covered separately by `branchNodeFallbackHonorsHardBudget`).
-    @Test func eligibleEvictionNodesExcludeSystemSnapshots() {
+    /// `.system` bodies lose their RAM eviction immunity (ADR-0019,
+    /// PRD #149): their protection moved to the SSD ledger's
+    /// type-protected cut, where loss is actually expensive. A demoted
+    /// system body costs a hydration on the next cold conversation; a
+    /// shielded one used to cost the newest leaf its life under a
+    /// pressure-collapsed budget.
+    @Test func eligibleEvictionNodesIncludeSystemSnapshots() {
         let tree = TokenRadixTree()
 
-        // Linear chain: root → [1..10] (system) → [11..15] (leaf)
-        // Both nodes have childCount <= 1; only the .leaf is eligible.
         let sysNode = tree.insertPath(tokens: Array(1...10))
         tree.storeSnapshot(makeSnapshot(offset: 10, type: .system), on: sysNode)
         let leafNode = tree.insertPath(tokens: Array(1...15))
@@ -279,15 +278,15 @@ struct TokenRadixTreeTests {
         let eligible = tree.eligibleEvictionNodes()
         let offsets = Set(eligible.map(\.tokenOffset))
 
-        #expect(offsets.contains(15))  // leaf is eligible
-        #expect(!offsets.contains(10))  // system is protected
+        #expect(offsets.contains(15))
+        #expect(offsets.contains(10))  // system is eligible (uniform eviction)
     }
 
     // MARK: - 14c. eligibleEvictionNodesAllowsBranchPointAndLeaf
 
-    /// `.branchPoint` snapshots are still eligible — only `.system` is
-    /// type-protected. Phase 2 branch points represent speculative
-    /// captures and have no special protection rule.
+    /// `.branchPoint` snapshots are eligible. Phase 2 branch points
+    /// represent speculative captures and have no special protection
+    /// rule.
     @Test func eligibleEvictionNodesAllowsBranchPointAndLeaf() {
         let tree = TokenRadixTree()
 

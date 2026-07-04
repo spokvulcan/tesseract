@@ -19,9 +19,12 @@ protocol SettingsStore {
     func double(for key: String, default: Double) -> Double
     func string(for key: String, default: String) -> String
     func optionalString(for key: String) -> String?
+    func optionalInt(for key: String) -> Int?
     func set<V>(_ value: V, for key: String)
     /// Writing `nil` removes the key (so a later read returns the default).
     func setOptional(_ value: String?, for key: String)
+    /// Writing `nil` removes the key (so a later read returns the default).
+    func setOptional(_ value: Int?, for key: String)
     /// Remove every key beginning with `prefix`. The escape hatch for the
     /// catalogue's dynamic, minted-on-demand keys (e.g. per-model toggles),
     /// which a static enumeration in `resetToDefaults` cannot reach. Moves
@@ -103,6 +106,17 @@ extension Setting where Value == String? {
         Setting(
             key: key, default: nil,
             load: { $0.optionalString(for: key) },
+            write: { value, store in store.setOptional(value, for: key) })
+    }
+}
+
+extension Setting where Value == Int? {
+    /// `nil` default = "Automatic" semantics: an unset key reads as
+    /// nil, and writing nil removes the key.
+    static func optionalInt(_ key: String) -> Setting<Int?> {
+        Setting(
+            key: key, default: nil,
+            load: { $0.optionalInt(for: key) },
             write: { value, store in store.setOptional(value, for: key) })
     }
 }

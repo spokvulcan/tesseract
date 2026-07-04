@@ -93,6 +93,30 @@ final class PrefixCacheManager {
     /// manager (model unload) deallocates the source, which cancels
     /// delivery.
     private let pressureSource: (any MemoryPressureSource)?
+    /// **Dynamic Budget Ceilings** (ADR-0018): the headroom sampler the
+    /// periodic ceiling re-evaluation pulls from. `nil` (tests, replay
+    /// caches, E2E tooling) keeps the load-time bootstrap ceiling for
+    /// the cache's lifetime — today's pre-measurement behavior.
+    private let headroomSource: (any MemoryHeadroomSource)?
+    /// User RAM cap (ADR-0018: caps, never floors). `nil` = "Automatic".
+    /// Applied inside `DynamicCeilingPolicy` so a cap below the measured
+    /// ceiling is honored and one above it changes nothing.
+    private let ramBudgetCapBytes: Int?
+    /// The **Active-Inference Reserve** (ADR-0018): per-lane working-set
+    /// estimate folded from observed leaf sizes, subtracted from every
+    /// measured ceiling before the cache sees it.
+    private(set) var activeInferenceReserve = ActiveInferenceReserve()
+    /// Requests currently inside their completion drive (registered by
+    /// `resolve`, released by `completeRequest`). The reserve is
+    /// count-aware over this set — floored at one lane, so the next
+    /// request always has room even when the server idles.
+    private var activeRequestIDs: Set<UUID> = []
+    /// Throttle anchor for the measurement cadence.
+    private var lastCeilingReevaluation: ContinuousClock.Instant?
+    /// An explicit `setMemoryBudget` override (E2E tooling) suspends
+    /// measurement until the cache is rebuilt — a scripted budget
+    /// scenario must not be silently re-measured out from under.
+    private var budgetOverrideActive = false
     /// Optional adaptive `alpha` tuner. Production caches attach one;
     /// test/replay caches pass `nil` to avoid recursive recording when
     /// the tuner itself spins up sandboxed caches during grid search.
@@ -126,15 +150,23 @@ final class PrefixCacheManager {
         alphaTuner: AlphaTuner? = nil,
         tieredStore: TieredSnapshotStore? = nil,
         demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)? = nil,
-        pressureSource: (any MemoryPressureSource)? = nil
+        pressureSource: (any MemoryPressureSource)? = nil,
+        headroomSource: (any MemoryHeadroomSource)? = nil,
+        ramBudgetCapBytes: Int? = nil
     ) {
         self.store = tieredStore ?? TieredSnapshotStore(ssdConfig: nil)
-        self.memoryBudgetBytes = memoryBudgetBytes
-        self.budgetBand = PrefixCacheBudgetBand(ceilingBytes: memoryBudgetBytes)
+        // The passed-in budget is the *bootstrap* ceiling (ADR-0018):
+        // the old constants' formula, replaced by the first headroom
+        // measurement. The user cap binds from the first byte.
+        let bootstrap = applyBudgetCap(memoryBudgetBytes, cap: ramBudgetCapBytes)
+        self.memoryBudgetBytes = bootstrap
+        self.budgetBand = PrefixCacheBudgetBand(ceilingBytes: bootstrap)
         self.evictionConfig = evictionConfig
         self.alphaTuner = alphaTuner
         self.demotionPayloadExtractor = demotionPayloadExtractor
         self.pressureSource = pressureSource
+        self.headroomSource = headroomSource
+        self.ramBudgetCapBytes = ramBudgetCapBytes
         pressureSource?.start { [weak self] level in
             self?.applyMemoryPressure(level)
         }
@@ -539,13 +571,22 @@ final class PrefixCacheManager {
     /// pinned into the **Budget Floor** until `completeRequest` releases
     /// it: no drain may evict the body an in-flight request restored
     /// from (ADR-0019).
+    ///
+    /// `interruption` (PRD #149 item 7) — polled by the hydration read
+    /// at its segment-boundary yield points. A background caller (the
+    /// preemptible speculative pass) passes its cancellation check so a
+    /// foreground request never waits out a multi-second chain read; an
+    /// interrupted hydration surfaces as a clean miss and leaves the
+    /// node's backing intact. `nil` = uninterruptible (the foreground
+    /// request path, tests).
     nonisolated func resolve(
         tokens: [Int],
         promptTokenCount: Int,
         partitionKey: CachePartitionKey,
         modelFingerprint: String?,
         diagnostics: PrefixCacheDiagnostics.Context,
-        pinningRestorePathFor pinRequestID: UUID? = nil
+        pinningRestorePathFor pinRequestID: UUID? = nil,
+        interruption: (@Sendable () -> Bool)? = nil
     ) async -> Resolved {
         // A failed hydration clears the faulted node (its committed ref or
         // chain-prefix point), which strictly shrinks the body-less hittable
@@ -559,8 +600,14 @@ final class PrefixCacheManager {
                 let (result, node) = self.lookupReturningNode(
                     tokens: tokens, partitionKey: partitionKey
                 )
-                if let pinRequestID, let node {
-                    self.pinRestorePath(node: node, requestID: pinRequestID)
+                if let pinRequestID {
+                    // Lane registration for the Active-Inference Reserve
+                    // (ADR-0018) — on hit AND miss: a missing prefix still
+                    // means an in-flight generation's working set.
+                    self.activeRequestIDs.insert(pinRequestID)
+                    if let node {
+                        self.pinRestorePath(node: node, requestID: pinRequestID)
+                    }
                 }
                 return result
             }
@@ -574,22 +621,45 @@ final class PrefixCacheManager {
 
             // Two body-less hit kinds need hydration — `.ssdHit` (state 5,
             // committed own ref) and `.chainPrefixHit` (ADR-0012, backed by the
-            // owning chain's leading segments). A nil return means hydration
-            // failed and cleared the node — re-resolve below.
+            // owning chain's leading segments). Each passes the **Hydration
+            // Gate** first (PRD #149 item 7): when re-prefilling from the
+            // deepest resident RAM body is cheaper than the disk read, the
+            // hit degrades to that body instead of hydrating. A nil return
+            // means hydration failed and cleared the node — re-resolve below.
             switch initial.reason {
             case .ssdHit(let ctx):
+                if let gated = await hydrationGateFallback(
+                    hydrationBytes: ctx.snapshotRef.bytesOnDisk,
+                    hitOffset: ctx.snapshotRef.tokenOffset,
+                    hitID: ctx.snapshotRef.snapshotID,
+                    tokens: tokens, promptTokenCount: promptTokenCount,
+                    partitionKey: partitionKey, pinRequestID: pinRequestID,
+                    diagnostics: diagnostics
+                ) {
+                    return gated
+                }
                 if let resolved = await resolveSSDHit(
                     ctx, initial: initial, promptTokenCount: promptTokenCount,
                     partitionKey: partitionKey, fingerprint: fingerprint,
-                    diagnostics: diagnostics
+                    diagnostics: diagnostics, interruption: interruption
                 ) {
                     return resolved
                 }
             case .chainPrefixHit(let ctx):
+                if let gated = await hydrationGateFallback(
+                    hydrationBytes: ctx.point.prefixBytes,
+                    hitOffset: ctx.point.boundaryOffset,
+                    hitID: ctx.point.ownerSnapshotID,
+                    tokens: tokens, promptTokenCount: promptTokenCount,
+                    partitionKey: partitionKey, pinRequestID: pinRequestID,
+                    diagnostics: diagnostics
+                ) {
+                    return gated
+                }
                 if let resolved = await resolveChainPrefixHit(
                     ctx, initial: initial, promptTokenCount: promptTokenCount,
                     partitionKey: partitionKey, fingerprint: fingerprint,
-                    diagnostics: diagnostics
+                    diagnostics: diagnostics, interruption: interruption
                 ) {
                     return resolved
                 }
@@ -619,16 +689,25 @@ final class PrefixCacheManager {
         promptTokenCount: Int,
         partitionKey: CachePartitionKey,
         fingerprint: String,
-        diagnostics: PrefixCacheDiagnostics.Context
+        diagnostics: PrefixCacheDiagnostics.Context,
+        interruption: (@Sendable () -> Bool)? = nil
     ) async -> Resolved? {
         // Materialize the body from disk on this Metal-affine thread (ADR-0001).
         let hydrateStart = Date.timeIntervalSinceReferenceDate
         let hydrated = ctx.hydrating.loadSync(
-            snapshotRef: ctx.snapshotRef, expectedFingerprint: fingerprint
+            snapshotRef: ctx.snapshotRef, expectedFingerprint: fingerprint,
+            interruption: interruption
         )
         let hydrateSeconds = Date.timeIntervalSinceReferenceDate - hydrateStart
 
         guard let hydrated else {
+            // An interrupted read (PRD #149 item 7) is not a failure: the
+            // backing is intact, the node stays hittable for the next
+            // caller — surface a clean miss without clearing anything.
+            if interruption?() == true {
+                diagnostics.logSkip(stage: "hydration", reason: "interrupted")
+                return missAfterFailedHydration(initial: initial, partitionKey: partitionKey)
+            }
             // Hydration failed: `loadSync` already removed the on-disk file; the
             // forgiving clear removes the now-bodyless node so the caller's
             // re-lookup falls back to the next-shallower resident body. A failed
@@ -676,15 +755,23 @@ final class PrefixCacheManager {
         promptTokenCount: Int,
         partitionKey: CachePartitionKey,
         fingerprint: String,
-        diagnostics: PrefixCacheDiagnostics.Context
+        diagnostics: PrefixCacheDiagnostics.Context,
+        interruption: (@Sendable () -> Bool)? = nil
     ) async -> Resolved? {
         let hydrateStart = Date.timeIntervalSinceReferenceDate
         let hydrated = ctx.hydrating.loadSyncPrefix(
-            point: ctx.point, expectedFingerprint: fingerprint
+            point: ctx.point, expectedFingerprint: fingerprint,
+            interruption: interruption
         )
         let hydrateSeconds = Date.timeIntervalSinceReferenceDate - hydrateStart
 
         guard let hydrated else {
+            // Interrupted, not failed — the chain stays intact (PRD #149
+            // item 7); the point clears only on a real compose failure.
+            if interruption?() == true {
+                diagnostics.logSkip(stage: "hydration", reason: "interrupted")
+                return missAfterFailedHydration(initial: initial, partitionKey: partitionKey)
+            }
             await MainActor.run {
                 self.clearChainPrefixRestorePointAfterHydrationFailure(
                     node: ctx.node, partitionKey: partitionKey
@@ -713,6 +800,92 @@ final class PrefixCacheManager {
             partitionKey: partitionKey, hydrateSeconds: hydrateSeconds,
             wasChainPrefixRestore: true
         )
+    }
+
+    /// The **Hydration Gate** (PRD #149 item 7, HiCache's min-hit gate
+    /// priced by recovery cost): `nil` when hydrating the body-less hit
+    /// is worth it; otherwise the `Resolved` this request should use
+    /// instead — the deepest resident RAM body on the path served as an
+    /// ordinary hit (access bumped, savings counted, restore path
+    /// pinned), or a clean miss when no body is resident. The skipped
+    /// hit's backing is untouched — it stays hittable for a future,
+    /// deeper request whose recompute span prices the other way.
+    private nonisolated func hydrationGateFallback(
+        hydrationBytes: Int,
+        hitOffset: Int,
+        hitID: String,
+        tokens: [Int],
+        promptTokenCount: Int,
+        partitionKey: CachePartitionKey,
+        pinRequestID: UUID?,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) async -> Resolved? {
+        await MainActor.run { () -> Resolved? in
+            guard let tree = self.store.tree(for: partitionKey) else { return nil }
+            // Peek (no access bump) at the deepest resident body — the
+            // recompute alternative the gate prices against.
+            let alternative = tree.findBestSnapshot(
+                tokens: tokens, updateAccess: false, includeSnapshotRefs: false
+            )
+            let alternativeOffset = alternative?.0.state.body?.tokenOffset ?? 0
+            guard
+                !EvictionPolicy.hydrationGateAdmits(
+                    hydrationBytes: hydrationBytes,
+                    hitOffset: hitOffset,
+                    alternativeOffset: alternativeOffset,
+                    config: self.evictionConfig
+                )
+            else { return nil }
+
+            diagnostics.logSkip(
+                stage: "hydration",
+                reason: "gateRecomputeCheaper",
+                extraFields: [
+                    ("id", hitID),
+                    ("bytes", "\(hydrationBytes)"),
+                    ("hitOffset", "\(hitOffset)"),
+                    ("alternativeOffset", "\(alternativeOffset)"),
+                ]
+            )
+            let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
+            // Serve the peeked alternative as a real hit — the same node the
+            // gate priced against (identical `tokens`, `includeSnapshotRefs`),
+            // so bump its access directly rather than re-walking the tree.
+            guard let (node, _) = alternative, let body = node.state.body else {
+                return Resolved(
+                    lookup: LookupResult(
+                        snapshot: nil, partitionKey: partitionKey,
+                        snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
+                        reason: .missNoSnapshotInPrefix
+                    ),
+                    hydratedFromSSD: false, hydrationSeconds: 0
+                )
+            }
+            node.lastAccessTime = .now
+            let recordedHitID = self.store.noteLookupHit(on: node)
+            self.recordHitSavings(restoredOffset: body.tokenOffset)
+            if let pinRequestID {
+                self.pinRestorePath(node: node, requestID: pinRequestID)
+            }
+            if let recordedHitID {
+                diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: recordedHitID))
+            }
+            return Resolved(
+                lookup: LookupResult(
+                    snapshot: body,
+                    partitionKey: partitionKey,
+                    snapshotTokenOffset: body.tokenOffset,
+                    sharedPrefixLength: treeMatchDepth,
+                    reason: .hit(
+                        snapshotOffset: body.tokenOffset,
+                        totalTokens: promptTokenCount,
+                        type: body.checkpointType
+                    ),
+                    recordedHitSnapshotID: recordedHitID
+                ),
+                hydratedFromSSD: false, hydrationSeconds: 0
+            )
+        }
     }
 
     private nonisolated func missAfterFailedHydration(
@@ -892,6 +1065,17 @@ final class PrefixCacheManager {
 
     @discardableResult
     func admit(_ admission: SnapshotAdmission) -> StoreDiagnostics {
+        // Re-evaluate the measured ceiling on the write path (throttled):
+        // budget accuracy matters exactly when bytes are about to land,
+        // and the admission cadence is the "periodic" of ADR-0018.
+        reevaluateBudgetCeilingIfDue()
+        // Feed the Active-Inference Reserve's per-lane estimate: an
+        // end-of-turn leaf *is* one lane's KV working set, measured.
+        if admission.kind == .leaf {
+            activeInferenceReserve.observeLeaf(
+                bytes: admission.entries.first.snapshot.memoryBytes
+            )
+        }
         let tree = store.getOrCreateTree(for: admission.partitionKey)
         var supersededLeaves: [LeafSupersession] = []
         let hasSSDEntry = admission.entries.contains { entry in
@@ -1658,6 +1842,75 @@ final class PrefixCacheManager {
         floorContents().bytes
     }
 
+    // MARK: - Dynamic Budget Ceilings (ADR-0018)
+
+    /// Minimum spacing between headroom measurements. The admission
+    /// cadence drives re-evaluation, so this is a throttle, not a
+    /// timer — an idle cache measures nothing (and needs nothing:
+    /// budget only matters when bytes move).
+    static let ceilingReevaluationMinimumInterval: Duration = .seconds(15)
+
+    /// Throttled entry — called on every admission. Internal (not
+    /// private) so the throttle and override-suspension guards are
+    /// assertable with an injected `now`.
+    func reevaluateBudgetCeilingIfDue(now: ContinuousClock.Instant = .now) {
+        guard headroomSource != nil, !budgetOverrideActive else { return }
+        if let last = lastCeilingReevaluation,
+            now - last < Self.ceilingReevaluationMinimumInterval
+        {
+            return
+        }
+        reevaluateBudgetCeiling(now: now)
+    }
+
+    /// One measured ceiling recomputation: sample headroom, subtract
+    /// the count-aware **Active-Inference Reserve**, rebase the band
+    /// (fast-down stays with the OS pressure events; this is the
+    /// slow-up clock), and drain if the live budget contracted.
+    /// Public so tests and the E2E harness can force a measurement
+    /// without waiting out the throttle.
+    @discardableResult
+    func reevaluateBudgetCeiling(now: ContinuousClock.Instant = .now) -> [EvictionEvent] {
+        guard let headroomSource, let sample = headroomSource.sample() else { return [] }
+        lastCeilingReevaluation = now
+        let lanes = max(activeRequestIDs.count, 1)
+        let reserveBytes = activeInferenceReserve.reserveBytes(lanes: lanes)
+        let previousCeiling = budgetBand.ceilingBytes
+        let previous = budgetBand.currentBytes
+        let residentBytes = totalSnapshotBytes
+        let ceiling = DynamicCeilingPolicy.ceilingBytes(
+            residentBytes: residentBytes,
+            measuredHeadroomBytes: sample.headroomBytes,
+            reserveBytes: reserveBytes,
+            capBytes: ramBudgetCapBytes
+        )
+        let floor = floorContents().bytes
+        budgetBand = budgetBand.rebasingCeiling(ceiling, floorBytes: floor)
+        memoryBudgetBytes = budgetBand.currentBytes
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.BudgetMeasurementEvent(
+                headroomBytes: sample.headroomBytes,
+                reserveBytes: reserveBytes,
+                lanes: lanes,
+                residentBytes: residentBytes,
+                capBytes: ramBudgetCapBytes,
+                ceilingBytes: budgetBand.ceilingBytes,
+                previousCeilingBytes: previousCeiling
+            ))
+        if budgetBand.currentBytes != previous {
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.BudgetChangeEvent(
+                    reason: "measurement",
+                    previousBytes: previous,
+                    currentBytes: budgetBand.currentBytes,
+                    ceilingBytes: budgetBand.ceilingBytes,
+                    floorBytes: floor
+                ))
+        }
+        guard budgetBand.currentBytes < previous else { return [] }
+        return evictToFitBudget()
+    }
+
     /// Override the RAM-tier budget, band-consistently: the band is
     /// rebuilt around the new value (ceiling and current alike), so a
     /// subsequent pressure regrowth converges to the override instead of
@@ -1669,6 +1922,10 @@ final class PrefixCacheManager {
     @discardableResult
     func setMemoryBudget(_ bytes: Int) -> [EvictionEvent] {
         let previous = memoryBudgetBytes
+        // An explicit override suspends measurement (ADR-0018): the E2E
+        // scenarios script the budget and must not be re-measured out
+        // from under mid-run.
+        budgetOverrideActive = true
         budgetBand = PrefixCacheBudgetBand(ceilingBytes: bytes)
         memoryBudgetBytes = budgetBand.currentBytes
         if memoryBudgetBytes != previous {
@@ -1783,11 +2040,13 @@ final class PrefixCacheManager {
         )
     }
 
-    /// Release a request's restore pins. Idempotent; called from the
-    /// completion drive's all-exit-paths tail. From here on the turn's
-    /// protection is the freshest-leaf floor member, not the pin.
+    /// Release a request's restore pins and its reserve lane.
+    /// Idempotent; called from the completion drive's all-exit-paths
+    /// tail. From here on the turn's protection is the freshest-leaf
+    /// floor member, not the pin.
     func completeRequest(requestID: UUID) {
         restorePins.removeAll { $0.requestID == requestID }
+        activeRequestIDs.remove(requestID)
     }
 
     // MARK: - Eviction
@@ -2058,8 +2317,8 @@ final class PrefixCacheManager {
     ///
     /// Strategy (in order):
     /// 1. **Preferred utility**: if a `preferredTree` is supplied, score
-    ///    its Marconi-eligible nodes (snapshot + `childCount <= 1` +
-    ///    non-`.system`) and return the lowest-utility one. This is the
+    ///    its eligible nodes (every body-bearing node — uniform eviction,
+    ///    ADR-0019) and return the lowest-utility one. This is the
     ///    writing-partition-first rule.
     /// 2. **Global utility**: if the preferred tree has no eligible
     ///    candidates (or none was supplied), score eligible nodes across
@@ -2068,12 +2327,14 @@ final class PrefixCacheManager {
     ///    configurations and for the spill-over case when the writing
     ///    partition is already drained.
     /// 3. **Preferred fallback**: if both utility paths are empty but
-    ///    the preferred tree still has any snapshots (all ineligible —
-    ///    e.g., `.system`-only), drop the oldest one from the preferred
-    ///    tree.
+    ///    the preferred tree still has any unprotected snapshot, drop
+    ///    the oldest one from the preferred tree. With uniform
+    ///    eligibility this is a residual safety net (the eligible set
+    ///    equals the snapshot set), kept so the hard budget invariant
+    ///    never depends on scoring returning a victim.
     /// 4. **Global fallback**: drop the oldest snapshot from any tree,
-    ///    including multi-child branches, so the hard budget invariant
-    ///    holds in degenerate cases like a zero-budget drain.
+    ///    so the hard budget invariant holds in degenerate cases like a
+    ///    zero-budget drain.
     private func findEvictionCandidate(
         now: ContinuousClock.Instant,
         orderedPartitions: [(key: CachePartitionKey, tree: TokenRadixTree)],

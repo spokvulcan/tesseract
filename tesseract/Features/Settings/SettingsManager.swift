@@ -317,11 +317,22 @@ final class SettingsManager {
         didSet { SettingsCatalogue.prefixCacheSSDEnabled.write(prefixCacheSSDEnabled, to: store) }
     }
 
-    /// Hard top-level byte budget for the SSD tier. Default single-sourced in
-    /// `SettingsCatalogue.prefixCacheSSDBudgetBytes` (20 GiB).
-    var prefixCacheSSDBudgetBytes: Int {
+    /// User cap on the RAM-tier cache budget (ADR-0018). `nil` =
+    /// "Automatic (recommended)". Caps only — a value above the measured
+    /// ceiling changes nothing, and pressure retreat always wins.
+    var prefixCacheRAMBudgetCapBytes: Int? {
         didSet {
-            SettingsCatalogue.prefixCacheSSDBudgetBytes.write(prefixCacheSSDBudgetBytes, to: store)
+            SettingsCatalogue.prefixCacheRAMBudgetCapBytes.write(
+                prefixCacheRAMBudgetCapBytes, to: store)
+        }
+    }
+
+    /// User cap on the SSD-tier budget (ADR-0018). `nil` = "Automatic
+    /// (recommended)": the budget tracks measured free disk space.
+    var prefixCacheSSDBudgetCapBytes: Int? {
+        didSet {
+            SettingsCatalogue.prefixCacheSSDBudgetCapBytes.write(
+                prefixCacheSSDBudgetCapBytes, to: store)
         }
     }
 
@@ -386,7 +397,9 @@ final class SettingsManager {
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
         self.serverPort = SettingsCatalogue.serverPort.load(from: store)
         self.prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.load(from: store)
-        self.prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.load(
+        self.prefixCacheRAMBudgetCapBytes = SettingsCatalogue.prefixCacheRAMBudgetCapBytes.load(
+            from: store)
+        self.prefixCacheSSDBudgetCapBytes = SettingsCatalogue.prefixCacheSSDBudgetCapBytes.load(
             from: store)
         self.prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride
             .load(from: store)
@@ -407,7 +420,8 @@ final class SettingsManager {
         guard prefixCacheSSDEnabled else { return nil }
         return .withAutoPendingCap(
             rootURL: resolvedSSDPrefixCacheRootURL(),
-            budgetBytes: prefixCacheSSDBudgetBytes
+            budgetCapBytes: prefixCacheSSDBudgetCapBytes,
+            measuresFreeDisk: true
         )
     }
 
@@ -483,7 +497,8 @@ final class SettingsManager {
         isServerEnabled = SettingsCatalogue.isServerEnabled.default
         serverPort = SettingsCatalogue.serverPort.default
         prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.default
-        prefixCacheSSDBudgetBytes = SettingsCatalogue.prefixCacheSSDBudgetBytes.default
+        prefixCacheRAMBudgetCapBytes = SettingsCatalogue.prefixCacheRAMBudgetCapBytes.default
+        prefixCacheSSDBudgetCapBytes = SettingsCatalogue.prefixCacheSSDBudgetCapBytes.default
         prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.default
         // Dynamic per-model keys are minted on demand and aren't in the static
         // enumeration above; sweep their prefix so a reset truly clears them. A

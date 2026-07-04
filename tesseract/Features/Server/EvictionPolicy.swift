@@ -245,6 +245,37 @@ enum EvictionPolicy {
         }
     }
 
+    // MARK: - Hydration gate (PRD #149 item 7, HiCache min-hit gate)
+
+    /// Should a body-less SSD hit hydrate, or is re-prefilling from the
+    /// best resident RAM body cheaper? HiCache guards this with a
+    /// 256-token constant; here it falls out of recovery-cost pricing —
+    /// the same measured estimates eviction scores with. `hitOffset` is
+    /// the SSD hit's boundary, `alternativeOffset` the deepest resident
+    /// RAM body on the same path (0 when none): hydration buys exactly
+    /// the `alternativeOffset → hitOffset` span of prefill.
+    ///
+    /// Unmeasurable estimates (a zeroed throughput) admit — hydrating
+    /// is today's behavior and the conservative default.
+    nonisolated static func hydrationGateAdmits(
+        hydrationBytes: Int,
+        hitOffset: Int,
+        alternativeOffset: Int,
+        config: EvictionConfiguration
+    ) -> Bool {
+        let bytesPerSecond = config.estimates.hydrationBytesPerSecond
+        let flopsPerSecond = config.estimates.prefillFlopsPerSecond
+        guard bytesPerSecond > 0, flopsPerSecond > 0 else { return true }
+        let hydrateSeconds = Double(max(hydrationBytes, 0)) / bytesPerSecond
+        let recomputeSeconds =
+            parentRelativeFlops(
+                nodeOffset: hitOffset,
+                parentOffset: alternativeOffset,
+                profile: config.flopProfile
+            ) / flopsPerSecond
+        return hydrateSeconds <= recomputeSeconds
+    }
+
     // MARK: - Scoring
 
     /// Score a candidate set. Returns scores in the same order as `candidates`.

@@ -19,17 +19,27 @@ nonisolated protocol SnapshotHydrating: Sendable {
     /// `nonisolated` so the read stays off the MainActor (ADR-0001). Returns
     /// `nil` on any failure (missing file / fingerprint mismatch / decode
     /// error); the on-disk backing is removed on failure.
+    ///
+    /// `interruption` (PRD #149 item 7, HiCache's cancellable prefetch):
+    /// polled between segment reads and before decode. When it fires the
+    /// load returns `nil` **without** touching the on-disk backing — the
+    /// caller distinguishes an interrupted `nil` (leave the node intact)
+    /// from a failed one (clear it) by re-polling the same closure.
+    /// `nil` means uninterruptible — the foreground request path.
     nonisolated func loadSync(
         snapshotRef: SnapshotRef,
-        expectedFingerprint: String
+        expectedFingerprint: String,
+        interruption: (@Sendable () -> Bool)?
     ) -> HybridCacheSnapshot?
 
     /// Compose the owning chain's leading segments into a body for a
-    /// **Chain-Prefix Restore** point (ADR-0012). Same isolation contract as
-    /// `loadSync`: off-MainActor read, `nil` on failure.
+    /// **Chain-Prefix Restore** point (ADR-0012). Same isolation and
+    /// interruption contract as `loadSync`: off-MainActor read, `nil` on
+    /// failure, an interrupted `nil` leaves the chain untouched.
     nonisolated func loadSyncPrefix(
         point: ChainPrefixRestorePoint,
-        expectedFingerprint: String
+        expectedFingerprint: String,
+        interruption: (@Sendable () -> Bool)?
     ) -> HybridCacheSnapshot?
 
     /// Bump an SSD-tier entry's recency so hot entries never look stale to the

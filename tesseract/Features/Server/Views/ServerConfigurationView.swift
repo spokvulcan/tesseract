@@ -86,6 +86,8 @@ struct ServerConfigurationView: View {
                 )
             }
 
+            ServerPromptCacheBudgetSection()
+
             ServerPreserveThinkingSection()
         }
         .formStyle(.grouped)
@@ -118,6 +120,63 @@ struct ServerConfigurationView: View {
             }
         } else {
             portText = String(settings.serverPort)
+        }
+    }
+}
+
+/// Prompt-cache budget caps (ADR-0018, PRD #149). Both budgets are
+/// *measured* — RAM from free + purgeable memory, SSD from free disk —
+/// so "Automatic (recommended)" is the default and a custom value acts
+/// as a **cap only**: it can lower the effective limit, never raise it,
+/// and pressure retreat always wins. A user cannot configure the swap
+/// incident back into existence. Snapshot-at-load semantics, like every
+/// prefix-cache setting.
+private struct ServerPromptCacheBudgetSection: View {
+    @Environment(SettingsManager.self) private var settings
+
+    private static let gib = 1024 * 1024 * 1024
+    private static let ramCapChoices = [2, 4, 8, 16, 32, 64].map { $0 * gib }
+    private static let ssdCapChoices = [10, 20, 50, 100].map { $0 * gib }
+
+    var body: some View {
+        @Bindable var settings = settings
+        Section {
+            capPicker(
+                "Memory Limit",
+                selection: $settings.prefixCacheRAMBudgetCapBytes,
+                choices: Self.ramCapChoices
+            )
+            capPicker(
+                "Disk Limit",
+                selection: $settings.prefixCacheSSDBudgetCapBytes,
+                choices: Self.ssdCapChoices
+            )
+        } header: {
+            Text("Prompt Cache")
+        } footer: {
+            Text(
+                "Automatic sizes the cache from measured free memory and disk space. A custom value only lowers the limit — the cache always shrinks first under system memory pressure. Applies at the next model load."
+            )
+        }
+    }
+
+    private func capPicker(
+        _ title: String,
+        selection: Binding<Int?>,
+        choices: [Int]
+    ) -> some View {
+        // A persisted custom value outside the preset list still renders
+        // (and stays selected) rather than blanking the picker.
+        var resolved = choices
+        if let current = selection.wrappedValue, !resolved.contains(current) {
+            resolved.append(current)
+            resolved.sort()
+        }
+        return Picker(title, selection: selection) {
+            Text("Automatic (recommended)").tag(Int?.none)
+            ForEach(resolved, id: \.self) { bytes in
+                Text(PromptCacheFormatting.bytes(bytes)).tag(Int?.some(bytes))
+            }
         }
     }
 }

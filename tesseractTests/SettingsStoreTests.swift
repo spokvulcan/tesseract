@@ -50,8 +50,15 @@ struct SettingsStoreTests {
         // default — nil here — not an empty string).
         store.setOptional("path", for: "c.opt")
         #expect(store.optionalString(for: "c.opt") == "path")
-        store.setOptional(nil, for: "c.opt")
+        store.setOptional(nil as String?, for: "c.opt")
         #expect(store.optionalString(for: "c.opt") == nil)
+
+        // Optional-int round-trip, then nil removes the key.
+        #expect(store.optionalInt(for: "c.optInt") == nil)
+        store.setOptional(9, for: "c.optInt")
+        #expect(store.optionalInt(for: "c.optInt") == 9)
+        store.setOptional(nil as Int?, for: "c.optInt")
+        #expect(store.optionalInt(for: "c.optInt") == nil)
     }
 
     // MARK: - Peer-implementation conformance

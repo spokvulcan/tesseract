@@ -56,19 +56,23 @@ final class InMemorySnapshotHydrating: @unchecked Sendable, SnapshotHydrating {
 
     nonisolated func loadSync(
         snapshotRef: SnapshotRef,
-        expectedFingerprint: String
+        expectedFingerprint: String,
+        interruption: (@Sendable () -> Bool)? = nil
     ) -> HybridCacheSnapshot? {
         let id = snapshotRef.snapshotID
         loadSyncCalls.append(id)
+        if interruption?() == true { return nil }
         return outcomes[id]
     }
 
     nonisolated func loadSyncPrefix(
         point: ChainPrefixRestorePoint,
-        expectedFingerprint: String
+        expectedFingerprint: String,
+        interruption: (@Sendable () -> Bool)? = nil
     ) -> HybridCacheSnapshot? {
         let id = point.ownerSnapshotID
         loadSyncPrefixCalls.append(id)
+        if interruption?() == true { return nil }
         return outcomes[id]
     }
 

@@ -98,7 +98,8 @@ actor LLMActor {
     func loadModel(
         from directory: URL,
         visionMode: Bool,
-        ssdConfig: SSDPrefixCacheConfig? = nil
+        ssdConfig: SSDPrefixCacheConfig? = nil,
+        ramBudgetCapBytes: Int? = nil
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let identity = ModelIdentity(directory: directory)
         let format = identity.toolCallFormat
@@ -131,7 +132,8 @@ actor LLMActor {
         installLoadTimeState(
             modelIdentity: identity,
             fingerprint: fingerprint,
-            ssdConfig: ssdConfig
+            ssdConfig: ssdConfig,
+            ramBudgetCapBytes: ramBudgetCapBytes
         )
 
         if isParoModel {
@@ -751,12 +753,17 @@ actor LLMActor {
     private func installLoadTimeState(
         modelIdentity: ModelIdentity,
         fingerprint: String,
-        ssdConfig: SSDPrefixCacheConfig?
+        ssdConfig: SSDPrefixCacheConfig?,
+        ramBudgetCapBytes: Int? = nil
     ) {
         ensureServerCompletion().installLoadTimeState(
             modelIdentity: modelIdentity,
             fingerprint: fingerprint,
-            ssdConfig: ssdConfig
+            ssdConfig: ssdConfig,
+            ramBudgetCapBytes: ramBudgetCapBytes,
+            // Production is the one place that measures the live machine
+            // (ADR-0018); fixtures installing state directly stay static.
+            headroomSource: MachMemoryHeadroomSource()
         )
     }
 

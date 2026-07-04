@@ -241,7 +241,13 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         self.ledger = SnapshotLedger(
             rootURL: config.rootURL,
             budgetBytes: config.budgetBytes,
-            manifestDebounce: manifestDebounce
+            manifestDebounce: manifestDebounce,
+            budgetCapBytes: config.budgetCapBytes,
+            // Dynamic SSD budget (ADR-0018): production configs measure
+            // free disk; test/replay configs stay on the static bootstrap.
+            freeDiskBytesProvider: config.measuresFreeDisk
+                ? { SSDBudgetPolicy.measuredFreeDiskBytes(rootURL: $0) }
+                : nil
         )
         self.onCommit = onCommit
         self.onDrop = onDrop
@@ -521,7 +527,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         return PromptCacheSSDSnapshot(
             enabled: true,
             rootPath: rootURL.path,
-            budgetBytes: budgetBytes,
+            // The budget currently in force (measured; ADR-0018), not
+            // the bootstrap constant this store was constructed with.
+            budgetBytes: ledger.currentBudgetBytes(),
             currentBytes: residency.currentBytes,
             pendingBytes: queuedBytes,
             maxPendingBytes: maxPendingBytes,
@@ -1178,7 +1186,8 @@ extension SSDSnapshotStore {
     /// Returns `nil` on any failure; `HybridCacheSnapshot` on success.
     nonisolated func loadSync(
         snapshotRef: SnapshotRef,
-        expectedFingerprint: String
+        expectedFingerprint: String,
+        interruption: (@Sendable () -> Bool)? = nil
     ) -> HybridCacheSnapshot? {
         // Fingerprint gate: compare the partition's persisted
         // fingerprint against the caller's expected value. Mismatch
@@ -1221,9 +1230,13 @@ extension SSDSnapshotStore {
         // missing / permission / IO errors via one catch site.
         // `.mappedIfSafe` lets the kernel page in on demand so
         // ~200 MiB snapshots do not spike peak RSS during hydration.
+        // The interruption poll between segments is the yield point a
+        // preempted background hydration exits through (PRD #149 item
+        // 7) — an interrupted return leaves the backing untouched.
         var segmentData: [Data] = []
         segmentData.reserveCapacity(chainURLs.count)
         for url in chainURLs {
+            if interruption?() == true { return nil }
             do {
                 segmentData.append(try Data(contentsOf: url, options: .mappedIfSafe))
             } catch {
@@ -1234,6 +1247,7 @@ extension SSDSnapshotStore {
                 )
             }
         }
+        if interruption?() == true { return nil }
 
         // Decode and compose the chain, reconstructing MLXArrays
         // from raw payload bytes inside the caller's Metal-affine
@@ -1275,7 +1289,8 @@ extension SSDSnapshotStore {
     ///   owner's tree ref *and* its dependent restore points.
     nonisolated func loadSyncPrefix(
         point: ChainPrefixRestorePoint,
-        expectedFingerprint: String
+        expectedFingerprint: String,
+        interruption: (@Sendable () -> Bool)? = nil
     ) -> HybridCacheSnapshot? {
         func missPoint(
             _ reason: PrefixCacheDiagnostics.SSDMissReason,
@@ -1325,6 +1340,9 @@ extension SSDSnapshotStore {
         var segmentData: [Data] = []
         segmentData.reserveCapacity(prefixURLs.count)
         for url in prefixURLs {
+            // Yield point (PRD #149 item 7): an interrupted return
+            // leaves the chain untouched — no condemn, no miss event.
+            if interruption?() == true { return nil }
             do {
                 segmentData.append(try Data(contentsOf: url, options: .mappedIfSafe))
             } catch {
@@ -1340,6 +1358,8 @@ extension SSDSnapshotStore {
                 return nil
             }
         }
+
+        if interruption?() == true { return nil }
 
         do {
             return try decodeSegmentChain(
