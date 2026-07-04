@@ -36,15 +36,22 @@ nonisolated struct ServerInferenceModelState: Sendable, Equatable {
     /// allowlist for `chat_template_kwargs` and the per-model
     /// **Preserve-Thinking Render** setting (issue #98).
     let declaredTemplateFlags: Set<TemplateRenderFlag>
+    /// The loaded model's tool-call format (`ModelIdentity.toolCallFormat`) —
+    /// what the completion handler's Argument Transcoder keys off. `nil`
+    /// means "no override": the parser then falls back to the vendor JSON
+    /// default, and the transcoder mirrors that with `?? .json`.
+    let toolCallFormat: ToolCallFormat?
 
     init(
         modelID: String,
         visionMode: Bool,
-        declaredTemplateFlags: Set<TemplateRenderFlag> = []
+        declaredTemplateFlags: Set<TemplateRenderFlag> = [],
+        toolCallFormat: ToolCallFormat? = nil
     ) {
         self.modelID = modelID
         self.visionMode = visionMode
         self.declaredTemplateFlags = declaredTemplateFlags
+        self.toolCallFormat = toolCallFormat
     }
 
     static let unavailable = ServerInferenceModelState(

@@ -431,6 +431,77 @@ struct CompletionHandlerTests {
         #expect(nonStreaming.usage?.total_tokens == streaming.usage?.total_tokens)
     }
 
+    // MARK: - Streaming tool-call closure (ADR-0020)
+
+    /// Once Argument Fragments streamed, a `.stop` projection (no parsed call
+    /// survived — the transcoder closed the call wire-valid) must still read
+    /// `tool_calls`; `.length` and an existing `tool_calls` pass through, and
+    /// nothing changes when nothing streamed.
+    @Test func resolvedStreamingFinishReasonOverridesStopOnlyAfterFragments() {
+        #expect(
+            CompletionHandler.resolvedStreamingFinishReason(
+                projection: .stop, wireStreamedToolCalls: true
+            ) == .tool_calls)
+        #expect(
+            CompletionHandler.resolvedStreamingFinishReason(
+                projection: .length, wireStreamedToolCalls: true
+            ) == .length)
+        #expect(
+            CompletionHandler.resolvedStreamingFinishReason(
+                projection: .tool_calls, wireStreamedToolCalls: true
+            ) == .tool_calls)
+        #expect(
+            CompletionHandler.resolvedStreamingFinishReason(
+                projection: .stop, wireStreamedToolCalls: false
+            ) == .stop)
+        #expect(
+            CompletionHandler.resolvedStreamingFinishReason(
+                projection: .length, wireStreamedToolCalls: false
+            ) == .length)
+    }
+
+    @MainActor @Test func finalStreamingChunkHonorsFinishReasonOverride() {
+        let info = AgentGeneration.Info(
+            promptTokenCount: 10,
+            generationTokenCount: 5,
+            promptTime: 0.1,
+            generateTime: 0.1,
+            stopReason: .stop
+        )
+        // A turn with no text and no parsed tool calls projects `.stop`…
+        let projection = makeProjection(
+            info: info,
+            maxTokens: 256,
+            completionID: "chatcmpl-override"
+        )
+        #expect(projection.finishReason == .stop)
+
+        // …but when fragments streamed, the caller overrides to `.tool_calls`.
+        let overridden = CompletionHandler.makeFinalStreamingChunk(
+            projection: projection,
+            completionID: "chatcmpl-override",
+            requestModel: nil,
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            cachedTokenCount: 0,
+            includeUsage: false,
+            finishReasonOverride: .tool_calls
+        )
+        #expect(overridden.choices[0].finish_reason == .tool_calls)
+
+        // Default (no override) preserves the projection's reason.
+        let plain = CompletionHandler.makeFinalStreamingChunk(
+            projection: projection,
+            completionID: "chatcmpl-override",
+            requestModel: nil,
+            physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678,
+            cachedTokenCount: 0,
+            includeUsage: false
+        )
+        #expect(plain.choices[0].finish_reason == .stop)
+    }
+
     @MainActor @Test func finalStreamingChunkOmitsUsageWhenMetricsAreUnavailable() {
         let projection = makeProjection(
             text: "Hi",

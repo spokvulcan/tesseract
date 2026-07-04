@@ -27,7 +27,8 @@ final class ServerInferenceService {
                 ServerInferenceModelState(
                     modelID: $0.modelID,
                     visionMode: $0.visionMode,
-                    declaredTemplateFlags: arbiter.loadedDeclaredTemplateFlags
+                    declaredTemplateFlags: arbiter.loadedDeclaredTemplateFlags,
+                    toolCallFormat: arbiter.loadedToolCallFormat
                 )
             }
         }

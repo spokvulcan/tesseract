@@ -375,6 +375,39 @@ token-stream vocabulary, not the model handle); Inference Session (collides with
 **Inference Arbiter**); model surface / perform wrapper (the mechanism, not the
 concept); widening it before a second consumer needs a member.
 
+### Streaming tool calls
+
+**Argument Transcoder**:
+The server-side component that converts model-native in-flight tool-call text
+(Qwen `<function=…>` XML, or the JSON wrapper body) into OpenAI
+`function.arguments` **Argument Fragment**s, incrementally. It engages only after
+the function name is locked and only for formats it understands (per-format
+strategies behind one seam); every other format keeps the atomic
+name-then-full-arguments emission. When engaged, its fragments are authoritative
+for the streamed wire — the parser's final tool call is a diagnostic
+cross-check, never re-sent.
+_Avoid_: tool-call streamer (the deltas already stream internally; this
+transcodes), converter (ToolCallConverter is the non-streaming id/JSON adapter),
+parser (upstream — it produces the deltas the transcoder consumes).
+
+**Argument Fragment**:
+One streamed piece of a tool call's `function.arguments` on the OpenAI wire. The
+concatenation of a call's fragments is the canonical arguments JSON: it must
+parse, and no strict prefix of it may parse (clients finalize on the first
+parseable accumulation). Schema-typed non-string parameter values are emitted
+whole at parameter close; string values stream progressively.
+_Avoid_: chunk (prefill vocabulary), delta (the internal parser event —
+`.toolCallDelta` carries raw model text, a fragment carries transcoded JSON).
+
+**Wire-Valid Close**:
+The closure rule for a tool call already on the streamed wire: there is no
+retraction, so any termination — malformation, cancel, safeguard intervention,
+max-tokens — synthesizes closers so the accumulated **Argument Fragment**s still
+parse as JSON, then the stream finishes with the appropriate finish reason. The
+malformed→text fallback survives only where nothing was streamed yet.
+_Avoid_: error recovery (the client's tool-error loop handles semantics; this
+only guarantees wire validity), abort (the stream ends validly, not abruptly).
+
 ### Client integrations
 
 **Integration**:

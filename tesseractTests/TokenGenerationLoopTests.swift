@@ -300,9 +300,21 @@ struct ToolCallDeltaTrackerTests {
 
     @Test func trailingTextAfterCloseIsRescannedForNextCall() {
         var tracker = makeTracker()
+        // The first block's body deltas out in full (open tag included, close
+        // tag excluded), then the trailing tagged call is picked up.
         let delta = tracker.observe(#"<tool_call>{}</tool_call><tool_call>{"b""#)
-        #expect(delta == #"<tool_call>{"b""#)
+        #expect(delta == #"<tool_call>{}<tool_call>{"b""#)
         #expect(tracker.isMidToolCall)
+    }
+
+    @Test func closeTagChunkDeltasItsBodyBytesButNotTheTag() {
+        var tracker = makeTracker()
+        #expect(tracker.observe(#"<tool_call>{"a":"#) == #"<tool_call>{"a":"#)
+        // The chunk carrying the close tag still deltas the body bytes that
+        // precede it — the Argument Transcoder needs the complete body on
+        // this channel — while the tag itself never surfaces.
+        #expect(tracker.observe(#" 1}</tool_call>"#) == " 1}")
+        #expect(tracker.isMidToolCall == false)
     }
 
     @Test func incrementalCollectingEmitsOnlyNewBytes() {

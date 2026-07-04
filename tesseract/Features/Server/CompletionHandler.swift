@@ -43,6 +43,13 @@ struct CompletionHandler: Sendable {
         /// store so that recovered reasoning content cannot cross two
         /// different physical LLM slots with the same client session.
         let visionMode: Bool
+        /// Tool-call format of the loaded model — what the streaming path's
+        /// Argument Transcoder keys off (`nil` ⇒ the vendor JSON default,
+        /// mirroring the parser's own fallback).
+        let toolCallFormat: ToolCallFormat?
+        /// The request's converted tool definitions, for schema-typed
+        /// argument transcoding.
+        let toolSpecs: [ToolSpec]?
         let completionID: String
         let stream: AsyncThrowingStream<AgentGeneration, Error>
         let cachedTokenCount: Int
@@ -354,6 +361,8 @@ struct CompletionHandler: Sendable {
                 .init(
                     modelID: startModelState.modelID,
                     visionMode: startModelState.visionMode,
+                    toolCallFormat: startModelState.toolCallFormat,
+                    toolSpecs: toolSpecs,
                     completionID: completionID,
                     stream: start.stream,
                     cachedTokenCount: start.cachedTokenCount,
@@ -585,7 +594,7 @@ struct CompletionHandler: Sendable {
         // Emit initial chunk with role
         guard
             await sse.send(
-                makeChunk(
+                Self.makeChunk(
                     id: start.completionID, model: model, created: created,
                     delta: OpenAI.ChunkDelta(role: .assistant)
                 ))
@@ -627,14 +636,23 @@ struct CompletionHandler: Sendable {
             }
 
             group.addTask {
-                await self.streamGenerationEvents(
+                await Self.streamGenerationEvents(
                     start.stream,
-                    sse: sse,
-                    completionID: start.completionID,
-                    model: model,
-                    created: created,
+                    envelope: ChunkEnvelope(
+                        completionID: start.completionID, model: model, created: created
+                    ),
+                    // The Argument Transcoder keys off the loaded model's
+                    // tool-call format — the same identity that selects the
+                    // parser; `nil` mirrors the parser's vendor JSON default
+                    // (ADR-0020).
+                    transcoder: ArgumentTranscoder(
+                        format: start.toolCallFormat ?? .json,
+                        toolSpecs: start.toolSpecs
+                    ),
+                    activityLog: self.activityLog,
+                    logHandle: logHandle,
                     cancel: start.cancel,
-                    logHandle: logHandle
+                    send: { await sse.send($0) }
                 )
             }
 
@@ -644,7 +662,7 @@ struct CompletionHandler: Sendable {
         }
 
         switch outcome {
-        case .completed(let accumulator, let info):
+        case .completed(let accumulator, let info, let wireStreamedToolCalls):
             // One Generation Projection — identical construction to the
             // non-streaming path — owns finish_reason, the malformed→text
             // fallback, the safeguard sidecar, and the diagnostic.
@@ -671,19 +689,35 @@ struct CompletionHandler: Sendable {
             // final text content and one SSE content chunk) lets the caller
             // detect the pattern (e.g. content contains `<tool_call>`) and
             // decide how to recover.
+            //
+            // The fallback survives only where nothing streamed (ADR-0020):
+            // once Argument Fragments went out, the attempted call is already
+            // on the wire wire-valid — re-sending it as text would duplicate
+            // it, so the extra content chunk is suppressed.
             if projection.malformedFallbackSurfaced {
                 logSurfacedFallback(
                     completionID: start.completionID,
                     rawLen: projection.diagnostic.malformedLen
                 )
-                _ = await sse.send(
-                    makeChunk(
-                        id: start.completionID,
-                        model: model,
-                        created: created,
-                        delta: OpenAI.ChunkDelta(content: projection.textContent)
-                    ))
+                if !wireStreamedToolCalls {
+                    _ = await sse.send(
+                        Self.makeChunk(
+                            id: start.completionID,
+                            model: model,
+                            created: created,
+                            delta: OpenAI.ChunkDelta(content: projection.textContent)
+                        ))
+                }
             }
+
+            // A call that streamed but never produced a parsed `.toolCall`
+            // (malformation, dashboard cancel) leaves the projection at
+            // `.stop` — but the wire carries a closed tool call, so the
+            // finish reason must say so. `.length` keeps priority.
+            let finishReason = Self.resolvedStreamingFinishReason(
+                projection: projection.finishReason,
+                wireStreamedToolCalls: wireStreamedToolCalls
+            )
 
             let finalChunk = Self.makeFinalStreamingChunk(
                 projection: projection,
@@ -692,7 +726,8 @@ struct CompletionHandler: Sendable {
                 physicalModelID: start.modelID,
                 created: created,
                 cachedTokenCount: start.cachedTokenCount,
-                includeUsage: includeUsage
+                includeUsage: includeUsage,
+                finishReasonOverride: finishReason
             )
 
             guard await sse.send(finalChunk) else {
@@ -724,13 +759,13 @@ struct CompletionHandler: Sendable {
 
             Log.server.info(
                 "HTTP completion finished — completionID=\(start.completionID) "
-                    + "stream=true finishReason=\(projection.finishReason.rawValue) "
+                    + "stream=true finishReason=\(finishReason.rawValue) "
                     + "promptTokens=\(projection.info?.promptTokenCount ?? 0) "
                     + "completionTokens=\(projection.info?.generationTokenCount ?? 0) "
                     + "cachedTokens=\(start.cachedTokenCount)"
             )
             await activityLog.complete(
-                handle: logHandle, finishReason: projection.finishReason.rawValue)
+                handle: logHandle, finishReason: finishReason.rawValue)
 
         case .disconnected(let source):
             Log.server.info(
@@ -827,7 +862,7 @@ struct CompletionHandler: Sendable {
         await start.waitForCompletion()
     }
 
-    private func makeChunk(
+    private nonisolated static func makeChunk(
         id: String,
         model: String,
         created: Int,
@@ -899,6 +934,20 @@ struct CompletionHandler: Sendable {
         )
     }
 
+    /// The streaming-path finish-reason resolution: once Argument Fragments
+    /// streamed on the wire, a `.stop` (no parsed call survived — the
+    /// transcoder closed the call wire-valid) must still read `tool_calls`;
+    /// `.length` and an already-computed `tool_calls` pass through.
+    nonisolated static func resolvedStreamingFinishReason(
+        projection finishReason: OpenAI.FinishReason,
+        wireStreamedToolCalls: Bool
+    ) -> OpenAI.FinishReason {
+        if wireStreamedToolCalls && finishReason == .stop {
+            return .tool_calls
+        }
+        return finishReason
+    }
+
     static func makeFinalStreamingChunk(
         projection: CompletionProjection,
         completionID: String,
@@ -906,7 +955,8 @@ struct CompletionHandler: Sendable {
         physicalModelID: String,
         created: Int,
         cachedTokenCount: Int,
-        includeUsage: Bool
+        includeUsage: Bool,
+        finishReasonOverride: OpenAI.FinishReason? = nil
     ) -> OpenAI.ChatCompletionChunk {
         var chunk = OpenAI.ChatCompletionChunk(
             id: completionID,
@@ -917,7 +967,7 @@ struct CompletionHandler: Sendable {
                 OpenAI.ChatCompletionChunkChoice(
                     index: 0,
                     delta: OpenAI.ChunkDelta(),
-                    finish_reason: projection.finishReason
+                    finish_reason: finishReasonOverride ?? projection.finishReason
                 )
             ]
         )
@@ -933,34 +983,70 @@ struct CompletionHandler: Sendable {
 
     // MARK: - Stream Event Loop
 
-    private enum DisconnectSource: String, Sendable {
+    enum DisconnectSource: String, Sendable {
         case connectionState = "connection_state"
         case keepaliveWrite = "keepalive_write"
         case chunkWrite = "chunk_write"
     }
 
-    private enum StreamingOutcome: Sendable {
-        /// The terminal Generation Accumulator plus captured completion metrics.
-        /// Both completion paths build one `CompletionProjection` from this.
-        case completed(GenerationAccumulator, AgentGeneration.Info?)
+    enum StreamingOutcome: Sendable {
+        /// The terminal Generation Accumulator plus captured completion metrics
+        /// and whether the Argument Transcoder streamed tool-call fragments on
+        /// the wire. Both completion paths build one `CompletionProjection`
+        /// from the first two; the flag adjusts only this path's closure.
+        case completed(GenerationAccumulator, AgentGeneration.Info?, wireStreamedToolCalls: Bool)
         case disconnected(DisconnectSource)
         case failed(String)
         case cancelled
     }
 
+    /// The per-completion identity every streamed SSE chunk repeats. Bundled
+    /// so tests can drive the stream event loop directly with an injected
+    /// chunk sink (the production sink is `SSEWriter.send`).
+    struct ChunkEnvelope: Sendable {
+        let completionID: String
+        let model: String
+        let created: Int
+    }
+
     /// Consume generation events, emit SSE chunks, return accumulated metadata.
-    private func streamGenerationEvents(
+    ///
+    /// The Argument Transcoder owns every tool-call wire delta on this path:
+    /// in-flight `.toolCallDelta`s become Argument Fragments for transcodable
+    /// formats (Qwen XML, JSON wrapper), `.toolCall` closes the streamed call
+    /// — or falls back to the atomic two-delta emission when nothing streamed
+    /// — and any termination after engagement gets a Wire-Valid Close.
+    nonisolated static func streamGenerationEvents(
         _ stream: AsyncThrowingStream<AgentGeneration, Error>,
-        sse: SSEWriter,
-        completionID: String,
-        model: String,
-        created: Int,
+        envelope: ChunkEnvelope,
+        transcoder: ArgumentTranscoder,
+        activityLog: ServerGenerationLog,
+        logHandle: TraceHandle,
         cancel: @escaping @Sendable () -> Void,
-        logHandle: TraceHandle
+        send: @Sendable (OpenAI.ChatCompletionChunk) async -> Bool
     ) async -> StreamingOutcome {
+        let completionID = envelope.completionID
+        let model = envelope.model
+        let created = envelope.created
         var accumulator = GenerationAccumulator()
         var info: AgentGeneration.Info?
-        var toolCallIndex = 0
+        var transcoder = transcoder
+        var loggedCrossCheckMismatches = 0
+
+        // Send every wire tool-call delta the transcoder produced for one
+        // event, one SSE chunk each. Returns false on client disconnect.
+        func sendToolCallDeltas(_ wireCalls: [OpenAI.ToolCall]) async -> Bool {
+            for wireCall in wireCalls {
+                guard
+                    await send(
+                        makeChunk(
+                            id: completionID, model: model, created: created,
+                            delta: OpenAI.ChunkDelta(tool_calls: [wireCall])
+                        ))
+                else { return false }
+            }
+            return true
+        }
 
         do {
             for try await event in stream {
@@ -971,7 +1057,7 @@ struct CompletionHandler: Sendable {
                 switch event {
                 case .text(let chunk):
                     guard
-                        await sse.send(
+                        await send(
                             makeChunk(
                                 id: completionID, model: model, created: created,
                                 delta: OpenAI.ChunkDelta(content: chunk)
@@ -983,7 +1069,7 @@ struct CompletionHandler: Sendable {
 
                 case .thinking(let chunk):
                     guard
-                        await sse.send(
+                        await send(
                             makeChunk(
                                 id: completionID, model: model, created: created,
                                 delta: OpenAI.ChunkDelta(reasoning_content: chunk)
@@ -993,43 +1079,18 @@ struct CompletionHandler: Sendable {
                         return .disconnected(.chunkWrite)
                     }
 
-                case .toolCall(let call):
-                    let index = toolCallIndex
-                    toolCallIndex += 1
-                    let openAICalls = ToolCallConverter.convertToOpenAI([call])
-                    guard let oaiCall = openAICalls.first else { continue }
-
-                    guard
-                        await sse.send(
-                            makeChunk(
-                                id: completionID, model: model, created: created,
-                                delta: OpenAI.ChunkDelta(tool_calls: [
-                                    OpenAI.ToolCall(
-                                        id: oaiCall.id, type: "function",
-                                        function: OpenAI.FunctionCall(
-                                            name: oaiCall.function?.name, arguments: ""),
-                                        index: index)
-                                ])
-                            ))
-                    else {
+                case .toolCallDelta, .toolCall:
+                    guard await sendToolCallDeltas(transcoder.ingest(event)) else {
                         cancel()
                         return .disconnected(.chunkWrite)
                     }
-
-                    guard
-                        await sse.send(
-                            makeChunk(
-                                id: completionID, model: model, created: created,
-                                delta: OpenAI.ChunkDelta(tool_calls: [
-                                    OpenAI.ToolCall(
-                                        function: OpenAI.FunctionCall(
-                                            arguments: oaiCall.function?.arguments),
-                                        index: index)
-                                ])
-                            ))
-                    else {
-                        cancel()
-                        return .disconnected(.chunkWrite)
+                    if transcoder.crossCheckMismatchCount > loggedCrossCheckMismatches {
+                        loggedCrossCheckMismatches = transcoder.crossCheckMismatchCount
+                        Log.server.warning(
+                            "Argument Transcoder cross-check mismatch — streamed "
+                                + "fragments disagree semantically with the parsed tool "
+                                + "call (wire not corrected) — completionID=\(completionID)"
+                        )
                     }
 
                 case .malformedToolCall(let raw):
@@ -1040,16 +1101,22 @@ struct CompletionHandler: Sendable {
                             + "head=\(String(raw.prefix(120)).debugDescription) "
                             + "tail=\(String(raw.suffix(80)).debugDescription)"
                     )
+                    // Wire-Valid Close for an engaged call — after fragments
+                    // streamed there is no retraction, so the malformed→text
+                    // fallback no longer applies to this call.
+                    guard await sendToolCallDeltas(transcoder.ingest(event)) else {
+                        cancel()
+                        return .disconnected(.chunkWrite)
+                    }
 
                 case .info(let i):
                     info = i
 
-                case .thinkStart, .thinkEnd, .thinkReclassify, .thinkTruncate, .toolCallDelta:
-                    // No SSE side effect. text/thinking/tool-call state is folded
-                    // by the accumulator above; reclassify/truncate only adjust
-                    // the final accumulated content — deltas already sent to the
-                    // client stand. `.toolCallDelta` drives only the activity log
-                    // / in-app UI (SSE forwarding is deferred — see Part B7).
+                case .thinkStart, .thinkEnd, .thinkReclassify, .thinkTruncate:
+                    // No SSE side effect. text/thinking state is folded by the
+                    // accumulator above; reclassify/truncate only adjust the
+                    // final accumulated content — deltas already sent to the
+                    // client stand.
                     break
                 }
             }
@@ -1059,9 +1126,18 @@ struct CompletionHandler: Sendable {
             return .failed(error.localizedDescription)
         }
 
+        // Wire-Valid Close for a stream that terminated (dashboard cancel,
+        // max-tokens, intervention) while a transcoded call was engaged: the
+        // accumulated Argument Fragments must parse before the final chunk.
+        guard await sendToolCallDeltas(transcoder.finish()) else {
+            cancel()
+            return .disconnected(.chunkWrite)
+        }
+
         // Hand the terminal accumulator (plus completion metrics) to the caller;
         // both completion paths build one CompletionProjection from it.
-        return .completed(accumulator, info)
+        return .completed(
+            accumulator, info, wireStreamedToolCalls: transcoder.hasStreamedFragments)
     }
 
     /// Emit the shared "surfaced dropped tool-call buffer" info-log. Both

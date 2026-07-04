@@ -321,9 +321,10 @@ nonisolated enum TokenGenerationLoop {
 /// - **Tagged** `<tool_call>…</tool_call>` collection produces deltas.
 ///   Nothing is emitted while a start tag is only partially matched; once
 ///   the full start tag is confirmed, the first delta carries the whole
-///   pending block (open tag included); the chunk that completes the close
-///   tag emits no delta for its remaining bytes (the authoritative
-///   `.toolCall` covers it).
+///   pending block (open tag included); the chunk containing the close tag
+///   still deltas its body bytes up to the tag (the Argument Transcoder
+///   needs the complete body on this channel), while the close tag itself
+///   is never a delta (the authoritative `.toolCall` covers it).
 /// - **Bare-JSON fallback** (a `{` that looks like a JSON object, preferred
 ///   by the processor when it precedes any `<`) is tracked for state parity
 ///   but intentionally produces no deltas (the fork had no such state
@@ -465,9 +466,19 @@ nonisolated struct ToolCallDeltaTracker {
                 var pending = tailWindow
                 pending += input
                 if let closeRange = pending.range(of: endTag) {
-                    // Close tag arrived: no delta for this chunk's bytes (the
-                    // authoritative `.toolCall` covers the block). Re-scan
-                    // any trailing text for another tool call.
+                    // Close tag arrived: forward the not-yet-emitted bytes
+                    // that precede it (the leading `tailWindow` characters
+                    // went out with an earlier chunk) so the delta stream
+                    // carries the complete block body — the server-side
+                    // Argument Transcoder streams arguments from these
+                    // deltas, so a body tail withheld here would be lost
+                    // from the wire. The close tag itself is never a delta
+                    // (the authoritative `.toolCall` covers the block).
+                    // Re-scan any trailing text for another tool call.
+                    let preClose = pending[..<closeRange.lowerBound]
+                    if preClose.count > tailWindow.count {
+                        delta += preClose.dropFirst(tailWindow.count)
+                    }
                     let trailing = pending[closeRange.upperBound...]
                     tailWindow = ""
                     state = .normal
