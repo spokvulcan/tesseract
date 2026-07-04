@@ -135,7 +135,10 @@ struct ServerHeroBand: View {
 
 // MARK: - Hero number
 
-private struct HeroNumber: View {
+/// One large telemetry number: 32 pt bold value, optional unit, uppercase
+/// kerned label, optional live dot. Shared by every Server page's hero
+/// band so the pages read as one instrument panel.
+struct HeroNumber: View {
     let value: String
     let unit: String?
     let label: String

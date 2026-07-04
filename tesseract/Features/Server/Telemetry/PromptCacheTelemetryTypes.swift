@@ -287,6 +287,11 @@ nonisolated struct PromptCacheCumulativeCounters: Codable, Equatable, Sendable {
     /// triggers (a demotion that terminal-dropped instead, a checkpoint
     /// write-through that stayed RAM-only).
     var survivalGateSkips: Int = 0
+    /// Prefill wall-clock the cache absorbed: each restored offset's
+    /// Marconi FLOPs divided by the measured prefill throughput at hit
+    /// time — the same **Recovery Cost** units eviction scores in, so
+    /// "seconds saved" and "seconds at risk" are directly comparable.
+    var savedPrefillSeconds: Double = 0
 }
 
 /// Eviction-tuner state surfaced to the UI: the `AlphaTuner` phase plus the

@@ -413,7 +413,7 @@ final class PrefixCacheManager {
             // is eventually dropped to state 5. `noteLookupHit` returns
             // the bumped snapshot ID, or nil for non-committed states.
             let recordedHitID = store.noteLookupHit(on: node)
-            cumulativeCounters.hitTokens += snapshot.tokenOffset
+            recordHitSavings(restoredOffset: snapshot.tokenOffset)
             return (
                 LookupResult(
                     snapshot: snapshot,
@@ -1322,7 +1322,7 @@ final class PrefixCacheManager {
         // offset land in the lifetime counters here (not at lookup)
         // so a failed hydration never inflates them.
         cumulativeCounters.hydrations += 1
-        cumulativeCounters.hitTokens += snapshot.tokenOffset
+        recordHitSavings(restoredOffset: snapshot.tokenOffset)
     }
 
     /// Clear a state-5 node's ref after a hydration failure (file missing
@@ -1373,7 +1373,23 @@ final class PrefixCacheManager {
         }
         tree.storeSnapshot(snapshot, on: node)
         cumulativeCounters.hydrations += 1
-        cumulativeCounters.hitTokens += snapshot.tokenOffset
+        recordHitSavings(restoredOffset: snapshot.tokenOffset)
+    }
+
+    /// Fold one served hit into the lifetime counters: the restored
+    /// offset, plus the prefill wall-clock it absorbed — the offset's
+    /// Marconi FLOPs over the measured throughput, the same units
+    /// **Recovery Cost** scores in.
+    private func recordHitSavings(restoredOffset: Int) {
+        cumulativeCounters.hitTokens += restoredOffset
+        let throughput = evictionConfig.estimates.prefillFlopsPerSecond
+        guard throughput > 0 else { return }
+        let flops = EvictionPolicy.parentRelativeFlops(
+            nodeOffset: restoredOffset,
+            parentOffset: 0,
+            profile: evictionConfig.flopProfile
+        )
+        cumulativeCounters.savedPrefillSeconds += flops / throughput
     }
 
     /// Clear a **Chain-Prefix Restore** point after its hydration failed

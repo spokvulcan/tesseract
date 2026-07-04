@@ -18,7 +18,9 @@ struct PromptCacheTreeCanvasView: View {
                     Canvas { context, _ in
                         draw(tree: tree, context: &context)
                     }
-                    .background(.regularMaterial)
+                    // Full-bleed content layer: plain window background,
+                    // not a material card.
+                    .background(.background)
                     .gesture(dragGesture)
                     .simultaneousGesture(magnificationGesture)
                     .simultaneousGesture(tapGesture(in: tree))
@@ -51,10 +53,10 @@ struct PromptCacheTreeCanvasView: View {
                     }
                     .padding(Theme.Spacing.md)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.regularMaterial)
+                    .background(.background)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
+            .clipped()
         }
     }
 

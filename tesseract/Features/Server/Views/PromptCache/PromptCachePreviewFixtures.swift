@@ -352,25 +352,24 @@ private struct PromptCacheAdaptivePreview: View {
         Group {
             switch surface {
             case .overview:
-                PromptCacheOverviewView(
+                PromptCacheHeroBand(
                     snapshot: snapshot,
                     aggregate: PromptCacheTelemetryAggregate.from(
                         events: PromptCachePreviewFixtures.events),
-                    samples: PromptCachePreviewFixtures.samples
+                    samples: PromptCachePreviewFixtures.samples,
+                    isLive: true
                 )
 
             case .tree:
-                VStack(spacing: Theme.Spacing.xs) {
-                    PromptCacheTreeCanvasView(
-                        tree: tree,
-                        selectedNodeID: selectedNode?.id,
-                        onSelectNode: { selectedNodeID = $0 }
-                    )
-                    PromptCacheSelectionStatusView(tree: tree, node: selectedNode)
-                }
+                PromptCacheTreeCanvasView(
+                    tree: tree,
+                    selectedNodeID: selectedNode?.id,
+                    onSelectNode: { selectedNodeID = $0 }
+                )
 
             case .events:
-                PromptCacheEventTableView(store: store)
+                PromptCacheEventsDrawer(onClose: {})
+                    .environment(store)
                     .onAppear {
                         if store.events.isEmpty {
                             store.recordForTesting(PromptCachePreviewFixtures.events)

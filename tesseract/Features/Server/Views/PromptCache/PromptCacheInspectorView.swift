@@ -7,8 +7,6 @@ struct PromptCacheInspectorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            sectionHeader("Selection", symbol: "sidebar.right")
-
             if let node {
                 nodeDetails(node)
             } else if let event {
@@ -40,9 +38,6 @@ struct PromptCacheInspectorView: View {
         }
         .padding(Theme.Spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            .regularMaterial,
-            in: RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
     }
 
     private func nodeDetails(_ node: PromptCacheTreeNodeSnapshot) -> some View {

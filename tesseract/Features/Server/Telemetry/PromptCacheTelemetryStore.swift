@@ -190,6 +190,16 @@ final class PromptCacheTelemetryStore {
         return text
     }
 
+    /// Drop the event buffer and the session aggregate derived from it.
+    /// Lifetime counters and the topology snapshot are untouched — they
+    /// belong to the cache, not to this window's session.
+    func clearEvents() {
+        pendingEvents.removeAll()
+        events.removeAll()
+        selectedEventID = nil
+        recalculateAggregate()
+    }
+
     func resetFilters() {
         searchText = ""
         visibleCheckpointTypes = ["system", "leaf", "branchPoint"]

@@ -1,24 +1,48 @@
 import SwiftUI
 
+/// The Prompt Cache page in the Server telemetry grammar: a hero band of
+/// four large numbers over the full-bleed radix-tree canvas, a one-line
+/// selection HUD, and an events console in a slide-up drawer (⌘`).
+/// Filters and actions live in the system toolbar — the content layer is
+/// plain, with no glass and no sub-page navigation.
 struct ServerPromptCacheView: View {
     @Environment(AgentEngine.self) private var agentEngine
     @Environment(PromptCacheTelemetryStore.self) private var telemetry
 
     @State private var isInspectorPresented = false
-
-    @SceneStorage("ServerPromptCacheView.section")
-    private var sectionRawValue = PromptCacheSection.tree.rawValue
+    @AppStorage("server.promptCache.events.open") private var isEventsOpen = false
 
     var body: some View {
         @Bindable var telemetry = telemetry
 
-        GeometryReader { proxy in
-            content(
-                telemetry: telemetry,
-                width: proxy.size.width
+        VStack(spacing: 0) {
+            PromptCacheHeroBand(
+                snapshot: telemetry.snapshot,
+                aggregate: telemetry.aggregate,
+                samples: telemetry.metricSamples,
+                isLive: telemetry.isLive
             )
+
+            Divider()
+
+            PromptCacheTreeCanvasView(
+                tree: telemetry.selectedTree,
+                selectedNodeID: telemetry.selectedNodeID,
+                onSelectNode: telemetry.selectNode
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            PromptCacheSelectionHUD(
+                tree: telemetry.selectedTree,
+                node: telemetry.selectedNode
+            )
+
+            if isEventsOpen {
+                PromptCacheEventsDrawer(onClose: { isEventsOpen = false })
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isEventsOpen)
         .navigationTitle("Prompt Cache")
         .searchable(
             text: $telemetry.searchText,
@@ -26,31 +50,8 @@ struct ServerPromptCacheView: View {
             prompt: "Offset, hash, checkpoint, storage"
         )
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                sectionPicker
-            }
-
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    isInspectorPresented.toggle()
-                } label: {
-                    Image(systemName: "info.circle")
-                }
-                .help("Show Selection Details")
-                .popover(isPresented: $isInspectorPresented, arrowEdge: .top) {
-                    PromptCacheInspectorPopover(
-                        tree: telemetry.selectedTree,
-                        node: telemetry.selectedNode,
-                        event: telemetry.selectedEvent
-                    )
-                }
-
-                Button {
-                    Task { await telemetry.refreshSnapshot(llmActor: agentEngine.llmActor) }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Refresh Snapshot")
+                filterMenu
 
                 Button {
                     telemetry.toggleLiveUpdates()
@@ -60,12 +61,44 @@ struct ServerPromptCacheView: View {
                 .help(telemetry.isLive ? "Pause Events" : "Resume Events")
 
                 Button {
-                    telemetry.copyExportJSONToPasteboard()
+                    Task { await telemetry.refreshSnapshot(llmActor: agentEngine.llmActor) }
                 } label: {
-                    Image(systemName: "doc.on.doc")
+                    Image(systemName: "arrow.clockwise")
                 }
-                .help("Copy Telemetry JSON")
+                .help("Refresh Snapshot")
+
+                Button {
+                    isInspectorPresented.toggle()
+                } label: {
+                    Image(systemName: "sidebar.trailing")
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .help(isInspectorPresented ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
+
+                Button {
+                    isEventsOpen.toggle()
+                } label: {
+                    Image(systemName: "square.bottomthird.inset.filled")
+                }
+                .keyboardShortcut("`", modifiers: .command)
+                .help(isEventsOpen ? "Hide Events (⌘`)" : "Show Events (⌘`)")
+
+                Menu {
+                    Button("Copy Telemetry JSON") {
+                        telemetry.copyExportJSONToPasteboard()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuIndicator(.hidden)
             }
+        }
+        .inspector(isPresented: $isInspectorPresented) {
+            PromptCacheInspectorPanel(
+                tree: telemetry.selectedTree,
+                node: telemetry.selectedNode,
+                event: telemetry.selectedEvent
+            )
         }
         .task {
             telemetry.startPolling(llmActor: agentEngine.llmActor)
@@ -76,120 +109,9 @@ struct ServerPromptCacheView: View {
         }
     }
 
-    private var sectionPicker: some View {
-        ViewThatFits(in: .horizontal) {
-            sectionPickerContent(useSymbols: false)
-                .frame(width: 342)
+    // MARK: - Toolbar pieces
 
-            sectionPickerContent(useSymbols: false)
-                .frame(width: 304)
-
-            sectionPickerContent(useSymbols: true)
-                .frame(width: 212)
-        }
-        .help("Prompt cache section")
-    }
-
-    private func sectionPickerContent(useSymbols: Bool) -> some View {
-        Picker("Prompt Cache Section", selection: sectionBinding) {
-            ForEach(PromptCacheSection.allCases) { section in
-                if useSymbols {
-                    Image(systemName: section.symbol)
-                        .tag(section)
-                } else {
-                    Text(section.title)
-                        .tag(section)
-                }
-            }
-        }
-        .pickerStyle(.segmented)
-        .controlSize(.regular)
-        .labelsHidden()
-    }
-
-    @ViewBuilder
-    private func content(
-        telemetry: PromptCacheTelemetryStore,
-        width: CGFloat
-    ) -> some View {
-        let section = PromptCacheSection(rawValue: sectionRawValue) ?? .tree
-        let padding = contentPadding(for: width)
-
-        switch section {
-        case .overview:
-            PromptCacheOverviewView(
-                snapshot: telemetry.snapshot,
-                aggregate: telemetry.aggregate,
-                samples: telemetry.metricSamples
-            )
-            .padding(padding)
-
-        case .tree:
-            VStack(spacing: spacing(for: width)) {
-                filterBar(telemetry: telemetry, compact: width < PromptCacheLayout.compactWidth)
-
-                PromptCacheTreeCanvasView(
-                    tree: telemetry.selectedTree,
-                    selectedNodeID: telemetry.selectedNodeID,
-                    onSelectNode: telemetry.selectNode
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                PromptCacheSelectionStatusView(
-                    tree: telemetry.selectedTree,
-                    node: telemetry.selectedNode,
-                    onShowDetails: { isInspectorPresented = true }
-                )
-            }
-            .padding(padding)
-
-        case .events:
-            VStack(spacing: spacing(for: width)) {
-                filterBar(telemetry: telemetry, compact: width < PromptCacheLayout.compactWidth)
-                PromptCacheEventTableView(
-                    store: telemetry,
-                    onShowDetails: { isInspectorPresented = true }
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .padding(padding)
-        }
-    }
-
-    private func filterBar(
-        telemetry: PromptCacheTelemetryStore,
-        compact: Bool
-    ) -> some View {
-        @Bindable var telemetry = telemetry
-
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: Theme.Spacing.sm) {
-                partitionMenu(telemetry: telemetry)
-                checkpointMenu(telemetry: telemetry)
-                storageMenu(telemetry: telemetry)
-                resetButton(telemetry: telemetry)
-                Spacer(minLength: 0)
-                liveStatus(telemetry: telemetry)
-            }
-
-            HStack(spacing: Theme.Spacing.xs) {
-                partitionMenu(telemetry: telemetry, title: "Part")
-                checkpointMenu(telemetry: telemetry, title: "Type")
-                storageMenu(telemetry: telemetry, title: "State")
-                resetButton(telemetry: telemetry, iconOnly: true)
-                Spacer(minLength: 0)
-                if !compact {
-                    liveStatus(telemetry: telemetry)
-                }
-            }
-        }
-        .controlSize(.small)
-    }
-
-    private func partitionMenu(
-        telemetry: PromptCacheTelemetryStore,
-        title: String = "Partition"
-    ) -> some View {
+    private var filterMenu: some View {
         @Bindable var telemetry = telemetry
 
         return Menu {
@@ -199,94 +121,32 @@ struct ServerPromptCacheView: View {
                     Text(tree.partitionDigest).tag(Optional(tree.id))
                 }
             }
-        } label: {
-            Label(title, systemImage: "square.stack.3d.up")
-        }
-        .menuStyle(.button)
-        .help("Select cache partition")
-    }
+            .pickerStyle(.menu)
 
-    private func checkpointMenu(
-        telemetry: PromptCacheTelemetryStore,
-        title: String = "Checkpoint"
-    ) -> some View {
-        Menu {
-            ForEach(["system", "leaf", "branchPoint"], id: \.self) { type in
-                Toggle(type, isOn: checkpointBinding(type, telemetry: telemetry))
+            Section("Checkpoints") {
+                ForEach(["system", "leaf", "branchPoint"], id: \.self) { type in
+                    Toggle(type, isOn: checkpointBinding(type))
+                }
             }
+
+            Section("Storage") {
+                ForEach(PromptCacheStorageState.allCases, id: \.self) { state in
+                    Toggle(state.displayName, isOn: storageBinding(state))
+                }
+            }
+
             Divider()
+
             Button("Reset Filters") {
                 telemetry.resetFilters()
             }
         } label: {
-            Label(title, systemImage: "line.3.horizontal.decrease.circle")
+            Image(systemName: "line.3.horizontal.decrease.circle")
         }
-        .menuStyle(.button)
-        .help("Filter checkpoint types")
+        .help("Filter partition, checkpoint types, and storage states")
     }
 
-    private func storageMenu(
-        telemetry: PromptCacheTelemetryStore,
-        title: String = "Storage"
-    ) -> some View {
-        Menu {
-            ForEach(PromptCacheStorageState.allCases, id: \.self) { state in
-                Toggle(state.displayName, isOn: storageBinding(state, telemetry: telemetry))
-            }
-            Divider()
-            Button("All Storage States") {
-                telemetry.visibleStorageStates = Set(PromptCacheStorageState.allCases)
-            }
-        } label: {
-            Label(title, systemImage: "externaldrive")
-        }
-        .menuStyle(.button)
-        .help("Filter storage states")
-    }
-
-    private func resetButton(
-        telemetry: PromptCacheTelemetryStore,
-        iconOnly: Bool = false
-    ) -> some View {
-        Button {
-            telemetry.resetFilters()
-        } label: {
-            if iconOnly {
-                Image(systemName: "xmark.circle")
-            } else {
-                Label("Reset", systemImage: "xmark.circle")
-            }
-        }
-        .help("Reset filters")
-    }
-
-    private func liveStatus(telemetry: PromptCacheTelemetryStore) -> some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(telemetry.isLive ? .green : .orange)
-                .frame(width: 6, height: 6)
-            Text(telemetry.isLive ? "Live" : "Paused")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        // Content-layer status chip: plain fill, not glass.
-        .background(.quinary, in: Capsule())
-    }
-
-    private var sectionBinding: Binding<PromptCacheSection> {
-        Binding {
-            PromptCacheSection(rawValue: sectionRawValue) ?? .tree
-        } set: { section in
-            sectionRawValue = section.rawValue
-        }
-    }
-
-    private func checkpointBinding(
-        _ type: String,
-        telemetry: PromptCacheTelemetryStore
-    ) -> Binding<Bool> {
+    private func checkpointBinding(_ type: String) -> Binding<Bool> {
         Binding {
             telemetry.visibleCheckpointTypes.contains(type)
         } set: { enabled in
@@ -298,10 +158,7 @@ struct ServerPromptCacheView: View {
         }
     }
 
-    private func storageBinding(
-        _ state: PromptCacheStorageState,
-        telemetry: PromptCacheTelemetryStore
-    ) -> Binding<Bool> {
+    private func storageBinding(_ state: PromptCacheStorageState) -> Binding<Bool> {
         Binding {
             telemetry.visibleStorageStates.contains(state)
         } set: { enabled in
@@ -312,41 +169,66 @@ struct ServerPromptCacheView: View {
             }
         }
     }
+}
 
-    private func contentPadding(for width: CGFloat) -> CGFloat {
-        width < PromptCacheLayout.compactWidth ? Theme.Spacing.sm : Theme.Spacing.md
+// MARK: - Selection HUD
+
+/// One monospace status line under the tree canvas: the selected node's
+/// vitals, or the visible tree's summary — the Dashboard meta-line
+/// grammar in place of the old status card + inspector ceremony.
+private struct PromptCacheSelectionHUD: View {
+    let tree: PromptCacheTreeSnapshot?
+    let node: PromptCacheTreeNodeSnapshot?
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.lg) {
+            Text(leadingText)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+
+            Spacer(minLength: 0)
+
+            Text("⌘` events · ⌥⌘I inspector")
+                .foregroundStyle(.quaternary)
+        }
+        .font(.caption.monospaced())
+        .monospacedDigit()
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, 5)
+        .background(.background.secondary)
     }
 
-    private func spacing(for width: CGFloat) -> CGFloat {
-        width < PromptCacheLayout.compactWidth ? Theme.Spacing.xs : Theme.Spacing.sm
+    private var leadingText: String {
+        if let node {
+            var parts = ["▸ \(node.checkpointType ?? "path") @\(node.tokenOffset.formatted())"]
+            if node.hasSnapshot || node.snapshotBytes > 0 {
+                parts.append(PromptCacheFormatting.bytes(node.snapshotBytes))
+            }
+            parts.append(node.storageState.displayName)
+            parts.append("hit \(PromptCacheFormatting.age(node.lastAccessAgeSeconds)) ago")
+            if let utility = node.utility {
+                parts.append(String(format: "utility %.2f", utility))
+            }
+            return parts.joined(separator: " · ")
+        }
+        if let tree {
+            return
+                "partition \(tree.partitionDigest) · \(tree.nodeCount) nodes"
+                + " · \(tree.snapshotCount) snapshots"
+                + " · \(PromptCacheFormatting.bytes(tree.totalSnapshotBytes))"
+        }
+        return "no topology — run an HTTP completion to instantiate the radix tree"
     }
 }
 
-private enum PromptCacheSection: String, CaseIterable, Identifiable {
-    case overview
-    case tree
-    case events
+// MARK: - Inspector panel
 
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .overview: "Overview"
-        case .tree: "Tree"
-        case .events: "Events"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .overview: "chart.bar"
-        case .tree: "point.3.connected.trianglepath.dotted"
-        case .events: "list.bullet.rectangle"
-        }
-    }
-}
-
-private struct PromptCacheInspectorPopover: View {
+/// Trailing system inspector: the selection's deep numbers in a standard
+/// column, not a transient popover. The system supplies the surface —
+/// the content stays plain.
+private struct PromptCacheInspectorPanel: View {
     let tree: PromptCacheTreeSnapshot?
     let node: PromptCacheTreeNodeSnapshot?
     let event: PromptCacheTelemetryEvent?
@@ -354,39 +236,7 @@ private struct PromptCacheInspectorPopover: View {
     var body: some View {
         ScrollView {
             PromptCacheInspectorView(tree: tree, node: node, event: event)
-                .padding(Theme.Spacing.sm)
         }
-        .frame(
-            minWidth: 320, idealWidth: 380, maxWidth: 460, minHeight: 260, idealHeight: 430,
-            maxHeight: 560)
+        .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
     }
-}
-
-enum PromptCacheChartKind: String, CaseIterable, Identifiable {
-    case efficiency
-    case memory
-    case latency
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .efficiency: "Efficiency"
-        case .memory: "Memory"
-        case .latency: "Latency"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .efficiency: "chart.line.uptrend.xyaxis"
-        case .memory: "memorychip"
-        case .latency: "timer"
-        }
-    }
-}
-
-enum PromptCacheLayout {
-    static let compactWidth: CGFloat = 620
-    static let wideWidth: CGFloat = 900
 }
