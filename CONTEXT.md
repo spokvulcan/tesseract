@@ -727,29 +727,47 @@ former.
 ### Cache memory budget
 
 **Pressure-Reactive Budget**:
-The RAM-tier byte budget expressed as a band rather than a constant — an auto-sized
-ceiling and a current value that OS memory-pressure events push down and hysteresis
-regrows, never below the **Budget Floor**. The cache is greedy when RAM is idle,
-polite when it is contested.
+The RAM-tier byte budget expressed as a band rather than a constant — a ceiling
+derived from measured machine headroom and a current value that OS memory-pressure
+events push down and hysteresis regrows, never below the **Budget Floor**. The cache
+is greedy when RAM is idle, polite when it is contested.
 _Avoid_: static budget, memoryBudgetBytes-as-constant, cache size limit. (This is the
-RAM tier; the SSD tier has its own separate, static byte budget.)
+RAM tier; the SSD tier's budget is separate — dynamic by default, user-cappable.)
 
 **Budget Floor**:
 The content-defined lower bound of the **Pressure-Reactive Budget**: the minimal
-survival set — the `.system` chains plus the single most-recently-extended leaf —
-kept resident even at critical pressure. A last-resort floor, not the protection
+survival set — the in-flight requests' restore paths plus the single
+most-recently-extended leaf — kept resident at critical pressure and honored by
+*every* eviction drain, admission included. A last-resort floor, not the protection
 mechanism (defending the main-agent leaf against subagent churn is the eviction
 score's job).
 _Avoid_: minimum cache size, reserved bytes, fixed floor, per-partition floor,
-workload heuristics in the floor.
+workload heuristics in the floor; `.system` chains as floor members (they are
+SSD-protected, not RAM-pinned — ADR-0019).
 
 **Snapshot Demotion**:
 Moving a snapshot's body out of RAM while keeping it recoverable — backing it to SSD
 first, then dropping the RAM body — so the next hit pays a cheap hydration instead of
-a re-prefill. The first response to any RAM-tier shrink; outright dropping (eviction)
-is the fallback when SSD backing is unavailable.
+a re-prefill. The required response to any RAM-tier shrink under **Recoverable
+Eviction**; a terminal drop in its place is a defect, not a fallback.
 _Avoid_: spill, flush, evict-to-SSD; eviction (terminal — a demotion is recoverable,
 and supersession *preserve* differs again in keeping an ancestor's SSD backing).
+
+**Leaf Home Guarantee**:
+The cross-tier invariant that the newest end-of-turn leaf always has a home on some
+tier: RAM when the budget holds it, otherwise a mandatory SSD write that no
+incidental cap, gate, or ordering may reject — and whose enqueue precedes any
+deletion of the backing it supersedes.
+_Avoid_: leaf pinning (it may leave RAM freely), floor membership (the floor is
+RAM-only; the guarantee spans tiers), best-effort persistence.
+
+**Recoverable Eviction**:
+The rule that a RAM body may be dropped only if its bytes are SSD-recoverable —
+demotion succeeds or a backing already exists. A terminal drop is a bug class, legal
+only for explicit invalidation (model change, user clear), disk-full, or I/O error;
+never a silent policy outcome.
+_Avoid_: demote-if-possible (the old best-effort reading), terminal drop as an
+eviction strategy, survival-gate veto of a demotion.
 
 ### Eviction tuning
 
