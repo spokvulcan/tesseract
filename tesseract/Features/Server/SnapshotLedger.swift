@@ -111,6 +111,14 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     private var currentSSDBytes: Int = 0
     private var manifestDirty: Bool = false
     private var manifestPersistTask: Task<Void, Never>?
+    /// Manifest file writes currently in flight. Claimed under `lock`
+    /// (together with clearing `manifestDirty`), performed outside it. A
+    /// `persistNow` caller that observes a clean flag waits for this to
+    /// reach zero, so "persist now" always means the manifest is on disk
+    /// when the call returns — without it, a caller racing the debounced
+    /// persist task returns while the file write is still in flight.
+    private var manifestWritesInFlight = 0
+    private let manifestWriteCondition = NSCondition()
     /// Snapshot IDs the store deleted while a write may already be in
     /// flight. `consumeTombstone` (the writer's pre-write skip) and
     /// `commit` (the self-veto) both check this set so a superseded
@@ -827,13 +835,27 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         lock.lock()
         guard manifestDirty else {
             lock.unlock()
+            // A concurrent persist may have claimed the dirty flag and
+            // still be mid-write. Wait it out so a return from this call
+            // always means the claimed manifest state is on disk.
+            manifestWriteCondition.lock()
+            while manifestWritesInFlight > 0 {
+                manifestWriteCondition.wait()
+            }
+            manifestWriteCondition.unlock()
             return
         }
         let snapshot = manifest
         manifestDirty = false
+        // Claimed under `lock`, so a clean-flag observer above can never
+        // miss the write this claim is about to perform.
+        manifestWriteCondition.lock()
+        manifestWritesInFlight += 1
+        manifestWriteCondition.unlock()
         lock.unlock()
 
         let manifestURL = self.manifestURL
+        var writeFailed = false
 
         do {
             try FileManager.default.createDirectory(
@@ -852,6 +874,15 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
             Log.agent.error(
                 "SnapshotLedger manifest persist failed: \(String(describing: error))"
             )
+            writeFailed = true
+        }
+
+        manifestWriteCondition.lock()
+        manifestWritesInFlight -= 1
+        manifestWriteCondition.broadcast()
+        manifestWriteCondition.unlock()
+
+        if writeFailed {
             // Mark dirty again so the next operation reschedules a
             // persist. Pure opportunistic retry; no backoff needed for a
             // local filesystem.
