@@ -223,6 +223,34 @@ struct RecordingSettingsSection: View {
 
                 AudioLevelMeter(audioCapture: container.audioCaptureEngine)
                     .frame(height: 20)
+
+                Toggle("Voice Processing", isOn: $settings.voiceProcessingEnabled)
+                Text(
+                    "Applies Apple's echo cancellation, noise suppression, and automatic gain to all voice capture. Other audio may briefly duck while recording."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Recent Recordings") {
+                Toggle("Keep Recent Recordings", isOn: $settings.captureDumpEnabled)
+                Text(
+                    "Keeps the most recent dictation recordings on disk (bounded, oldest deleted first) so a bad transcription can be diagnosed. Recordings never leave this Mac."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                HStack {
+                    Button("Show in Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting(
+                            [container.captureDumpStore.directory])
+                    }
+                    Button("Delete All Recordings", role: .destructive) {
+                        container.captureDumpStore.deleteAll()
+                    }
+                }
             }
 
             Section("Dictation Hotkey") {

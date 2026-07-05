@@ -821,6 +821,25 @@ Guard** it composes (the epoch protocol alone).
 _Avoid_: coordinator (it is composed by the coordinators, not one), capture engine
 (`AudioCaptureEngine`, the mic port below it), voice controller, session (unqualified).
 
+### Microphone capture
+
+**Voice Processing**:
+Apple's capture-time processing bundle — echo cancellation, automatic gain control,
+noise suppression — applied by the OS before the app ever sees samples; in Tesseract
+one user toggle covering all microphone capture (dictation, **Voice Input**, and the
+settings level meter alike). Capture-time: it changes what gets recorded, so its
+effect can never be replayed offline against the same utterance — unlike post-capture
+DSP.
+_Avoid_: Voice Isolation (the user-only Control Center mic mode — not programmatically
+settable), noise cancellation, VPIO / `setVoiceProcessingEnabled` (the implementation).
+
+**Capture Dump**:
+The on-disk ring buffer of recent dictation capture audio — what the microphone tap
+delivered (post–**Voice Processing** when enabled, pre-resample) — tagged with its
+capture conditions and kept for diagnosing bad transcriptions; bounded by count/size,
+oldest evicted first.
+_Avoid_: recording archive (it is bounded and diagnostic, not an archive), audio log.
+
 ### GPU lease arbitration
 
 **GPU Lease Queue**:

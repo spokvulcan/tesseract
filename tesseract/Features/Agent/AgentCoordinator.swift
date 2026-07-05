@@ -81,6 +81,7 @@ final class AgentCoordinator {
         audioCapture: (any AudioCapturing)? = nil,
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
+        captureDump: (any CaptureDumpStoring)? = nil,
         arbiter: any InferenceArbitrating,
         formatRawPrompt: (
             @MainActor (String, [AgentToolDefinition]?) async throws -> (
@@ -112,7 +113,10 @@ final class AgentCoordinator {
         )
         self.transcript = ChatTranscriptController()
         self.voiceInput = AgentVoiceInputController(
-            audioCapture: audioCapture, transcriptionEngine: transcriptionEngine, settings: settings
+            audioCapture: audioCapture,
+            transcriptionEngine: transcriptionEngine,
+            settings: settings,
+            captureDump: captureDump
         )
         self.imageDraft = ImageDraftController(conversationImages: { [agent] in
             agent.state.messages.flatMap { message -> [ImageAttachment] in

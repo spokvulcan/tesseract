@@ -33,6 +33,8 @@ enum SettingsCatalogue {
     // MARK: - Audio
 
     static let selectedMicrophoneUID = Setting.string("selectedMicrophoneUID", default: "")
+    static let voiceProcessingEnabled = Setting.bool("voiceProcessingEnabled", default: false)
+    static let captureDumpEnabled = Setting.bool("captureDumpEnabled", default: true)
 
     // MARK: - Language
 

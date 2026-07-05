@@ -96,6 +96,18 @@ final class SettingsManager {
         didSet { SettingsCatalogue.selectedMicrophoneUID.write(selectedMicrophoneUID, to: store) }
     }
 
+    /// **Voice Processing** (PRD #175): Apple's capture-time bundle (echo
+    /// cancellation + auto gain + noise suppression) on all microphone capture.
+    var voiceProcessingEnabled: Bool {
+        didSet { SettingsCatalogue.voiceProcessingEnabled.write(voiceProcessingEnabled, to: store) }
+    }
+
+    /// **Capture Dump** (PRD #175): keep recent dictation recordings on disk
+    /// for diagnosing bad transcriptions.
+    var captureDumpEnabled: Bool {
+        didSet { SettingsCatalogue.captureDumpEnabled.write(captureDumpEnabled, to: store) }
+    }
+
     // MARK: - Language Settings
 
     var language: String {
@@ -427,6 +439,8 @@ final class SettingsManager {
         self.glowThemeRaw = SettingsCatalogue.glowThemeRaw.load(from: store)
         self.samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.load(from: store)
         self.selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.load(from: store)
+        self.voiceProcessingEnabled = SettingsCatalogue.voiceProcessingEnabled.load(from: store)
+        self.captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.load(from: store)
         self.language = SettingsCatalogue.language.load(from: store)
         self.hotkeyKeyCode = SettingsCatalogue.hotkeyKeyCode.load(from: store)
         self.hotkeyModifiers = SettingsCatalogue.hotkeyModifiers.load(from: store)
@@ -531,6 +545,8 @@ final class SettingsManager {
         overlayStyleRaw = SettingsCatalogue.overlayStyleRaw.default
         glowThemeRaw = SettingsCatalogue.glowThemeRaw.default
         selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.default
+        voiceProcessingEnabled = SettingsCatalogue.voiceProcessingEnabled.default
+        captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.default
         language = SettingsCatalogue.language.default
         hotkeyKeyCode = SettingsCatalogue.hotkeyKeyCode.default
         hotkeyModifiers = SettingsCatalogue.hotkeyModifiers.default

@@ -7,7 +7,7 @@ import Foundation
 import AVFoundation
 import Accelerate
 
-enum AudioConverter {
+nonisolated enum AudioConverter: Sendable {
     static let whisperSampleRate: Double = 16000
 
     /// Convert AVAudioPCMBuffer to Float array suitable for WhisperKit
@@ -27,13 +27,124 @@ enum AudioConverter {
         return samples
     }
 
-    /// Resample audio from one sample rate to another using linear interpolation
+    /// The one mono float32 `AVAudioFormat` every sample-array boundary in the
+    /// app shares — the capture tap, the resampler, the WAV writer, TTS playback.
+    static func monoFloat32Format(sampleRate: Double) -> AVAudioFormat? {
+        AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false
+        )
+    }
+
+    /// Build a mono float32 PCM buffer from raw samples — the one shape for
+    /// feeding sample arrays into AVFoundation (the resampler here, the WAV
+    /// writer in the **Capture Dump**, TTS playback).
+    static func makeMonoFloat32Buffer(
+        _ samples: [Float], sampleRate: Double
+    ) -> AVAudioPCMBuffer? {
+        guard let format = monoFloat32Format(sampleRate: sampleRate) else { return nil }
+        return makeMonoFloat32Buffer(samples, format: format)
+    }
+
+    /// Same, against an existing format instance (e.g. a streaming player's
+    /// negotiated format).
+    static func makeMonoFloat32Buffer(
+        _ samples: [Float], format: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        guard
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(samples.count)
+            )
+        else { return nil }
+
+        samples.withUnsafeBufferPointer { source in
+            buffer.floatChannelData?[0].update(from: source.baseAddress!, count: samples.count)
+        }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        return buffer
+    }
+
+    /// Resample audio from one sample rate to another. Anti-aliased: content
+    /// above the target Nyquist is filtered out rather than folded into the
+    /// speech band, which matters most for quiet speech under noise (PRD #175).
     static func resample(
         _ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double
     ) -> [Float] {
         guard sourceSampleRate != targetSampleRate else { return samples }
-        guard !samples.isEmpty else { return [] }
+        guard !samples.isEmpty, sourceSampleRate > 0, targetSampleRate > 0 else { return [] }
 
+        guard
+            let inputBuffer = makeMonoFloat32Buffer(samples, sampleRate: sourceSampleRate),
+            let targetFormat = monoFloat32Format(sampleRate: targetSampleRate),
+            let converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat)
+        else {
+            Log.audio.error("Resampler setup failed; falling back to linear interpolation")
+            return linearResample(samples, from: sourceSampleRate, to: targetSampleRate)
+        }
+
+        converter.sampleRateConverterQuality = .max
+
+        // Feed the single input buffer, then end-of-stream so the converter
+        // flushes its filter tail. The box exists because the input block is
+        // @Sendable; convert(to:) invokes it synchronously on this thread.
+        nonisolated final class InputFeed: @unchecked Sendable {
+            let buffer: AVAudioPCMBuffer
+            var consumed = false
+            init(buffer: AVAudioPCMBuffer) { self.buffer = buffer }
+        }
+        let feed = InputFeed(buffer: inputBuffer)
+        let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
+            if feed.consumed {
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+            feed.consumed = true
+            outStatus.pointee = .haveData
+            return feed.buffer
+        }
+
+        let chunkCapacity: AVAudioFrameCount = 8_192
+        var output: [Float] = []
+        output.reserveCapacity(Int(Double(samples.count) * targetSampleRate / sourceSampleRate) + 1)
+
+        while true {
+            guard
+                let chunk = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: chunkCapacity)
+            else { break }
+            var conversionError: NSError?
+            let status = converter.convert(
+                to: chunk, error: &conversionError, withInputFrom: inputBlock)
+
+            if let channelData = chunk.floatChannelData?[0], chunk.frameLength > 0 {
+                output.append(
+                    contentsOf: UnsafeBufferPointer(
+                        start: channelData, count: Int(chunk.frameLength)))
+            }
+
+            switch status {
+            case .haveData:
+                continue
+            case .error:
+                Log.audio.error(
+                    "Resampling failed: \(conversionError?.localizedDescription ?? "unknown")")
+                return linearResample(samples, from: sourceSampleRate, to: targetSampleRate)
+            case .endOfStream, .inputRanDry:
+                return output
+            @unknown default:
+                return output
+            }
+        }
+        return output
+    }
+
+    /// Last-resort fallback if `AVAudioConverter` setup fails — aliases above the
+    /// target Nyquist, so it must never become the primary path.
+    private static func linearResample(
+        _ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double
+    ) -> [Float] {
         let ratio = targetSampleRate / sourceSampleRate
         let outputLength = Int(Double(samples.count) * ratio)
 
@@ -41,7 +152,6 @@ enum AudioConverter {
 
         var output = [Float](repeating: 0, count: outputLength)
 
-        // Linear interpolation resampling
         for i in 0..<outputLength {
             let position = Double(i) / ratio
             let index = Int(position)

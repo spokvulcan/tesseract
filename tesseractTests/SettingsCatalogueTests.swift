@@ -50,8 +50,29 @@ struct SettingsCatalogueTests {
         // on, so vision-capable models load their image-aware container from a
         // fresh install.
         #expect(SettingsCatalogue.useVisionWhenAvailable.load(from: store) == true)
+        // Capture Dump (PRD #175): on by default while the capture experiment
+        // runs — a fresh install keeps diagnostic recordings.
+        #expect(SettingsCatalogue.captureDumpEnabled.load(from: store) == true)
         // Skill Pills (PRD #174): the row shows by default on a fresh install.
         #expect(SettingsCatalogue.showSkillPills.load(from: store) == true)
+    }
+
+    @Test
+    func voiceProcessingDefaultsOff() {
+        // PRD #175: Voice Processing is an experiment the owner opts into —
+        // the baseline capture behavior must be unchanged on a fresh install.
+        let store = InMemorySettingsStore()
+        #expect(SettingsCatalogue.voiceProcessingEnabled.default == false)
+        #expect(SettingsCatalogue.voiceProcessingEnabled.load(from: store) == false)
+    }
+
+    @Test
+    func captureSettingsRoundTripThroughTheStore() {
+        let store = InMemorySettingsStore()
+        SettingsCatalogue.voiceProcessingEnabled.write(true, to: store)
+        SettingsCatalogue.captureDumpEnabled.write(false, to: store)
+        #expect(SettingsCatalogue.voiceProcessingEnabled.load(from: store) == true)
+        #expect(SettingsCatalogue.captureDumpEnabled.load(from: store) == false)
     }
 
     @Test
