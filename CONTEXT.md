@@ -284,6 +284,15 @@ downscaling" (the mechanism), "resolution cap" (names the input, not the
 vision-token unit), conflating the per-image budget with the request-wide patch
 guard.
 
+**Appshot**:
+A hotkey-invoked capture of the frontmost window — whatever window that is,
+Tesseract's own included — staged as a pending composer image identified by its
+source app name and window title. Image-only: no accessibility text is read from
+the captured window.
+_Avoid_: snapshot (owned by the prefix cache lifecycle), "capture" unqualified
+(dictation vocabulary for voice), screenshot (generic any-pixels; an Appshot is
+the frontmost window specifically).
+
 ### Model catalog
 
 **Model Catalog**:
