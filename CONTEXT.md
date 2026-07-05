@@ -951,6 +951,45 @@ unit-testable.
 _Avoid_: an `NSScreen` (deliberately not passed to placements), a bare single rect
 (placements need both frames).
 
+### Onboarding tour
+
+**Onboarding Tour**:
+The first-launch welcome experience: a chaptered, user-paced cinematic tour of the
+app's features that also carries first-run setup — the model download runs in the
+background from its first screen and permission requests live inside the chapter
+that motivates them. Optional and skippable, never re-shown after a skip, and
+relaunchable from Settings, where it replays the same state-aware flow rather than
+a separate "tour mode".
+_Avoid_: setup wizard, tutorial, walkthrough, splash screen, Setup One-liner (a
+server/Integration concept, unrelated).
+
+**Chapter**:
+One user-paced beat of the **Onboarding Tour**, owning a single feature story plus
+whatever setup belongs to that story. Chapters are navigable in both directions and
+never block on downloads or denied permissions.
+_Avoid_: step (the retired flow's term), page, slide, screen.
+
+**Try-it**:
+A live, real-functionality demo slot inside a **Chapter** that activates when its
+preconditions (model on disk, permission granted) are met, and otherwise shows the
+chapter's scripted animation with a soft note — the tour proving the app rather
+than describing it.
+_Avoid_: interactive tutorial, demo video, sandbox.
+
+**Welcome Window**:
+The dedicated window the **Onboarding Tour** runs in — the only window shown on a
+first launch, an ordinary additional window when relaunched from Settings. Closing
+it mid-tour is a permanent skip, equivalent to finishing, never a nag deferred to
+next launch.
+_Avoid_: onboarding sheet (the retired presentation), modal, popup.
+
+**Handoff**:
+The finish transition out of the tour: the main window appears first, then the
+Welcome Window dissolves — there is never a moment with zero windows on screen, and
+the landing surface must state download progress honestly if setup is still
+running.
+_Avoid_: dismissal, close animation.
+
 ### App composition
 
 **App Bindings**:
