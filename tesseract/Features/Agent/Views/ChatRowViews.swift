@@ -89,6 +89,7 @@ struct UserBubble: View, Equatable {
                         if useMarkdown {
                             StructuredText(markdown: data.content)
                                 .textual.structuredTextStyle(.default)
+                                .textual.codeBlockStyle(CopyableCodeBlockStyle())
                                 .textual.textSelection(.enabled)
                                 .font(.system(size: chatBodyFontSize))
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -178,6 +179,7 @@ struct AssistantBubble: View, Equatable {
                     if useMarkdown {
                         StructuredText(markdown: data.content)
                             .textual.structuredTextStyle(.gitHub)
+                            .textual.codeBlockStyle(CopyableCodeBlockStyle())
                             .textual.textSelection(.enabled)
                             .font(.system(size: chatBodyFontSize))
                     } else {

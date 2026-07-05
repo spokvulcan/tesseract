@@ -104,6 +104,29 @@ enum SettingsCatalogue {
         Setting.bool(preserveThinkingRenderKeyPrefix + modelID, default: false)
     }
 
+    // MARK: - Skill Pills (PRD #174)
+
+    /// The "Show skill pills" opt-out for the pill row above the agent
+    /// composer. Default on; the row also hides itself when no skill declares
+    /// pill membership.
+    static let showSkillPills = Setting.bool("showSkillPills", default: true)
+
+    /// The `translate` skill's default target language, stored as an English
+    /// display name ("Ukrainian"). Pre-filled once per launch from the first
+    /// non-English macOS preferred language; the picker in agent settings
+    /// overrides it.
+    static let translateTargetLanguage = Setting.string(
+        "translateTargetLanguage", default: TranslateLanguageDefault.systemDefault())
+
+    /// Shared key prefix for the dynamic per-skill usage counters (the Skill
+    /// Usage Ranking), so `resetToDefaults` can sweep them — same pattern as
+    /// `preserveThinkingRenderKeyPrefix`.
+    static let skillUsageCountKeyPrefix = "skillUsageCount."
+
+    static func skillUsageCount(skillName: String) -> Setting<Int> {
+        Setting.int(skillUsageCountKeyPrefix + skillName, default: 0)
+    }
+
     // MARK: - Server
 
     static let isServerEnabled = Setting.bool("isServerEnabled", default: false)

@@ -69,6 +69,14 @@ struct AgentContentView: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
 
+                        // The Skill Pill row (PRD #174) — always visible while
+                        // pill skills exist and the Setting is on; pills dim
+                        // (never hide) during a run, so the layout stays put.
+                        if coordinator.skillPills.isRowVisible {
+                            SkillPillRowView(inputText: $inputText)
+                                .padding(.horizontal, Theme.Spacing.md + 4)
+                        }
+
                         AgentInputBarView(inputText: $inputText)
                     }
                 }

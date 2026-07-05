@@ -758,6 +758,39 @@ on the spine) and from the pure parser/registry types it merely drives.
 _Avoid_: command executor / router (execution stays on the spine), slash command
 registry (the pure type it drives).
 
+### Agent skills
+
+**Skill**:
+A named markdown instruction unit (frontmatter name/description plus body) the
+agent loads on demand — user-invocable as a slash command or **Skill Pill**,
+model-invocable via the prompt's skills listing. Discovered from user directories
+and packages.
+_Avoid_: command (the palette concept), prompt template, tool (a callable
+capability, not an instruction), persona/mode.
+
+**Skill Pill**:
+The tappable pill above the agent chat composer that runs one **Skill** instantly
+on tap — the composer's current text and pending images ride along as the skill's
+arguments and attachments, and a bare tap with an empty composer still fires.
+Presentation only: a surface over skills, never a second invocation mechanism.
+_Avoid_: quick action, suggestion chip, shortcut button, mode/toggle (a pill arms
+nothing).
+
+**Skill Invocation Row**:
+The **Chat Transcript**'s compact rendering of a fired **Skill** — the skill name
+plus the user's argument text and attachments, expandable to the full injected
+skill block. One rendering for every invocation surface (pill or slash command).
+_Avoid_: raw `<skill>` text as the user bubble, skill message (it is a rendering,
+not a message kind).
+
+**Skill Usage Ranking**:
+The left-to-right order of **Skill Pill**s: user-initiated invocations (pill tap
+or slash command — never model-initiated) accumulate a per-skill count; zero-count
+skills follow the curated default order. Recomputed at conversation start and held
+stable within a conversation.
+_Avoid_: frecency (not the V1 mechanism), MRU/recently-used (counts, not recency),
+live re-sort (explicitly rejected — the row never shifts mid-conversation).
+
 ### Operation staleness
 
 **Operation Guard**:

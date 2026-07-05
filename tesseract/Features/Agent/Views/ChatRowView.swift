@@ -28,6 +28,13 @@ struct ChatRowView: View {
                     .equatable()
             }
 
+        case .skillInvocation(let data):
+            HStack {
+                Spacer(minLength: 60)
+                SkillInvocationRowView(data: data, rowID: row.id)
+                    .equatable()
+            }
+
         case .assistantText(let data):
             HStack {
                 AssistantBubble(
