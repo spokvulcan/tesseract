@@ -11,6 +11,7 @@ nonisolated struct ChatRow: Identifiable, Equatable, Sendable {
 
     enum Kind: Equatable, Sendable {
         case user(UserRow)
+        case skillInvocation(SkillInvocationRow)
         case assistantText(AssistantTextRow)
         case thinking(ThinkingRow)
         case toolCall(ToolCallRow)
@@ -49,6 +50,24 @@ nonisolated struct UserRow: Equatable, Sendable {
     let images: [ImageAttachment]
     let timestamp: String
     let messageID: UUID
+}
+
+/// The **Skill Invocation Row** (PRD #174): the compact rendering of a user
+/// message that carries an injected skill block — skill name, the user's
+/// argument text, and attachments — expandable to the full injected block.
+/// One rendering for every invocation surface (Skill Pill or slash command).
+nonisolated struct SkillInvocationRow: Equatable, Sendable {
+    let skillName: String
+    /// Title-cased pill-style label ("proofread-tweet" → "Proofread Tweet").
+    let displayLabel: String
+    /// The user's argument text (empty for a bare invocation).
+    let argumentText: String
+    /// The full injected `<skill>…</skill>` block, shown when expanded.
+    let injectedBlock: String
+    let images: [ImageAttachment]
+    let timestamp: String
+    let messageID: UUID
+    let isExpanded: Bool
 }
 
 nonisolated struct AssistantTextRow: Equatable, Sendable {

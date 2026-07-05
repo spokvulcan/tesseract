@@ -84,11 +84,11 @@ nonisolated enum ChatTranscript {
         /// Turns) — the coordinator uses it verbatim as the `replaceSubrange`
         /// splice point, with no recomputation of layout.
         var activeTurnStart: Int
-        /// Every committed tool-call row id across all Turns, **regardless of
-        /// whether the Turn is expanded** (a collapsed Turn's tool rows are not
-        /// in `rows`). The coordinator prunes stale `expandedDetails` against
-        /// this so collapsing then re-expanding a Turn preserves tool-detail
-        /// expansion state.
+        /// Every committed detail-expandable row id across all Turns — tool
+        /// calls **regardless of whether the Turn is expanded** (a collapsed
+        /// Turn's tool rows are not in `rows`), plus Skill Invocation Rows.
+        /// The coordinator prunes stale `expandedDetails` against this so
+        /// collapsing then re-expanding preserves detail expansion state.
         var toolRowIDs: Set<String>
         /// Every still-valid turn id — the committed Turn ids, plus
         /// ``streamingTurnID`` when generating. The coordinator prunes stale
@@ -213,19 +213,41 @@ nonisolated enum ChatTranscript {
 
         // User row — rendered whenever the turn opens with a user message, even
         // image-only (empty content). This converges both paths onto the
-        // full-rebuild behaviour.
+        // full-rebuild behaviour. A user message carrying an injected skill
+        // block renders as the compact Skill Invocation Row instead (PRD #174);
+        // its id joins `toolRowIDs` so detail-expansion pruning keeps it alive.
         if let user {
-            rows.append(
-                ChatRow(
-                    id: turn.id.uuidString,
-                    kind: .user(
-                        UserRow(
-                            content: user.content,
-                            images: user.images,
-                            timestamp: ctx.formatTimestamp(user.timestamp),
-                            messageID: turn.id
-                        ))
-                ))
+            if let skill = SkillInvocationBlock.parse(user.content) {
+                let rowID = turn.id.uuidString + "-skill"
+                toolRowIDs.insert(rowID)
+                rows.append(
+                    ChatRow(
+                        id: rowID,
+                        kind: .skillInvocation(
+                            SkillInvocationRow(
+                                skillName: skill.skillName,
+                                displayLabel: skill.displayLabel,
+                                argumentText: skill.argumentText,
+                                injectedBlock: skill.injectedBlock,
+                                images: user.images,
+                                timestamp: ctx.formatTimestamp(user.timestamp),
+                                messageID: turn.id,
+                                isExpanded: ctx.expandedDetails.contains(rowID)
+                            ))
+                    ))
+            } else {
+                rows.append(
+                    ChatRow(
+                        id: turn.id.uuidString,
+                        kind: .user(
+                            UserRow(
+                                content: user.content,
+                                images: user.images,
+                                timestamp: ctx.formatTimestamp(user.timestamp),
+                                messageID: turn.id
+                            ))
+                    ))
+            }
         }
 
         // System (compaction) row.

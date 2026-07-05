@@ -50,5 +50,54 @@ struct SettingsCatalogueTests {
         // on, so vision-capable models load their image-aware container from a
         // fresh install.
         #expect(SettingsCatalogue.useVisionWhenAvailable.load(from: store) == true)
+        // Skill Pills (PRD #174): the row shows by default on a fresh install.
+        #expect(SettingsCatalogue.showSkillPills.load(from: store) == true)
+    }
+
+    @Test
+    func translateTargetLanguageDefaultsFromSystemPreferredLanguages() {
+        // The catalogue default is the launch-time derivation from the macOS
+        // preferred languages — non-empty, and exactly what the pure helper
+        // produces for this process (PRD #174).
+        let store = InMemorySettingsStore()
+        let expected = TranslateLanguageDefault.derive(from: Locale.preferredLanguages)
+        #expect(!expected.isEmpty)
+        #expect(SettingsCatalogue.translateTargetLanguage.load(from: store) == expected)
+    }
+
+    @Test
+    func skillUsageCountsDefaultToZeroAndResetSweepsThem() {
+        // Dynamic per-skill keys mint on demand (default 0) and share a prefix
+        // so resetToDefaults can sweep them back to the curated pill order.
+        let store = InMemorySettingsStore()
+        #expect(SettingsCatalogue.skillUsageCount(skillName: "proofread").load(from: store) == 0)
+
+        let settings = SettingsManager(store: store)
+        settings.incrementSkillUsage(skillName: "proofread")
+        settings.incrementSkillUsage(skillName: "proofread")
+        #expect(settings.skillUsageCount(skillName: "proofread") == 2)
+
+        settings.resetToDefaults()
+        #expect(settings.skillUsageCount(skillName: "proofread") == 0)
+        #expect(settings.showSkillPills == true)
+    }
+}
+
+// MARK: - TranslateLanguageDefault
+
+struct TranslateLanguageDefaultTests {
+
+    @Test
+    func firstNonEnglishPreferredLanguageWins() {
+        #expect(TranslateLanguageDefault.derive(from: ["uk-UA", "en-US"]) == "Ukrainian")
+        #expect(TranslateLanguageDefault.derive(from: ["en-US", "de-DE", "fr-FR"]) == "German")
+    }
+
+    @Test
+    func allEnglishFallsBackToEnglish() {
+        // Target = English collapses the translate direction flip (PRD #174):
+        // everything simply translates to English.
+        #expect(TranslateLanguageDefault.derive(from: ["en-US", "en-GB"]) == "English")
+        #expect(TranslateLanguageDefault.derive(from: []) == "English")
     }
 }

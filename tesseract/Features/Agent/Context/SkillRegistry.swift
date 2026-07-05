@@ -12,6 +12,19 @@ nonisolated struct SkillMetadata: Sendable {
     let filePath: String
     /// When true, the skill is available but not listed in the prompt.
     let disableModelInvocation: Bool
+    /// When true, the skill joins the Skill Pill row above the composer
+    /// (`composer-pill` frontmatter key, PRD #174).
+    let composerPill: Bool
+    /// Optional pill-label override (`label` frontmatter key). When absent the
+    /// pill shows ``displayLabel``'s derivation from the name.
+    let label: String?
+
+    /// The human-readable pill title: the `label` override, or the kebab-case
+    /// name title-cased ("proofread-tweet" → "Proofread Tweet").
+    var displayLabel: String {
+        if let label, !label.isEmpty { return label }
+        return name.kebabTitleCased
+    }
 }
 
 // MARK: - SkillRegistry
@@ -187,12 +200,17 @@ nonisolated enum SkillRegistry: Sendable {
         let disableInvocation =
             frontmatter["disable-model-invocation"]
             .map { $0.lowercased() == "true" } ?? false
+        let composerPill =
+            frontmatter["composer-pill"]
+            .map { $0.lowercased() == "true" } ?? false
 
         return SkillMetadata(
             name: name.lowercased(),
             description: String(description.prefix(1024)),
             filePath: url.path,
-            disableModelInvocation: disableInvocation
+            disableModelInvocation: disableInvocation,
+            composerPill: composerPill,
+            label: frontmatter["label"]
         )
     }
 

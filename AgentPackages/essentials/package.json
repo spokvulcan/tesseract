@@ -1,0 +1,12 @@
+{
+    "name": "essentials",
+    "enabled": true,
+    "skills": [
+        "skills/proofread/SKILL.md",
+        "skills/proofread-tweet/SKILL.md",
+        "skills/reply/SKILL.md",
+        "skills/summarize/SKILL.md",
+        "skills/explain/SKILL.md",
+        "skills/translate/SKILL.md"
+    ]
+}
