@@ -112,6 +112,11 @@ final class TieredSnapshotStore {
     /// both ends, same rationale as `CommittedRefOwner`.
     private var chainPrefixDependentsByOwnerID: [String: [CommittedRefOwner]] = [:]
 
+    /// The shared **Storage Activity Gate** (PRD #150) handed to the SSD
+    /// tier's writer, retained here so `PrefixCacheManager` can surface
+    /// it to the prefill call sites that mark it busy.
+    let activityGate: StorageActivityGate?
+
     // MARK: - Init
 
     /// Construct a tiered store. Passing `nil` (or an
@@ -125,9 +130,11 @@ final class TieredSnapshotStore {
     /// `SSDSnapshotStore.init` already exposes.
     init(
         ssdConfig: SSDPrefixCacheConfig? = nil,
+        activityGate: StorageActivityGate? = nil,
         writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
     ) {
         self.ssdStore = nil
+        self.activityGate = activityGate
 
         guard let ssdConfig, ssdConfig.enabled else { return }
 
@@ -137,6 +144,7 @@ final class TieredSnapshotStore {
         // state — the writer task itself is not MainActor-isolated.
         self.ssdStore = SSDSnapshotStore(
             config: ssdConfig,
+            activityGate: activityGate,
             onCommit: { [weak self] info in
                 Task { @MainActor [weak self] in
                     self?.markSnapshotRefCommitted(info)
@@ -338,7 +346,8 @@ final class TieredSnapshotStore {
         demotionLastAccessAt: TimeInterval? = nil,
         scoringConfig: EvictionConfiguration = EvictionConfiguration(),
         condemnedResidentIDs: Set<String> = [],
-        mandatory: Bool = false
+        mandatory: Bool = false,
+        deferrable: Bool = false
     ) -> SnapshotRef? {
         guard let ssdStore else { return nil }
 
@@ -363,7 +372,8 @@ final class TieredSnapshotStore {
                 refreshRecencyAtCommit: demotionLastAccessAt == nil,
                 scoringConfig: scoringConfig,
                 condemnedResidentIDs: condemnedResidentIDs,
-                mandatory: mandatory
+                mandatory: mandatory,
+                deferrable: deferrable
             )
         else {
             return nil

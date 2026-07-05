@@ -397,6 +397,11 @@ nonisolated enum PrefixCacheDiagnostics {
         /// pinned wire lines stay stable; a non-`accepted` outcome with
         /// this flag is a hard error, logged at error level.
         var mandatory: Bool = false
+        /// Write class for the endurance ledger (PRD #150):
+        /// `guarantee` / `writeThrough` / `deferred`. Set on the
+        /// terminal `accepted` event only — reject outcomes wrote
+        /// nothing, so they carry no class.
+        var writeClass: String?
 
         let eventName = "ssdAdmit"
 
@@ -408,6 +413,9 @@ nonisolated enum PrefixCacheDiagnostics {
             ]
             if mandatory {
                 fields.append(("mandatory", "true"))
+            }
+            if let writeClass {
+                fields.append(("writeClass", writeClass))
             }
             return fields
         }
@@ -686,6 +694,46 @@ nonisolated enum PrefixCacheDiagnostics {
 
         var fields: [(String, String)] {
             [("partition", partition)]
+        }
+    }
+
+    /// One SSD write skipped by **adaptive write eagerness** (ADR-0019,
+    /// PRD #150): RAM comfortably holds the snapshot and the node has
+    /// not yet proven reuse, so the copy is pure redundancy. Not an
+    /// `ssdAdmit` outcome — nothing reached the front door.
+    struct SSDWriteDeferredEvent: Payload {
+        let offset: Int
+        let bytes: Int
+        let hitCount: Int
+
+        let eventName = "ssdWriteDeferred"
+
+        var fields: [(String, String)] {
+            [
+                ("offset", "\(offset)"),
+                ("bytes", "\(bytes)"),
+                ("hitCount", "\(hitCount)"),
+            ]
+        }
+    }
+
+    /// A hit-count promotion (PRD #150): an unbacked RAM body crossed
+    /// `SSDWriteEagernessPolicy.hitCountThreshold` and earned a
+    /// deferred-class SSD write. The paired `ssdAdmit` event carries
+    /// the terminal outcome; this one marks *why* the write exists.
+    struct SSDWritePromotedEvent: Payload {
+        let offset: Int
+        let bytes: Int
+        let hitCount: Int
+
+        let eventName = "ssdWritePromoted"
+
+        var fields: [(String, String)] {
+            [
+                ("offset", "\(offset)"),
+                ("bytes", "\(bytes)"),
+                ("hitCount", "\(hitCount)"),
+            ]
         }
     }
 

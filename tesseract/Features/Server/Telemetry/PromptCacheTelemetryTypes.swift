@@ -292,6 +292,13 @@ nonisolated struct PromptCacheCumulativeCounters: Codable, Equatable, Sendable {
     /// time — the same **Recovery Cost** units eviction scores in, so
     /// "seconds saved" and "seconds at risk" are directly comparable.
     var savedPrefillSeconds: Double = 0
+    /// SSD writes skipped by **Adaptive Write Eagerness** (ADR-0019,
+    /// PRD #150) — redundant copies not taken while RAM comfortably
+    /// held the body and the node had not yet proven reuse.
+    var eagernessDeferrals: Int = 0
+    /// Deferred-class promotion writes issued when a previously
+    /// skipped node's hit count crossed the eagerness threshold.
+    var eagernessPromotions: Int = 0
 }
 
 /// Eviction-tuner state surfaced to the UI: the `AlphaTuner` phase plus the

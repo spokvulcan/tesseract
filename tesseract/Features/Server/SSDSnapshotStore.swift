@@ -226,11 +226,35 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     private let onDrop: @Sendable (String, SSDDropReason) -> Void
     private let writerDrainPreludeForTesting: (@Sendable () async -> Void)?
 
+    // MARK: - Deferred-class write scheduling (PRD #150)
+
+    /// Shared busy signal with the inference path. While a hydration
+    /// read or prefill is in flight, deferrable pending items wait —
+    /// bounded by `maxDeferredHoldup`. `nil` (tests, replay caches)
+    /// means no gating: every item processes immediately.
+    private let activityGate: StorageActivityGate?
+
+    /// Longest a deferrable item waits out a busy gate before it is
+    /// written anyway. Liveness bound, not policy: the PRD wants
+    /// overlap *avoided when possible*, never writes that starve.
+    static let maxDeferredHoldup: Duration = .seconds(30)
+
+    /// Delay before the writer re-checks a gate-blocked deferred item.
+    static let deferredRecheckInterval: Duration = .milliseconds(500)
+
+    /// Set for the duration of `flushAsync`: unload/benchmark drains
+    /// must write everything out regardless of gate state.
+    private var forceDrainDeferred = false
+    /// Guards against stacking re-wake tasks while a deferred item
+    /// waits out the gate.
+    private var deferredRewakeScheduled = false
+
     // MARK: - Public API
 
     init(
         config: SSDPrefixCacheConfig,
         manifestDebounce: Duration = .milliseconds(500),
+        activityGate: StorageActivityGate? = nil,
         onCommit: @escaping @Sendable (SSDCommitInfo) -> Void = { _ in },
         onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in },
         writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
@@ -238,6 +262,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         self.rootURL = config.rootURL
         self.budgetBytes = config.budgetBytes
         self.maxPendingBytes = config.maxPendingBytes
+        self.activityGate = activityGate
         self.ledger = SnapshotLedger(
             rootURL: config.rootURL,
             budgetBytes: config.budgetBytes,
@@ -320,13 +345,20 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// transiently exceed the cap by at most the guarantee payloads in
     /// flight. Its remaining rejection paths are hard errors, logged at
     /// error level with `mandatory=true` on the `ssdAdmit` event.
+    /// `deferrable: true` marks a deferred-class write (a hit-count
+    /// promotion, PRD #150): the writer holds it while the
+    /// `StorageActivityGate` reports hydration/prefill in flight,
+    /// bounded by `maxDeferredHoldup`. Mutually exclusive with
+    /// `mandatory` by construction — the guarantee write is never
+    /// deferred (ADR-0019).
     func tryEnqueue(
         payload: SnapshotPayload,
         descriptor: PersistedSnapshotDescriptor,
         refreshRecencyAtCommit: Bool = true,
         scoringConfig: EvictionConfiguration = EvictionConfiguration(),
         condemnedResidentIDs: Set<String> = [],
-        mandatory: Bool = false
+        mandatory: Bool = false,
+        deferrable: Bool = false
     ) -> TryEnqueueResult {
         // Parse the wire-format checkpoint type before taking the lock;
         // no sense holding the lock for a parse that can fail.
@@ -407,6 +439,15 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             let baseIsQueuedOrInFlight =
                 inFlightSnapshotID == extendingBaseID
                 || pending.contains { $0.descriptor.snapshotID == extendingBaseID }
+            // An extension's fold needs its base committed first (FIFO).
+            // A gate-held deferrable base would let this extension be
+            // popped past it and drop with `extensionBaseLost` — so the
+            // extension's arrival promotes the queued base to immediate.
+            if let baseIndex = pending.firstIndex(where: {
+                $0.descriptor.snapshotID == extendingBaseID && $0.deferrable
+            }) {
+                pending[baseIndex].deferrable = false
+            }
             queueLock.unlock()
             guard
                 ledger.beginExtensionTransfer(
@@ -432,7 +473,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                 refreshRecencyAtCommit: refreshRecencyAtCommit,
                 scoringConfig: scoringConfig,
                 condemnedResidentIDs: condemnedResidentIDs,
-                mandatory: mandatory
+                mandatory: mandatory,
+                deferrable: deferrable && !mandatory,
+                enqueuedAt: .now
             ))
 
         wakeupContinuation.yield()
@@ -462,22 +505,31 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
 
         queueLock.lock()
 
-        var scanIndex = 0
-        while pendingBytes + payloadBytes > maxPendingBytes,
-            scanIndex < pending.count
-        {
-            guard !pending[scanIndex].mandatory else {
-                scanIndex += 1
-                continue
+        // Two victim passes: deferrable items first — a dropped
+        // promotion write costs nothing (the RAM body stays, demotion
+        // covers eviction), a dropped write-through costs its node the
+        // pending backing — then the remaining non-mandatory entries.
+        for victimsArePureRedundancy in [true, false] {
+            var scanIndex = 0
+            while pendingBytes + payloadBytes > maxPendingBytes,
+                scanIndex < pending.count
+            {
+                let candidate = pending[scanIndex]
+                guard !candidate.mandatory,
+                    candidate.deferrable == victimsArePureRedundancy
+                else {
+                    scanIndex += 1
+                    continue
+                }
+                let oldest = pending.remove(at: scanIndex)
+                pendingBytes -= oldest.payload.totalBytes
+                droppedItems.append(
+                    (
+                        id: oldest.descriptor.snapshotID,
+                        bytes: oldest.payload.totalBytes,
+                        extendingBaseID: oldest.extendingBaseID
+                    ))
             }
-            let oldest = pending.remove(at: scanIndex)
-            pendingBytes -= oldest.payload.totalBytes
-            droppedItems.append(
-                (
-                    id: oldest.descriptor.snapshotID,
-                    bytes: oldest.payload.totalBytes,
-                    extendingBaseID: oldest.extendingBaseID
-                ))
         }
 
         pending.append(item)
@@ -550,6 +602,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// — the writer is woken once and runs a no-op `drainPending`
     /// before the continuation resumes.
     func flushAsync() async {
+        // A flush drains *everything*: deferred-class items stop
+        // waiting out the activity gate — unload durability outranks
+        // bandwidth scheduling.
+        setForceDrainDeferred(true)
+        defer { setForceDrainDeferred(false) }
+
         // Register before yielding so the writer can never skip our
         // signal. New admissions landing between the wakeup and the
         // resume pop off a second drain pass — covered by the loop.
@@ -561,6 +619,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         } while hasPendingWrites()
 
         ledger.persistNow()
+    }
+
+    private func setForceDrainDeferred(_ value: Bool) {
+        queueLock.lock()
+        forceDrainDeferred = value
+        queueLock.unlock()
     }
 
     private func registerDrainWaiter(
@@ -695,9 +759,54 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             inFlightSnapshotID = nil
             return nil
         }
-        let item = pending.removeFirst()
-        inFlightSnapshotID = item.descriptor.snapshotID
-        return item
+        // FIFO over the processable set: non-deferrable items always;
+        // deferrable items when the gate is idle (or absent), the item
+        // has waited out `maxDeferredHoldup`, or a flush forces the
+        // drain. A blocked deferrable head does not block later
+        // non-deferrable items — write-order between unrelated
+        // snapshots carries no invariant (extension bases are promoted
+        // to non-deferrable at the extension's enqueue, so base-before-
+        // suffix is preserved the FIFO way).
+        let gateBusy = activityGate?.isBusy ?? false
+        let now: ContinuousClock.Instant = .now
+        for index in pending.indices {
+            let item = pending[index]
+            if item.deferrable, !forceDrainDeferred, gateBusy,
+                now - item.enqueuedAt < Self.maxDeferredHoldup
+            {
+                continue
+            }
+            let selected = pending.remove(at: index)
+            inFlightSnapshotID = selected.descriptor.snapshotID
+            return selected
+        }
+        // Only gate-blocked deferrable items remain — leave them queued
+        // and let a delayed re-wake retry once the gate quiets down.
+        inFlightSnapshotID = nil
+        scheduleDeferredRewakeLocked()
+        return nil
+    }
+
+    /// Schedule a one-shot delayed wakeup so gate-blocked deferrable
+    /// items are re-checked without busy-spinning. Must be called with
+    /// `queueLock` held.
+    private func scheduleDeferredRewakeLocked() {
+        guard !deferredRewakeScheduled else { return }
+        deferredRewakeScheduled = true
+        Task.detached { [weak self] in
+            try? await Task.sleep(for: Self.deferredRecheckInterval)
+            self?.clearDeferredRewakeAndWake()
+        }
+    }
+
+    /// Synchronous tail of the delayed re-wake: `NSLock` cannot be
+    /// taken inside an async context, so the rewake task calls out
+    /// to this nonisolated-sync hop instead.
+    private func clearDeferredRewakeAndWake() {
+        queueLock.lock()
+        deferredRewakeScheduled = false
+        queueLock.unlock()
+        wakeupContinuation.yield()
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
@@ -868,7 +977,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             PrefixCacheDiagnostics.SSDAdmitEvent(
                 id: item.descriptor.snapshotID,
                 bytes: item.descriptor.bytes,
-                outcome: .accepted
+                outcome: .accepted,
+                writeClass: item.mandatory
+                    ? "guarantee" : (item.deferrable ? "deferred" : "writeThrough")
             ))
         if let baseID = item.extendingBaseID {
             PrefixCacheDiagnostics.logSystem(
@@ -1173,6 +1284,14 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         /// ADR-0019): never a back-pressure victim, and any writer-side
         /// drop is a hard error logged at error level.
         let mandatory: Bool
+        /// Deferred-class marker (PRD #150): the writer holds this item
+        /// while the `StorageActivityGate` is busy (bounded by
+        /// `maxDeferredHoldup`), and back-pressure victimizes it first.
+        /// `var`: an extension enqueue promotes its queued base to
+        /// immediate by clearing the flag.
+        var deferrable: Bool = false
+        /// Enqueue instant, for the deferred-holdup liveness bound.
+        var enqueuedAt: ContinuousClock.Instant = .now
     }
 }
 
@@ -1213,6 +1332,12 @@ extension SSDSnapshotStore {
         expectedFingerprint: String,
         interruption: (@Sendable () -> Bool)? = nil
     ) -> HybridCacheSnapshot? {
+        // Mark the hydration window for the deferred-write scheduler
+        // (PRD #150): large-block reads and writes on one NVMe device
+        // contend, so deferrable writer items wait this out.
+        activityGate?.hydrationDidBegin()
+        defer { activityGate?.hydrationDidEnd() }
+
         // Fingerprint gate: compare the partition's persisted
         // fingerprint against the caller's expected value. Mismatch
         // or missing partition is terminal — drop and miss. Read
@@ -1316,6 +1441,10 @@ extension SSDSnapshotStore {
         expectedFingerprint: String,
         interruption: (@Sendable () -> Bool)? = nil
     ) -> HybridCacheSnapshot? {
+        // Same hydration mark as `loadSync` (PRD #150).
+        activityGate?.hydrationDidBegin()
+        defer { activityGate?.hydrationDidEnd() }
+
         func missPoint(
             _ reason: PrefixCacheDiagnostics.SSDMissReason,
             _ message: @autoclosure () -> String

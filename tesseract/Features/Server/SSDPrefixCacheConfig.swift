@@ -84,6 +84,44 @@ nonisolated enum SSDStalePartitionPolicy {
     static let lastUsedRefreshInterval: TimeInterval = 6 * 3600
 }
 
+/// **Adaptive write eagerness** (ADR-0019, PRD #150): when RAM
+/// comfortably holds a snapshot, its SSD copy is redundancy and the
+/// write may be skipped — the node stays visibly unbacked, so
+/// **Recoverable Eviction**'s demote-before-drop still persists it the
+/// moment RAM actually needs the bytes back. The skip is re-earned the
+/// other way by reuse: a node whose hit count crosses
+/// `hitCountThreshold` gets a deferred-class promotion write (HiCache's
+/// `write_through_selective` precedent, keyed on RAM-tier health per
+/// ADR-0019). The guarantee-class end-of-turn write is never deferred.
+nonisolated enum SSDWriteEagernessPolicy {
+    /// Lookup hits after which an unbacked RAM body earns its SSD
+    /// backing regardless of RAM health — proven reuse is worth the
+    /// write even as pure redundancy (it converts a future demotion
+    /// under pressure into an already-done idle write).
+    static let hitCountThreshold = 2
+
+    /// RAM is "comfortable" while the resident set stays at or below
+    /// this fraction of the live budget. Above it, eviction is near
+    /// and a skipped write would soon be paid back as a pressure-time
+    /// demotion — write through instead.
+    static let comfortFraction = 0.75
+
+    /// Whether a non-guarantee write may be skipped at admission.
+    /// `bandRetreating` (current budget below the measured ceiling —
+    /// an OS pressure fold in effect) always writes through: pressure
+    /// is exactly when redundancy stops being redundant.
+    static func mayDefer(
+        nodeHitCount: Int,
+        residentBytes: Int,
+        budgetBytes: Int,
+        bandRetreating: Bool
+    ) -> Bool {
+        guard !bandRetreating else { return false }
+        guard nodeHitCount < hitCountThreshold else { return false }
+        return Double(residentBytes) <= comfortFraction * Double(budgetBytes)
+    }
+}
+
 /// Immutable snapshot of the SSD prefix-cache tier configuration.
 ///
 /// Downstream consumers gate on `self.ssdConfig?.enabled == true` as a

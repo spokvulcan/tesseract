@@ -107,7 +107,9 @@ enum PrefixCacheTestFixtures {
         ramBudgetBytes: Int,
         ssdBudgetBytes: Int = 10_000_000,
         demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)? = nil,
-        writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
+        writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil,
+        activityGate: StorageActivityGate? = nil,
+        adaptiveWriteEagerness: Bool = false
     ) -> (manager: PrefixCacheManager, store: TieredSnapshotStore, root: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(label)-\(UUID().uuidString)")
@@ -119,12 +121,14 @@ enum PrefixCacheTestFixtures {
                 budgetBytes: ssdBudgetBytes,
                 maxPendingBytes: 10_000_000
             ),
+            activityGate: activityGate,
             writerDrainPreludeForTesting: writerDrainPreludeForTesting
         )
         let manager = PrefixCacheManager(
             memoryBudgetBytes: ramBudgetBytes,
             tieredStore: store,
-            demotionPayloadExtractor: demotionPayloadExtractor
+            demotionPayloadExtractor: demotionPayloadExtractor,
+            adaptiveWriteEagerness: adaptiveWriteEagerness
         )
         return (manager, store, root)
     }
