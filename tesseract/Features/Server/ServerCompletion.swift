@@ -1876,7 +1876,8 @@ nonisolated final class ServerCompletion {
             switch prefillPlan.restore {
             case .restore(let cacheOffset, let anchorDelta):
                 let (restoredCache, measuredRestoreMs) = measure {
-                    Self.restoreCache(lookupResult, session: session)
+                    Self.restoreCache(
+                        lookupResult, session: session, diagnostics: diagnosticsContext)
                 }
                 cacheToUse = restoredCache
                 restoreMs = measuredRestoreMs
@@ -2511,7 +2512,8 @@ nonisolated final class ServerCompletion {
                 switch prefillPlan.restore {
                 case .restore(let cacheOffset, let anchorDelta):
                     let restoreStarted = Date.timeIntervalSinceReferenceDate
-                    cacheToUse = Self.restoreCache(lookupResult, session: session)
+                    cacheToUse = Self.restoreCache(
+                        lookupResult, session: session, diagnostics: diagnosticsContext)
                     restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
                     executionBaseOffset = cacheOffset
                     if seedsPositionAnchor {
@@ -2998,11 +3000,20 @@ nonisolated final class ServerCompletion {
     /// **Model Session** so the sequencing suite observes restore ordering.
     private static func restoreCache(
         _ lookup: PrefixCacheManager.LookupResult,
-        session: any ModelSession
+        session: any ModelSession,
+        diagnostics: PrefixCacheDiagnostics.Context
     ) -> [any KVCache]? {
         guard let snapshot = lookup.snapshot, lookup.partitionKey != nil else { return nil }
         do {
-            return try session.restore(snapshot)
+            let cache = try session.restore(snapshot)
+            // Duplicate-prefix-bytes meter (PRD #173): this deep copy is the
+            // RAM a paged (refcounted) tier would not spend — record it.
+            diagnostics.log(
+                PrefixCacheDiagnostics.DuplicatePrefixBytesEvent(
+                    restoredBytes: snapshot.memoryBytes,
+                    snapshotOffset: snapshot.tokenOffset
+                ))
+            return cache
         } catch {
             Log.server.error(
                 "snapshot restore failed — treating as cache miss: \(error)"

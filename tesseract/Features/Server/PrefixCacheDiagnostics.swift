@@ -389,6 +389,28 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// The deep-copy **duplicate-prefix-bytes meter** (PRD #173): under the
+    /// shipped v1 storage posture every lane restore deep-copies its prefix
+    /// out of the radix tree, so the restored bytes exist twice (tree copy +
+    /// lane copy) for the lane's lifetime. Under the paged KV tier
+    /// (ADR-0023, recorded follow-up — kernel gate PASSED) the same restore
+    /// is a refcount bump. One event per restore; summed over a trace and
+    /// joined with the lane lifecycle events by requestID, this is the
+    /// measured RAM the paged tier would reclaim on real traffic.
+    struct DuplicatePrefixBytesEvent: Payload {
+        let restoredBytes: Int
+        let snapshotOffset: Int
+
+        let eventName = "duplicatePrefixBytes"
+
+        var fields: [(String, String)] {
+            [
+                ("restoredBytes", "\(restoredBytes)"),
+                ("snapshotOffset", "\(snapshotOffset)"),
+            ]
+        }
+    }
+
     struct MemoryEvent: Payload {
         let snapshotCount: Int
         let totalSnapshotBytes: Int
