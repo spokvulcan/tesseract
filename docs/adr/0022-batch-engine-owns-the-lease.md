@@ -78,3 +78,21 @@ pre-registration, the latency bar is not negotiable after the fact, so
 batched decode stays a follow-up question (it is one step function away
 if a future revisit re-weighs latency or shrinks the batched round).
 Report: `tmp/tesseract-debug/benchmark/batch-lane-curves/`.
+
+## v1 wiring notes (2026-07-06)
+
+What the shipped change wires narrower than the decision above; each is a
+recorded follow-up on #173, not a silent cut:
+
+- **LPM queue order is unfed.** The policy core orders by
+  `matchedPrefixLength` and ages to FIFO (tested), but no production
+  submit site probes the radix tree yet — every real submission passes 0,
+  so the v1 queue is aged-FIFO in practice and the `queued` diagnostic
+  records 0 until the probe lands.
+- **The internal Agent Run submits as an exclusive lane.** Its multi-turn
+  run isn't engine-stepped yet, so a chat turn or `/compact` drains the
+  pool and runs solo rather than pooling alongside subagent fan-out.
+- **Speculative Canonical Prefill keeps its module-quiescence gate**
+  (active completions empty, preempt at entry). The engine's own
+  idle predicate is the wrong signal at schedule time — the completing
+  lane is still live when the speculative pass is scheduled.

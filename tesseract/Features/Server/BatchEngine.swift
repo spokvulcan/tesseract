@@ -18,8 +18,10 @@ nonisolated struct BatchSubmission: Sendable {
     /// (managed arm, standard route) rather than engine-stepped lanes; it
     /// occupies the pool exclusively, like an image request.
     let runsMonolithic: Bool
-    /// Longest radix-tree prefix match probed at submit; 0 when no probe was
-    /// possible. Orders the waiting queue (SGLang cache-aware), aged to FIFO.
+    /// Longest radix-tree prefix match probed at submit. Orders the waiting
+    /// queue (SGLang cache-aware), aged to FIFO. No production submit site
+    /// probes yet — every real submission passes 0, so the v1 queue is
+    /// aged-FIFO in practice; the probe is a recorded follow-up (#173).
     let matchedPrefixLength: Int
     /// The lane's solo prefill chunk size (the request's `prefillStepSize`).
     let preferredPrefillChunk: Int
@@ -46,6 +48,9 @@ nonisolated struct BatchSubmission: Sendable {
         self.preferredPrefillChunk = preferredPrefillChunk
         self.admissionTimeout = admissionTimeout
     }
+
+    /// The lane must run alone — image-bearing or monolithic-path.
+    var requiresExclusivePool: Bool { bearsImages || runsMonolithic }
 }
 
 /// A live pool lane's handle, threaded from the submission point
@@ -186,10 +191,6 @@ actor BatchEngine {
 
     // MARK: - Submission
 
-    /// True when no lane is live and nothing waits — the Speculative
-    /// Canonical Prefill's idle predicate (ADR-0009 stays idle-only).
-    var isIdle: Bool { lanes.isEmpty && queue.isEmpty }
-
     /// Submit a completion; suspends until it becomes a lane. Throws
     /// `LeaseTimeoutError` when the admission deadline passes (the caller
     /// maps it to today's 503 + `Retry-After`), `CancellationError` when the
@@ -226,7 +227,7 @@ actor BatchEngine {
                         phase: .queued,
                         requestID: id,
                         matchedPrefixLength: submission.matchedPrefixLength,
-                        exclusive: submission.bearsImages || submission.runsMonolithic
+                        exclusive: submission.requiresExclusivePool
                     ))
                 wake()
             }
@@ -554,11 +555,9 @@ actor BatchEngine {
             return BatchEngineSnapshot.QueueEntry(
                 requestID: entry.submission.requestID,
                 arrivalOrder: entry.arrivalOrder,
-                waitedSeconds: TimeInterval(waited.components.seconds)
-                    + TimeInterval(waited.components.attoseconds) / 1e18,
+                waitedSeconds: Self.seconds(waited),
                 matchedPrefixLength: entry.submission.matchedPrefixLength,
-                requiresExclusivePool: entry.submission.bearsImages
-                    || entry.submission.runsMonolithic,
+                requiresExclusivePool: entry.submission.requiresExclusivePool,
                 demandSatisfiedByLoadedModel: entry.demandIsSatisfied
             )
         }
