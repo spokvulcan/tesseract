@@ -66,3 +66,15 @@ loads see one long-running lease consumer.
 - A stray request for a different model can stall a fan-out burst for one
   freeze window (bounded by the longest in-flight completion) — accepted in
   exchange for keeping today's model-switch contract.
+
+## Decode-shape verdict (2026-07-06)
+
+**Interleaved round-robin ships; batched matmul NOT justified.** On
+qwen3.5-4b (Release, M-series, `--batch-lane-bench`): batched `[N, 1]`
+decode at N=4 clears the aggregate bar (2.50× at ctx 2048, 1.89× at
+ctx 8192, vs the 1.8× threshold) but fails the per-lane latency bar at
+both context points — 1.60× and 2.11× vs the ≤1.5× cap. Per the
+pre-registration, the latency bar is not negotiable after the fact, so
+batched decode stays a follow-up question (it is one step function away
+if a future revisit re-weighs latency or shrinks the batched round).
+Report: `tmp/tesseract-debug/benchmark/batch-lane-curves/`.

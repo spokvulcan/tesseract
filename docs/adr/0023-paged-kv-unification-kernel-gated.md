@@ -59,3 +59,19 @@ waits for a better kernel story; the batch engine is unaffected either way.
   unchanged in meaning.
 - The decode-shape spike (ADR-0022) runs on the paged layout if the gate
   passes — contiguous-KV measurements would not transfer.
+
+## Gate verdict (2026-07-05)
+
+**PASS.** `fusedGatherQMM` (gather fused into the quantized matmul via
+`gatherQuantizedMM`, page pool as the expert axis) stays within the
+pre-registered ≤15% bar at every cell: qwen3.5-4b +6.6% (N=1, P=64) /
++9.1% (N=4, P=256); ornith-35b +13.9% (N=1, P=64) / +2.3% (N=4, P=256);
+`maxAbsDiff ≤ 2e-4`, all outputs finite. Naive gather-then-attend fails
+everywhere — the fused kernel is the enabling shape. Report:
+`tmp/tesseract-debug/benchmark/paged-kv-kernel-gate/`.
+
+Paged unification is therefore a GO — but lands as the recorded follow-up,
+not in the engine-skeleton change (the PRD's build order: engine first,
+storage second). v1 ships deep-copied per-lane caches plus the
+duplicate-prefix-bytes meter, so the paged win is quantified on real
+traffic before the tier is rebuilt.
