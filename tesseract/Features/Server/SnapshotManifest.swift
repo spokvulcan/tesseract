@@ -357,6 +357,17 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
     /// exact key (the on-disk digest check would otherwise drop it).
     let templateContextDigest: String?
 
+    /// Seconds since Date's reference date of the last time this
+    /// partition was *used* — an admission registered it or an SSD
+    /// hydration hit one of its residents. The **stale-partition GC**
+    /// input (PRD #150): a partition unused past
+    /// `SSDStalePartitionPolicy.maxUnusedAge` is reclaimed at warm
+    /// start. Optional-with-nil like `templateContextDigest` — no
+    /// schema bump; a legacy `nil` is grace-stamped to "now" at the
+    /// first warm start that sees it, so the clock starts there
+    /// instead of retroactively reclaiming long-lived caches.
+    var lastUsedAt: Double?
+
     init(
         modelID: String,
         modelFingerprint: String,
@@ -364,7 +375,8 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         kvGroupSize: Int,
         createdAt: Double,
         schemaVersion: Int,
-        templateContextDigest: String? = nil
+        templateContextDigest: String? = nil,
+        lastUsedAt: Double? = nil
     ) {
         self.modelID = modelID
         self.modelFingerprint = modelFingerprint
@@ -373,6 +385,7 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         self.createdAt = createdAt
         self.schemaVersion = schemaVersion
         self.templateContextDigest = templateContextDigest
+        self.lastUsedAt = lastUsedAt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -383,6 +396,7 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         case createdAt
         case schemaVersion
         case templateContextDigest
+        case lastUsedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -396,6 +410,22 @@ nonisolated struct PartitionMeta: Codable, Sendable, Equatable {
         self.templateContextDigest = try container.decodeIfPresent(
             String.self, forKey: .templateContextDigest
         )
+        self.lastUsedAt = try container.decodeIfPresent(Double.self, forKey: .lastUsedAt)
+    }
+
+    /// True when `other` describes the same partition identity — every
+    /// field that participates in `CachePartitionKey.partitionDigest`
+    /// plus the schema version, ignoring the bookkeeping timestamps
+    /// (`createdAt`, `lastUsedAt`). `registerPartition` uses this to
+    /// tell "same partition, refresh its use stamp" apart from "the
+    /// partition changed under this digest, replace the meta".
+    func sameIdentity(as other: PartitionMeta) -> Bool {
+        modelID == other.modelID
+            && modelFingerprint == other.modelFingerprint
+            && kvBits == other.kvBits
+            && kvGroupSize == other.kvGroupSize
+            && schemaVersion == other.schemaVersion
+            && templateContextDigest == other.templateContextDigest
     }
 }
 

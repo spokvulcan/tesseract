@@ -1676,13 +1676,29 @@ final class PrefixCacheManager {
         }
         let durationSeconds = Date.timeIntervalSinceReferenceDate - started
 
-        // Emit a fingerprint mismatch event per invalidated partition
-        // BEFORE the warm-start summary so a `grep` walk of the log
-        // shows the failures contributing to the summary count.
-        for digest in outcome.invalidatedPartitionDigests {
+        // Emit the per-partition invalidation events BEFORE the
+        // warm-start summary so a `grep` walk of the log shows the
+        // failures contributing to the summary count. The richer
+        // `ssdPartitionInvalidated` (reason + modelID + reclaimed
+        // bytes) feeds the cache panel's notable-events feed; the
+        // legacy `fingerprintMismatch` line stays for that reason's
+        // pinned wire format.
+        for partition in outcome.invalidated {
             PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.FingerprintMismatchEvent(partition: digest)
+                PrefixCacheDiagnostics.SSDPartitionInvalidatedEvent(
+                    digest: partition.digest,
+                    modelID: partition.modelID,
+                    bytes: partition.bytes,
+                    reason: partition.reason
+                )
             )
+            if partition.reason == .fingerprintChanged {
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.FingerprintMismatchEvent(
+                        partition: partition.digest
+                    )
+                )
+            }
         }
         for digest in digestMismatchPartitions {
             Log.agent.warning(

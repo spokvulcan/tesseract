@@ -652,6 +652,30 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// One partition warm start reclaimed, with the reason and the
+    /// bytes returned to the budget. The visibility fix for the
+    /// 2026-07-04 silent invalidation (PRD #150): the cache panel
+    /// renders this as a non-alarming notable event ("Cache for
+    /// <modelID> was reset — model files changed") instead of the
+    /// tier silently shrinking to zero.
+    struct SSDPartitionInvalidatedEvent: Payload {
+        let digest: String
+        let modelID: String
+        let bytes: Int
+        let reason: WarmStartOutcome.PartitionInvalidationReason
+
+        let eventName = "ssdPartitionInvalidated"
+
+        var fields: [(String, String)] {
+            [
+                ("digest", digest),
+                ("modelID", modelID),
+                ("bytes", "\(bytes)"),
+                ("reason", reason.rawValue),
+            ]
+        }
+    }
+
     /// Render a payload without per-request context fields. Used by
     /// SSD-tier events that originate outside any request scope —
     /// the SSD writer task, warm-start, the writer's commit/drop

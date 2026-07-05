@@ -53,12 +53,43 @@ nonisolated struct WarmStartOutcome: Sendable {
         let descriptors: [PersistedSnapshotDescriptor]
     }
 
+    /// Why warm start reclaimed a partition. Rendered into the
+    /// `ssdPartitionInvalidated` diagnostics event and, from there,
+    /// the cache panel's notable-events feed — the 2026-07-04 lesson
+    /// that a legitimate invalidation must never be silent.
+    enum PartitionInvalidationReason: String, Sendable {
+        /// The partition's persisted `modelFingerprint` no longer
+        /// matches the loaded model (model re-downloaded / changed —
+        /// or, under the single-model tier, a different model loaded).
+        case fingerprintChanged
+        /// Stale-partition GC (PRD #150): unused past
+        /// `SSDStalePartitionPolicy.maxUnusedAge`.
+        case staleUnused
+        /// The `PartitionMeta` carries a stale schema version inside a
+        /// current-version manifest — a hand-edited or partially
+        /// upgraded file.
+        case schemaStale
+    }
+
+    /// One reclaimed partition, with everything the diagnostics event
+    /// (and the panel copy "Cache for <model> was reset") needs.
+    struct InvalidatedPartition: Sendable {
+        let digest: String
+        let modelID: String
+        /// Chain-total bytes of the descriptors that left the manifest
+        /// with this partition — what the reclaim returned to the budget.
+        let bytes: Int
+        let reason: PartitionInvalidationReason
+    }
+
     let validPartitions: [Partition]
-    let invalidatedPartitionDigests: [String]
+    let invalidated: [InvalidatedPartition]
+
+    var invalidatedPartitionDigests: [String] { invalidated.map(\.digest) }
 
     static let empty = WarmStartOutcome(
         validPartitions: [],
-        invalidatedPartitionDigests: []
+        invalidated: []
     )
 }
 
@@ -373,13 +404,42 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// Idempotent — repeat calls with the same digest overwrite the
     /// stored metadata, which is correct when a partition's fingerprint
     /// or session affinity changes between model loads.
+    ///
+    /// **Use stamping (stale-partition GC, PRD #150).** A value-equal
+    /// re-registration (warm start replaying the persisted meta) is a
+    /// no-op — a warm start alone is not "use". A same-identity call
+    /// with fresh timestamps (the admission path minting a new meta)
+    /// preserves the stored `createdAt` and bumps `lastUsedAt`,
+    /// throttled to `SSDStalePartitionPolicy.lastUsedRefreshInterval`
+    /// so per-admission calls don't turn into a sidecar write storm.
     func registerPartition(_ meta: PartitionMeta, digest: String) {
         lock.lock()
-        if manifest.partitions[digest] == meta {
+        let existing = manifest.partitions[digest]
+        if existing == meta {
             lock.unlock()
             return
         }
-        manifest.partitions[digest] = meta
+
+        let now = Date().timeIntervalSinceReferenceDate
+        let stored: PartitionMeta
+        if let existing, existing.sameIdentity(as: meta) {
+            if let last = existing.lastUsedAt,
+                now - last < SSDStalePartitionPolicy.lastUsedRefreshInterval
+            {
+                lock.unlock()
+                return
+            }
+            var refreshed = existing
+            refreshed.lastUsedAt = now
+            stored = refreshed
+        } else {
+            var fresh = meta
+            if fresh.lastUsedAt == nil {
+                fresh.lastUsedAt = now
+            }
+            stored = fresh
+        }
+        manifest.partitions[digest] = stored
         manifestDirty = true
         scheduleManifestPersistLocked()
         lock.unlock()
@@ -388,7 +448,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         // directory-walk rebuild can validate partition fingerprints
         // without relying on the top-level `manifest.json`. The file is
         // idempotent — repeat writes for the same digest overwrite cleanly.
-        writePartitionMetaFile(meta, digest: digest)
+        writePartitionMetaFile(stored, digest: digest)
     }
 
     /// Serialize a `PartitionMeta` to `partitions/{digest}/_meta.json`.
@@ -433,8 +493,19 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard var descriptor = manifest.snapshots[id] else { return }
-        descriptor.lastAccessAt = Date().timeIntervalSinceReferenceDate
+        let now = Date().timeIntervalSinceReferenceDate
+        descriptor.lastAccessAt = now
         manifest.snapshots[id] = descriptor
+        // A hit is "use" for the stale-partition GC clock (PRD #150):
+        // a read-heavy partition must not age out just because nothing
+        // wrote to it. Throttled like the register-path bump; persisted
+        // by the same debounced manifest write this hit schedules.
+        if var meta = manifest.partitions[descriptor.partitionDigest],
+            now - (meta.lastUsedAt ?? 0) >= SSDStalePartitionPolicy.lastUsedRefreshInterval
+        {
+            meta.lastUsedAt = now
+            manifest.partitions[descriptor.partitionDigest] = meta
+        }
         scheduleManifestPersistLocked()
     }
 
@@ -1273,19 +1344,74 @@ extension SnapshotLedger {
         source: String
     ) -> WarmStartOutcome {
         var restored = SnapshotManifest.empty()
-        var invalidatedDigests: [String] = []
+        var invalidated: [WarmStartOutcome.InvalidatedPartition] = []
+        let now = Date().timeIntervalSinceReferenceDate
+
+        // Chain-total bytes per partition, so each reclaim can report
+        // what it returned to the budget.
+        var bytesByPartition: [String: Int] = [:]
+        for descriptor in loaded.snapshots.values {
+            bytesByPartition[descriptor.partitionDigest, default: 0] += descriptor.totalBytes
+        }
+        func invalidate(
+            _ digest: String,
+            _ meta: PartitionMeta,
+            _ reason: WarmStartOutcome.PartitionInvalidationReason
+        ) {
+            invalidated.append(
+                WarmStartOutcome.InvalidatedPartition(
+                    digest: digest,
+                    modelID: meta.modelID,
+                    bytes: bytesByPartition[digest] ?? 0,
+                    reason: reason
+                ))
+        }
+
+        // True when a legacy meta was grace-stamped below — the stamp
+        // must reach disk this session or the GC clock never starts.
+        var mutatedRestoredMeta = false
+
+        // Stale-partition GC (PRD #150): staleness is measured against
+        // the freshest valid partition's use stamp, not the wall clock
+        // — an idle week must not reclaim the whole tier (see
+        // `SSDStalePartitionPolicy`). Legacy metas without a stamp are
+        // treated as fresh here and grace-stamped below.
+        let tierMostRecentUse = loaded.partitions.values
+            .filter {
+                $0.schemaVersion == SnapshotManifestSchema.currentVersion
+                    && $0.modelFingerprint == expectedFingerprint
+            }
+            .map { $0.lastUsedAt ?? now }
+            .max()
+
         for (digest, meta) in loaded.partitions {
             // Stale `PartitionMeta` inside a current-version manifest
             // signals a hand-edited or partially upgraded file — drop it
             // rather than reattach under stale canonicalization.
             guard meta.schemaVersion == SnapshotManifestSchema.currentVersion else {
-                invalidatedDigests.append(digest)
+                invalidate(digest, meta, .schemaStale)
                 continue
             }
-            if meta.modelFingerprint == expectedFingerprint {
+            guard meta.modelFingerprint == expectedFingerprint else {
+                invalidate(digest, meta, .fingerprintChanged)
+                continue
+            }
+            // A legacy meta without a stamp is grace-stamped to "now" —
+            // the clock starts here, it does not retroactively reclaim
+            // long-lived caches.
+            if let lastUsed = meta.lastUsedAt {
+                if let anchor = tierMostRecentUse,
+                    anchor - lastUsed > SSDStalePartitionPolicy.maxUnusedAge
+                {
+                    invalidate(digest, meta, .staleUnused)
+                    continue
+                }
                 restored.partitions[digest] = meta
             } else {
-                invalidatedDigests.append(digest)
+                var graced = meta
+                graced.lastUsedAt = now
+                restored.partitions[digest] = graced
+                mutatedRestoredMeta = true
             }
         }
 
@@ -1320,10 +1446,18 @@ extension SnapshotLedger {
 
         let seedBytes = restored.snapshots.values.reduce(0) { $0 + $1.totalBytes }
 
+        // Reclaims and grace stamps must reach disk even on the normal
+        // manifest-load path (which otherwise defers persistence to the
+        // next mutation): an unpersisted grace stamp restarts the GC
+        // clock every launch, and an unpersisted reclaim resurfaces the
+        // partition's dangling descriptors on the next read.
+        let persistAfter =
+            persistManifestAfter || mutatedRestoredMeta || !invalidated.isEmpty
+
         lock.lock()
         self.manifest = restored
         self.currentSSDBytes = seedBytes
-        if persistManifestAfter {
+        if persistAfter {
             self.manifestDirty = true
             scheduleManifestPersistLocked()
         }
@@ -1340,9 +1474,9 @@ extension SnapshotLedger {
         }
         .sorted { $0.digest < $1.digest }
 
-        if !invalidatedDigests.isEmpty {
+        if !invalidated.isEmpty {
             let capturedRoot = rootURL
-            let capturedDigests = invalidatedDigests
+            let capturedDigests = invalidated.map(\.digest)
             Task.detached {
                 for digest in capturedDigests {
                     let dir =
@@ -1368,13 +1502,13 @@ extension SnapshotLedger {
                 + "partitions=\(restored.partitions.count) "
                 + "snapshots=\(restored.snapshots.count) "
                 + "bytes=\(seedBytes) "
-                + "invalidated=\(invalidatedDigests.count) "
+                + "invalidated=\(invalidated.count) "
                 + "dead=\(deadDescriptorFiles.count)"
         )
 
         return WarmStartOutcome(
             validPartitions: validPartitions,
-            invalidatedPartitionDigests: invalidatedDigests
+            invalidated: invalidated.sorted { $0.digest < $1.digest }
         )
     }
 
@@ -1461,5 +1595,14 @@ extension SnapshotLedger {
         lock.lock()
         defer { lock.unlock() }
         return manifest.snapshots[id]?.lastAccessAt ?? -1
+    }
+
+    /// Read a partition's in-memory meta without mutating anything.
+    /// Used by the stale-partition GC tests to assert `lastUsedAt`
+    /// stamping (register merge, hit bump, warm-start grace).
+    nonisolated func partitionMetaForTesting(digest: String) -> PartitionMeta? {
+        lock.lock()
+        defer { lock.unlock() }
+        return manifest.partitions[digest]
     }
 }

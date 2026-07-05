@@ -55,6 +55,35 @@ nonisolated enum SSDBudgetPolicy {
     }
 }
 
+/// The **stale-partition GC** policy (PRD #150): partitions unused past
+/// `maxUnusedAge` are reclaimed at warm start — their descriptors leave
+/// the manifest, their directories are deleted, and their bytes return
+/// to the budget. "Used" means an admission registered the partition or
+/// an SSD hydration hit one of its residents; a warm start alone does
+/// not refresh the stamp (otherwise every launch would reset the clock
+/// and nothing would ever age out).
+///
+/// Staleness is *relative to the tier's most recent use*, not to the
+/// wall clock: a partition is stale when it is `maxUnusedAge` older
+/// than the freshest valid partition's stamp. An absolute clock would
+/// reclaim the entire cache after any week the app sat unused; the
+/// relative rule is idle-proof (all partitions age together, nothing
+/// is reclaimed) while a variant abandoned mid-activity still goes.
+/// The freshest partition never ages out by construction.
+nonisolated enum SSDStalePartitionPolicy {
+    /// Use-gap past which a partition is reclaimed. 7 days (owner
+    /// decision 2026-07-05, revised down from the grilling's ~30):
+    /// stale kv-config and template-digest variants of a still-loaded
+    /// model used to accumulate forever — only a fingerprint change
+    /// cleared them.
+    static let maxUnusedAge: TimeInterval = 7 * 24 * 3600
+
+    /// Minimum spacing between `lastUsedAt` re-stamps. Day-scale GC
+    /// needs no finer resolution, and the throttle keeps the per-hit /
+    /// per-admission bump from turning into a sidecar write storm.
+    static let lastUsedRefreshInterval: TimeInterval = 6 * 3600
+}
+
 /// Immutable snapshot of the SSD prefix-cache tier configuration.
 ///
 /// Downstream consumers gate on `self.ssdConfig?.enabled == true` as a
