@@ -101,12 +101,12 @@ private struct WaveformView: View {
                 let barCount = 42
                 let spacing = size.width / CGFloat(barCount)
                 let energy: Double = isActive ? 1.0 : 0.28
-                let opacity = isActive ? 0.9 : 0.45
-                // One gradient per frame, shared by all 42 bars.
-                let gradient = Gradient(colors: [
-                    OnboardingPalette.accentCyan.opacity(opacity),
-                    OnboardingPalette.accentViolet.opacity(opacity),
-                ])
+                // One shading per frame, shared by all 42 bars: the system
+                // accent while speaking, quiet neutral ink while idle.
+                let shading: GraphicsContext.Shading = .color(
+                    isActive
+                        ? Color.accentColor.opacity(0.85)
+                        : Color.secondary.opacity(0.4))
 
                 for index in 0..<barCount {
                     let x = CGFloat(index) * spacing + spacing / 2
@@ -123,12 +123,7 @@ private struct WaveformView: View {
                         x: x - 1.5, y: size.height / 2 - height / 2,
                         width: 3, height: height)
                     let path = Path(roundedRect: rect, cornerRadius: 1.5)
-                    context.fill(
-                        path,
-                        with: .linearGradient(
-                            gradient,
-                            startPoint: CGPoint(x: rect.midX, y: rect.minY),
-                            endPoint: CGPoint(x: rect.midX, y: rect.maxY)))
+                    context.fill(path, with: shading)
                 }
             }
         }

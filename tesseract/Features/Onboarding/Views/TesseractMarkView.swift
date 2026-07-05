@@ -2,11 +2,13 @@
 //  TesseractMarkView.swift
 //  tesseract
 //
-//  The tour's signature: a live 4D hypercube (tesseract) wireframe, double-
-//  rotating in the XW and YZ planes and projected 4D→3D→2D. Its edges fill
-//  with the accent gradient as setup bytes land — the mark *is* the download
-//  indicator (ADR-0021). Under Reduce Motion the rotation freezes at a
-//  composed pose; the progress fill still updates.
+//  The tour's signature: a 4D hypercube (tesseract) wireframe turning slowly
+//  in the XW plane — the classic inside-out tesseract motion — under a fixed
+//  studio tilt, drawn as monochrome ink with depth cues: near edges bright and
+//  weighty, far edges faint. Edges brighten as setup bytes land — the mark
+//  *is* the download indicator (ADR-0021). The projection is re-fit to the
+//  canvas every frame, so it can never clip. Under Reduce Motion the rotation
+//  freezes at a composed pose; the progress fill still updates.
 //
 
 import SwiftUI
@@ -23,7 +25,7 @@ struct TesseractMarkView: View {
             Canvas { context, size in
                 let angle =
                     reduceMotion
-                    ? 0.9 : timeline.date.timeIntervalSinceReferenceDate * 0.35
+                    ? 0.55 : timeline.date.timeIntervalSinceReferenceDate * 0.22
                 draw(in: &context, size: size, angle: angle)
             }
         }
@@ -64,84 +66,93 @@ struct TesseractMarkView: View {
         return result
     }()
 
+    private struct ProjectedVertex {
+        let point: CGPoint  // unscaled projection-space coordinates
+        let depth: Double  // combined perspective factor; larger = nearer
+    }
+
     private func draw(in context: inout GraphicsContext, size: CGSize, angle: Double) {
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let scale = min(size.width, size.height) * 0.34
+        let projected = Self.vertices.map { project($0, angle: angle) }
 
-        let projected = Self.vertices.map { project($0, angle: angle, scale: scale) }
+        // Fit the whole figure inside the canvas with a fixed margin, every
+        // frame — the stacked perspective divisions make any analytic bound
+        // loose enough to clip.
+        let extent = projected.reduce(0.001) {
+            max($0, max(abs($1.point.x), abs($1.point.y)))
+        }
+        let fit = (min(size.width, size.height) / 2 - 4) / extent
+
+        let depths = projected.map(\.depth)
+        let farthest = depths.min() ?? 0
+        let depthSpan = max((depths.max() ?? 1) - farthest, 0.001)
+
         let filledCount = Int((progress.clamped01 * Double(Self.edges.count)).rounded())
+        let ink = colorScheme == .dark ? Color.white : Color.black
 
-        let hairline = GraphicsContext.Shading.color(
-            colorScheme == .dark
-                ? Color.white.opacity(0.22) : Color.black.opacity(0.25))
+        // Far edges draw first so near ones read on top.
+        let ordered = Self.edges.enumerated().sorted { lhs, rhs in
+            edgeDepth(lhs.element, in: projected) < edgeDepth(rhs.element, in: projected)
+        }
 
-        for (index, edge) in Self.edges.enumerated() {
-            let from = offsetPoint(projected[edge.0], by: center)
-            let to = offsetPoint(projected[edge.1], by: center)
+        for (index, edge) in ordered {
+            let a = projected[edge.0]
+            let b = projected[edge.1]
             var path = Path()
-            path.move(to: from)
-            path.addLine(to: to)
+            path.move(
+                to: CGPoint(x: center.x + a.point.x * fit, y: center.y + a.point.y * fit))
+            path.addLine(
+                to: CGPoint(x: center.x + b.point.x * fit, y: center.y + b.point.y * fit))
+
+            let nearness = (edgeDepth(edge, in: projected) - farthest) / depthSpan
 
             if index < filledCount {
-                let gradient = OnboardingPalette.accentGradient
-                var glow = context
-                glow.addFilter(.blur(radius: 2.4))
-                glow.stroke(
-                    path,
-                    with: .linearGradient(gradient, startPoint: from, endPoint: to),
-                    style: StrokeStyle(lineWidth: 2.4, lineCap: .round))
                 context.stroke(
                     path,
-                    with: .linearGradient(gradient, startPoint: from, endPoint: to),
-                    style: StrokeStyle(lineWidth: 1.3, lineCap: .round))
+                    with: .color(ink.opacity(0.45 + 0.5 * nearness)),
+                    style: StrokeStyle(lineWidth: 1.0 + 0.6 * nearness, lineCap: .round))
             } else {
                 context.stroke(
-                    path, with: hairline,
+                    path,
+                    with: .color(ink.opacity(0.08 + 0.14 * nearness)),
                     style: StrokeStyle(lineWidth: 0.7, lineCap: .round))
             }
         }
-
-        // Vertices as faint points, so the form reads even fully unfilled.
-        for point in projected {
-            let dot = CGRect(
-                x: center.x + point.x - 1.2, y: center.y + point.y - 1.2,
-                width: 2.4, height: 2.4)
-            context.fill(Path(ellipseIn: dot), with: hairline)
-        }
     }
 
-    /// Double rotation (XW and YZ planes), then perspective 4D→3D→2D.
-    private func project(_ vertex: SIMD4<Double>, angle: Double, scale: Double) -> CGPoint {
-        var v = vertex
+    private func edgeDepth(_ edge: (Int, Int), in projected: [ProjectedVertex]) -> Double {
+        (projected[edge.0].depth + projected[edge.1].depth) / 2
+    }
 
+    // Fixed studio tilt, so the nested-cube form reads as an object.
+    private static let cosTiltY = cos(0.55), sinTiltY = sin(0.55)
+    private static let cosTiltX = cos(-0.32), sinTiltX = sin(-0.32)
+
+    /// One slow XW-plane rotation, perspective 4D→3D, the fixed tilt, then
+    /// perspective 3D→2D.
+    private func project(_ vertex: SIMD4<Double>, angle: Double) -> ProjectedVertex {
         let cosA = cos(angle)
         let sinA = sin(angle)
-        // XW plane
-        let x = v.x * cosA - v.w * sinA
-        let w = v.x * sinA + v.w * cosA
-        v.x = x
-        v.w = w
-        // YZ plane (slightly detuned so the motion never loops visibly)
-        let cosB = cos(angle * 0.62)
-        let sinB = sin(angle * 0.62)
-        let y = v.y * cosB - v.z * sinB
-        let z = v.y * sinB + v.z * cosB
-        v.y = y
-        v.z = z
+        var x = vertex.x * cosA - vertex.w * sinA
+        let w = vertex.x * sinA + vertex.w * cosA
+        var y = vertex.y
+        var z = vertex.z
 
-        let wDistance = 3.2
-        let wFactor = wDistance / (wDistance - v.w)
-        let x3 = v.x * wFactor
-        let y3 = v.y * wFactor
-        let z3 = v.z * wFactor
+        // 4D → 3D: the inner/outer cube separation. |w| ≤ √2, so the
+        // denominator stays comfortably positive.
+        let wFactor = 3.0 / (3.0 - w)
+        x *= wFactor
+        y *= wFactor
+        z *= wFactor
 
-        let zDistance = 4.4
-        let zFactor = zDistance / (zDistance - z3)
-        return CGPoint(x: x3 * zFactor * scale, y: y3 * zFactor * scale)
-    }
+        (x, z) = (x * Self.cosTiltY + z * Self.sinTiltY, -x * Self.sinTiltY + z * Self.cosTiltY)
+        (y, z) = (y * Self.cosTiltX - z * Self.sinTiltX, y * Self.sinTiltX + z * Self.cosTiltX)
 
-    private func offsetPoint(_ point: CGPoint, by center: CGPoint) -> CGPoint {
-        CGPoint(x: center.x + point.x, y: center.y + point.y)
+        // 3D → 2D: gentle depth. |z| ≤ wFactor·√3 < 3.3, again safely bounded.
+        let zFactor = 7.0 / (7.0 - z)
+        return ProjectedVertex(
+            point: CGPoint(x: x * zFactor, y: y * zFactor),
+            depth: wFactor * zFactor)
     }
 }
 

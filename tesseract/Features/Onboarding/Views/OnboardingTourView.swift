@@ -25,7 +25,7 @@ struct OnboardingTourView: View {
     var body: some View {
         ZStack {
             if let controller {
-                OnboardingBackdrop(chapter: controller.chapter)
+                OnboardingBackdrop()
                     .gesture(WindowDragGesture())
 
                 VStack(spacing: 0) {

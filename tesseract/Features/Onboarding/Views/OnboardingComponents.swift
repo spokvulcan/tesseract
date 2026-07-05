@@ -9,17 +9,6 @@
 
 import SwiftUI
 
-// MARK: - Palette
-
-/// The tour's accent pair — the violet→cyan run every filled edge, waveform
-/// bar, and cache cell shares. Static so per-frame Canvas code never
-/// re-allocates it.
-enum OnboardingPalette {
-    static let accentViolet = Color(red: 0.48, green: 0.36, blue: 0.98)
-    static let accentCyan = Color(red: 0.22, green: 0.78, blue: 0.94)
-    static let accentGradient = Gradient(colors: [accentViolet, accentCyan])
-}
-
 // MARK: - Card surface
 
 /// The one material card surface all tour cards share.

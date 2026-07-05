@@ -154,7 +154,7 @@ private struct CelebrationBurst: View {
         let angle: Double
         let speed: Double
         let size: Double
-        let hue: Double
+        let isAccent: Bool
         let spin: Double
     }
 
@@ -165,7 +165,7 @@ private struct CelebrationBurst: View {
             angle: golden,
             speed: 130 + (Double((index * 37) % 100) / 100) * 170,
             size: 3 + Double((index * 53) % 100) / 100 * 4,
-            hue: Double((index * 71) % 100) / 100,
+            isAccent: (index * 71) % 100 < 45,
             spin: Double((index * 29) % 100) / 100 * 6
         )
     }
@@ -203,9 +203,9 @@ private struct CelebrationBurst: View {
                                     width: rect.width, height: rect.height),
                                 cornerRadius: 1),
                             with: .color(
-                                Color(
-                                    hue: 0.55 + particle.hue * 0.25,
-                                    saturation: 0.65, brightness: 0.95)))
+                                particle.isAccent
+                                    ? Color.accentColor.opacity(0.9)
+                                    : Color.primary.opacity(0.5)))
                     }
                 }
             }
