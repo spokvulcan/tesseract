@@ -43,11 +43,16 @@ final class AgentVoiceInputController {
     init(
         audioCapture: (any AudioCapturing)? = nil,
         transcriptionEngine: (any Transcribing)? = nil,
-        settings: SettingsManager? = nil
+        settings: SettingsManager? = nil,
+        captureDump: (any CaptureDumpStoring)? = nil
     ) {
         if let audioCapture, let transcriptionEngine {
             self.session = VoiceCaptureSession(
-                audioCapture: audioCapture, transcriptionEngine: transcriptionEngine)
+                audioCapture: audioCapture,
+                transcriptionEngine: transcriptionEngine,
+                captureDump: captureDump,
+                isCaptureDumpEnabled: { settings?.captureDumpEnabled ?? true }
+            )
         } else {
             self.session = nil
         }

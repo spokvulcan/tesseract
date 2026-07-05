@@ -472,9 +472,9 @@ struct ChatTranscriptTests {
     // MARK: - Detail pruning support
 
     /// A collapsed Turn's tool rows are not rendered, but their ids are still
-    /// reported in `toolRowIDs` so the coordinator's full-rebuild detail-pruning
+    /// reported in `detailRowIDs` so the coordinator's full-rebuild detail-pruning
     /// preserves tool-detail expansion across a collapse/re-expand.
-    @Test func toolRowIDsIncludeCollapsedTurnTools() {
+    @Test func detailRowIDsIncludeCollapsedTurnTools() {
         let user = UserMessage(content: "read")
         let call = toolCall(id: "tc1", name: "read_file", path: "/tmp/foo.txt")
         let a1 = AssistantMessage(content: "", toolCalls: [call])
@@ -485,7 +485,7 @@ struct ChatTranscriptTests {
 
         let toolRowID = "\(a1.id.uuidString)-tool-0"
         #expect(!projection.rows.contains { $0.id == toolRowID })  // collapsed: not rendered
-        #expect(projection.toolRowIDs.contains(toolRowID))  // but tracked for pruning
+        #expect(projection.detailRowIDs.contains(toolRowID))  // but tracked for pruning
     }
 
     /// The projection reports the still-valid turn ids — committed Turn ids, plus

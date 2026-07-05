@@ -68,34 +68,15 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         let player = AVAudioPlayerNode()
 
         guard
-            let format = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: Double(sampleRate),
-                channels: 1,
-                interleaved: false
-            )
-        else {
-            Log.speech.error("Failed to create audio format")
-            return
-        }
-
-        guard
-            let buffer = AVAudioPCMBuffer(
-                pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
+            let buffer = AudioConverter.makeMonoFloat32Buffer(
+                samples, sampleRate: Double(sampleRate))
         else {
             Log.speech.error("Failed to create audio buffer")
             return
         }
 
-        buffer.frameLength = AVAudioFrameCount(samples.count)
-        if let channelData = buffer.floatChannelData?[0] {
-            samples.withUnsafeBufferPointer { src in
-                channelData.update(from: src.baseAddress!, count: samples.count)
-            }
-        }
-
         engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
+        engine.connect(player, to: engine.mainMixerNode, format: buffer.format)
 
         do {
             try engine.start()
@@ -125,13 +106,7 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         stop()
         self.diagnostics = diagnostics
 
-        guard
-            let format = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: Double(sampleRate),
-                channels: 1,
-                interleaved: false
-            )
+        guard let format = AudioConverter.monoFloat32Format(sampleRate: Double(sampleRate))
         else {
             Log.speech.error("Failed to create audio format for streaming")
             return
@@ -194,19 +169,10 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         }
 
         // Create and schedule a buffer for this chunk
-        guard
-            let buffer = AVAudioPCMBuffer(
-                pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
+        guard let buffer = AudioConverter.makeMonoFloat32Buffer(samples, format: format)
         else {
             Log.speech.error("Failed to create PCM buffer for chunk")
             return
-        }
-
-        buffer.frameLength = AVAudioFrameCount(samples.count)
-        if let channelData = buffer.floatChannelData {
-            samples.withUnsafeBufferPointer { src in
-                channelData[0].update(from: src.baseAddress!, count: samples.count)
-            }
         }
 
         totalScheduledSamples += samples.count

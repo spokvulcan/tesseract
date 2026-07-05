@@ -45,17 +45,7 @@ final class SlashCommandPaletteController {
 
     /// Rebuild the command registry from current skills and extensions.
     func rebuildRegistry() {
-        let agentRoot = PathSandbox.defaultRoot
-        let skillsDir = agentRoot.appendingPathComponent("skills")
-        let packageSkillFiles: [URL]
-        if let packageRegistry {
-            packageSkillFiles = PackageBootstrap.cachedSkillPaths(
-                from: packageRegistry, agentRoot: agentRoot)
-        } else {
-            packageSkillFiles = []
-        }
-        let skills = SkillRegistry.discover(
-            locations: [skillsDir], packageSkillFiles: packageSkillFiles)
+        let skills = PackageBootstrap.discoverAgentSkills(packageRegistry: packageRegistry)
         commandRegistry.rebuild(skills: skills, extensionHost: extensionHost)
     }
 

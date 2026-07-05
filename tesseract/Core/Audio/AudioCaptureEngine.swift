@@ -91,7 +91,18 @@ final class AudioCaptureEngine: AudioCapturing {
     private var inputSampleRate: Double = Defaults.defaultInputSampleRate
     private let bufferSize: AVAudioFrameCount = Defaults.bufferSize
 
-    init() {}
+    /// Whether **Voice Processing** (PRD #175) should be requested at capture
+    /// start. Queried per capture, so a settings flip applies to the next
+    /// push-to-talk without restart.
+    private let isVoiceProcessingEnabled: () -> Bool
+
+    /// Whether the *current/last* capture actually ran voice-processed —
+    /// requested AND accepted by the platform. Tags the `RawCapture`.
+    private var voiceProcessingActive = false
+
+    init(isVoiceProcessingEnabled: @escaping () -> Bool = { false }) {
+        self.isVoiceProcessingEnabled = isVoiceProcessingEnabled
+    }
 
     func startCapture() throws {
         guard !isCapturing else { return }
@@ -108,17 +119,29 @@ final class AudioCaptureEngine: AudioCapturing {
         }
 
         let inputNode = audioEngine.inputNode
+
+        // Voice Processing must be requested before the engine starts; a
+        // platform refusal falls back to raw capture — dictation must never
+        // be blocked by it (PRD #175).
+        voiceProcessingActive = false
+        if isVoiceProcessingEnabled() {
+            do {
+                try inputNode.setVoiceProcessingEnabled(true)
+                voiceProcessingActive = true
+            } catch {
+                Log.audio.error(
+                    "Voice processing unavailable, capturing raw: \(error.localizedDescription)")
+            }
+        }
+
+        // Read the format only after voice processing may have changed it.
         let inputFormat = inputNode.outputFormat(forBus: 0)
         inputSampleRate = inputFormat.sampleRate
 
         // Create format for our tap
         guard
-            let recordingFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: inputFormat.sampleRate,
-                channels: 1,
-                interleaved: false
-            )
+            let recordingFormat = AudioConverter.monoFloat32Format(
+                sampleRate: inputFormat.sampleRate)
         else {
             throw DictationError.audioCaptureFailed("Failed to create recording format")
         }
@@ -181,17 +204,18 @@ final class AudioCaptureEngine: AudioCapturing {
         captureStartTime = nil
 
         // Resample to 16kHz if needed
-        let resampledSamples: [Float]
-        if inputSampleRate != targetSampleRate {
-            resampledSamples = resample(samples, from: inputSampleRate, to: targetSampleRate)
-        } else {
-            resampledSamples = samples
-        }
+        let resampledSamples = AudioConverter.resample(
+            samples, from: inputSampleRate, to: targetSampleRate)
 
         return AudioData(
             samples: resampledSamples,
             sampleRate: targetSampleRate,
-            duration: duration
+            duration: duration,
+            raw: RawCapture(
+                samples: samples,
+                sampleRate: inputSampleRate,
+                voiceProcessed: voiceProcessingActive
+            )
         )
     }
 
@@ -242,29 +266,4 @@ final class AudioCaptureEngine: AudioCapturing {
         }
     }
 
-    private func resample(
-        _ samples: [Float], from sourceSampleRate: Double, to targetSampleRate: Double
-    ) -> [Float] {
-        let ratio = targetSampleRate / sourceSampleRate
-        let outputLength = Int(Double(samples.count) * ratio)
-
-        guard outputLength > 0 else { return [] }
-
-        var output = [Float](repeating: 0, count: outputLength)
-
-        // Linear interpolation resampling
-        for i in 0..<outputLength {
-            let position = Double(i) / ratio
-            let index = Int(position)
-            let fraction = Float(position - Double(index))
-
-            if index + 1 < samples.count {
-                output[i] = samples[index] * (1 - fraction) + samples[index + 1] * fraction
-            } else if index < samples.count {
-                output[i] = samples[index]
-            }
-        }
-
-        return output
-    }
 }

@@ -96,6 +96,18 @@ final class SettingsManager {
         didSet { SettingsCatalogue.selectedMicrophoneUID.write(selectedMicrophoneUID, to: store) }
     }
 
+    /// **Voice Processing** (PRD #175): Apple's capture-time bundle (echo
+    /// cancellation + auto gain + noise suppression) on all microphone capture.
+    var voiceProcessingEnabled: Bool {
+        didSet { SettingsCatalogue.voiceProcessingEnabled.write(voiceProcessingEnabled, to: store) }
+    }
+
+    /// **Capture Dump** (PRD #175): keep recent dictation recordings on disk
+    /// for diagnosing bad transcriptions.
+    var captureDumpEnabled: Bool {
+        didSet { SettingsCatalogue.captureDumpEnabled.write(captureDumpEnabled, to: store) }
+    }
+
     // MARK: - Language Settings
 
     var language: String {
@@ -322,6 +334,37 @@ final class SettingsManager {
         preserveThinkingRenderRevision += 1
     }
 
+    // MARK: - Skill Pills (PRD #174)
+
+    /// "Show skill pills" — the pill row's single opt-out.
+    var showSkillPills: Bool {
+        didSet { SettingsCatalogue.showSkillPills.write(showSkillPills, to: store) }
+    }
+
+    /// The `translate` skill's default target language (English display name).
+    var translateTargetLanguage: String {
+        didSet {
+            SettingsCatalogue.translateTargetLanguage.write(translateTargetLanguage, to: store)
+        }
+    }
+
+    /// Per-skill usage counters for the **Skill Usage Ranking**. Method-based
+    /// (dynamic key — one per skill name), reads/writes straight through to the
+    /// store; the revision counter gives Observation something to track, same
+    /// as the Preserve-Thinking Render pattern.
+    private(set) var skillUsageRevision = 0
+
+    func skillUsageCount(skillName: String) -> Int {
+        _ = skillUsageRevision
+        return SettingsCatalogue.skillUsageCount(skillName: skillName).load(from: store)
+    }
+
+    func incrementSkillUsage(skillName: String) {
+        let setting = SettingsCatalogue.skillUsageCount(skillName: skillName)
+        setting.write(setting.load(from: store) + 1, to: store)
+        skillUsageRevision += 1
+    }
+
     // MARK: - Server Settings
 
     var isServerEnabled: Bool {
@@ -396,6 +439,8 @@ final class SettingsManager {
         self.glowThemeRaw = SettingsCatalogue.glowThemeRaw.load(from: store)
         self.samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.load(from: store)
         self.selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.load(from: store)
+        self.voiceProcessingEnabled = SettingsCatalogue.voiceProcessingEnabled.load(from: store)
+        self.captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.load(from: store)
         self.language = SettingsCatalogue.language.load(from: store)
         self.hotkeyKeyCode = SettingsCatalogue.hotkeyKeyCode.load(from: store)
         self.hotkeyModifiers = SettingsCatalogue.hotkeyModifiers.load(from: store)
@@ -421,6 +466,8 @@ final class SettingsManager {
         self.playSounds = SettingsCatalogue.playSounds.load(from: store)
         self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
         self.useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.load(from: store)
+        self.showSkillPills = SettingsCatalogue.showSkillPills.load(from: store)
+        self.translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.load(from: store)
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
         self.serverPort = SettingsCatalogue.serverPort.load(from: store)
         self.prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.load(from: store)
@@ -498,6 +545,8 @@ final class SettingsManager {
         overlayStyleRaw = SettingsCatalogue.overlayStyleRaw.default
         glowThemeRaw = SettingsCatalogue.glowThemeRaw.default
         selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.default
+        voiceProcessingEnabled = SettingsCatalogue.voiceProcessingEnabled.default
+        captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.default
         language = SettingsCatalogue.language.default
         hotkeyKeyCode = SettingsCatalogue.hotkeyKeyCode.default
         hotkeyModifiers = SettingsCatalogue.hotkeyModifiers.default
@@ -522,6 +571,8 @@ final class SettingsManager {
         selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.default
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default
         useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.default
+        showSkillPills = SettingsCatalogue.showSkillPills.default
+        translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.default
         samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
         isServerEnabled = SettingsCatalogue.isServerEnabled.default
         serverPort = SettingsCatalogue.serverPort.default
@@ -535,6 +586,10 @@ final class SettingsManager {
         // that model in a non-canonical cache partition after a "clean" reset.
         store.removeAll(withPrefix: SettingsCatalogue.preserveThinkingRenderKeyPrefix)
         preserveThinkingRenderRevision += 1
+        // Per-skill usage counters are minted on demand too — sweep them so a
+        // reset restores the curated pill order.
+        store.removeAll(withPrefix: SettingsCatalogue.skillUsageCountKeyPrefix)
+        skillUsageRevision += 1
         // hasCompletedOnboarding is intentionally omitted — see the doc comment.
     }
 
