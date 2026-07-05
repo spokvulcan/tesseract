@@ -151,6 +151,9 @@ actor BatchEngine {
         var phase: BatchEngineSnapshot.LanePhase
         var pendingStep: PendingStep?
         let isExclusive: Bool
+        /// Lifecycle diagnostics: firstToken/drained durations anchor here.
+        let admittedAt: ContinuousClock.Instant
+        var sawFirstToken = false
     }
 
     private var queue: [QueuedEntry] = []
@@ -218,6 +221,13 @@ actor BatchEngine {
                         timeoutTask: timeoutTask
                     ))
                 arrivalCounter += 1
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.LaneLifecycleEvent(
+                        phase: .queued,
+                        requestID: id,
+                        matchedPrefixLength: submission.matchedPrefixLength,
+                        exclusive: submission.bearsImages || submission.runsMonolithic
+                    ))
                 wake()
             }
         } onCancel: {
@@ -307,6 +317,13 @@ actor BatchEngine {
     func laneFinished(_ laneID: UUID) async {
         guard let lane = lanes.removeValue(forKey: laneID) else { return }
         lane.pendingStep?.cancel()
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.LaneLifecycleEvent(
+                phase: .drained,
+                requestID: laneID,
+                sinceAdmissionSeconds: Self.seconds(
+                    lane.admittedAt.duration(to: clock.now))
+            ))
         await refreshLaneCapacity()
         wake()
     }
@@ -423,6 +440,18 @@ actor BatchEngine {
         lanes[laneID]?.pendingStep = nil
         lastGrantWasPrefillClass = prefillClass
         await pending.run(grant)
+        // The first completed decode step produced the lane's first token —
+        // the TTFT anchor of the lifecycle record.
+        if pending.kind == .decode, let lane = lanes[laneID], !lane.sawFirstToken {
+            lanes[laneID]?.sawFirstToken = true
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.LaneLifecycleEvent(
+                    phase: .firstToken,
+                    requestID: laneID,
+                    sinceAdmissionSeconds: Self.seconds(
+                        lane.admittedAt.duration(to: clock.now))
+                ))
+        }
     }
 
     // MARK: - Admission bookkeeping
@@ -438,16 +467,29 @@ actor BatchEngine {
             admissionOrder: admissionCounter,
             phase: .starting,
             pendingStep: nil,
-            isExclusive: exclusive
+            isExclusive: exclusive,
+            admittedAt: clock.now
         )
         admissionCounter += 1
+        let queueWaitSeconds = Self.seconds(waited)
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.LaneLifecycleEvent(
+                phase: .admitted,
+                requestID: requestID,
+                exclusive: exclusive,
+                queueWaitSeconds: queueWaitSeconds
+            ))
         entry.continuation.resume(
             returning: BatchLaneAdmission(
                 laneID: requestID,
                 isExclusive: exclusive,
-                queueWaitSeconds: TimeInterval(waited.components.seconds)
-                    + TimeInterval(waited.components.attoseconds) / 1e18
+                queueWaitSeconds: queueWaitSeconds
             ))
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        TimeInterval(duration.components.seconds)
+            + TimeInterval(duration.components.attoseconds) / 1e18
     }
 
     private func timeoutEntry(_ requestID: UUID) {

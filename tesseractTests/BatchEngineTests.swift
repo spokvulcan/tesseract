@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import os
 
 @testable import Tesseract_Agent
 
@@ -519,5 +520,79 @@ import Testing
         await engine.laneFinished(blocker)
         try await followerTask.value
         #expect(await recorder.events == ["follower.run"])
+    }
+
+    // MARK: - Lane lifecycle diagnostics (PRD #173 user story 23)
+
+    /// Lifecycle events keyed by request identity flow to the diagnostics
+    /// sink: queued → admitted → firstToken → drained, with the match length
+    /// on `queued` (the LPM-vs-FIFO evidence) and durations on the later
+    /// phases so per-lane TTFT and queue wait derive from the record.
+    @Test func laneLifecycleEventsReachTheDiagnosticsSink() async throws {
+        let lease = TestLease()
+        let engine = makeEngine(lease: lease)
+        let laneID = UUID()
+
+        let lines = OSAllocatedUnfairLock(initialState: [String]())
+        let sink = PrefixCacheDiagnostics.addTestSink { line in
+            lines.withLock { $0.append(line) }
+        }
+        defer { PrefixCacheDiagnostics.removeTestSink(sink) }
+
+        _ = try await engine.submit(submission(laneID, match: 128))
+        _ = try await engine.step(lane: laneID, kind: .startup) { _ in }
+        _ = try await engine.step(lane: laneID, kind: .decode) { _ in }
+        _ = try await engine.step(lane: laneID, kind: .decode) { _ in }
+        await engine.laneFinished(laneID)
+
+        let laneLines = lines.withLock { $0 }.filter {
+            $0.contains("event=lane") && $0.contains("requestID=\(laneID.uuidString)")
+        }
+        let phases = laneLines.compactMap { line in
+            line.split(separator: " ")
+                .first(where: { $0.hasPrefix("phase=") })?
+                .dropFirst("phase=".count)
+        }.map(String.init)
+        #expect(phases == ["queued", "admitted", "firstToken", "drained"])
+        let queued = try #require(laneLines.first)
+        #expect(queued.contains("matchedPrefixLength=128"))
+        #expect(queued.contains("exclusive=false"))
+        let admitted = try #require(laneLines.dropFirst().first)
+        #expect(admitted.contains("queueWaitMs="))
+        let firstToken = try #require(laneLines.dropFirst(2).first)
+        #expect(firstToken.contains("sinceAdmissionMs="))
+    }
+
+    /// An exclusive (monolithic) lane never runs decode steps, so its record
+    /// is queued → admitted → drained — no phantom firstToken.
+    @Test func exclusiveLaneLifecycleSkipsFirstToken() async throws {
+        let lease = TestLease()
+        let engine = makeEngine(lease: lease)
+        let laneID = UUID()
+
+        let lines = OSAllocatedUnfairLock(initialState: [String]())
+        let sink = PrefixCacheDiagnostics.addTestSink { line in
+            lines.withLock { $0.append(line) }
+        }
+        defer { PrefixCacheDiagnostics.removeTestSink(sink) }
+
+        _ = try await engine.submit(submission(laneID, monolithic: true))
+        await engine.laneFinished(laneID)
+
+        let phases = lines.withLock { $0 }
+            .filter {
+                $0.contains("event=lane")
+                    && $0.contains("requestID=\(laneID.uuidString)")
+            }
+            .compactMap { line in
+                line.split(separator: " ")
+                    .first(where: { $0.hasPrefix("phase=") })?
+                    .dropFirst("phase=".count)
+            }.map(String.init)
+        #expect(phases == ["queued", "admitted", "drained"])
+        let queuedLine = lines.withLock { $0 }.first {
+            $0.contains("requestID=\(laneID.uuidString)") && $0.contains("phase=queued")
+        }
+        #expect(queuedLine?.contains("exclusive=true") == true)
     }
 }
