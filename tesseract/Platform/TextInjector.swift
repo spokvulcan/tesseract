@@ -31,6 +31,16 @@ final class TextInjector: ObservableObject, TextInjecting {
             throw DictationError.textInjectionFailed("Empty text")
         }
 
+        // Our own app focused: a synthetic Cmd+V must not fire (it used to be
+        // skipped outright, stranding the transcript on the clipboard — issue
+        // #168). Insert in-process at the caret instead, no clipboard round-trip.
+        let isOwnAppFocused =
+            NSApp.isActive && NSApp.keyWindow != nil && !(NSApp.keyWindow is NSPanel)
+        if isOwnAppFocused, insertIntoFocusedTextView(text) {
+            lastInjectionSucceeded = true
+            return
+        }
+
         // Save clipboard contents if restoration is enabled
         if restoreClipboard {
             saveClipboardContents()
@@ -38,11 +48,6 @@ final class TextInjector: ObservableObject, TextInjecting {
 
         // Copy text to clipboard
         copyToClipboard(text)
-
-        // Skip paste simulation if our own app window is focused
-        // to prevent system alert sound (no text field to receive paste)
-        let isOwnAppFocused =
-            NSApp.isActive && NSApp.keyWindow != nil && !(NSApp.keyWindow is NSPanel)
 
         if !isOwnAppFocused {
             // Small delay to ensure clipboard is updated
@@ -59,9 +64,22 @@ final class TextInjector: ObservableObject, TextInjecting {
                 restoreClipboardContents()
             }
         }
-        // When own app is focused, text remains on clipboard for manual paste
+        // Own app focused with no editable text field: text remains on the
+        // clipboard for manual paste (a synthetic paste would only beep)
 
         lastInjectionSucceeded = true
+    }
+
+    /// Insert directly into our own key window's focused text view (the agent
+    /// composer, or any field editor). Returns false when nothing editable has
+    /// focus, in which case the caller falls back to leaving the text on the
+    /// clipboard.
+    private func insertIntoFocusedTextView(_ text: String) -> Bool {
+        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
+            textView.isEditable
+        else { return false }
+        textView.insertText(text, replacementRange: textView.selectedRange())
+        return true
     }
 
     // MARK: - Clipboard Operations
