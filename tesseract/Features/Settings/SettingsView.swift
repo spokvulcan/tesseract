@@ -172,6 +172,21 @@ struct RecordingSettingsSection: View {
         container.modelDownloadManager.status(for: settings.selectedAgentModelID)
     }
 
+    /// Language options for the Translate skill's target picker: the canonical
+    /// ``SupportedLanguage`` catalogue (minus the dictation-only "Auto-detect"
+    /// pseudo-entry), with the current selection (the launch-time derivation
+    /// from the macOS preferred languages, or a past choice) always present so
+    /// the Picker never shows an unselectable value.
+    private var translateLanguageOptions: [String] {
+        var languages = SupportedLanguage.all
+            .filter { $0.code != SupportedLanguage.auto.code }
+            .map(\.name)
+        if !languages.contains(settings.translateTargetLanguage) {
+            languages.append(settings.translateTargetLanguage)
+        }
+        return languages.sorted()
+    }
+
     private func refreshSelectedAgentModelCapabilities() {
         guard case .downloaded = selectedAgentModelStatus,
             let directory = container.modelDownloadManager.modelPath(
@@ -483,6 +498,28 @@ struct RecordingSettingsSection: View {
                 Toggle("Use vision models when available", isOn: $settings.useVisionWhenAvailable)
                 Text(
                     "When on, a vision-capable model loads its image-aware container so you can attach images in chat. Prefill speed is unchanged — vision only keeps a small vision tower resident (~1 GB). Turn off to load the faster, text-only container instead; a model already loaded with vision keeps it until the next reload."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Skills") {
+                Toggle("Show skill pills", isOn: $settings.showSkillPills)
+                Text(
+                    "One-tap skills above the chat composer — tap a pill to run it on your text and attachments instantly. Every skill also stays available as a slash command."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                Picker("Translate to", selection: $settings.translateTargetLanguage) {
+                    ForEach(translateLanguageOptions, id: \.self) { language in
+                        Text(language).tag(language)
+                    }
+                }
+                Text(
+                    "The Translate skill's default target. Text already in this language translates to English instead; naming a language in your message always wins."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

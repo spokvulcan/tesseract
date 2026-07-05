@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// Thin **dispatcher spine** over ``Agent`` and five publisher-agnostic
+/// Thin **dispatcher spine** over ``Agent`` and its publisher-agnostic
 /// sub-modules. The coordinator owns the single agent-event subscription and
 /// *sequences* typed intent calls to the sub-modules — each owning its own state
 /// and dependencies, each testable at its own interface:
@@ -16,6 +16,8 @@ import Observation
 /// - ``ImageDraftController`` (`imageDraft`) — pending-image queue, full-window drop,
 ///   and Quick Look preview viewer.
 /// - ``SlashCommandPaletteController`` (`commandPalette`) — slash-command popup.
+/// - ``SkillPillController`` (`skillPills`) — the Skill Pill row: membership ×
+///   usage ranking × curated order, usage recording, invocation assembly.
 ///
 /// The coordinator retains only what is genuinely cross-cutting: event
 /// sequencing, conversation-lifecycle orchestration, the shared `error` banner,
@@ -33,6 +35,7 @@ final class AgentCoordinator {
     let imageDraft: ImageDraftController
     let systemPromptInspector: AgentSystemPromptInspector
     let commandPalette: SlashCommandPaletteController
+    let skillPills: SkillPillController
 
     // MARK: - Shared view-facing state
 
@@ -90,7 +93,8 @@ final class AgentCoordinator {
         packageRegistry: PackageRegistry? = nil,
         contextManager: ContextManager? = nil,
         contextWindow: Int = 262_144,
-        summarize: (@Sendable (String) async throws -> String)? = nil
+        summarize: (@Sendable (String) async throws -> String)? = nil,
+        discoverSkills: (@MainActor () -> [SkillMetadata])? = nil
     ) {
         self.agent = agent
         self.conversationStore = conversationStore
@@ -125,6 +129,11 @@ final class AgentCoordinator {
         )
         self.commandPalette = SlashCommandPaletteController(
             extensionHost: extensionHost, packageRegistry: packageRegistry
+        )
+        self.skillPills = SkillPillController(
+            discoverSkills: discoverSkills
+                ?? { PackageBootstrap.discoverAgentSkills(packageRegistry: packageRegistry) },
+            settings: settings
         )
 
         // Now that `self` is fully initialized, route sub-module failures to the
@@ -204,10 +213,46 @@ final class AgentCoordinator {
         case .builtIn:
             executeBuiltIn(command.name, arguments: arguments)
         case .skill(let filePath):
-            executeSkill(filePath: filePath, skillName: command.name, arguments: arguments)
+            // A slash command is a user-initiated invocation: it counts toward
+            // the Skill Usage Ranking (only when the skill actually fires), and
+            // its arguments go through the same assembly as a pill tap (the
+            // translate default-target wiring).
+            let sent = executeSkill(
+                filePath: filePath, skillName: command.name,
+                arguments: skillPills.assembleArguments(
+                    skillName: command.name, userText: arguments))
+            if sent {
+                skillPills.recordUserInvocation(skillName: command.name)
+            }
         case .extension(let extensionPath):
             executeExtensionCommand(
                 command.name, extensionPath: extensionPath, arguments: arguments)
+        }
+    }
+
+    // MARK: - Skill Pill fire
+
+    /// The Skill Pill instant action (PRD #174): fire `pill`'s skill now, the
+    /// composer's text riding along as arguments and the pending images as
+    /// attachments. A bare tap (empty composer, nothing pending) still fires —
+    /// the skill body defines the no-arguments behavior. No-op while a run is
+    /// active (the row renders dimmed then). If the skill file fails to load,
+    /// the drained images go back to the pending strip and nothing is counted —
+    /// a failed fire must not eat the user's Appshot.
+    func fireSkillPill(_ pill: SkillPill, composerText: String) {
+        guard !agentRun.isGenerating else { return }
+        let images = imageDraft.drainImages()
+        let sent = executeSkill(
+            filePath: pill.filePath,
+            skillName: pill.name,
+            arguments: skillPills.assembleArguments(
+                skillName: pill.name, userText: composerText),
+            images: images
+        )
+        if sent {
+            skillPills.recordUserInvocation(skillName: pill.name)
+        } else {
+            imageDraft.restoreImages(images)
         }
     }
 
@@ -246,12 +291,22 @@ final class AgentCoordinator {
         }
     }
 
-    private func executeSkill(filePath: String, skillName: String, arguments: String) {
+    /// Inject the skill body as the user message (the established `<skill>`
+    /// wrapper — a user-message injection, never a system-prompt mutation, so
+    /// the prefix cache's stable prefix is untouched) and forward any pending
+    /// images so an Appshot rides along with the invocation (PRD #174).
+    /// Returns whether the injection was sent — false when the skill file
+    /// failed to load, so callers can skip usage counting and restore state.
+    @discardableResult
+    private func executeSkill(
+        filePath: String, skillName: String, arguments: String,
+        images: [ImageAttachment] = []
+    ) -> Bool {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
             let fullText = String(data: data, encoding: .utf8)
         else {
             error = "Failed to load skill: \(filePath)"
-            return
+            return false
         }
 
         let body = SkillRegistry.bodyContent(of: fullText)
@@ -269,7 +324,8 @@ final class AgentCoordinator {
             message += "\n\n\(arguments)"
         }
 
-        sendMessage(message, bypassCommandParsing: true)
+        sendMessage(message, images: images, bypassCommandParsing: true)
+        return true
     }
 
     private func executeExtensionCommand(
@@ -308,6 +364,9 @@ final class AgentCoordinator {
         error = nil
         systemPromptInspector.reset()
         debugLogger.reset()
+        // Conversation start is the one recompute point of the Skill Usage
+        // Ranking — the row holds stable within a conversation.
+        skillPills.refreshPills()
         Log.agent.info("New conversation created")
     }
 
@@ -324,6 +383,7 @@ final class AgentCoordinator {
         rebuildTranscript()
         error = nil
         debugLogger.reset()
+        skillPills.refreshPills()
         Log.agent.info("Loaded conversation \(id) with \(self.rows.count) rows")
     }
 
@@ -339,6 +399,7 @@ final class AgentCoordinator {
             resetState()
             rebuildTranscript()
             debugLogger.reset()
+            skillPills.refreshPills()
         }
     }
 

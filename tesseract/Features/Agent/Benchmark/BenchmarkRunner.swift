@@ -405,7 +405,9 @@ final class BenchmarkRunner {
                     name: skill.name,
                     description: skill.description,
                     filePath: fileURL.path,
-                    disableModelInvocation: false
+                    disableModelInvocation: false,
+                    composerPill: false,
+                    label: nil
                 )
             } catch {
                 log("WARNING: Failed to seed skill '\(skill.name)': \(error.localizedDescription)")

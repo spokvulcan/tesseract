@@ -81,7 +81,7 @@ final class ChatTranscriptController {
         rows = projection.rows
         activeTurnRowIndex = projection.activeTurnStart
         pruneExpansionState(
-            validTurnIDs: projection.validTurnIDs, toolRowIDs: projection.toolRowIDs)
+            validTurnIDs: projection.validTurnIDs, detailRowIDs: projection.detailRowIDs)
 
         ChatViewPerf.signposter.endInterval("rebuildRows", perfState)
     }
@@ -167,10 +167,12 @@ final class ChatTranscriptController {
 
     func toggleDetailExpanded(_ rowID: String) {
         expandedDetails.formSymmetricDifference([rowID])
-        if let idx = rows.firstIndex(where: { $0.id == rowID }),
-            case .toolCall(let data) = rows[idx].kind
-        {
-            rows[idx] = ChatRow(id: rowID, kind: .toolCall(data.togglingDetail()))
+        // Optimistic in-place refresh — kind-agnostic, so every
+        // detail-expandable row (tool call, Skill Invocation Row) updates
+        // immediately; `expandedDetails` is ObservationIgnored and a rebuild
+        // may be far away.
+        if let idx = rows.firstIndex(where: { $0.id == rowID }) {
+            rows[idx] = rows[idx].togglingDetail()
         }
     }
 
@@ -212,10 +214,10 @@ final class ChatTranscriptController {
 
     /// Full-rebuild-only pruning of stale expansion state against the projection's
     /// valid-turn and committed tool-row id sets.
-    private func pruneExpansionState(validTurnIDs: Set<UUID>, toolRowIDs: Set<String>) {
+    private func pruneExpansionState(validTurnIDs: Set<UUID>, detailRowIDs: Set<String>) {
         expandedTurns = expandedTurns.intersection(validTurnIDs)
         if !expandedDetails.isEmpty {
-            expandedDetails = expandedDetails.intersection(toolRowIDs)
+            expandedDetails = expandedDetails.intersection(detailRowIDs)
         }
     }
 

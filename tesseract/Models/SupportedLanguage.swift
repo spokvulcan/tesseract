@@ -6,7 +6,10 @@
 import Foundation
 
 /// Represents a language supported by the Whisper model for transcription.
-struct SupportedLanguage: Identifiable, Hashable {
+///
+/// `nonisolated` value type: pure data consumed by MainActor UI and by
+/// nonisolated derivations (``TranslateLanguageDefault``) alike.
+nonisolated struct SupportedLanguage: Identifiable, Hashable {
     let code: String  // ISO 639-1 code (e.g., "en")
     let name: String  // Display name (e.g., "English")
     let flag: String  // Emoji flag (e.g., "🇬🇧")
