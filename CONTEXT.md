@@ -815,6 +815,57 @@ _Avoid_: arbiter protocol / arbitering, lease provider; widening it before a
 peer-consuming caller needs the member. ("Lease" unqualified = GPU lease, not the
 prefix-cache snapshot pin.)
 
+### Batch inference
+
+**Batch Engine**:
+The single generation engine that holds the GPU lease whenever any **Lane** is
+live, driving every lane's prefill and decode on the model-affine actor;
+completions submit to it rather than acquiring the lease themselves. Distinct
+from the **GPU Lease Queue** (the mutex it holds) and the **Inference Arbiter**
+(model ownership it sits under, as one long-running lease consumer).
+_Avoid_: scheduler (one policy inside it, not the module), continuous batching
+(the technique family), server engine, engine (unqualified).
+
+**Lane**:
+One admitted request's live generation inside the **Batch Engine** — its
+execution identity from admission to drain. One request is one lane for its
+whole completion; admitted lanes are FIFO-fair, never descheduled for a
+sibling.
+_Avoid_: slot (the arbiter's `.llm`/`.tts` co-residency unit, and oMLX's static
+per-slot KV reservation — both different things), worker, stream (the wire
+concept), request (the HTTP envelope; a lane is its execution).
+
+**Lane Admission**:
+The gate that turns the waiting queue's head into a **Lane** — headroom-priced
+by the per-lane reserve and hard-capped; the queue it draws from is ordered by
+longest radix prefix match, aged to strict FIFO so no request starves. Distinct
+from **Snapshot Admission** (the cache write side — always say which).
+_Avoid_: admission (unqualified — collides with **Snapshot Admission**),
+scheduling (the step-loop share, not the gate), request start.
+
+**Boundary Yield**:
+The **Batch Engine**'s release of the GPU lease at a decode-step or
+prefill-chunk boundary to a waiting slot-preserving consumer (TTS), lanes
+pausing as plain data until the engine re-acquires. Never for a consumer that
+would change the loaded model — that is an **Admission Freeze**.
+_Avoid_: preemption (nothing is descheduled or lost), GPU handoff, lease steal.
+
+**Admission Freeze**:
+The drain mode where **Lane Admission** stops so the pool can empty for a
+consumer that needs the pool gone — a model switch, or an image-bearing request
+running solo. The freeze is the cause; the drain is the emptying that follows.
+_Avoid_: drain (the effect), pool pause (a **Boundary Yield** pauses lanes; a
+freeze retires them by attrition), admission stop.
+
+**KV Page**:
+The refcounted fixed-size block of KV cache the RAM tier stores and **Lane**s
+reference — a shared prefix is held by reference, restore is a refcount bump
+rather than a copy, and a page with a live reference is structurally
+unevictable.
+_Avoid_: block (vLLM vocabulary; generic), snapshot body (the deep-copied
+predecessor it replaces), slot reservation (the oMLX static shape, explicitly
+not built).
+
 ### Model loading
 
 **Model Identity**:
