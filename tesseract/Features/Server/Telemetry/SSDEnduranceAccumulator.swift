@@ -51,10 +51,16 @@ nonisolated struct SSDEnduranceSnapshot: Codable, Equatable, Sendable {
     struct NotableEvent: Codable, Equatable, Sendable, Identifiable {
         let at: Date
         /// `fingerprintChanged` / `staleUnused` / `schemaStale` — the
-        /// `ssdPartitionInvalidated` reason vocabulary.
+        /// `ssdPartitionInvalidated` reason vocabulary — or
+        /// `clientPrefixChange` (issue #158): a deep cache loss caused by
+        /// the client mutating its prompt prefix, not by this tier.
         let kind: String
         let modelID: String
         let bytes: Int
+        /// Kind-specific copy detail (e.g. the divergence numbers for
+        /// `clientPrefixChange`). Optional so pre-existing persisted
+        /// ledgers still decode.
+        var detail: String?
 
         var id: String { "\(at.timeIntervalSinceReferenceDate)-\(kind)-\(modelID)" }
     }
@@ -204,6 +210,9 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
                 event.field("reason") == "staleUnused" ? "staleGC" : "invalidated"
             add(deleted: bytes, reason: reason, at: event.timestamp)
 
+        case "lookup":
+            recordClientPrefixChangeNotable(event)
+
         default:
             break
         }
@@ -290,12 +299,39 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
         guard let modelID = event.field("modelID"),
             let reason = event.field("reason")
         else { return }
-        let notable = SSDEnduranceSnapshot.NotableEvent(
-            at: event.timestamp,
-            kind: reason,
-            modelID: modelID,
-            bytes: event.intField("bytes") ?? 0
-        )
+        appendNotable(
+            SSDEnduranceSnapshot.NotableEvent(
+                at: event.timestamp,
+                kind: reason,
+                modelID: modelID,
+                bytes: event.intField("bytes") ?? 0
+            ))
+    }
+
+    /// Buffer a client-prefix-change divergence (issue #158) as a
+    /// panel-worthy notable event. Not an SSD-tier event, but the panel's
+    /// notable line is the one place a deep, *not-our-fault* cache loss
+    /// can be explained instead of reading as a tier regression — the
+    /// 2026-07-05 incident (see `docs/prompt-cache-client-divergence.md`).
+    /// Only the deep `clientPrefixChange` classification lands here;
+    /// routine tail rewinds fire on every tool turn and would drown the
+    /// sparing notable line.
+    private func recordClientPrefixChangeNotable(_ event: PromptCacheTelemetryEvent) {
+        guard event.field("divergence") == "clientPrefixChange",
+            let offset = event.intField("divergenceOffset"),
+            let abandoned = event.intField("abandonedCachedTokens")
+        else { return }
+        appendNotable(
+            SSDEnduranceSnapshot.NotableEvent(
+                at: event.timestamp,
+                kind: "clientPrefixChange",
+                modelID: event.modelID ?? "unknown",
+                bytes: 0,
+                detail: "at token \(offset), \(abandoned) cached tokens abandoned"
+            ))
+    }
+
+    private func appendNotable(_ notable: SSDEnduranceSnapshot.NotableEvent) {
         lock.lock()
         var buffer = state.notable ?? []
         buffer.append(notable)

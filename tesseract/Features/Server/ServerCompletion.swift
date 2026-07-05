@@ -59,6 +59,10 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let lookupReason: PrefixCacheManager.LookupReason
     /// Shared-prefix length in tokens between the request and the best cache entry.
     let sharedPrefixLength: Int
+    /// Miss attribution (issue #158): non-nil when the prompt contradicted
+    /// cached content — the client changed the prompt prefix, not the server
+    /// losing state. Feeds `Diagnostics.divergence` for the console.
+    let divergence: PrefixDivergenceProbe?
 
     // -- Post-generation store context (radix tree flow) --
 
@@ -638,7 +642,8 @@ nonisolated final class ServerCompletion {
             prefill: mlxStart.prefillMs,
             cacheReason: mlxStart.cacheReasonDescription,
             sharedPrefixLength: mlxStart.sharedPrefixLength,
-            promptTokenCount: mlxStart.promptTokenCount
+            promptTokenCount: mlxStart.promptTokenCount,
+            divergence: mlxStart.divergence
         )
 
         // The driving work lives in a nonisolated static helper, so it runs
@@ -1869,7 +1874,8 @@ nonisolated final class ServerCompletion {
                         promptTokens: fullTokenCount,
                         newTokensToPrefill: newTokensToPrefill,
                         lookupMs: lookupMs * 1000,
-                        restoreMs: restoreMs * 1000
+                        restoreMs: restoreMs * 1000,
+                        divergence: lookupResult.divergence
                     )))
             diagnosticsContext.log(
                 PrefixCacheDiagnostics.LookupEvent(
@@ -1882,7 +1888,8 @@ nonisolated final class ServerCompletion {
                     restoreMs: restoreMs,
                     plannedCheckpoints: prefillPlan.checkpointsToCapture,
                     hydratedFromSSD: resolved.hydratedFromSSD,
-                    chainPrefixRestore: resolved.wasChainPrefixRestore
+                    chainPrefixRestore: resolved.wasChainPrefixRestore,
+                    divergence: lookupResult.divergence
                 ))
 
             // 8. Fold the plan's checkpoints plus the transient boundary
@@ -2147,6 +2154,7 @@ nonisolated final class ServerCompletion {
                 skippedPrefillTokens: skippedTokens,
                 lookupReason: lookupResult.reason,
                 sharedPrefixLength: lookupResult.sharedPrefixLength,
+                divergence: lookupResult.divergence,
                 fullTokens: fullTokens,
                 keySpace: keySpace,
                 unkeyedReason: nil,
@@ -2421,6 +2429,7 @@ nonisolated final class ServerCompletion {
             skippedPrefillTokens: 0,
             lookupReason: .missNoEntries,
             sharedPrefixLength: 0,
+            divergence: nil,
             fullTokens: fullTokens,
             keySpace: .identity(keyPath: fullTokens),
             unkeyedReason: reason,

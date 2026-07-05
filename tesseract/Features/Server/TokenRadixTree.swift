@@ -52,6 +52,39 @@ final class RadixTreeNode {
     var childCount: Int { children.count }
 }
 
+/// Where an incoming prompt's tokens stopped matching cached content, and how
+/// much restorable cached depth the mismatch abandons (issue #158). A probe
+/// exists only when the tree holds cached content that *contradicts* the
+/// prompt — never on a plain miss where the deep branch was evicted/GC'd, and
+/// never when the prompt simply extends past everything cached. That asymmetry
+/// is the attribution: probe present ⇒ the client changed the prompt; probe
+/// absent on a shallow match ⇒ the loss happened server-side.
+nonisolated struct PrefixDivergenceProbe: Sendable, Equatable {
+    /// Token offset of the first mismatch between the prompt and cached content.
+    let offset: Int
+    /// Deepest restorable cached offset on the abandoned branch(es) below `offset`.
+    let deepestAbandonedOffset: Int
+
+    /// Cached tokens the divergence makes unusable for this prompt.
+    var abandonedTokens: Int { max(0, deepestAbandonedOffset - offset) }
+
+    /// True when the divergence looks like a client-mutated prompt *prefix*
+    /// (the 2026-07-05 OpenCode AGENTS.md incident — see
+    /// `docs/prompt-cache-client-divergence.md`) rather than the routine
+    /// per-turn tail rewind (Think-Strip Rewind, retried sampling): the
+    /// mismatch sits well below the abandoned depth and the abandoned span is
+    /// substantial.
+    var indicatesClientPrefixChange: Bool {
+        abandonedTokens >= Self.clientPrefixChangeMinAbandonedTokens
+            && offset * 4 <= deepestAbandonedOffset * 3
+    }
+
+    /// Tail rewinds abandon at most a turn's worth of tokens; a client prefix
+    /// change abandons the rest of a long conversation. The floor keeps
+    /// even a pathological multi-thousand-token rewind from raising the alarm.
+    static let clientPrefixChangeMinAbandonedTokens = 4096
+}
+
 /// Token-level radix tree for prefix cache lookup.
 /// Stores compressed token paths with optional HybridCacheSnapshot at nodes.
 /// Partitioned externally by (modelID, kvBits, kvGroupSize) via PrefixCacheManager.
@@ -923,6 +956,71 @@ final class TokenRadixTree {
             TraceBlockDigest.fold(token: token, into: &hash)
         }
         return TraceBlockDigest.hexDigest(hash)
+    }
+}
+
+// MARK: - Divergence probe (issue #158)
+
+extension TokenRadixTree {
+    /// Probe whether `tokens` *contradicts* cached content, and what that
+    /// contradiction abandons (issue #158). Returns `nil` when the prompt is
+    /// consistent with the tree: fully matched, a strict prefix of a cached
+    /// path, or extending past a cached leaf. Read-only — no access bump.
+    ///
+    /// Only restorable nodes (hittable state or a Chain-Prefix Restore point)
+    /// count toward the abandoned depth: a divergence that abandons nothing
+    /// restorable costs the request nothing and reports as `nil`.
+    func probeDivergence(tokens: [Int]) -> PrefixDivergenceProbe? {
+        var current = root
+        var pos = 0
+
+        while pos < tokens.count {
+            guard let child = current.children[tokens[pos]] else {
+                // Node-boundary stop: every child edge starts with a token
+                // other than the prompt's next token, so any child branch is
+                // cached content that contradicts the prompt at `pos`. A
+                // childless stop is the prompt extending past the cache.
+                return probe(offset: pos, abandoned: Array(current.children.values))
+            }
+
+            let edge = child.edgeTokens
+            var edgePos = 0
+            while edgePos < edge.count && pos < tokens.count && edge[edgePos] == tokens[pos] {
+                edgePos += 1
+                pos += 1
+            }
+
+            if edgePos < edge.count {
+                // Mid-edge stop: a real token mismatch only if prompt tokens
+                // remain — running out of prompt inside an edge is a strict
+                // prefix, not a contradiction.
+                guard pos < tokens.count else { return nil }
+                return probe(offset: pos, abandoned: [child])
+            }
+
+            current = child
+        }
+
+        return nil
+    }
+
+    private func probe(
+        offset: Int, abandoned: [RadixTreeNode]
+    ) -> PrefixDivergenceProbe? {
+        let deepest = abandoned.compactMap { deepestRestorableOffset(under: $0) }.max()
+        guard let deepest, deepest > offset else { return nil }
+        return PrefixDivergenceProbe(offset: offset, deepestAbandonedOffset: deepest)
+    }
+
+    private func deepestRestorableOffset(under node: RadixTreeNode) -> Int? {
+        let restorable = node.state.isHittable || node.chainPrefixRestorePoint != nil
+        var best: Int? = restorable ? node.tokenOffset : nil
+        for child in node.children.values {
+            if let depth = deepestRestorableOffset(under: child) {
+                best = max(best ?? depth, depth)
+            }
+        }
+        return best
     }
 }
 

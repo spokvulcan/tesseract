@@ -138,7 +138,8 @@ final class ServerGenerationLog {
         promptTokens: Int,
         lookupMs: Double,
         restoreMs: Double,
-        newTokensToPrefill: Int
+        newTokensToPrefill: Int,
+        divergence: PrefixDivergenceProbe? = nil
     ) {
         update(handle) { trace in
             trace.cacheReason = reason
@@ -148,6 +149,7 @@ final class ServerGenerationLog {
             trace.lookupMs = lookupMs
             trace.restoreMs = restoreMs
             trace.newTokensToPrefill = newTokensToPrefill
+            trace.divergence = divergence
             if trace.phase == .queued {
                 trace.phase = .lookingUp
             }
@@ -522,6 +524,9 @@ struct RequestTrace: Identifiable, Equatable {
     var cacheReason: String?
     var cachedTokens: Int = 0
     var sharedPrefixLength: Int = 0
+    /// Miss attribution (issue #158) — drives the console's
+    /// client-prefix-change callout under the lookup line.
+    var divergence: PrefixDivergenceProbe?
     var newTokensToPrefill: Int?
     var lookupMs: Double?
     var restoreMs: Double?

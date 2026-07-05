@@ -15,6 +15,12 @@
 //  failing disk drops the handle rather than taking emission down; the
 //  next day-roll retries cleanly.
 //
+//  Files open with `O_APPEND` and each line lands as one `write(2)`
+//  (issue #159): a second writer on the same file — another process, or
+//  a parallel test runner — appends at EOF instead of overwriting at
+//  this instance's stale offset, which is exactly how the 2026-07-05
+//  trace file got its torn mid-record line.
+//
 
 import Foundation
 
@@ -131,10 +137,14 @@ nonisolated final class RotatingJSONLWriter: @unchecked Sendable {
             return
         }
         let url = fileURL(day: day)
-        if !manager.fileExists(atPath: url.path) {
-            manager.createFile(atPath: url.path, contents: nil)
+        // O_APPEND: the kernel moves every write atomically to EOF, so a
+        // concurrent writer on the same file (another process) can no longer
+        // tear a record by landing inside this instance's stale offset.
+        let fd = url.path.withCString {
+            open($0, O_WRONLY | O_APPEND | O_CREAT, 0o644)
         }
-        guard let opened = try? FileHandle(forWritingTo: url) else { return }
+        guard fd >= 0 else { return }
+        let opened = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         let end = (try? opened.seekToEnd()) ?? 0
         handle = opened
         currentFileBytes = Int(end)

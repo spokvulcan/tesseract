@@ -802,7 +802,8 @@ struct CompletionHandler: Sendable {
             promptTokens: diagnostics.promptTokenCount,
             lookupMs: diagnostics.lookupMs,
             restoreMs: diagnostics.restoreMs,
-            newTokensToPrefill: max(0, diagnostics.promptTokenCount - start.cachedTokenCount)
+            newTokensToPrefill: max(0, diagnostics.promptTokenCount - start.cachedTokenCount),
+            divergence: diagnostics.divergence
         )
         await activityLog.markPrefillFinished(
             handle: logHandle,
@@ -837,7 +838,8 @@ struct CompletionHandler: Sendable {
                 promptTokens: info.promptTokens,
                 lookupMs: info.lookupMs,
                 restoreMs: info.restoreMs,
-                newTokensToPrefill: info.newTokensToPrefill
+                newTokensToPrefill: info.newTokensToPrefill,
+                divergence: info.divergence
             )
         case .prefillStarted(let info):
             activityLog.markPrefillStarted(

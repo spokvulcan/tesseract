@@ -31,6 +31,44 @@ struct PrefixCacheDiagnosticsTests {
         )
     }
 
+    @Test func lookupWithDivergenceAppendsAttributionFields() {
+        // The 2026-07-05 incident shape (issue #158): a hit at the shallow
+        // branch point after the client changed its prompt prefix.
+        let event = PrefixCacheDiagnostics.LookupEvent(
+            reason: .hit(snapshotOffset: 1342, totalTokens: 58214, type: .branchPoint),
+            promptTokens: 58214,
+            sharedPrefixLength: 8597,
+            skippedPrefillTokens: 1342,
+            newTokensToPrefill: 56872,
+            lookupMs: 0.123,
+            restoreMs: 0.006,
+            plannedCheckpoints: [],
+            divergence: PrefixDivergenceProbe(offset: 8597, deepestAbandonedOffset: 58059)
+        )
+
+        let line = context.render(event)
+        #expect(
+            line.hasSuffix(
+                "divergenceOffset=8597 abandonedCachedTokens=49462 divergence=clientPrefixChange"
+            ))
+    }
+
+    @Test func lookupWithTailRewindDivergenceClassifiesQuietly() {
+        let event = PrefixCacheDiagnostics.LookupEvent(
+            reason: .hit(snapshotOffset: 54564, totalTokens: 56328, type: .leaf),
+            promptTokens: 56328,
+            sharedPrefixLength: 54564,
+            skippedPrefillTokens: 54564,
+            newTokensToPrefill: 1764,
+            lookupMs: 0.002,
+            restoreMs: 0.1,
+            plannedCheckpoints: [],
+            divergence: PrefixDivergenceProbe(offset: 54564, deepestAbandonedOffset: 56100)
+        )
+
+        #expect(context.render(event).hasSuffix("divergence=tailRewind"))
+    }
+
     @Test func lookupMissRendersTreeDepthAndNilSnapshotFields() {
         let event = PrefixCacheDiagnostics.LookupEvent(
             reason: .missNoSnapshotInPrefix,

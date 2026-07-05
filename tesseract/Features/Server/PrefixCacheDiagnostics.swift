@@ -83,6 +83,10 @@ nonisolated enum PrefixCacheDiagnostics {
         /// the no-fingerprint replay path, so the aggregate honors both.
         let hydratedFromSSD: Bool
         let chainPrefixRestore: Bool
+        /// Miss attribution (issue #158): non-nil when the prompt contradicted
+        /// cached content. Rendered as trailing fields only when present, so
+        /// the pinned divergence-free wire lines stay byte-stable.
+        let divergence: PrefixDivergenceProbe?
 
         init(
             reason: PrefixCacheManager.LookupReason,
@@ -94,7 +98,8 @@ nonisolated enum PrefixCacheDiagnostics {
             restoreMs: TimeInterval,
             plannedCheckpoints: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)],
             hydratedFromSSD: Bool = false,
-            chainPrefixRestore: Bool = false
+            chainPrefixRestore: Bool = false,
+            divergence: PrefixDivergenceProbe? = nil
         ) {
             switch reason {
             case .hit(let snapshotOffset, _, let type):
@@ -128,12 +133,13 @@ nonisolated enum PrefixCacheDiagnostics {
             self.plannedCheckpoints = plannedCheckpoints
             self.hydratedFromSSD = hydratedFromSSD
             self.chainPrefixRestore = chainPrefixRestore
+            self.divergence = divergence
         }
 
         let eventName = "lookup"
 
         var fields: [(String, String)] {
-            [
+            var fields: [(String, String)] = [
                 ("reason", reason),
                 ("promptTokens", "\(promptTokens)"),
                 ("sharedPrefixLength", "\(sharedPrefixLength)"),
@@ -147,6 +153,17 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("hydratedFromSSD", hydratedFromSSD ? "true" : "false"),
                 ("chainPrefixRestore", chainPrefixRestore ? "true" : "false"),
             ]
+            if let divergence {
+                fields.append(("divergenceOffset", "\(divergence.offset)"))
+                fields.append(("abandonedCachedTokens", "\(divergence.abandonedTokens)"))
+                fields.append(
+                    (
+                        "divergence",
+                        divergence.indicatesClientPrefixChange
+                            ? "clientPrefixChange" : "tailRewind"
+                    ))
+            }
+            return fields
         }
     }
 
