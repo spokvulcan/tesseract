@@ -7,6 +7,8 @@
 //  files it leaves on disk. Ring bounds (count and total size, oldest evicted
 //  first), condition tagging, and the non-fatality of write failures are the
 //  contract (PRD #175); how the store names or writes files internally is not.
+//  Disk work runs on a background chain, so each test `flush()`es before it
+//  looks at the directory.
 //
 
 import AVFoundation
@@ -43,13 +45,14 @@ struct CaptureDumpStoreTests {
 
     // MARK: - Saving
 
-    @Test func saveWritesAReadableWAVCarryingTheCaptureConditions() throws {
+    @Test func saveWritesAReadableWAVCarryingTheCaptureConditions() async throws {
         let directory = makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = CaptureDumpStore(directory: directory)
         let capture = makeCapture(seconds: 0.1, sampleRate: 48_000, voiceProcessed: true)
 
         store.save(capture)
+        await store.flush()
 
         let files = wavFiles(in: directory)
         #expect(files.count == 1)
@@ -63,12 +66,13 @@ struct CaptureDumpStoreTests {
         #expect(Int(audioFile.length) == capture.samples.count)
     }
 
-    @Test func saveTagsAnUnprocessedCaptureAsVPOff() throws {
+    @Test func saveTagsAnUnprocessedCaptureAsVPOff() async throws {
         let directory = makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = CaptureDumpStore(directory: directory)
 
         store.save(makeCapture(voiceProcessed: false))
+        await store.flush()
 
         let name = try #require(wavFiles(in: directory).first).lastPathComponent
         #expect(name.contains("vp-off"))
@@ -76,7 +80,7 @@ struct CaptureDumpStoreTests {
 
     // MARK: - Ring bounds
 
-    @Test func exceedingTheRecordingCountEvictsOldestFirst() {
+    @Test func exceedingTheRecordingCountEvictsOldestFirst() async {
         let directory = makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = CaptureDumpStore(
@@ -88,6 +92,7 @@ struct CaptureDumpStoreTests {
         for _ in 0..<4 {
             let before = Set(wavFiles(in: directory).map(\.lastPathComponent))
             store.save(makeCapture())
+            await store.flush()
             let after = Set(wavFiles(in: directory).map(\.lastPathComponent))
             if let newName = after.subtracting(before).first {
                 namesInSaveOrder.append(newName)
@@ -100,7 +105,7 @@ struct CaptureDumpStoreTests {
         #expect(!remaining.contains(namesInSaveOrder[0]))
     }
 
-    @Test func exceedingTheTotalSizeBoundEvictsOldestFirst() {
+    @Test func exceedingTheTotalSizeBoundEvictsOldestFirst() async {
         let directory = makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         // One 0.1 s 48 kHz float32 mono capture is ~19 KB of payload; a 50 KB
@@ -113,6 +118,7 @@ struct CaptureDumpStoreTests {
         for _ in 0..<3 {
             store.save(makeCapture(seconds: 0.1))
         }
+        await store.flush()
 
         let files = wavFiles(in: directory)
         #expect(files.count < 3)
@@ -125,7 +131,7 @@ struct CaptureDumpStoreTests {
 
     // MARK: - Delete all
 
-    @Test func deleteAllEmptiesTheStore() {
+    @Test func deleteAllEmptiesTheStore() async {
         let directory = makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = CaptureDumpStore(directory: directory)
@@ -133,13 +139,14 @@ struct CaptureDumpStoreTests {
         store.save(makeCapture())
 
         store.deleteAll()
+        await store.flush()
 
         #expect(wavFiles(in: directory).isEmpty)
     }
 
     // MARK: - Failure is non-fatal
 
-    @Test func saveIntoAnUncreatableDirectoryDoesNotCrashOrWrite() throws {
+    @Test func saveIntoAnUncreatableDirectoryDoesNotCrashOrWrite() async throws {
         // A plain file where the store expects its directory: creation fails.
         let blocker = FileManager.default.temporaryDirectory
             .appendingPathComponent("capture-dump-blocker-\(UUID().uuidString)")
@@ -148,6 +155,7 @@ struct CaptureDumpStoreTests {
         let store = CaptureDumpStore(directory: blocker)
 
         store.save(makeCapture())
+        await store.flush()
 
         #expect(wavFiles(in: blocker).isEmpty)
     }

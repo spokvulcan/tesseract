@@ -140,12 +140,8 @@ final class AudioCaptureEngine: AudioCapturing {
 
         // Create format for our tap
         guard
-            let recordingFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: inputFormat.sampleRate,
-                channels: 1,
-                interleaved: false
-            )
+            let recordingFormat = AudioConverter.monoFloat32Format(
+                sampleRate: inputFormat.sampleRate)
         else {
             throw DictationError.audioCaptureFailed("Failed to create recording format")
         }

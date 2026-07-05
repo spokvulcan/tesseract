@@ -7,7 +7,7 @@ import Foundation
 import AVFoundation
 import Accelerate
 
-enum AudioConverter {
+nonisolated enum AudioConverter: Sendable {
     static let whisperSampleRate: Double = 16000
 
     /// Convert AVAudioPCMBuffer to Float array suitable for WhisperKit
@@ -27,19 +27,33 @@ enum AudioConverter {
         return samples
     }
 
+    /// The one mono float32 `AVAudioFormat` every sample-array boundary in the
+    /// app shares — the capture tap, the resampler, the WAV writer, TTS playback.
+    static func monoFloat32Format(sampleRate: Double) -> AVAudioFormat? {
+        AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false
+        )
+    }
+
     /// Build a mono float32 PCM buffer from raw samples — the one shape for
     /// feeding sample arrays into AVFoundation (the resampler here, the WAV
-    /// writer in the **Capture Dump**).
+    /// writer in the **Capture Dump**, TTS playback).
     static func makeMonoFloat32Buffer(
         _ samples: [Float], sampleRate: Double
     ) -> AVAudioPCMBuffer? {
+        guard let format = monoFloat32Format(sampleRate: sampleRate) else { return nil }
+        return makeMonoFloat32Buffer(samples, format: format)
+    }
+
+    /// Same, against an existing format instance (e.g. a streaming player's
+    /// negotiated format).
+    static func makeMonoFloat32Buffer(
+        _ samples: [Float], format: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
         guard
-            let format = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: sampleRate,
-                channels: 1,
-                interleaved: false
-            ),
             let buffer = AVAudioPCMBuffer(
                 pcmFormat: format,
                 frameCapacity: AVAudioFrameCount(samples.count)
@@ -64,12 +78,7 @@ enum AudioConverter {
 
         guard
             let inputBuffer = makeMonoFloat32Buffer(samples, sampleRate: sourceSampleRate),
-            let targetFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: targetSampleRate,
-                channels: 1,
-                interleaved: false
-            ),
+            let targetFormat = monoFloat32Format(sampleRate: targetSampleRate),
             let converter = AVAudioConverter(from: inputBuffer.format, to: targetFormat)
         else {
             Log.audio.error("Resampler setup failed; falling back to linear interpolation")

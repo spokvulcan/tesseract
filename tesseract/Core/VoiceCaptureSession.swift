@@ -124,10 +124,15 @@ final class VoiceCaptureSession {
     /// Stops capture and applies the minimum-duration guard. Does not advance the
     /// epoch — the caller's maximum-duration auto-stop drives *when* this is called.
     func stop() -> StopResult {
-        guard let audioData = audioCapture.stopCapture() else { return .noAudio }
+        guard var audioData = audioCapture.stopCapture() else { return .noAudio }
         guard audioData.duration >= Self.minimumRecordingDuration else { return .tooShort }
-        if let raw = audioData.raw, let captureDump, isCaptureDumpEnabled() {
-            captureDump.save(raw)
+        if let raw = audioData.raw {
+            if let captureDump, isCaptureDumpEnabled() {
+                captureDump.save(raw)
+            }
+            // The dump is `raw`'s only consumer — don't keep the native-rate
+            // samples (~3× the 16 kHz payload) alive through transcription.
+            audioData.raw = nil
         }
         return .audio(audioData)
     }
