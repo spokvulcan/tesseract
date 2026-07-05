@@ -18,6 +18,10 @@ nonisolated enum ServerInferenceProgressEvent: Sendable, Equatable {
         let newTokensToPrefill: Int
         let lookupMs: Double
         let restoreMs: Double
+        /// Miss attribution (issue #158): non-nil when the prompt
+        /// contradicted cached content — the console renders the
+        /// client-prefix-change callout from this.
+        var divergence: PrefixDivergenceProbe?
     }
 
     nonisolated struct PrefillInfo: Sendable, Equatable {

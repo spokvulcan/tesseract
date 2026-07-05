@@ -39,13 +39,12 @@ nonisolated final class CompletionTraceLog: @unchecked Sendable {
 
     /// Default durable home for the corpus. Application Support (not
     /// the tmp debug root) — the harness replays traces across
-    /// sessions, so the OS must not garbage-collect them.
+    /// sessions, so the OS must not garbage-collect them. Diverts to an
+    /// isolated per-process directory under a test runner (issue #159):
+    /// test suites host the full app, and their toy-model completions
+    /// used to append into — and tear — the production corpus.
     static var defaultDirectory: URL {
-        let base =
-            FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask
-            ).first ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("PrefixCacheTraces", isDirectory: true)
+        TelemetryEnvironment.durableDirectory(component: "PrefixCacheTraces")
     }
 
     init(directory: URL = CompletionTraceLog.defaultDirectory) {

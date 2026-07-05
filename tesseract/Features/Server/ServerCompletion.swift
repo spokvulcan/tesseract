@@ -1869,7 +1869,8 @@ nonisolated final class ServerCompletion {
                         promptTokens: fullTokenCount,
                         newTokensToPrefill: newTokensToPrefill,
                         lookupMs: lookupMs * 1000,
-                        restoreMs: restoreMs * 1000
+                        restoreMs: restoreMs * 1000,
+                        divergence: lookupResult.divergence
                     )))
             diagnosticsContext.log(
                 PrefixCacheDiagnostics.LookupEvent(
@@ -1882,7 +1883,8 @@ nonisolated final class ServerCompletion {
                     restoreMs: restoreMs,
                     plannedCheckpoints: prefillPlan.checkpointsToCapture,
                     hydratedFromSSD: resolved.hydratedFromSSD,
-                    chainPrefixRestore: resolved.wasChainPrefixRestore
+                    chainPrefixRestore: resolved.wasChainPrefixRestore,
+                    divergence: lookupResult.divergence
                 ))
 
             // 8. Fold the plan's checkpoints plus the transient boundary

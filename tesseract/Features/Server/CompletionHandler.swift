@@ -837,7 +837,8 @@ struct CompletionHandler: Sendable {
                 promptTokens: info.promptTokens,
                 lookupMs: info.lookupMs,
                 restoreMs: info.restoreMs,
-                newTokensToPrefill: info.newTokensToPrefill
+                newTokensToPrefill: info.newTokensToPrefill,
+                divergence: info.divergence
             )
         case .prefillStarted(let info):
             activityLog.markPrefillStarted(

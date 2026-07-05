@@ -735,4 +735,73 @@ struct TokenRadixTreeTests {
         #expect(snapshot.snapshotCount == 16)
         #expect(snapshot.snapshotsByType["leaf"] == 16)
     }
+
+    // MARK: - Divergence probe (issue #158)
+
+    @Test func probeReturnsNilWhenPromptExtendsPastCachedLeaf() {
+        let tree = TokenRadixTree()
+        insertAndStore(tree, tokens: Array(1...50), type: .leaf)
+
+        // Normal turn growth: the cached path is a strict prefix of the prompt.
+        #expect(tree.matchPrompt(tokens: Array(1...80)).divergence == nil)
+    }
+
+    @Test func probeReturnsNilWhenPromptIsStrictPrefixOfCache() {
+        let tree = TokenRadixTree()
+        insertAndStore(tree, tokens: Array(1...50), type: .leaf)
+
+        #expect(tree.matchPrompt(tokens: Array(1...30)).divergence == nil)
+        #expect(tree.matchPrompt(tokens: Array(1...50)).divergence == nil)
+    }
+
+    @Test func probeReportsMidEdgeMismatchWithAbandonedDepth() {
+        let tree = TokenRadixTree()
+        insertAndStore(tree, tokens: Array(1...100), type: .leaf)
+
+        // Prompt matches 40 tokens, then contradicts the cached edge.
+        let query = Array(1...40) + Array(900...960)
+        let probe = tree.matchPrompt(tokens: query).divergence
+        #expect(probe?.offset == 40)
+        #expect(probe?.deepestAbandonedOffset == 100)
+        #expect(probe?.abandonedTokens == 60)
+    }
+
+    @Test func probeReportsNodeBoundaryMismatchAcrossSiblingBranches() {
+        let tree = TokenRadixTree()
+        let shared = Array(1...30)
+        insertAndStore(tree, tokens: shared + Array(100...150), type: .leaf)
+        insertAndStore(tree, tokens: shared + Array(200...220), type: .leaf)
+
+        // Prompt matches the shared prefix then takes a third, uncached fork:
+        // both cached sibling branches contradict it, deepest one counts.
+        let probe = tree.matchPrompt(tokens: shared + Array(300...310)).divergence
+        #expect(probe?.offset == 30)
+        #expect(probe?.deepestAbandonedOffset == 81)
+        #expect(probe?.abandonedTokens == 51)
+    }
+
+    @Test func probeIgnoresAbandonedBranchesWithNothingRestorable() {
+        let tree = TokenRadixTree()
+        // A bare path (no snapshot, no ref, no restore point) abandons
+        // nothing a restore could have used — the mismatch costs nothing.
+        tree.insertPath(tokens: Array(1...100))
+
+        let query = Array(1...40) + Array(900...960)
+        #expect(tree.matchPrompt(tokens: query).divergence == nil)
+    }
+
+    @Test func clientPrefixChangeClassificationSeparatesDeepLossFromTailRewind() {
+        // The 2026-07-05 incident shape: divergence at 8 597 of a branch
+        // reaching 58 059 — a client-changed prefix.
+        let deepLoss = PrefixDivergenceProbe(offset: 8597, deepestAbandonedOffset: 58059)
+        #expect(deepLoss.indicatesClientPrefixChange)
+
+        // A Think-Strip Rewind: divergence near the tail of the cached leaf.
+        let tailRewind = PrefixDivergenceProbe(offset: 54564, deepestAbandonedOffset: 56328)
+        #expect(!tailRewind.indicatesClientPrefixChange)
+
+        // Deep ratio but a tiny abandoned span stays quiet too.
+        let shallowSpan = PrefixDivergenceProbe(offset: 100, deepestAbandonedOffset: 900)
+        #expect(!shallowSpan.indicatesClientPrefixChange)
+    }
 }

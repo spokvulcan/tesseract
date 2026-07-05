@@ -337,7 +337,7 @@ struct TieredSnapshotStoreTests {
         #expect(node.state.body == nil)
         #expect(store.pendingRefCountForTesting == 0)
         // Node stays in the tree as a structural path for future lookups.
-        #expect(tree.findSharedPrefixLength(tokens: [1, 2, 3]) == 3)
+        #expect(tree.matchPrompt(tokens: [1, 2, 3]).depth == 3)
     }
 
     // MARK: - State 3 → removed-from-tree (drop callback)
@@ -378,8 +378,8 @@ struct TieredSnapshotStoreTests {
         #expect(node.state.ref == nil)
         // Target node is hard-deleted via self-heal — the [1,2,3] path no
         // longer reaches a terminal, but the shared [1,2] prefix survives.
-        #expect(tree.findSharedPrefixLength(tokens: [1, 2, 3]) == 2)
-        #expect(tree.findSharedPrefixLength(tokens: [1, 2, 5]) == 3)
+        #expect(tree.matchPrompt(tokens: [1, 2, 3]).depth == 2)
+        #expect(tree.matchPrompt(tokens: [1, 2, 5]).depth == 3)
     }
 
     // MARK: - State 2 → 1 (drop callback with body present)
@@ -447,7 +447,7 @@ struct TieredSnapshotStoreTests {
         tree.dropBody(node: node)
         #expect(node.state.body == nil)
         #expect(node.state.committed)
-        #expect(tree.findSharedPrefixLength(tokens: [1, 2, 3]) == 3)
+        #expect(tree.matchPrompt(tokens: [1, 2, 3]).depth == 3)
         #expect(tree.findBestSnapshot(tokens: [1, 2, 3]) == nil)
     }
 

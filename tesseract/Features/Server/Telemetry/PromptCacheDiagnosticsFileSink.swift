@@ -31,13 +31,10 @@ nonisolated final class PromptCacheDiagnosticsFileSink: @unchecked Sendable {
     /// Durable home (#148, scope item 5): Application Support, not the
     /// tmp debug root — the sandbox tmp directory is OS-purged, which
     /// is exactly why the original leaf-loss incident left no evidence
-    /// to diagnose from. Bounded by `retainedDayFiles`.
+    /// to diagnose from. Bounded by `retainedDayFiles`. Diverts to an
+    /// isolated per-process directory under a test runner (issue #159).
     static var defaultDirectory: URL {
-        let base =
-            FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask
-            ).first ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("CacheDiagnostics", isDirectory: true)
+        TelemetryEnvironment.durableDirectory(component: "CacheDiagnostics")
     }
 
     init(

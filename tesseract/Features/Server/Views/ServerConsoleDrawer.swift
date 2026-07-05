@@ -230,6 +230,9 @@ private struct ConsoleDiagnosticsLines: View {
             if let lookup = lookupLine {
                 line(label: "lookup", text: lookup)
             }
+            if let divergence = divergenceLine {
+                line(label: "divergence", text: divergence, color: .orange)
+            }
             if let prefill = prefillLine {
                 line(label: "prefill", text: prefill)
             }
@@ -268,6 +271,19 @@ private struct ConsoleDiagnosticsLines: View {
             parts.append(String(format: "restore %.0f ms", restore))
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Miss attribution (issue #158): shown only for a client-changed
+    /// prompt *prefix* — the deep loss an operator would otherwise
+    /// misread as a server-side eviction. Routine per-turn tail rewinds
+    /// stay silent.
+    private var divergenceLine: String? {
+        guard let divergence = trace.divergence,
+            divergence.indicatesClientPrefixChange
+        else { return nil }
+        return "prompt changed at token \(divergence.offset.formatted())"
+            + " — client prefix change abandoned"
+            + " \(divergence.abandonedTokens.formatted()) cached tokens"
     }
 
     private var prefillLine: String? {

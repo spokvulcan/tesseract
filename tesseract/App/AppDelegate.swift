@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var onOpenWindow: (() -> Void)?
     private var hasSetupWithContainer = false
     private var isRunningUnderTests: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        ProcessEnvironment.isRunningTests
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

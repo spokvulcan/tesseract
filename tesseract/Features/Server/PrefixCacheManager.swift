@@ -353,6 +353,12 @@ final class PrefixCacheManager {
         /// is non-nil so the SSD LRU age progression is visible
         /// under operator workload traces.
         let recordedHitSnapshotID: String?
+        /// Non-nil when the prompt *contradicts* cached content (issue
+        /// #158): the tree held a branch whose tokens differ from the
+        /// prompt's at `divergence.offset`. Attributes a shallow match to
+        /// the client changing the prompt, as opposed to server-side
+        /// eviction — see `PrefixDivergenceProbe`.
+        let divergence: PrefixDivergenceProbe?
 
         nonisolated init(
             snapshot: HybridCacheSnapshot?,
@@ -360,7 +366,8 @@ final class PrefixCacheManager {
             snapshotTokenOffset: Int,
             sharedPrefixLength: Int,
             reason: LookupReason,
-            recordedHitSnapshotID: String? = nil
+            recordedHitSnapshotID: String? = nil,
+            divergence: PrefixDivergenceProbe? = nil
         ) {
             self.snapshot = snapshot
             self.partitionKey = partitionKey
@@ -368,6 +375,7 @@ final class PrefixCacheManager {
             self.sharedPrefixLength = sharedPrefixLength
             self.reason = reason
             self.recordedHitSnapshotID = recordedHitSnapshotID
+            self.divergence = divergence
         }
 
         /// Restore the cached KV/Mamba state. Each call produces an independent deep copy.
@@ -439,6 +447,12 @@ final class PrefixCacheManager {
             )
         }
 
+        // One walk yields both the match depth and the divergence attribution
+        // (issue #158): a shallow match carries *why* it is shallow — the
+        // prompt contradicted cached content (client changed the prompt) vs
+        // the deep branch simply being gone (evicted/GC'd server-side).
+        let (treeMatchDepth, divergence) = tree.matchPrompt(tokens: tokens)
+
         // Consider state-5 (committed ref, no body) as hittable —
         // LLMActor will hydrate from SSD. Pending refs (state 3) are
         // filtered out inside `findBestSnapshot`.
@@ -447,17 +461,15 @@ final class PrefixCacheManager {
                 tokens: tokens, includeSnapshotRefs: true
             )
         else {
-            let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
             return (
                 LookupResult(
                     snapshot: nil, partitionKey: partitionKey,
                     snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
-                    reason: .missNoSnapshotInPrefix
+                    reason: .missNoSnapshotInPrefix,
+                    divergence: divergence
                 ), nil
             )
         }
-
-        let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
 
         if let snapshot = node.state.body {
             // States 1, 2, or 4. On state 4 (committed ref + body) the
@@ -479,7 +491,8 @@ final class PrefixCacheManager {
                         totalTokens: tokens.count,
                         type: snapshot.checkpointType
                     ),
-                    recordedHitSnapshotID: recordedHitID
+                    recordedHitSnapshotID: recordedHitID,
+                    divergence: divergence
                 ), node
             )
         }
@@ -498,7 +511,8 @@ final class PrefixCacheManager {
                     partitionKey: partitionKey,
                     snapshotTokenOffset: ref.tokenOffset,
                     sharedPrefixLength: treeMatchDepth,
-                    reason: .ssdHit(context)
+                    reason: .ssdHit(context),
+                    divergence: divergence
                 ), node
             )
         }
@@ -516,7 +530,8 @@ final class PrefixCacheManager {
                     partitionKey: partitionKey,
                     snapshotTokenOffset: point.boundaryOffset,
                     sharedPrefixLength: treeMatchDepth,
-                    reason: .chainPrefixHit(context)
+                    reason: .chainPrefixHit(context),
+                    divergence: divergence
                 ), node
             )
         }
@@ -525,7 +540,8 @@ final class PrefixCacheManager {
             LookupResult(
                 snapshot: nil, partitionKey: partitionKey,
                 snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
-                reason: .missNoSnapshotInPrefix
+                reason: .missNoSnapshotInPrefix,
+                divergence: divergence
             ), nil
         )
     }
@@ -869,7 +885,7 @@ final class PrefixCacheManager {
                     ("alternativeOffset", "\(alternativeOffset)"),
                 ]
             )
-            let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
+            let (treeMatchDepth, divergence) = tree.matchPrompt(tokens: tokens)
             // Serve the peeked alternative as a real hit — the same node the
             // gate priced against (identical `tokens`, `includeSnapshotRefs`),
             // so bump its access directly rather than re-walking the tree.
@@ -878,7 +894,8 @@ final class PrefixCacheManager {
                     lookup: LookupResult(
                         snapshot: nil, partitionKey: partitionKey,
                         snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
-                        reason: .missNoSnapshotInPrefix
+                        reason: .missNoSnapshotInPrefix,
+                        divergence: divergence
                     ),
                     hydratedFromSSD: false, hydrationSeconds: 0
                 )
@@ -903,7 +920,8 @@ final class PrefixCacheManager {
                         totalTokens: promptTokenCount,
                         type: body.checkpointType
                     ),
-                    recordedHitSnapshotID: recordedHitID
+                    recordedHitSnapshotID: recordedHitID,
+                    divergence: divergence
                 ),
                 hydratedFromSSD: false, hydrationSeconds: 0
             )
@@ -920,7 +938,8 @@ final class PrefixCacheManager {
                 partitionKey: partitionKey,
                 snapshotTokenOffset: 0,
                 sharedPrefixLength: initial.sharedPrefixLength,
-                reason: .missNoSnapshotInPrefix
+                reason: .missNoSnapshotInPrefix,
+                divergence: initial.divergence
             ),
             hydratedFromSSD: true,
             hydrationSeconds: 0
@@ -945,7 +964,8 @@ final class PrefixCacheManager {
                     snapshotOffset: hydrated.tokenOffset,
                     totalTokens: promptTokenCount,
                     type: hydrated.checkpointType
-                )
+                ),
+                divergence: initial.divergence
             ),
             hydratedFromSSD: true,
             hydrationSeconds: hydrateSeconds,

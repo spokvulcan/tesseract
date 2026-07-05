@@ -344,6 +344,15 @@ to re-prefill. It is bounded — not removed — by the canonical-leaf probe.
 _Avoid_: cache miss after tools (the felt symptom, not the mechanism); template
 drift (the render is deterministic); client mutation.
 
+**Client Prefix Divergence**:
+A deep prefix-cache loss caused by the client changing early tokens of its own
+prompt mid-session (e.g. OpenCode re-injecting the live content of an AGENTS.md
+the session itself is editing) — the tokens genuinely differ, so the re-prefill
+is correct, and the loss is attributed at lookup, never "fixed" with fuzzy
+matching. See `docs/prompt-cache-client-divergence.md`.
+_Avoid_: cache bug, server-side loss (it is neither); **Think-Strip Rewind** (the
+tail-local cousin — a template artifact, not a client prefix change).
+
 **Tool Stretch**:
 The span of assistant turns and tool results since the last real user message — the
 region a thinking template renders with `<think>` kept, and the exact span a
