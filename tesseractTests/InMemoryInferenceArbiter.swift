@@ -36,6 +36,10 @@ final class InMemoryInferenceArbiter: InferenceArbitrating {
     /// of `ensureLoaded` failing (e.g. `modelNotDownloaded`).
     var ensureLoadedError: (any Error)?
 
+    /// Waiter visibility peer: tests raise it directly (`increment()`) to
+    /// simulate a slot-preserving consumer waiting on the lease.
+    nonisolated let leaseWaiters = LeaseWaiterSignal()
+
     func withExclusiveGPU<T: Sendable>(
         _ slot: ModelSlot,
         llmModelIDOverride: String?,

@@ -83,6 +83,10 @@ final class InferenceArbiter: InferenceArbitrating {
     /// arbiter composes it with model loading.
     @ObservationIgnored private let lease = GPULeaseQueue()
 
+    /// Waiter visibility for the Batch Engine's Boundary Yield (PRD #173):
+    /// raised around a slot-preserving (.tts) consumer's wait for the lease.
+    nonisolated let leaseWaiters = LeaseWaiterSignal()
+
     // MARK: - Dependencies
 
     private let agentEngine: AgentEngine
@@ -118,14 +122,30 @@ final class InferenceArbiter: InferenceArbitrating {
         llmVision: LLMVisionRequirement = .fromSettings,
         body: () async throws -> T
     ) async throws -> T {
-        try await lease.withExclusive {
-            Log.general.info("InferenceArbiter: lease acquired for \(slot)")
-            try await ensureLoaded(
-                slot,
-                llmModelIDOverride: llmModelIDOverride,
-                llmVision: llmVision
-            )
-            return try await body()
+        // Boundary Yield visibility (PRD #173): only a slot-preserving
+        // consumer raises the waiter signal — the Batch Engine yields its
+        // lease to TTS at step boundaries, never to a consumer that could
+        // reload the LLM under paused lanes (that path drains the pool via
+        // ensureLoaded's unload backstop instead).
+        let slotPreserving = slot == .tts
+        if slotPreserving { leaseWaiters.increment() }
+        var acquired = false
+        do {
+            let result = try await lease.withExclusive {
+                acquired = true
+                if slotPreserving { leaseWaiters.decrement() }
+                Log.general.info("InferenceArbiter: lease acquired for \(slot)")
+                try await ensureLoaded(
+                    slot,
+                    llmModelIDOverride: llmModelIDOverride,
+                    llmVision: llmVision
+                )
+                return try await body()
+            }
+            return result
+        } catch {
+            if slotPreserving, !acquired { leaseWaiters.decrement() }
+            throw error
         }
     }
 
