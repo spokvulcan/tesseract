@@ -48,8 +48,25 @@ struct VoiceCaptureSessionTests {
         }
     }
 
-    private func makeAudio(duration: TimeInterval = 2.0) -> AudioData {
-        AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: duration)
+    /// Records what the session hands to the **Capture Dump** seam.
+    @MainActor
+    final class FakeCaptureDump: CaptureDumpStoring {
+        private(set) var saved: [RawCapture] = []
+        private(set) var deleteAllCount = 0
+
+        func save(_ capture: RawCapture) { saved.append(capture) }
+        func deleteAll() { deleteAllCount += 1 }
+    }
+
+    private func makeAudio(
+        duration: TimeInterval = 2.0, raw: RawCapture? = nil
+    ) -> AudioData {
+        AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: duration, raw: raw)
+    }
+
+    private func makeRaw(voiceProcessed: Bool = false) -> RawCapture {
+        RawCapture(
+            samples: [0.3, 0.4, 0.5], sampleRate: 48_000, voiceProcessed: voiceProcessed)
     }
 
     // MARK: - start()
@@ -143,6 +160,99 @@ struct VoiceCaptureSessionTests {
             Issue.record("expected .noAudio, got \(result)")
             return
         }
+    }
+
+    // MARK: - Capture Dump
+
+    /// A successful stop hands the raw capture — conditions intact — to the dump.
+    @Test func stopSavesTheRawCaptureToTheDump() {
+        let raw = makeRaw(voiceProcessed: true)
+        let capture = FakeAudioCapture(cannedAudio: makeAudio(duration: 2.0, raw: raw))
+        let dump = FakeCaptureDump()
+        let session = VoiceCaptureSession(
+            audioCapture: capture,
+            transcriptionEngine: ControllableTranscribing(),
+            captureDump: dump,
+            isCaptureDumpEnabled: { true }
+        )
+        _ = session.start()
+
+        _ = session.stop()
+
+        #expect(dump.saved.count == 1)
+        #expect(dump.saved.first?.samples == raw.samples)
+        #expect(dump.saved.first?.sampleRate == raw.sampleRate)
+        #expect(dump.saved.first?.voiceProcessed == true)
+    }
+
+    @Test func stopDoesNotDumpARecordingShorterThanMinimum() {
+        let capture = FakeAudioCapture(
+            cannedAudio: makeAudio(duration: 0.2, raw: makeRaw()))
+        let dump = FakeCaptureDump()
+        let session = VoiceCaptureSession(
+            audioCapture: capture,
+            transcriptionEngine: ControllableTranscribing(),
+            captureDump: dump,
+            isCaptureDumpEnabled: { true }
+        )
+        _ = session.start()
+
+        _ = session.stop()
+
+        #expect(dump.saved.isEmpty)
+    }
+
+    /// Dump disabled means the store is never invoked — not invoked-and-discarded.
+    @Test func stopDoesNotDumpWhenTheSettingIsDisabled() {
+        let capture = FakeAudioCapture(
+            cannedAudio: makeAudio(duration: 2.0, raw: makeRaw()))
+        let dump = FakeCaptureDump()
+        let session = VoiceCaptureSession(
+            audioCapture: capture,
+            transcriptionEngine: ControllableTranscribing(),
+            captureDump: dump,
+            isCaptureDumpEnabled: { false }
+        )
+        _ = session.start()
+
+        _ = session.stop()
+
+        #expect(dump.saved.isEmpty)
+    }
+
+    @Test func stopDoesNotDumpWhenTheCaptureCarriesNoRawAudio() {
+        let capture = FakeAudioCapture(cannedAudio: makeAudio(duration: 2.0, raw: nil))
+        let dump = FakeCaptureDump()
+        let session = VoiceCaptureSession(
+            audioCapture: capture,
+            transcriptionEngine: ControllableTranscribing(),
+            captureDump: dump,
+            isCaptureDumpEnabled: { true }
+        )
+        _ = session.start()
+
+        _ = session.stop()
+
+        #expect(dump.saved.isEmpty)
+    }
+
+    /// `cancel()` also stops a running capture — but an abandoned recording is
+    /// not evidence; nothing may reach the dump.
+    @Test func cancelDoesNotDumpTheAbandonedCapture() {
+        let capture = FakeAudioCapture(
+            cannedAudio: makeAudio(duration: 2.0, raw: makeRaw()))
+        let dump = FakeCaptureDump()
+        let session = VoiceCaptureSession(
+            audioCapture: capture,
+            transcriptionEngine: ControllableTranscribing(),
+            captureDump: dump,
+            isCaptureDumpEnabled: { true }
+        )
+        _ = session.start()
+
+        session.cancel()
+
+        #expect(dump.saved.isEmpty)
     }
 
     // MARK: - transcribeAndCommit()

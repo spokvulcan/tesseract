@@ -17,7 +17,24 @@ final class DependencyContainer: ObservableObject {
     lazy var audioDeviceManager = AudioDeviceManager()
 
     // Audio
-    lazy var audioCaptureEngine = AudioCaptureEngine()
+    lazy var audioCaptureEngine = AudioCaptureEngine(
+        isVoiceProcessingEnabled: { [settingsManager] in settingsManager.voiceProcessingEnabled }
+    )
+
+    /// The **Capture Dump** (PRD #175) — one shared ring buffer for every
+    /// capture surface, so bounds are enforced across the whole app.
+    lazy var captureDumpStore: CaptureDumpStore = {
+        let base =
+            FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first ?? FileManager.default.temporaryDirectory
+        return CaptureDumpStore(
+            directory:
+                base
+                .appendingPathComponent("Tesseract Agent", isDirectory: true)
+                .appendingPathComponent("CaptureDump", isDirectory: true)
+        )
+    }()
 
     // Transcription
     lazy var modelManager = ModelManager(
@@ -100,6 +117,7 @@ final class DependencyContainer: ObservableObject {
             audioCapture: audioCaptureEngine,
             transcriptionEngine: transcriptionEngine,
             settings: settingsManager,
+            captureDump: captureDumpStore,
             arbiter: inferenceArbiter,
             formatRawPrompt: { [weak self] systemPrompt, tools in
                 guard let self else { throw AgentEngineError.modelNotLoaded }
@@ -181,7 +199,8 @@ final class DependencyContainer: ObservableObject {
             transcriptionEngine: transcriptionEngine,
             textInjector: textInjector,
             history: transcriptionHistory,
-            settings: settingsManager
+            settings: settingsManager,
+            captureDump: captureDumpStore
         )
     }()
 

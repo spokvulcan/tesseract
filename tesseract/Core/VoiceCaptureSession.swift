@@ -73,6 +73,12 @@ final class VoiceCaptureSession {
     private let transcriptionEngine: any Transcribing
     private let postProcessor = TranscriptionPostProcessor()
 
+    /// The **Capture Dump** and its enablement, both caller-injected. The dump
+    /// only ever sees captures that passed the minimum-duration guard — an
+    /// accidental tap or an abandoned (cancelled) recording is not evidence.
+    private let captureDump: (any CaptureDumpStoring)?
+    private let isCaptureDumpEnabled: () -> Bool
+
     /// The **Operation Guard** for this session. `invalidate()`d at *operation
     /// start* and at `cancel()` so a transcription that finishes (or races
     /// cancellation to *success*) after a cancel-and-restart recognizes it is stale
@@ -89,10 +95,14 @@ final class VoiceCaptureSession {
 
     init(
         audioCapture: any AudioCapturing,
-        transcriptionEngine: any Transcribing
+        transcriptionEngine: any Transcribing,
+        captureDump: (any CaptureDumpStoring)? = nil,
+        isCaptureDumpEnabled: @escaping () -> Bool = { true }
     ) {
         self.audioCapture = audioCapture
         self.transcriptionEngine = transcriptionEngine
+        self.captureDump = captureDump
+        self.isCaptureDumpEnabled = isCaptureDumpEnabled
     }
 
     // MARK: - Interface
@@ -116,6 +126,9 @@ final class VoiceCaptureSession {
     func stop() -> StopResult {
         guard let audioData = audioCapture.stopCapture() else { return .noAudio }
         guard audioData.duration >= Self.minimumRecordingDuration else { return .tooShort }
+        if let raw = audioData.raw, let captureDump, isCaptureDumpEnabled() {
+            captureDump.save(raw)
+        }
         return .audio(audioData)
     }
 

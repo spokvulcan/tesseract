@@ -35,10 +35,15 @@ final class DictationCoordinator {
         transcriptionEngine: any Transcribing,
         textInjector: any TextInjecting,
         history: any TranscriptionStoring,
-        settings: SettingsManager
+        settings: SettingsManager,
+        captureDump: (any CaptureDumpStoring)? = nil
     ) {
         self.session = VoiceCaptureSession(
-            audioCapture: audioCapture, transcriptionEngine: transcriptionEngine)
+            audioCapture: audioCapture,
+            transcriptionEngine: transcriptionEngine,
+            captureDump: captureDump,
+            isCaptureDumpEnabled: { settings.captureDumpEnabled }
+        )
         self.textInjector = textInjector
         self.history = history
         self.settings = settings
