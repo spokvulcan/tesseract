@@ -16,21 +16,11 @@
 import Foundation
 
 nonisolated enum TelemetryEnvironment {
-    /// True when the process is a test host. Mirrors `AppDelegate`'s
-    /// launch-time check; the extra keys cover runners that set only the
-    /// session/bundle variants.
-    static let isRunningTests: Bool = {
-        let env = ProcessInfo.processInfo.environment
-        return env["XCTestConfigurationFilePath"] != nil
-            || env["XCTestBundlePath"] != nil
-            || env["XCTestSessionIdentifier"] != nil
-    }()
-
     /// The durable home for a telemetry component (`"CacheDiagnostics"`,
     /// `"PrefixCacheTraces"`, ...): Application Support in production, an
     /// isolated per-process temp directory under a test runner.
     static func durableDirectory(component: String) -> URL {
-        guard !isRunningTests else {
+        guard !ProcessEnvironment.isRunningTests else {
             return FileManager.default.temporaryDirectory
                 .appendingPathComponent(
                     "TesseractTestTelemetry-\(ProcessInfo.processInfo.processIdentifier)",

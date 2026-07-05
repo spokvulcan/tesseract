@@ -57,10 +57,12 @@ nonisolated struct SSDEnduranceSnapshot: Codable, Equatable, Sendable {
         let kind: String
         let modelID: String
         let bytes: Int
-        /// Kind-specific copy detail (e.g. the divergence numbers for
-        /// `clientPrefixChange`). Optional so pre-existing persisted
-        /// ledgers still decode.
-        var detail: String?
+        /// `clientPrefixChange` payload: where the prompt diverged and how
+        /// many cached tokens it abandoned. Numbers, not copy — the view
+        /// composes (and can reword) the sentence. Optional so pre-existing
+        /// persisted ledgers and other kinds decode.
+        var divergenceOffset: Int?
+        var abandonedTokens: Int?
 
         var id: String { "\(at.timeIntervalSinceReferenceDate)-\(kind)-\(modelID)" }
     }
@@ -317,7 +319,9 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
     /// routine tail rewinds fire on every tool turn and would drown the
     /// sparing notable line.
     private func recordClientPrefixChangeNotable(_ event: PromptCacheTelemetryEvent) {
-        guard event.field("divergence") == "clientPrefixChange",
+        guard
+            event.field("divergence")
+                == PrefixDivergenceProbe.Classification.clientPrefixChange.rawValue,
             let offset = event.intField("divergenceOffset"),
             let abandoned = event.intField("abandonedCachedTokens")
         else { return }
@@ -327,14 +331,31 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
                 kind: "clientPrefixChange",
                 modelID: event.modelID ?? "unknown",
                 bytes: 0,
-                detail: "at token \(offset), \(abandoned) cached tokens abandoned"
-            ))
+                divergenceOffset: offset,
+                abandonedTokens: abandoned
+            ),
+            coalescingLast: true
+        )
     }
 
-    private func appendNotable(_ notable: SSDEnduranceSnapshot.NotableEvent) {
+    /// `coalescingLast`: replace the buffer's last entry instead of appending
+    /// when it has the same kind and model — a session that keeps mutating
+    /// its prompt prefix (the chatty case by construction) occupies one slot
+    /// instead of evicting the rare invalidation notices out of the
+    /// `retainedNotables` cap. Keeps the feed "sparing by design".
+    private func appendNotable(
+        _ notable: SSDEnduranceSnapshot.NotableEvent,
+        coalescingLast: Bool = false
+    ) {
         lock.lock()
         var buffer = state.notable ?? []
-        buffer.append(notable)
+        if coalescingLast, let last = buffer.last,
+            last.kind == notable.kind, last.modelID == notable.modelID
+        {
+            buffer[buffer.count - 1] = notable
+        } else {
+            buffer.append(notable)
+        }
         if buffer.count > Self.retainedNotables {
             buffer.removeFirst(buffer.count - Self.retainedNotables)
         }

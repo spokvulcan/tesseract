@@ -802,8 +802,7 @@ struct CompletionHandler: Sendable {
             promptTokens: diagnostics.promptTokenCount,
             lookupMs: diagnostics.lookupMs,
             restoreMs: diagnostics.restoreMs,
-            newTokensToPrefill: max(0, diagnostics.promptTokenCount - start.cachedTokenCount),
-            divergence: diagnostics.divergence
+            newTokensToPrefill: max(0, diagnostics.promptTokenCount - start.cachedTokenCount)
         )
         await activityLog.markPrefillFinished(
             handle: logHandle,

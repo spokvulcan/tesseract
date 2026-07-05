@@ -743,15 +743,15 @@ struct TokenRadixTreeTests {
         insertAndStore(tree, tokens: Array(1...50), type: .leaf)
 
         // Normal turn growth: the cached path is a strict prefix of the prompt.
-        #expect(tree.probeDivergence(tokens: Array(1...80)) == nil)
+        #expect(tree.matchPrompt(tokens: Array(1...80)).divergence == nil)
     }
 
     @Test func probeReturnsNilWhenPromptIsStrictPrefixOfCache() {
         let tree = TokenRadixTree()
         insertAndStore(tree, tokens: Array(1...50), type: .leaf)
 
-        #expect(tree.probeDivergence(tokens: Array(1...30)) == nil)
-        #expect(tree.probeDivergence(tokens: Array(1...50)) == nil)
+        #expect(tree.matchPrompt(tokens: Array(1...30)).divergence == nil)
+        #expect(tree.matchPrompt(tokens: Array(1...50)).divergence == nil)
     }
 
     @Test func probeReportsMidEdgeMismatchWithAbandonedDepth() {
@@ -760,7 +760,7 @@ struct TokenRadixTreeTests {
 
         // Prompt matches 40 tokens, then contradicts the cached edge.
         let query = Array(1...40) + Array(900...960)
-        let probe = tree.probeDivergence(tokens: query)
+        let probe = tree.matchPrompt(tokens: query).divergence
         #expect(probe?.offset == 40)
         #expect(probe?.deepestAbandonedOffset == 100)
         #expect(probe?.abandonedTokens == 60)
@@ -774,7 +774,7 @@ struct TokenRadixTreeTests {
 
         // Prompt matches the shared prefix then takes a third, uncached fork:
         // both cached sibling branches contradict it, deepest one counts.
-        let probe = tree.probeDivergence(tokens: shared + Array(300...310))
+        let probe = tree.matchPrompt(tokens: shared + Array(300...310)).divergence
         #expect(probe?.offset == 30)
         #expect(probe?.deepestAbandonedOffset == 81)
         #expect(probe?.abandonedTokens == 51)
@@ -787,7 +787,7 @@ struct TokenRadixTreeTests {
         tree.insertPath(tokens: Array(1...100))
 
         let query = Array(1...40) + Array(900...960)
-        #expect(tree.probeDivergence(tokens: query) == nil)
+        #expect(tree.matchPrompt(tokens: query).divergence == nil)
     }
 
     @Test func clientPrefixChangeClassificationSeparatesDeepLossFromTailRewind() {

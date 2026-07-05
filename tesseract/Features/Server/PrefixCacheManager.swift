@@ -447,11 +447,11 @@ final class PrefixCacheManager {
             )
         }
 
-        // Divergence attribution (issue #158): probed on every lookup so a
-        // shallow match carries *why* it is shallow — the prompt contradicted
-        // cached content (client changed the prompt) vs the deep branch
-        // simply being gone (evicted/GC'd server-side).
-        let divergence = tree.probeDivergence(tokens: tokens)
+        // One walk yields both the match depth and the divergence attribution
+        // (issue #158): a shallow match carries *why* it is shallow — the
+        // prompt contradicted cached content (client changed the prompt) vs
+        // the deep branch simply being gone (evicted/GC'd server-side).
+        let (treeMatchDepth, divergence) = tree.matchPrompt(tokens: tokens)
 
         // Consider state-5 (committed ref, no body) as hittable —
         // LLMActor will hydrate from SSD. Pending refs (state 3) are
@@ -461,7 +461,6 @@ final class PrefixCacheManager {
                 tokens: tokens, includeSnapshotRefs: true
             )
         else {
-            let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
             return (
                 LookupResult(
                     snapshot: nil, partitionKey: partitionKey,
@@ -471,8 +470,6 @@ final class PrefixCacheManager {
                 ), nil
             )
         }
-
-        let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
 
         if let snapshot = node.state.body {
             // States 1, 2, or 4. On state 4 (committed ref + body) the
@@ -888,8 +885,7 @@ final class PrefixCacheManager {
                     ("alternativeOffset", "\(alternativeOffset)"),
                 ]
             )
-            let treeMatchDepth = tree.findSharedPrefixLength(tokens: tokens)
-            let divergence = tree.probeDivergence(tokens: tokens)
+            let (treeMatchDepth, divergence) = tree.matchPrompt(tokens: tokens)
             // Serve the peeked alternative as a real hit — the same node the
             // gate priced against (identical `tokens`, `includeSnapshotRefs`),
             // so bump its access directly rather than re-walking the tree.

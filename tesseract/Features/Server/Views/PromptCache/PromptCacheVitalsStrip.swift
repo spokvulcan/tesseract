@@ -117,7 +117,12 @@ struct PromptCacheVitalsStrip: View {
         case "schemaStale":
             return "Cache for \(event.modelID) was reset\(size) — storage format upgraded · \(when)"
         case "clientPrefixChange":
-            let detail = event.detail.map { " \($0)" } ?? ""
+            var detail = ""
+            if let offset = event.divergenceOffset, let abandoned = event.abandonedTokens {
+                detail =
+                    " at token \(offset.formatted())"
+                    + " (\(abandoned.formatted()) cached tokens abandoned)"
+            }
             return "Client changed its prompt prefix\(detail) — not a cache fault · \(when)"
         default:
             return "Cache for \(event.modelID) was reset\(size) · \(when)"

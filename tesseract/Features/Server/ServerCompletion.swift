@@ -59,10 +59,6 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let lookupReason: PrefixCacheManager.LookupReason
     /// Shared-prefix length in tokens between the request and the best cache entry.
     let sharedPrefixLength: Int
-    /// Miss attribution (issue #158): non-nil when the prompt contradicted
-    /// cached content — the client changed the prompt prefix, not the server
-    /// losing state. Feeds `Diagnostics.divergence` for the console.
-    let divergence: PrefixDivergenceProbe?
 
     // -- Post-generation store context (radix tree flow) --
 
@@ -642,8 +638,7 @@ nonisolated final class ServerCompletion {
             prefill: mlxStart.prefillMs,
             cacheReason: mlxStart.cacheReasonDescription,
             sharedPrefixLength: mlxStart.sharedPrefixLength,
-            promptTokenCount: mlxStart.promptTokenCount,
-            divergence: mlxStart.divergence
+            promptTokenCount: mlxStart.promptTokenCount
         )
 
         // The driving work lives in a nonisolated static helper, so it runs
@@ -2154,7 +2149,6 @@ nonisolated final class ServerCompletion {
                 skippedPrefillTokens: skippedTokens,
                 lookupReason: lookupResult.reason,
                 sharedPrefixLength: lookupResult.sharedPrefixLength,
-                divergence: lookupResult.divergence,
                 fullTokens: fullTokens,
                 keySpace: keySpace,
                 unkeyedReason: nil,
@@ -2429,7 +2423,6 @@ nonisolated final class ServerCompletion {
             skippedPrefillTokens: 0,
             lookupReason: .missNoEntries,
             sharedPrefixLength: 0,
-            divergence: nil,
             fullTokens: fullTokens,
             keySpace: .identity(keyPath: fullTokens),
             unkeyedReason: reason,

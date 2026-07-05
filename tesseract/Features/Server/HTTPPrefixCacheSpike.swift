@@ -22,9 +22,6 @@ nonisolated struct HTTPServerGenerationStart: Sendable {
         let cacheReason: String
         let sharedPrefixLength: Int
         let promptTokenCount: Int
-        /// Miss attribution (issue #158): non-nil when the prompt
-        /// contradicted cached content. `nil` on the fallback path.
-        let divergence: PrefixDivergenceProbe?
 
         static let unavailable = Diagnostics(
             lookupMs: 0,
@@ -32,8 +29,7 @@ nonisolated struct HTTPServerGenerationStart: Sendable {
             prefillMs: 0,
             cacheReason: "n/a",
             sharedPrefixLength: 0,
-            promptTokenCount: 0,
-            divergence: nil
+            promptTokenCount: 0
         )
 
         static func fromSeconds(
@@ -42,8 +38,7 @@ nonisolated struct HTTPServerGenerationStart: Sendable {
             prefill: TimeInterval,
             cacheReason: String,
             sharedPrefixLength: Int,
-            promptTokenCount: Int,
-            divergence: PrefixDivergenceProbe? = nil
+            promptTokenCount: Int
         ) -> Diagnostics {
             Diagnostics(
                 lookupMs: lookup * 1000,
@@ -51,8 +46,7 @@ nonisolated struct HTTPServerGenerationStart: Sendable {
                 prefillMs: prefill * 1000,
                 cacheReason: cacheReason,
                 sharedPrefixLength: sharedPrefixLength,
-                promptTokenCount: promptTokenCount,
-                divergence: divergence
+                promptTokenCount: promptTokenCount
             )
         }
     }

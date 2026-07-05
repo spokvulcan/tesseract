@@ -156,12 +156,7 @@ nonisolated enum PrefixCacheDiagnostics {
             if let divergence {
                 fields.append(("divergenceOffset", "\(divergence.offset)"))
                 fields.append(("abandonedCachedTokens", "\(divergence.abandonedTokens)"))
-                fields.append(
-                    (
-                        "divergence",
-                        divergence.indicatesClientPrefixChange
-                            ? "clientPrefixChange" : "tailRewind"
-                    ))
+                fields.append(("divergence", divergence.classification.rawValue))
             }
             return fields
         }

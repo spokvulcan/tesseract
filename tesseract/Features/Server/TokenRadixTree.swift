@@ -50,6 +50,16 @@ final class RadixTreeNode {
 
     var isLeaf: Bool { children.isEmpty }
     var childCount: Int { children.count }
+
+    /// A lookup/attribution target: the node's own state is hittable (RAM
+    /// body or committed SSD ref) or a **Chain-Prefix Restore** point backs
+    /// its boundary (ADR-0012). The single definition of "restorable" shared
+    /// by `findBestSnapshot(includeSnapshotRefs: true)` and the divergence
+    /// probe's abandoned-depth scan — the two must never disagree about what
+    /// a divergence abandons.
+    var isRestorableTarget: Bool {
+        state.isHittable || chainPrefixRestorePoint != nil
+    }
 }
 
 /// Where an incoming prompt's tokens stopped matching cached content, and how
@@ -68,12 +78,24 @@ nonisolated struct PrefixDivergenceProbe: Sendable, Equatable {
     /// Cached tokens the divergence makes unusable for this prompt.
     var abandonedTokens: Int { max(0, deepestAbandonedOffset - offset) }
 
-    /// True when the divergence looks like a client-mutated prompt *prefix*
-    /// (the 2026-07-05 OpenCode AGENTS.md incident — see
-    /// `docs/prompt-cache-client-divergence.md`) rather than the routine
-    /// per-turn tail rewind (Think-Strip Rewind, retried sampling): the
-    /// mismatch sits well below the abandoned depth and the abandoned span is
-    /// substantial.
+    /// The probe's wire vocabulary — one definition for every serializer
+    /// (diagnostics field renderer) and parser (endurance accumulator).
+    enum Classification: String, Sendable {
+        /// Deep loss: the client mutated its prompt *prefix* (the 2026-07-05
+        /// OpenCode AGENTS.md incident — see
+        /// `docs/prompt-cache-client-divergence.md`).
+        case clientPrefixChange
+        /// Routine near-tail divergence (Think-Strip Rewind, retried
+        /// sampling). Logged, never alarmed on.
+        case tailRewind
+    }
+
+    /// `clientPrefixChange` when the mismatch sits well below the abandoned
+    /// depth and the abandoned span is substantial; `tailRewind` otherwise.
+    var classification: Classification {
+        indicatesClientPrefixChange ? .clientPrefixChange : .tailRewind
+    }
+
     var indicatesClientPrefixChange: Bool {
         abandonedTokens >= Self.clientPrefixChangeMinAbandonedTokens
             && offset * 4 <= deepestAbandonedOffset * 3
@@ -140,9 +162,7 @@ final class TokenRadixTree {
         // the owning chain's leading segments. Pending refs are never
         // hittable.
         func isHittable(_ node: RadixTreeNode) -> Bool {
-            includeSnapshotRefs
-                ? node.state.isHittable || node.chainPrefixRestorePoint != nil
-                : node.state.hasResidentBody
+            includeSnapshotRefs ? node.isRestorableTarget : node.state.hasResidentBody
         }
 
         // Root can have a snapshot (e.g. empty-prefix checkpoint)
@@ -215,29 +235,6 @@ final class TokenRadixTree {
         }
 
         return best
-    }
-
-    /// Returns how many leading tokens from `tokens` match the tree, regardless of
-    /// whether any snapshot exists along the path. Useful for miss diagnostics.
-    func findSharedPrefixLength(tokens: [Int]) -> Int {
-        var current = root
-        var pos = 0
-
-        while pos < tokens.count {
-            guard let child = current.children[tokens[pos]] else { break }
-
-            let edge = child.edgeTokens
-            var edgePos = 0
-            while edgePos < edge.count && pos < tokens.count && edge[edgePos] == tokens[pos] {
-                edgePos += 1
-                pos += 1
-            }
-
-            if edgePos < edge.count { break }
-            current = child
-        }
-
-        return pos
     }
 
     // MARK: - Insert
@@ -959,18 +956,21 @@ final class TokenRadixTree {
     }
 }
 
-// MARK: - Divergence probe (issue #158)
+// MARK: - Prompt match + divergence probe (issue #158)
 
 extension TokenRadixTree {
-    /// Probe whether `tokens` *contradicts* cached content, and what that
-    /// contradiction abandons (issue #158). Returns `nil` when the prompt is
-    /// consistent with the tree: fully matched, a strict prefix of a cached
-    /// path, or extending past a cached leaf. Read-only — no access bump.
+    /// One walk, two answers: how many leading tokens of `tokens` the tree
+    /// matches (the old `findSharedPrefixLength`), and — when the walk
+    /// stopped because cached content *contradicts* the prompt — a
+    /// `PrefixDivergenceProbe` for what that contradiction abandons (issue
+    /// #158). The probe is `nil` when the prompt is consistent with the
+    /// tree: fully matched, a strict prefix of a cached path, or extending
+    /// past a cached leaf. Read-only — no access bump.
     ///
-    /// Only restorable nodes (hittable state or a Chain-Prefix Restore point)
-    /// count toward the abandoned depth: a divergence that abandons nothing
-    /// restorable costs the request nothing and reports as `nil`.
-    func probeDivergence(tokens: [Int]) -> PrefixDivergenceProbe? {
+    /// Only restorable nodes (`isRestorableTarget`) count toward the
+    /// abandoned depth: a divergence that abandons nothing restorable costs
+    /// the request nothing and probes as `nil`.
+    func matchPrompt(tokens: [Int]) -> (depth: Int, divergence: PrefixDivergenceProbe?) {
         var current = root
         var pos = 0
 
@@ -980,7 +980,7 @@ extension TokenRadixTree {
                 // other than the prompt's next token, so any child branch is
                 // cached content that contradicts the prompt at `pos`. A
                 // childless stop is the prompt extending past the cache.
-                return probe(offset: pos, abandoned: Array(current.children.values))
+                return (pos, probe(offset: pos, abandoned: Array(current.children.values)))
             }
 
             let edge = child.edgeTokens
@@ -994,14 +994,14 @@ extension TokenRadixTree {
                 // Mid-edge stop: a real token mismatch only if prompt tokens
                 // remain — running out of prompt inside an edge is a strict
                 // prefix, not a contradiction.
-                guard pos < tokens.count else { return nil }
-                return probe(offset: pos, abandoned: [child])
+                guard pos < tokens.count else { return (pos, nil) }
+                return (pos, probe(offset: pos, abandoned: [child]))
             }
 
             current = child
         }
 
-        return nil
+        return (pos, nil)
     }
 
     private func probe(
@@ -1013,8 +1013,7 @@ extension TokenRadixTree {
     }
 
     private func deepestRestorableOffset(under node: RadixTreeNode) -> Int? {
-        let restorable = node.state.isHittable || node.chainPrefixRestorePoint != nil
-        var best: Int? = restorable ? node.tokenOffset : nil
+        var best: Int? = node.isRestorableTarget ? node.tokenOffset : nil
         for child in node.children.values {
             if let depth = deepestRestorableOffset(under: child) {
                 best = max(best ?? depth, depth)

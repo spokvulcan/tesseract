@@ -149,7 +149,10 @@ final class ServerGenerationLog {
             trace.lookupMs = lookupMs
             trace.restoreMs = restoreMs
             trace.newTokensToPrefill = newTokensToPrefill
-            trace.divergence = divergence
+            // Two writers reach this trace: the early progress event carries
+            // the divergence probe mid-prefill; the post-start bookkeeping
+            // pass omits it and must not erase the earlier value.
+            if let divergence { trace.divergence = divergence }
             if trace.phase == .queued {
                 trace.phase = .lookingUp
             }
