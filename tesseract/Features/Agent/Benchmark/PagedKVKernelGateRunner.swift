@@ -1,8 +1,12 @@
 import Foundation
 import MLX
 import MLXLMCommon
-import MLXRandom
 import os
+
+// `MLXRandom` is reached through a linked module's re-export (same as the
+// speech synthesizer's `MLXRandom.seed`): the app target links no MLXRandom
+// product, so a direct `import MLXRandom` resolves in Debug but breaks the
+// Release build.
 
 /// **Paged-KV kernel gate** (spike phase 0 of PRD #173, ADR-0023): before the
 /// radix tree's RAM tier becomes refcounted KV Pages, the enabling kernel —

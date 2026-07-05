@@ -70,6 +70,10 @@ struct TesseractApp: App {
             Self.runHarness("Paged-KV kernel gate") {
                 try await PagedKVKernelGateRunner().run()
             }
+        } else if args.contains("--batch-lane-bench") {
+            Self.runHarness("Batch-lane decode-shape bench") {
+                try await BatchLaneCurveRunner(runner: BenchmarkRunner()).run()
+            }
         }
     }
 

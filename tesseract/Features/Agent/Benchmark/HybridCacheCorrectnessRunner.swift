@@ -165,6 +165,9 @@ final class HybridCacheCorrectnessRunner {
                 context: context, tokens: shortPrompt, fullLogits: shortFullLogits
             )
         }
+        runTest("interleavedLaneDecodeIsolation") {
+            try test12_interleavedLaneDecodeIsolation(context: context, tokens: shortPrompt)
+        }
 
         return TestRunResult(logs: logs, checks: checks)
     }
@@ -407,6 +410,83 @@ final class HybridCacheCorrectnessRunner {
 
         let diff = BenchmarkHarness.maxAbsDiff(logits1, logits2)
         return (diff <= bitwiseTolerance, "maxAbsDiff=\(diff)", [])
+    }
+
+    /// **Batch-engine lane isolation** (PRD #173, deep-copy lane storage):
+    /// N lanes restored from one snapshot decode different suffixes in
+    /// round-robin — the engine's interleaved decode shape — and each lane's
+    /// final logits match a solo lane fed the identical per-token sequence,
+    /// bitwise. A shared tensor between deep-copied lanes, or decode state
+    /// leaking across interleaved forwards, breaks this at the first token.
+    private nonisolated static func test12_interleavedLaneDecodeIsolation(
+        context: ModelContext,
+        tokens: [Int]
+    ) throws -> (passed: Bool, detail: String, lines: [String]) {
+        let k = tokens.count / 2
+        let setupCache = context.model.newCache(parameters: nil)
+        try prefill(
+            context: context,
+            tokens: Array(tokens.prefix(k)),
+            checkpoints: [:],
+            cache: setupCache
+        )
+        guard
+            let snap = HybridCacheSnapshot.capture(
+                cache: setupCache, offset: k, type: .system
+            )
+        else {
+            return (false, "capture nil", [])
+        }
+
+        // Three lanes, three different continuations off the shared prefix.
+        let stepCount = 24
+        let base = Array(tokens.dropFirst(k))
+        let suffixes: [[Int]] = [
+            Array(base.prefix(stepCount)),
+            Array(base.dropFirst(stepCount).prefix(stepCount)),
+            Array(base.prefix(stepCount)).reversed(),
+        ]
+
+        func decodeStep(_ token: Int, cache: [any KVCache]) -> MLXArray {
+            let input = LMInput.Text(
+                tokens: MLXArray([Int32(token)]).expandedDimensions(axis: 0), mask: nil)
+            let output = context.model(input, cache: cache, state: nil)
+            eval(output.logits)
+            return output.logits[0, 0]
+        }
+
+        // Solo baselines: each suffix decoded token-by-token on its own
+        // restored lane, no interleaving.
+        var baselines: [MLXArray] = []
+        for suffix in suffixes {
+            let cache = try snap.restore()
+            var last = MLXArray([Float(0)])
+            for token in suffix {
+                last = decodeStep(token, cache: cache)
+            }
+            baselines.append(last)
+        }
+
+        // Interleaved: the same three suffixes advanced round-robin across
+        // concurrently live lanes.
+        let lanes = try suffixes.map { _ in try snap.restore() }
+        var finals = [MLXArray?](repeating: nil, count: suffixes.count)
+        for step in 0..<stepCount {
+            for (lane, suffix) in suffixes.enumerated() where step < suffix.count {
+                finals[lane] = decodeStep(suffix[step], cache: lanes[lane])
+            }
+        }
+
+        var worst: Float = 0
+        for (lane, baseline) in baselines.enumerated() {
+            guard let final = finals[lane] else { return (false, "lane \(lane) never stepped", []) }
+            worst = max(worst, BenchmarkHarness.maxAbsDiff(baseline, final))
+        }
+        return (
+            worst <= bitwiseTolerance,
+            "lanes=\(suffixes.count) steps=\(stepCount) maxAbsDiff=\(worst)",
+            []
+        )
     }
 
     private nonisolated static func test8_longContextRestore(
