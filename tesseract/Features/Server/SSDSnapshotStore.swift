@@ -638,6 +638,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         // segment file it owns.
         if let resident = ledger.removeOrTombstone(id: snapshotID) {
             deleteChainFiles(resident.fileURLs)
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDDeleteEvent(
+                    id: resident.snapshotID,
+                    bytes: resident.bytes,
+                    reason: .superseded
+                ))
         }
     }
 
@@ -823,6 +829,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                 ledger.releaseExtensionTransfer(baseID: baseID)
             }
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDDeleteEvent(
+                    id: item.descriptor.snapshotID,
+                    bytes: item.descriptor.bytes,
+                    reason: .tombstoneVeto
+                ))
             releasePendingBytes(item.payload.totalBytes)
             return
         }
@@ -842,6 +854,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             )
         else {
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDDeleteEvent(
+                    id: item.descriptor.snapshotID,
+                    bytes: item.descriptor.bytes,
+                    reason: .tombstoneVeto
+                ))
             releasePendingBytes(item.payload.totalBytes)
             return
         }
@@ -935,6 +953,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             for url in resident.fileURLs {
                 deleteResidentFile(url)
             }
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDDeleteEvent(
+                    id: resident.snapshotID,
+                    bytes: resident.bytes,
+                    reason: .evicted
+                ))
             PrefixCacheDiagnostics.logSystem(
                 PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                     id: resident.snapshotID,
@@ -1413,6 +1437,12 @@ extension SSDSnapshotStore {
     private nonisolated func dropHydrationFailure(id: String) {
         if let evicted = ledger.remove(id: id) {
             deleteChainFiles(evicted.fileURLs)
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDDeleteEvent(
+                    id: evicted.snapshotID,
+                    bytes: evicted.bytes,
+                    reason: .hydrationFailure
+                ))
         }
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(

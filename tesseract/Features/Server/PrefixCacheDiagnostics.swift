@@ -544,6 +544,43 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// Why an on-disk snapshot's files were deleted. Every file-delete
+    /// choke point in `SSDSnapshotStore` emits one `ssdDelete` event so
+    /// the endurance ledger (PRD #150) can account bytes-deleted per
+    /// class from the same diagnostics pipeline the write side uses.
+    enum SSDDeleteReason: String, Sendable {
+        /// The ledger's admission cut (or a disk-full retry) evicted a
+        /// committed resident.
+        case evicted
+        /// An explicit `deleteSnapshot` — supersession by a newer leaf,
+        /// or a deferred delete landing at the superseding write's commit.
+        case superseded
+        /// A `loadSync` failure condemned the chain.
+        case hydrationFailure
+        /// A write finished after its snapshot was deleted in flight —
+        /// the tombstone veto discarded the fresh own file.
+        case tombstoneVeto
+    }
+
+    /// One on-disk deletion, with the freed byte count. Fires next to
+    /// the existing lifecycle callbacks; the byte accounting is the
+    /// point — `storageRefDropCallback` carries no size.
+    struct SSDDeleteEvent: Payload {
+        let id: String
+        let bytes: Int
+        let reason: SSDDeleteReason
+
+        let eventName = "ssdDelete"
+
+        var fields: [(String, String)] {
+            [
+                ("id", id),
+                ("bytes", "\(bytes)"),
+                ("reason", reason.rawValue),
+            ]
+        }
+    }
+
     struct LeafSupersessionEvent: Payload {
         let offset: Int
         let snapshotRefID: String?

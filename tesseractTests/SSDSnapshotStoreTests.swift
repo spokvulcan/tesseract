@@ -657,7 +657,10 @@ struct SSDSnapshotStoreTests {
             SnapshotManifest.self,
             from: Data(contentsOf: manifestURL)
         )
-        #expect(decoded.partitions["abcd1234"] == original)
+        // The stored meta is the caller's identity plus a fresh
+        // `lastUsedAt` use stamp (stale-partition GC, PRD #150).
+        #expect(decoded.partitions["abcd1234"]?.sameIdentity(as: original) == true)
+        #expect(decoded.partitions["abcd1234"]?.lastUsedAt != nil)
         #expect(decoded.snapshots.isEmpty)
 
         // Re-registering the same digest with a fresh fingerprint
@@ -671,7 +674,7 @@ struct SSDSnapshotStoreTests {
             SnapshotManifest.self,
             from: Data(contentsOf: manifestURL)
         )
-        #expect(decoded.partitions["abcd1234"] == rotated)
+        #expect(decoded.partitions["abcd1234"]?.sameIdentity(as: rotated) == true)
         #expect(decoded.partitions["abcd1234"]?.modelFingerprint != original.modelFingerprint)
     }
 
@@ -1329,5 +1332,66 @@ struct SSDSnapshotStoreTests {
             .filter { $0.contains("id=\(descriptor.snapshotID)") }
         #expect(missLines.count == 1)
         #expect(missLines.first?.contains("reason=fingerprintMismatch") == true)
+    }
+
+    // MARK: - Endurance delete events (PRD #150)
+
+    /// An explicit `deleteSnapshot` of a committed resident emits one
+    /// `ssdDelete` event carrying the freed chain bytes — the endurance
+    /// ledger's bytes-deleted input.
+    @Test
+    func deleteSnapshotEmitsSSDDeleteWithBytes() {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+
+        let store = makeStoreWithPartition(config: config)
+        let descriptor = makeDescriptor(id: "endurance-delete", bytes: 2_048)
+        store.seedDescriptorForTesting(descriptor)
+
+        store.deleteSnapshot(snapshotID: descriptor.snapshotID)
+
+        let deleteLines = sink.lines(matching: "event=ssdDelete")
+            .filter { $0.contains("id=\(descriptor.snapshotID)") }
+        #expect(deleteLines.count == 1)
+        #expect(deleteLines.first?.contains("bytes=2048") == true)
+        #expect(deleteLines.first?.contains("reason=superseded") == true)
+    }
+
+    /// A hydration failure's chain condemnation emits `ssdDelete`
+    /// with `reason=hydrationFailure` alongside the existing miss +
+    /// drop-callback events.
+    @Test
+    func hydrationFailureEmitsSSDDeleteWithBytes() {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+
+        let store = makeStoreWithPartition(config: config)
+        let descriptor = makeDescriptor(id: "endurance-hydration", bytes: 4_096)
+        store.seedDescriptorForTesting(descriptor)
+
+        let snapshotRef = SnapshotRef(
+            snapshotID: descriptor.snapshotID,
+            partitionDigest: descriptor.partitionDigest,
+            tokenOffset: descriptor.tokenOffset,
+            checkpointType: .leaf,
+            bytesOnDisk: descriptor.bytes
+        )
+        // No file exists on disk for this descriptor, so the read
+        // fails and the chain is condemned.
+        let result = store.loadSync(
+            snapshotRef: snapshotRef,
+            expectedFingerprint: String(repeating: "a", count: 64)
+        )
+        #expect(result == nil)
+
+        let deleteLines = sink.lines(matching: "event=ssdDelete")
+            .filter { $0.contains("id=\(descriptor.snapshotID)") }
+        #expect(deleteLines.count == 1)
+        #expect(deleteLines.first?.contains("bytes=4096") == true)
+        #expect(deleteLines.first?.contains("reason=hydrationFailure") == true)
     }
 }

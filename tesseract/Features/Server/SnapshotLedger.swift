@@ -105,6 +105,9 @@ nonisolated struct WarmStartOutcome: Sendable {
 nonisolated struct EvictedResident: Sendable {
     let snapshotID: String
     let fileURLs: [URL]
+    /// Chain-total bytes the removal freed (`descriptor.totalBytes`) —
+    /// the endurance ledger's bytes-deleted input (PRD #150).
+    let bytes: Int
 }
 
 // MARK: - Admission decision
@@ -847,7 +850,8 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         scheduleManifestPersistLocked()
         return EvictedResident(
             snapshotID: descriptor.snapshotID,
-            fileURLs: chainFileURLs(for: descriptor)
+            fileURLs: chainFileURLs(for: descriptor),
+            bytes: descriptor.totalBytes
         )
     }
 
