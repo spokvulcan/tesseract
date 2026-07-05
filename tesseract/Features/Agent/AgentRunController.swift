@@ -117,10 +117,10 @@ final class AgentRunController {
                         demand: BatchModelDemand(
                             modelIDOverride: nil, vision: visionReq
                         ),
-                        bearsImages: false,
                         // The whole turn — prompt, tool calls, follow-ups —
-                        // runs the monolithic single-flight path.
-                        runsMonolithic: true,
+                        // runs the monolithic single-flight path, as one
+                        // exclusive lane.
+                        mode: .exclusive(.monolithicPath),
                         admissionTimeout: nil
                     ))
                 await body()

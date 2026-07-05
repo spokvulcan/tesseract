@@ -9,7 +9,7 @@ struct CompletionHandlerTests {
     // busy contract is now the Batch Engine's Lane Admission timeout —
     // pinned in `BatchEngineTests.admissionDeadlinePreservesTheBusyContract`.
 
-    // MARK: - Image detection (Batch Engine `bearsImages` input)
+    // MARK: - Image detection (Batch Engine lane-mode input)
 
     @Test func requestWithImagePartBearsImages() {
         let request = OpenAI.ChatCompletionRequest(
@@ -42,7 +42,7 @@ struct CompletionHandlerTests {
         #expect(!CompletionHandler.requestBearsImages(request))
     }
 
-    // MARK: - Pool-eligibility probe (Batch Engine `runsMonolithic` input)
+    // MARK: - Pool-eligibility probe (Batch Engine lane-mode input)
 
     @MainActor
     @Test func textOnlyServableRequestRidesTheCacheAwareArm() {

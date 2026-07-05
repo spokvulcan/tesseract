@@ -198,8 +198,7 @@ struct ServerInferenceServiceTests {
             BatchSubmission(
                 requestID: laneID,
                 demand: BatchModelDemand(modelIDOverride: nil, vision: .fromSettings),
-                bearsImages: false,
-                runsMonolithic: false
+                mode: .pooled
             ))
         let start = try await service.start(
             ServerInferenceRequest(
@@ -242,8 +241,7 @@ struct ServerInferenceServiceTests {
             BatchSubmission(
                 requestID: laneID,
                 demand: BatchModelDemand(modelIDOverride: nil, vision: .fromSettings),
-                bearsImages: false,
-                runsMonolithic: false
+                mode: .pooled
             ))
         await #expect(throws: AgentEngineError.self) {
             _ = try await service.start(

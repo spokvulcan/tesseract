@@ -97,8 +97,9 @@ import os
         BatchSubmission(
             requestID: id,
             demand: BatchModelDemand(modelIDOverride: modelID, vision: .fromSettings),
-            bearsImages: images,
-            runsMonolithic: monolithic,
+            mode: images
+                ? .exclusive(.bearsImages)
+                : monolithic ? .exclusive(.monolithicPath) : .pooled,
             matchedPrefixLength: match,
             admissionTimeout: timeout
         )

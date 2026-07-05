@@ -6,18 +6,31 @@ nonisolated struct BatchModelDemand: Sendable, Equatable {
     let vision: LLMVisionRequirement
 }
 
+/// How a submission occupies the pool — one decision (pooled vs exclusive),
+/// with the exclusivity reason kept because the two reasons retire on
+/// different contracts (ADR-0022): a monolithic-path lane pools as soon as
+/// its generation is engine-stepped, while an image-bearing lane stays solo
+/// until the overlapping-image stress run and the parked MLX
+/// buffer-lifetime investigation both clear.
+nonisolated enum BatchLaneMode: Sendable, Equatable {
+    /// Text-only cache-aware completion — engine-stepped, shares the pool.
+    case pooled
+    /// The generation runs today's monolithic single-flight path unchanged
+    /// and occupies the pool exclusively.
+    case exclusive(ExclusiveReason)
+
+    nonisolated enum ExclusiveReason: Sendable, Equatable {
+        case bearsImages
+        case monolithicPath
+    }
+}
+
 /// One completion submitted to the **Batch Engine** (PRD #173, ADR-0022).
 nonisolated struct BatchSubmission: Sendable {
     let requestID: UUID
     let demand: BatchModelDemand
-    /// Image-bearing requests run solo — exactly today's semantics — until
-    /// the overlapping-image stress run and the parked MLX buffer-lifetime
-    /// investigation both clear (ADR-0022).
-    let bearsImages: Bool
-    /// The completion's generation runs the monolithic single-flight path
-    /// (managed arm, standard route) rather than engine-stepped lanes; it
-    /// occupies the pool exclusively, like an image request.
-    let runsMonolithic: Bool
+    /// Pooled vs exclusive, decided at submit (`CompletionHandler`'s probe).
+    let mode: BatchLaneMode
     /// Longest radix-tree prefix match probed at submit. Orders the waiting
     /// queue (SGLang cache-aware), aged to FIFO. No production submit site
     /// probes yet — every real submission passes 0, so the v1 queue is
@@ -34,23 +47,24 @@ nonisolated struct BatchSubmission: Sendable {
     init(
         requestID: UUID,
         demand: BatchModelDemand,
-        bearsImages: Bool,
-        runsMonolithic: Bool,
+        mode: BatchLaneMode,
         matchedPrefixLength: Int = 0,
         preferredPrefillChunk: Int = 1_024,
         admissionTimeout: Duration? = .seconds(60)
     ) {
         self.requestID = requestID
         self.demand = demand
-        self.bearsImages = bearsImages
-        self.runsMonolithic = runsMonolithic
+        self.mode = mode
         self.matchedPrefixLength = matchedPrefixLength
         self.preferredPrefillChunk = preferredPrefillChunk
         self.admissionTimeout = admissionTimeout
     }
 
-    /// The lane must run alone — image-bearing or monolithic-path.
-    var requiresExclusivePool: Bool { bearsImages || runsMonolithic }
+    /// The lane must run alone rather than share the pool.
+    var requiresExclusivePool: Bool {
+        if case .exclusive = mode { return true }
+        return false
+    }
 }
 
 /// A live pool lane's handle, threaded from the submission point
@@ -322,8 +336,8 @@ actor BatchEngine {
             PrefixCacheDiagnostics.LaneLifecycleEvent(
                 phase: .drained,
                 requestID: laneID,
-                sinceAdmissionSeconds: Self.seconds(
-                    lane.admittedAt.duration(to: clock.now))
+                sinceAdmissionSeconds: lane.admittedAt.duration(to: clock.now)
+                    .seconds
             ))
         await refreshLaneCapacity()
         wake()
@@ -449,8 +463,8 @@ actor BatchEngine {
                 PrefixCacheDiagnostics.LaneLifecycleEvent(
                     phase: .firstToken,
                     requestID: laneID,
-                    sinceAdmissionSeconds: Self.seconds(
-                        lane.admittedAt.duration(to: clock.now))
+                    sinceAdmissionSeconds: lane.admittedAt.duration(to: clock.now)
+                        .seconds
                 ))
         }
     }
@@ -472,7 +486,7 @@ actor BatchEngine {
             admittedAt: clock.now
         )
         admissionCounter += 1
-        let queueWaitSeconds = Self.seconds(waited)
+        let queueWaitSeconds = waited.seconds
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.LaneLifecycleEvent(
                 phase: .admitted,
@@ -486,11 +500,6 @@ actor BatchEngine {
                 isExclusive: exclusive,
                 queueWaitSeconds: queueWaitSeconds
             ))
-    }
-
-    private static func seconds(_ duration: Duration) -> TimeInterval {
-        TimeInterval(duration.components.seconds)
-            + TimeInterval(duration.components.attoseconds) / 1e18
     }
 
     private func timeoutEntry(_ requestID: UUID) {
@@ -555,7 +564,7 @@ actor BatchEngine {
             return BatchEngineSnapshot.QueueEntry(
                 requestID: entry.submission.requestID,
                 arrivalOrder: entry.arrivalOrder,
-                waitedSeconds: Self.seconds(waited),
+                waitedSeconds: waited.seconds,
                 matchedPrefixLength: entry.submission.matchedPrefixLength,
                 requiresExclusivePool: entry.submission.requiresExclusivePool,
                 demandSatisfiedByLoadedModel: entry.demandIsSatisfied

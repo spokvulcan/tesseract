@@ -227,8 +227,7 @@ struct CompletionHandler: Sendable {
                         // promised.
                         vision: .visionIfCapable
                     ),
-                    bearsImages: Self.requestBearsImages(completionRequest),
-                    runsMonolithic: !Self.requestRidesCacheAwareArm(completionRequest),
+                    mode: Self.laneMode(for: completionRequest),
                     admissionTimeout: .seconds(Int(Self.leaseTimeoutSeconds))
                 ))
             let lane: BatchLane? =
@@ -1203,7 +1202,7 @@ struct CompletionHandler: Sendable {
     }
 
     /// Whether any request message carries an image part — the Batch
-    /// Engine's `bearsImages` input: image requests always run an exclusive
+    /// Engine's lane-mode input: image requests always run an exclusive
     /// lane (ADR-0022).
     nonisolated static func requestBearsImages(
         _ request: OpenAI.ChatCompletionRequest
@@ -1212,6 +1211,19 @@ struct CompletionHandler: Sendable {
             guard case .parts(let parts) = message.content else { return false }
             return parts.contains { $0.type == .image_url }
         }
+    }
+
+    /// The submit-time lane mode (PRD #173): image-bearing requests run an
+    /// exclusive lane (ADR-0022); text-only requests the **Completion
+    /// Route** sends down the cache-aware arm share the pool; everything
+    /// else runs the monolithic single-flight path, exclusively.
+    static func laneMode(
+        for request: OpenAI.ChatCompletionRequest
+    ) -> BatchLaneMode {
+        if requestBearsImages(request) { return .exclusive(.bearsImages) }
+        return requestRidesCacheAwareArm(request)
+            ? .pooled
+            : .exclusive(.monolithicPath)
     }
 
     /// The submit-time pool-eligibility probe (PRD #173): will the

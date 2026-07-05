@@ -174,6 +174,24 @@ final class InferenceArbiter: InferenceArbitrating {
     /// whenever the target model is capable (`.visionIfCapable`). Satisfaction
     /// upgrades but never downgrades — a loaded vision container also serves
     /// text-only demands.
+    /// `ensureLoaded`'s `.llm` target resolution (override ?? selected
+    /// model) + the ADR-0008 vision rule, as one shared assembly — the
+    /// Batch Engine's satisfaction oracle (`DependencyContainer`) consumes
+    /// the same desired state, so "oracle says satisfied" and "the
+    /// acquisition would not reload" can never drift apart.
+    func desiredLLMState(
+        modelIDOverride: String?, vision: LLMVisionRequirement
+    ) -> LoadedLLMState {
+        let targetModelID = modelIDOverride ?? settingsManager.selectedAgentModelID
+        return LoadedLLMState(
+            modelID: targetModelID,
+            visionMode: vision.wantsVision(
+                useVisionWhenAvailable: settingsManager.useVisionWhenAvailable,
+                isVisionCapable: modelDownloadManager.isVisionCapable(targetModelID)
+            )
+        )
+    }
+
     private func ensureLoaded(
         _ slot: ModelSlot,
         llmModelIDOverride: String? = nil,
@@ -181,14 +199,8 @@ final class InferenceArbiter: InferenceArbitrating {
     ) async throws {
         switch slot {
         case .llm:
-            let targetModelID = llmModelIDOverride ?? settingsManager.selectedAgentModelID
-            let desiredVision = llmVision.wantsVision(
-                useVisionWhenAvailable: settingsManager.useVisionWhenAvailable,
-                isVisionCapable: modelDownloadManager.isVisionCapable(targetModelID)
-            )
-            let desired = LoadedLLMState(
-                modelID: targetModelID,
-                visionMode: desiredVision
+            let desired = desiredLLMState(
+                modelIDOverride: llmModelIDOverride, vision: llmVision
             )
             if loadedSlots.contains(.llm),
                 let loaded = loadedLLMState,

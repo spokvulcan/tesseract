@@ -979,8 +979,7 @@ final class PrefixCacheE2ERunner {
                 BatchSubmission(
                     requestID: laneID,
                     demand: BatchModelDemand(modelIDOverride: nil, vision: .fromSettings),
-                    bearsImages: false,
-                    runsMonolithic: false,
+                    mode: .pooled,
                     admissionTimeout: .seconds(120)
                 ))
             guard !admission.isExclusive else {

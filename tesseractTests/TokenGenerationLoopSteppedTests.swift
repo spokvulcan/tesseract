@@ -61,8 +61,7 @@ import Testing
             BatchSubmission(
                 requestID: laneID,
                 demand: BatchModelDemand(modelIDOverride: nil, vision: .fromSettings),
-                bearsImages: false,
-                runsMonolithic: false
+                mode: .pooled
             ))
         let (stream, task) = TokenGenerationLoop.steppedRawTokenTask(
             promptTokenCount: 7,
@@ -126,8 +125,7 @@ import Testing
                 BatchSubmission(
                     requestID: laneID,
                     demand: BatchModelDemand(modelIDOverride: nil, vision: .fromSettings),
-                    bearsImages: false,
-                    runsMonolithic: false
+                    mode: .pooled
                 ))
             let script = ScriptedIterator(Array(1...count))
             let (stream, task) = TokenGenerationLoop.steppedRawTokenTask(
@@ -166,8 +164,7 @@ import Testing
             BatchSubmission(
                 requestID: laneID,
                 demand: BatchModelDemand(modelIDOverride: nil, vision: .fromSettings),
-                bearsImages: false,
-                runsMonolithic: false
+                mode: .pooled
             ))
         let script = ScriptedIterator(Array(1...100_000))
         let (stream, task) = TokenGenerationLoop.steppedRawTokenTask(

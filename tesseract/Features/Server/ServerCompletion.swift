@@ -2134,74 +2134,28 @@ nonisolated final class ServerCompletion {
             }
             let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
             let iterator = prefillResult.iterator
-            await progressHandler?(
-                .prefillFinished(
-                    .init(
-                        promptTokens: fullTokenCount,
-                        cachedTokens: skippedTokens,
-                        newTokensToPrefill: newTokensToPrefill,
-                        prefillMs: prefillMs * 1000
-                    )))
-
-            // Fold the observed prefill into the rolling FLOPs/s estimate
-            // (slice #84) — a real measured operation on this device.
-            // Tiny residuals are timer noise, not throughput signal.
-            if newTokensToPrefill >= 64, prefillMs > 0 {
-                let prefillFlops = EvictionPolicy.parentRelativeFlops(
-                    nodeOffset: fullTokenCount,
-                    parentOffset: skippedTokens,
-                    profile: flopProfile
-                )
-                await MainActor.run {
-                    prefixCache.recordPrefillMeasurement(
-                        flops: prefillFlops, seconds: prefillMs
-                    )
-                }
-            }
+            await Self.recordPrefillFinished(
+                promptTokens: fullTokenCount,
+                skippedTokens: skippedTokens,
+                prefillSeconds: prefillMs,
+                flopProfile: flopProfile,
+                prefixCache: prefixCache,
+                progressHandler: progressHandler
+            )
 
             // 10. Split the driver's snapshots into stored checkpoints vs the
-            // request-local transient boundary helpers, then extract payloads
-            // inside this `container.perform` so `MLXArray.asData()` runs on
-            // the Metal-affine thread before the later MainActor store hop.
-            var capturedSnapshots: [HybridCacheSnapshot] = []
-            var transientSnapshots: [Int: HybridCacheSnapshot] = [:]
-            for snapshot in prefillResult.snapshots {
-                if transientOffsets.contains(snapshot.tokenOffset) {
-                    transientSnapshots[snapshot.tokenOffset] = snapshot
-                } else {
-                    capturedSnapshots.append(snapshot)
-                }
-            }
-            let transientLastMessageBoundarySnapshot = prefillPlan.transientBoundaries.lastMessage
-                .flatMap { offset in
-                    transientSnapshots[offset]
-                        ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
-                }
-            let transientLastUserBoundarySnapshot = prefillPlan.transientBoundaries.lastUser.flatMap
-            { offset in
-                transientSnapshots[offset]
-                    ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
-            }
-            let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
-                capturedSnapshots,
-                ssdEnabled: ssdEnabled
-            )
-            let snapshotAdmission = SnapshotAdmission.checkpoints(
-                fullPromptTokens: keySpace.keyPath,
-                candidates: checkpointCandidates,
+            // request-local transient boundary helpers, inside this
+            // `container.perform` so `MLXArray.asData()` runs on the
+            // Metal-affine thread before the later MainActor store hop.
+            let bookkeeping = Self.splitAndAdmitSnapshots(
+                prefillResult.snapshots,
+                plan: prefillPlan,
+                keySpace: keySpace,
                 partitionKey: partitionKey,
-                requestID: requestID
+                requestID: requestID,
+                ssdEnabled: ssdEnabled,
+                diagnostics: diagnosticsContext
             )
-            for snapshot in capturedSnapshots {
-                diagnosticsContext.log(
-                    PrefixCacheDiagnostics.CaptureEvent(
-                        offset: snapshot.tokenOffset,
-                        checkpointType: snapshot.checkpointType,
-                        bytes: snapshot.memoryBytes,
-                        duringPrefill: true,
-                        source: "prefill"
-                    ))
-            }
 
             // 11. Start the app-owned generation stream.
             let (stream, task) = TokenGenerationLoop.start(
@@ -2230,11 +2184,11 @@ nonisolated final class ServerCompletion {
                 keySpace: keySpace,
                 unkeyedReason: nil,
                 seedsPositionAnchor: seedsPositionAnchor,
-                snapshotAdmission: snapshotAdmission,
+                snapshotAdmission: bookkeeping.admission,
                 ssdEnabled: ssdEnabled,
                 partitionKey: partitionKey,
-                transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
-                transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
+                transientLastMessageBoundarySnapshot: bookkeeping.lastMessageBoundary,
+                transientLastUserBoundarySnapshot: bookkeeping.lastUserBoundary,
                 prefillStepSize: parameters.prefillStepSize,
                 tokenNDim: tokenNDim
             )
@@ -2355,12 +2309,155 @@ nonisolated final class ServerCompletion {
         }
     }
 
+    /// What the shared iterator step hands to the engine-stepped token
+    /// loop. `@unchecked Sendable` via temporal exclusivity — built inside
+    /// a granted step, consumed by the lane's drive after it.
+    nonisolated private struct SteppedLoopInputs: @unchecked Sendable {
+        let iterator: StateThreadedTokenIterator
+        let configuration: ModelConfiguration
+        let tokenizer: any MLXLMCommon.Tokenizer
+        let liveCache: [any KVCache]
+    }
+
+    /// The stepped generators' shared iterator step: one granted step that
+    /// quantizes the prefilled cache, primes the decode iterator from the
+    /// prime remainder (the PRD #72 penalty-context threading lives in
+    /// `makeDecodeIterator`), and hands the loop inputs out of the grant.
+    private static func steppedIteratorStep(
+        sessions: any ModelSessionProviding,
+        lane: BatchLane,
+        box: UnsafeMutableSendableBox<SteppedPrefillState>,
+        parameters: GenerateParameters,
+        missingRemainder: String
+    ) async throws -> SteppedLoopInputs {
+        try await lane.engine.step(lane: lane.laneID, kind: .prefillChunk) { _ in
+            try await sessions.withSession { session in
+                guard let remainder = box.value.remainder else {
+                    throw AgentEngineError.generationFailed(missingRemainder)
+                }
+                var liveCache = box.value.cache
+                session.quantizeKVCache(&liveCache, parameters: parameters)
+                var iteratorParams = parameters
+                iteratorParams.kvBits = nil
+                let iterator = session.makeDecodeIterator(
+                    remainder: remainder,
+                    fullText: box.value.text,
+                    cache: liveCache,
+                    state: box.value.state,
+                    parameters: iteratorParams
+                )
+                return SteppedLoopInputs(
+                    iterator: iterator,
+                    configuration: session.configuration,
+                    tokenizer: session.tokenizer,
+                    liveCache: liveCache
+                )
+            }
+        }
+    }
+
+    /// The `.prefillFinished` progress event + the rolling FLOPs/s estimate
+    /// fold (slice #84) — one place for both generation arms. Tiny
+    /// residuals are timer noise, not throughput signal.
+    private static func recordPrefillFinished(
+        promptTokens: Int,
+        skippedTokens: Int,
+        prefillSeconds: TimeInterval,
+        flopProfile: ModelFlopProfile,
+        prefixCache: PrefixCacheManager,
+        progressHandler: ServerInferenceProgressHandler?
+    ) async {
+        let newTokensToPrefill = promptTokens - skippedTokens
+        await progressHandler?(
+            .prefillFinished(
+                .init(
+                    promptTokens: promptTokens,
+                    cachedTokens: skippedTokens,
+                    newTokensToPrefill: newTokensToPrefill,
+                    prefillMs: prefillSeconds * 1000
+                )))
+        if newTokensToPrefill >= 64, prefillSeconds > 0 {
+            let prefillFlops = EvictionPolicy.parentRelativeFlops(
+                nodeOffset: promptTokens,
+                parentOffset: skippedTokens,
+                profile: flopProfile
+            )
+            await MainActor.run {
+                prefixCache.recordPrefillMeasurement(
+                    flops: prefillFlops, seconds: prefillSeconds
+                )
+            }
+        }
+    }
+
+    /// Post-prefill snapshot bookkeeping shared by both generation arms:
+    /// split the driver's snapshots into stored checkpoints vs the
+    /// request-local transient boundary helpers, build the checkpoint
+    /// admission, and log each stored capture. Synchronous on purpose — the
+    /// monolithic arm calls it inside the Metal-affine session closure so
+    /// payload extraction (`MLXArray.asData()`) stays there, before the
+    /// later MainActor store hop.
+    private static func splitAndAdmitSnapshots(
+        _ snapshots: [HybridCacheSnapshot],
+        plan: PrefillPlan,
+        keySpace: CacheKeySpace,
+        partitionKey: CachePartitionKey,
+        requestID: UUID,
+        ssdEnabled: Bool,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) -> (
+        admission: SnapshotAdmission?,
+        lastMessageBoundary: HybridCacheSnapshot?,
+        lastUserBoundary: HybridCacheSnapshot?
+    ) {
+        let transientOffsets = plan.transientCheckpointOffsets
+        var capturedSnapshots: [HybridCacheSnapshot] = []
+        var transientSnapshots: [Int: HybridCacheSnapshot] = [:]
+        for snapshot in snapshots {
+            if transientOffsets.contains(snapshot.tokenOffset) {
+                transientSnapshots[snapshot.tokenOffset] = snapshot
+            } else {
+                capturedSnapshots.append(snapshot)
+            }
+        }
+        func boundarySnapshot(at offset: Int?) -> HybridCacheSnapshot? {
+            offset.flatMap { offset in
+                transientSnapshots[offset]
+                    ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
+            }
+        }
+        let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
+            capturedSnapshots,
+            ssdEnabled: ssdEnabled
+        )
+        let admission = SnapshotAdmission.checkpoints(
+            fullPromptTokens: keySpace.keyPath,
+            candidates: checkpointCandidates,
+            partitionKey: partitionKey,
+            requestID: requestID
+        )
+        for snapshot in capturedSnapshots {
+            diagnostics.log(
+                PrefixCacheDiagnostics.CaptureEvent(
+                    offset: snapshot.tokenOffset,
+                    checkpointType: snapshot.checkpointType,
+                    bytes: snapshot.memoryBytes,
+                    duringPrefill: true,
+                    source: "prefill"
+                ))
+        }
+        return (
+            admission: admission,
+            lastMessageBoundary: boundarySnapshot(at: plan.transientBoundaries.lastMessage),
+            lastUserBoundary: boundarySnapshot(at: plan.transientBoundaries.lastUser)
+        )
+    }
+
     /// Startup-step product for the stepped pool path — everything the
     /// chunked prefill and the iterator step need, produced under one
     /// granted startup step. `@unchecked Sendable` via temporal exclusivity
     /// (boxed hand-off between granted steps).
     nonisolated private struct PoolStartupCarry: @unchecked Sendable {
-        let fullInput: LMInput
         let fullTokens: [Int]
         let fullTokenCount: Int
         let tokenNDim: Int
@@ -2589,7 +2686,6 @@ nonisolated final class ServerCompletion {
 
                 return UnsafeSendableBox(
                     PoolStartupCarry(
-                        fullInput: fullInput,
                         fullTokens: fullTokens,
                         fullTokenCount: fullTokenCount,
                         tokenNDim: tokenNDim,
@@ -2628,42 +2724,18 @@ nonisolated final class ServerCompletion {
                 state: carry.initialState,
                 storageGate: prefixCache.storageActivityGate
             ))
-        let iteratorBox: UnsafeMutableSendableBox<StateThreadedTokenIterator?> =
-            UnsafeMutableSendableBox(nil)
-        let finalCacheBox: UnsafeMutableSendableBox<[any KVCache]> =
-            UnsafeMutableSendableBox(carry.cache)
-        let loopInputs: UnsafeSendableBox<(ModelConfiguration, any MLXLMCommon.Tokenizer)>
+        let loopInputs: SteppedLoopInputs
         do {
             try await Self.runSteppedPrefill(
                 sessions: sessions, lane: lane, box: prefillBox
             )
-            loopInputs = try await lane.engine.step(
-                lane: lane.laneID, kind: .prefillChunk
-            ) { _ in
-                try await sessions.withSession { session in
-                    guard let remainder = prefillBox.value.remainder else {
-                        throw AgentEngineError.generationFailed(
-                            "stepped prefill finished without a prime remainder"
-                        )
-                    }
-                    var liveCache = prefillBox.value.cache
-                    session.quantizeKVCache(&liveCache, parameters: parameters)
-                    var iteratorParams = parameters
-                    iteratorParams.kvBits = nil
-                    let iterator = session.makeDecodeIterator(
-                        remainder: remainder,
-                        fullText: LMInput.Text(
-                            tokens: carry.suffixText.tokens, mask: nil),
-                        cache: liveCache,
-                        state: prefillBox.value.state,
-                        parameters: iteratorParams
-                    )
-                    iteratorBox.value = iterator
-                    finalCacheBox.value = liveCache
-                    return UnsafeSendableBox(
-                        (session.configuration, session.tokenizer))
-                }
-            }
+            loopInputs = try await Self.steppedIteratorStep(
+                sessions: sessions,
+                lane: lane,
+                box: prefillBox,
+                parameters: parameters,
+                missingRemainder: "stepped prefill finished without a prime remainder"
+            )
         } catch is CancellationError {
             // **Salvage-on-cancel** (issue #97), stepped form: the client is
             // gone mid-prefill. The cancelled task can never be granted a
@@ -2683,87 +2755,37 @@ nonisolated final class ServerCompletion {
             }
             throw CancellationError()
         }
-        guard let iterator = iteratorBox.value else {
-            throw AgentEngineError.generationFailed(
-                "stepped prefill produced no decode iterator"
-            )
-        }
 
         let prefillMs = Date.timeIntervalSinceReferenceDate - carry.prefillStartedAt
         let skippedTokens = carry.plan.prefillBaseOffset
-        let newTokensToPrefill = carry.fullTokenCount - skippedTokens
-        await progressHandler?(
-            .prefillFinished(
-                .init(
-                    promptTokens: carry.fullTokenCount,
-                    cachedTokens: skippedTokens,
-                    newTokensToPrefill: newTokensToPrefill,
-                    prefillMs: prefillMs * 1000
-                )))
-        if newTokensToPrefill >= 64, prefillMs > 0 {
-            let prefillFlops = EvictionPolicy.parentRelativeFlops(
-                nodeOffset: carry.fullTokenCount,
-                parentOffset: skippedTokens,
-                profile: carry.flopProfile
-            )
-            await MainActor.run {
-                prefixCache.recordPrefillMeasurement(
-                    flops: prefillFlops, seconds: prefillMs
-                )
-            }
-        }
+        await Self.recordPrefillFinished(
+            promptTokens: carry.fullTokenCount,
+            skippedTokens: skippedTokens,
+            prefillSeconds: prefillMs,
+            flopProfile: carry.flopProfile,
+            prefixCache: prefixCache,
+            progressHandler: progressHandler
+        )
 
-        // Split captured snapshots into stored checkpoints vs the transient
-        // boundary helpers — same bookkeeping as the monolithic arm.
-        let transientOffsets = carry.plan.transientCheckpointOffsets
-        var capturedSnapshots: [HybridCacheSnapshot] = []
-        var transientSnapshots: [Int: HybridCacheSnapshot] = [:]
-        for snapshot in prefillBox.value.snapshots {
-            if transientOffsets.contains(snapshot.tokenOffset) {
-                transientSnapshots[snapshot.tokenOffset] = snapshot
-            } else {
-                capturedSnapshots.append(snapshot)
-            }
-        }
-        let transientLastMessageBoundarySnapshot = carry.plan.transientBoundaries
-            .lastMessage
-            .flatMap { offset in
-                transientSnapshots[offset]
-                    ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
-            }
-        let transientLastUserBoundarySnapshot = carry.plan.transientBoundaries.lastUser
-            .flatMap { offset in
-                transientSnapshots[offset]
-                    ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
-            }
-        let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
-            capturedSnapshots,
-            ssdEnabled: ssdEnabled
-        )
-        let snapshotAdmission = SnapshotAdmission.checkpoints(
-            fullPromptTokens: carry.keySpace.keyPath,
-            candidates: checkpointCandidates,
+        // Same bookkeeping as the monolithic arm — still on the Metal-affine
+        // actor, between granted steps.
+        let bookkeeping = Self.splitAndAdmitSnapshots(
+            prefillBox.value.snapshots,
+            plan: carry.plan,
+            keySpace: carry.keySpace,
             partitionKey: carry.partitionKey,
-            requestID: requestID
+            requestID: requestID,
+            ssdEnabled: ssdEnabled,
+            diagnostics: diagnosticsContext
         )
-        for snapshot in capturedSnapshots {
-            diagnosticsContext.log(
-                PrefixCacheDiagnostics.CaptureEvent(
-                    offset: snapshot.tokenOffset,
-                    checkpointType: snapshot.checkpointType,
-                    bytes: snapshot.memoryBytes,
-                    duringPrefill: true,
-                    source: "prefill"
-                ))
-        }
 
         // The engine-stepped token loop: decode grants interleave this
         // lane's tokens with its siblings'.
         let (stream, task) = TokenGenerationLoop.start(
             promptTokenCount: carry.fullTokenCount,
-            modelConfiguration: loopInputs.value.0,
-            tokenizer: loopInputs.value.1,
-            iterator: iterator,
+            modelConfiguration: loopInputs.configuration,
+            tokenizer: loopInputs.tokenizer,
+            iterator: loopInputs.iterator,
             engine: lane.engine,
             laneID: lane.laneID,
             tools: canonicalTools
@@ -2772,7 +2794,7 @@ nonisolated final class ServerCompletion {
         return HTTPPrefixCacheGeneration(
             stream: stream,
             completion: task,
-            finalCache: finalCacheBox.value,
+            finalCache: loopInputs.liveCache,
             diagnosticsContext: diagnosticsContext,
             lookupMs: carry.lookupMs,
             restoreMs: carry.restoreMs,
@@ -2787,11 +2809,11 @@ nonisolated final class ServerCompletion {
             keySpace: carry.keySpace,
             unkeyedReason: nil,
             seedsPositionAnchor: carry.seedsPositionAnchor,
-            snapshotAdmission: snapshotAdmission,
+            snapshotAdmission: bookkeeping.admission,
             ssdEnabled: ssdEnabled,
             partitionKey: carry.partitionKey,
-            transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
-            transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
+            transientLastMessageBoundarySnapshot: bookkeeping.lastMessageBoundary,
+            transientLastUserBoundarySnapshot: bookkeeping.lastUserBoundary,
             prefillStepSize: parameters.prefillStepSize,
             tokenNDim: carry.tokenNDim
         )
@@ -2850,42 +2872,19 @@ nonisolated final class ServerCompletion {
         let box = UnsafeMutableSendableBox(seeded)
         try await runSteppedPrefill(sessions: sessions, lane: lane, box: box)
 
-        let iteratorBox: UnsafeMutableSendableBox<StateThreadedTokenIterator?> =
-            UnsafeMutableSendableBox(nil)
-        let loopInputs = try await lane.engine.step(
-            lane: lane.laneID, kind: .prefillChunk
-        ) { _ -> UnsafeSendableBox<(ModelConfiguration, any MLXLMCommon.Tokenizer)> in
-            try await sessions.withSession { session in
-                guard let remainder = box.value.remainder else {
-                    throw AgentEngineError.generationFailed(
-                        "stepped continuation finished without a prime remainder"
-                    )
-                }
-                var cache = box.value.cache
-                session.quantizeKVCache(&cache, parameters: parameters)
-                var iteratorParams = parameters
-                iteratorParams.kvBits = nil
-                iteratorBox.value = session.makeDecodeIterator(
-                    remainder: remainder,
-                    fullText: box.value.text,
-                    cache: cache,
-                    state: box.value.state,
-                    parameters: iteratorParams
-                )
-                return UnsafeSendableBox((session.configuration, session.tokenizer))
-            }
-        }
-        guard let iterator = iteratorBox.value else {
-            throw AgentEngineError.generationFailed(
-                "stepped continuation produced no decode iterator"
-            )
-        }
+        let loopInputs = try await steppedIteratorStep(
+            sessions: sessions,
+            lane: lane,
+            box: box,
+            parameters: parameters,
+            missingRemainder: "stepped continuation finished without a prime remainder"
+        )
 
         let (stream, completion) = TokenGenerationLoop.start(
             promptTokenCount: combined.count,
-            modelConfiguration: loopInputs.value.0,
-            tokenizer: loopInputs.value.1,
-            iterator: iterator,
+            modelConfiguration: loopInputs.configuration,
+            tokenizer: loopInputs.tokenizer,
+            iterator: loopInputs.iterator,
             engine: lane.engine,
             laneID: lane.laneID,
             tools: canonicalTools

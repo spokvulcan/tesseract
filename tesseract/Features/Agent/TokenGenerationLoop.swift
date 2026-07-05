@@ -153,17 +153,10 @@ nonisolated enum TokenGenerationLoop {
     ) -> (AsyncStream<TokenGeneration>, Task<Void, Never>) {
         let (stream, continuation) = AsyncStream<TokenGeneration>.makeStream()
 
-        var stopTokenIds = modelConfiguration.eosTokenIds
-        if let tokenizerEOS = tokenizer.eosTokenId {
-            stopTokenIds.insert(tokenizerEOS)
-        }
-        for token in modelConfiguration.extraEOSTokens {
-            if let id = tokenizer.convertTokenToId(token) {
-                stopTokenIds.insert(id)
-            }
-        }
+        let resolvedStopTokenIds = Self.stopTokenIds(
+            modelConfiguration: modelConfiguration, tokenizer: tokenizer
+        )
         let unknownTokenId = tokenizer.unknownTokenId
-        let resolvedStopTokenIds = stopTokenIds
 
         let task = Task {
             var start = Date.timeIntervalSinceReferenceDate
@@ -204,22 +197,15 @@ nonisolated enum TokenGenerationLoop {
             }
 
             let stats = iteratorStats()
-            let resolvedStopReason: GenerateStopReason =
-                stopReason
-                ?? {
-                    if Task.isCancelled { return .cancelled }
-                    if let maxTokens = stats.maxTokens, stats.tokenCount >= maxTokens {
-                        return .length
-                    }
-                    return .cancelled
-                }()
-
-            let info = GenerateCompletionInfo(
+            let info = Self.completionInfo(
                 promptTokenCount: promptTokenCount,
-                generationTokenCount: tokenCount,
-                promptTime: promptTime + stats.promptPrefillTime,
-                generationTime: Date.timeIntervalSinceReferenceDate - start,
-                stopReason: resolvedStopReason
+                generatedTokenCount: tokenCount,
+                promptTime: promptTime,
+                generationStart: start,
+                loopStopReason: stopReason,
+                iteratorTokenCount: stats.tokenCount,
+                iteratorMaxTokens: stats.maxTokens,
+                iteratorPrefillTime: stats.promptPrefillTime
             )
             _ = continuation.yield(.info(info))
 
@@ -260,15 +246,9 @@ nonisolated enum TokenGenerationLoop {
     ) -> (AsyncStream<TokenGeneration>, Task<Void, Never>) {
         let (stream, continuation) = AsyncStream<TokenGeneration>.makeStream()
 
-        var stopTokenIds = modelConfiguration.eosTokenIds
-        if let tokenizerEOS = tokenizer.eosTokenId {
-            stopTokenIds.insert(tokenizerEOS)
-        }
-        for token in modelConfiguration.extraEOSTokens {
-            if let id = tokenizer.convertTokenToId(token) {
-                stopTokenIds.insert(id)
-            }
-        }
+        let stopTokenIds = Self.stopTokenIds(
+            modelConfiguration: modelConfiguration, tokenizer: tokenizer
+        )
         let unknownTokenId = tokenizer.unknownTokenId
 
         let iteratorBox = UnsafeSendableBox(iterator)
@@ -301,22 +281,15 @@ nonisolated enum TokenGenerationLoop {
                 }
             }
 
-            let resolvedStopReason: GenerateStopReason =
-                stopReason
-                ?? {
-                    if Task.isCancelled { return .cancelled }
-                    if let maxTokens = iterator.maxTokens, iterator.tokenCount >= maxTokens {
-                        return .length
-                    }
-                    return .cancelled
-                }()
-
-            let info = GenerateCompletionInfo(
+            let info = Self.completionInfo(
                 promptTokenCount: promptTokenCount,
-                generationTokenCount: tokenCount,
-                promptTime: promptTime + iterator.promptPrefillTime,
-                generationTime: Date.timeIntervalSinceReferenceDate - start,
-                stopReason: resolvedStopReason
+                generatedTokenCount: tokenCount,
+                promptTime: promptTime,
+                generationStart: start,
+                loopStopReason: stopReason,
+                iteratorTokenCount: iterator.tokenCount,
+                iteratorMaxTokens: iterator.maxTokens,
+                iteratorPrefillTime: iterator.promptPrefillTime
             )
             _ = continuation.yield(.info(info))
 
@@ -333,6 +306,56 @@ nonisolated enum TokenGenerationLoop {
         }
 
         return (stream, task)
+    }
+
+    /// The combined stop-token set both raw loops share: the
+    /// configuration's `eosTokenIds` + the tokenizer's EOS +
+    /// `extraEOSTokens`.
+    private static func stopTokenIds(
+        modelConfiguration: ModelConfiguration, tokenizer: any Tokenizer
+    ) -> Set<Int> {
+        var stopTokenIds = modelConfiguration.eosTokenIds
+        if let tokenizerEOS = tokenizer.eosTokenId {
+            stopTokenIds.insert(tokenizerEOS)
+        }
+        for token in modelConfiguration.extraEOSTokens {
+            if let id = tokenizer.convertTokenToId(token) {
+                stopTokenIds.insert(id)
+            }
+        }
+        return stopTokenIds
+    }
+
+    /// Both raw loops' authoritative `.info`: resolves the stop reason
+    /// (length vs cancelled when the loop itself didn't decide) and splits
+    /// prompt time from generation time. Synchronous — called inside the
+    /// loop task, so `Task.isCancelled` reflects the loop's own task.
+    private static func completionInfo(
+        promptTokenCount: Int,
+        generatedTokenCount: Int,
+        promptTime: TimeInterval,
+        generationStart: TimeInterval,
+        loopStopReason: GenerateStopReason?,
+        iteratorTokenCount: Int,
+        iteratorMaxTokens: Int?,
+        iteratorPrefillTime: TimeInterval
+    ) -> GenerateCompletionInfo {
+        let stopReason: GenerateStopReason =
+            loopStopReason
+            ?? {
+                if Task.isCancelled { return .cancelled }
+                if let maxTokens = iteratorMaxTokens, iteratorTokenCount >= maxTokens {
+                    return .length
+                }
+                return .cancelled
+            }()
+        return GenerateCompletionInfo(
+            promptTokenCount: promptTokenCount,
+            generationTokenCount: generatedTokenCount,
+            promptTime: promptTime + iteratorPrefillTime,
+            generationTime: Date.timeIntervalSinceReferenceDate - generationStart,
+            stopReason: stopReason
+        )
     }
 
     /// Map an upstream raw-token stream into ``RawGeneration`` events.

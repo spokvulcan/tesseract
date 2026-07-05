@@ -76,8 +76,6 @@ final class DependencyContainer: ObservableObject {
     lazy var batchEngine: BatchEngine = {
         let arbiter = inferenceArbiter
         let engine = agentEngine
-        let settings = settingsManager
-        let downloads = modelDownloadManager
         let cacheAdmin = llmActor.prefixCacheAdmin
         return BatchEngine(
             leaseRunner: { override, vision, body in
@@ -88,22 +86,17 @@ final class DependencyContainer: ObservableObject {
                 }
             },
             leaseWaiters: arbiter.leaseWaiters,
-            // Mirrors `ensureLoaded`'s target resolution + the ADR-0008
-            // satisfaction rule, so "oracle says satisfied" and "the
-            // acquisition would not reload" can never disagree.
+            // `ensureLoaded`'s own target resolution + ADR-0008 satisfaction
+            // rule, so "oracle says satisfied" and "the acquisition would
+            // not reload" can never disagree.
             demandSatisfied: { demand in
                 guard engine.isModelLoaded, let loaded = arbiter.loadedLLMState
                 else { return false }
-                let targetModelID =
-                    demand.modelIDOverride ?? settings.selectedAgentModelID
-                let desired = InferenceArbiter.LoadedLLMState(
-                    modelID: targetModelID,
-                    visionMode: demand.vision.wantsVision(
-                        useVisionWhenAvailable: settings.useVisionWhenAvailable,
-                        isVisionCapable: downloads.isVisionCapable(targetModelID)
-                    )
-                )
-                return loaded.satisfies(desired)
+                return loaded.satisfies(
+                    arbiter.desiredLLMState(
+                        modelIDOverride: demand.modelIDOverride,
+                        vision: demand.vision
+                    ))
             },
             laneBudget: { cacheAdmin.batchLaneBudget() }
         )
