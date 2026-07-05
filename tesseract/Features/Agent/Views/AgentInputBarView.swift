@@ -47,6 +47,10 @@ struct AgentInputBarView: View {
                 imageHintBanner
             }
 
+            if let notice = coordinator.imageDraft.attachmentNotice {
+                attachmentNoticeBanner(notice)
+            }
+
             ZStack(alignment: .topLeading) {
                 if inputText.isEmpty && coordinator.imageDraft.pendingImages.isEmpty {
                     Text("Message…")
@@ -61,13 +65,14 @@ struct AgentInputBarView: View {
                     text: $inputText,
                     dynamicHeight: $textHeight,
                     onCommit: { handleCommit() },
-                    onImagePaste: { attachments in
-                        // When the selected model can't see images, surface the
-                        // one-tap switch hint instead of silently dropping (#115).
-                        guard imageInputAvailable else {
-                            coordinator.imageDraft.showImageSwitchHint = true; return
-                        }
-                        coordinator.imageDraft.attachImages(attachments)
+                    // Every Image Gesture (paste or composer drag) resolves on
+                    // the draft controller: availability hint, cap, and
+                    // rejection feedback all live there (issue #167).
+                    onImageGesture: { payload in
+                        coordinator.imageDraft.handleGesture(payload)
+                    },
+                    onImageDragTargeted: { targeted in
+                        coordinator.imageDraft.isDropTargeted = targeted
                     },
                     isEnabled:
                         !(coordinator.voiceInput.voiceState == .recording
@@ -382,25 +387,46 @@ struct AgentInputBarView: View {
 
     // MARK: - Image Switch Hint (slice #115)
 
-    @ViewBuilder
     private var imageHintBanner: some View {
+        composerBanner(
+            icon: "eye.slash", message: visionSwitch.message,
+            actionTitle: visionSwitch.actionTitle, action: applyVisionSwitch
+        ) {
+            coordinator.imageDraft.showImageSwitchHint = false
+        }
+    }
+
+    /// The transient Image Gesture feedback line (issue #167): what a paste,
+    /// drop, or pick could not attach — cap trims, oversize files, unreadable
+    /// bytes. Same slot and chrome as the switch-model hint.
+    private func attachmentNoticeBanner(_ notice: String) -> some View {
+        composerBanner(icon: "exclamationmark.circle", message: notice) {
+            coordinator.imageDraft.attachmentNotice = nil
+        }
+    }
+
+    /// Shared chrome for the composer's hint/notice slot: icon, message,
+    /// optional action, dismiss.
+    private func composerBanner(
+        icon: String, message: String,
+        actionTitle: String? = nil, action: @escaping () -> Void = {},
+        onDismiss: @escaping () -> Void
+    ) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "eye.slash")
+            Image(systemName: icon)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-            Text(visionSwitch.message)
+            Text(message)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            if let title = visionSwitch.actionTitle {
-                Button(title) { applyVisionSwitch() }
+            if let actionTitle {
+                Button(actionTitle, action: action)
                     .buttonStyle(.borderless)
                     .font(.system(size: 12, weight: .medium))
             }
-            Button {
-                coordinator.imageDraft.showImageSwitchHint = false
-            } label: {
+            Button(action: onDismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.tertiary)
@@ -483,16 +509,11 @@ struct AgentInputBarView: View {
         panel.message = "Select images to attach"
         panel.begin { response in
             guard response == .OK else { return }
-            let attachments = panel.urls.compactMap { url -> ImageAttachment? in
-                guard let data = try? Data(contentsOf: url) else { return nil }
-                let uti =
-                    UTType(filenameExtension: url.pathExtension)?.identifier ?? url.pathExtension
-                return try? ImageIngest.ingest(
-                    data: data, typeIdentifier: uti, filename: url.lastPathComponent
-                ).get()
-            }
+            // Same funnel as paste/drop, so cap trims and unreadable files get
+            // the same composer notice (issue #167).
+            let payload = PasteboardImageReader.ingest(fileURLs: panel.urls)
             DispatchQueue.main.async {
-                coordinator.imageDraft.attachImages(attachments)
+                coordinator.imageDraft.handleGesture(payload)
             }
         }
     }

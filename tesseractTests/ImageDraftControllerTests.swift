@@ -116,4 +116,99 @@ struct ImageDraftControllerTests {
         #expect(controller.showImageSwitchHint == true)
         #expect(controller.pendingImages.isEmpty)
     }
+
+    // MARK: - Image Gesture resolution (issue #167)
+
+    @Test
+    func gestureOnUnavailableModelSurfacesHintAndAttachesNothing() {
+        let controller = ImageDraftController(conversationImages: { [] })
+        controller.imageInputAvailable = false
+
+        controller.handleGesture(ImageGesturePayload(attachments: [makeAttachment(byte: 1)]))
+
+        #expect(controller.pendingImages.isEmpty)
+        #expect(controller.showImageSwitchHint == true)
+        #expect(controller.attachmentNotice == nil)
+    }
+
+    @Test
+    func gestureAttachesUnderCapWithoutANotice() {
+        let controller = ImageDraftController(conversationImages: { [] })
+        controller.imageInputAvailable = true
+        let images = [makeAttachment(byte: 1), makeAttachment(byte: 2)]
+
+        controller.handleGesture(ImageGesturePayload(attachments: images))
+
+        #expect(controller.pendingImages.map(\.id) == images.map(\.id))
+        #expect(controller.attachmentNotice == nil)
+        #expect(controller.showImageSwitchHint == false)
+    }
+
+    @Test
+    func gestureOverCapAttachesWhatFitsAndReportsTheTrim() {
+        let controller = ImageDraftController(conversationImages: { [] })
+        controller.imageInputAvailable = true
+        let images = (0..<10).map { makeAttachment(byte: UInt8($0)) }
+
+        controller.handleGesture(ImageGesturePayload(attachments: images))
+
+        #expect(controller.pendingImages.count == ImageDraftController.maxPendingImages)
+        let notice = controller.attachmentNotice
+        #expect(notice?.contains("8 of 10") == true)
+    }
+
+    @Test
+    func gestureWithRejectionsReportsThemInTheNotice() {
+        let controller = ImageDraftController(conversationImages: { [] })
+        controller.imageInputAvailable = true
+
+        controller.handleGesture(
+            ImageGesturePayload(
+                attachments: [makeAttachment(byte: 1)],
+                rejections: [.oversize(bytes: 20_000_000), .notAnImage]
+            ))
+
+        #expect(controller.pendingImages.count == 1)
+        let notice = controller.attachmentNotice
+        #expect(notice?.contains("10 MB") == true)
+        #expect(notice?.contains("couldn't be read") == true)
+    }
+
+    @Test
+    func emptyGesturePayloadIsANoOp() {
+        let controller = ImageDraftController(conversationImages: { [] })
+        controller.imageInputAvailable = false
+
+        controller.handleGesture(ImageGesturePayload())
+
+        #expect(controller.showImageSwitchHint == false)
+        #expect(controller.attachmentNotice == nil)
+    }
+
+    @Test
+    func gestureNoticeIsNilWhenEverythingAttached() {
+        #expect(
+            ImageDraftController.gestureNotice(requested: 3, attached: 3, rejections: []) == nil)
+    }
+
+    @Test
+    func gestureNoticeReportsFullCapWhenNothingFit() {
+        let notice = ImageDraftController.gestureNotice(
+            requested: 2, attached: 0, rejections: [])
+        #expect(notice?.contains("limit reached") == true)
+    }
+
+    @Test
+    func resetClearsGestureFeedbackState() {
+        let controller = ImageDraftController(conversationImages: { [] })
+        controller.imageInputAvailable = true
+        controller.isDropTargeted = true
+        controller.handleGesture(ImageGesturePayload(rejections: [.notAnImage]))
+        #expect(controller.attachmentNotice != nil)
+
+        controller.reset()
+
+        #expect(controller.attachmentNotice == nil)
+        #expect(controller.isDropTargeted == false)
+    }
 }

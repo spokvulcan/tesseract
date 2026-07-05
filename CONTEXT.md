@@ -723,6 +723,19 @@ _Avoid_: image input (the broader UI affordance/capability concept), image cache
 (the server-side **Image Digest** cache path), Quick Look host (the AppKit bridge it
 feeds).
 
+**Image Gesture**:
+An inbound paste or drop into the agent chat whose payload carries image content —
+one concept regardless of delivery (⌘V, drag onto the composer, drag onto the
+window) or source form (copied file, raw bytes, decoded image, file promise).
+Keyed on *content, not outcome*: once the payload holds an image, the gesture
+resolves as an image action — attaching what it can and voicing failures through
+composer feedback — and never falls back to inserting the payload's textual
+sidecar (file name, path, or source URL). A payload with no image content is not
+an Image Gesture and takes the ordinary text path.
+_Avoid_: image paste (one delivery of several), mixed text+image paste (retired —
+the sidecar text of an Image Gesture is never inserted), drop handling (delivery
+mechanism, not the concept).
+
 **System Prompt Inspector**:
 The system-prompt transparency module: it renders the *already-assembled* prompt
 into raw ChatML plus a token count, on demand. Distinct from the prompt builder,
