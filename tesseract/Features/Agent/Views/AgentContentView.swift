@@ -8,8 +8,6 @@ struct AgentContentView: View {
     @State private var inputText = ""
     @State private var showingHistory = false
     @State private var speakingMessageID: UUID?
-    /// True while an image-bearing drag hovers the window (slice #117).
-    @State private var isDropTargeted = false
     @Environment(SettingsManager.self) private var settings
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
 
@@ -20,7 +18,11 @@ struct AgentContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        // The drop-target flag lives on the draft controller so the composer
+        // text view's AppKit drag tracking drives the same overlay (#167).
+        @Bindable var imageDraft = coordinator.imageDraft
+
+        return VStack(spacing: 0) {
             AgentConversationListView(
                 speakingMessageID: $speakingMessageID,
                 isSpeechActive: isSpeechActive
@@ -87,11 +89,11 @@ struct AgentContentView: View {
         // Full-window image drop (slice #117): dropping an image anywhere lands it
         // in the composer's pending strip. `isTargeted` only flips for drags whose
         // items conform to `.image`, so non-image drags never dim the window.
-        .onDrop(of: [.image], isTargeted: $isDropTargeted) { providers in
+        .onDrop(of: [.image], isTargeted: $imageDraft.isDropTargeted) { providers in
             coordinator.imageDraft.handleWindowImageDrop(providers)
         }
         .overlay {
-            if isDropTargeted {
+            if imageDraft.isDropTargeted {
                 ZStack {
                     Color.black.opacity(0.4)
                     VStack(spacing: 12) {
@@ -109,7 +111,7 @@ struct AgentContentView: View {
                 .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
+        .animation(.easeInOut(duration: 0.15), value: imageDraft.isDropTargeted)
         .onChange(of: speechCoordinator.state) { _, newState in
             if case .idle = newState { speakingMessageID = nil }
         }

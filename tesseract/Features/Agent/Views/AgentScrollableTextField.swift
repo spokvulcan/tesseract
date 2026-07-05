@@ -6,7 +6,12 @@ struct AgentScrollableTextField: NSViewRepresentable {
     @Binding var text: String
     @Binding var dynamicHeight: CGFloat
     var onCommit: () -> Void
-    var onImagePaste: (([ImageAttachment]) -> Void)?
+    /// Delivers every Image Gesture payload (paste or composer drag) — the
+    /// receiver decides availability, capping, and feedback (issue #167).
+    var onImageGesture: ((ImageGesturePayload) -> Void)?
+    /// Mirrors an image-bearing drag hovering the composer, so the same
+    /// full-window drop overlay shows over the text view too.
+    var onImageDragTargeted: ((Bool) -> Void)?
     var isEnabled: Bool = true
     /// Return true if the arrow key was consumed (e.g. by popup navigation).
     var onArrowUp: (() -> Bool)?
@@ -49,6 +54,9 @@ struct AgentScrollableTextField: NSViewRepresentable {
             width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
 
+        // Pick up the image/promise drag types `acceptableDragTypes` adds.
+        textView.updateDragTypeRegistration()
+
         // Initial height calculation
         DispatchQueue.main.async {
             context.coordinator.recalculateHeight(textView: textView)
@@ -58,6 +66,8 @@ struct AgentScrollableTextField: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+
         // AppKit guarantees documentView is the NSTextView we installed.
         // swiftlint:disable:next force_cast
         let textView = nsView.documentView as! NSTextView
@@ -137,87 +147,113 @@ struct AgentScrollableTextField: NSViewRepresentable {
             return false
         }
 
-        /// Reads any images from the pasteboard (the full PNG/JPEG/TIFF/GIF/WebP/
-        /// HEIC set, plus a decoded `NSImage` or copied image file-URL) via the
-        /// shared `ImageIngest` core and forwards them. Returns whether images were
-        /// found; the caller always falls through to `super.paste` so a mixed
-        /// text+image clipboard pastes its text too (slice #115).
-        @discardableResult
-        func handleImagePaste() -> Bool {
-            guard let onImagePaste = parent.onImagePaste else { return false }
-            let attachments = PasteboardImageReader.read(NSPasteboard.general)
-            guard !attachments.isEmpty else { return false }
-            onImagePaste(attachments)
+        /// The Image Gesture entry point (issue #167): if the pasteboard
+        /// carries image content, the gesture resolves as an image action —
+        /// read it (async only for file promises) and forward the payload —
+        /// and the caller must NOT fall through to text insertion, even when
+        /// the pasteboard also carries a textual sidecar (a copied file's
+        /// name, a browser image's source URL) and even when nothing attaches
+        /// (availability and rejection feedback belong to the receiver).
+        /// Returns whether the gesture was claimed.
+        func handleImageGesture(from pasteboard: NSPasteboard) -> Bool {
+            guard parent.onImageGesture != nil else { return false }
+            guard PasteboardImageReader.containsImageContent(pasteboard) else { return false }
+            Task { @MainActor in
+                let payload = await PasteboardImageReader.read(pasteboard)
+                guard !payload.isEmpty else { return }
+                parent.onImageGesture?(payload)
+            }
             return true
+        }
+
+        func setImageDragTargeted(_ targeted: Bool) {
+            parent.onImageDragTargeted?(targeted)
         }
     }
 }
 
 // MARK: - ImagePasteTextView
 
-/// Custom NSTextView that intercepts paste to also attach image content.
+/// Custom NSTextView owning the composer's Image Gesture edges (issue #167):
+/// image-wins paste, ⌘V enablement for image-only pasteboards, and drag
+/// handling that mirrors the paste rule instead of inserting file paths.
 final class ImagePasteTextView: NSTextView {
     weak var coordinator: AgentScrollableTextField.Coordinator?
 
+    // MARK: Paste — image wins
+
     override func paste(_ sender: Any?) {
-        // Attach any images first, then always paste text. Image pasteboard data
-        // does not materialize as text, so a mixed clipboard yields both (#115).
-        coordinator?.handleImagePaste()
+        if coordinator?.handleImageGesture(from: .general) == true { return }
         super.paste(sender)
     }
-}
 
-// MARK: - Pasteboard Image Reader
+    override func pasteAsPlainText(_ sender: Any?) {
+        if coordinator?.handleImageGesture(from: .general) == true { return }
+        super.pasteAsPlainText(sender)
+    }
 
-/// The impure pasteboard edge for ⌘V (slice #115): pulls image content off an
-/// `NSPasteboard` and funnels each candidate through `ImageIngest`. Tries, in
-/// order, the richest source first: copied image *file* URLs (⌘C on a file in
-/// Finder), raw image data of a supported type, then a decoded `NSImage` (copied
-/// in Preview or a browser). The first source that yields attachments wins, so a
-/// single image never double-attaches.
-enum PasteboardImageReader {
-    static func read(_ pasteboard: NSPasteboard) -> [ImageAttachment] {
-        // 1. Image file URLs.
-        let urlOptions: [NSPasteboard.ReadingOptionKey: Any] = [
-            .urlReadingContentsConformToTypes: [UTType.image.identifier]
-        ]
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: urlOptions)
-            as? [URL],
-            !urls.isEmpty
+    /// A plain-text NSTextView disables ⌘V when the pasteboard has no text
+    /// representation, so a clipboard-only screenshot (⇧⌃⌘4) could never
+    /// paste — enable the paste actions whenever the pasteboard carries image
+    /// content.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)) || item.action == #selector(pasteAsPlainText(_:)),
+            PasteboardImageReader.containsImageContent(.general)
         {
-            let attachments = urls.compactMap { url -> ImageAttachment? in
-                guard let data = try? Data(contentsOf: url) else { return nil }
-                let uti =
-                    (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.identifier)
-                    ?? UTType(filenameExtension: url.pathExtension)?.identifier
-                    ?? url.pathExtension
-                return try? ImageIngest.ingest(
-                    data: data, typeIdentifier: uti, filename: url.lastPathComponent
-                ).get()
-            }
-            if !attachments.isEmpty { return attachments }
+            return true
         }
+        return super.validateUserInterfaceItem(item)
+    }
 
-        // 2. Raw image data of a supported type.
-        for utType in ImageIngest.supportedUTTypes {
-            let type = NSPasteboard.PasteboardType(utType.identifier)
-            if let data = pasteboard.data(forType: type),
-                let attachment = try? ImageIngest.ingest(
-                    data: data, typeIdentifier: utType.identifier, filename: "pasted-image"
-                ).get()
-            {
-                return [attachment]
-            }
+    // MARK: Drag — mirrors the paste rule
+
+    /// The image and file-promise types the stock plain-text view wouldn't
+    /// accept; text and non-image file drags keep the default behavior.
+    private static let imageDragTypes: [NSPasteboard.PasteboardType] =
+        ImageIngest.supportedUTTypes.map { NSPasteboard.PasteboardType($0.identifier) }
+        + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
+
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        super.acceptableDragTypes + Self.imageDragTypes
+    }
+
+    private func isImageGestureDrag(_ sender: any NSDraggingInfo) -> Bool {
+        PasteboardImageReader.containsImageContent(sender.draggingPasteboard)
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if isImageGestureDrag(sender) {
+            coordinator?.setImageDragTargeted(true)
+            return .copy
         }
+        return super.draggingEntered(sender)
+    }
 
-        // 3. Decoded image with no file backing.
-        if let image = NSImage(pasteboard: pasteboard),
-            let attachment = try? ImageIngest.ingest(image: image, filename: "pasted-image.png")
-                .get()
-        {
-            return [attachment]
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if isImageGestureDrag(sender) { return .copy }
+        return super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        coordinator?.setImageDragTargeted(false)
+        super.draggingExited(sender)
+    }
+
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        coordinator?.setImageDragTargeted(false)
+        super.draggingEnded(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if isImageGestureDrag(sender) { return true }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if isImageGestureDrag(sender) {
+            coordinator?.setImageDragTargeted(false)
+            return coordinator?.handleImageGesture(from: sender.draggingPasteboard) == true
         }
-
-        return []
+        return super.performDragOperation(sender)
     }
 }
