@@ -66,6 +66,10 @@ struct TesseractApp: App {
             Self.runHarness("Trace replay") {
                 try await TraceReplayRunner(arguments: args).run()
             }
+        } else if args.contains("--paged-kv-kernel-gate") {
+            Self.runHarness("Paged-KV kernel gate") {
+                try await PagedKVKernelGateRunner().run()
+            }
         }
     }
 
