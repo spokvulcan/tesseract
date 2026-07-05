@@ -23,6 +23,19 @@ nonisolated final class UnsafeSendableBox<T>: @unchecked Sendable {
     }
 }
 
+/// Mutable sibling of `UnsafeSendableBox` for state that must persist across
+/// Batch Engine step bodies (PRD #173) — e.g. the pool lane's decode
+/// iterator, mutated one granted step at a time. Safety argument is temporal
+/// exclusivity, same as the immutable box: the engine executes one grant at
+/// a time, so no two accesses ever overlap.
+nonisolated final class UnsafeMutableSendableBox<T>: @unchecked Sendable {
+    var value: T
+
+    init(_ value: T) {
+        self.value = value
+    }
+}
+
 /// Output of `ServerCompletion.makeHTTPPrefixCacheGeneration`. Bundles the
 /// lower-level MLX generation handles together so the module can drive the
 /// stream and capture the final KV cache after generation completes.
@@ -323,21 +336,20 @@ nonisolated final class ServerCompletion {
 
     private var _prefixCache: PrefixCacheManager?
 
-    /// Active-completion registry: the most recent cache-aware start, keyed
-    /// by its request ID so the natural-finish clear and the drain can tell
-    /// handles apart. The GPU lease — held across the whole HTTP request by
-    /// `CompletionHandler` — is the primary guard against unload/reload
-    /// interleaving; this handle is the in-actor backstop
-    /// `LLMActor.unloadModel` drains (cancel-and-await) before the container
-    /// is released, replacing the engine's old fire-and-forget cancel.
-    /// Replaced on each start; cleared by the drain and by the driving
-    /// task's natural-finish hook (`clearFinishedCompletion`), so an idle
-    /// server doesn't retain the finished handle — and through it the
-    /// final-cache handle's KV tensors — until the next request.
-    private var activeCompletion: (id: UUID, handle: HTTPServerGenerationStart)?
+    /// Active-completion registry: every live cache-aware start, keyed by
+    /// request ID (PRD #173 — overlapping Batch Engine lanes replaced the
+    /// single slot). The GPU lease — held by the Batch Engine while any lane
+    /// is live — is the primary guard against unload/reload interleaving;
+    /// these handles are the in-actor backstop `LLMActor.unloadModel` drains
+    /// (cancel-and-await, all of them) before the container is released.
+    /// Entries clear on the drain and on each driving task's natural-finish
+    /// hook (`clearFinishedCompletion`), so an idle server doesn't retain
+    /// finished handles — and through them the final-cache KV tensors —
+    /// until the next request.
+    private var activeCompletions: [UUID: HTTPServerGenerationStart] = [:]
 
     /// `start` calls still in their heavy restore/prefill phase, which runs
-    /// *before* the handle lands in `activeCompletion` — the drain cannot see
+    /// *before* the handle lands in `activeCompletions` — the drain cannot see
     /// those starts through the registry alone, so it parks on this count.
     private var inflightStartCount = 0
 
@@ -416,13 +428,11 @@ nonisolated final class ServerCompletion {
     /// an await cannot slip past the teardown.
     func drainActiveCompletion(on actor: isolated LLMActor) async {
         drainGeneration += 1
-        while inflightStartCount > 0 || activeCompletion != nil || speculativePrefill != nil {
-            if let active = activeCompletion {
-                active.handle.cancel()
-                await active.handle.waitForCompletion()
-                if activeCompletion?.id == active.id {
-                    activeCompletion = nil
-                }
+        while inflightStartCount > 0 || !activeCompletions.isEmpty || speculativePrefill != nil {
+            if let (id, handle) = activeCompletions.first {
+                handle.cancel()
+                await handle.waitForCompletion()
+                activeCompletions.removeValue(forKey: id)
             } else if speculativePrefill != nil {
                 await preemptSpeculativePrefill(on: actor)
             } else {
@@ -433,13 +443,11 @@ nonisolated final class ServerCompletion {
         }
     }
 
-    /// Natural-finish hook from the driving task: drop the registry slot for
+    /// Natural-finish hook from the driving task: drop the registry entry for
     /// `requestID` once its stream has fully completed. Keyed by request ID
-    /// so a newer registered start is never dropped by a stale finisher.
+    /// so no other lane's registered start is ever dropped by this finisher.
     func clearFinishedCompletion(_ requestID: UUID, on actor: isolated LLMActor) {
-        if activeCompletion?.id == requestID {
-            activeCompletion = nil
-        }
+        activeCompletions.removeValue(forKey: requestID)
     }
 
     // MARK: - Speculative Canonical Prefill lifecycle
@@ -461,7 +469,7 @@ nonisolated final class ServerCompletion {
         await preemptSpeculativePrefill(on: actor)
         guard drainGeneration == entryDrainGeneration,
             inflightStartCount == 0,
-            activeCompletion == nil,
+            activeCompletions.isEmpty,
             let prefixCache = _prefixCache
         else {
             seed.discard()
@@ -540,7 +548,8 @@ nonisolated final class ServerCompletion {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext = .canonical,
-        progressHandler: ServerInferenceProgressHandler? = nil
+        progressHandler: ServerInferenceProgressHandler? = nil,
+        lane: BatchLane? = nil
     ) async throws -> HTTPServerGenerationStart {
         Memory.cacheLimit = LLMActor.Defaults.cacheLimitMB * 1024 * 1024
 
@@ -576,18 +585,38 @@ nonisolated final class ServerCompletion {
         // Canonicalize tools once so the leaf re-tokenization uses the same dict
         // iteration order as the prefill path inside makeHTTPPrefixCacheGeneration.
         let canonicalTools = LLMActor.canonicalizeToolSpecs(toolSpecs)
-        let mlxStart = try await makeHTTPPrefixCacheGeneration(
-            on: actor,
-            sessions: sessions,
-            conversation: conversation,
-            requestID: requestID,
-            modelID: modelID,
-            parameters: genParams,
-            toolSpecs: canonicalTools,
-            prefixCache: prefixCache,
-            renderContext: renderContext,
-            progressHandler: progressHandler
-        )
+        // Pool lanes (PRD #173) run the engine-stepped arm — every GPU phase
+        // a granted step, so siblings interleave; exclusive lanes keep
+        // today's monolithic arm unchanged.
+        let mlxStart: HTTPPrefixCacheGeneration
+        if let lane {
+            mlxStart = try await makeSteppedPoolGeneration(
+                on: actor,
+                sessions: sessions,
+                lane: lane,
+                conversation: conversation,
+                requestID: requestID,
+                modelID: modelID,
+                parameters: genParams,
+                toolSpecs: canonicalTools,
+                prefixCache: prefixCache,
+                renderContext: renderContext,
+                progressHandler: progressHandler
+            )
+        } else {
+            mlxStart = try await makeHTTPPrefixCacheGeneration(
+                on: actor,
+                sessions: sessions,
+                conversation: conversation,
+                requestID: requestID,
+                modelID: modelID,
+                parameters: genParams,
+                toolSpecs: canonicalTools,
+                prefixCache: prefixCache,
+                renderContext: renderContext,
+                progressHandler: progressHandler
+            )
+        }
 
         // A drain ran while restore/prefill was suspended: the model is
         // tearing down, so stop the freshly started generation and bail
@@ -610,16 +639,34 @@ nonisolated final class ServerCompletion {
         let continuationInjection = safeguardConfig.continuationHandOff
         let continuationToolSpecs = canonicalTools
         let actorRef = actor
-        let continuationStarter: @Sendable (String) async throws -> HTTPServerRawGenerationStart = {
-            safePrefix in
-            try await actorRef.startThinkingContinuationFromTokens(
-                originalTokens: fullTokensForContinuation,
-                tokenNDim: tokenNDimForContinuation,
-                safeThinkingPrefix: safePrefix,
-                injection: continuationInjection,
-                toolSpecs: continuationToolSpecs,
-                parameters: parameters
-            )
+        // A pool lane's safeguard continuation must also run engine-stepped —
+        // the vendor continuation free-runs a plain decode task, which would
+        // overlap sibling grants.
+        let continuationStarter: @Sendable (String) async throws -> HTTPServerRawGenerationStart
+        if let lane {
+            continuationStarter = { safePrefix in
+                try await Self.startSteppedThinkingContinuation(
+                    sessions: sessions,
+                    lane: lane,
+                    originalTokens: fullTokensForContinuation,
+                    tokenNDim: tokenNDimForContinuation,
+                    safeThinkingPrefix: safePrefix,
+                    injection: continuationInjection,
+                    toolSpecs: continuationToolSpecs,
+                    parameters: genParams
+                )
+            }
+        } else {
+            continuationStarter = { safePrefix in
+                try await actorRef.startThinkingContinuationFromTokens(
+                    originalTokens: fullTokensForContinuation,
+                    tokenNDim: tokenNDimForContinuation,
+                    safeThinkingPrefix: safePrefix,
+                    injection: continuationInjection,
+                    toolSpecs: continuationToolSpecs,
+                    parameters: parameters
+                )
+            }
         }
 
         // The loop owns the cross-swap cancel invariant (which raw handle is live
@@ -680,7 +727,8 @@ nonisolated final class ServerCompletion {
                         seed: seed,
                         entryDrainGeneration: entryDrainGeneration
                     )
-                }
+                },
+                lane: lane
             )
         })
         let task = Task {
@@ -708,7 +756,7 @@ nonisolated final class ServerCompletion {
             },
             diagnostics: completionDiagnostics
         )
-        activeCompletion = (id: requestID, handle: completionStart)
+        activeCompletions[requestID] = completionStart
         return completionStart
     }
 
@@ -737,11 +785,27 @@ nonisolated final class ServerCompletion {
             @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
         continuation: AsyncThrowingStream<AgentGeneration, Error>.Continuation,
         finishHook: @escaping @Sendable () async -> Void,
-        scheduleSpeculative: @escaping @Sendable (SpeculativeCanonicalPrefill.Seed) async -> Void
+        scheduleSpeculative: @escaping @Sendable (SpeculativeCanonicalPrefill.Seed) async -> Void,
+        lane: BatchLane? = nil
     ) async {
         // swiftlint:enable function_body_length cyclomatic_complexity function_parameter_count
         let mlxStart = mlxStartBox.value
         let diagnosticsContext = mlxStart.diagnosticsContext
+
+        // Serialize a GPU-touching post-generation block against sibling
+        // lanes (PRD #173): a pool lane runs it inside a granted finish
+        // step — a sibling may be mid-decode — while the exclusive path
+        // (lane == nil) runs it directly, exactly as before. A throw means
+        // the lane was torn down mid-cancel; callers treat it as
+        // cancellation.
+        func gpuPhase<R: Sendable>(
+            _ body: @escaping @Sendable () async throws -> R
+        ) async throws -> R {
+            guard let lane else { return try await body() }
+            return try await lane.engine.step(lane: lane.laneID, kind: .finish) { _ in
+                try await body()
+            }
+        }
         // The accumulator fold and the `.toolCall → HTTPPrefixCacheToolCall`
         // projection are the server's per-event side effects (its sink); the
         // streaming spine itself lives in `GenerationStreamLoop`.
@@ -1036,34 +1100,39 @@ nonisolated final class ServerCompletion {
                         case .canonical: mlxStart.transientLastUserBoundarySnapshot
                         }
                     let leafTokenizer = try await sessions.withSession { $0.tokenizer }
-                    let leafPlan = await LeafAdmissionBuilder.plan(
-                        mode: boundaryMode,
-                        storedConversation: storedConversation,
-                        storedTokens: storedTokens,
-                        toolSpecs: canonicalTools,
-                        transientBoundary: transientBoundary,
-                        tokenizer: leafTokenizer,
-                        keySpace: mlxStart.keySpace,
-                        renderContext: renderContext,
-                        resolveBoundary: { tokens in
-                            // Drive Snapshot Resolution inside the Model
-                            // Session so the SSD `loadSync` stays
-                            // off-MainActor (ADR-0001). Session entry cannot
-                            // fail with a non-throwing body; the hypothetical
-                            // failure degrades to "no boundary snapshot".
-                            let resolved = try? await sessions.withSession { _ in
-                                await prefixCache.resolve(
-                                    tokens: tokens,
-                                    promptTokenCount: tokens.count,
-                                    partitionKey: mlxStart.partitionKey,
-                                    modelFingerprint: mlxStart.partitionKey.modelFingerprint,
-                                    diagnostics: diagnosticsContext,
-                                    pinningRestorePathFor: diagnosticsContext.requestID
-                                ).lookup.snapshot
+                    // GPU-adjacent: `resolveBoundary` may hydrate from SSD
+                    // (materializes MLXArrays) — grant-serialized for pool
+                    // lanes via `gpuPhase` below.
+                    let leafPlan = try await gpuPhase {
+                        await LeafAdmissionBuilder.plan(
+                            mode: boundaryMode,
+                            storedConversation: storedConversation,
+                            storedTokens: storedTokens,
+                            toolSpecs: canonicalTools,
+                            transientBoundary: transientBoundary,
+                            tokenizer: leafTokenizer,
+                            keySpace: mlxStart.keySpace,
+                            renderContext: renderContext,
+                            resolveBoundary: { tokens in
+                                // Drive Snapshot Resolution inside the Model
+                                // Session so the SSD `loadSync` stays
+                                // off-MainActor (ADR-0001). Session entry cannot
+                                // fail with a non-throwing body; the hypothetical
+                                // failure degrades to "no boundary snapshot".
+                                let resolved = try? await sessions.withSession { _ in
+                                    await prefixCache.resolve(
+                                        tokens: tokens,
+                                        promptTokenCount: tokens.count,
+                                        partitionKey: mlxStart.partitionKey,
+                                        modelFingerprint: mlxStart.partitionKey.modelFingerprint,
+                                        diagnostics: diagnosticsContext,
+                                        pinningRestorePathFor: diagnosticsContext.requestID
+                                    ).lookup.snapshot
+                                }
+                                return resolved.flatMap { $0 }
                             }
-                            return resolved.flatMap { $0 }
-                        }
-                    )
+                        )
+                    }
 
                     // One exhaustive switch over the boundary plan: `.skip`
                     // logs the decidable reason; `.fromBoundary` runs the
@@ -1133,23 +1202,28 @@ nonisolated final class ServerCompletion {
                                     diagnostics: diagnosticsContext
                                 )
                             }
-                        leafStoreForTuner = await Self.captureStructuredLeafFromBoundary(
-                            sessions: sessions,
-                            storedTokens: boundaryStoredTokens,
-                            boundarySnapshot: boundarySnapshot,
-                            positionAnchorRopeDelta: positionAnchorRopeDelta,
-                            partitionKey: mlxStart.partitionKey,
-                            prefillStepSize: mlxStart.prefillStepSize,
-                            tokenNDim: mlxStart.tokenNDim,
-                            requestID: requestID,
-                            prefixCache: prefixCache,
-                            diagnosticsContext: diagnosticsContext,
-                            ssdEnabled: mlxStart.ssdEnabled,
-                            storeStage: stages.store,
-                            captureStage: stages.capture,
-                            admissionStage: stages.admission,
-                            captureSource: stages.source
-                        )
+                        // Restore → reprefill → capture: pure GPU work —
+                        // grant-serialized for pool lanes.
+                        let ropeDelta = positionAnchorRopeDelta
+                        leafStoreForTuner = try await gpuPhase {
+                            await Self.captureStructuredLeafFromBoundary(
+                                sessions: sessions,
+                                storedTokens: boundaryStoredTokens,
+                                boundarySnapshot: boundarySnapshot,
+                                positionAnchorRopeDelta: ropeDelta,
+                                partitionKey: mlxStart.partitionKey,
+                                prefillStepSize: mlxStart.prefillStepSize,
+                                tokenNDim: mlxStart.tokenNDim,
+                                requestID: requestID,
+                                prefixCache: prefixCache,
+                                diagnosticsContext: diagnosticsContext,
+                                ssdEnabled: mlxStart.ssdEnabled,
+                                storeStage: stages.store,
+                                captureStage: stages.capture,
+                                admissionStage: stages.admission,
+                                captureSource: stages.source
+                            )
+                        }
                         // A stored canonical leaf still ends at the
                         // think-strip divergence; everything past it would
                         // re-prefill interactively on the next user message —
@@ -1235,30 +1309,32 @@ nonisolated final class ServerCompletion {
                     prefixCache: prefixCache
                 )
                 let (maybeLeaf, maybeLeafAdmission): (HybridCacheSnapshot?, SnapshotAdmission?) =
-                    try await sessions.withSession { session in
-                        let cache = mlxStartBox.value.finalCache
-                        guard
-                            let snap = session.captureSnapshot(
-                                cache: cache,
-                                offset: storedTokens.count,
-                                type: .leaf
+                    try await gpuPhase {
+                        try await sessions.withSession { session in
+                            let cache = mlxStartBox.value.finalCache
+                            guard
+                                let snap = session.captureSnapshot(
+                                    cache: cache,
+                                    offset: storedTokens.count,
+                                    type: .leaf
+                                )
+                            else {
+                                return (nil, nil)
+                            }
+                            let storage = Self.snapshotAdmissionStorage(
+                                for: snap,
+                                ssdEnabled: ssdEnabled,
+                                extending: extensionBase
                             )
-                        else {
-                            return (nil, nil)
+                            let leafAdmission = SnapshotAdmission.leaf(
+                                storedTokens: storedTokens,
+                                snapshot: snap,
+                                storage: storage,
+                                partitionKey: mlxStart.partitionKey,
+                                requestID: requestID
+                            )
+                            return (snap, leafAdmission)
                         }
-                        let storage = Self.snapshotAdmissionStorage(
-                            for: snap,
-                            ssdEnabled: ssdEnabled,
-                            extending: extensionBase
-                        )
-                        let leafAdmission = SnapshotAdmission.leaf(
-                            storedTokens: storedTokens,
-                            snapshot: snap,
-                            storage: storage,
-                            partitionKey: mlxStart.partitionKey,
-                            requestID: requestID
-                        )
-                        return (snap, leafAdmission)
                     }
                 guard let leafSnapshot = maybeLeaf else {
                     diagnosticsContext.logSkip(
@@ -1800,7 +1876,8 @@ nonisolated final class ServerCompletion {
             switch prefillPlan.restore {
             case .restore(let cacheOffset, let anchorDelta):
                 let (restoredCache, measuredRestoreMs) = measure {
-                    Self.restoreCache(lookupResult, session: session)
+                    Self.restoreCache(
+                        lookupResult, session: session, diagnostics: diagnosticsContext)
                 }
                 cacheToUse = restoredCache
                 restoreMs = measuredRestoreMs
@@ -2057,74 +2134,28 @@ nonisolated final class ServerCompletion {
             }
             let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
             let iterator = prefillResult.iterator
-            await progressHandler?(
-                .prefillFinished(
-                    .init(
-                        promptTokens: fullTokenCount,
-                        cachedTokens: skippedTokens,
-                        newTokensToPrefill: newTokensToPrefill,
-                        prefillMs: prefillMs * 1000
-                    )))
-
-            // Fold the observed prefill into the rolling FLOPs/s estimate
-            // (slice #84) — a real measured operation on this device.
-            // Tiny residuals are timer noise, not throughput signal.
-            if newTokensToPrefill >= 64, prefillMs > 0 {
-                let prefillFlops = EvictionPolicy.parentRelativeFlops(
-                    nodeOffset: fullTokenCount,
-                    parentOffset: skippedTokens,
-                    profile: flopProfile
-                )
-                await MainActor.run {
-                    prefixCache.recordPrefillMeasurement(
-                        flops: prefillFlops, seconds: prefillMs
-                    )
-                }
-            }
+            await Self.recordPrefillFinished(
+                promptTokens: fullTokenCount,
+                skippedTokens: skippedTokens,
+                prefillSeconds: prefillMs,
+                flopProfile: flopProfile,
+                prefixCache: prefixCache,
+                progressHandler: progressHandler
+            )
 
             // 10. Split the driver's snapshots into stored checkpoints vs the
-            // request-local transient boundary helpers, then extract payloads
-            // inside this `container.perform` so `MLXArray.asData()` runs on
-            // the Metal-affine thread before the later MainActor store hop.
-            var capturedSnapshots: [HybridCacheSnapshot] = []
-            var transientSnapshots: [Int: HybridCacheSnapshot] = [:]
-            for snapshot in prefillResult.snapshots {
-                if transientOffsets.contains(snapshot.tokenOffset) {
-                    transientSnapshots[snapshot.tokenOffset] = snapshot
-                } else {
-                    capturedSnapshots.append(snapshot)
-                }
-            }
-            let transientLastMessageBoundarySnapshot = prefillPlan.transientBoundaries.lastMessage
-                .flatMap { offset in
-                    transientSnapshots[offset]
-                        ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
-                }
-            let transientLastUserBoundarySnapshot = prefillPlan.transientBoundaries.lastUser.flatMap
-            { offset in
-                transientSnapshots[offset]
-                    ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
-            }
-            let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
-                capturedSnapshots,
-                ssdEnabled: ssdEnabled
-            )
-            let snapshotAdmission = SnapshotAdmission.checkpoints(
-                fullPromptTokens: keySpace.keyPath,
-                candidates: checkpointCandidates,
+            // request-local transient boundary helpers, inside this
+            // `container.perform` so `MLXArray.asData()` runs on the
+            // Metal-affine thread before the later MainActor store hop.
+            let bookkeeping = Self.splitAndAdmitSnapshots(
+                prefillResult.snapshots,
+                plan: prefillPlan,
+                keySpace: keySpace,
                 partitionKey: partitionKey,
-                requestID: requestID
+                requestID: requestID,
+                ssdEnabled: ssdEnabled,
+                diagnostics: diagnosticsContext
             )
-            for snapshot in capturedSnapshots {
-                diagnosticsContext.log(
-                    PrefixCacheDiagnostics.CaptureEvent(
-                        offset: snapshot.tokenOffset,
-                        checkpointType: snapshot.checkpointType,
-                        bytes: snapshot.memoryBytes,
-                        duringPrefill: true,
-                        source: "prefill"
-                    ))
-            }
 
             // 11. Start the app-owned generation stream.
             let (stream, task) = TokenGenerationLoop.start(
@@ -2153,15 +2184,716 @@ nonisolated final class ServerCompletion {
                 keySpace: keySpace,
                 unkeyedReason: nil,
                 seedsPositionAnchor: seedsPositionAnchor,
-                snapshotAdmission: snapshotAdmission,
+                snapshotAdmission: bookkeeping.admission,
                 ssdEnabled: ssdEnabled,
                 partitionKey: partitionKey,
-                transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
-                transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
+                transientLastMessageBoundarySnapshot: bookkeeping.lastMessageBoundary,
+                transientLastUserBoundarySnapshot: bookkeeping.lastUserBoundary,
                 prefillStepSize: parameters.prefillStepSize,
                 tokenNDim: tokenNDim
             )
         }
+    }
+
+    // MARK: - Stepped pool-lane generation (PRD #173, ADR-0022)
+
+    /// Mutable cross-step state for a pool lane's chunked prefill. Boxed in
+    /// `UnsafeMutableSendableBox`; safety is temporal exclusivity — only one
+    /// granted step (or the lane's drive between steps) touches it at a time.
+    nonisolated struct SteppedPrefillState {
+        var cache: [any KVCache]
+        /// The whole not-yet-prefilled suffix (last token included; the
+        /// final slice keeps it back for the iterator prime).
+        let text: LMInput.Text
+        let tokenNDim: Int
+        let checkpoints: [Int: HybridCacheSnapshot.CheckpointType]
+        /// Absolute token offset the suffix starts at (restore offset / 0).
+        let baseOffset: Int
+        var covered = 0
+        var state: LMOutput.State?
+        var snapshots: [HybridCacheSnapshot] = []
+        var remainder: LMInput.Text?
+        /// `nil` for the thinking-continuation prefill, which bypasses the
+        /// prefix cache and therefore its storage gate.
+        let storageGate: StorageActivityGate?
+    }
+
+    /// Where the next stepped prefill slice ends. One chunk past `covered`
+    /// (clamped to `total`) — but never exactly ON a checkpoint offset: the
+    /// executor captures only offsets strictly inside the text it is handed
+    /// (a boundary-relative 0 is filtered, the tail drain stops short of the
+    /// end), so a checkpoint on the seam would be silently dropped. The seam
+    /// extends past it, keeping the capture interior — exactly what the
+    /// monolithic arm's single call over the whole suffix would do.
+    nonisolated static func steppedSliceEnd(
+        covered: Int,
+        total: Int,
+        chunk: Int,
+        baseOffset: Int,
+        checkpoints: [Int: HybridCacheSnapshot.CheckpointType]
+    ) -> Int {
+        var end = min(total, covered + max(1, chunk))
+        while end < total, checkpoints[baseOffset + end] != nil {
+            end += 1
+        }
+        return end
+    }
+
+    /// Drive a pool lane's chunked prefill as granted engine steps: each
+    /// grant prefills one scheduler-sized slice (full step size solo, ~512
+    /// while a sibling decodes), capturing checkpoints at absolute offsets
+    /// and threading the model state; the final slice runs `consumeAll:
+    /// false` so the executor keeps the prime token back. Each step body
+    /// owns its own Model Session entry — the container mutex is NEVER held
+    /// across a grant await (deadlock rule) — and evaluates its chunk
+    /// synchronously, so the GPU is quiescent at every grant boundary
+    /// (`.pipelined`'s in-flight chunks would leak past the step and overlap
+    /// a sibling's grant).
+    private static func runSteppedPrefill(
+        sessions: any ModelSessionProviding,
+        lane: BatchLane,
+        box: UnsafeMutableSendableBox<SteppedPrefillState>
+    ) async throws {
+        while true {
+            let finished = try await lane.engine.step(
+                lane: lane.laneID, kind: .prefillChunk
+            ) { grant -> Bool in
+                try await sessions.withSession { session in
+                    var step = box.value
+                    let total = step.text.tokens.dim(-1)
+                    let chunk = max(1, grant.prefillChunkTokens)
+                    let end = Self.steppedSliceEnd(
+                        covered: step.covered,
+                        total: total,
+                        chunk: chunk,
+                        baseOffset: step.baseOffset,
+                        checkpoints: step.checkpoints
+                    )
+                    let isFinal = end == total
+                    let sliceTokens: MLXArray =
+                        step.tokenNDim <= 1
+                        ? step.text.tokens[step.covered..<end]
+                        : step.text.tokens[0..., step.covered..<end]
+                    let sliceText = LMInput.Text(tokens: sliceTokens, mask: nil)
+                    let run: () throws -> PrefillExecutor.Output = {
+                        try session.prefill(
+                            text: sliceText,
+                            cache: step.cache,
+                            checkpoints: step.checkpoints,
+                            checkpointBaseOffset: step.baseOffset + step.covered,
+                            prefillStepSize: chunk,
+                            consumeAll: !isFinal,
+                            initialState: step.state,
+                            evalPolicy: .checkedSynchronous
+                        )
+                    }
+                    let output: PrefillExecutor.Output
+                    if let gate = step.storageGate {
+                        output = try gate.withPrefillMarked(run)
+                    } else {
+                        output = try run()
+                    }
+                    step.snapshots += output.snapshots
+                    step.state = output.state
+                    if isFinal {
+                        step.remainder = output.remainder
+                        step.covered = total
+                    } else {
+                        step.covered = end
+                    }
+                    box.value = step
+                    return isFinal
+                }
+            }
+            if finished { return }
+        }
+    }
+
+    /// What the shared iterator step hands to the engine-stepped token
+    /// loop. `@unchecked Sendable` via temporal exclusivity — built inside
+    /// a granted step, consumed by the lane's drive after it.
+    nonisolated private struct SteppedLoopInputs: @unchecked Sendable {
+        let iterator: StateThreadedTokenIterator
+        let configuration: ModelConfiguration
+        let tokenizer: any MLXLMCommon.Tokenizer
+        let liveCache: [any KVCache]
+    }
+
+    /// The stepped generators' shared iterator step: one granted step that
+    /// quantizes the prefilled cache, primes the decode iterator from the
+    /// prime remainder (the PRD #72 penalty-context threading lives in
+    /// `makeDecodeIterator`), and hands the loop inputs out of the grant.
+    private static func steppedIteratorStep(
+        sessions: any ModelSessionProviding,
+        lane: BatchLane,
+        box: UnsafeMutableSendableBox<SteppedPrefillState>,
+        parameters: GenerateParameters,
+        missingRemainder: String
+    ) async throws -> SteppedLoopInputs {
+        try await lane.engine.step(lane: lane.laneID, kind: .prefillChunk) { _ in
+            try await sessions.withSession { session in
+                guard let remainder = box.value.remainder else {
+                    throw AgentEngineError.generationFailed(missingRemainder)
+                }
+                var liveCache = box.value.cache
+                session.quantizeKVCache(&liveCache, parameters: parameters)
+                var iteratorParams = parameters
+                iteratorParams.kvBits = nil
+                let iterator = session.makeDecodeIterator(
+                    remainder: remainder,
+                    fullText: box.value.text,
+                    cache: liveCache,
+                    state: box.value.state,
+                    parameters: iteratorParams
+                )
+                return SteppedLoopInputs(
+                    iterator: iterator,
+                    configuration: session.configuration,
+                    tokenizer: session.tokenizer,
+                    liveCache: liveCache
+                )
+            }
+        }
+    }
+
+    /// The `.prefillFinished` progress event + the rolling FLOPs/s estimate
+    /// fold (slice #84) — one place for both generation arms. Tiny
+    /// residuals are timer noise, not throughput signal.
+    private static func recordPrefillFinished(
+        promptTokens: Int,
+        skippedTokens: Int,
+        prefillSeconds: TimeInterval,
+        flopProfile: ModelFlopProfile,
+        prefixCache: PrefixCacheManager,
+        progressHandler: ServerInferenceProgressHandler?
+    ) async {
+        let newTokensToPrefill = promptTokens - skippedTokens
+        await progressHandler?(
+            .prefillFinished(
+                .init(
+                    promptTokens: promptTokens,
+                    cachedTokens: skippedTokens,
+                    newTokensToPrefill: newTokensToPrefill,
+                    prefillMs: prefillSeconds * 1000
+                )))
+        if newTokensToPrefill >= 64, prefillSeconds > 0 {
+            let prefillFlops = EvictionPolicy.parentRelativeFlops(
+                nodeOffset: promptTokens,
+                parentOffset: skippedTokens,
+                profile: flopProfile
+            )
+            await MainActor.run {
+                prefixCache.recordPrefillMeasurement(
+                    flops: prefillFlops, seconds: prefillSeconds
+                )
+            }
+        }
+    }
+
+    /// Post-prefill snapshot bookkeeping shared by both generation arms:
+    /// split the driver's snapshots into stored checkpoints vs the
+    /// request-local transient boundary helpers, build the checkpoint
+    /// admission, and log each stored capture. Synchronous on purpose — the
+    /// monolithic arm calls it inside the Metal-affine session closure so
+    /// payload extraction (`MLXArray.asData()`) stays there, before the
+    /// later MainActor store hop.
+    private static func splitAndAdmitSnapshots(
+        _ snapshots: [HybridCacheSnapshot],
+        plan: PrefillPlan,
+        keySpace: CacheKeySpace,
+        partitionKey: CachePartitionKey,
+        requestID: UUID,
+        ssdEnabled: Bool,
+        diagnostics: PrefixCacheDiagnostics.Context
+    ) -> (
+        admission: SnapshotAdmission?,
+        lastMessageBoundary: HybridCacheSnapshot?,
+        lastUserBoundary: HybridCacheSnapshot?
+    ) {
+        let transientOffsets = plan.transientCheckpointOffsets
+        var capturedSnapshots: [HybridCacheSnapshot] = []
+        var transientSnapshots: [Int: HybridCacheSnapshot] = [:]
+        for snapshot in snapshots {
+            if transientOffsets.contains(snapshot.tokenOffset) {
+                transientSnapshots[snapshot.tokenOffset] = snapshot
+            } else {
+                capturedSnapshots.append(snapshot)
+            }
+        }
+        func boundarySnapshot(at offset: Int?) -> HybridCacheSnapshot? {
+            offset.flatMap { offset in
+                transientSnapshots[offset]
+                    ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
+            }
+        }
+        let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
+            capturedSnapshots,
+            ssdEnabled: ssdEnabled
+        )
+        let admission = SnapshotAdmission.checkpoints(
+            fullPromptTokens: keySpace.keyPath,
+            candidates: checkpointCandidates,
+            partitionKey: partitionKey,
+            requestID: requestID
+        )
+        for snapshot in capturedSnapshots {
+            diagnostics.log(
+                PrefixCacheDiagnostics.CaptureEvent(
+                    offset: snapshot.tokenOffset,
+                    checkpointType: snapshot.checkpointType,
+                    bytes: snapshot.memoryBytes,
+                    duringPrefill: true,
+                    source: "prefill"
+                ))
+        }
+        return (
+            admission: admission,
+            lastMessageBoundary: boundarySnapshot(at: plan.transientBoundaries.lastMessage),
+            lastUserBoundary: boundarySnapshot(at: plan.transientBoundaries.lastUser)
+        )
+    }
+
+    /// Startup-step product for the stepped pool path — everything the
+    /// chunked prefill and the iterator step need, produced under one
+    /// granted startup step. `@unchecked Sendable` via temporal exclusivity
+    /// (boxed hand-off between granted steps).
+    nonisolated private struct PoolStartupCarry: @unchecked Sendable {
+        let fullTokens: [Int]
+        let fullTokenCount: Int
+        let tokenNDim: Int
+        let partitionKey: CachePartitionKey
+        let keySpace: CacheKeySpace
+        let plan: PrefillPlan
+        let allCheckpoints: [Int: HybridCacheSnapshot.CheckpointType]
+        let cache: [any KVCache]
+        let suffixText: LMInput.Text
+        let executionBaseOffset: Int
+        let initialState: LMOutput.State?
+        let seedsPositionAnchor: Bool
+        let lookupReason: PrefixCacheManager.LookupReason
+        let sharedPrefixLength: Int
+        let lookupMs: TimeInterval
+        let restoreMs: TimeInterval
+        let hydrationSeconds: TimeInterval
+        let hydratedFromSSD: Bool
+        let prefillStartedAt: TimeInterval
+        let flopProfile: ModelFlopProfile
+    }
+
+    // Evolving MVP mid-refactor; parameter shape mirrors the monolithic arm.
+    // swiftlint:disable function_body_length function_parameter_count
+    /// The pool lane's stepped generation (PRD #173): the text-only subset
+    /// of `makeHTTPPrefixCacheGeneration`, phase-split into granted engine
+    /// steps — startup (tokenize → lookup → restore → begin-prefill), one
+    /// step per prefill chunk, an iterator step (quantize + decode iterator),
+    /// then the engine-stepped token loop. The monolithic function stays the
+    /// exclusive-lane path; image-bearing and non-cache-aware requests never
+    /// reach here (`CompletionHandler` gates pool eligibility).
+    private func makeSteppedPoolGeneration(
+        on actor: isolated LLMActor,
+        sessions: any ModelSessionProviding,
+        lane: BatchLane,
+        conversation: HTTPPrefixCacheConversation,
+        requestID: UUID,
+        modelID: String,
+        parameters: GenerateParameters,
+        toolSpecs: [ToolSpec]?,
+        prefixCache: PrefixCacheManager,
+        renderContext: TemplateRenderContext,
+        progressHandler: ServerInferenceProgressHandler?
+    ) async throws -> HTTPPrefixCacheGeneration {
+        let canonicalTools = LLMActor.canonicalizeToolSpecs(toolSpecs)
+        let promptStartsThinking = self.promptStartsThinking
+        let modelFingerprint = self.modelFingerprint
+        let imageKeying = self.modelIdentity?.imageKeying
+        let flopProfile = self.modelIdentity?.flopProfile ?? .fallback
+        let ssdEnabled = self.ssdConfig?.enabled == true
+        let diagnosticsContext = PrefixCacheDiagnostics.Context(
+            requestID: requestID,
+            modelID: modelID,
+            kvBits: parameters.kvBits,
+            kvGroupSize: parameters.kvGroupSize
+        )
+
+        // Startup step: tokenize, look up, restore, begin prefill — one
+        // granted step, one Model Session entry.
+        let carryBox = try await lane.engine.step(lane: lane.laneID, kind: .startup) {
+            _ -> UnsafeSendableBox<PoolStartupCarry> in
+            let carry = try await sessions.withSession {
+                session -> UnsafeSendableBox<PoolStartupCarry> in
+                let fullInput = try await session.prepare(
+                    UserInput(
+                        messages: conversation.promptMessages,
+                        images: [],
+                        tools: canonicalTools,
+                        additionalContext: renderContext.additionalContext()
+                    )
+                )
+                let fullTokenCount = fullInput.text.tokens.dim(-1)
+                let tokenNDim = fullInput.text.tokens.ndim
+                let fullTokens = LLMActor.extractTokenSequence(fullInput.text.tokens)
+                let partitionKey = CachePartitionKey(
+                    modelID: modelID,
+                    kvBits: parameters.kvBits,
+                    kvGroupSize: parameters.kvGroupSize,
+                    modelFingerprint: modelFingerprint,
+                    templateContextDigest: conversation.templateContextDigest
+                )
+                // Text-only by the pool gate: the key space is identity and
+                // free; a failure here is a broken invariant, not a request
+                // shape to degrade for.
+                guard
+                    case .success(let keySpace) = CacheKeySpace.make(
+                        preparedTokens: fullTokens,
+                        imageDigests: [],
+                        imageGrids: [],
+                        imageKeying: imageKeying
+                    )
+                else {
+                    throw AgentEngineError.generationFailed(
+                        "pool lane requires a keyed text-only completion"
+                    )
+                }
+                let seedsPositionAnchor = imageKeying != nil
+
+                let boundaries = try PrefillPlanner.detectBoundaries(
+                    conversation: conversation,
+                    toolSpecs: canonicalTools,
+                    promptStartsThinking: promptStartsThinking,
+                    tokenizer: session.tokenizer,
+                    keySpace: keySpace,
+                    renderContext: renderContext
+                )
+                if let failure = boundaries.lastUserTranslationFailure {
+                    diagnosticsContext.logSkip(
+                        stage: "lastUserBoundary",
+                        reason: "render-translation-failed",
+                        level: .warning,
+                        extraFields: [("failure", "\(failure)")]
+                    )
+                }
+
+                await progressHandler?(.cacheLookupStarted)
+                let lookupStarted = Date.timeIntervalSinceReferenceDate
+                let resolved = await prefixCache.resolve(
+                    tokens: keySpace.keyPath,
+                    promptTokenCount: fullTokenCount,
+                    partitionKey: partitionKey,
+                    modelFingerprint: modelFingerprint,
+                    diagnostics: diagnosticsContext,
+                    pinningRestorePathFor: diagnosticsContext.requestID
+                )
+                let lookupResult = resolved.lookup
+                let checkpointPlan = await MainActor.run {
+                    prefixCache.planCheckpoints(
+                        tokens: keySpace.keyPath,
+                        stablePrefixOffset: boundaries.stablePrefixOffset,
+                        partitionKey: partitionKey,
+                        alignTo: resolved.alignmentLookup
+                    )
+                }
+                let lookupMs = Date.timeIntervalSinceReferenceDate - lookupStarted
+
+                let prefillPlan = PrefillPlanner.plan(
+                    boundaries: boundaries,
+                    lookupResult: lookupResult,
+                    checkpointPlan: checkpointPlan,
+                    promptTokenCount: fullTokenCount,
+                    keySpace: keySpace
+                )
+
+                let cacheToUse: [any KVCache]?
+                let restoreMs: TimeInterval
+                let executionBaseOffset: Int
+                var executorInitialState: LMOutput.State?
+                switch prefillPlan.restore {
+                case .restore(let cacheOffset, let anchorDelta):
+                    let restoreStarted = Date.timeIntervalSinceReferenceDate
+                    cacheToUse = Self.restoreCache(
+                        lookupResult, session: session, diagnostics: diagnosticsContext)
+                    restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
+                    executionBaseOffset = cacheOffset
+                    if seedsPositionAnchor {
+                        executorInitialState = PositionAnchor.seededState(
+                            ropeDelta: anchorDelta)
+                    }
+                case .cold:
+                    cacheToUse = nil
+                    restoreMs = 0
+                    executionBaseOffset = 0
+                }
+                let suffixTokens: MLXArray =
+                    tokenNDim <= 1
+                    ? fullInput.text.tokens[executionBaseOffset...]
+                    : fullInput.text.tokens[0..., executionBaseOffset...]
+                let suffixText = LMInput.Text(tokens: suffixTokens, mask: nil)
+
+                let skippedTokens = prefillPlan.prefillBaseOffset
+                let newTokensToPrefill = fullTokenCount - skippedTokens
+                await progressHandler?(
+                    .cacheLookupFinished(
+                        .init(
+                            reason: String(describing: lookupResult.reason),
+                            cachedTokens: skippedTokens,
+                            sharedPrefixLength: lookupResult.sharedPrefixLength,
+                            promptTokens: fullTokenCount,
+                            newTokensToPrefill: newTokensToPrefill,
+                            lookupMs: lookupMs * 1000,
+                            restoreMs: restoreMs * 1000,
+                            divergence: lookupResult.divergence
+                        )))
+                diagnosticsContext.log(
+                    PrefixCacheDiagnostics.LookupEvent(
+                        reason: lookupResult.reason,
+                        promptTokens: fullTokenCount,
+                        sharedPrefixLength: lookupResult.sharedPrefixLength,
+                        skippedPrefillTokens: skippedTokens,
+                        newTokensToPrefill: newTokensToPrefill,
+                        lookupMs: lookupMs,
+                        restoreMs: restoreMs,
+                        plannedCheckpoints: prefillPlan.checkpointsToCapture,
+                        hydratedFromSSD: resolved.hydratedFromSSD,
+                        chainPrefixRestore: resolved.wasChainPrefixRestore,
+                        divergence: lookupResult.divergence
+                    ))
+
+                let plannedCheckpoints = Dictionary(
+                    uniqueKeysWithValues: prefillPlan.checkpointsToCapture.map {
+                        ($0.offset, $0.type)
+                    }
+                )
+                let helperCheckpoints = Dictionary(
+                    uniqueKeysWithValues: prefillPlan.transientCheckpointOffsets.map {
+                        ($0, HybridCacheSnapshot.CheckpointType.leaf)
+                    }
+                )
+                let allCheckpoints = plannedCheckpoints.merging(helperCheckpoints) {
+                    stored, _ in stored
+                }
+
+                let begin = try await Self.beginPrefill(
+                    session: session,
+                    restoredCache: cacheToUse,
+                    parameters: parameters,
+                    promptTokens: fullTokenCount,
+                    cachedTokens: skippedTokens,
+                    pricedImage: nil,
+                    visionAttentionScratchProfile: nil,
+                    guardLabel: "keyed",
+                    diagnosticsContext: diagnosticsContext,
+                    progressHandler: progressHandler
+                )
+
+                return UnsafeSendableBox(
+                    PoolStartupCarry(
+                        fullTokens: fullTokens,
+                        fullTokenCount: fullTokenCount,
+                        tokenNDim: tokenNDim,
+                        partitionKey: partitionKey,
+                        keySpace: keySpace,
+                        plan: prefillPlan,
+                        allCheckpoints: allCheckpoints,
+                        cache: begin.cache,
+                        suffixText: suffixText,
+                        executionBaseOffset: executionBaseOffset,
+                        initialState: executorInitialState,
+                        seedsPositionAnchor: seedsPositionAnchor,
+                        lookupReason: lookupResult.reason,
+                        sharedPrefixLength: lookupResult.sharedPrefixLength,
+                        lookupMs: lookupMs,
+                        restoreMs: restoreMs,
+                        hydrationSeconds: resolved.hydrationSeconds,
+                        hydratedFromSSD: resolved.hydratedFromSSD,
+                        prefillStartedAt: begin.startedAt,
+                        flopProfile: flopProfile
+                    ))
+            }
+            return carry
+        }
+        let carry = carryBox.value
+
+        // Chunked prefill: one granted step per slice, then quantize + the
+        // decode iterator inside a final granted step.
+        let prefillBox = UnsafeMutableSendableBox(
+            SteppedPrefillState(
+                cache: carry.cache,
+                text: carry.suffixText,
+                tokenNDim: carry.tokenNDim,
+                checkpoints: carry.allCheckpoints,
+                baseOffset: carry.executionBaseOffset,
+                state: carry.initialState,
+                storageGate: prefixCache.storageActivityGate
+            ))
+        let loopInputs: SteppedLoopInputs
+        do {
+            try await Self.runSteppedPrefill(
+                sessions: sessions, lane: lane, box: prefillBox
+            )
+            loopInputs = try await Self.steppedIteratorStep(
+                sessions: sessions,
+                lane: lane,
+                box: prefillBox,
+                parameters: parameters,
+                missingRemainder: "stepped prefill finished without a prime remainder"
+            )
+        } catch is CancellationError {
+            // **Salvage-on-cancel** (issue #97), stepped form: the client is
+            // gone mid-prefill. The cancelled task can never be granted a
+            // regular step again, so the capture runs through the teardown
+            // step — still grant-serialized against live siblings.
+            await lane.engine.teardownStep(lane: lane.laneID) {
+                await Self.salvageCancelledPrefill(
+                    cache: prefillBox.value.cache,
+                    keySpace: carry.keySpace,
+                    restoreBaseOffset: carry.executionBaseOffset,
+                    partitionKey: carry.partitionKey,
+                    requestID: requestID,
+                    prefixCache: prefixCache,
+                    diagnostics: diagnosticsContext
+                )
+                Memory.clearCache()
+            }
+            throw CancellationError()
+        }
+
+        let prefillMs = Date.timeIntervalSinceReferenceDate - carry.prefillStartedAt
+        let skippedTokens = carry.plan.prefillBaseOffset
+        await Self.recordPrefillFinished(
+            promptTokens: carry.fullTokenCount,
+            skippedTokens: skippedTokens,
+            prefillSeconds: prefillMs,
+            flopProfile: carry.flopProfile,
+            prefixCache: prefixCache,
+            progressHandler: progressHandler
+        )
+
+        // Same bookkeeping as the monolithic arm — still on the Metal-affine
+        // actor, between granted steps.
+        let bookkeeping = Self.splitAndAdmitSnapshots(
+            prefillBox.value.snapshots,
+            plan: carry.plan,
+            keySpace: carry.keySpace,
+            partitionKey: carry.partitionKey,
+            requestID: requestID,
+            ssdEnabled: ssdEnabled,
+            diagnostics: diagnosticsContext
+        )
+
+        // The engine-stepped token loop: decode grants interleave this
+        // lane's tokens with its siblings'.
+        let (stream, task) = TokenGenerationLoop.start(
+            promptTokenCount: carry.fullTokenCount,
+            modelConfiguration: loopInputs.configuration,
+            tokenizer: loopInputs.tokenizer,
+            iterator: loopInputs.iterator,
+            engine: lane.engine,
+            laneID: lane.laneID,
+            tools: canonicalTools
+        )
+
+        return HTTPPrefixCacheGeneration(
+            stream: stream,
+            completion: task,
+            finalCache: loopInputs.liveCache,
+            diagnosticsContext: diagnosticsContext,
+            lookupMs: carry.lookupMs,
+            restoreMs: carry.restoreMs,
+            prefillMs: prefillMs,
+            hydrationSeconds: carry.hydrationSeconds,
+            restoredFromSSD: carry.hydratedFromSSD,
+            promptTokenCount: carry.fullTokenCount,
+            skippedPrefillTokens: skippedTokens,
+            lookupReason: carry.lookupReason,
+            sharedPrefixLength: carry.sharedPrefixLength,
+            fullTokens: carry.fullTokens,
+            keySpace: carry.keySpace,
+            unkeyedReason: nil,
+            seedsPositionAnchor: carry.seedsPositionAnchor,
+            snapshotAdmission: bookkeeping.admission,
+            ssdEnabled: ssdEnabled,
+            partitionKey: carry.partitionKey,
+            transientLastMessageBoundarySnapshot: bookkeeping.lastMessageBoundary,
+            transientLastUserBoundarySnapshot: bookkeeping.lastUserBoundary,
+            prefillStepSize: parameters.prefillStepSize,
+            tokenNDim: carry.tokenNDim
+        )
+    }
+    // swiftlint:enable function_body_length function_parameter_count
+
+    /// Pool-lane thinking-safeguard continuation (PRD #173): the vendor
+    /// continuation free-runs a plain decode task, which a pool lane must
+    /// never do — this stepped variant prefills the combined prompt
+    /// (original tokens + hand-off) as granted chunks over a fresh cache and
+    /// decodes through the engine-stepped loop. Bypasses the prefix cache,
+    /// exactly like the raw continuation it replaces.
+    static func startSteppedThinkingContinuation(
+        sessions: any ModelSessionProviding,
+        lane: BatchLane,
+        originalTokens: [Int],
+        tokenNDim: Int,
+        safeThinkingPrefix: String,
+        injection: String,
+        toolSpecs: [ToolSpec]?,
+        parameters: GenerateParameters
+    ) async throws -> HTTPServerRawGenerationStart {
+        let handoff = safeThinkingPrefix + injection
+        let canonicalTools = LLMActor.canonicalizeToolSpecs(toolSpecs)
+
+        // Tokenizer-only session entry — CPU work, safe outside a grant.
+        let combined: [Int] = try await sessions.withSession { session in
+            let appended = try session.tokenizer.encode(
+                text: handoff, addSpecialTokens: false
+            )
+            return originalTokens + appended
+        }
+
+        let stateBox: UnsafeMutableSendableBox<SteppedPrefillState?> =
+            UnsafeMutableSendableBox(nil)
+        try await lane.engine.step(lane: lane.laneID, kind: .prefillChunk) { _ in
+            try await sessions.withSession { session in
+                let flat = MLXArray(combined.map { Int32($0) })
+                let tokens: MLXArray =
+                    tokenNDim >= 2 ? flat.expandedDimensions(axis: 0) : flat
+                stateBox.value = SteppedPrefillState(
+                    cache: session.newCache(parameters: parameters),
+                    text: LMInput.Text(tokens: tokens, mask: nil),
+                    tokenNDim: tokenNDim,
+                    checkpoints: [:],
+                    baseOffset: 0,
+                    storageGate: nil
+                )
+            }
+        }
+        guard let seeded = stateBox.value else {
+            throw AgentEngineError.generationFailed(
+                "stepped continuation failed to seed its prefill state"
+            )
+        }
+        let box = UnsafeMutableSendableBox(seeded)
+        try await runSteppedPrefill(sessions: sessions, lane: lane, box: box)
+
+        let loopInputs = try await steppedIteratorStep(
+            sessions: sessions,
+            lane: lane,
+            box: box,
+            parameters: parameters,
+            missingRemainder: "stepped continuation finished without a prime remainder"
+        )
+
+        let (stream, completion) = TokenGenerationLoop.start(
+            promptTokenCount: combined.count,
+            modelConfiguration: loopInputs.configuration,
+            tokenizer: loopInputs.tokenizer,
+            iterator: loopInputs.iterator,
+            engine: lane.engine,
+            laneID: lane.laneID,
+            tools: canonicalTools
+        )
+        return HTTPServerRawGenerationStart(
+            stream: stream,
+            cancel: { completion.cancel() },
+            waitForCompletion: { await completion.value }
+        )
     }
 
     /// The shared **begin-prefill step** (PRD #137, PR B): progress event,
@@ -2267,11 +2999,20 @@ nonisolated final class ServerCompletion {
     /// **Model Session** so the sequencing suite observes restore ordering.
     private static func restoreCache(
         _ lookup: PrefixCacheManager.LookupResult,
-        session: any ModelSession
+        session: any ModelSession,
+        diagnostics: PrefixCacheDiagnostics.Context
     ) -> [any KVCache]? {
         guard let snapshot = lookup.snapshot, lookup.partitionKey != nil else { return nil }
         do {
-            return try session.restore(snapshot)
+            let cache = try session.restore(snapshot)
+            // Duplicate-prefix-bytes meter (PRD #173): this deep copy is the
+            // RAM a paged (refcounted) tier would not spend — record it.
+            diagnostics.log(
+                PrefixCacheDiagnostics.DuplicatePrefixBytesEvent(
+                    restoredBytes: snapshot.memoryBytes,
+                    snapshotOffset: snapshot.tokenOffset
+                ))
+            return cache
         } catch {
             Log.server.error(
                 "snapshot restore failed — treating as cache miss: \(error)"

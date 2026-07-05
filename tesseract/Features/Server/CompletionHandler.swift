@@ -4,32 +4,34 @@ import os
 
 // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
 // swiftlint:disable type_body_length
-/// Handles `POST /v1/chat/completions` requests by acquiring an inference lease
-/// from the `InferenceArbiter`, running generation through
+/// Handles `POST /v1/chat/completions` requests by submitting to the
+/// **Batch Engine** (PRD #173, ADR-0022), running generation through
 /// `ServerInferenceService`, and writing the response.
 ///
-/// All generation runs inside `arbiter.withExclusiveGPU(.llm)` to prevent
-/// overlap with the internal Agent chat or other HTTP requests.
+/// All generation runs inside an engine lane — the engine owns the GPU
+/// lease while any lane is live — so overlap with the internal Agent chat
+/// and other HTTP requests stays impossible by construction.
 struct CompletionHandler: Sendable {
 
-    /// Maximum seconds to wait for the inference lease before returning 503.
+    /// Maximum seconds to wait for lane admission before returning 503 —
+    /// the **Lane Admission** timeout, today's busy contract verbatim.
     static let leaseTimeoutSeconds: UInt64 = 60
     private static let sessionReplayStore = HTTPPrefixCacheSessionReplayStore()
 
-    private let arbiter: InferenceArbiter
+    private let batchEngine: BatchEngine
     private let inferenceService: ServerInferenceService
     private let downloads: ModelDownloadManager
     private let activityLog: ServerGenerationLog
     private let settings: SettingsManager
 
     init(
-        arbiter: InferenceArbiter,
+        batchEngine: BatchEngine,
         inferenceService: ServerInferenceService,
         downloads: ModelDownloadManager,
         activityLog: ServerGenerationLog,
         settings: SettingsManager
     ) {
-        self.arbiter = arbiter
+        self.batchEngine = batchEngine
         self.inferenceService = inferenceService
         self.downloads = downloads
         self.activityLog = activityLog
@@ -200,26 +202,47 @@ struct CompletionHandler: Sendable {
         )
 
         do {
-            try await withAcquisitionTimeout { signal in
-                try await arbiter.withExclusiveGPU(
-                    .llm,
-                    llmModelIDOverride: llmModelIDOverride,
-                    // ADR-0008: HTTP requests load the vision variant whenever
-                    // the target model is capable — the chat toggle never
-                    // gates what a configured client was promised.
-                    llmVision: .visionIfCapable
-                ) {
-                    signal.set()
-                    await self.activityLog.markLeaseAcquired(handle: logHandle)
-                    await self.runCompletion(
-                        completionRequest,
-                        sessionAffinity: sessionAffinity,
-                        writer: writer,
-                        completionID: completionID,
-                        logHandle: logHandle
-                    )
-                }
-            }
+            let requestID = UUID()
+            // Lane Admission (PRD #173): submit to the Batch Engine instead
+            // of acquiring the lease. The engine holds the GPU lease for the
+            // lane's whole life, loads the demanded model on acquisition,
+            // and preserves the 60 s busy contract as the admission timeout
+            // (`LeaseTimeoutError` → the 503 + Retry-After below).
+            //
+            // Pool eligibility is probed at submit time: text-only requests
+            // the **Completion Route** will send down the cache-aware arm
+            // may share the pool; everything else runs an exclusive lane
+            // (today's single-flight semantics). The probe and the route are
+            // the same pure decision over the same conversation shape, so
+            // they cannot disagree (`ServerInferenceService` guards the
+            // impossible mismatch loudly).
+            let admission = try await batchEngine.submit(
+                BatchSubmission(
+                    requestID: requestID,
+                    demand: BatchModelDemand(
+                        modelIDOverride: llmModelIDOverride,
+                        // ADR-0008: HTTP requests load the vision variant
+                        // whenever the target model is capable — the chat
+                        // toggle never gates what a configured client was
+                        // promised.
+                        vision: .visionIfCapable
+                    ),
+                    mode: Self.laneMode(for: completionRequest),
+                    admissionTimeout: .seconds(Int(Self.leaseTimeoutSeconds))
+                ))
+            let lane: BatchLane? =
+                admission.isExclusive
+                ? nil : BatchLane(engine: batchEngine, laneID: requestID)
+            await activityLog.markLeaseAcquired(handle: logHandle)
+            await runCompletion(
+                completionRequest,
+                sessionAffinity: sessionAffinity,
+                writer: writer,
+                completionID: completionID,
+                logHandle: logHandle,
+                lane: lane
+            )
+            await batchEngine.laneFinished(requestID)
         } catch is CancellationError {
             await activityLog.cancel(handle: logHandle)
             try await writer.send(.serviceUnavailable("Request cancelled"))
@@ -258,7 +281,8 @@ struct CompletionHandler: Sendable {
         sessionAffinity: String?,
         writer: HTTPResponseWriter,
         completionID: String,
-        logHandle: TraceHandle
+        logHandle: TraceHandle,
+        lane: BatchLane?
     ) async {
         if request.stream == true {
             await runStreamingCompletion(
@@ -266,7 +290,8 @@ struct CompletionHandler: Sendable {
                 sessionAffinity: sessionAffinity,
                 writer: writer,
                 completionID: completionID,
-                logHandle: logHandle
+                logHandle: logHandle,
+                lane: lane
             )
         } else {
             await runNonStreamingCompletion(
@@ -274,7 +299,8 @@ struct CompletionHandler: Sendable {
                 sessionAffinity: sessionAffinity,
                 writer: writer,
                 completionID: completionID,
-                logHandle: logHandle
+                logHandle: logHandle,
+                lane: lane
             )
         }
     }
@@ -284,7 +310,8 @@ struct CompletionHandler: Sendable {
         _ request: OpenAI.ChatCompletionRequest,
         sessionAffinity: String?,
         completionID: String,
-        logHandle: TraceHandle
+        logHandle: TraceHandle,
+        lane: BatchLane?
     ) async -> Result<StartedGeneration, Error> {
         let modelState = inferenceService.currentModelState() ?? .unavailable
 
@@ -354,7 +381,8 @@ struct CompletionHandler: Sendable {
                 route: .serverCompatible
             )
             let start = try await inferenceService.start(
-                inferenceRequest
+                inferenceRequest,
+                lane: lane
             )
             let startModelState = start.modelState ?? modelState
             return .success(
@@ -418,14 +446,16 @@ struct CompletionHandler: Sendable {
         sessionAffinity: String?,
         writer: HTTPResponseWriter,
         completionID: String,
-        logHandle: TraceHandle
+        logHandle: TraceHandle,
+        lane: BatchLane?
     ) async {
         let start: StartedGeneration
         switch await startGeneration(
             request,
             sessionAffinity: sessionAffinity,
             completionID: completionID,
-            logHandle: logHandle
+            logHandle: logHandle,
+            lane: lane
         ) {
         case .success(let started):
             start = started
@@ -551,7 +581,8 @@ struct CompletionHandler: Sendable {
         sessionAffinity: String?,
         writer: HTTPResponseWriter,
         completionID: String,
-        logHandle: TraceHandle
+        logHandle: TraceHandle,
+        lane: BatchLane?
     ) async {
         // swiftlint:enable function_body_length
         let start: StartedGeneration
@@ -559,7 +590,8 @@ struct CompletionHandler: Sendable {
             request,
             sessionAffinity: sessionAffinity,
             completionID: completionID,
-            logHandle: logHandle
+            logHandle: logHandle,
+            lane: lane
         ) {
         case .success(let started):
             start = started
@@ -1169,50 +1201,52 @@ struct CompletionHandler: Sendable {
         )
     }
 
-    /// Timeout that covers only lease acquisition + model loading, not generation.
-    ///
-    /// The timer task sleeps for the timeout duration, then checks whether the
-    /// lease was acquired. If not, it throws `LeaseTimeoutError` which cancels
-    /// the body (still waiting in the arbiter queue). If the lease WAS acquired,
-    /// the timer suspends indefinitely — only the body's completion or failure
-    /// will finish the group.
-    private func withAcquisitionTimeout(
-        body: @escaping @Sendable (LeaseAcquiredSignal) async throws -> Void
-    ) async throws {
-        try await Self.withAcquisitionTimeout(
-            timeoutNanoseconds: Self.leaseTimeoutSeconds * 1_000_000_000,
-            body: body
-        )
+    /// Whether any request message carries an image part — the Batch
+    /// Engine's lane-mode input: image requests always run an exclusive
+    /// lane (ADR-0022).
+    nonisolated static func requestBearsImages(
+        _ request: OpenAI.ChatCompletionRequest
+    ) -> Bool {
+        request.messages.contains { message in
+            guard case .parts(let parts) = message.content else { return false }
+            return parts.contains { $0.type == .image_url }
+        }
     }
 
-    /// Testable core: acquisition timeout with configurable duration.
-    static func withAcquisitionTimeout(
-        timeoutNanoseconds: UInt64,
-        body: @escaping @Sendable (LeaseAcquiredSignal) async throws -> Void
-    ) async throws {
-        let signal = LeaseAcquiredSignal()
+    /// The submit-time lane mode (PRD #173): image-bearing requests run an
+    /// exclusive lane (ADR-0022); text-only requests the **Completion
+    /// Route** sends down the cache-aware arm share the pool; everything
+    /// else runs the monolithic single-flight path, exclusively.
+    static func laneMode(
+        for request: OpenAI.ChatCompletionRequest
+    ) -> BatchLaneMode {
+        if requestBearsImages(request) { return .exclusive(.bearsImages) }
+        return requestRidesCacheAwareArm(request)
+            ? .pooled
+            : .exclusive(.monolithicPath)
+    }
 
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await body(signal)
-            }
-
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                if signal.isSet {
-                    // Lease acquired — park until cancelled by group cleanup
-                    while !Task.isCancelled {
-                        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
-                    }
-                    return
-                }
-                throw LeaseTimeoutError()
-            }
-
-            // First to finish/throw wins — cancel the other
-            try await group.next()
-            group.cancelAll()
+    /// The submit-time pool-eligibility probe (PRD #173): will the
+    /// **Completion Route** send this request down the cache-aware arm?
+    /// Text-only cache-aware requests may share the pool; everything else
+    /// runs monolithic. Runs the exact route decision — `normalizeRequest`
+    /// is pure over messages + tools, `CompletionRoute.decide` pure over the
+    /// conversation shape, and the post-admission session-replay repair only
+    /// fills assistant `reasoning_content` (never roles, counts, or content
+    /// parts) — so this cannot disagree with the dispatcher's decision.
+    static func requestRidesCacheAwareArm(
+        _ request: OpenAI.ChatCompletionRequest
+    ) -> Bool {
+        guard !requestBearsImages(request) else { return false }
+        let probe = MessageConverter.normalizeRequest(
+            request.messages, tools: request.tools
+        )
+        if case .cacheAware = CompletionRoute.decide(
+            conversation: probe.prefixCacheEligibility.conversation
+        ) {
+            return true
         }
+        return false
     }
 }
 // swiftlint:enable type_body_length

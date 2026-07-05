@@ -69,7 +69,7 @@ struct AgentSkillExecutionTests {
             agent: agent,
             conversationStore: InMemoryAgentConversationStore(),
             settings: settings,
-            arbiter: InMemoryInferenceArbiter(),
+            batchEngine: InMemoryInferenceArbiter().makeBatchEngine(),
             discoverSkills: { skills }
         )
         coordinator.imageDraft.imageInputAvailable = true

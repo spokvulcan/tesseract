@@ -375,7 +375,8 @@ struct EvictionScore: Comparable, Sendable {
 extension Duration {
     /// Total elapsed seconds as a `Double`. Combines integer seconds with
     /// the fractional attoseconds component (`1 atto = 1e-18 s`).
-    var seconds: Double {
+    /// Nonisolated: pure value math, callable from any actor.
+    nonisolated var seconds: Double {
         let components = self.components
         return Double(components.seconds)
             + Double(components.attoseconds) * 1e-18

@@ -36,6 +36,10 @@ final class InMemoryInferenceArbiter: InferenceArbitrating {
     /// of `ensureLoaded` failing (e.g. `modelNotDownloaded`).
     var ensureLoadedError: (any Error)?
 
+    /// Waiter visibility peer: tests raise it directly (`increment()`) to
+    /// simulate a slot-preserving consumer waiting on the lease.
+    nonisolated let leaseWaiters = LeaseWaiterSignal()
+
     func withExclusiveGPU<T: Sendable>(
         _ slot: ModelSlot,
         llmModelIDOverride: String?,
@@ -50,5 +54,31 @@ final class InMemoryInferenceArbiter: InferenceArbitrating {
             ))
         if let ensureLoadedError { throw ensureLoadedError }
         return try await body()
+    }
+
+    /// A real `BatchEngine` whose lease tenures run through this peer — the
+    /// consumer-side rewire (completions submit instead of acquiring) keeps
+    /// its lease contract assertable via `leaseCalls`, with the engine in
+    /// between exactly as in production. Oracle always satisfied, budget
+    /// funds the hard cap.
+    func makeBatchEngine() -> BatchEngine {
+        BatchEngine(
+            leaseRunner: { override, vision, body in
+                try await self.withExclusiveGPU(
+                    .llm, llmModelIDOverride: override, llmVision: vision
+                ) {
+                    await body()
+                }
+            },
+            leaseWaiters: leaseWaiters,
+            demandSatisfied: { _ in true },
+            laneBudget: {
+                BatchLaneBudget(
+                    headroomBytes: 64 << 30,
+                    evictableCacheBytes: 0,
+                    perLaneBytes: 4 << 30
+                )
+            }
+        )
     }
 }

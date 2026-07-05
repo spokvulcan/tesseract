@@ -317,6 +317,100 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// Lane lifecycle (PRD #173, user story 23): request-identity-keyed
+    /// events the **Batch Engine** emits at each lane phase transition —
+    /// queued → admitted → firstToken → drained (exclusive lanes skip
+    /// firstToken; their decode never steps through the engine). Emitted
+    /// system-scope: the engine has no per-request cache context, so the
+    /// `requestID` travels as an explicit field. Per-lane TTFT and queue
+    /// wait derive from the durations; `matchedPrefixLength` on `queued` is
+    /// the LPM-vs-FIFO evidence the PRD asks to quantify.
+    struct LaneLifecycleEvent: Payload {
+        enum Phase: String, Sendable {
+            case queued
+            case admitted
+            case firstToken
+            case drained
+        }
+
+        let phase: Phase
+        let requestID: UUID
+        /// `queued` only: the submission's radix-tree probe result.
+        let matchedPrefixLength: Int?
+        /// `queued` carries the submission's claim (images/monolithic);
+        /// `admitted` carries the engine's actual admission mode.
+        let exclusive: Bool?
+        /// `admitted` only.
+        let queueWaitSeconds: TimeInterval?
+        /// `firstToken` and `drained`.
+        let sinceAdmissionSeconds: TimeInterval?
+
+        init(
+            phase: Phase,
+            requestID: UUID,
+            matchedPrefixLength: Int? = nil,
+            exclusive: Bool? = nil,
+            queueWaitSeconds: TimeInterval? = nil,
+            sinceAdmissionSeconds: TimeInterval? = nil
+        ) {
+            self.phase = phase
+            self.requestID = requestID
+            self.matchedPrefixLength = matchedPrefixLength
+            self.exclusive = exclusive
+            self.queueWaitSeconds = queueWaitSeconds
+            self.sinceAdmissionSeconds = sinceAdmissionSeconds
+        }
+
+        let eventName = "lane"
+
+        var fields: [(String, String)] {
+            var out: [(String, String)] = [
+                ("phase", phase.rawValue),
+                ("requestID", requestID.uuidString),
+            ]
+            if let matchedPrefixLength {
+                out.append(("matchedPrefixLength", "\(matchedPrefixLength)"))
+            }
+            if let exclusive {
+                out.append(("exclusive", "\(exclusive)"))
+            }
+            if let queueWaitSeconds {
+                out.append(
+                    ("queueWaitMs", PrefixCacheDiagnostics.milliseconds(queueWaitSeconds)))
+            }
+            if let sinceAdmissionSeconds {
+                out.append(
+                    (
+                        "sinceAdmissionMs",
+                        PrefixCacheDiagnostics.milliseconds(sinceAdmissionSeconds)
+                    ))
+            }
+            return out
+        }
+    }
+
+    /// The deep-copy **duplicate-prefix-bytes meter** (PRD #173): under the
+    /// shipped v1 storage posture every lane restore deep-copies its prefix
+    /// out of the radix tree, so the restored bytes exist twice (tree copy +
+    /// lane copy) for the lane's lifetime. Under the paged KV tier
+    /// (ADR-0023, recorded follow-up — kernel gate PASSED) the same restore
+    /// is a refcount bump. One event per restore; summed over a trace and
+    /// joined with the lane lifecycle events by requestID, this is the
+    /// measured RAM the paged tier would reclaim on real traffic.
+    struct DuplicatePrefixBytesEvent: Payload {
+        let restoredBytes: Int
+        let snapshotOffset: Int
+
+        let eventName = "duplicatePrefixBytes"
+
+        var fields: [(String, String)] {
+            [
+                ("restoredBytes", "\(restoredBytes)"),
+                ("snapshotOffset", "\(snapshotOffset)"),
+            ]
+        }
+    }
+
     struct MemoryEvent: Payload {
         let snapshotCount: Int
         let totalSnapshotBytes: Int
