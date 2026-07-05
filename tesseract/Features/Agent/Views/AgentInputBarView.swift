@@ -387,54 +387,46 @@ struct AgentInputBarView: View {
 
     // MARK: - Image Switch Hint (slice #115)
 
-    @ViewBuilder
     private var imageHintBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "eye.slash")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-            Text(visionSwitch.message)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            if let title = visionSwitch.actionTitle {
-                Button(title) { applyVisionSwitch() }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 12, weight: .medium))
-            }
-            Button {
-                coordinator.imageDraft.showImageSwitchHint = false
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.tertiary)
-            }
-            .buttonStyle(.plain)
-            .help("Dismiss")
+        composerBanner(
+            icon: "eye.slash", message: visionSwitch.message,
+            actionTitle: visionSwitch.actionTitle, action: applyVisionSwitch
+        ) {
+            coordinator.imageDraft.showImageSwitchHint = false
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 4)
     }
 
     /// The transient Image Gesture feedback line (issue #167): what a paste,
     /// drop, or pick could not attach — cap trims, oversize files, unreadable
-    /// bytes. Same slot and styling as the switch-model hint.
-    @ViewBuilder
+    /// bytes. Same slot and chrome as the switch-model hint.
     private func attachmentNoticeBanner(_ notice: String) -> some View {
+        composerBanner(icon: "exclamationmark.circle", message: notice) {
+            coordinator.imageDraft.attachmentNotice = nil
+        }
+    }
+
+    /// Shared chrome for the composer's hint/notice slot: icon, message,
+    /// optional action, dismiss.
+    private func composerBanner(
+        icon: String, message: String,
+        actionTitle: String? = nil, action: @escaping () -> Void = {},
+        onDismiss: @escaping () -> Void
+    ) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.circle")
+            Image(systemName: icon)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-            Text(notice)
+            Text(message)
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            Button {
-                coordinator.imageDraft.attachmentNotice = nil
-            } label: {
+            if let actionTitle {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            Button(action: onDismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.tertiary)

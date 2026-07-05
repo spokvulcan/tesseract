@@ -39,6 +39,12 @@ enum PasteboardImageReader {
         .urlReadingContentsConformToTypes: [UTType.image.identifier]
     ]
 
+    /// The supported image set as pasteboard types — one derivation shared by
+    /// the content probe and the composer's drag registration, so the two can
+    /// never drift apart.
+    static let supportedPasteboardTypes: [NSPasteboard.PasteboardType] =
+        ImageIngest.supportedUTTypes.map { NSPasteboard.PasteboardType($0.identifier) }
+
     /// The gesture test: does this pasteboard carry image content in any form
     /// we can read? Deliberately cheap — type/conformance checks only, no byte
     /// reads or decodes — so it can run inside menu validation and drag
@@ -47,10 +53,7 @@ enum PasteboardImageReader {
         if pasteboard.canReadObject(forClasses: [NSURL.self], options: imageURLOptions) {
             return true
         }
-        let supportedTypes = ImageIngest.supportedUTTypes.map {
-            NSPasteboard.PasteboardType($0.identifier)
-        }
-        if pasteboard.availableType(from: supportedTypes) != nil { return true }
+        if pasteboard.availableType(from: supportedPasteboardTypes) != nil { return true }
         if NSImage.canInit(with: pasteboard) { return true }
         if !imagePromiseReceivers(pasteboard).isEmpty { return true }
         return false
@@ -193,6 +196,9 @@ enum PasteboardImageReader {
 enum ImageItemProviderReader {
 
     static func load(_ providers: [NSItemProvider]) async -> ImageGesturePayload {
+        // Loads run serially: NSItemProvider is not Sendable, so a task-group
+        // fan-out can't cross the isolation boundary, and drops are small
+        // (cap is 8) — determinism over concurrency machinery here.
         var payload = ImageGesturePayload()
         for provider in providers {
             let preferredUTI =

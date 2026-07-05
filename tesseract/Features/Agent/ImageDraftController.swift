@@ -80,11 +80,14 @@ final class ImageDraftController {
     // MARK: - Image Draft
 
     /// Append ingested images, capped to the room remaining under `maxPendingImages`.
-    func attachImages(_ attachments: [ImageAttachment]) {
+    /// Returns the slice actually appended.
+    @discardableResult
+    func attachImages(_ attachments: [ImageAttachment]) -> [ImageAttachment] {
         let added = ImageIngest.capBatch(
             attachments, alreadyQueued: pendingImages.count, limit: Self.maxPendingImages
         )
         pendingImages.append(contentsOf: added)
+        return added
     }
 
     /// Resolve one Image Gesture payload (issue #167): when the selected model
@@ -98,10 +101,7 @@ final class ImageDraftController {
             showImageSwitchHint = true
             return
         }
-        let added = ImageIngest.capBatch(
-            payload.attachments, alreadyQueued: pendingImages.count, limit: Self.maxPendingImages
-        )
-        pendingImages.append(contentsOf: added)
+        let added = attachImages(payload.attachments)
         showNotice(
             Self.gestureNotice(
                 requested: payload.attachments.count,
@@ -116,6 +116,8 @@ final class ImageDraftController {
     /// through `handleGesture`. Returns whether the drop was accepted.
     @discardableResult
     func handleWindowImageDrop(_ providers: [NSItemProvider]) -> Bool {
+        // `handleGesture` re-checks availability; this early gate exists only to
+        // answer `.onDrop` synchronously and to skip the async provider load.
         guard imageInputAvailable else {
             showImageSwitchHint = true
             return false

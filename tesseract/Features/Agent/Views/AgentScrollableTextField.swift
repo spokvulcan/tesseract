@@ -155,15 +155,21 @@ struct AgentScrollableTextField: NSViewRepresentable {
         /// name, a browser image's source URL) and even when nothing attaches
         /// (availability and rejection feedback belong to the receiver).
         /// Returns whether the gesture was claimed.
-        func handleImageGesture(from pasteboard: NSPasteboard) -> Bool {
+        func claimImageGesture(from pasteboard: NSPasteboard) -> Bool {
             guard parent.onImageGesture != nil else { return false }
             guard PasteboardImageReader.containsImageContent(pasteboard) else { return false }
+            deliverImageGesture(from: pasteboard)
+            return true
+        }
+
+        /// Read and forward a pasteboard already known to carry image content
+        /// (the drag path establishes that once per drag session).
+        func deliverImageGesture(from pasteboard: NSPasteboard) {
             Task { @MainActor in
                 let payload = await PasteboardImageReader.read(pasteboard)
                 guard !payload.isEmpty else { return }
                 parent.onImageGesture?(payload)
             }
-            return true
         }
 
         func setImageDragTargeted(_ targeted: Bool) {
@@ -183,12 +189,12 @@ final class ImagePasteTextView: NSTextView {
     // MARK: Paste — image wins
 
     override func paste(_ sender: Any?) {
-        if coordinator?.handleImageGesture(from: .general) == true { return }
+        if coordinator?.claimImageGesture(from: .general) == true { return }
         super.paste(sender)
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
-        if coordinator?.handleImageGesture(from: .general) == true { return }
+        if coordinator?.claimImageGesture(from: .general) == true { return }
         super.pasteAsPlainText(sender)
     }
 
@@ -210,19 +216,22 @@ final class ImagePasteTextView: NSTextView {
     /// The image and file-promise types the stock plain-text view wouldn't
     /// accept; text and non-image file drags keep the default behavior.
     private static let imageDragTypes: [NSPasteboard.PasteboardType] =
-        ImageIngest.supportedUTTypes.map { NSPasteboard.PasteboardType($0.identifier) }
+        PasteboardImageReader.supportedPasteboardTypes
         + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
         super.acceptableDragTypes + Self.imageDragTypes
     }
 
-    private func isImageGestureDrag(_ sender: any NSDraggingInfo) -> Bool {
-        PasteboardImageReader.containsImageContent(sender.draggingPasteboard)
-    }
+    /// The gesture test for the drag hovering the view, computed once on entry
+    /// — the dragging pasteboard is fixed for the session, and `draggingUpdated`
+    /// fires per pointer move.
+    private var dragSessionIsImageGesture = false
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        if isImageGestureDrag(sender) {
+        dragSessionIsImageGesture =
+            PasteboardImageReader.containsImageContent(sender.draggingPasteboard)
+        if dragSessionIsImageGesture {
             coordinator?.setImageDragTargeted(true)
             return .copy
         }
@@ -230,7 +239,7 @@ final class ImagePasteTextView: NSTextView {
     }
 
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        if isImageGestureDrag(sender) { return .copy }
+        if dragSessionIsImageGesture { return .copy }
         return super.draggingUpdated(sender)
     }
 
@@ -240,19 +249,21 @@ final class ImagePasteTextView: NSTextView {
     }
 
     override func draggingEnded(_ sender: any NSDraggingInfo) {
+        dragSessionIsImageGesture = false
         coordinator?.setImageDragTargeted(false)
         super.draggingEnded(sender)
     }
 
     override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        if isImageGestureDrag(sender) { return true }
+        if dragSessionIsImageGesture { return true }
         return super.prepareForDragOperation(sender)
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        if isImageGestureDrag(sender) {
+        if dragSessionIsImageGesture {
             coordinator?.setImageDragTargeted(false)
-            return coordinator?.handleImageGesture(from: sender.draggingPasteboard) == true
+            coordinator?.deliverImageGesture(from: sender.draggingPasteboard)
+            return true
         }
         return super.performDragOperation(sender)
     }
