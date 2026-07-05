@@ -14,8 +14,6 @@ import SwiftUI
 struct TesseractMarkView: View {
     /// Setup completion in [0, 1] — filled edges out of 32.
     var progress: Double
-    /// Extra rotation phase so chapters can re-pose the mark.
-    var phase: Double = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -23,10 +21,10 @@ struct TesseractMarkView: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 60, paused: reduceMotion)) { timeline in
             Canvas { context, size in
-                let time =
+                let angle =
                     reduceMotion
                     ? 0.9 : timeline.date.timeIntervalSinceReferenceDate * 0.35
-                draw(in: &context, size: size, angle: time + phase)
+                draw(in: &context, size: size, angle: angle)
             }
         }
         .accessibilityLabel(accessibilityDescription)
@@ -85,10 +83,7 @@ struct TesseractMarkView: View {
             path.addLine(to: to)
 
             if index < filledCount {
-                let gradient = Gradient(colors: [
-                    Color(red: 0.48, green: 0.36, blue: 0.98),
-                    Color(red: 0.22, green: 0.78, blue: 0.94),
-                ])
+                let gradient = OnboardingPalette.accentGradient
                 var glow = context
                 glow.addFilter(.blur(radius: 2.4))
                 glow.stroke(

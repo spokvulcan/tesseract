@@ -108,7 +108,7 @@ struct AgentInputStatusStrip: View {
             case .loading(let t): (t, AnyShapeStyle(.secondary))
             case .downloadingModel(let name, let progress):
                 (
-                    "\(name) is on its way — \(progress.formatted(.percent.precision(.fractionLength(0))))",
+                    "\(name) is on its way — \(progress.formatted(.wholePercent))",
                     AnyShapeStyle(.secondary)
                 )
             case .notDownloaded:

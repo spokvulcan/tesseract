@@ -75,6 +75,10 @@ private struct PrefixCacheDiagram: View {
     private let sharedCells = 7
     private let tailCells = [3, 5, 2]
 
+    private static let bracketLabel = Text("cached prefix — served from RAM or SSD")
+        .font(.system(size: 9, design: .monospaced))
+        .foregroundStyle(.secondary)
+
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
             Canvas { context, size in
@@ -101,10 +105,8 @@ private struct PrefixCacheDiagram: View {
                                 path,
                                 with: .linearGradient(
                                     Gradient(colors: [
-                                        Color(red: 0.22, green: 0.78, blue: 0.94)
-                                            .opacity(base),
-                                        Color(red: 0.48, green: 0.36, blue: 0.98)
-                                            .opacity(base),
+                                        OnboardingPalette.accentCyan.opacity(base),
+                                        OnboardingPalette.accentViolet.opacity(base),
                                     ]),
                                     startPoint: CGPoint(x: rect.minX, y: rect.midY),
                                     endPoint: CGPoint(x: rect.maxX, y: rect.midY)))
@@ -117,11 +119,8 @@ private struct PrefixCacheDiagram: View {
 
                 // The bracket under the shared run, labelled once.
                 let sharedWidth = CGFloat(sharedCells) * (cellWidth + 4) - 4
-                let label = Text("cached prefix — served from RAM or SSD")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.secondary)
                 context.draw(
-                    label,
+                    Self.bracketLabel,
                     at: CGPoint(x: sharedWidth / 2, y: size.height - 2),
                     anchor: .bottom)
             }

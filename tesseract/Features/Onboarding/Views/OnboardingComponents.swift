@@ -9,6 +9,47 @@
 
 import SwiftUI
 
+// MARK: - Palette
+
+/// The tour's accent pair — the violet→cyan run every filled edge, waveform
+/// bar, and cache cell shares. Static so per-frame Canvas code never
+/// re-allocates it.
+enum OnboardingPalette {
+    static let accentViolet = Color(red: 0.48, green: 0.36, blue: 0.98)
+    static let accentCyan = Color(red: 0.22, green: 0.78, blue: 0.94)
+    static let accentGradient = Gradient(colors: [accentViolet, accentCyan])
+}
+
+// MARK: - Card surface
+
+/// The one material card surface all tour cards share.
+struct OnboardingCardModifier: ViewModifier {
+    var cornerRadius: CGFloat = 12
+    var shadowed = false
+
+    func body(content: Content) -> some View {
+        content.background(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(.regularMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(.quaternary, lineWidth: 0.5)
+                }
+                .shadow(
+                    color: shadowed ? .black.opacity(0.18) : .clear,
+                    radius: shadowed ? 18 : 0,
+                    y: shadowed ? 8 : 0)
+        )
+    }
+}
+
+extension View {
+    func onboardingCard(cornerRadius: CGFloat = 12, shadowed: Bool = false) -> some View {
+        modifier(
+            OnboardingCardModifier(cornerRadius: cornerRadius, shadowed: shadowed))
+    }
+}
+
 // MARK: - Typography
 
 enum OnboardingType {
@@ -160,14 +201,7 @@ struct PermissionCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(.quaternary, lineWidth: 0.5)
-                }
-        )
+        .onboardingCard()
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: state)
     }
 
@@ -255,7 +289,7 @@ struct TryItLockedSlot: View {
         if let overrideReason { return overrideReason }
         switch status {
         case .downloading(let progress):
-            let percent = progress.formatted(.percent.precision(.fractionLength(0)))
+            let percent = progress.formatted(.wholePercent)
             return "The \(modelNoun) model is \(percent) of the way here — a minute more."
         default:
             return "Available as soon as the \(modelNoun) model lands."
@@ -275,14 +309,6 @@ struct StagePanel<Content: View>: View {
         content
             .padding(18)
             .frame(maxWidth: maxWidth)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(.regularMaterial)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(.quaternary, lineWidth: 0.5)
-                    }
-                    .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
-            )
+            .onboardingCard(cornerRadius: 14, shadowed: true)
     }
 }

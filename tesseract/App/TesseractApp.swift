@@ -25,7 +25,7 @@ private struct WindowOpenerView: View {
             .frame(width: 0, height: 0)
             .onAppear {
                 appDelegate.onOpenWindow = { [openWindow] in
-                    openWindow(id: "main")
+                    openWindow(id: WindowID.main)
                 }
             }
     }
@@ -88,7 +88,7 @@ struct TesseractApp: App {
     }
 
     var body: some Scene {
-        Window("Tesseract", id: "main") {
+        Window("Tesseract", id: WindowID.main) {
             ContentView(container: container, selectedNavigation: $selectedNavigation)
                 .background {
                     WindowOpenerView(appDelegate: appDelegate)

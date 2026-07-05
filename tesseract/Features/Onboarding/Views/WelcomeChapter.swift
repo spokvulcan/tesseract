@@ -119,14 +119,7 @@ struct ModelPickCard: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: 480)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(.quaternary, lineWidth: 0.5)
-                }
-        )
+        .onboardingCard()
     }
 
     private var pickStatusLine: String {
@@ -134,7 +127,7 @@ struct ModelPickCard: View {
         case .downloaded:
             return "Already installed — chosen for your \(memoryGigabytes) GB Mac"
         case .downloading(let progress):
-            let percent = progress.formatted(.percent.precision(.fractionLength(0)))
+            let percent = progress.formatted(.wholePercent)
             return "Downloading now — chosen for your \(memoryGigabytes) GB Mac · \(percent)"
         case .verifying:
             return "Verifying — chosen for your \(memoryGigabytes) GB Mac"

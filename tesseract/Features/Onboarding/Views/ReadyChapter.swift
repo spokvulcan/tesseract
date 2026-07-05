@@ -95,7 +95,7 @@ struct ReadyChapter: View {
                 ProgressView(value: progress)
                     .controlSize(.small)
                     .frame(width: 56)
-                Text(progress.formatted(.percent.precision(.fractionLength(0))))
+                Text(progress.formatted(.wholePercent))
                     .font(.system(size: 10.5).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -140,10 +140,15 @@ struct ReadyChapter: View {
 // MARK: - Celebration
 
 /// The tour's one particle moment: a single burst, fired once per appearance
-/// of the all-green Ready chapter, then over. Skipped under Reduce Motion.
+/// of the all-green Ready chapter, then over — the timeline is torn down when
+/// the burst ends, so no frames tick while the user sits on the final screen.
+/// Skipped under Reduce Motion.
 private struct CelebrationBurst: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var startDate: Date?
+    @State private var isOver = false
+
+    private static let duration = 1.6
 
     private struct Particle {
         let angle: Double
@@ -166,16 +171,15 @@ private struct CelebrationBurst: View {
     }
 
     var body: some View {
-        if reduceMotion {
+        if reduceMotion || isOver {
             EmptyView()
         } else {
             TimelineView(.animation(minimumInterval: 1 / 60)) { timeline in
                 Canvas { context, size in
                     guard let start = startDate else { return }
                     let elapsed = timeline.date.timeIntervalSince(start)
-                    let duration = 1.6
-                    guard elapsed >= 0, elapsed < duration else { return }
-                    let t = elapsed / duration
+                    guard elapsed >= 0, elapsed < Self.duration else { return }
+                    let t = elapsed / Self.duration
 
                     let origin = CGPoint(x: size.width / 2, y: size.height * 0.34)
                     for particle in Self.particles {
@@ -206,6 +210,10 @@ private struct CelebrationBurst: View {
                 }
             }
             .onAppear { startDate = Date() }
+            .task {
+                try? await Task.sleep(for: .seconds(Self.duration + 0.1))
+                isOver = true
+            }
         }
     }
 }

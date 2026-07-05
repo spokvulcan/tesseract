@@ -16,7 +16,10 @@ struct OnboardingBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 20, paused: reduceMotion)) { timeline in
+        // Depends only on chapter + scheme — resolved once per body
+        // evaluation, not once per 20fps frame.
+        let colors = meshColors
+        return TimelineView(.animation(minimumInterval: 1 / 20, paused: reduceMotion)) { timeline in
             let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
             let sway = Float(0.10 * sin(t * 0.23))
             let lift = Float(0.08 * cos(t * 0.17))
@@ -29,7 +32,7 @@ struct OnboardingBackdrop: View {
                     [0, 0.5], [0.5 + sway, 0.5 + lift], [1, 0.5],
                     [0, 1], [0.5, 1], [1, 1],
                 ],
-                colors: meshColors
+                colors: colors
             )
         }
         .overlay {

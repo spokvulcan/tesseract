@@ -54,13 +54,10 @@ struct OnboardingTourView: View {
             Spacer()
             if controller.chapter != .welcome {
                 if !controller.isSetupComplete {
-                    Text(
-                        controller.setupProgress.formatted(
-                            .percent.precision(.fractionLength(0)))
-                    )
-                    .font(.system(size: 10.5).monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                    .contentTransition(.numericText())
+                    Text(controller.setupProgress.formatted(.wholePercent))
+                        .font(.system(size: 10.5).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .contentTransition(.numericText())
                 }
                 TesseractMarkView(progress: controller.setupProgress)
                     .frame(width: 30, height: 30)
