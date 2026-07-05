@@ -167,10 +167,12 @@ final class ChatTranscriptController {
 
     func toggleDetailExpanded(_ rowID: String) {
         expandedDetails.formSymmetricDifference([rowID])
-        if let idx = rows.firstIndex(where: { $0.id == rowID }),
-            case .toolCall(let data) = rows[idx].kind
-        {
-            rows[idx] = ChatRow(id: rowID, kind: .toolCall(data.togglingDetail()))
+        // Optimistic in-place refresh — kind-agnostic, so every
+        // detail-expandable row (tool call, Skill Invocation Row) updates
+        // immediately; `expandedDetails` is ObservationIgnored and a rebuild
+        // may be far away.
+        if let idx = rows.firstIndex(where: { $0.id == rowID }) {
+            rows[idx] = rows[idx].togglingDetail()
         }
     }
 

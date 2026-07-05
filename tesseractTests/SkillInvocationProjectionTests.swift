@@ -94,11 +94,9 @@ struct SkillInvocationProjectionTests {
             Issue.record("Expected .skillInvocation, got \(row.kind)")
             return
         }
-        #expect(data.skillName == "proofread")
         #expect(data.displayLabel == "Proofread")
         #expect(data.argumentText == "fix this")
         #expect(data.isExpanded == false)
-        #expect(data.messageID == user.id)
         #expect(data.timestamp == "TS")
     }
 
@@ -149,6 +147,25 @@ struct SkillInvocationProjectionTests {
             return
         }
         #expect(data.content == "just a normal message")
+    }
+
+    @Test @MainActor func chevronToggleFlipsTheRowInPlace() throws {
+        // Regression: the controller's optimistic in-place toggle refresh must
+        // be kind-agnostic. `expandedDetails` is ObservationIgnored, so if the
+        // toggle only rebuilt `.toolCall` rows the Skill Invocation Row's
+        // chevron would do nothing until an unrelated rebuild came along.
+        let controller = ChatTranscriptController()
+        let user = UserMessage(content: skillContent())
+        controller.rebuild(messages: [user], stream: nil, isGenerating: false)
+        let rowID = try #require(controller.rows.first?.id)
+
+        controller.toggleDetailExpanded(rowID)
+
+        guard case .skillInvocation(let data) = controller.rows.first?.kind else {
+            Issue.record("Expected .skillInvocation")
+            return
+        }
+        #expect(data.isExpanded == true)
     }
 
     @Test func assistantAnswerFollowsTheSkillRow() throws {

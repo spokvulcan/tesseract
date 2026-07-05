@@ -226,13 +226,11 @@ nonisolated enum ChatTranscript {
                         id: rowID,
                         kind: .skillInvocation(
                             SkillInvocationRow(
-                                skillName: skill.skillName,
                                 displayLabel: skill.displayLabel,
                                 argumentText: skill.argumentText,
                                 injectedBlock: skill.injectedBlock,
                                 images: user.images,
                                 timestamp: ctx.formatTimestamp(user.timestamp),
-                                messageID: turn.id,
                                 isExpanded: ctx.expandedDetails.contains(rowID)
                             ))
                     ))

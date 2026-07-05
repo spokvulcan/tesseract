@@ -22,6 +22,22 @@ nonisolated struct ChatRow: Identifiable, Equatable, Sendable {
         case streamingIndicator
     }
 
+    /// Returns a copy with the detail-expansion flag flipped on the
+    /// detail-expandable kinds (tool calls, Skill Invocation Rows); other kinds
+    /// return self. The controller's in-place toggle refresh goes through this
+    /// so every expandable kind gets the optimistic row update, not just tool
+    /// calls.
+    func togglingDetail() -> ChatRow {
+        switch kind {
+        case .toolCall(let d):
+            ChatRow(id: id, kind: .toolCall(d.togglingDetail()))
+        case .skillInvocation(let d):
+            ChatRow(id: id, kind: .skillInvocation(d.togglingExpanded()))
+        default:
+            self
+        }
+    }
+
     /// Returns a copy with `isLast` stamped on step-row kinds (thinking, toolCall, toolText).
     func withIsLast(_ isLast: Bool) -> ChatRow {
         switch kind {
@@ -57,7 +73,6 @@ nonisolated struct UserRow: Equatable, Sendable {
 /// argument text, and attachments — expandable to the full injected block.
 /// One rendering for every invocation surface (Skill Pill or slash command).
 nonisolated struct SkillInvocationRow: Equatable, Sendable {
-    let skillName: String
     /// Title-cased pill-style label ("proofread-tweet" → "Proofread Tweet").
     let displayLabel: String
     /// The user's argument text (empty for a bare invocation).
@@ -66,8 +81,14 @@ nonisolated struct SkillInvocationRow: Equatable, Sendable {
     let injectedBlock: String
     let images: [ImageAttachment]
     let timestamp: String
-    let messageID: UUID
     let isExpanded: Bool
+
+    func togglingExpanded() -> SkillInvocationRow {
+        SkillInvocationRow(
+            displayLabel: displayLabel, argumentText: argumentText,
+            injectedBlock: injectedBlock, images: images,
+            timestamp: timestamp, isExpanded: !isExpanded)
+    }
 }
 
 nonisolated struct AssistantTextRow: Equatable, Sendable {
