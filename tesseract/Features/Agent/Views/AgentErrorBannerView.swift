@@ -11,43 +11,24 @@ struct AgentInputStatusStrip: View {
     @Environment(SettingsManager.self) private var settings
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
-    private var isModelDownloaded: Bool {
-        downloadManager.isDownloaded(settings.selectedAgentModelID)
-    }
-
-    private enum Status: Equatable {
-        case error(String)
-        case voiceError(String)
-        case loading(String)
-        case notDownloaded
-
-        var tint: Color {
-            switch self {
-            case .error: .red
-            case .voiceError: .orange
-            case .loading: .blue
-            case .notDownloaded: .yellow
-            }
-        }
-    }
-
-    private var currentStatus: Status? {
-        if let error = coordinator.error {
-            return .error(error)
-        }
+    private var currentStatus: AgentInputStatus? {
+        let selectedID = settings.selectedAgentModelID
+        let voiceMessage: String?
         if case .error(let message) = coordinator.voiceInput.voiceState {
-            return .voiceError(message)
+            voiceMessage = message
+        } else {
+            voiceMessage = nil
         }
-        if agentEngine.isLoading {
-            let text =
-                agentEngine.loadingStatus.isEmpty
-                ? "Loading model\u{2026}" : agentEngine.loadingStatus
-            return .loading(text)
-        }
-        if !agentEngine.isModelLoaded && !isModelDownloaded {
-            return .notDownloaded
-        }
-        return nil
+        return AgentInputStatus.derive(
+            error: coordinator.error,
+            voiceErrorMessage: voiceMessage,
+            isEngineLoading: agentEngine.isLoading,
+            loadingStatus: agentEngine.loadingStatus,
+            isModelLoaded: agentEngine.isModelLoaded,
+            selectedModelDisplayName: ModelDefinition.withID(selectedID)?.displayName
+                ?? selectedID,
+            selectedModelStatus: downloadManager.status(for: selectedID)
+        )
     }
 
     var body: some View {
@@ -90,7 +71,7 @@ struct AgentInputStatusStrip: View {
     }
 
     @ViewBuilder
-    private func statusIcon(_ status: Status) -> some View {
+    private func statusIcon(_ status: AgentInputStatus) -> some View {
         switch status {
         case .error:
             Image(systemName: "exclamationmark.circle.fill")
@@ -106,6 +87,12 @@ struct AgentInputStatusStrip: View {
             ProgressView()
                 .controlSize(.mini)
                 .tint(.blue)
+        case .downloadingModel:
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(.blue)
+                .symbolRenderingMode(.hierarchical)
+                .symbolEffect(.pulse, options: .repeating)
         case .notDownloaded:
             Image(systemName: "arrow.down.circle.fill")
                 .font(.system(size: 13))
@@ -114,11 +101,16 @@ struct AgentInputStatusStrip: View {
         }
     }
 
-    private func statusLabel(_ status: Status) -> some View {
+    private func statusLabel(_ status: AgentInputStatus) -> some View {
         let (text, style): (String, AnyShapeStyle) =
             switch status {
             case .error(let m), .voiceError(let m): (m, AnyShapeStyle(.primary.opacity(0.7)))
             case .loading(let t): (t, AnyShapeStyle(.secondary))
+            case .downloadingModel(let name, let progress):
+                (
+                    "\(name) is on its way — \(progress.formatted(.percent.precision(.fractionLength(0))))",
+                    AnyShapeStyle(.secondary)
+                )
             case .notDownloaded:
                 ("Download an agent model to get started", AnyShapeStyle(.secondary))
             }
@@ -134,6 +126,17 @@ struct AgentInputStatusStrip: View {
             .font(.caption)
             .foregroundStyle(style)
             .lineLimit(lineLimit)
+    }
+}
+
+extension AgentInputStatus {
+    fileprivate var tint: Color {
+        switch self {
+        case .error: .red
+        case .voiceError: .orange
+        case .loading, .downloadingModel: .blue
+        case .notDownloaded: .yellow
+        }
     }
 }
 
