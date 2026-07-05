@@ -110,7 +110,8 @@ nonisolated enum SSDStalePartitionPolicy {
 /// other way by reuse: a node whose hit count crosses
 /// `hitCountThreshold` gets a deferred-class promotion write (HiCache's
 /// `write_through_selective` precedent, keyed on RAM-tier health per
-/// ADR-0019). The guarantee-class end-of-turn write is never deferred.
+/// ADR-0019). The guarantee-class end-of-turn write is never deferred,
+/// and neither is the `.system` stable-prefix checkpoint (see `mayDefer`).
 nonisolated enum SSDWriteEagernessPolicy {
     /// Lookup hits after which an unbacked RAM body earns its SSD
     /// backing regardless of RAM health — proven reuse is worth the
@@ -125,15 +126,20 @@ nonisolated enum SSDWriteEagernessPolicy {
     static let comfortFraction = 0.75
 
     /// Whether a non-guarantee write may be skipped at admission.
+    /// `.system` checkpoints always write through: demote-before-drop
+    /// covers RAM pressure but not process exit, and only the SSD copy
+    /// carries the stable prefix across a restart (issue #165).
     /// `bandRetreating` (current budget below the measured ceiling —
     /// an OS pressure fold in effect) always writes through: pressure
     /// is exactly when redundancy stops being redundant.
     static func mayDefer(
+        checkpointType: HybridCacheSnapshot.CheckpointType,
         nodeHitCount: Int,
         residentBytes: Int,
         budgetBytes: Int,
         bandRetreating: Bool
     ) -> Bool {
+        guard checkpointType != .system else { return false }
         guard !bandRetreating else { return false }
         guard nodeHitCount < hitCountThreshold else { return false }
         return Double(residentBytes) <= comfortFraction * Double(budgetBytes)

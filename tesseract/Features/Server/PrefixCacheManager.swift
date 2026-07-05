@@ -1170,9 +1170,11 @@ final class PrefixCacheManager {
             // **Recoverable Eviction**'s demote-before-drop persists it
             // the moment RAM actually needs the bytes back, and a hot
             // streak earns a deferred-class promotion write from the
-            // lookup path instead.
+            // lookup path instead. `.system` checkpoints are exempt
+            // inside the policy (issue #165).
             if !guaranteeWrite, adaptiveWriteEagerness,
                 SSDWriteEagernessPolicy.mayDefer(
+                    checkpointType: entry.snapshot.checkpointType,
                     nodeHitCount: node.hitCount,
                     residentBytes: totalSnapshotBytes,
                     budgetBytes: memoryBudgetBytes,

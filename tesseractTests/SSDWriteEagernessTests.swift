@@ -25,10 +25,12 @@ struct SSDWriteEagernessPolicyTests {
     @Test func defersColdNodeWhileRAMComfortable() {
         #expect(
             SSDWriteEagernessPolicy.mayDefer(
+                checkpointType: .branchPoint,
                 nodeHitCount: 0, residentBytes: 50, budgetBytes: 100, bandRetreating: false
             ))
         #expect(
             SSDWriteEagernessPolicy.mayDefer(
+                checkpointType: .leaf,
                 nodeHitCount: 1, residentBytes: 75, budgetBytes: 100, bandRetreating: false
             ))
     }
@@ -36,6 +38,7 @@ struct SSDWriteEagernessPolicyTests {
     @Test func writesThroughOnceHitCountProvesReuse() {
         #expect(
             !SSDWriteEagernessPolicy.mayDefer(
+                checkpointType: .branchPoint,
                 nodeHitCount: SSDWriteEagernessPolicy.hitCountThreshold,
                 residentBytes: 0, budgetBytes: 100, bandRetreating: false
             ))
@@ -44,6 +47,7 @@ struct SSDWriteEagernessPolicyTests {
     @Test func writesThroughAboveComfortFraction() {
         #expect(
             !SSDWriteEagernessPolicy.mayDefer(
+                checkpointType: .branchPoint,
                 nodeHitCount: 0, residentBytes: 76, budgetBytes: 100, bandRetreating: false
             ))
     }
@@ -51,7 +55,18 @@ struct SSDWriteEagernessPolicyTests {
     @Test func writesThroughWhileBandRetreats() {
         #expect(
             !SSDWriteEagernessPolicy.mayDefer(
+                checkpointType: .branchPoint,
                 nodeHitCount: 0, residentBytes: 0, budgetBytes: 100, bandRetreating: true
+            ))
+    }
+
+    /// `.system` is never deferrable, even cold under a fully
+    /// comfortable RAM budget — see the `mayDefer` doc (issue #165).
+    @Test func systemCheckpointNeverDeferred() {
+        #expect(
+            !SSDWriteEagernessPolicy.mayDefer(
+                checkpointType: .system,
+                nodeHitCount: 0, residentBytes: 0, budgetBytes: 100, bandRetreating: false
             ))
     }
 }
@@ -69,7 +84,8 @@ struct SSDWriteEagernessTests {
     }
 
     private func admitSSDCheckpoint(
-        _ manager: PrefixCacheManager, prefixTokens: [Int]
+        _ manager: PrefixCacheManager, prefixTokens: [Int],
+        type: HybridCacheSnapshot.CheckpointType = .branchPoint
     ) {
         manager.admit(
             SnapshotAdmission.checkpoints(
@@ -77,7 +93,7 @@ struct SSDWriteEagernessTests {
                 candidates: [
                     .ramAndSSD(
                         PrefixCacheTestFixtures.makeUniformSnapshot(
-                            offset: prefixTokens.count, type: .system
+                            offset: prefixTokens.count, type: type
                         ),
                         payload: PrefixCacheTestFixtures.makeLeafPayload(
                             bytes: 2_000, tokenOffset: prefixTokens.count
@@ -120,6 +136,27 @@ struct SSDWriteEagernessTests {
         #expect(manager.cumulativeCounters.eagernessDeferrals == 1)
         #expect(store.ssdStoreForTesting!.residentIDsByRecencyForTesting().isEmpty)
         #expect(sink.drain().contains { $0.contains("event=ssdWriteDeferred") })
+    }
+
+    /// A cold `.system` checkpoint lands on SSD even with eagerness on
+    /// and RAM fully comfortable (issue #165, prefix-cache-e2e
+    /// `requestX3_stable_prefix_reused_across_users`).
+    @Test func coldSystemCheckpointWritesThroughDespiteComfort() async {
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: "eagerness-system-writethrough",
+            ramBudgetBytes: 100_000_000,
+            adaptiveWriteEagerness: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        admitSSDCheckpoint(manager, prefixTokens: Array(1...10), type: .system)
+        await store.ssdStoreForTesting!.flushAsync()
+
+        let committed = await waitUntil {
+            self.nodeState(store, tokens: Array(1...10))?.committed == true
+        }
+        #expect(committed)
+        #expect(manager.cumulativeCounters.eagernessDeferrals == 0)
     }
 
     /// The guarantee-class end-of-turn leaf is never deferred: it lands
@@ -172,7 +209,7 @@ struct SSDWriteEagernessTests {
                 candidates: [
                     .ramOnly(
                         PrefixCacheTestFixtures.makeUniformSnapshot(
-                            offset: prefix.count, type: .system
+                            offset: prefix.count, type: .branchPoint
                         ))
                 ],
                 partitionKey: key
