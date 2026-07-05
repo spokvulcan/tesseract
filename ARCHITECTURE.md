@@ -442,8 +442,10 @@ The Overlay Panel receives dictation state via a push method (`handleStateChange
 ### Audio Format Pipeline
 
 ```
-Microphone (48kHz stereo) → AVAudioEngine tap (device rate, mono float32)
-  → SampleBuffer (thread-safe) → Resample to 16kHz → WhisperKit
+Microphone (48kHz stereo) → [Voice Processing: AEC+AGC+NS, optional toggle]
+  → AVAudioEngine tap (device rate, mono float32) → SampleBuffer (thread-safe)
+  → Resample to 16kHz (anti-aliased, AudioConverter) → WhisperKit
+  └─► RawCapture (native rate, pre-resample) → Capture Dump (bounded WAV ring)
 ```
 
 ---

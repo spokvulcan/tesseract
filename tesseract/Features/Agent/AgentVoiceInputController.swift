@@ -51,7 +51,7 @@ final class AgentVoiceInputController {
                 audioCapture: audioCapture,
                 transcriptionEngine: transcriptionEngine,
                 captureDump: captureDump,
-                isCaptureDumpEnabled: { [weak settings] in settings?.captureDumpEnabled ?? true }
+                isCaptureDumpEnabled: { settings?.captureDumpEnabled ?? true }
             )
         } else {
             self.session = nil

@@ -79,27 +79,18 @@ final class CaptureDumpStore: CaptureDumpStoring {
         return String(format: "capture-%@-%04d_%dHz_vp-%@.wav", stamp, sequence, rate, vp)
     }
 
+    private enum CaptureDumpError: LocalizedError {
+        case bufferSetupFailed
+        var errorDescription: String? { "buffer setup failed" }
+    }
+
     private func write(_ capture: RawCapture, to url: URL) throws {
         guard
-            let format = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: capture.sampleRate,
-                channels: 1,
-                interleaved: false
-            ),
-            let buffer = AVAudioPCMBuffer(
-                pcmFormat: format,
-                frameCapacity: AVAudioFrameCount(capture.samples.count)
-            )
+            let buffer = AudioConverter.makeMonoFloat32Buffer(
+                capture.samples, sampleRate: capture.sampleRate)
         else {
-            throw DictationError.audioCaptureFailed("Capture Dump buffer setup failed")
+            throw CaptureDumpError.bufferSetupFailed
         }
-
-        capture.samples.withUnsafeBufferPointer { source in
-            buffer.floatChannelData?[0].update(
-                from: source.baseAddress!, count: capture.samples.count)
-        }
-        buffer.frameLength = AVAudioFrameCount(capture.samples.count)
 
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
