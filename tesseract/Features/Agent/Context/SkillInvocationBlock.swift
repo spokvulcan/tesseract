@@ -31,8 +31,12 @@ nonisolated struct SkillInvocationBlock: Equatable, Sendable {
     /// invocation row (best-effort — the expanded view shows the full text
     /// either way, so an exact-format collision stays transparent).
     static func parse(_ content: String) -> SkillInvocationBlock? {
+        // Raw prefix gate before any allocation: this runs for every user
+        // message on every projection pass, and the injection path always
+        // writes the tag at byte zero — so a plain message bails without
+        // paying for a full-content trim.
+        guard content.hasPrefix("<skill ") else { return nil }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("<skill ") else { return nil }
 
         guard let openingEnd = trimmed.firstIndex(of: ">") else { return nil }
         let openingTag = trimmed[..<openingEnd]

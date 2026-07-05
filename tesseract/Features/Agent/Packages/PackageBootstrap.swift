@@ -87,17 +87,13 @@ enum PackageBootstrap {
 
     /// Discover every skill visible to the agent: the user-global skills
     /// directory plus the cached package skill files. The one discovery used by
-    /// both the Command Palette registry and the Skill Pill row, so the two
-    /// surfaces can never drift on which skills exist.
+    /// the model's `use_skill` listing, the Command Palette registry, and the
+    /// Skill Pill row, so the surfaces can never drift on which skills exist.
     static func discoverAgentSkills(packageRegistry: PackageRegistry?) -> [SkillMetadata] {
         let agentRoot = PathSandbox.defaultRoot
         let skillsDir = agentRoot.appendingPathComponent("skills")
-        let packageSkillFiles: [URL]
-        if let packageRegistry {
-            packageSkillFiles = cachedSkillPaths(from: packageRegistry, agentRoot: agentRoot)
-        } else {
-            packageSkillFiles = []
-        }
+        let packageSkillFiles =
+            packageRegistry.map { cachedSkillPaths(from: $0, agentRoot: agentRoot) } ?? []
         return SkillRegistry.discover(
             locations: [skillsDir], packageSkillFiles: packageSkillFiles)
     }

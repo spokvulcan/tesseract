@@ -33,15 +33,10 @@ enum AgentFactory {
         // 2. Refresh extension tools after package bootstrap
         toolRegistry.refreshExtensionTools(from: extensionHost)
 
-        // 3. Discover skills from agent root + packages (sandbox-local paths)
-        let skillsDir = agentRoot.appendingPathComponent("skills")
-        let cachedSkillPaths = PackageBootstrap.cachedSkillPaths(
-            from: packageRegistry, agentRoot: agentRoot
-        )
-        let skills = SkillRegistry.discover(
-            locations: [skillsDir],
-            packageSkillFiles: cachedSkillPaths
-        )
+        // 3. Discover skills from agent root + packages (sandbox-local paths) —
+        // the same discovery the Command Palette and Skill Pill row run, so the
+        // model's use_skill listing can never drift from the user surfaces.
+        let skills = PackageBootstrap.discoverAgentSkills(packageRegistry: packageRegistry)
 
         // 3b. Register the use_skill tool (needs discovered skills)
         let skillTool = createSkillTool(skills: skills)

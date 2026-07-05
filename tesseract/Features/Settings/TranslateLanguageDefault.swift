@@ -14,11 +14,18 @@ nonisolated enum TranslateLanguageDefault {
 
     /// English display name of the first non-English language identifier
     /// (e.g. `["uk-UA", "en-US"]` → "Ukrainian"), or "English".
+    ///
+    /// Names come from the ``SupportedLanguage`` catalogue first so the derived
+    /// default matches the Settings picker's options exactly; `Locale` is the
+    /// fallback for codes outside the catalogue.
     static func derive(from preferredLanguages: [String]) -> String {
         let english = Locale(identifier: "en_US")
         for identifier in preferredLanguages {
             let language = Locale(identifier: identifier).language
             guard let code = language.languageCode?.identifier, code != "en" else { continue }
+            if let catalogued = SupportedLanguage.language(forCode: code) {
+                return catalogued.name
+            }
             if let name = english.localizedString(forLanguageCode: code) {
                 return name
             }

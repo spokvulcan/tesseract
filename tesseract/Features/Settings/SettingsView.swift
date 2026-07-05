@@ -172,23 +172,19 @@ struct RecordingSettingsSection: View {
         container.modelDownloadManager.status(for: settings.selectedAgentModelID)
     }
 
-    /// Curated common-language options for the Translate skill's target
-    /// picker, with the current selection (the launch-time derivation from the
-    /// macOS preferred languages, or a past choice) always present so the
-    /// Picker never shows an unselectable value.
+    /// Language options for the Translate skill's target picker: the canonical
+    /// ``SupportedLanguage`` catalogue (minus the dictation-only "Auto-detect"
+    /// pseudo-entry), with the current selection (the launch-time derivation
+    /// from the macOS preferred languages, or a past choice) always present so
+    /// the Picker never shows an unselectable value.
     private var translateLanguageOptions: [String] {
-        var languages = [
-            "Arabic", "Chinese", "Czech", "Danish", "Dutch", "English", "Finnish",
-            "French", "German", "Greek", "Hebrew", "Hindi", "Hungarian", "Indonesian",
-            "Italian", "Japanese", "Korean", "Norwegian", "Polish", "Portuguese",
-            "Romanian", "Russian", "Spanish", "Swedish", "Thai", "Turkish",
-            "Ukrainian", "Vietnamese",
-        ]
+        var languages = SupportedLanguage.all
+            .filter { $0.code != SupportedLanguage.auto.code }
+            .map(\.name)
         if !languages.contains(settings.translateTargetLanguage) {
             languages.append(settings.translateTargetLanguage)
-            languages.sort()
         }
-        return languages
+        return languages.sorted()
     }
 
     private func refreshSelectedAgentModelCapabilities() {
