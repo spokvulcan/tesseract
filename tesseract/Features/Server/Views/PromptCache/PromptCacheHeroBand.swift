@@ -124,6 +124,9 @@ struct PromptCacheHeroBand: View {
     private var ssdLabel: String {
         guard let ssd = snapshot?.ssd else { return "ssd tier" }
         if !ssd.enabled { return "ssd tier · off" }
+        // Free space, not policy, is the binding constraint — the PRD's
+        // "nearly-full disk degrades to the floor and the panel says so".
+        if ssd.isAtFloor { return "ssd tier · at floor, disk low" }
         if ssd.pendingCount > 0 { return "ssd tier · \(ssd.pendingCount) pending" }
         return "ssd tier"
     }
@@ -151,6 +154,11 @@ struct PromptCacheHeroBand: View {
                 parts.append(
                     "budget squeezed (ceiling "
                         + PromptCacheFormatting.bytes(snapshot.budgetCeilingBytes) + ")")
+            }
+            // Free-disk context next to the SSD gauge (PRD #150): only
+            // when the dynamic budget actually measured the volume.
+            if let freeDisk = snapshot.ssd.freeDiskBytes {
+                parts.append("disk free " + PromptCacheFormatting.bytes(freeDisk))
             }
         }
         if aggregate.averageLookupMs > 0 {

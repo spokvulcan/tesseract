@@ -576,18 +576,21 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         let queuedCount = pending.count
         queueLock.unlock()
 
+        let budget = ledger.budgetContext()
         return PromptCacheSSDSnapshot(
             enabled: true,
             rootPath: rootURL.path,
             // The budget currently in force (measured; ADR-0018), not
             // the bootstrap constant this store was constructed with.
-            budgetBytes: ledger.currentBudgetBytes(),
+            budgetBytes: budget.budgetBytes,
             currentBytes: residency.currentBytes,
             pendingBytes: queuedBytes,
             maxPendingBytes: maxPendingBytes,
             pendingCount: queuedCount,
             snapshotCount: residency.snapshotCount,
-            partitionCount: residency.partitionCount
+            partitionCount: residency.partitionCount,
+            budgetFloorBytes: budget.floorBytes,
+            freeDiskBytes: budget.freeDiskBytes
         )
     }
 

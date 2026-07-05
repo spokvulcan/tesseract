@@ -23,6 +23,12 @@ struct ServerPromptCacheView: View {
                 isLive: telemetry.isLive
             )
 
+            PromptCacheVitalsStrip(
+                outcome: telemetry.lastRequestOutcome,
+                endurance: telemetry.endurance,
+                ssdEnabled: telemetry.snapshot?.ssd.enabled == true
+            )
+
             Divider()
 
             PromptCacheTreeCanvasView(

@@ -15,6 +15,9 @@ final class PromptCacheTelemetryStore {
     private(set) var metricSamples: [PromptCacheMetricSample] = []
     private(set) var lastRefreshError: String?
     private(set) var isPolling = false
+    /// The SSD endurance ledger's current counters + notable events
+    /// (PRD #150), re-pulled on every snapshot refresh and sample tick.
+    private(set) var endurance: SSDEnduranceSnapshot = .empty
 
     var isLive = true
     var searchText = ""
@@ -34,8 +37,13 @@ final class PromptCacheTelemetryStore {
     @ObservationIgnored private var pendingEvents: [PromptCacheTelemetryEvent] = []
     @ObservationIgnored private var flushScheduled = false
     @ObservationIgnored private var pollingTask: Task<Void, Never>?
+    @ObservationIgnored private let enduranceAccumulator: SSDEnduranceAccumulator?
 
-    init(registerDiagnosticsSink: Bool = true) {
+    init(
+        registerDiagnosticsSink: Bool = true,
+        enduranceAccumulator: SSDEnduranceAccumulator? = nil
+    ) {
+        self.enduranceAccumulator = enduranceAccumulator
         if registerDiagnosticsSink {
             diagnosticsHandle = PrefixCacheDiagnostics.addTelemetrySink { [weak self] event in
                 Task { @MainActor [weak self] in
@@ -166,6 +174,21 @@ final class PromptCacheTelemetryStore {
     var selectedEvent: PromptCacheTelemetryEvent? {
         guard let selectedEventID else { return nil }
         return events.first { $0.id == selectedEventID }
+    }
+
+    /// The most recent completed request's humanized `lookup` + `ttft`
+    /// pair (PRD #150's per-request outcome line). The `ttft` event
+    /// trails its `lookup` by the whole generation, so it is matched by
+    /// request ID and may legitimately still be absent.
+    var lastRequestOutcome: (lookup: PromptCacheTelemetryEvent, ttft: PromptCacheTelemetryEvent?)? {
+        guard let lookup = events.last(where: { $0.eventName == "lookup" }) else {
+            return nil
+        }
+        guard let requestID = lookup.requestID else { return (lookup, nil) }
+        let ttft = events.last {
+            $0.eventName == "ttft" && $0.requestID == requestID
+        }
+        return (lookup, ttft)
     }
 
     func startPolling(llmActor: LLMActor) {
@@ -303,6 +326,9 @@ final class PromptCacheTelemetryStore {
     }
 
     private func appendSample() {
+        if let enduranceAccumulator {
+            endurance = enduranceAccumulator.snapshot()
+        }
         let current = snapshot
         let ssd = current?.ssd ?? .disabled
         metricSamples.append(

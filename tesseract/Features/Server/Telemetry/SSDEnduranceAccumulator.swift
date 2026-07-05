@@ -41,6 +41,24 @@ nonisolated struct SSDEnduranceSnapshot: Codable, Equatable, Sendable {
         let bytesDeleted: Int
     }
 
+    /// One user-worthy SSD-tier event for the cache panel's sparing
+    /// "notable events" line — a partition invalidation ("Cache for X
+    /// was reset — model files changed") or a stale-GC reclaim. Kept
+    /// here (the eager, persistent ledger) rather than in the window's
+    /// event buffer because these fire at model load, typically before
+    /// any telemetry window exists, and the 2026-07-04 incident was
+    /// exactly such a silent reset.
+    struct NotableEvent: Codable, Equatable, Sendable, Identifiable {
+        let at: Date
+        /// `fingerprintChanged` / `staleUnused` / `schemaStale` — the
+        /// `ssdPartitionInvalidated` reason vocabulary.
+        let kind: String
+        let modelID: String
+        let bytes: Int
+
+        var id: String { "\(at.timeIntervalSinceReferenceDate)-\(kind)-\(modelID)" }
+    }
+
     /// When the ledger started counting — the "lifetime" anchor.
     let since: Date
     let lifetimeBytesWrittenByClass: [String: Int]
@@ -49,6 +67,8 @@ nonisolated struct SSDEnduranceSnapshot: Codable, Equatable, Sendable {
     let hourly: [DatedBucket]
     /// Ascending by date; at most `SSDEnduranceAccumulator.retainedDays`.
     let daily: [DatedBucket]
+    /// Ascending by date; at most `SSDEnduranceAccumulator.retainedNotables`.
+    let notable: [NotableEvent]
 
     var lifetimeBytesWritten: Int {
         lifetimeBytesWrittenByClass.values.reduce(0, +)
@@ -63,7 +83,8 @@ nonisolated struct SSDEnduranceSnapshot: Codable, Equatable, Sendable {
         lifetimeBytesWrittenByClass: [:],
         lifetimeBytesDeletedByReason: [:],
         hourly: [],
-        daily: []
+        daily: [],
+        notable: []
     )
 }
 
@@ -77,6 +98,8 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
     static let retainedDays = 60
     /// Debounce for the JSON persist; a crash loses at most this much.
     static let persistDebounce: TimeInterval = 5
+    /// Notable events retained for the panel — sparing by design.
+    static let retainedNotables = 20
 
     static var defaultFileURL: URL {
         PromptCacheDiagnosticsFileSink.defaultDirectory
@@ -100,6 +123,8 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
         /// greppable).
         var hourly: [String: Bucket] = [:]
         var daily: [String: Bucket] = [:]
+        /// Optional so a pre-notables state file still decodes.
+        var notable: [SSDEnduranceSnapshot.NotableEvent]?
     }
 
     private let fileURL: URL
@@ -173,6 +198,7 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
             add(deleted: bytes, reason: reason, at: event.timestamp)
 
         case "ssdPartitionInvalidated":
+            recordNotable(event)
             guard let bytes = event.intField("bytes"), bytes > 0 else { return }
             let reason =
                 event.field("reason") == "staleUnused" ? "staleGC" : "invalidated"
@@ -193,7 +219,8 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
             lifetimeBytesWrittenByClass: state.writtenByClass,
             lifetimeBytesDeletedByReason: state.deletedByReason,
             hourly: datedBuckets(state.hourly, secondsPerUnit: 3600),
-            daily: datedBuckets(state.daily, secondsPerUnit: 86_400)
+            daily: datedBuckets(state.daily, secondsPerUnit: 86_400),
+            notable: state.notable ?? []
         )
     }
 
@@ -249,6 +276,37 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
 
     private func add(deleted bytes: Int, reason: String, at timestamp: Date) {
         add(written: 0, class: "", deleted: bytes, reason: reason, at: timestamp)
+    }
+
+    /// Buffer an invalidation as a panel-worthy notable event. Persists
+    /// with the counters: invalidations fire at model load, typically
+    /// before any telemetry window exists to catch them live.
+    private func recordNotable(_ event: PromptCacheTelemetryEvent) {
+        guard let modelID = event.field("modelID"),
+            let reason = event.field("reason")
+        else { return }
+        let notable = SSDEnduranceSnapshot.NotableEvent(
+            at: event.timestamp,
+            kind: reason,
+            modelID: modelID,
+            bytes: event.intField("bytes") ?? 0
+        )
+        lock.lock()
+        var buffer = state.notable ?? []
+        buffer.append(notable)
+        if buffer.count > Self.retainedNotables {
+            buffer.removeFirst(buffer.count - Self.retainedNotables)
+        }
+        state.notable = buffer
+        let shouldSchedule = !persistScheduled
+        persistScheduled = true
+        lock.unlock()
+
+        if shouldSchedule {
+            persistQueue.asyncAfter(deadline: .now() + Self.persistDebounce) { [weak self] in
+                self?.persistIfScheduled()
+            }
+        }
     }
 
     private func add(written bytes: Int, class writeClass: String, at timestamp: Date) {

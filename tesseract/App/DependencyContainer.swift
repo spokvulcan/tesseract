@@ -71,7 +71,9 @@ final class DependencyContainer: ObservableObject {
         arbiter: inferenceArbiter
     )
     lazy var serverGenerationLog = ServerGenerationLog()
-    lazy var promptCacheTelemetryStore = PromptCacheTelemetryStore()
+    lazy var promptCacheTelemetryStore = PromptCacheTelemetryStore(
+        enduranceAccumulator: ssdEnduranceAccumulator
+    )
     /// Eager (non-lazy) so the JSONL diagnostics file is written from the
     /// first request on, whether or not the telemetry UI ever opens.
     let promptCacheDiagnosticsFileSink = PromptCacheDiagnosticsFileSink()

@@ -165,6 +165,10 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// `reevaluateBudgetIfDueLocked`.
     private var dynamicBudgetBytes: Int
     private var lastBudgetReevaluation: ContinuousClock.Instant?
+    /// Last measured free-disk bytes (`nil` until the first probe, and
+    /// forever when no provider is injected). Panel context only —
+    /// never a control input.
+    private var lastMeasuredFreeDiskBytes: Int?
     private var manifestDirty: Bool = false
     private var manifestPersistTask: Task<Void, Never>?
     /// Manifest file writes currently in flight. Claimed under `lock`
@@ -212,6 +216,17 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         return dynamicBudgetBytes
     }
 
+    /// Panel-facing budget context (PRD #150): the budget in force, the
+    /// floor it degrades to, and the last measured free-disk bytes
+    /// (`nil` when dynamic budgeting is off or unmeasured). The panel's
+    /// "nearly-full disk degraded to the floor" copy reads off exactly
+    /// this triple.
+    func budgetContext() -> (budgetBytes: Int, floorBytes: Int, freeDiskBytes: Int?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (dynamicBudgetBytes, budgetBytes, lastMeasuredFreeDiskBytes)
+    }
+
     /// Re-derive the budget from measured free disk space, throttled
     /// (ADR-0018). Must be called with `lock` held — it sits at the top
     /// of the admission cut, the one consumer of the budget. A failed
@@ -226,6 +241,7 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         }
         lastBudgetReevaluation = now
         guard let freeDiskBytes = freeDiskBytesProvider(rootURL) else { return }
+        lastMeasuredFreeDiskBytes = freeDiskBytes
         let next = SSDBudgetPolicy.budgetBytes(
             freeDiskBytes: freeDiskBytes,
             currentTierBytes: currentSSDBytes,
