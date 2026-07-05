@@ -25,7 +25,9 @@ nonisolated struct BatchSubmission: Sendable {
     let preferredPrefillChunk: Int
     /// The admission deadline — today's 60 s busy contract, preserved
     /// verbatim as a Lane Admission timeout (503 + `Retry-After` above).
-    let admissionTimeout: Duration
+    /// `nil` waits indefinitely — the internal Agent Run's contract, which
+    /// has never had an acquisition timeout.
+    let admissionTimeout: Duration?
 
     init(
         requestID: UUID,
@@ -34,7 +36,7 @@ nonisolated struct BatchSubmission: Sendable {
         runsMonolithic: Bool,
         matchedPrefixLength: Int = 0,
         preferredPrefillChunk: Int = 1_024,
-        admissionTimeout: Duration = .seconds(60)
+        admissionTimeout: Duration? = .seconds(60)
     ) {
         self.requestID = requestID
         self.demand = demand
@@ -123,7 +125,7 @@ actor BatchEngine {
         let enqueuedAt: ContinuousClock.Instant
         var demandIsSatisfied: Bool
         let continuation: CheckedContinuation<BatchLaneAdmission, any Error>
-        let timeoutTask: Task<Void, Never>
+        let timeoutTask: Task<Void, Never>?
     }
 
     private struct PendingStep {
@@ -189,10 +191,12 @@ actor BatchEngine {
                     continuation.resume(throwing: CancellationError())
                     return
                 }
-                let timeoutTask = Task { [weak self] in
-                    try? await Task.sleep(for: submission.admissionTimeout)
-                    guard !Task.isCancelled else { return }
-                    await self?.timeoutEntry(id)
+                let timeoutTask = submission.admissionTimeout.map { timeout in
+                    Task { [weak self] in
+                        try? await Task.sleep(for: timeout)
+                        guard !Task.isCancelled else { return }
+                        await self?.timeoutEntry(id)
+                    }
                 }
                 queue.append(
                     QueuedEntry(
@@ -322,8 +326,19 @@ actor BatchEngine {
         }
         await refreshLaneCapacity()
 
+        // A session that has run lanes releases the lease when the pool
+        // fully drains — a natural tenure boundary, so a queued consumer the
+        // engine never yields to (`reloadLLMIfNeeded`, a direct lease user)
+        // gets its FIFO turn between batches instead of starving behind
+        // back-to-back completions. A session resumed under paused lanes
+        // owes that release from the start.
+        var owesDrainRelease = !lanes.isEmpty
+
         while true {
-            if lanes.isEmpty, queue.isEmpty { return }
+            if lanes.isEmpty {
+                if queue.isEmpty { return }
+                if owesDrainRelease { return }
+            }
             let decision = BatchEnginePolicy.decide(makeSnapshot())
             switch decision {
             case .yieldLease:
@@ -335,8 +350,10 @@ actor BatchEngine {
                 return
             case .admit(let id):
                 admitEntry(id, exclusive: false)
+                owesDrainRelease = true
             case .admitExclusive(let id):
                 admitEntry(id, exclusive: true)
+                owesDrainRelease = true
             case .grant(let id, let grant):
                 let tokens: Int =
                     if case .prefillChunk(let t) = grant { t } else { 0 }
@@ -374,7 +391,7 @@ actor BatchEngine {
         guard let index = queue.firstIndex(where: { $0.submission.requestID == requestID })
         else { return }
         let entry = queue.remove(at: index)
-        entry.timeoutTask.cancel()
+        entry.timeoutTask?.cancel()
         let waited = entry.enqueuedAt.duration(to: clock.now)
         lanes[requestID] = LaneRecord(
             submission: entry.submission,
@@ -404,7 +421,7 @@ actor BatchEngine {
         guard let index = queue.firstIndex(where: { $0.submission.requestID == requestID })
         else { return }
         let entry = queue.remove(at: index)
-        entry.timeoutTask.cancel()
+        entry.timeoutTask?.cancel()
         entry.continuation.resume(throwing: CancellationError())
     }
 
@@ -419,7 +436,7 @@ actor BatchEngine {
             $0.element.submission.demand == target
         }
         for (_, entry) in matching.reversed() {
-            entry.timeoutTask.cancel()
+            entry.timeoutTask?.cancel()
             entry.continuation.resume(throwing: error)
         }
         queue.removeAll { $0.submission.demand == target }

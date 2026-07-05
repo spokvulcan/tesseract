@@ -201,6 +201,19 @@ import Testing
         #expect(decision == .yieldLease)
     }
 
+    @Test func neverYieldsWhileAnExclusiveLaneIsLive() {
+        // An exclusive lane's generation runs today's monolithic path — its
+        // Metal work is not inside granted steps, so there is no safe step
+        // boundary to yield at. The waiter gets the lease FIFO once the lane
+        // drains, exactly today's semantics.
+        let decision = BatchEnginePolicy.decide(
+            snapshot(
+                lanes: [lane(0, phase: .decoding, pending: false, exclusive: true)],
+                waiters: true
+            ))
+        #expect(decision == .idle)
+    }
+
     // MARK: - Step loop: one prefill chunk alternates with decode steps
 
     @Test func startupGrantedInAdmissionOrder() {

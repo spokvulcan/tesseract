@@ -4,32 +4,34 @@ import os
 
 // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
 // swiftlint:disable type_body_length
-/// Handles `POST /v1/chat/completions` requests by acquiring an inference lease
-/// from the `InferenceArbiter`, running generation through
+/// Handles `POST /v1/chat/completions` requests by submitting to the
+/// **Batch Engine** (PRD #173, ADR-0022), running generation through
 /// `ServerInferenceService`, and writing the response.
 ///
-/// All generation runs inside `arbiter.withExclusiveGPU(.llm)` to prevent
-/// overlap with the internal Agent chat or other HTTP requests.
+/// All generation runs inside an engine lane — the engine owns the GPU
+/// lease while any lane is live — so overlap with the internal Agent chat
+/// and other HTTP requests stays impossible by construction.
 struct CompletionHandler: Sendable {
 
-    /// Maximum seconds to wait for the inference lease before returning 503.
+    /// Maximum seconds to wait for lane admission before returning 503 —
+    /// the **Lane Admission** timeout, today's busy contract verbatim.
     static let leaseTimeoutSeconds: UInt64 = 60
     private static let sessionReplayStore = HTTPPrefixCacheSessionReplayStore()
 
-    private let arbiter: InferenceArbiter
+    private let batchEngine: BatchEngine
     private let inferenceService: ServerInferenceService
     private let downloads: ModelDownloadManager
     private let activityLog: ServerGenerationLog
     private let settings: SettingsManager
 
     init(
-        arbiter: InferenceArbiter,
+        batchEngine: BatchEngine,
         inferenceService: ServerInferenceService,
         downloads: ModelDownloadManager,
         activityLog: ServerGenerationLog,
         settings: SettingsManager
     ) {
-        self.arbiter = arbiter
+        self.batchEngine = batchEngine
         self.inferenceService = inferenceService
         self.downloads = downloads
         self.activityLog = activityLog
@@ -200,26 +202,38 @@ struct CompletionHandler: Sendable {
         )
 
         do {
-            try await withAcquisitionTimeout { signal in
-                try await arbiter.withExclusiveGPU(
-                    .llm,
-                    llmModelIDOverride: llmModelIDOverride,
-                    // ADR-0008: HTTP requests load the vision variant whenever
-                    // the target model is capable — the chat toggle never
-                    // gates what a configured client was promised.
-                    llmVision: .visionIfCapable
-                ) {
-                    signal.set()
-                    await self.activityLog.markLeaseAcquired(handle: logHandle)
-                    await self.runCompletion(
-                        completionRequest,
-                        sessionAffinity: sessionAffinity,
-                        writer: writer,
-                        completionID: completionID,
-                        logHandle: logHandle
-                    )
-                }
-            }
+            let requestID = UUID()
+            // Lane Admission (PRD #173): submit to the Batch Engine instead
+            // of acquiring the lease. The engine holds the GPU lease for the
+            // lane's whole life, loads the demanded model on acquisition,
+            // and preserves the 60 s busy contract as the admission timeout
+            // (`LeaseTimeoutError` → the 503 + Retry-After below).
+            _ = try await batchEngine.submit(
+                BatchSubmission(
+                    requestID: requestID,
+                    demand: BatchModelDemand(
+                        modelIDOverride: llmModelIDOverride,
+                        // ADR-0008: HTTP requests load the vision variant
+                        // whenever the target model is capable — the chat
+                        // toggle never gates what a configured client was
+                        // promised.
+                        vision: .visionIfCapable
+                    ),
+                    bearsImages: Self.requestBearsImages(completionRequest),
+                    // The generation below runs today's single-flight path;
+                    // the lane is exclusive until pool lanes land.
+                    runsMonolithic: true,
+                    admissionTimeout: .seconds(Int(Self.leaseTimeoutSeconds))
+                ))
+            await activityLog.markLeaseAcquired(handle: logHandle)
+            await runCompletion(
+                completionRequest,
+                sessionAffinity: sessionAffinity,
+                writer: writer,
+                completionID: completionID,
+                logHandle: logHandle
+            )
+            await batchEngine.laneFinished(requestID)
         } catch is CancellationError {
             await activityLog.cancel(handle: logHandle)
             try await writer.send(.serviceUnavailable("Request cancelled"))
@@ -1169,49 +1183,15 @@ struct CompletionHandler: Sendable {
         )
     }
 
-    /// Timeout that covers only lease acquisition + model loading, not generation.
-    ///
-    /// The timer task sleeps for the timeout duration, then checks whether the
-    /// lease was acquired. If not, it throws `LeaseTimeoutError` which cancels
-    /// the body (still waiting in the arbiter queue). If the lease WAS acquired,
-    /// the timer suspends indefinitely — only the body's completion or failure
-    /// will finish the group.
-    private func withAcquisitionTimeout(
-        body: @escaping @Sendable (LeaseAcquiredSignal) async throws -> Void
-    ) async throws {
-        try await Self.withAcquisitionTimeout(
-            timeoutNanoseconds: Self.leaseTimeoutSeconds * 1_000_000_000,
-            body: body
-        )
-    }
-
-    /// Testable core: acquisition timeout with configurable duration.
-    static func withAcquisitionTimeout(
-        timeoutNanoseconds: UInt64,
-        body: @escaping @Sendable (LeaseAcquiredSignal) async throws -> Void
-    ) async throws {
-        let signal = LeaseAcquiredSignal()
-
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await body(signal)
-            }
-
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                if signal.isSet {
-                    // Lease acquired — park until cancelled by group cleanup
-                    while !Task.isCancelled {
-                        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
-                    }
-                    return
-                }
-                throw LeaseTimeoutError()
-            }
-
-            // First to finish/throw wins — cancel the other
-            try await group.next()
-            group.cancelAll()
+    /// Whether any request message carries an image part — the Batch
+    /// Engine's `bearsImages` input: image requests always run an exclusive
+    /// lane (ADR-0022).
+    nonisolated static func requestBearsImages(
+        _ request: OpenAI.ChatCompletionRequest
+    ) -> Bool {
+        request.messages.contains { message in
+            guard case .parts(let parts) = message.content else { return false }
+            return parts.contains { $0.type == .image_url }
         }
     }
 }

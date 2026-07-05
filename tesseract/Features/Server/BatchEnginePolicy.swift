@@ -164,12 +164,15 @@ nonisolated enum BatchEnginePolicy {
     /// decode round, alternating so a decode lane's stall is bounded by one
     /// chunk.
     static func decide(_ snapshot: BatchEngineSnapshot) -> BatchEngineDecision {
-        if snapshot.leaseHasWaiters {
+        let hasExclusiveLane = snapshot.lanes.contains(where: \.isExclusive)
+        if snapshot.leaseHasWaiters, !hasExclusiveLane {
+            // An exclusive lane's Metal work runs the monolithic path outside
+            // granted steps — no safe boundary exists until it drains, so the
+            // waiter queues FIFO exactly as it does today.
             return .yieldLease
         }
 
         // Lane Admission / Admission Freeze.
-        let hasExclusiveLane = snapshot.lanes.contains(where: \.isExclusive)
         if let head = orderedQueue(snapshot.queue).first, !hasExclusiveLane {
             if !head.demandSatisfiedByLoadedModel {
                 if snapshot.lanes.isEmpty {

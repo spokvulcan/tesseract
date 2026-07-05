@@ -5,103 +5,41 @@ import Testing
 
 struct CompletionHandlerTests {
 
-    // MARK: - LeaseAcquiredSignal
+    // The acquisition-timeout helper (`withAcquisitionTimeout`) is gone: the
+    // busy contract is now the Batch Engine's Lane Admission timeout —
+    // pinned in `BatchEngineTests.admissionDeadlinePreservesTheBusyContract`.
 
-    @Test func signalStartsFalse() {
-        let signal = LeaseAcquiredSignal()
-        #expect(!signal.isSet)
+    // MARK: - Image detection (Batch Engine `bearsImages` input)
+
+    @Test func requestWithImagePartBearsImages() {
+        let request = OpenAI.ChatCompletionRequest(
+            model: "m",
+            messages: [
+                .init(role: .user, content: .text("hi")),
+                .init(
+                    role: .user,
+                    content: .parts([
+                        .init(type: .text, text: "look at this"),
+                        .init(
+                            type: .image_url,
+                            image_url: .init(url: "data:image/png;base64,AAAA")
+                        ),
+                    ])
+                ),
+            ]
+        )
+        #expect(CompletionHandler.requestBearsImages(request))
     }
 
-    @Test func signalBecomesTrue() {
-        let signal = LeaseAcquiredSignal()
-        signal.set()
-        #expect(signal.isSet)
-    }
-
-    @Test func signalSetIsIdempotent() {
-        let signal = LeaseAcquiredSignal()
-        signal.set()
-        signal.set()
-        #expect(signal.isSet)
-    }
-
-    // MARK: - withAcquisitionTimeout
-
-    @Test func timeoutThrowsWhenBodyNeverSignals() async {
-        do {
-            try await CompletionHandler.withAcquisitionTimeout(
-                timeoutNanoseconds: 50_000_000
-            ) { _ in
-                try await Task.sleep(nanoseconds: 5_000_000_000)
-            }
-            Issue.record("Expected LeaseTimeoutError")
-        } catch is LeaseTimeoutError {
-            // Expected
-        } catch {
-            Issue.record("Unexpected error: \(error)")
-        }
-    }
-
-    @Test func longBodyNotCancelledAfterSignal() async throws {
-        let completed = LeaseAcquiredSignal()
-
-        try await CompletionHandler.withAcquisitionTimeout(
-            timeoutNanoseconds: 100_000_000
-        ) { signal in
-            signal.set()
-            try await Task.sleep(nanoseconds: 300_000_000)
-            completed.set()
-        }
-
-        #expect(completed.isSet)
-    }
-
-    @Test func fastBodyCompletesBeforeTimeout() async throws {
-        let completed = LeaseAcquiredSignal()
-
-        try await CompletionHandler.withAcquisitionTimeout(
-            timeoutNanoseconds: 1_000_000_000
-        ) { signal in
-            signal.set()
-            completed.set()
-        }
-
-        #expect(completed.isSet)
-    }
-
-    @Test func bodyErrorPropagatesNotTimeout() async {
-        struct BodyError: Error {}
-
-        do {
-            try await CompletionHandler.withAcquisitionTimeout(
-                timeoutNanoseconds: 1_000_000_000
-            ) { signal in
-                signal.set()
-                throw BodyError()
-            }
-            Issue.record("Expected BodyError")
-        } catch is BodyError {
-            // Expected
-        } catch {
-            Issue.record("Unexpected error type: \(error)")
-        }
-    }
-
-    @Test func bodyErrorBeforeSignalPropagates() async {
-        struct EarlyError: Error {}
-
-        do {
-            try await CompletionHandler.withAcquisitionTimeout(
-                timeoutNanoseconds: 1_000_000_000
-            ) { _ in
-                throw EarlyError()
-            }
-            Issue.record("Expected EarlyError")
-        } catch is EarlyError {
-            // Expected
-        } catch {
-            Issue.record("Unexpected error type: \(error)")
-        }
+    @Test func textOnlyRequestBearsNoImages() {
+        let request = OpenAI.ChatCompletionRequest(
+            model: "m",
+            messages: [
+                .init(role: .user, content: .text("hi")),
+                .init(role: .user, content: .parts([.init(type: .text, text: "plain")])),
+            ]
+        )
+        #expect(!CompletionHandler.requestBearsImages(request))
     }
 
     @MainActor

@@ -70,6 +70,44 @@ final class DependencyContainer: ObservableObject {
         engine: agentEngine,
         arbiter: inferenceArbiter
     )
+    /// The **Batch Engine** (PRD #173, ADR-0022): completions submit here
+    /// instead of acquiring the GPU lease themselves. One shared instance —
+    /// HTTP completions and the internal Agent Run queue into the same pool.
+    lazy var batchEngine: BatchEngine = {
+        let arbiter = inferenceArbiter
+        let engine = agentEngine
+        let settings = settingsManager
+        let downloads = modelDownloadManager
+        let cacheAdmin = llmActor.prefixCacheAdmin
+        return BatchEngine(
+            leaseRunner: { override, vision, body in
+                try await arbiter.withExclusiveGPU(
+                    .llm, llmModelIDOverride: override, llmVision: vision
+                ) {
+                    await body()
+                }
+            },
+            leaseWaiters: arbiter.leaseWaiters,
+            // Mirrors `ensureLoaded`'s target resolution + the ADR-0008
+            // satisfaction rule, so "oracle says satisfied" and "the
+            // acquisition would not reload" can never disagree.
+            demandSatisfied: { demand in
+                guard engine.isModelLoaded, let loaded = arbiter.loadedLLMState
+                else { return false }
+                let targetModelID =
+                    demand.modelIDOverride ?? settings.selectedAgentModelID
+                let desired = InferenceArbiter.LoadedLLMState(
+                    modelID: targetModelID,
+                    visionMode: demand.vision.wantsVision(
+                        useVisionWhenAvailable: settings.useVisionWhenAvailable,
+                        isVisionCapable: downloads.isVisionCapable(targetModelID)
+                    )
+                )
+                return loaded.satisfies(desired)
+            },
+            laneBudget: { cacheAdmin.batchLaneBudget() }
+        )
+    }()
     lazy var serverGenerationLog = ServerGenerationLog()
     lazy var promptCacheTelemetryStore = PromptCacheTelemetryStore(
         enduranceAccumulator: ssdEnduranceAccumulator
@@ -100,7 +138,7 @@ final class DependencyContainer: ObservableObject {
             audioCapture: audioCaptureEngine,
             transcriptionEngine: transcriptionEngine,
             settings: settingsManager,
-            arbiter: inferenceArbiter,
+            batchEngine: batchEngine,
             formatRawPrompt: { [weak self] systemPrompt, tools in
                 guard let self else { throw AgentEngineError.modelNotLoaded }
                 return try await self.agentEngine.formatRawPrompt(
@@ -409,7 +447,7 @@ final class DependencyContainer: ObservableObject {
         }
 
         let completionHandler = CompletionHandler(
-            arbiter: inferenceArbiter,
+            batchEngine: batchEngine,
             inferenceService: serverInferenceService,
             downloads: modelDownloadManager,
             activityLog: serverGenerationLog,

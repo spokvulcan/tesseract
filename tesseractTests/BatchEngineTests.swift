@@ -285,6 +285,43 @@ import Testing
         #expect(events.firstIndex(of: "decode39")! > tts)
     }
 
+    @Test func fullDrainReleasesLeaseBeforeServingTheNextQueuedEntry() async throws {
+        let lease = TestLease()
+        let engine = makeEngine(lease: lease, budget: Self.singleLaneBudget)
+        let first = UUID()
+        let second = UUID()
+        let recorder = StepRecorder()
+
+        _ = try await engine.submit(submission(first))
+        // A non-slot-preserving consumer (`reloadLLMIfNeeded`, a direct
+        // lease user) queues FIFO. The engine never yields to it mid-batch —
+        // but a fully drained pool is a tenure boundary, so it must get its
+        // turn before the engine's next admission, not starve behind a
+        // stream of back-to-back completions.
+        let reload = Task {
+            try await lease.queue.withExclusive {
+                await recorder.add("reload")
+            }
+        }
+        for _ in 0..<50 { await Task.yield() }
+
+        let successor = Task {
+            _ = try await engine.submit(submission(second))
+            await recorder.add("second.run")
+            await engine.laneFinished(second)
+        }
+        for _ in 0..<50 { await Task.yield() }
+
+        await engine.laneFinished(first)
+        try await reload.value
+        try await successor.value
+
+        let events = await recorder.events
+        let reloadIndex = try #require(events.firstIndex(of: "reload"))
+        let secondIndex = try #require(events.firstIndex(of: "second.run"))
+        #expect(reloadIndex < secondIndex)
+    }
+
     // MARK: - Admission Freeze: exclusive requests drain the pool
 
     @Test func exclusiveRequestDrainsPoolRunsAloneThenPoolResumes() async throws {
