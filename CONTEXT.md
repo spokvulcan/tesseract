@@ -119,6 +119,46 @@ budget contention, and end-of-turn leaf writes bypass it.
 _Avoid_: judicious admission (the Marconi-paper mechanism this derives, not
 copies); admission policy (vague); write filter.
 
+**Adaptive Write Eagerness**:
+The admission-time skip of a non-guarantee SSD write while RAM comfortably holds
+the body and the node has not proven reuse — the copy would be pure redundancy,
+and **Recoverable Eviction**'s demote-before-drop persists it later if RAM ever
+needs the bytes back. Reuse re-earns the write: crossing the hit-count threshold
+issues a one-shot deferred-class promotion write off the lookup path. The
+end-of-turn leaf (guarantee class) is never deferred.
+_Avoid_: write throttling (a rate limiter — explicitly not built); lazy writes
+(the guarantee class is never lazy); HiCache write_through_selective (the
+precedent it extends with RAM-tier health, not the mechanism itself).
+
+**Storage Activity Gate**:
+The shared busy signal between the inference path and the SSD writer: while a
+hydration read or a prefill is in flight, deferred-class writes wait (bounded by
+a holdup ceiling; flushes force-drain), because concurrent large-block reads and
+writes on one NVMe device collapse total bandwidth. Guarantee- and
+write-through-class writes ignore it — durability outranks bandwidth.
+_Avoid_: I/O scheduler (it delays one write class, it does not schedule I/O);
+write lock (nothing blocks the inference side).
+
+**Endurance Ledger**:
+The persistent bytes-written / bytes-deleted counters for the SSD tier, keyed by
+write class and delete reason, bucketed hourly and daily, accumulated from the
+same diagnostics events the JSONL file sink records — so the counters reconcile
+with `ssdAdmit accepted` sums by construction. "Measure before throttle": it
+exists so a future write limiter would be justified by field data. Also buffers
+the panel's sparing notable events (partition invalidations).
+_Avoid_: write throttle, SSD protection (no such knob ships); telemetry store
+(the window-scoped event buffer — this ledger is eager and survives restarts).
+
+**Stale-Partition GC**:
+The warm-start reclaim of partitions unused past a fixed gap measured *relative
+to the tier's freshest partition's use stamp* — never the wall clock, so an idle
+tier ages together and survives any break, while an abandoned kv-config or
+template-digest variant of a still-active model ages out. "Use" is admission or
+an SSD hit; warm start itself never refreshes a stamp, and legacy stamp-less
+partitions are grace-stamped without inflating the anchor.
+_Avoid_: TTL, expiry (absolute-clock framings); cache eviction (that is the
+byte-budget LRU cut — GC is staleness, not space).
+
 ### SSD leaf extension
 
 **Snapshot Segment**:

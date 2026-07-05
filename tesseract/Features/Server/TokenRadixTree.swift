@@ -21,6 +21,18 @@ final class RadixTreeNode {
     /// Cumulative token count from root to the end of this node's edge.
     var tokenOffset: Int
     var lastAccessTime: ContinuousClock.Instant
+    /// Lookup hits this node has served (bumped alongside
+    /// `lastAccessTime`). The **adaptive write eagerness** input
+    /// (ADR-0019, PRD #150): a node whose SSD write was deferred while
+    /// RAM was healthy earns its backing once the hit count crosses
+    /// `SSDWriteEagernessPolicy.hitCountThreshold` — HiCache's
+    /// `write_through_selective` precedent.
+    var hitCount: Int = 0
+    /// One-shot latch for the hit-count promotion write: set when a
+    /// promotion has been scheduled or attempted for this node, so a
+    /// rejected write (budget, back-pressure) does not retry on every
+    /// subsequent hit.
+    var ssdPromotionAttempted: Bool = false
     weak var parent: RadixTreeNode?
 
     init(
@@ -129,7 +141,10 @@ final class TokenRadixTree {
         }
 
         guard let node = bestNode else { return nil }
-        if updateAccess { node.lastAccessTime = .now }
+        if updateAccess {
+            node.lastAccessTime = .now
+            node.hitCount += 1
+        }
         return (node: node, sharedPrefixLength: bestPrefixLength)
     }
 

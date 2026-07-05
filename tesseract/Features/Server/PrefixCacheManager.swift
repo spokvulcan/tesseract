@@ -144,6 +144,24 @@ final class PrefixCacheManager {
     /// drop is terminal, today's pre-demotion behavior.
     private let demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)?
 
+    /// **Adaptive Write Eagerness** master switch (ADR-0019, PRD #150).
+    /// Production passes `true` (**Server Completion**'s cache build):
+    /// non-guarantee SSD writes are skipped while RAM comfortably holds
+    /// the body, re-earned by reuse via a deferred-class promotion
+    /// write. The default is `false` — same pattern as `headroomSource`
+    /// — so test fixtures keep asserting the unconditional write-through
+    /// pipeline, which remains production's path whenever RAM is under
+    /// pressure or a node has proven reuse.
+    private let adaptiveWriteEagerness: Bool
+
+    /// The **Storage Activity Gate** (PRD #150) the prefill call sites
+    /// mark busy so the SSD writer holds deferred-class writes out of
+    /// hydration and prefill windows. `nonisolated` because the marks
+    /// run on the model-affine execution path, not MainActor. Always
+    /// non-nil — the tiered store's gate when one was wired, else a
+    /// private gate nobody reads, so call sites never branch.
+    nonisolated let storageActivityGate: StorageActivityGate
+
     init(
         memoryBudgetBytes: Int,
         evictionConfig: EvictionConfiguration = EvictionConfiguration(),
@@ -152,9 +170,11 @@ final class PrefixCacheManager {
         demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)? = nil,
         pressureSource: (any MemoryPressureSource)? = nil,
         headroomSource: (any MemoryHeadroomSource)? = nil,
-        ramBudgetCapBytes: Int? = nil
+        ramBudgetCapBytes: Int? = nil,
+        adaptiveWriteEagerness: Bool = false
     ) {
         self.store = tieredStore ?? TieredSnapshotStore(ssdConfig: nil)
+        self.storageActivityGate = self.store.activityGate ?? StorageActivityGate()
         // The passed-in budget is the *bootstrap* ceiling (ADR-0018):
         // the old constants' formula, replaced by the first headroom
         // measurement. The user cap binds from the first byte.
@@ -164,6 +184,7 @@ final class PrefixCacheManager {
         self.evictionConfig = evictionConfig
         self.alphaTuner = alphaTuner
         self.demotionPayloadExtractor = demotionPayloadExtractor
+        self.adaptiveWriteEagerness = adaptiveWriteEagerness
         self.pressureSource = pressureSource
         self.headroomSource = headroomSource
         self.ramBudgetCapBytes = ramBudgetCapBytes
@@ -446,6 +467,7 @@ final class PrefixCacheManager {
             // the bumped snapshot ID, or nil for non-committed states.
             let recordedHitID = store.noteLookupHit(on: node)
             recordHitSavings(restoredOffset: snapshot.tokenOffset)
+            promoteHotUnbackedNodeIfEarned(node, tree: tree, partitionKey: partitionKey)
             return (
                 LookupResult(
                     snapshot: snapshot,
@@ -1121,6 +1143,31 @@ final class PrefixCacheManager {
             // leaf is the highest-reuse object in the system, and no
             // gate or cap may reject its home.
             let guaranteeWrite = admission.kind == .leaf && admission.leafIsEndOfTurn
+            // **Adaptive Write Eagerness** (ADR-0019, PRD #150): while
+            // RAM comfortably holds this body and the node has not yet
+            // proven reuse, its SSD copy is pure redundancy — skip the
+            // write. The node stays unbacked (`ref == nil`), so
+            // **Recoverable Eviction**'s demote-before-drop persists it
+            // the moment RAM actually needs the bytes back, and a hot
+            // streak earns a deferred-class promotion write from the
+            // lookup path instead.
+            if !guaranteeWrite, adaptiveWriteEagerness,
+                SSDWriteEagernessPolicy.mayDefer(
+                    nodeHitCount: node.hitCount,
+                    residentBytes: totalSnapshotBytes,
+                    budgetBytes: memoryBudgetBytes,
+                    bandRetreating: budgetBand.currentBytes < budgetBand.ceilingBytes
+                )
+            {
+                cumulativeCounters.eagernessDeferrals += 1
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.SSDWriteDeferredEvent(
+                        offset: entry.snapshot.tokenOffset,
+                        bytes: payload.totalBytes,
+                        hitCount: node.hitCount
+                    ))
+                return nil
+            }
             // The Survival Gate: checkpoint write-throughs (and any
             // leaf declared non-end-of-turn) only write if the chain
             // would survive the cut its own admission triggers.
@@ -1676,13 +1723,29 @@ final class PrefixCacheManager {
         }
         let durationSeconds = Date.timeIntervalSinceReferenceDate - started
 
-        // Emit a fingerprint mismatch event per invalidated partition
-        // BEFORE the warm-start summary so a `grep` walk of the log
-        // shows the failures contributing to the summary count.
-        for digest in outcome.invalidatedPartitionDigests {
+        // Emit the per-partition invalidation events BEFORE the
+        // warm-start summary so a `grep` walk of the log shows the
+        // failures contributing to the summary count. The richer
+        // `ssdPartitionInvalidated` (reason + modelID + reclaimed
+        // bytes) feeds the cache panel's notable-events feed; the
+        // legacy `fingerprintMismatch` line stays for that reason's
+        // pinned wire format.
+        for partition in outcome.invalidated {
             PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.FingerprintMismatchEvent(partition: digest)
+                PrefixCacheDiagnostics.SSDPartitionInvalidatedEvent(
+                    digest: partition.digest,
+                    modelID: partition.modelID,
+                    bytes: partition.bytes,
+                    reason: partition.reason
+                )
             )
+            if partition.reason == .fingerprintChanged {
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.FingerprintMismatchEvent(
+                        partition: partition.digest
+                    )
+                )
+            }
         }
         for digest in digestMismatchPartitions {
             Log.agent.warning(
@@ -2311,6 +2374,60 @@ final class PrefixCacheManager {
             demotionLastAccessAt: lastAccessAt,
             scoringConfig: evictionConfig
         )
+    }
+
+    /// **Adaptive Write Eagerness** promotion (ADR-0019, PRD #150): an
+    /// unbacked RAM body whose lookup hit count crossed the eagerness
+    /// threshold has proven its reuse — persist it with a deferred-class
+    /// write (the writer schedules those around hydration reads and
+    /// active prefill). The extraction is a full KV copy, so it runs in
+    /// a follow-up MainActor task rather than on the lookup's TTFT path;
+    /// the guards re-run there because eviction or a fresh admission may
+    /// land in between. One shot per node (`ssdPromotionAttempted`): if
+    /// the front door rejects the write, demote-before-drop remains the
+    /// safety net, exactly as for a deferral that was never promoted.
+    private func promoteHotUnbackedNodeIfEarned(
+        _ node: RadixTreeNode, tree: TokenRadixTree, partitionKey: CachePartitionKey
+    ) {
+        guard adaptiveWriteEagerness,
+            !node.ssdPromotionAttempted,
+            node.hitCount >= SSDWriteEagernessPolicy.hitCountThreshold,
+            node.state.ref == nil,
+            node.chainPrefixRestorePoint == nil,
+            store.isSSDEnabled,
+            demotionPayloadExtractor != nil,
+            partitionKey.modelFingerprint != nil,
+            node.state.body != nil
+        else { return }
+
+        node.ssdPromotionAttempted = true
+        Task { @MainActor [weak self] in
+            guard let self,
+                node.state.ref == nil,
+                node.chainPrefixRestorePoint == nil,
+                let snapshot = node.state.body,
+                let payload = self.demotionPayloadExtractor?(snapshot)
+            else { return }
+
+            self.registerSSDPartitionIfNeeded(for: partitionKey)
+            self.cumulativeCounters.eagernessPromotions += 1
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDWritePromotedEvent(
+                    offset: snapshot.tokenOffset,
+                    bytes: payload.totalBytes,
+                    hitCount: node.hitCount
+                ))
+            self.store.admitSnapshot(
+                node: node,
+                tree: tree,
+                partitionKey: partitionKey,
+                pathFromRoot: tree.pathToNode(node),
+                snapshot: snapshot,
+                payload: payload,
+                scoringConfig: self.evictionConfig,
+                deferrable: true
+            )
+        }
     }
 
     /// Pick one snapshot to evict from the supplied (already-sorted) trees.

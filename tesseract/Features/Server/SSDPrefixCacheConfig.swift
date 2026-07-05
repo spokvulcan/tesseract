@@ -37,11 +37,29 @@ nonisolated enum SSDBudgetPolicy {
         floorBytes: Int = SSDBudgetPolicy.floorBytes,
         capBytes: Int?
     ) -> Int {
-        let claimable = Int(
-            Double(max(freeDiskBytes + currentTierBytes, 0)) * freeDiskFraction
+        let claimable = claimableBytes(
+            freeDiskBytes: freeDiskBytes, currentTierBytes: currentTierBytes
         )
         let measured = max(floorBytes, min(absoluteCapBytes, claimable))
         return applyBudgetCap(measured, cap: capBytes)
+    }
+
+    /// The disk's own contribution to the formula, pre-floor/pre-cap.
+    static func claimableBytes(freeDiskBytes: Int, currentTierBytes: Int) -> Int {
+        Int(Double(max(freeDiskBytes + currentTierBytes, 0)) * freeDiskFraction)
+    }
+
+    /// True when the floor, not the disk, is holding the budget up —
+    /// the panel's "disk low" signal (PRD #150). Deliberately distinct
+    /// from `budget == floor`: a *user cap* below the floor also drags
+    /// the budget down there, and that must not read as a full disk.
+    static func isFloorBound(
+        freeDiskBytes: Int,
+        currentTierBytes: Int,
+        floorBytes: Int = SSDBudgetPolicy.floorBytes
+    ) -> Bool {
+        claimableBytes(freeDiskBytes: freeDiskBytes, currentTierBytes: currentTierBytes)
+            < floorBytes
     }
 
     /// Production free-space probe for the volume holding `rootURL`.
@@ -52,6 +70,73 @@ nonisolated enum SSDBudgetPolicy {
             forKeys: [.volumeAvailableCapacityForImportantUsageKey]
         )
         return values?.volumeAvailableCapacityForImportantUsage.map { Int(clamping: $0) }
+    }
+}
+
+/// The **stale-partition GC** policy (PRD #150): partitions unused past
+/// `maxUnusedAge` are reclaimed at warm start — their descriptors leave
+/// the manifest, their directories are deleted, and their bytes return
+/// to the budget. "Used" means an admission registered the partition or
+/// an SSD hydration hit one of its residents; a warm start alone does
+/// not refresh the stamp (otherwise every launch would reset the clock
+/// and nothing would ever age out).
+///
+/// Staleness is *relative to the tier's most recent use*, not to the
+/// wall clock: a partition is stale when it is `maxUnusedAge` older
+/// than the freshest valid partition's stamp. An absolute clock would
+/// reclaim the entire cache after any week the app sat unused; the
+/// relative rule is idle-proof (all partitions age together, nothing
+/// is reclaimed) while a variant abandoned mid-activity still goes.
+/// The freshest partition never ages out by construction.
+nonisolated enum SSDStalePartitionPolicy {
+    /// Use-gap past which a partition is reclaimed. 7 days (owner
+    /// decision 2026-07-05, revised down from the grilling's ~30):
+    /// stale kv-config and template-digest variants of a still-loaded
+    /// model used to accumulate forever — only a fingerprint change
+    /// cleared them.
+    static let maxUnusedAge: TimeInterval = 7 * 24 * 3600
+
+    /// Minimum spacing between `lastUsedAt` re-stamps. Day-scale GC
+    /// needs no finer resolution, and the throttle keeps the per-hit /
+    /// per-admission bump from turning into a sidecar write storm.
+    static let lastUsedRefreshInterval: TimeInterval = 6 * 3600
+}
+
+/// **Adaptive write eagerness** (ADR-0019, PRD #150): when RAM
+/// comfortably holds a snapshot, its SSD copy is redundancy and the
+/// write may be skipped — the node stays visibly unbacked, so
+/// **Recoverable Eviction**'s demote-before-drop still persists it the
+/// moment RAM actually needs the bytes back. The skip is re-earned the
+/// other way by reuse: a node whose hit count crosses
+/// `hitCountThreshold` gets a deferred-class promotion write (HiCache's
+/// `write_through_selective` precedent, keyed on RAM-tier health per
+/// ADR-0019). The guarantee-class end-of-turn write is never deferred.
+nonisolated enum SSDWriteEagernessPolicy {
+    /// Lookup hits after which an unbacked RAM body earns its SSD
+    /// backing regardless of RAM health — proven reuse is worth the
+    /// write even as pure redundancy (it converts a future demotion
+    /// under pressure into an already-done idle write).
+    static let hitCountThreshold = 2
+
+    /// RAM is "comfortable" while the resident set stays at or below
+    /// this fraction of the live budget. Above it, eviction is near
+    /// and a skipped write would soon be paid back as a pressure-time
+    /// demotion — write through instead.
+    static let comfortFraction = 0.75
+
+    /// Whether a non-guarantee write may be skipped at admission.
+    /// `bandRetreating` (current budget below the measured ceiling —
+    /// an OS pressure fold in effect) always writes through: pressure
+    /// is exactly when redundancy stops being redundant.
+    static func mayDefer(
+        nodeHitCount: Int,
+        residentBytes: Int,
+        budgetBytes: Int,
+        bandRetreating: Bool
+    ) -> Bool {
+        guard !bandRetreating else { return false }
+        guard nodeHitCount < hitCountThreshold else { return false }
+        return Double(residentBytes) <= comfortFraction * Double(budgetBytes)
     }
 }
 

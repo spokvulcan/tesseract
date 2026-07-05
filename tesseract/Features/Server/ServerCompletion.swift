@@ -488,11 +488,13 @@ nonisolated final class ServerCompletion {
                     return
                 }
             }
-            await SpeculativeCanonicalPrefill.run(
-                seed: seed,
-                container: container,
-                prefixCache: prefixCache
-            )
+            await prefixCache.storageActivityGate.withPrefillMarked {
+                await SpeculativeCanonicalPrefill.run(
+                    seed: seed,
+                    container: container,
+                    prefixCache: prefixCache
+                )
+            }
             await actorRef.clearFinishedSpeculativeServerPrefill(id)
         }
         speculativePrefill = (id: id, task: task)
@@ -1999,16 +2001,19 @@ nonisolated final class ServerCompletion {
                         // image-text-tail (its cache already holds a large image,
                         // so the per-chunk score matrix is large) on checked
                         // synchronous eval so an MLX failure throws not crashes.
-                        let warmed = try session.prefill(
-                            text: inputForGeneration.text,
-                            cache: liveCache,
-                            checkpoints: allCheckpoints,
-                            checkpointBaseOffset: executionBaseOffset,
-                            prefillStepSize: genParams.prefillStepSize,
-                            consumeAll: false,
-                            initialState: initialState,
-                            evalPolicy: imagePrefixInput == nil ? .pipelined : .checkedSynchronous
-                        )
+                        let warmed = try prefixCache.storageActivityGate.withPrefillMarked {
+                            try session.prefill(
+                                text: inputForGeneration.text,
+                                cache: liveCache,
+                                checkpoints: allCheckpoints,
+                                checkpointBaseOffset: executionBaseOffset,
+                                prefillStepSize: genParams.prefillStepSize,
+                                consumeAll: false,
+                                initialState: initialState,
+                                evalPolicy: imagePrefixInput == nil
+                                    ? .pipelined : .checkedSynchronous
+                            )
+                        }
                         try error.check()
                         session.quantizeKVCache(&liveCache, parameters: genParams)
                         var iteratorParams = genParams
@@ -2470,8 +2475,15 @@ nonisolated final class ServerCompletion {
         let admin = cacheAdmin
         let ramCap = ramBudgetCapBytes
         let headroom = headroomSource
+        // The Storage Activity Gate (PRD #150): shared busy signal
+        // between the prefill/hydration paths and the SSD writer's
+        // deferred-class scheduling. Created here so the writer and
+        // the prefill marks observe the same instance.
+        let activityGate = StorageActivityGate()
         let cache = await MainActor.run { () -> PrefixCacheManager in
-            let tieredStore = TieredSnapshotStore(ssdConfig: ssdConfigSnapshot)
+            let tieredStore = TieredSnapshotStore(
+                ssdConfig: ssdConfigSnapshot, activityGate: activityGate
+            )
             let cache = PrefixCacheManager(
                 memoryBudgetBytes: budget,
                 evictionConfig: EvictionConfiguration(flopProfile: flopProfile),
@@ -2494,7 +2506,11 @@ nonisolated final class ServerCompletion {
                 // admission-driven headroom measurement replaces it.
                 // `nil` (test fixtures) keeps the bootstrap static.
                 headroomSource: headroom,
-                ramBudgetCapBytes: ramCap
+                ramBudgetCapBytes: ramCap,
+                // Adaptive Write Eagerness (ADR-0019, PRD #150): skip
+                // redundant SSD copies while RAM is comfortable; reuse
+                // earns a deferred-class promotion write instead.
+                adaptiveWriteEagerness: true
             )
             // The current-cache accessor holds it weakly: dropping this
             // module (model unload) reads as "no live cache" over there.
@@ -3115,16 +3131,18 @@ nonisolated final class ServerCompletion {
                     tokenNDim >= 2
                     ? flatInput.expandedDimensions(axis: 0)
                     : flatInput
-                _ = try session.prefill(
-                    text: .init(tokens: inputArr, mask: nil),
-                    cache: restoredCache,
-                    checkpoints: [:],
-                    checkpointBaseOffset: boundaryOffset,
-                    prefillStepSize: prefillStepSize,
-                    consumeAll: true,
-                    initialState: positionAnchorRopeDelta.map(PositionAnchor.seededState),
-                    evalPolicy: .pipelined
-                )
+                _ = try prefixCache.storageActivityGate.withPrefillMarked {
+                    try session.prefill(
+                        text: .init(tokens: inputArr, mask: nil),
+                        cache: restoredCache,
+                        checkpoints: [:],
+                        checkpointBaseOffset: boundaryOffset,
+                        prefillStepSize: prefillStepSize,
+                        consumeAll: true,
+                        initialState: positionAnchorRopeDelta.map(PositionAnchor.seededState),
+                        evalPolicy: .pipelined
+                    )
+                }
                 let prefillMs = Date.timeIntervalSinceReferenceDate - prefillStart
 
                 guard

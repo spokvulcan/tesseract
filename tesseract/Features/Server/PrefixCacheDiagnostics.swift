@@ -397,6 +397,11 @@ nonisolated enum PrefixCacheDiagnostics {
         /// pinned wire lines stay stable; a non-`accepted` outcome with
         /// this flag is a hard error, logged at error level.
         var mandatory: Bool = false
+        /// Write class for the endurance ledger (PRD #150):
+        /// `guarantee` / `writeThrough` / `deferred`. Set on the
+        /// terminal `accepted` event only — reject outcomes wrote
+        /// nothing, so they carry no class.
+        var writeClass: String?
 
         let eventName = "ssdAdmit"
 
@@ -408,6 +413,9 @@ nonisolated enum PrefixCacheDiagnostics {
             ]
             if mandatory {
                 fields.append(("mandatory", "true"))
+            }
+            if let writeClass {
+                fields.append(("writeClass", writeClass))
             }
             return fields
         }
@@ -544,6 +552,43 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// Why an on-disk snapshot's files were deleted. Every file-delete
+    /// choke point in `SSDSnapshotStore` emits one `ssdDelete` event so
+    /// the endurance ledger (PRD #150) can account bytes-deleted per
+    /// class from the same diagnostics pipeline the write side uses.
+    enum SSDDeleteReason: String, Sendable {
+        /// The ledger's admission cut (or a disk-full retry) evicted a
+        /// committed resident.
+        case evicted
+        /// An explicit `deleteSnapshot` — supersession by a newer leaf,
+        /// or a deferred delete landing at the superseding write's commit.
+        case superseded
+        /// A `loadSync` failure condemned the chain.
+        case hydrationFailure
+        /// A write finished after its snapshot was deleted in flight —
+        /// the tombstone veto discarded the fresh own file.
+        case tombstoneVeto
+    }
+
+    /// One on-disk deletion, with the freed byte count. Fires next to
+    /// the existing lifecycle callbacks; the byte accounting is the
+    /// point — `storageRefDropCallback` carries no size.
+    struct SSDDeleteEvent: Payload {
+        let id: String
+        let bytes: Int
+        let reason: SSDDeleteReason
+
+        let eventName = "ssdDelete"
+
+        var fields: [(String, String)] {
+            [
+                ("id", id),
+                ("bytes", "\(bytes)"),
+                ("reason", reason.rawValue),
+            ]
+        }
+    }
+
     struct LeafSupersessionEvent: Payload {
         let offset: Int
         let snapshotRefID: String?
@@ -649,6 +694,70 @@ nonisolated enum PrefixCacheDiagnostics {
 
         var fields: [(String, String)] {
             [("partition", partition)]
+        }
+    }
+
+    /// One SSD write skipped by **adaptive write eagerness** (ADR-0019,
+    /// PRD #150): RAM comfortably holds the snapshot and the node has
+    /// not yet proven reuse, so the copy is pure redundancy. Not an
+    /// `ssdAdmit` outcome — nothing reached the front door.
+    struct SSDWriteDeferredEvent: Payload {
+        let offset: Int
+        let bytes: Int
+        let hitCount: Int
+
+        let eventName = "ssdWriteDeferred"
+
+        var fields: [(String, String)] {
+            [
+                ("offset", "\(offset)"),
+                ("bytes", "\(bytes)"),
+                ("hitCount", "\(hitCount)"),
+            ]
+        }
+    }
+
+    /// A hit-count promotion (PRD #150): an unbacked RAM body crossed
+    /// `SSDWriteEagernessPolicy.hitCountThreshold` and earned a
+    /// deferred-class SSD write. The paired `ssdAdmit` event carries
+    /// the terminal outcome; this one marks *why* the write exists.
+    struct SSDWritePromotedEvent: Payload {
+        let offset: Int
+        let bytes: Int
+        let hitCount: Int
+
+        let eventName = "ssdWritePromoted"
+
+        var fields: [(String, String)] {
+            [
+                ("offset", "\(offset)"),
+                ("bytes", "\(bytes)"),
+                ("hitCount", "\(hitCount)"),
+            ]
+        }
+    }
+
+    /// One partition warm start reclaimed, with the reason and the
+    /// bytes returned to the budget. The visibility fix for the
+    /// 2026-07-04 silent invalidation (PRD #150): the cache panel
+    /// renders this as a non-alarming notable event ("Cache for
+    /// <modelID> was reset — model files changed") instead of the
+    /// tier silently shrinking to zero.
+    struct SSDPartitionInvalidatedEvent: Payload {
+        let digest: String
+        let modelID: String
+        let bytes: Int
+        let reason: WarmStartOutcome.PartitionInvalidationReason
+
+        let eventName = "ssdPartitionInvalidated"
+
+        var fields: [(String, String)] {
+            [
+                ("digest", digest),
+                ("modelID", modelID),
+                ("bytes", "\(bytes)"),
+                ("reason", reason.rawValue),
+            ]
         }
     }
 

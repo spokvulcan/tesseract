@@ -71,10 +71,16 @@ final class DependencyContainer: ObservableObject {
         arbiter: inferenceArbiter
     )
     lazy var serverGenerationLog = ServerGenerationLog()
-    lazy var promptCacheTelemetryStore = PromptCacheTelemetryStore()
+    lazy var promptCacheTelemetryStore = PromptCacheTelemetryStore(
+        enduranceAccumulator: ssdEnduranceAccumulator
+    )
     /// Eager (non-lazy) so the JSONL diagnostics file is written from the
     /// first request on, whether or not the telemetry UI ever opens.
     let promptCacheDiagnosticsFileSink = PromptCacheDiagnosticsFileSink()
+    /// Eager for the same reason: the endurance ledger (PRD #150) must
+    /// count every SSD write/delete from launch — "persist from day
+    /// one" is the ADR-0019 decision that replaces a write throttle.
+    let ssdEnduranceAccumulator = SSDEnduranceAccumulator()
     lazy var agent: Agent = AgentFactory.makeAgent(
         inferenceService: serverInferenceService,
         packageRegistry: packageRegistry,

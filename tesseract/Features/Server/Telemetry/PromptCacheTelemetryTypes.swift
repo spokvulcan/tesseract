@@ -252,6 +252,19 @@ nonisolated struct PromptCacheSSDSnapshot: Codable, Equatable, Sendable {
     let pendingCount: Int
     let snapshotCount: Int
     let partitionCount: Int
+    /// The floor the dynamic budget degrades to on a nearly-full disk
+    /// (ADR-0018; the old 20 GiB constant). Panel context.
+    var budgetFloorBytes: Int = 0
+    /// Last measured free-disk bytes; `nil` when dynamic budgeting is
+    /// off (tests, replay) or the volume was never probed.
+    var freeDiskBytes: Int?
+    /// The panel's "disk low" signal: the last measurement found free
+    /// space, not policy, holding the budget at the floor. Measured
+    /// ledger-side (`SSDBudgetPolicy.isFloorBound`) rather than derived
+    /// from `budgetBytes <= budgetFloorBytes` here — a user cap below
+    /// the floor also parks the budget there, and that is a settings
+    /// choice, not a full disk.
+    var budgetFloorBound: Bool = false
 
     static let disabled = PromptCacheSSDSnapshot(
         enabled: false,
@@ -292,6 +305,13 @@ nonisolated struct PromptCacheCumulativeCounters: Codable, Equatable, Sendable {
     /// time — the same **Recovery Cost** units eviction scores in, so
     /// "seconds saved" and "seconds at risk" are directly comparable.
     var savedPrefillSeconds: Double = 0
+    /// SSD writes skipped by **Adaptive Write Eagerness** (ADR-0019,
+    /// PRD #150) — redundant copies not taken while RAM comfortably
+    /// held the body and the node had not yet proven reuse.
+    var eagernessDeferrals: Int = 0
+    /// Deferred-class promotion writes issued when a previously
+    /// skipped node's hit count crossed the eagerness threshold.
+    var eagernessPromotions: Int = 0
 }
 
 /// Eviction-tuner state surfaced to the UI: the `AlphaTuner` phase plus the
