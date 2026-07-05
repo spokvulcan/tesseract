@@ -27,10 +27,16 @@ DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
 find_app() {
     local configuration="${1:-Debug}"
     local app_path
-    # Search Xcode's default DerivedData (most recently modified first)
-    app_path=$(ls -dt $DERIVED_DATA_GLOB/Build/Products/"$configuration"/Tesseract\ Agent.app 2>/dev/null | head -1)
-    if [ -z "$app_path" ] || [ ! -d "$app_path" ]; then
-        echo "Error: Tesseract Agent.app ($configuration) not found in Xcode DerivedData. Run a matching build first." >&2
+    # Resolve the products dir from xcodebuild, not an mtime-sorted glob —
+    # stale sibling DerivedData dirs picked hours-old binaries (#165).
+    local products_dir
+    products_dir=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
+        -configuration "$configuration" -destination 'platform=macOS' \
+        -skipPackagePluginValidation -showBuildSettings 2>/dev/null \
+        | awk -F' = ' '/[[:space:]]BUILT_PRODUCTS_DIR =/{print $2; exit}')
+    app_path="$products_dir/Tesseract Agent.app"
+    if [ -z "$products_dir" ] || [ ! -d "$app_path" ]; then
+        echo "Error: Tesseract Agent.app ($configuration) not found at BUILT_PRODUCTS_DIR ('${products_dir:-unresolved}'). Run a matching build first." >&2
         return 1
     fi
     echo "$app_path"

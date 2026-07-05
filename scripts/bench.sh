@@ -61,14 +61,16 @@ DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
 [ -n "$DERIVED_DATA" ] && echo "$CONFIGURATION" > "$DERIVED_DATA/.last_config"
 echo "Build succeeded."
 
-# Find the built app (search Xcode's default DerivedData, most recently modified first).
-# The product was renamed from `tesseract.app` to `Tesseract Agent.app` (commit dfc7bcc0).
-# Note: $DERIVED_DATA_GLOB and $CONFIGURATION must NOT be quoted so the `tesseract-*`
-# glob expands; the literal "Tesseract Agent.app" tail is quoted to survive the space.
-APP=$(ls -dt $DERIVED_DATA_GLOB/Build/Products/$CONFIGURATION/"Tesseract Agent.app" 2>/dev/null | head -1 || true)
+# Resolve the products dir from xcodebuild, not an mtime-sorted glob —
+# stale sibling DerivedData dirs picked hours-old binaries (#165).
+PRODUCTS_DIR=$(xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" -destination 'platform=macOS' \
+    -skipPackagePluginValidation -showBuildSettings 2>/dev/null \
+    | awk -F' = ' '/[[:space:]]BUILT_PRODUCTS_DIR =/{print $2; exit}')
+APP="$PRODUCTS_DIR/Tesseract Agent.app"
 
-if [ -z "$APP" ] || [ ! -d "$APP" ]; then
-    echo "Error: 'Tesseract Agent.app' ($CONFIGURATION) not found in Xcode DerivedData."
+if [ -z "$PRODUCTS_DIR" ] || [ ! -d "$APP" ]; then
+    echo "Error: 'Tesseract Agent.app' ($CONFIGURATION) not found at BUILT_PRODUCTS_DIR ('${PRODUCTS_DIR:-unresolved}')."
     exit 1
 fi
 
