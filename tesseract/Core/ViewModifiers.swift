@@ -107,6 +107,7 @@ extension View {
         self
             .environment(container.agentCoordinator)
             .environment(container.agentEngine)
+            .environment(container.appshotController)
             .environmentObject(container.agentConversationStore)
     }
 

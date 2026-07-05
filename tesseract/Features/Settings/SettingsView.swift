@@ -164,6 +164,7 @@ struct RecordingSettingsSection: View {
     @State private var isRecordingHotkey = false
     @State private var isRecordingTTSHotkey = false
     @State private var isRecordingAgentHotkey = false
+    @State private var isRecordingAppshotHotkey = false
     @State private var selectedAgentModelDeclaresPreserveThinking = false
 
     private var selectedAgentModelStatus: ModelStatus {
@@ -333,6 +334,80 @@ struct RecordingSettingsSection: View {
                 }
             }
 
+            Section("Appshot Hotkey") {
+                HStack {
+                    Text("Capture Frontmost Window:")
+                    Spacer()
+
+                    if isRecordingAppshotHotkey {
+                        Text("Press a key...")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Waiting for key press")
+                    } else {
+                        Text(settings.appshotHotkey.displayString)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.2))
+                            .cornerRadius(4)
+                            .accessibilityLabel(
+                                "Current appshot hotkey: \(settings.appshotHotkey.displayString)")
+                    }
+
+                    Button(isRecordingAppshotHotkey ? "Cancel" : "Change") {
+                        if isRecordingAppshotHotkey {
+                            isRecordingAppshotHotkey = false
+                        } else {
+                            recordNewAppshotHotkey()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityHint(
+                        isRecordingAppshotHotkey
+                            ? "Cancel recording new hotkey" : "Record a new appshot hotkey")
+
+                    if !settings.appshotHotkey.isDoubleCommand {
+                        Button("Reset to ⌘⌘") {
+                            settings.appshotHotkey = .doubleCommand
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Restore the double-Command default")
+                    }
+                }
+
+                Text(
+                    "Press both Command keys in any app to attach a shot of its frontmost window to the agent composer."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                HStack {
+                    Text("Screen Recording Permission:")
+                    Spacer()
+                    if container.permissionsManager.screenRecordingPermission == .granted {
+                        Label("Granted", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .labelStyle(.titleAndIcon)
+                    } else {
+                        Text("Not granted")
+                            .foregroundStyle(.secondary)
+                        Button("Grant…") {
+                            container.permissionsManager.requestScreenRecordingPermission()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                if container.permissionsManager.screenRecordingPermission != .granted {
+                    Text(
+                        "Appshots need Screen Recording. macOS applies the permission after Tesseract is relaunched."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             Section("Agent Model") {
                 let agentModels = ModelDefinition.models(in: .agent)
                 let downloadedAgentModels = container.modelDownloadManager.downloadedModels(
@@ -493,6 +568,17 @@ struct RecordingSettingsSection: View {
                 settings.ttsHotkey = combo
             }
             isRecordingTTSHotkey = false
+        }
+    }
+
+    private func recordNewAppshotHotkey() {
+        isRecordingAppshotHotkey = true
+
+        Task {
+            if let combo = await container.hotkeyManager.recordHotkey() {
+                settings.appshotHotkey = combo
+            }
+            isRecordingAppshotHotkey = false
         }
     }
 

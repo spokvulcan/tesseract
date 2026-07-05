@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct AgentContentView: View {
     @Environment(AgentCoordinator.self) private var coordinator
+    @Environment(AppshotController.self) private var appshot
     @EnvironmentObject private var conversationStore: AgentConversationStore
     @Environment(SpeechCoordinator.self) private var speechCoordinator
     @State private var inputText = ""
@@ -79,7 +80,13 @@ struct AgentContentView: View {
         .onChange(of: coordinator.editDraftRestore) { _, _ in
             applyEditDraftRestore(allowClobber: true)
         }
-        .onAppear { applyEditDraftRestore(allowClobber: false) }
+        .onChange(of: appshot.composerPrefill) { _, _ in
+            applyAppshotPrefill()
+        }
+        .onAppear {
+            applyEditDraftRestore(allowClobber: false)
+            applyAppshotPrefill()
+        }
         .background(
             QuickLookContainer(
                 request: coordinator.imageDraft.quickLookRequest,
@@ -181,6 +188,16 @@ struct AgentContentView: View {
         coordinator.editDraftRestore = nil
         if !allowClobber, restored.isEmpty, !inputText.isEmpty { return }
         inputText = restored
+    }
+
+    /// Consume the one-shot Appshot composer prefill. Unlike the edit restore,
+    /// it never replaces typed text — the appshot label is a convenience and
+    /// the user's draft always wins; the prefill is simply dropped then.
+    private func applyAppshotPrefill() {
+        guard let prefill = appshot.composerPrefill else { return }
+        appshot.composerPrefill = nil
+        guard inputText.isEmpty else { return }
+        inputText = prefill
     }
 
     // MARK: - Conversation History Popover

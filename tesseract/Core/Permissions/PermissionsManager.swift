@@ -20,10 +20,12 @@ enum PermissionState: Sendable {
 final class PermissionsManager: ObservableObject {
     @Published private(set) var microphonePermission: PermissionState = .unknown
     @Published private(set) var accessibilityPermission: PermissionState = .unknown
+    @Published private(set) var screenRecordingPermission: PermissionState = .unknown
 
     init() {
         checkMicrophonePermission()
         checkAccessibilityPermission()
+        checkScreenRecordingPermission()
     }
 
     // MARK: - Microphone Permission
@@ -64,16 +66,43 @@ final class PermissionsManager: ObservableObject {
         // so opening System Settings is more reliable
         openSystemPreferences(for: "accessibility")
 
-        // Poll for permission change since there's no callback
+        pollForGrant(check: { [weak self] in
+            self?.checkAccessibilityPermission()
+            return self?.accessibilityPermission == .granted
+        })
+    }
+
+    /// Poll a TCC grant the system gives no callback for: re-check once a
+    /// second for a minute, stopping early once `check` reports granted.
+    private func pollForGrant(check: @escaping @MainActor () -> Bool) {
         Task {
             for _ in 0..<60 {
                 try? await Task.sleep(for: .seconds(1))
-                checkAccessibilityPermission()
-                if accessibilityPermission == .granted {
+                if check() {
                     break
                 }
             }
         }
+    }
+
+    // MARK: - Screen Recording Permission (Appshots)
+
+    func checkScreenRecordingPermission() {
+        screenRecordingPermission = CGPreflightScreenCaptureAccess() ? .granted : .denied
+    }
+
+    /// Requested lazily — only the Appshot flow ever asks, so users who never
+    /// take one never see macOS's Screen Recording re-nags. Triggers the
+    /// one-time system prompt, opens the Privacy pane, and polls: the grant
+    /// lands in System Settings and (per macOS) may only apply after relaunch.
+    func requestScreenRecordingPermission() {
+        CGRequestScreenCaptureAccess()
+        openSystemPreferences(for: "screenRecording")
+
+        pollForGrant(check: { [weak self] in
+            self?.checkScreenRecordingPermission()
+            return self?.screenRecordingPermission == .granted
+        })
     }
 
     // MARK: - System Settings
@@ -86,6 +115,9 @@ final class PermissionsManager: ObservableObject {
         case "accessibility":
             urlString =
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        case "screenRecording":
+            urlString =
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
         default:
             urlString = "x-apple.systempreferences:com.apple.preference.security"
         }

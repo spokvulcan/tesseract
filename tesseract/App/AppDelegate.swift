@@ -108,6 +108,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menuBarManager?.setupMenuBar()
 
+        // The Appshot flow summons the main window onto the Agent view — the
+        // same activation path as the menu bar's "Talk to Tesse".
+        container.appshotController.onSummon = { [weak self] in
+            self?.navigateToAgent()
+        }
+
         // Apply initial dock visibility (didSet doesn't fire during SettingsManager.init)
         container.settingsManager.applyDockVisibility()
     }

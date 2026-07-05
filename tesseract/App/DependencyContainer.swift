@@ -121,6 +121,14 @@ final class DependencyContainer: ObservableObject {
         )
     }()
 
+    // Appshot — the double-Command frontmost-window capture (PRD #170). Stages
+    // through the agent coordinator's Image Draft; the app delegate attaches
+    // the window-summon callback it owns.
+    lazy var appshotController = AppshotController(
+        capturer: ScreenCaptureKitAppshotCapturer(),
+        imageDraft: agentCoordinator.imageDraft
+    )
+
     // Speech (TTS)
     lazy var textExtractor = TextExtractor()
     lazy var speechEngine = SpeechEngine()
@@ -251,6 +259,14 @@ final class DependencyContainer: ObservableObject {
             onDown: { [weak self] in self?.agentCoordinator.voiceInput.start() },
             onUp: { [weak self] in self?.agentCoordinator.voiceInput.finishCapture() }
         )
+        // Register Appshot hotkey (one-shot tap, no held state)
+        hotkeyManager.registerHotkey(
+            id: "appshot",
+            combo: settingsManager.appshotHotkey,
+            onDown: { [weak self] in
+                Task { await self?.appshotController.takeAppshot() }
+            }
+        )
 
         // Register message codecs for the new persistence layer (Epic 2)
         await registerCoreMessageCodecs()
@@ -326,6 +342,9 @@ final class DependencyContainer: ObservableObject {
                 },
                 updateAgentHotkey: { [hotkeyManager] in
                     hotkeyManager.updateRegisteredHotkey(id: "agent", combo: $0)
+                },
+                updateAppshotHotkey: { [hotkeyManager] in
+                    hotkeyManager.updateRegisteredHotkey(id: "appshot", combo: $0)
                 },
                 startHTTPServer: { [httpServer] in
                     await httpServer.start()

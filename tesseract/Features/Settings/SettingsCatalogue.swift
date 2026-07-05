@@ -52,6 +52,10 @@ enum SettingsCatalogue {
         "agentHotkeyKeyCode", default: Int(KeyCombo.controlSpace.keyCode))
     static let agentHotkeyModifiers = Setting.int(
         "agentHotkeyModifiers", default: Int(KeyCombo.controlSpace.modifiers))
+    static let appshotHotkeyKeyCode = Setting.int(
+        "appshotHotkeyKeyCode", default: Int(KeyCombo.doubleCommand.keyCode))
+    static let appshotHotkeyModifiers = Setting.int(
+        "appshotHotkeyModifiers", default: Int(KeyCombo.doubleCommand.modifiers))
 
     // MARK: - TTS
 

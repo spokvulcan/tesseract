@@ -95,11 +95,13 @@ final class ImageDraftController {
     /// under the cap and voice everything that didn't — trimmed, oversize, or
     /// unreadable — through the transient composer notice. The gesture already
     /// suppressed any text fallthrough, so this feedback is the only signal.
-    func handleGesture(_ payload: ImageGesturePayload) {
-        guard !payload.isEmpty else { return }
+    /// Returns the slice actually attached (empty when the hint fired instead).
+    @discardableResult
+    func handleGesture(_ payload: ImageGesturePayload) -> [ImageAttachment] {
+        guard !payload.isEmpty else { return [] }
         guard imageInputAvailable else {
             showImageSwitchHint = true
-            return
+            return []
         }
         let added = attachImages(payload.attachments)
         showNotice(
@@ -108,6 +110,7 @@ final class ImageDraftController {
                 attached: added.count,
                 rejections: payload.rejections
             ))
+        return added
     }
 
     /// Handle image item providers dropped anywhere on the window (slice #117).
@@ -161,8 +164,9 @@ final class ImageDraftController {
     }
 
     /// Show a transient notice, auto-dismissing after a few seconds unless a
-    /// newer notice (or a manual ✕) superseded it.
-    private func showNotice(_ notice: String?) {
+    /// newer notice (or a manual ✕) superseded it. Internal so the Appshot
+    /// flow's capture failures speak through the same composer surface.
+    func showNotice(_ notice: String?) {
         guard let notice else { return }
         attachmentNotice = notice
         noticeGeneration += 1
