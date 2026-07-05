@@ -42,6 +42,93 @@ struct CompletionHandlerTests {
         #expect(!CompletionHandler.requestBearsImages(request))
     }
 
+    // MARK: - Pool-eligibility probe (Batch Engine `runsMonolithic` input)
+
+    @MainActor
+    @Test func textOnlyServableRequestRidesTheCacheAwareArm() {
+        let request = OpenAI.ChatCompletionRequest(
+            model: "m",
+            messages: [
+                .init(role: .system, content: .text("Be brief.")),
+                .init(role: .user, content: .text("hi")),
+            ]
+        )
+        #expect(CompletionHandler.requestRidesCacheAwareArm(request))
+    }
+
+    @MainActor
+    @Test func imageBearingRequestRunsMonolithic() {
+        let request = OpenAI.ChatCompletionRequest(
+            model: "m",
+            messages: [
+                .init(
+                    role: .user,
+                    content: .parts([
+                        .init(type: .text, text: "look"),
+                        .init(
+                            type: .image_url,
+                            image_url: .init(url: "data:image/png;base64,AAAA")
+                        ),
+                    ])
+                )
+            ]
+        )
+        #expect(!CompletionHandler.requestRidesCacheAwareArm(request))
+    }
+
+    @MainActor
+    @Test func assistantLastRequestRunsMonolithic() {
+        // The Completion Route sends assistant-last conversations down the
+        // standard managed arm — the probe must agree, so the submission is
+        // exclusive and the monolithic generation never shares the pool.
+        let request = OpenAI.ChatCompletionRequest(
+            model: "m",
+            messages: [
+                .init(role: .user, content: .text("hi")),
+                .init(role: .assistant, content: .text("partial")),
+            ]
+        )
+        #expect(!CompletionHandler.requestRidesCacheAwareArm(request))
+    }
+
+    /// The probe is THE route decision: for any text-only request shape,
+    /// submit-time pool eligibility must equal the dispatcher's
+    /// `CompletionRoute` arm (image-bearing shapes are pool-ineligible by
+    /// the ADR-0022 exclusivity rule even when served cache-aware).
+    @MainActor
+    @Test func probeAgreesWithTheCompletionRouteOnTextOnlyShapes() {
+        let shapes: [[OpenAI.ChatMessage]] = [
+            [.init(role: .user, content: .text("hi"))],
+            [
+                .init(role: .system, content: .text("s")),
+                .init(role: .user, content: .text("u")),
+                .init(role: .assistant, content: .text("a")),
+                .init(role: .user, content: .text("u2")),
+            ],
+            [
+                .init(role: .user, content: .text("u")),
+                .init(role: .assistant, content: .text("a")),
+            ],
+            [.init(role: .system, content: .text("only system"))],
+        ]
+        for messages in shapes {
+            let request = OpenAI.ChatCompletionRequest(model: "m", messages: messages)
+            let normalized = MessageConverter.normalizeRequest(messages)
+            let routeIsCacheAware: Bool
+            if case .cacheAware = CompletionRoute.decide(
+                conversation: normalized.prefixCacheEligibility.conversation
+            ) {
+                routeIsCacheAware = true
+            } else {
+                routeIsCacheAware = false
+            }
+            #expect(
+                CompletionHandler.requestRidesCacheAwareArm(request) == routeIsCacheAware,
+                "probe/route disagreement for \(messages.map(\.role))"
+            )
+        }
+    }
+
     @MainActor
     @Test func makeGenerateParametersUsesModelDefaultsWhenRequestOmitsSampling() {
         let request = OpenAI.ChatCompletionRequest(

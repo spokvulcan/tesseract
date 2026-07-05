@@ -48,6 +48,16 @@ nonisolated struct BatchSubmission: Sendable {
     }
 }
 
+/// A live pool lane's handle, threaded from the submission point
+/// (`CompletionHandler`) through the dispatcher into the **Server
+/// Completion** so its generation runs engine-stepped: startup, prefill
+/// chunks, per-token decode, and the leaf-capture finish all execute inside
+/// granted steps.
+nonisolated struct BatchLane: Sendable {
+    let engine: BatchEngine
+    let laneID: UUID
+}
+
 /// What `submit` returns once the request became a **Lane**.
 nonisolated struct BatchLaneAdmission: Sendable, Equatable {
     let laneID: UUID
@@ -258,6 +268,36 @@ actor BatchEngine {
             }
         } onCancel: {
             Task { await self.cancelPendingStep(lane: laneID, step: stepID) }
+        }
+    }
+
+    /// A teardown-path step that ignores the calling task's cancellation:
+    /// salvage-on-cancel (issue #97) must still run grant-serialized — a
+    /// sibling may be mid-decode — after the lane's own task was cancelled,
+    /// which `step` (correctly) refuses. No-op when the lane is already
+    /// gone; the body never throws.
+    func teardownStep(
+        lane laneID: UUID,
+        body: @escaping @Sendable () async -> Void
+    ) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            guard lanes[laneID] != nil, lanes[laneID]?.pendingStep == nil else {
+                continuation.resume()
+                return
+            }
+            lanes[laneID]?.pendingStep = PendingStep(
+                id: UUID(),
+                kind: .finish,
+                run: { _ in
+                    await body()
+                    continuation.resume()
+                },
+                cancel: {
+                    continuation.resume()
+                }
+            )
+            lanes[laneID]?.phase = .finishing
+            wake()
         }
     }
 

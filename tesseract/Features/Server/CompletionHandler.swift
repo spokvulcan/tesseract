@@ -208,7 +208,15 @@ struct CompletionHandler: Sendable {
             // lane's whole life, loads the demanded model on acquisition,
             // and preserves the 60 s busy contract as the admission timeout
             // (`LeaseTimeoutError` → the 503 + Retry-After below).
-            _ = try await batchEngine.submit(
+            //
+            // Pool eligibility is probed at submit time: text-only requests
+            // the **Completion Route** will send down the cache-aware arm
+            // may share the pool; everything else runs an exclusive lane
+            // (today's single-flight semantics). The probe and the route are
+            // the same pure decision over the same conversation shape, so
+            // they cannot disagree (`ServerInferenceService` guards the
+            // impossible mismatch loudly).
+            let admission = try await batchEngine.submit(
                 BatchSubmission(
                     requestID: requestID,
                     demand: BatchModelDemand(
@@ -220,18 +228,20 @@ struct CompletionHandler: Sendable {
                         vision: .visionIfCapable
                     ),
                     bearsImages: Self.requestBearsImages(completionRequest),
-                    // The generation below runs today's single-flight path;
-                    // the lane is exclusive until pool lanes land.
-                    runsMonolithic: true,
+                    runsMonolithic: !Self.requestRidesCacheAwareArm(completionRequest),
                     admissionTimeout: .seconds(Int(Self.leaseTimeoutSeconds))
                 ))
+            let lane: BatchLane? =
+                admission.isExclusive
+                ? nil : BatchLane(engine: batchEngine, laneID: requestID)
             await activityLog.markLeaseAcquired(handle: logHandle)
             await runCompletion(
                 completionRequest,
                 sessionAffinity: sessionAffinity,
                 writer: writer,
                 completionID: completionID,
-                logHandle: logHandle
+                logHandle: logHandle,
+                lane: lane
             )
             await batchEngine.laneFinished(requestID)
         } catch is CancellationError {
@@ -272,7 +282,8 @@ struct CompletionHandler: Sendable {
         sessionAffinity: String?,
         writer: HTTPResponseWriter,
         completionID: String,
-        logHandle: TraceHandle
+        logHandle: TraceHandle,
+        lane: BatchLane?
     ) async {
         if request.stream == true {
             await runStreamingCompletion(
@@ -280,7 +291,8 @@ struct CompletionHandler: Sendable {
                 sessionAffinity: sessionAffinity,
                 writer: writer,
                 completionID: completionID,
-                logHandle: logHandle
+                logHandle: logHandle,
+                lane: lane
             )
         } else {
             await runNonStreamingCompletion(
@@ -288,7 +300,8 @@ struct CompletionHandler: Sendable {
                 sessionAffinity: sessionAffinity,
                 writer: writer,
                 completionID: completionID,
-                logHandle: logHandle
+                logHandle: logHandle,
+                lane: lane
             )
         }
     }
@@ -298,7 +311,8 @@ struct CompletionHandler: Sendable {
         _ request: OpenAI.ChatCompletionRequest,
         sessionAffinity: String?,
         completionID: String,
-        logHandle: TraceHandle
+        logHandle: TraceHandle,
+        lane: BatchLane?
     ) async -> Result<StartedGeneration, Error> {
         let modelState = inferenceService.currentModelState() ?? .unavailable
 
@@ -368,7 +382,8 @@ struct CompletionHandler: Sendable {
                 route: .serverCompatible
             )
             let start = try await inferenceService.start(
-                inferenceRequest
+                inferenceRequest,
+                lane: lane
             )
             let startModelState = start.modelState ?? modelState
             return .success(
@@ -432,14 +447,16 @@ struct CompletionHandler: Sendable {
         sessionAffinity: String?,
         writer: HTTPResponseWriter,
         completionID: String,
-        logHandle: TraceHandle
+        logHandle: TraceHandle,
+        lane: BatchLane?
     ) async {
         let start: StartedGeneration
         switch await startGeneration(
             request,
             sessionAffinity: sessionAffinity,
             completionID: completionID,
-            logHandle: logHandle
+            logHandle: logHandle,
+            lane: lane
         ) {
         case .success(let started):
             start = started
@@ -565,7 +582,8 @@ struct CompletionHandler: Sendable {
         sessionAffinity: String?,
         writer: HTTPResponseWriter,
         completionID: String,
-        logHandle: TraceHandle
+        logHandle: TraceHandle,
+        lane: BatchLane?
     ) async {
         // swiftlint:enable function_body_length
         let start: StartedGeneration
@@ -573,7 +591,8 @@ struct CompletionHandler: Sendable {
             request,
             sessionAffinity: sessionAffinity,
             completionID: completionID,
-            logHandle: logHandle
+            logHandle: logHandle,
+            lane: lane
         ) {
         case .success(let started):
             start = started
@@ -1193,6 +1212,29 @@ struct CompletionHandler: Sendable {
             guard case .parts(let parts) = message.content else { return false }
             return parts.contains { $0.type == .image_url }
         }
+    }
+
+    /// The submit-time pool-eligibility probe (PRD #173): will the
+    /// **Completion Route** send this request down the cache-aware arm?
+    /// Text-only cache-aware requests may share the pool; everything else
+    /// runs monolithic. Runs the exact route decision — `normalizeRequest`
+    /// is pure over messages + tools, `CompletionRoute.decide` pure over the
+    /// conversation shape, and the post-admission session-replay repair only
+    /// fills assistant `reasoning_content` (never roles, counts, or content
+    /// parts) — so this cannot disagree with the dispatcher's decision.
+    static func requestRidesCacheAwareArm(
+        _ request: OpenAI.ChatCompletionRequest
+    ) -> Bool {
+        guard !requestBearsImages(request) else { return false }
+        let probe = MessageConverter.normalizeRequest(
+            request.messages, tools: request.tools
+        )
+        if case .cacheAware = CompletionRoute.decide(
+            conversation: probe.prefixCacheEligibility.conversation
+        ) {
+            return true
+        }
+        return false
     }
 }
 // swiftlint:enable type_body_length
