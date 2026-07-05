@@ -37,11 +37,29 @@ nonisolated enum SSDBudgetPolicy {
         floorBytes: Int = SSDBudgetPolicy.floorBytes,
         capBytes: Int?
     ) -> Int {
-        let claimable = Int(
-            Double(max(freeDiskBytes + currentTierBytes, 0)) * freeDiskFraction
+        let claimable = claimableBytes(
+            freeDiskBytes: freeDiskBytes, currentTierBytes: currentTierBytes
         )
         let measured = max(floorBytes, min(absoluteCapBytes, claimable))
         return applyBudgetCap(measured, cap: capBytes)
+    }
+
+    /// The disk's own contribution to the formula, pre-floor/pre-cap.
+    static func claimableBytes(freeDiskBytes: Int, currentTierBytes: Int) -> Int {
+        Int(Double(max(freeDiskBytes + currentTierBytes, 0)) * freeDiskFraction)
+    }
+
+    /// True when the floor, not the disk, is holding the budget up —
+    /// the panel's "disk low" signal (PRD #150). Deliberately distinct
+    /// from `budget == floor`: a *user cap* below the floor also drags
+    /// the budget down there, and that must not read as a full disk.
+    static func isFloorBound(
+        freeDiskBytes: Int,
+        currentTierBytes: Int,
+        floorBytes: Int = SSDBudgetPolicy.floorBytes
+    ) -> Bool {
+        claimableBytes(freeDiskBytes: freeDiskBytes, currentTierBytes: currentTierBytes)
+            < floorBytes
     }
 
     /// Production free-space probe for the volume holding `rootURL`.

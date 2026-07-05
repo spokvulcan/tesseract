@@ -126,7 +126,7 @@ struct PromptCacheHeroBand: View {
         if !ssd.enabled { return "ssd tier · off" }
         // Free space, not policy, is the binding constraint — the PRD's
         // "nearly-full disk degrades to the floor and the panel says so".
-        if ssd.isAtFloor { return "ssd tier · at floor, disk low" }
+        if ssd.budgetFloorBound { return "ssd tier · at floor, disk low" }
         if ssd.pendingCount > 0 { return "ssd tier · \(ssd.pendingCount) pending" }
         return "ssd tier"
     }

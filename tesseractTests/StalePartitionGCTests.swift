@@ -283,6 +283,31 @@ struct StalePartitionGCTests {
         #expect(outcome.invalidated.isEmpty)
     }
 
+    /// A mixed tier — one partition with a real (old) stamp, one legacy
+    /// nil-stamped sibling — must not reclaim the stamped partition at
+    /// the migration launch: the sibling's grace stamp is "the clock
+    /// starts here", not evidence of use, so it cannot inflate the
+    /// staleness anchor (the code-review catch on `lastUsedAt ?? now`).
+    @Test func legacySiblingDoesNotInflateTheStalenessAnchor() throws {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+        let stampedDigest = "deadbeef"
+        let legacyDigest = "cafebabe"
+
+        var manifest = SnapshotManifest.empty()
+        manifest.partitions[stampedDigest] = makePartitionMeta(
+            lastUsedAt: now - SSDStalePartitionPolicy.maxUnusedAge - 3 * 24 * 3600
+        )
+        manifest.partitions[legacyDigest] = makePartitionMeta(lastUsedAt: nil)
+        try writeManifest(manifest, rootURL: root)
+
+        let ledger = makeLedger(root: root)
+        let outcome = ledger.seedFromWarmStart(expectedFingerprint: testFingerprint)
+
+        #expect(outcome.invalidated.isEmpty)
+        #expect(Set(outcome.validPartitions.map(\.digest)) == [stampedDigest, legacyDigest])
+    }
+
     /// A legacy meta without a `lastUsedAt` stamp survives warm start
     /// (no retroactive reclaim), is grace-stamped to now, and the stamp
     /// is persisted — otherwise the GC clock would restart every launch.

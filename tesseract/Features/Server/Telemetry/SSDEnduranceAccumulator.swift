@@ -266,11 +266,16 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
         let shouldSchedule = !persistScheduled
         persistScheduled = true
         lock.unlock()
+        scheduleDebouncedPersist(shouldSchedule)
+    }
 
-        if shouldSchedule {
-            persistQueue.asyncAfter(deadline: .now() + Self.persistDebounce) { [weak self] in
-                self?.persistIfScheduled()
-            }
+    /// Debounced-persist kickoff shared by every mutation site. The
+    /// caller claims the schedule flag under its own lock (so flag and
+    /// state mutate atomically) and passes the claim result here.
+    private func scheduleDebouncedPersist(_ claimed: Bool) {
+        guard claimed else { return }
+        persistQueue.asyncAfter(deadline: .now() + Self.persistDebounce) { [weak self] in
+            self?.persistIfScheduled()
         }
     }
 
@@ -301,12 +306,7 @@ nonisolated final class SSDEnduranceAccumulator: @unchecked Sendable {
         let shouldSchedule = !persistScheduled
         persistScheduled = true
         lock.unlock()
-
-        if shouldSchedule {
-            persistQueue.asyncAfter(deadline: .now() + Self.persistDebounce) { [weak self] in
-                self?.persistIfScheduled()
-            }
-        }
+        scheduleDebouncedPersist(shouldSchedule)
     }
 
     private func add(written bytes: Int, class writeClass: String, at timestamp: Date) {

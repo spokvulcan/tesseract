@@ -58,6 +58,7 @@ struct SSDBudgetPanelContextTests {
         #expect(context.budgetBytes == 100 * gib)
         #expect(context.floorBytes == 1_000_000)
         #expect(context.freeDiskBytes == 400 * gib)
+        #expect(!context.floorBound)
     }
 
     /// A nearly-full disk degrades the measured budget to the floor —
@@ -76,16 +77,7 @@ struct SSDBudgetPanelContextTests {
         let context = ledger.budgetContext()
         #expect(context.budgetBytes == 1_000_000)
         #expect(context.freeDiskBytes == 2_000_000)
-
-        let panel = PromptCacheSSDSnapshot(
-            enabled: true, rootPath: root.path,
-            budgetBytes: context.budgetBytes, currentBytes: 0,
-            pendingBytes: 0, maxPendingBytes: 0, pendingCount: 0,
-            snapshotCount: 0, partitionCount: 0,
-            budgetFloorBytes: context.floorBytes,
-            freeDiskBytes: context.freeDiskBytes
-        )
-        #expect(panel.isAtFloor)
+        #expect(context.floorBound)
     }
 
     /// No provider (tests, replay) → no free-disk claim, and a budget
@@ -102,16 +94,29 @@ struct SSDBudgetPanelContextTests {
 
         let context = ledger.budgetContext()
         #expect(context.freeDiskBytes == nil)
+        #expect(!context.floorBound)
+    }
 
-        let panel = PromptCacheSSDSnapshot(
-            enabled: true, rootPath: root.path,
-            budgetBytes: context.budgetBytes, currentBytes: 0,
-            pendingBytes: 0, maxPendingBytes: 0, pendingCount: 0,
-            snapshotCount: 0, partitionCount: 0,
-            budgetFloorBytes: context.floorBytes,
-            freeDiskBytes: nil
+    /// A user cap below the floor drags the budget under it on a roomy
+    /// disk — a settings choice, not a full disk. The panel signal must
+    /// stay quiet (the code-review catch on the derived
+    /// `budget <= floor` heuristic).
+    @Test func capBelowFloorIsNotDiskLow() {
+        let root = makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ledger = SnapshotLedger(
+            rootURL: root,
+            budgetBytes: 1_000_000,
+            manifestDebounce: .milliseconds(20),
+            budgetCapBytes: 500_000,  // below the floor
+            freeDiskBytesProvider: { _ in 400 * gib }  // roomy disk
         )
-        #expect(!panel.isAtFloor)
+        _ = ledger.admit(makeDescriptor(bytes: 1_000))
+
+        let context = ledger.budgetContext()
+        #expect(context.budgetBytes == 500_000)
+        #expect(context.budgetBytes < context.floorBytes)
+        #expect(!context.floorBound)
     }
 }
 

@@ -258,14 +258,13 @@ nonisolated struct PromptCacheSSDSnapshot: Codable, Equatable, Sendable {
     /// Last measured free-disk bytes; `nil` when dynamic budgeting is
     /// off (tests, replay) or the volume was never probed.
     var freeDiskBytes: Int?
-
-    /// The panel's "disk low" signal: dynamic budgeting is live (the
-    /// disk was measured) yet the measured budget sits at the floor —
-    /// free space, not policy, is the binding constraint.
-    var isAtFloor: Bool {
-        enabled && freeDiskBytes != nil && budgetFloorBytes > 0
-            && budgetBytes <= budgetFloorBytes
-    }
+    /// The panel's "disk low" signal: the last measurement found free
+    /// space, not policy, holding the budget at the floor. Measured
+    /// ledger-side (`SSDBudgetPolicy.isFloorBound`) rather than derived
+    /// from `budgetBytes <= budgetFloorBytes` here — a user cap below
+    /// the floor also parks the budget there, and that is a settings
+    /// choice, not a full disk.
+    var budgetFloorBound: Bool = false
 
     static let disabled = PromptCacheSSDSnapshot(
         enabled: false,

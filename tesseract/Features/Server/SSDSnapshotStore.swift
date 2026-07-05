@@ -590,7 +590,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             snapshotCount: residency.snapshotCount,
             partitionCount: residency.partitionCount,
             budgetFloorBytes: budget.floorBytes,
-            freeDiskBytes: budget.freeDiskBytes
+            freeDiskBytes: budget.freeDiskBytes,
+            budgetFloorBound: budget.floorBound
         )
     }
 
@@ -705,13 +706,21 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         // segment file it owns.
         if let resident = ledger.removeOrTombstone(id: snapshotID) {
             deleteChainFiles(resident.fileURLs)
-            PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.SSDDeleteEvent(
-                    id: resident.snapshotID,
-                    bytes: resident.bytes,
-                    reason: .superseded
-                ))
+            logSSDDelete(
+                id: resident.snapshotID, bytes: resident.bytes, reason: .superseded
+            )
         }
+    }
+
+    /// One-call `ssdDelete` emission. Every writer path that deletes a
+    /// snapshot file goes through here so no deletion can miss the
+    /// endurance ledger.
+    private func logSSDDelete(
+        id: String, bytes: Int, reason: PrefixCacheDiagnostics.SSDDeleteReason
+    ) {
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.SSDDeleteEvent(id: id, bytes: bytes, reason: reason)
+        )
     }
 
     /// Whether `snapshotID` is a base currently shielded by a pending
@@ -941,12 +950,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                 ledger.releaseExtensionTransfer(baseID: baseID)
             }
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
-            PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.SSDDeleteEvent(
-                    id: item.descriptor.snapshotID,
-                    bytes: item.descriptor.bytes,
-                    reason: .tombstoneVeto
-                ))
+            logSSDDelete(
+                id: item.descriptor.snapshotID,
+                bytes: item.descriptor.bytes,
+                reason: .tombstoneVeto
+            )
             releasePendingBytes(item.payload.totalBytes)
             return
         }
@@ -966,12 +974,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             )
         else {
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
-            PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.SSDDeleteEvent(
-                    id: item.descriptor.snapshotID,
-                    bytes: item.descriptor.bytes,
-                    reason: .tombstoneVeto
-                ))
+            logSSDDelete(
+                id: item.descriptor.snapshotID,
+                bytes: item.descriptor.bytes,
+                reason: .tombstoneVeto
+            )
             releasePendingBytes(item.payload.totalBytes)
             return
         }
@@ -1067,12 +1074,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             for url in resident.fileURLs {
                 deleteResidentFile(url)
             }
-            PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.SSDDeleteEvent(
-                    id: resident.snapshotID,
-                    bytes: resident.bytes,
-                    reason: .evicted
-                ))
+            logSSDDelete(
+                id: resident.snapshotID, bytes: resident.bytes, reason: .evicted
+            )
             PrefixCacheDiagnostics.logSystem(
                 PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(
                     id: resident.snapshotID,
@@ -1569,12 +1573,9 @@ extension SSDSnapshotStore {
     private nonisolated func dropHydrationFailure(id: String) {
         if let evicted = ledger.remove(id: id) {
             deleteChainFiles(evicted.fileURLs)
-            PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.SSDDeleteEvent(
-                    id: evicted.snapshotID,
-                    bytes: evicted.bytes,
-                    reason: .hydrationFailure
-                ))
+            logSSDDelete(
+                id: evicted.snapshotID, bytes: evicted.bytes, reason: .hydrationFailure
+            )
         }
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.SnapshotRefDropCallbackEvent(

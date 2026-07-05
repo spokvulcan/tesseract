@@ -169,6 +169,10 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     /// forever when no provider is injected). Panel context only —
     /// never a control input.
     private var lastMeasuredFreeDiskBytes: Int?
+    /// Whether the last measurement was floor-bound — free space, not
+    /// policy, holding the budget up. Distinct from `budget == floor`:
+    /// a user cap below the floor must not read as a full disk.
+    private var lastMeasurementFloorBound = false
     private var manifestDirty: Bool = false
     private var manifestPersistTask: Task<Void, Never>?
     /// Manifest file writes currently in flight. Claimed under `lock`
@@ -217,14 +221,19 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     }
 
     /// Panel-facing budget context (PRD #150): the budget in force, the
-    /// floor it degrades to, and the last measured free-disk bytes
-    /// (`nil` when dynamic budgeting is off or unmeasured). The panel's
-    /// "nearly-full disk degraded to the floor" copy reads off exactly
-    /// this triple.
-    func budgetContext() -> (budgetBytes: Int, floorBytes: Int, freeDiskBytes: Int?) {
+    /// floor it degrades to, the last measured free-disk bytes (`nil`
+    /// when dynamic budgeting is off or unmeasured), and whether that
+    /// measurement was floor-bound. The panel's "nearly-full disk
+    /// degraded to the floor" copy reads off exactly this.
+    func budgetContext() -> (
+        budgetBytes: Int, floorBytes: Int, freeDiskBytes: Int?, floorBound: Bool
+    ) {
         lock.lock()
         defer { lock.unlock() }
-        return (dynamicBudgetBytes, budgetBytes, lastMeasuredFreeDiskBytes)
+        return (
+            dynamicBudgetBytes, budgetBytes, lastMeasuredFreeDiskBytes,
+            lastMeasurementFloorBound
+        )
     }
 
     /// Re-derive the budget from measured free disk space, throttled
@@ -242,6 +251,11 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         lastBudgetReevaluation = now
         guard let freeDiskBytes = freeDiskBytesProvider(rootURL) else { return }
         lastMeasuredFreeDiskBytes = freeDiskBytes
+        lastMeasurementFloorBound = SSDBudgetPolicy.isFloorBound(
+            freeDiskBytes: freeDiskBytes,
+            currentTierBytes: currentSSDBytes,
+            floorBytes: budgetBytes
+        )
         let next = SSDBudgetPolicy.budgetBytes(
             freeDiskBytes: freeDiskBytes,
             currentTierBytes: currentSSDBytes,
@@ -1396,12 +1410,18 @@ extension SnapshotLedger {
         // — an idle week must not reclaim the whole tier (see
         // `SSDStalePartitionPolicy`). Legacy metas without a stamp are
         // treated as fresh here and grace-stamped below.
+        // Anchor on *real* stamps only: a legacy nil-stamped partition
+        // is about to be grace-stamped, and letting it count as "used
+        // now" would inflate the anchor and reclaim a genuinely-stamped
+        // sibling at the migration launch — the wall-clock regression
+        // the relative rule exists to prevent. No stamps anywhere → no
+        // anchor → nothing reclaimed this launch.
         let tierMostRecentUse = loaded.partitions.values
             .filter {
                 $0.schemaVersion == SnapshotManifestSchema.currentVersion
                     && $0.modelFingerprint == expectedFingerprint
             }
-            .map { $0.lastUsedAt ?? now }
+            .compactMap(\.lastUsedAt)
             .max()
 
         for (digest, meta) in loaded.partitions {
