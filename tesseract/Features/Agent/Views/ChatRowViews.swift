@@ -9,6 +9,11 @@ import os
 // required here, not redundant.
 // swiftlint:disable redundant_discardable_let
 
+/// Base size for chat message body text. The markdown renderer (Textual)
+/// derives all its font-scaled metrics from the environment font, so applying
+/// `.font(.system(size: chatBodyFontSize))` keeps both render modes identical.
+let chatBodyFontSize: CGFloat = 16
+
 // MARK: - Step Gutter (shared timeline column)
 
 /// Shared timeline gutter: vertical line (when not last) + icon. Used by all step row views.
@@ -85,10 +90,11 @@ struct UserBubble: View, Equatable {
                             StructuredText(markdown: data.content)
                                 .textual.structuredTextStyle(.default)
                                 .textual.textSelection(.enabled)
+                                .font(.system(size: chatBodyFontSize))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
                             Text(data.content)
-                                .font(.system(size: 15))
+                                .font(.system(size: chatBodyFontSize))
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -173,9 +179,10 @@ struct AssistantBubble: View, Equatable {
                         StructuredText(markdown: data.content)
                             .textual.structuredTextStyle(.gitHub)
                             .textual.textSelection(.enabled)
+                            .font(.system(size: chatBodyFontSize))
                     } else {
                         Text(data.content)
-                            .font(.system(size: 15))
+                            .font(.system(size: chatBodyFontSize))
                             .textSelection(.enabled)
                     }
                 }
@@ -234,7 +241,7 @@ struct StreamingBubble: View, Equatable {
         let _ = ChatViewPerf.signposter.emitEvent("StreamingBubble.body")
         #endif
         Text(data.content)
-            .font(.system(size: 15))
+            .font(.system(size: chatBodyFontSize))
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14)

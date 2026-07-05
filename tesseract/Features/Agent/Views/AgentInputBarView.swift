@@ -54,7 +54,7 @@ struct AgentInputBarView: View {
             ZStack(alignment: .topLeading) {
                 if inputText.isEmpty && coordinator.imageDraft.pendingImages.isEmpty {
                     Text("Message…")
-                        .font(.system(size: 15))
+                        .font(.system(size: chatBodyFontSize))
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 20)
                         .padding(.top, 16)

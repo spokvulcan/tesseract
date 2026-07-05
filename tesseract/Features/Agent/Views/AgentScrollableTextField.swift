@@ -37,7 +37,7 @@ struct AgentScrollableTextField: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.isRichText = false
         textView.drawsBackground = false
-        textView.font = .systemFont(ofSize: 15)
+        textView.font = .systemFont(ofSize: chatBodyFontSize)
         textView.textColor = .labelColor
         textView.isSelectable = true
         textView.isEditable = isEnabled
