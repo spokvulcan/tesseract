@@ -69,6 +69,7 @@ struct ModelDefinition: Identifiable, Sendable {
 extension ModelDefinition {
     static let defaultAgentModelID = "qwen3.5-4b-paro"
     static let defaultSpeechToTextModelID = "whisper-large-v3-turbo"
+    static let defaultTextToSpeechModelID = "qwen3-tts-voicedesign"
 
     static let all: [ModelDefinition] = [
         ModelDefinition(

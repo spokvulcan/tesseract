@@ -5,6 +5,15 @@
 
 import SwiftUI
 
+/// The app's window scene identifiers.
+enum WindowID {
+    static let main = "main"
+    /// The Onboarding Tour's Welcome Window (see `CONTEXT.md` → Onboarding
+    /// tour): the only window presented on a first launch, an ordinary
+    /// on-demand window when relaunched from Settings.
+    static let onboarding = "onboarding"
+}
+
 /// Bridges the SwiftUI `openWindow` environment action to the AppDelegate.
 /// Needed because `@Environment(\.openWindow)` is only available inside a SwiftUI view hierarchy.
 private struct WindowOpenerView: View {
@@ -26,7 +35,6 @@ private struct WindowOpenerView: View {
 struct TesseractApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var container = DependencyContainer()
-    @State private var showOnboarding = false
     @State private var selectedNavigation: NavigationItem? = .agent
 
     init() {
@@ -108,22 +116,13 @@ struct TesseractApp: App {
                     await container.setup()
                     appDelegate.setupWithContainer(
                         container, navigationSelection: $selectedNavigation)
-
-                    // Show onboarding if needed
-                    if !container.settingsManager.hasCompletedOnboarding {
-                        showOnboarding = true
-                    }
-                }
-                .sheet(isPresented: $showOnboarding) {
-                    OnboardingView(isPresented: $showOnboarding)
-                        .injectCoreDependencies(from: container)
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .showOnboarding)) { _ in
-                    showOnboarding = true
                 }
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 800, height: 700)
+        // First launch belongs to the Welcome Window; the main window arrives
+        // at the Handoff (or via the menu bar). Every later launch is normal.
+        .defaultLaunchBehavior(isFirstLaunch ? .suppressed : .automatic)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings...") {
@@ -135,6 +134,33 @@ struct TesseractApp: App {
 
             DictationCommands()
         }
+
+        Window("Welcome to Tesseract", id: WindowID.onboarding) {
+            OnboardingTourView(container: container)
+                .injectCoreDependencies(from: container)
+                .injectDictationDependencies(from: container)
+                .injectSpeechDependencies(from: container)
+                .background {
+                    WindowOpenerView(appDelegate: appDelegate)
+                }
+                .task {
+                    // On a first launch this is the only window, so it owns
+                    // the (idempotent) container setup and delegate wiring.
+                    await container.setup()
+                    appDelegate.setupWithContainer(
+                        container, navigationSelection: $selectedNavigation)
+                }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(isFirstLaunch ? .presented : .suppressed)
+    }
+
+    /// Read once per scene evaluation; only the value at launch matters for
+    /// the two `defaultLaunchBehavior`s above.
+    private var isFirstLaunch: Bool {
+        !container.settingsManager.hasCompletedOnboarding
     }
 }
 

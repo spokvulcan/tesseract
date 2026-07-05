@@ -8,7 +8,7 @@ import Combine
 import AVFoundation
 import AppKit
 
-enum PermissionState: Sendable {
+nonisolated enum PermissionState: Sendable {
     case unknown
     case requesting
     case granted

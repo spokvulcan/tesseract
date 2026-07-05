@@ -9,6 +9,7 @@ import SwiftUI
 
 struct GeneralSettingsSection: View {
     @Environment(SettingsManager.self) private var settings
+    @Environment(\.openWindow) private var openWindow
 
     // Prevent disabling both dock and menu bar
     private var showInDockBinding: Binding<Bool> {
@@ -63,8 +64,8 @@ struct GeneralSettingsSection: View {
             }
 
             Section("Setup") {
-                Button("Run Setup Wizard...") {
-                    NotificationCenter.default.post(name: .showOnboarding, object: nil)
+                Button("Show Welcome Tour\u{2026}") {
+                    openWindow(id: WindowID.onboarding)
                 }
             }
 
@@ -601,10 +602,4 @@ struct RecordingSettingsSection: View {
 #Preview("Recording") {
     RecordingSettingsSection()
         .environmentObject(DependencyContainer())
-}
-
-// MARK: - Notifications
-
-extension Notification.Name {
-    static let showOnboarding = Notification.Name("showOnboarding")
 }
