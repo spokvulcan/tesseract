@@ -24,6 +24,7 @@ private struct CopyableCodeBlock: View {
 
     @State private var isHovering = false
     @State private var didCopy = false
+    @State private var resetTask: Task<Void, Never>?
 
     var body: some View {
         StructuredText.GitHubCodeBlockStyle()
@@ -36,8 +37,12 @@ private struct CopyableCodeBlock: View {
         Button {
             configuration.codeBlock.copyToPasteboard()
             didCopy = true
-            Task {
+            // Supersede any in-flight reset so rapid re-copies keep the
+            // checkmark up for the full window.
+            resetTask?.cancel()
+            resetTask = Task {
                 try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled else { return }
                 didCopy = false
             }
         } label: {

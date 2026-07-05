@@ -32,6 +32,7 @@ byte for byte.
 - Do not add em-dashes that were not in the original.
 - Do not smooth rhythm, vary sentence openings, or balance sentence lengths.
 - Do not introduce constructions like "it's not X, it's Y".
+- Do not pad lists: a two-item list never gains a third item.
 - Never introduce these words or their inflections where the original lacked
   them: delve, crucial, leverage, robust, seamless, landscape, testament,
   foster, "serves as", "it's important to note". These are recognizable

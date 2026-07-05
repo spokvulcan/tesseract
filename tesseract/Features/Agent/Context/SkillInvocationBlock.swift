@@ -24,8 +24,12 @@ nonisolated struct SkillInvocationBlock: Equatable, Sendable {
     var displayLabel: String { skillName.kebabTitleCased }
 
     /// Parse a user-message content string. Returns nil unless the content
-    /// starts with a well-formed `<skill name="…"…>` opening tag and contains
-    /// a closing `</skill>`.
+    /// starts with a well-formed `<skill name="…" location="…">` opening tag
+    /// and contains a closing `</skill>`. Requiring *both* attributes the
+    /// injection path always writes keeps a user who literally types
+    /// `<skill name=…>` from having their message re-rendered as an
+    /// invocation row (best-effort — the expanded view shows the full text
+    /// either way, so an exact-format collision stays transparent).
     static func parse(_ content: String) -> SkillInvocationBlock? {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("<skill ") else { return nil }
@@ -33,7 +37,9 @@ nonisolated struct SkillInvocationBlock: Equatable, Sendable {
         guard let openingEnd = trimmed.firstIndex(of: ">") else { return nil }
         let openingTag = trimmed[..<openingEnd]
 
-        guard let name = attributeValue("name", in: openingTag), !name.isEmpty else {
+        guard let name = attributeValue("name", in: openingTag), !name.isEmpty,
+            attributeValue("location", in: openingTag) != nil
+        else {
             return nil
         }
 

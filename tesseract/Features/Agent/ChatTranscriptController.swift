@@ -81,7 +81,7 @@ final class ChatTranscriptController {
         rows = projection.rows
         activeTurnRowIndex = projection.activeTurnStart
         pruneExpansionState(
-            validTurnIDs: projection.validTurnIDs, toolRowIDs: projection.toolRowIDs)
+            validTurnIDs: projection.validTurnIDs, detailRowIDs: projection.detailRowIDs)
 
         ChatViewPerf.signposter.endInterval("rebuildRows", perfState)
     }
@@ -212,10 +212,10 @@ final class ChatTranscriptController {
 
     /// Full-rebuild-only pruning of stale expansion state against the projection's
     /// valid-turn and committed tool-row id sets.
-    private func pruneExpansionState(validTurnIDs: Set<UUID>, toolRowIDs: Set<String>) {
+    private func pruneExpansionState(validTurnIDs: Set<UUID>, detailRowIDs: Set<String>) {
         expandedTurns = expandedTurns.intersection(validTurnIDs)
         if !expandedDetails.isEmpty {
-            expandedDetails = expandedDetails.intersection(toolRowIDs)
+            expandedDetails = expandedDetails.intersection(detailRowIDs)
         }
     }
 

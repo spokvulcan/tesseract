@@ -52,7 +52,8 @@ nonisolated enum ChatTranscript {
         /// "auto-expand the streaming header unless the user collapsed it"
         /// decision before projecting (by inserting ``streamingTurnID`` here).
         var expandedTurns: Set<UUID>
-        /// Tool-call row ids whose argument/result detail is expanded.
+        /// Detail-expandable row ids (tool calls, Skill Invocation Rows) whose
+        /// argument/result detail is expanded.
         var expandedDetails: Set<String>
         /// The live streaming message — active turn only.
         var stream: AssistantMessage?
@@ -89,7 +90,7 @@ nonisolated enum ChatTranscript {
         /// Turn's tool rows are not in `rows`), plus Skill Invocation Rows.
         /// The coordinator prunes stale `expandedDetails` against this so
         /// collapsing then re-expanding preserves detail expansion state.
-        var toolRowIDs: Set<String>
+        var detailRowIDs: Set<String>
         /// Every still-valid turn id — the committed Turn ids, plus
         /// ``streamingTurnID`` when generating. The coordinator prunes stale
         /// `expandedTurns` against this, so it never has to re-group the log a
@@ -139,7 +140,7 @@ nonisolated enum ChatTranscript {
         let turns = turns(from: messages)
         var rows: [ChatRow] = []
         var activeTurnStart = 0
-        var toolRowIDs = Set<String>()
+        var detailRowIDs = Set<String>()
         var validTurnIDs = Set<UUID>()
 
         for (index, turn) in turns.enumerated() {
@@ -147,7 +148,7 @@ nonisolated enum ChatTranscript {
             if isLast { activeTurnStart = rows.count }
             let projected = projectTurn(turn, isActive: ctx.isGenerating && isLast, ctx)
             rows += projected.rows
-            toolRowIDs.formUnion(projected.toolRowIDs)
+            detailRowIDs.formUnion(projected.detailRowIDs)
             validTurnIDs.insert(turn.id)
         }
 
@@ -162,7 +163,7 @@ nonisolated enum ChatTranscript {
 
         return Projection(
             rows: rows, activeTurnStart: activeTurnStart,
-            toolRowIDs: toolRowIDs, validTurnIDs: validTurnIDs
+            detailRowIDs: detailRowIDs, validTurnIDs: validTurnIDs
         )
     }
 
@@ -203,9 +204,9 @@ nonisolated enum ChatTranscript {
     // swiftlint:disable:next function_body_length
     private static func projectTurn(
         _ turn: Turn, isActive: Bool, _ ctx: Context
-    ) -> (rows: [ChatRow], toolRowIDs: Set<String>) {
+    ) -> (rows: [ChatRow], detailRowIDs: Set<String>) {
         var rows: [ChatRow] = []
-        var toolRowIDs = Set<String>()
+        var detailRowIDs = Set<String>()
 
         let boundary = turn.messages.first
         let user = boundary?.asUser
@@ -215,11 +216,11 @@ nonisolated enum ChatTranscript {
         // image-only (empty content). This converges both paths onto the
         // full-rebuild behaviour. A user message carrying an injected skill
         // block renders as the compact Skill Invocation Row instead (PRD #174);
-        // its id joins `toolRowIDs` so detail-expansion pruning keeps it alive.
+        // its id joins `detailRowIDs` so detail-expansion pruning keeps it alive.
         if let user {
             if let skill = SkillInvocationBlock.parse(user.content) {
                 let rowID = turn.id.uuidString + "-skill"
-                toolRowIDs.insert(rowID)
+                detailRowIDs.insert(rowID)
                 rows.append(
                     ChatRow(
                         id: rowID,
@@ -303,7 +304,7 @@ nonisolated enum ChatTranscript {
                 let props = ToolDisplayHelpers.displayProps(for: info)
                 let result = toolResultMap[info.id]
                 let rowID = "\(asst.id)-tool-\(index)"
-                toolRowIDs.insert(rowID)
+                detailRowIDs.insert(rowID)
                 steps.append(
                     ChatRow(
                         id: rowID,
@@ -339,7 +340,7 @@ nonisolated enum ChatTranscript {
         // indicator must still show while generation is running.
         if isActive && steps.isEmpty && answer == nil {
             rows += generatingFallback(ctx)
-            return (rows, toolRowIDs)
+            return (rows, detailRowIDs)
         }
 
         let liveSteps = isActive ? streamingStepCount(ctx.stream) : 0
@@ -407,7 +408,7 @@ nonisolated enum ChatTranscript {
                 ))
         }
 
-        return (rows, toolRowIDs)
+        return (rows, detailRowIDs)
     }
 
     // MARK: - Streaming overlay

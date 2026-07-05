@@ -72,6 +72,13 @@ struct SkillInvocationProjectionTests {
         #expect(SkillInvocationBlock.parse("") == nil)
     }
 
+    @Test func handTypedSkillTagWithoutLocationStaysAUserMessage() {
+        // Only the injection path writes both `name` and `location`; a user
+        // literally typing a bare `<skill name=…>` tag keeps their bubble.
+        let handTyped = "<skill name=\"proofread\">how does this tag work?</skill>"
+        #expect(SkillInvocationBlock.parse(handTyped) == nil)
+    }
+
     @Test func unterminatedBlockIsNotASkillInvocation() {
         #expect(SkillInvocationBlock.parse("<skill name=\"proofread\">no closing tag") == nil)
     }
@@ -118,7 +125,7 @@ struct SkillInvocationProjectionTests {
         let user = UserMessage(content: skillContent())
         let projection = ChatTranscript.rows(from: [user], ctx())
         let rowID = try #require(projection.rows.first?.id)
-        #expect(projection.toolRowIDs.contains(rowID))
+        #expect(projection.detailRowIDs.contains(rowID))
     }
 
     @Test func attachedImagesRideOnTheRow() throws {
