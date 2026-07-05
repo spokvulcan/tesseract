@@ -75,6 +75,15 @@ struct AgentContentView: View {
                 .animation(
                     .easeOut(duration: 0.15), value: coordinator.commandPalette.showCommandPopup)
             }
+            // Min-size shield, load-bearing (macOS 26 framework bug): the
+            // scene measures NavigationSplitView's detail minimum by probing
+            // at near-zero width, where any wrapping `.fixedSize(vertical:)`
+            // text in this inset reports a word-per-line height. When a
+            // banner (or popup, or the speech bar) appears, that inflated
+            // minimum makes the scene resize the window past the screen and
+            // pin its min height there. Reporting a zero minimum here keeps
+            // the window's frame the user's alone; real layout is unaffected.
+            .frame(minHeight: 0)
         }
         .navigationTitle("Agent")
         .onChange(of: coordinator.editDraftRestore) { _, _ in
