@@ -175,6 +175,31 @@ final class SettingsManager {
         }
     }
 
+    // MARK: - Appshot Hotkey
+
+    var appshotHotkeyKeyCode: Int {
+        didSet { SettingsCatalogue.appshotHotkeyKeyCode.write(appshotHotkeyKeyCode, to: store) }
+    }
+
+    var appshotHotkeyModifiers: Int {
+        didSet {
+            SettingsCatalogue.appshotHotkeyModifiers.write(appshotHotkeyModifiers, to: store)
+        }
+    }
+
+    var appshotHotkey: KeyCombo {
+        get {
+            KeyCombo(
+                keyCode: UInt16(appshotHotkeyKeyCode),
+                modifiers: NSEvent.ModifierFlags(rawValue: UInt(appshotHotkeyModifiers))
+            )
+        }
+        set {
+            appshotHotkeyKeyCode = Int(newValue.keyCode)
+            appshotHotkeyModifiers = Int(newValue.modifiers)
+        }
+    }
+
     // MARK: - TTS Settings
 
     var ttsTemperature: Double {
@@ -378,6 +403,8 @@ final class SettingsManager {
         self.ttsHotkeyModifiers = SettingsCatalogue.ttsHotkeyModifiers.load(from: store)
         self.agentHotkeyKeyCode = SettingsCatalogue.agentHotkeyKeyCode.load(from: store)
         self.agentHotkeyModifiers = SettingsCatalogue.agentHotkeyModifiers.load(from: store)
+        self.appshotHotkeyKeyCode = SettingsCatalogue.appshotHotkeyKeyCode.load(from: store)
+        self.appshotHotkeyModifiers = SettingsCatalogue.appshotHotkeyModifiers.load(from: store)
         self.ttsTemperature = SettingsCatalogue.ttsTemperature.load(from: store)
         self.ttsTopP = SettingsCatalogue.ttsTopP.load(from: store)
         self.ttsRepetitionPenalty = SettingsCatalogue.ttsRepetitionPenalty.load(from: store)
@@ -480,6 +507,8 @@ final class SettingsManager {
         ttsHotkeyModifiers = SettingsCatalogue.ttsHotkeyModifiers.default
         agentHotkeyKeyCode = SettingsCatalogue.agentHotkeyKeyCode.default
         agentHotkeyModifiers = SettingsCatalogue.agentHotkeyModifiers.default
+        appshotHotkeyKeyCode = SettingsCatalogue.appshotHotkeyKeyCode.default
+        appshotHotkeyModifiers = SettingsCatalogue.appshotHotkeyModifiers.default
         ttsTemperature = SettingsCatalogue.ttsTemperature.default
         ttsTopP = SettingsCatalogue.ttsTopP.default
         ttsRepetitionPenalty = SettingsCatalogue.ttsRepetitionPenalty.default

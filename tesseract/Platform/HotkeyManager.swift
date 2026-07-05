@@ -45,6 +45,11 @@ final class HotkeyManager: ObservableObject {
     private var registrations: [String: HotkeyRegistration] = [:]
     private var pressedHotkeys: Set<String> = []
 
+    /// Chord state for double-Command registrations (`combo.isDoubleCommand`).
+    /// Fed raw flag words from both delivery paths; fires `onDown` once per
+    /// chord (one-shot — these registrations have no held state, no `onUp`).
+    private var doubleCommandDetector = DoubleCommandDetector()
+
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
@@ -151,6 +156,7 @@ final class HotkeyManager: ObservableObject {
 
                 // Handle flagsChanged - check for released modifiers on pressed hotkeys
                 if type == .flagsChanged {
+                    manager.handleDoubleCommandFlags(rawFlags: flags.rawValue)
                     for id in manager.pressedHotkeys {
                         guard let reg = manager.registrations[id] else { continue }
                         let hotkeyRelevant = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
@@ -302,6 +308,7 @@ final class HotkeyManager: ObservableObject {
 
         // Handle modifier-only hotkeys
         if event.type == .flagsChanged {
+            handleDoubleCommandFlags(rawFlags: UInt64(event.modifierFlags.rawValue))
             for (id, reg) in registrations where reg.combo.keyCode == 0 {
                 let targetModifiers = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
                 if modifiers == targetModifiers && !pressedHotkeys.contains(id) {
@@ -329,6 +336,21 @@ final class HotkeyManager: ObservableObject {
 
             if event.type == .keyDown && !pressedHotkeys.contains(id) {
                 pressedHotkeys.insert(id)
+                reg.onDown()
+            }
+        }
+    }
+
+    // MARK: - Double-Command Chord
+
+    /// Shared by both event paths (tap and NSEvent fallback): feed one
+    /// `flagsChanged` word to the chord detector and, on fire, invoke every
+    /// double-Command registration once. Always hops to the next main-queue
+    /// turn so both paths deliver identically.
+    private func handleDoubleCommandFlags(rawFlags: UInt64) {
+        guard doubleCommandDetector.handleFlagsChanged(rawFlags: rawFlags) else { return }
+        for (_, reg) in registrations where reg.combo.isDoubleCommand {
+            DispatchQueue.main.async {
                 reg.onDown()
             }
         }

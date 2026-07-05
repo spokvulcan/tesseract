@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
 struct AgentInputBarView: View {
     @Binding var inputText: String
     @Environment(AgentCoordinator.self) private var coordinator
+    @Environment(AppshotController.self) private var appshot
+    @EnvironmentObject private var permissions: PermissionsManager
     @Environment(AgentEngine.self) private var agentEngine
     @Environment(TranscriptionEngine.self) private var transcriptionEngine
     @EnvironmentObject private var downloadManager: ModelDownloadManager
@@ -45,6 +47,10 @@ struct AgentInputBarView: View {
         VStack(alignment: .leading, spacing: 0) {
             if coordinator.imageDraft.showImageSwitchHint {
                 imageHintBanner
+            }
+
+            if appshot.showPermissionExplainer {
+                appshotPermissionBanner
             }
 
             if let notice = coordinator.imageDraft.attachmentNotice {
@@ -394,6 +400,21 @@ struct AgentInputBarView: View {
         ) {
             coordinator.imageDraft.showImageSwitchHint = false
         }
+    }
+
+    /// The lazy Screen Recording explainer (PRD #170): shown when an Appshot
+    /// failed on the missing permission. The grant lives in System Settings
+    /// and macOS applies it only after a relaunch, so the copy says so.
+    private var appshotPermissionBanner: some View {
+        composerBanner(
+            icon: "rectangle.dashed.badge.record",
+            message:
+                "Appshots need Screen Recording permission. After granting it in "
+                + "System Settings, relaunch Tesseract to apply.",
+            actionTitle: "Open System Settings",
+            action: permissions.requestScreenRecordingPermission,
+            onDismiss: { appshot.showPermissionExplainer = false }
+        )
     }
 
     /// The transient Image Gesture feedback line (issue #167): what a paste,

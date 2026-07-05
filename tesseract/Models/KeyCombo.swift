@@ -20,7 +20,14 @@ struct KeyCombo: Codable, Equatable, Sendable {
         NSEvent.ModifierFlags(rawValue: modifiers)
     }
 
+    /// The double-Command chord (the Appshot default) — both Command keys
+    /// pressed together. Not a real key: the sentinel key code never matches a
+    /// keyboard event, so the chord is detected on modifier flags alone.
+    var isDoubleCommand: Bool { keyCode == Self.doubleCommandKeyCode }
+
     var displayString: String {
+        if isDoubleCommand { return "⌘⌘" }
+
         var parts: [String] = []
 
         let flags = modifierFlags
@@ -119,6 +126,8 @@ struct KeyCombo: Codable, Equatable, Sendable {
     }
 
     // Common presets
+    static let doubleCommandKeyCode: UInt16 = .max
+    static let doubleCommand = KeyCombo(keyCode: doubleCommandKeyCode, modifiers: .command)
     static let f5 = KeyCombo(keyCode: UInt16(kVK_F5))
     static let optionSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .option)
     static let controlSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .control)

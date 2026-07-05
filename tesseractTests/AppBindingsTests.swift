@@ -151,6 +151,23 @@ struct AppBindingsTests {
     }
 
     @Test
+    func appshotHotkeyChangeReBindsItsRegistration() async {
+        let h = makeHarness()
+        defer { h.bindings.stop() }
+
+        h.bindings.start()
+
+        let combo = KeyCombo(keyCode: 20, modifiers: [.command, .option])
+        h.settings.appshotHotkey = combo
+
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "updateAppshotHotkey").last
+                    == "updateAppshotHotkey(\(combo.displayString))"
+            })
+    }
+
+    @Test
     func serverEnabledAtLaunchStartsItExactlyOnceAndTogglingOffStopsIt() async {
         let h = makeHarness { $0.isServerEnabled = true }
         defer { h.bindings.stop() }
@@ -541,6 +558,7 @@ private func makeHarness(
             updateDictationHotkey: { recorder("updateDictationHotkey(\($0.displayString))") },
             updateTTSHotkey: { recorder("updateTTSHotkey(\($0.displayString))") },
             updateAgentHotkey: { recorder("updateAgentHotkey(\($0.displayString))") },
+            updateAppshotHotkey: { recorder("updateAppshotHotkey(\($0.displayString))") },
             startHTTPServer: { recorder("startHTTPServer") },
             stopHTTPServer: { recorder("stopHTTPServer") },
             updateHTTPServerPort: { recorder("updateHTTPServerPort(\($0))") },

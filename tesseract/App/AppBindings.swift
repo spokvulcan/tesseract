@@ -74,6 +74,7 @@ final class AppBindings {
         let updateDictationHotkey: @MainActor (KeyCombo) -> Void
         let updateTTSHotkey: @MainActor (KeyCombo) -> Void
         let updateAgentHotkey: @MainActor (KeyCombo) -> Void
+        let updateAppshotHotkey: @MainActor (KeyCombo) -> Void
         let startHTTPServer: @MainActor () async -> Void
         let stopHTTPServer: @MainActor () -> Void
         let updateHTTPServerPort: @MainActor (UInt16) async -> Void
@@ -95,6 +96,7 @@ final class AppBindings {
             updateDictationHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateTTSHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateAgentHotkey: @escaping @MainActor (KeyCombo) -> Void,
+            updateAppshotHotkey: @escaping @MainActor (KeyCombo) -> Void,
             startHTTPServer: @escaping @MainActor () async -> Void,
             stopHTTPServer: @escaping @MainActor () -> Void,
             updateHTTPServerPort: @escaping @MainActor (UInt16) async -> Void,
@@ -113,6 +115,7 @@ final class AppBindings {
             self.updateDictationHotkey = updateDictationHotkey
             self.updateTTSHotkey = updateTTSHotkey
             self.updateAgentHotkey = updateAgentHotkey
+            self.updateAppshotHotkey = updateAppshotHotkey
             self.startHTTPServer = startHTTPServer
             self.stopHTTPServer = stopHTTPServer
             self.updateHTTPServerPort = updateHTTPServerPort
@@ -349,6 +352,13 @@ final class AppBindings {
                 guard let self else { return }
                 for await hotkey in Observations({ self.settings.agentHotkey }) {
                     self.effects.updateAgentHotkey(hotkey)
+                }
+            })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await hotkey in Observations({ self.settings.appshotHotkey }) {
+                    self.effects.updateAppshotHotkey(hotkey)
                 }
             })
 
