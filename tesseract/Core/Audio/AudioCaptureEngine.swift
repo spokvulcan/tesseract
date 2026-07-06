@@ -7,6 +7,7 @@ import Foundation
 import Observation
 import AVFoundation
 import Accelerate
+import Combine
 
 // Thread-safe sample storage - nonisolated for real-time audio thread access
 nonisolated final class SampleBuffer: @unchecked Sendable {
@@ -75,12 +76,31 @@ final class AudioCaptureEngine: AudioCapturing {
         static let bufferSize: AVAudioFrameCount = 1024
         static let meterInterval: TimeInterval = 0.05
         static let reserveSeconds: Int = 60
+        /// A capture this long with zero tap buffers is a wedged input, not a
+        /// quick tap — one 1024-frame buffer arrives within ~25 ms even with
+        /// Voice Processing ramp-up. Matches the session's minimum recording
+        /// duration, below which the capture is discarded as "too short" anyway.
+        static let emptyCaptureGrace: TimeInterval = 0.5
     }
 
     private(set) var isCapturing = false
     private(set) var audioLevel: Float = 0
 
+    /// Kept alive across captures. Configuring Voice Processing tears down and
+    /// rebuilds the input's whole IO unit — hundreds of milliseconds — so paying
+    /// it per press made push-to-talk laggy, and rapid create/destroy cycles are
+    /// exactly the pattern that wedges CoreAudio input. Built lazily on first
+    /// capture; rebuilt only when the Voice Processing setting flips, the device
+    /// configuration changes, or a capture comes back empty.
     private var audioEngine: AVAudioEngine?
+    /// The Voice Processing setting `audioEngine` was built under (requested,
+    /// not necessarily accepted) — a mismatch with the live setting rebuilds.
+    private var engineBuiltWithVoiceProcessing = false
+    /// Raised by `AVAudioEngineConfigurationChange` (default input device or
+    /// format changed): the kept engine is not trusted, the next capture rebuilds.
+    private var engineNeedsRebuild = false
+    private var configChangeCancellable: AnyCancellable?
+
     private var inputTapInstalled = false
     private let sampleBuffer = SampleBuffer()
     private var captureStartTime: Date?
@@ -113,29 +133,88 @@ final class AudioCaptureEngine: AudioCapturing {
             throw DictationError.microphonePermissionDenied
         }
 
-        audioEngine = AVAudioEngine()
-        guard let audioEngine else {
-            throw DictationError.audioCaptureFailed("Failed to create audio engine")
-        }
-
-        let inputNode = audioEngine.inputNode
-
-        // Voice Processing must be requested before the engine starts; a
-        // platform refusal falls back to raw capture — dictation must never
-        // be blocked by it (PRD #175).
-        voiceProcessingActive = false
-        if isVoiceProcessingEnabled() {
+        let wantsVoiceProcessing = isVoiceProcessingEnabled()
+        if audioEngine == nil || engineNeedsRebuild
+            || engineBuiltWithVoiceProcessing != wantsVoiceProcessing
+        {
+            rebuildEngine(voiceProcessing: wantsVoiceProcessing)
+            try beginCapture()
+        } else {
             do {
-                try inputNode.setVoiceProcessingEnabled(true)
+                try beginCapture()
+            } catch {
+                // A kept-alive engine can go stale in ways no configuration-change
+                // notification reported — rebuild once and retry before failing
+                // the press.
+                Log.audio.error(
+                    "Capture start failed on the kept engine, rebuilding: \(error.localizedDescription)"
+                )
+                rebuildEngine(voiceProcessing: wantsVoiceProcessing)
+                try beginCapture()
+            }
+        }
+    }
+
+    /// Builds a fresh engine configured for `voiceProcessing`, replacing any kept
+    /// one. Voice Processing must be requested before the engine starts; a
+    /// platform refusal falls back to raw capture — dictation must never be
+    /// blocked by it (PRD #175).
+    private func rebuildEngine(voiceProcessing: Bool) {
+        tearDownEngine()
+
+        let buildStart = Date()
+        let engine = AVAudioEngine()
+        voiceProcessingActive = false
+        if voiceProcessing {
+            do {
+                try engine.inputNode.setVoiceProcessingEnabled(true)
                 voiceProcessingActive = true
             } catch {
                 Log.audio.error(
                     "Voice processing unavailable, capturing raw: \(error.localizedDescription)")
             }
         }
+        Log.audio.info(
+            """
+            Capture engine built in \
+            \(String(format: "%.0f", Date().timeIntervalSince(buildStart) * 1000)) ms \
+            (voice processing: \(voiceProcessingActive))
+            """)
 
-        // Read the format only after voice processing may have changed it.
+        audioEngine = engine
+        engineBuiltWithVoiceProcessing = voiceProcessing
+        engineNeedsRebuild = false
+
+        configChangeCancellable = NotificationCenter.default
+            .publisher(for: .AVAudioEngineConfigurationChange, object: engine)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.engineNeedsRebuild = true
+            }
+    }
+
+    private func tearDownEngine() {
+        configChangeCancellable = nil
+        tearDownAudioEngine(audioEngine)
+        audioEngine = nil
+    }
+
+    /// Starts one capture on the current engine: tap, level timer, engine start.
+    /// Fails leaving the engine allocated but idle — the caller decides whether
+    /// to rebuild and retry.
+    private func beginCapture() throws {
+        guard let audioEngine else {
+            throw DictationError.audioCaptureFailed("Failed to create audio engine")
+        }
+        let inputNode = audioEngine.inputNode
+
+        // Read the format only after voice processing may have changed it. A
+        // kept engine whose device went away reports a zero format — treat it
+        // as a start failure so the rebuild-and-retry path runs.
         let inputFormat = inputNode.outputFormat(forBus: 0)
+        guard inputFormat.sampleRate > 0 else {
+            throw DictationError.audioCaptureFailed("Input device reports no format")
+        }
         inputSampleRate = inputFormat.sampleRate
 
         // Create format for our tap
@@ -179,8 +258,9 @@ final class AudioCaptureEngine: AudioCapturing {
         } catch {
             levelUpdateTimer?.invalidate()
             levelUpdateTimer = nil
-            tearDownAudioEngine(audioEngine)
-            self.audioEngine = nil
+            inputNode.removeTap(onBus: 0)
+            inputTapInstalled = false
+            captureStartTime = nil
             throw DictationError.audioCaptureFailed(error.localizedDescription)
         }
     }
@@ -191,17 +271,40 @@ final class AudioCaptureEngine: AudioCapturing {
         isCapturing = false
         levelUpdateTimer?.invalidate()
         levelUpdateTimer = nil
-
-        let engine = audioEngine
-        audioEngine = nil
         audioLevel = 0
         levelRelay.level = 0
 
-        tearDownAudioEngine(engine)
+        // Stop IO but keep the engine (and its Voice Processing configuration)
+        // for the next press. Same order as teardown: stop before removing the
+        // tap, so AudioOutputUnitStop never races a nil tap callback.
+        if let audioEngine {
+            audioEngine.stop()
+            if inputTapInstalled {
+                audioEngine.inputNode.removeTap(onBus: 0)
+                inputTapInstalled = false
+            }
+        }
 
         let samples = sampleBuffer.getAndClear()
         let duration = captureStartTime.map { Date().timeIntervalSince($0) } ?? 0
         captureStartTime = nil
+
+        if samples.isEmpty && duration >= Defaults.emptyCaptureGrace {
+            // The engine ran long enough that the tap must have fired, yet it
+            // delivered nothing — a wedged input. Discard the engine (the next
+            // press builds fresh) and report "no audio", which is the truth,
+            // rather than letting an empty transcription claim "no speech
+            // detected". Below the grace, an empty capture is just a tap that
+            // beat the first buffer; it falls through to the session's
+            // minimum-duration guard ("too short").
+            Log.audio.error(
+                """
+                Capture delivered no samples over \
+                \(String(format: "%.1f", duration)) s — discarding engine
+                """)
+            tearDownEngine()
+            return nil
+        }
 
         // Resample to 16kHz if needed
         let resampledSamples = AudioConverter.resample(
