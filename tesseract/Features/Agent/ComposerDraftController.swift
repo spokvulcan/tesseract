@@ -204,6 +204,16 @@ final class ComposerDraftController {
         }
     }
 
+    /// Restore a whole **Composer Draft** — text and images together, one
+    /// lifetime — into the composer. Used when a drained draft must come back
+    /// intact (a failed **Skill Pill** fire) and when **Edit & resend** loads a
+    /// sent message for editing. Images route through `restoreImages`, so the
+    /// vision-capability gate governs both callers.
+    func restore(text: String, images: [ImageAttachment]) {
+        self.text = text
+        restoreImages(images)
+    }
+
     // MARK: - Quick Look Image Viewer (slice #114)
 
     /// Open the full-size Quick Look viewer on the clicked image, navigable

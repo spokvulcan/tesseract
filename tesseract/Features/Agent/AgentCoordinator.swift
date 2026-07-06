@@ -235,26 +235,30 @@ final class AgentCoordinator {
     /// attachments. A bare tap (empty composer, nothing pending) still fires —
     /// the skill body defines the no-arguments behavior. No-op while a run is
     /// active (the row renders dimmed then). If the skill file fails to load,
-    /// the drained images go back to the pending strip and nothing is counted —
+    /// the drained draft goes back to the composer and nothing is counted —
     /// a failed fire must not eat the user's draft — text or Appshot.
-    func fireSkillPill(_ pill: SkillPill, composerText: String) {
+    func fireSkillPill(_ pill: SkillPill) {
         guard !agentRun.isGenerating else { return }
+        // Drain the whole Composer Draft — text and images, one lifetime — so a
+        // successful fire consumes it and a failed one restores it whole. The
+        // coordinator owns the draft, so it drains text here rather than taking
+        // it as a parameter the caller has to clear first.
+        let text = composerDraft.text
         let images = composerDraft.drainImages()
+        composerDraft.text = ""
         let sent = executeSkill(
             filePath: pill.filePath,
             skillName: pill.name,
             arguments: skillPills.assembleArguments(
-                skillName: pill.name, userText: composerText),
+                skillName: pill.name, userText: text),
             images: images
         )
         if sent {
             skillPills.recordUserInvocation(skillName: pill.name)
         } else {
-            // A failed fire must not eat the user's draft: the row cleared the text
-            // before firing, so restore it alongside the drained images — text and
-            // images share one lifetime.
-            composerDraft.text = composerText
-            composerDraft.restoreImages(images)
+            // A failed fire must not eat the user's draft: restore text and
+            // images together — they share one lifetime.
+            composerDraft.restore(text: text, images: images)
         }
     }
 
@@ -467,8 +471,7 @@ final class AgentCoordinator {
         // they would render as chips and be silently dropped on send. Mirrors the
         // paste/drop gate; the vision-rejection recovery flow stays vision-capable,
         // so this is a no-op there.
-        composerDraft.restoreImages(user.images)
-        composerDraft.text = user.content
+        composerDraft.restore(text: user.content, images: user.images)
         // Leave `error` in place: the rejection banner's guidance ("Reduce the
         // number or size of the attached images") stays visible while the user
         // trims; `sendMessage` clears it on the next turn.

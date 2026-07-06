@@ -73,7 +73,7 @@ struct AgentContentView: View {
                         // pill skills exist and the Setting is on; pills dim
                         // (never hide) during a run, so the layout stays put.
                         if coordinator.skillPills.isRowVisible {
-                            SkillPillRowView(inputText: $composerDraft.text)
+                            SkillPillRowView()
                                 .padding(.horizontal, Theme.Spacing.md + 4)
                         }
 
