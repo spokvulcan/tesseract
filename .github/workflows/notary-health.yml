@@ -1,0 +1,60 @@
+# Weekly canary for Apple notary access. Apple periodically publishes an
+# updated developer agreement and blocks notarization account-wide until the
+# Account Holder accepts it (this broke the v1.3.0 release build). This
+# check surfaces that days before a release instead of during one, by
+# opening an issue when the same preflight used in release-build.yml fails.
+
+name: Notary Health
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      # The runner image's default Xcode is enough for notarytool — skip
+      # setup-xcode to keep the canary cheap.
+      - name: Notary service preflight
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: scripts/release/notary-preflight.sh
+
+      - name: Open an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TITLE="Notary access broken — release builds will fail"
+          EXISTING=$(gh issue list --repo "$REPO" --state open \
+            --search "\"$TITLE\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "Issue #$EXISTING already open; not filing a duplicate."
+            exit 0
+          fi
+          cat > /tmp/issue-body.md <<'EOF'
+          The weekly notary preflight failed — Apple is rejecting our App Store
+          Connect API credentials, so `release-build.yml` will fail at
+          notarization.
+
+          Most common cause: Apple published an updated developer agreement.
+          The Account Holder signs in at https://developer.apple.com/account
+          and accepts it (also check App Store Connect → Agreements), then
+          re-runs this workflow to confirm and closes this issue.
+
+          Failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          gh issue create --repo "$REPO" --title "$TITLE" --body-file /tmp/issue-body.md
