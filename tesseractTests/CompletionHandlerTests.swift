@@ -5,127 +5,102 @@ import Testing
 
 struct CompletionHandlerTests {
 
-    // The acquisition-timeout helper (`withAcquisitionTimeout`) is gone: the
-    // busy contract is now the Batch Engine's Lane Admission timeout —
-    // pinned in `BatchEngineTests.admissionDeadlinePreservesTheBusyContract`.
+    // MARK: - LeaseAcquiredSignal
 
-    // MARK: - Image detection (Batch Engine lane-mode input)
-
-    @Test func requestWithImagePartBearsImages() {
-        let request = OpenAI.ChatCompletionRequest(
-            model: "m",
-            messages: [
-                .init(role: .user, content: .text("hi")),
-                .init(
-                    role: .user,
-                    content: .parts([
-                        .init(type: .text, text: "look at this"),
-                        .init(
-                            type: .image_url,
-                            image_url: .init(url: "data:image/png;base64,AAAA")
-                        ),
-                    ])
-                ),
-            ]
-        )
-        #expect(CompletionHandler.requestBearsImages(request))
+    @Test func signalStartsFalse() {
+        let signal = LeaseAcquiredSignal()
+        #expect(!signal.isSet)
     }
 
-    @Test func textOnlyRequestBearsNoImages() {
-        let request = OpenAI.ChatCompletionRequest(
-            model: "m",
-            messages: [
-                .init(role: .user, content: .text("hi")),
-                .init(role: .user, content: .parts([.init(type: .text, text: "plain")])),
-            ]
-        )
-        #expect(!CompletionHandler.requestBearsImages(request))
+    @Test func signalBecomesTrue() {
+        let signal = LeaseAcquiredSignal()
+        signal.set()
+        #expect(signal.isSet)
     }
 
-    // MARK: - Pool-eligibility probe (Batch Engine lane-mode input)
-
-    @MainActor
-    @Test func textOnlyServableRequestRidesTheCacheAwareArm() {
-        let request = OpenAI.ChatCompletionRequest(
-            model: "m",
-            messages: [
-                .init(role: .system, content: .text("Be brief.")),
-                .init(role: .user, content: .text("hi")),
-            ]
-        )
-        #expect(CompletionHandler.requestRidesCacheAwareArm(request))
+    @Test func signalSetIsIdempotent() {
+        let signal = LeaseAcquiredSignal()
+        signal.set()
+        signal.set()
+        #expect(signal.isSet)
     }
 
-    @MainActor
-    @Test func imageBearingRequestRunsMonolithic() {
-        let request = OpenAI.ChatCompletionRequest(
-            model: "m",
-            messages: [
-                .init(
-                    role: .user,
-                    content: .parts([
-                        .init(type: .text, text: "look"),
-                        .init(
-                            type: .image_url,
-                            image_url: .init(url: "data:image/png;base64,AAAA")
-                        ),
-                    ])
-                )
-            ]
-        )
-        #expect(!CompletionHandler.requestRidesCacheAwareArm(request))
-    }
+    // MARK: - withAcquisitionTimeout
 
-    @MainActor
-    @Test func assistantLastRequestRunsMonolithic() {
-        // The Completion Route sends assistant-last conversations down the
-        // standard managed arm — the probe must agree, so the submission is
-        // exclusive and the monolithic generation never shares the pool.
-        let request = OpenAI.ChatCompletionRequest(
-            model: "m",
-            messages: [
-                .init(role: .user, content: .text("hi")),
-                .init(role: .assistant, content: .text("partial")),
-            ]
-        )
-        #expect(!CompletionHandler.requestRidesCacheAwareArm(request))
-    }
-
-    /// The probe is THE route decision: for any text-only request shape,
-    /// submit-time pool eligibility must equal the dispatcher's
-    /// `CompletionRoute` arm (image-bearing shapes are pool-ineligible by
-    /// the ADR-0022 exclusivity rule even when served cache-aware).
-    @MainActor
-    @Test func probeAgreesWithTheCompletionRouteOnTextOnlyShapes() {
-        let shapes: [[OpenAI.ChatMessage]] = [
-            [.init(role: .user, content: .text("hi"))],
-            [
-                .init(role: .system, content: .text("s")),
-                .init(role: .user, content: .text("u")),
-                .init(role: .assistant, content: .text("a")),
-                .init(role: .user, content: .text("u2")),
-            ],
-            [
-                .init(role: .user, content: .text("u")),
-                .init(role: .assistant, content: .text("a")),
-            ],
-            [.init(role: .system, content: .text("only system"))],
-        ]
-        for messages in shapes {
-            let request = OpenAI.ChatCompletionRequest(model: "m", messages: messages)
-            let normalized = MessageConverter.normalizeRequest(messages)
-            let routeIsCacheAware: Bool
-            if case .cacheAware = CompletionRoute.decide(
-                conversation: normalized.prefixCacheEligibility.conversation
-            ) {
-                routeIsCacheAware = true
-            } else {
-                routeIsCacheAware = false
+    @Test func timeoutThrowsWhenBodyNeverSignals() async {
+        do {
+            try await CompletionHandler.withAcquisitionTimeout(
+                timeoutNanoseconds: 50_000_000
+            ) { _ in
+                try await Task.sleep(nanoseconds: 5_000_000_000)
             }
-            #expect(
-                CompletionHandler.requestRidesCacheAwareArm(request) == routeIsCacheAware,
-                "probe/route disagreement for \(messages.map(\.role))"
-            )
+            Issue.record("Expected LeaseTimeoutError")
+        } catch is LeaseTimeoutError {
+            // Expected
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test func longBodyNotCancelledAfterSignal() async throws {
+        let completed = LeaseAcquiredSignal()
+
+        try await CompletionHandler.withAcquisitionTimeout(
+            timeoutNanoseconds: 100_000_000
+        ) { signal in
+            signal.set()
+            try await Task.sleep(nanoseconds: 300_000_000)
+            completed.set()
+        }
+
+        #expect(completed.isSet)
+    }
+
+    @Test func fastBodyCompletesBeforeTimeout() async throws {
+        let completed = LeaseAcquiredSignal()
+
+        try await CompletionHandler.withAcquisitionTimeout(
+            timeoutNanoseconds: 1_000_000_000
+        ) { signal in
+            signal.set()
+            completed.set()
+        }
+
+        #expect(completed.isSet)
+    }
+
+    @Test func bodyErrorPropagatesNotTimeout() async {
+        struct BodyError: Error {}
+
+        do {
+            try await CompletionHandler.withAcquisitionTimeout(
+                timeoutNanoseconds: 1_000_000_000
+            ) { signal in
+                signal.set()
+                throw BodyError()
+            }
+            Issue.record("Expected BodyError")
+        } catch is BodyError {
+            // Expected
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
+        }
+    }
+
+    @Test func bodyErrorBeforeSignalPropagates() async {
+        struct EarlyError: Error {}
+
+        do {
+            try await CompletionHandler.withAcquisitionTimeout(
+                timeoutNanoseconds: 1_000_000_000
+            ) { _ in
+                throw EarlyError()
+            }
+            Issue.record("Expected EarlyError")
+        } catch is EarlyError {
+            // Expected
+        } catch {
+            Issue.record("Unexpected error type: \(error)")
         }
     }
 

@@ -174,96 +174,6 @@ struct ServerInferenceServiceTests {
         #expect(try await collectText(from: start.stream) == "server path")
     }
 
-    /// A pool lane (PRD #173) rides through the dispatcher into the
-    /// cache-aware arm, where the Server Completion runs it engine-stepped.
-    @Test func poolLaneIsForwardedToTheCompletionArm() async throws {
-        let engine = StubManagedInferenceEngine()
-        let completion = StubServerCompletionStarter()
-        completion.start = makeStart(textChunks: ["stepped"])
-        let service = ServerInferenceService(
-            completionStarter: completion,
-            engine: engine,
-            modelStateProvider: {
-                ServerInferenceModelState(modelID: "qwen3.5-9b-paro", visionMode: false)
-            }
-        )
-        let prefixConversation = HTTPPrefixCacheConversation(
-            systemPrompt: "System",
-            messages: [.init(role: .user, content: "Hello")]
-        )
-
-        let batchEngine = InMemoryInferenceArbiter().makeBatchEngine()
-        let laneID = UUID()
-        _ = try await batchEngine.submit(
-            BatchSubmission(
-                requestID: laneID,
-                demand: BatchModelDemand(modelIDOverride: nil, vision: .fromSettings),
-                mode: .pooled
-            ))
-        let start = try await service.start(
-            ServerInferenceRequest(
-                input: .chat(
-                    .init(
-                        systemPrompt: "System",
-                        messages: [.user(content: "Hello")],
-                        toolSpecs: nil,
-                        prefixCacheConversation: prefixConversation
-                    )),
-                parameters: .default,
-                route: .serverCompatible
-            ),
-            lane: BatchLane(engine: batchEngine, laneID: laneID)
-        )
-
-        #expect(completion.calls.count == 1)
-        #expect(completion.calls[0].laneForwarded)
-        #expect(engine.calls.isEmpty)
-        #expect(try await collectText(from: start.stream) == "stepped")
-        await batchEngine.laneFinished(laneID)
-    }
-
-    /// The impossible mismatch — a pool lane whose request the route sends
-    /// to a monolithic arm — must fail loudly instead of running unstepped
-    /// GPU work beside live sibling lanes.
-    @Test func poolLaneRoutedToTheManagedArmThrows() async throws {
-        let engine = StubManagedInferenceEngine()
-        let completion = StubServerCompletionStarter()
-        engine.chatStart = makeStart(textChunks: ["managed fallback"])
-        let service = ServerInferenceService(
-            completionStarter: completion,
-            engine: engine,
-            modelStateProvider: { nil }
-        )
-
-        let batchEngine = InMemoryInferenceArbiter().makeBatchEngine()
-        let laneID = UUID()
-        _ = try await batchEngine.submit(
-            BatchSubmission(
-                requestID: laneID,
-                demand: BatchModelDemand(modelIDOverride: nil, vision: .fromSettings),
-                mode: .pooled
-            ))
-        await #expect(throws: AgentEngineError.self) {
-            _ = try await service.start(
-                ServerInferenceRequest(
-                    input: .chat(
-                        .init(
-                            systemPrompt: "System",
-                            messages: [.user(content: "Hello")],
-                            toolSpecs: nil,
-                            prefixCacheConversation: nil
-                        )),
-                    parameters: .default,
-                    route: .serverCompatible
-                ),
-                lane: BatchLane(engine: batchEngine, laneID: laneID)
-            )
-        }
-        #expect(engine.calls.isEmpty)
-        #expect(completion.calls.isEmpty)
-        await batchEngine.laneFinished(laneID)
-    }
-
     /// No usable prefix-cache conversation ⇒ the **Completion Route** decides
     /// standard, and the dispatcher falls back to the managed arm — the
     /// completion arm never sees a request it cannot serve.
@@ -724,7 +634,6 @@ private final class StubServerCompletionStarter: ServerCompletionStarting {
         let progressHandlerForwarded: Bool
         let parameters: AgentGenerateParameters
         let renderContext: TemplateRenderContext
-        let laneForwarded: Bool
     }
 
     var calls: [Call] = []
@@ -743,8 +652,7 @@ private final class StubServerCompletionStarter: ServerCompletionStarting {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext,
-        progressHandler: ServerInferenceProgressHandler?,
-        lane: BatchLane?
+        progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart {
         calls.append(
             .init(
@@ -753,8 +661,7 @@ private final class StubServerCompletionStarter: ServerCompletionStarting {
                 toolSpecCount: toolSpecs?.count ?? 0,
                 progressHandlerForwarded: progressHandler != nil,
                 parameters: parameters,
-                renderContext: renderContext,
-                laneForwarded: lane != nil
+                renderContext: renderContext
             ))
         if let error {
             throw error

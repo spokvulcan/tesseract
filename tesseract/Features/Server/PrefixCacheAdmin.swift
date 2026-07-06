@@ -22,27 +22,7 @@ import Foundation
 final class PrefixCacheAdmin {
     private weak var current: PrefixCacheManager?
 
-    /// Headroom for the Batch Engine's Lane Admission arithmetic — the
-    /// admin samples directly rather than through the manager so a budget
-    /// exists even between model loads.
-    private let headroom = MachMemoryHeadroomSource()
-
     nonisolated init() {}
-
-    /// The **Lane Admission** inputs (PRD #173, ADR-0022): measured machine
-    /// headroom, the cache bytes an eviction drain could free toward a new
-    /// lane (`totalSnapshotBytes` — the survival floor is a single leaf,
-    /// small enough to ignore here), and the Active-Inference Reserve's
-    /// per-lane price. Degrades to zero headroom and the bootstrap reserve
-    /// when no cache is live — the policy floors capacity at one lane.
-    func batchLaneBudget() -> BatchLaneBudget {
-        BatchLaneBudget(
-            headroomBytes: headroom.sample()?.headroomBytes ?? 0,
-            evictableCacheBytes: current?.totalSnapshotBytes ?? 0,
-            perLaneBytes: current?.activeInferenceReserve.perLaneBytes
-                ?? ActiveInferenceReserve.bootstrapPerLaneBytes
-        )
-    }
 
     /// Install the freshly built manager as the live cache. Called by the
     /// Server Completion module's cache construction, on the MainActor.

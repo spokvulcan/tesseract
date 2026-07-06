@@ -48,17 +48,7 @@ final class ServerInferenceService {
         modelStateProvider()
     }
 
-    /// `lane` is non-nil only for a **pool lane** (PRD #173): a submission
-    /// the Batch Engine admitted non-exclusively because the handler's
-    /// submit-time probe said this request rides the cache-aware arm. A pool
-    /// lane's generation must run engine-stepped, so the managed arm — whose
-    /// GPU work is monolithic — is forbidden for it; the probe and the route
-    /// compute the same pure decision over the same conversation shape, so
-    /// the mismatch guard below is an invariant check, not a reachable path.
-    func start(
-        _ request: ServerInferenceRequest,
-        lane: BatchLane? = nil
-    ) async throws -> ServerInferenceStart {
+    func start(_ request: ServerInferenceRequest) async throws -> ServerInferenceStart {
         let modelState = currentModelState()
         let routeDescription: String =
             switch request.route {
@@ -81,7 +71,6 @@ final class ServerInferenceService {
 
         switch request.input {
         case .prompt(let prompt):
-            try Self.assertNoPoolLane(lane, arm: "prompt")
             let start = try engine.startPromptInference(
                 prompt: prompt,
                 parameters: request.parameters
@@ -91,7 +80,6 @@ final class ServerInferenceService {
         case .chat(let chat):
             switch request.route {
             case .standard:
-                try Self.assertNoPoolLane(lane, arm: "standard-route")
                 return try startStandardChat(
                     chat, parameters: request.parameters, modelState: modelState
                 )
@@ -107,18 +95,15 @@ final class ServerInferenceService {
                         toolSpecs: chat.toolSpecs,
                         parameters: request.parameters,
                         renderContext: chat.templateRenderContext,
-                        progressHandler: chat.progressHandler,
-                        lane: lane
+                        progressHandler: chat.progressHandler
                     )
                     Log.server.info(
                         "HTTP completion using prefix-cache path — model=\(modelState.modelID) "
-                            + "cachedTokens=\(start.cachedTokenCount) "
-                            + "poolLane=\(lane != nil)"
+                            + "cachedTokens=\(start.cachedTokenCount)"
                     )
                     return ServerInferenceStart(start, modelState: modelState)
 
                 case .standard(let reason):
-                    try Self.assertNoPoolLane(lane, arm: "standard-fallback")
                     Log.server.info(
                         "HTTP completion using standard generation path — "
                             + "model=\(modelState.modelID) reason=\(reason.rawValue) "
@@ -130,18 +115,6 @@ final class ServerInferenceService {
                 }
             }
         }
-    }
-
-    /// A pool lane reaching a monolithic arm means the submit-time probe and
-    /// the **Completion Route** disagreed — supposed to be impossible (both
-    /// are the same pure decision). Fail the request loudly instead of
-    /// running unstepped GPU work beside live sibling lanes.
-    private nonisolated static func assertNoPoolLane(_ lane: BatchLane?, arm: String) throws {
-        guard lane != nil else { return }
-        Log.server.error("Pool lane routed to a monolithic arm — arm=\(arm)")
-        throw AgentEngineError.generationFailed(
-            "pool lane routed to the \(arm) arm — submit-time probe mismatch"
-        )
     }
 
     /// The managed arm for chat input — shared by the `.standard` route and

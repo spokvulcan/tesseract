@@ -87,37 +87,6 @@ final class DependencyContainer: ObservableObject {
         engine: agentEngine,
         arbiter: inferenceArbiter
     )
-    /// The **Batch Engine** (PRD #173, ADR-0022): completions submit here
-    /// instead of acquiring the GPU lease themselves. One shared instance —
-    /// HTTP completions and the internal Agent Run queue into the same pool.
-    lazy var batchEngine: BatchEngine = {
-        let arbiter = inferenceArbiter
-        let engine = agentEngine
-        let cacheAdmin = llmActor.prefixCacheAdmin
-        return BatchEngine(
-            leaseRunner: { override, vision, body in
-                try await arbiter.withExclusiveGPU(
-                    .llm, llmModelIDOverride: override, llmVision: vision
-                ) {
-                    await body()
-                }
-            },
-            leaseWaiters: arbiter.leaseWaiters,
-            // `ensureLoaded`'s own target resolution + ADR-0008 satisfaction
-            // rule, so "oracle says satisfied" and "the acquisition would
-            // not reload" can never disagree.
-            demandSatisfied: { demand in
-                guard engine.isModelLoaded, let loaded = arbiter.loadedLLMState
-                else { return false }
-                return loaded.satisfies(
-                    arbiter.desiredLLMState(
-                        modelIDOverride: demand.modelIDOverride,
-                        vision: demand.vision
-                    ))
-            },
-            laneBudget: { cacheAdmin.batchLaneBudget() }
-        )
-    }()
     lazy var serverGenerationLog = ServerGenerationLog()
     lazy var promptCacheTelemetryStore = PromptCacheTelemetryStore(
         enduranceAccumulator: ssdEnduranceAccumulator
@@ -149,7 +118,7 @@ final class DependencyContainer: ObservableObject {
             transcriptionEngine: transcriptionEngine,
             settings: settingsManager,
             captureDump: captureDumpStore,
-            batchEngine: batchEngine,
+            arbiter: inferenceArbiter,
             formatRawPrompt: { [weak self] systemPrompt, tools in
                 guard let self else { throw AgentEngineError.modelNotLoaded }
                 return try await self.agentEngine.formatRawPrompt(
@@ -466,7 +435,7 @@ final class DependencyContainer: ObservableObject {
         }
 
         let completionHandler = CompletionHandler(
-            batchEngine: batchEngine,
+            arbiter: inferenceArbiter,
             inferenceService: serverInferenceService,
             downloads: modelDownloadManager,
             activityLog: serverGenerationLog,

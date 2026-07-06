@@ -102,12 +102,11 @@ final class InMemoryMemoryHeadroomSource: MemoryHeadroomSource {
 
 /// The named replacement for the retired `/2` divisor (ADR-0018): the
 /// bytes withheld from the cache ceiling for in-flight generations'
-/// KV working sets. Count-aware — N lanes subtract N reserves; the
-/// **Batch Engine**'s Lane Admission (PRD #173, ADR-0022) prices each
-/// pool lane against this per-lane figure — and never zero: even an
-/// idle server reserves one lane, so the *next* request always has
-/// room (SGLang's shared-pool arbitration invariant: active generation
-/// always outranks cache, the reserve is subtracted first).
+/// KV working sets. Count-aware — N lanes subtract N reserves (single
+/// lane today; phase-4 batch changes only the count) — and never zero:
+/// even an idle server reserves one lane, so the *next* request always
+/// has room (SGLang's shared-pool arbitration invariant: active
+/// generation always outranks cache, the reserve is subtracted first).
 ///
 /// Per-lane sizing is measured where possible: a lane's KV working set
 /// at end of turn *is* its leaf snapshot, and the capture deep-copies
@@ -115,13 +114,6 @@ final class InMemoryMemoryHeadroomSource: MemoryHeadroomSource {
 /// admitted. The bootstrap constant covers the window before the first
 /// leaf; prefill activation transients beyond the KV bytes remain
 /// guarded by fast pressure retreat (ADR-0018's explicit trade).
-///
-/// Storage posture (ADR-0023): v1 lanes deep-copy their restored
-/// prefixes — the duplicate-prefix-bytes meter records the cost — so
-/// the capture-copy factor stays. The paged (refcounted) KV tier is
-/// the recorded follow-up (kernel gate PASSED 2026-07-05); landing it
-/// drops `captureCopyFactor` — a lane's marginal RAM becomes its new
-/// decode pages only.
 nonisolated struct ActiveInferenceReserve: Sendable, Equatable {
     /// Per-lane bytes before any leaf has been observed: two ~2 GiB
     /// 96k-token leaves' worth (measured 2026-07-04, ornith-35b,

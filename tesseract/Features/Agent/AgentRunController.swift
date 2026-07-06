@@ -4,9 +4,8 @@
 //
 //  The **Agent Run** module: the foreground-run envelope carved out of
 //  `AgentCoordinator`. It owns the lifecycle of one foreground LLM invocation —
-//  a `send` turn or a `/compact` — submitted as an exclusive **Batch Engine**
-//  lane (the engine holds the arbiter's `.llm` lease while the lane is live),
-//  and is the **single writer** of `isGenerating`.
+//  a `send` turn or a `/compact` — serialized behind the `InferenceArbiter`'s
+//  exclusive `.llm` lease, and is the **single writer** of `isGenerating`.
 //
 //  `isGenerating` is set *eagerly* in `send`/`runUnderLease` — before
 //  `agent.prompt` runs — because the run may sit **queued** behind the lease
@@ -36,7 +35,7 @@ final class AgentRunController {
     // MARK: - Dependencies
 
     private let agent: Agent
-    private let batchEngine: BatchEngine
+    private let arbiter: any InferenceArbitrating
     private let toolRegistry: ToolRegistry?
     private let settings: SettingsManager?
     /// Failures inside the lease task surface through the coordinator's shared
@@ -52,13 +51,13 @@ final class AgentRunController {
 
     init(
         agent: Agent,
-        batchEngine: BatchEngine,
+        arbiter: any InferenceArbitrating,
         toolRegistry: ToolRegistry? = nil,
         settings: SettingsManager? = nil,
         reportError: @escaping @MainActor (String) -> Void = { _ in }
     ) {
         self.agent = agent
-        self.batchEngine = batchEngine
+        self.arbiter = arbiter
         self.toolRegistry = toolRegistry
         self.settings = settings
         self.reportError = reportError
@@ -82,14 +81,9 @@ final class AgentRunController {
         }
     }
 
-    /// Run `body` as an exclusive **Batch Engine** lane, holding the lane
-    /// until the body (and the in-agent work it awaits) finishes. Shared by
-    /// `send` and `/compact` so the lane/flag/cancel contract is written once.
-    ///
-    /// The engine owns the GPU lease while the lane is live and loads the
-    /// demanded model on acquisition — the turn's serialization contract is
-    /// unchanged from the direct-lease days. No admission timeout: a queued
-    /// chat turn waits for its slot indefinitely, as it always has.
+    /// Run `body` under the exclusive `.llm` lease, holding it until the body
+    /// (and the in-agent work it awaits) finishes. Shared by `send` and
+    /// `/compact` so the lease/flag/cancel contract is written once.
     ///
     /// `isGenerating` is set eagerly and cleared when the body completes (or on
     /// cancel/error), so a body that awaits its work to completion — a `send`
@@ -109,23 +103,13 @@ final class AgentRunController {
             (settings?.useVisionWhenAvailable ?? false) ? .visionIfCapable : .fromSettings
 
         sendTask = Task {
-            let requestID = UUID()
             do {
-                _ = try await batchEngine.submit(
-                    BatchSubmission(
-                        requestID: requestID,
-                        demand: BatchModelDemand(
-                            modelIDOverride: nil, vision: visionReq
-                        ),
-                        // The whole turn — prompt, tool calls, follow-ups —
-                        // runs the monolithic single-flight path, as one
-                        // exclusive lane.
-                        mode: .exclusive(.monolithicPath),
-                        admissionTimeout: nil
-                    ))
-                await body()
-                await batchEngine.laneFinished(requestID)
-                // Body ran to completion under the lane — clear the busy flag.
+                try await arbiter.withExclusiveGPU(
+                    .llm, llmModelIDOverride: nil, llmVision: visionReq
+                ) {
+                    await body()
+                }
+                // Body ran to completion under the lease — clear the busy flag.
                 self.isGenerating = false
             } catch is CancellationError {
                 // Cancelled while queued or during run — clean up.

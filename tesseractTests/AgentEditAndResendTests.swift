@@ -55,7 +55,7 @@ struct AgentEditAndResendTests {
             agent: makeIdleAgent(),
             conversationStore: InMemoryAgentConversationStore(seed: [conversation]),
             settings: SettingsManager(store: InMemorySettingsStore()),
-            batchEngine: InMemoryInferenceArbiter().makeBatchEngine()
+            arbiter: InMemoryInferenceArbiter()
         )
         // The composer normally syncs this from the selected model; image-bearing
         // tests represent a vision-capable model unless they opt out.
@@ -156,7 +156,7 @@ struct AgentEditAndResendTests {
             agent: makeIdleAgent(),
             conversationStore: store,
             settings: SettingsManager(store: InMemorySettingsStore()),
-            batchEngine: InMemoryInferenceArbiter().makeBatchEngine()
+            arbiter: InMemoryInferenceArbiter()
         )
         coordinator.imageDraft.imageInputAvailable = true
 
@@ -192,7 +192,7 @@ struct AgentEditAndResendTests {
             agent: makeIdleAgent(),
             conversationStore: store,
             settings: SettingsManager(store: InMemorySettingsStore()),
-            batchEngine: InMemoryInferenceArbiter().makeBatchEngine()
+            arbiter: InMemoryInferenceArbiter()
         )
         coordinator.imageDraft.imageInputAvailable = true
 

@@ -194,8 +194,7 @@ nonisolated protocol ServerCompletionStarting: AnyObject, Sendable {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext,
-        progressHandler: ServerInferenceProgressHandler?,
-        lane: BatchLane?
+        progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart
 }
 

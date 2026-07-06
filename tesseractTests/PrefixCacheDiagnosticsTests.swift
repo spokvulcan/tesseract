@@ -31,65 +31,6 @@ struct PrefixCacheDiagnosticsTests {
         )
     }
 
-    /// The deep-copy duplicate-prefix meter (PRD #173, ADR-0023 fallback
-    /// posture): every lane restore materializes a second copy of
-    /// tree-resident prefix bytes for the lane's lifetime — the exact RAM a
-    /// paged (refcounted) tier would not spend. Summing these events over a
-    /// trace, joined with the lane lifecycle events by requestID, quantifies
-    /// the paged-KV win on real traffic.
-    @Test func duplicatePrefixBytesRendersDeterministically() {
-        let event = PrefixCacheDiagnostics.DuplicatePrefixBytesEvent(
-            restoredBytes: 1_234_567,
-            snapshotOffset: 768
-        )
-
-        #expect(
-            context.render(event)
-                == "event=duplicatePrefixBytes requestID=00000000-0000-0000-0000-000000000001 "
-                + "modelID=qwen3.5 kvBits=8 kvGroupSize=64 restoredBytes=1234567 snapshotOffset=768"
-        )
-    }
-
-    /// Lane lifecycle wire lines (PRD #173 story 23) — phase-conditional
-    /// fields stay byte-stable for downstream TTFT/queue-wait derivation.
-    @Test func laneLifecycleEventsRenderDeterministically() {
-        let requestID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
-        let queued = PrefixCacheDiagnostics.LaneLifecycleEvent(
-            phase: .queued,
-            requestID: requestID,
-            matchedPrefixLength: 128,
-            exclusive: false
-        )
-        #expect(
-            PrefixCacheDiagnostics.renderSystem(queued)
-                == "event=lane phase=queued requestID=00000000-0000-0000-0000-000000000002 "
-                + "matchedPrefixLength=128 exclusive=false"
-        )
-
-        let admitted = PrefixCacheDiagnostics.LaneLifecycleEvent(
-            phase: .admitted,
-            requestID: requestID,
-            exclusive: true,
-            queueWaitSeconds: 0.25
-        )
-        #expect(
-            PrefixCacheDiagnostics.renderSystem(admitted)
-                == "event=lane phase=admitted requestID=00000000-0000-0000-0000-000000000002 "
-                + "exclusive=true queueWaitMs=250.000"
-        )
-
-        let drained = PrefixCacheDiagnostics.LaneLifecycleEvent(
-            phase: .drained,
-            requestID: requestID,
-            sinceAdmissionSeconds: 1.5
-        )
-        #expect(
-            PrefixCacheDiagnostics.renderSystem(drained)
-                == "event=lane phase=drained requestID=00000000-0000-0000-0000-000000000002 "
-                + "sinceAdmissionMs=1500.000"
-        )
-    }
-
     @Test func lookupWithDivergenceAppendsAttributionFields() {
         // The 2026-07-05 incident shape (issue #158): a hit at the shallow
         // branch point after the client changed its prompt prefix.

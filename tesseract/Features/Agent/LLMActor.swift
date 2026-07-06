@@ -438,8 +438,7 @@ actor LLMActor {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext = .canonical,
-        progressHandler: ServerInferenceProgressHandler? = nil,
-        lane: BatchLane? = nil
+        progressHandler: ServerInferenceProgressHandler? = nil
     ) async throws -> HTTPServerGenerationStart {
         guard let container = modelContainer else {
             throw AgentEngineError.modelNotLoaded
@@ -452,8 +451,7 @@ actor LLMActor {
             toolSpecs: toolSpecs,
             parameters: parameters,
             renderContext: renderContext,
-            progressHandler: progressHandler,
-            lane: lane
+            progressHandler: progressHandler
         )
     }
 

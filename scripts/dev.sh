@@ -277,21 +277,6 @@ cmd_trace_replay() {
     _run_loaded_model_check --trace-replay trace-replay
 }
 
-cmd_paged_kv_kernel_gate() {
-    # No loaded model needed — synthetic quantized KV at the two gate models'
-    # config.json shapes (PRD #173 spike phase 0, ADR-0023). Exit 1 = the
-    # pre-registered <=15% paged-attention overhead threshold was missed.
-    _run_loaded_model_check --paged-kv-kernel-gate paged-kv-kernel-gate
-}
-
-cmd_batch_lane_bench() {
-    # PRD #173 spike phase 1 — interleaved vs batched decode-shape curves on
-    # the loaded bench model. The pre-registered N=4 verdict (>=1.8x aggregate,
-    # <=1.5x per-lane latency) is recorded, not gating: interleaved ships v1
-    # either way. Exit 1 = instability or setup failure only.
-    _run_loaded_model_check --batch-lane-bench batch-lane-curves
-}
-
 cmd_archive() {
     local archive_path="$PROJECT_DIR/build/Tesseract.xcarchive"
     echo "Archiving tesseract for App Store (arm64 only)..."
@@ -393,8 +378,6 @@ usage() {
     echo "  prefill-step-benchmark   Build + run Task 3.2 prefill-step-size benchmark sweep"
     echo "  paroquant-vlm-smoke      Build + run VLM load smoke for PARO models (PR #164 C5 gate)"
     echo "  trace-replay             Build + run offline trace-replay harness (PRD #82 slice #85; no model needed)"
-    echo "  paged-kv-kernel-gate     Build + run the ADR-0023 paged-KV kernel microbench gate (no model needed)"
-    echo "  batch-lane-bench         Build + run the PRD #173 decode-shape lane-curve bench (loads the bench model)"
     echo "  archive     Create release archive for App Store submission"
     echo "  resolve     Resolve SPM package dependencies"
     echo "  clean       Clean build artifacts and derived data"
@@ -414,8 +397,6 @@ case "${1:-}" in
     prefill-step-benchmark)   cmd_prefill_step_benchmark ;;
     paroquant-vlm-smoke)      cmd_paroquant_vlm_smoke ;;
     trace-replay)             cmd_trace_replay ;;
-    paged-kv-kernel-gate)     cmd_paged_kv_kernel_gate ;;
-    batch-lane-bench)         cmd_batch_lane_bench ;;
     archive)     cmd_archive ;;
     resolve)     cmd_resolve ;;
     clean)       cmd_clean ;;

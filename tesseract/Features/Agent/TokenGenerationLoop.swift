@@ -98,140 +98,6 @@ nonisolated enum TokenGenerationLoop {
         )
     }
 
-    /// Batch Engine pool-lane overload (PRD #173, ADR-0022): identical
-    /// event mapping and raw-loop semantics, but every `iterator.next()`
-    /// runs inside a granted decode step — the engine interleaves lanes at
-    /// token granularity and all Metal work stays grant-serialized.
-    static func start(
-        promptTokenCount: Int,
-        modelConfiguration: ModelConfiguration,
-        tokenizer: any Tokenizer,
-        iterator: consuming StateThreadedTokenIterator,
-        engine: BatchEngine,
-        laneID: UUID,
-        tools: [ToolSpec]? = nil
-    ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
-        let box = UnsafeMutableSendableBox(iterator)
-        let (tokens, generationTask) = steppedRawTokenTask(
-            promptTokenCount: promptTokenCount,
-            modelConfiguration: modelConfiguration,
-            tokenizer: tokenizer,
-            engine: engine,
-            laneID: laneID,
-            nextToken: { box.value.next() },
-            iteratorStats: {
-                (box.value.tokenCount, box.value.maxTokens, box.value.promptPrefillTime)
-            }
-        )
-        return events(
-            from: tokens,
-            generationTask: generationTask,
-            promptTokenCount: promptTokenCount,
-            modelConfiguration: modelConfiguration,
-            tokenizer: tokenizer,
-            tools: tools
-        )
-    }
-
-    /// The stepped raw loop's core, over closures so the loop semantics are
-    /// unit-testable without a model (`TokenGenerationLoopSteppedTests`).
-    /// Mirrors `rawTokenTask` exactly — stop-token set, timing split,
-    /// authoritative `.info` — plus a final grant-wrapped synchronize so the
-    /// "task done ⇒ model/cache untouched" contract holds while sibling
-    /// lanes may still be decoding.
-    static func steppedRawTokenTask(
-        promptTokenCount: Int,
-        modelConfiguration: ModelConfiguration,
-        tokenizer: any Tokenizer,
-        engine: BatchEngine,
-        laneID: UUID,
-        nextToken: @escaping @Sendable () -> Int?,
-        iteratorStats:
-            @escaping @Sendable () -> (
-                tokenCount: Int, maxTokens: Int?, promptPrefillTime: TimeInterval
-            )
-    ) -> (AsyncStream<TokenGeneration>, Task<Void, Never>) {
-        let (stream, continuation) = AsyncStream<TokenGeneration>.makeStream()
-
-        let resolvedStopTokenIds = Self.stopTokenIds(
-            modelConfiguration: modelConfiguration, tokenizer: tokenizer
-        )
-        let unknownTokenId = tokenizer.unknownTokenId
-
-        let task = Task {
-            var start = Date.timeIntervalSinceReferenceDate
-            var promptTime: TimeInterval = 0
-            var tokenCount = 0
-            var stopReason: GenerateStopReason?
-
-            decode: while true {
-                let token: Int?
-                do {
-                    token = try await engine.step(lane: laneID, kind: .decode) { _ in
-                        nextToken()
-                    }
-                } catch {
-                    // Lane torn down or the step cancelled while pending.
-                    stopReason = .cancelled
-                    break decode
-                }
-                guard let token else { break }
-                if Task.isCancelled {
-                    stopReason = .cancelled
-                    break
-                }
-                if promptTime == 0 {
-                    let now = Date.timeIntervalSinceReferenceDate
-                    promptTime = now - start
-                    start = now
-                }
-                if token == unknownTokenId || resolvedStopTokenIds.contains(token) {
-                    stopReason = .stop
-                    break
-                }
-                tokenCount += 1
-                if case .terminated = continuation.yield(.token(token)) {
-                    stopReason = .cancelled
-                    break
-                }
-            }
-
-            let stats = iteratorStats()
-            let info = Self.completionInfo(
-                promptTokenCount: promptTokenCount,
-                generatedTokenCount: tokenCount,
-                promptTime: promptTime,
-                generationStart: start,
-                loopStopReason: stopReason,
-                iteratorTokenCount: stats.tokenCount,
-                iteratorMaxTokens: stats.maxTokens,
-                iteratorPrefillTime: stats.promptPrefillTime
-            )
-            _ = continuation.yield(.info(info))
-
-            // Match upstream's end-of-loop synchronize, inside a grant when
-            // the lane is still live — a sibling may be mid-decode. When the
-            // lane is already gone (cancel path) fall back to the direct
-            // wait-only call, exactly today's behavior.
-            do {
-                _ = try await engine.step(lane: laneID, kind: .decode) { _ in
-                    Stream().synchronize()
-                }
-            } catch {
-                Stream().synchronize()
-            }
-            continuation.finish()
-        }
-
-        continuation.onTermination = { termination in
-            if case .cancelled = termination {
-                task.cancel()
-            }
-        }
-
-        return (stream, task)
-    }
-
     /// App-side replica of upstream's raw token loop (`generateLoopTask`'s
     /// `TokenGeneration` shape): per-token cancellation checks, the combined
     /// stop-token set (`eosTokenIds` + tokenizer EOS + `extraEOSTokens`), the
@@ -246,9 +112,15 @@ nonisolated enum TokenGenerationLoop {
     ) -> (AsyncStream<TokenGeneration>, Task<Void, Never>) {
         let (stream, continuation) = AsyncStream<TokenGeneration>.makeStream()
 
-        let stopTokenIds = Self.stopTokenIds(
-            modelConfiguration: modelConfiguration, tokenizer: tokenizer
-        )
+        var stopTokenIds = modelConfiguration.eosTokenIds
+        if let tokenizerEOS = tokenizer.eosTokenId {
+            stopTokenIds.insert(tokenizerEOS)
+        }
+        for token in modelConfiguration.extraEOSTokens {
+            if let id = tokenizer.convertTokenToId(token) {
+                stopTokenIds.insert(id)
+            }
+        }
         let unknownTokenId = tokenizer.unknownTokenId
 
         let iteratorBox = UnsafeSendableBox(iterator)
@@ -281,15 +153,22 @@ nonisolated enum TokenGenerationLoop {
                 }
             }
 
-            let info = Self.completionInfo(
+            let resolvedStopReason: GenerateStopReason =
+                stopReason
+                ?? {
+                    if Task.isCancelled { return .cancelled }
+                    if let maxTokens = iterator.maxTokens, iterator.tokenCount >= maxTokens {
+                        return .length
+                    }
+                    return .cancelled
+                }()
+
+            let info = GenerateCompletionInfo(
                 promptTokenCount: promptTokenCount,
-                generatedTokenCount: tokenCount,
-                promptTime: promptTime,
-                generationStart: start,
-                loopStopReason: stopReason,
-                iteratorTokenCount: iterator.tokenCount,
-                iteratorMaxTokens: iterator.maxTokens,
-                iteratorPrefillTime: iterator.promptPrefillTime
+                generationTokenCount: tokenCount,
+                promptTime: promptTime + iterator.promptPrefillTime,
+                generationTime: Date.timeIntervalSinceReferenceDate - start,
+                stopReason: resolvedStopReason
             )
             _ = continuation.yield(.info(info))
 
@@ -306,56 +185,6 @@ nonisolated enum TokenGenerationLoop {
         }
 
         return (stream, task)
-    }
-
-    /// The combined stop-token set both raw loops share: the
-    /// configuration's `eosTokenIds` + the tokenizer's EOS +
-    /// `extraEOSTokens`.
-    private static func stopTokenIds(
-        modelConfiguration: ModelConfiguration, tokenizer: any Tokenizer
-    ) -> Set<Int> {
-        var stopTokenIds = modelConfiguration.eosTokenIds
-        if let tokenizerEOS = tokenizer.eosTokenId {
-            stopTokenIds.insert(tokenizerEOS)
-        }
-        for token in modelConfiguration.extraEOSTokens {
-            if let id = tokenizer.convertTokenToId(token) {
-                stopTokenIds.insert(id)
-            }
-        }
-        return stopTokenIds
-    }
-
-    /// Both raw loops' authoritative `.info`: resolves the stop reason
-    /// (length vs cancelled when the loop itself didn't decide) and splits
-    /// prompt time from generation time. Synchronous — called inside the
-    /// loop task, so `Task.isCancelled` reflects the loop's own task.
-    private static func completionInfo(
-        promptTokenCount: Int,
-        generatedTokenCount: Int,
-        promptTime: TimeInterval,
-        generationStart: TimeInterval,
-        loopStopReason: GenerateStopReason?,
-        iteratorTokenCount: Int,
-        iteratorMaxTokens: Int?,
-        iteratorPrefillTime: TimeInterval
-    ) -> GenerateCompletionInfo {
-        let stopReason: GenerateStopReason =
-            loopStopReason
-            ?? {
-                if Task.isCancelled { return .cancelled }
-                if let maxTokens = iteratorMaxTokens, iteratorTokenCount >= maxTokens {
-                    return .length
-                }
-                return .cancelled
-            }()
-        return GenerateCompletionInfo(
-            promptTokenCount: promptTokenCount,
-            generationTokenCount: generatedTokenCount,
-            promptTime: promptTime + iteratorPrefillTime,
-            generationTime: Date.timeIntervalSinceReferenceDate - generationStart,
-            stopReason: stopReason
-        )
     }
 
     /// Map an upstream raw-token stream into ``RawGeneration`` events.

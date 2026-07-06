@@ -60,7 +60,7 @@ struct AgentGenerationErrorSurfacingTests {
             agent: makeThrowingAgent(.generationFailed(message)),
             conversationStore: InMemoryAgentConversationStore(),
             settings: SettingsManager(store: InMemorySettingsStore()),
-            batchEngine: InMemoryInferenceArbiter().makeBatchEngine()
+            arbiter: InMemoryInferenceArbiter()
         )
 
         coordinator.sendMessage("describe these")

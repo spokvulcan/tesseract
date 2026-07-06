@@ -78,7 +78,7 @@ struct AgentRunControllerTests {
         let errors = ErrorRecorder()
         let run = AgentRunController(
             agent: agent,
-            batchEngine: makeFailingArbiter().makeBatchEngine(),
+            arbiter: makeFailingArbiter(),
             reportError: { errors.report($0) }
         )
 
@@ -104,7 +104,7 @@ struct AgentRunControllerTests {
         let log = ErrorRecorder()
         let run = AgentRunController(
             agent: agent,
-            batchEngine: peer.makeBatchEngine(),
+            arbiter: peer,
             reportError: { log.report($0) }
         )
 
@@ -132,8 +132,7 @@ struct AgentRunControllerTests {
         let settings = SettingsManager(store: InMemorySettingsStore())
         #expect(settings.useVisionWhenAvailable == true)  // default on
         let run = AgentRunController(
-            agent: agent, batchEngine: peer.makeBatchEngine(), settings: settings,
-            reportError: { _ in }
+            agent: agent, arbiter: peer, settings: settings, reportError: { _ in }
         )
 
         run.runUnderLease {}
@@ -150,8 +149,7 @@ struct AgentRunControllerTests {
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.useVisionWhenAvailable = false
         let run = AgentRunController(
-            agent: agent, batchEngine: peer.makeBatchEngine(), settings: settings,
-            reportError: { _ in }
+            agent: agent, arbiter: peer, settings: settings, reportError: { _ in }
         )
 
         run.runUnderLease {}
@@ -178,7 +176,7 @@ struct AgentRunControllerTests {
 
         let run = AgentRunController(
             agent: agent,
-            batchEngine: makeFailingArbiter().makeBatchEngine(),
+            arbiter: makeFailingArbiter(),
             reportError: { errors.report($0) }
         )
 
@@ -214,7 +212,7 @@ struct AgentRunControllerTests {
 
         let run = AgentRunController(
             agent: agent,
-            batchEngine: peer.makeBatchEngine(),
+            arbiter: peer,
             reportError: { _ in }
         )
 
@@ -248,8 +246,7 @@ struct AgentRunControllerTests {
     @Test func sendIssuesPromptAndRaisesEagerFlag() async throws {
         let agent = makeAgent()
         let run = AgentRunController(
-            agent: agent, batchEngine: InMemoryInferenceArbiter().makeBatchEngine(),
-            reportError: { _ in })
+            agent: agent, arbiter: InMemoryInferenceArbiter(), reportError: { _ in })
 
         run.send(CoreMessage.user(UserMessage(content: "Hello")))
         #expect(run.isGenerating == true)
@@ -265,8 +262,7 @@ struct AgentRunControllerTests {
     @Test func cancelAndWaitResetsIsGenerating() async throws {
         let agent = makeAgent()
         let run = AgentRunController(
-            agent: agent, batchEngine: InMemoryInferenceArbiter().makeBatchEngine(),
-            reportError: { _ in })
+            agent: agent, arbiter: InMemoryInferenceArbiter(), reportError: { _ in })
 
         run.send(CoreMessage.user(UserMessage(content: "Hi")))
         #expect(run.isGenerating == true)

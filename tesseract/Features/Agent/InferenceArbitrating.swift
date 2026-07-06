@@ -15,34 +15,6 @@
 //  (contrast the actor-backed speech model ports of ADR-0003).
 //
 
-import os
-
-/// Lock-protected waiter visibility (PRD #173, ADR-0022 **Boundary Yield**):
-/// the one fact the **Batch Engine** needs off-MainActor — "is a
-/// slot-preserving consumer (TTS) waiting on the lease right now?" — readable
-/// at step/chunk boundaries without an actor hop. Deliberately counts *only*
-/// slot-preserving waiters: yielding to a consumer that could change the
-/// loaded model (`reloadLLMIfNeeded`, a different-model completion) would
-/// reload under paused lanes — that case is an **Admission Freeze**, never a
-/// yield. A count, not a bool, so overlapping waiters can't blank each other.
-nonisolated final class LeaseWaiterSignal: Sendable {
-    private let count = OSAllocatedUnfairLock(initialState: 0)
-
-    var hasWaiters: Bool {
-        count.withLock { $0 > 0 }
-    }
-
-    /// Mutated by `InferenceArbiter` around a slot-preserving consumer's wait
-    /// (and by the in-memory test peer directly).
-    func increment() {
-        count.withLock { $0 += 1 }
-    }
-
-    func decrement() {
-        count.withLock { $0 = max(0, $0 - 1) }
-    }
-}
-
 /// How a lease chooses the `.llm` slot's vision mode (ADR-0008).
 nonisolated enum LLMVisionRequirement: Sendable, Equatable {
     /// Chat UI and background agents: load vision when the user's global
@@ -77,12 +49,6 @@ protocol InferenceArbitrating {
         llmVision: LLMVisionRequirement,
         body: () async throws -> T
     ) async throws -> T
-
-    /// Waiter visibility for the **Batch Engine**'s Boundary Yield (PRD #173):
-    /// whether a slot-preserving consumer (TTS) is queued on the lease,
-    /// readable off-MainActor at step/chunk boundaries. The one widening
-    /// ADR-0022 called for.
-    nonisolated var leaseWaiters: LeaseWaiterSignal { get }
 }
 
 extension InferenceArbitrating {
