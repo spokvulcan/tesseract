@@ -29,6 +29,7 @@ final class OverlayPanel<Content: View> {
     let state: OverlayState
 
     private let placement: OverlayPlacement
+    private let hasShadow: Bool
     private let content: @MainActor (OverlayState) -> Content
 
     private var panel: NSPanel?
@@ -42,14 +43,21 @@ final class OverlayPanel<Content: View> {
     ///   - state: the `OverlayState` the caller owns; seed any initial pure view
     ///     data (e.g. the border's `glowTheme`) on it *before* calling ``setup()``.
     ///   - placement: where the panel sits and whether it animates its reposition.
+    ///   - hasShadow: whether the panel casts a window shadow matching the
+    ///     content's silhouette. On for the Liquid Glass pill (the system draws
+    ///     the shadow from the capsule's alpha, which a SwiftUI `.shadow` behind
+    ///     translucent glass can't do without muddying it); off for the
+    ///     full-screen border.
     ///   - content: builds the hosted SwiftUI view from the state.
     init(
         state: OverlayState,
         placement: OverlayPlacement,
+        hasShadow: Bool = false,
         content: @escaping @MainActor (OverlayState) -> Content
     ) {
         self.state = state
         self.placement = placement
+        self.hasShadow = hasShadow
         self.content = content
     }
 
@@ -57,6 +65,12 @@ final class OverlayPanel<Content: View> {
     /// ``handleStateChange(_:)`` to drive show/hide afterward.
     func setup() {
         createPanel()
+        // Materialize the panel's backing store and the hosted content (for
+        // the pill, its Liquid Glass backdrop) once at launch — alpha stays 0
+        // and the panel is click-through, so it's invisible; the first press
+        // then skips the first-render cost. The first completed hide orders
+        // it back out.
+        panel?.orderFrontRegardless()
         startScreenObservation()
     }
 
@@ -90,8 +104,11 @@ final class OverlayPanel<Content: View> {
     /// Forward an audio level to the hosted content. Dropped while disabled, so the
     /// hidden overlay does no SwiftUI work at audio frame-rate — gated on the same
     /// `isEnabled` as visibility, so "which overlay is live" has one source of truth.
+    /// Also dropped while nothing is on screen (e.g. the settings level meter runs
+    /// while the dictation state is idle): a hidden view has no use for 20 Hz level
+    /// invalidations.
     func handleAudioLevelChange(_ level: Float) {
-        guard isEnabled else { return }
+        guard isEnabled, state.dictationState.showsOverlay else { return }
         state.audioLevel = level
     }
 
@@ -121,7 +138,7 @@ final class OverlayPanel<Content: View> {
         panel.ignoresMouseEvents = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false
+        panel.hasShadow = hasShadow
         panel.hidesOnDeactivate = false
 
         // Hosting view reads `state`, which the caller has already seeded. Created
@@ -153,13 +170,23 @@ final class OverlayPanel<Content: View> {
         hideRequestID &+= 1
 
         // Reposition in case the screen changed. The placement decides whether the
-        // resize animates (the pill) or snaps (the border).
-        applyFrame(for: state.dictationState, animated: placement.animatesResizeOnShow)
+        // resize animates (the pill) or snaps (the border). Resolving the screen
+        // is window-server IPC (a full window-list copy), so it's refreshed only
+        // on a fresh show — mid-dictation state changes reuse the cached screen.
+        applyFrame(
+            for: state.dictationState,
+            animated: placement.animatesResizeOnShow,
+            refreshGeometry: !panel.isVisible
+        )
 
         panel.orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.25
+            // Near-instant: this exists to retarget an in-flight hide fade, not
+            // to animate the entrance — that's the hosted content's single
+            // animation. The old 0.25 s fade multiplied with it, so the pill
+            // didn't read as "on" until ~200 ms after the press.
+            context.duration = 0.08
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
         }
@@ -190,8 +217,13 @@ final class OverlayPanel<Content: View> {
 
     // MARK: - Frame
 
-    private func applyFrame(for dictationState: DictationState, animated: Bool) {
-        guard let panel = panel, let geometry = currentGeometry() else { return }
+    private func applyFrame(
+        for dictationState: DictationState, animated: Bool, refreshGeometry: Bool = true
+    ) {
+        if refreshGeometry || cachedGeometry == nil {
+            cachedGeometry = currentGeometry() ?? cachedGeometry
+        }
+        guard let panel = panel, let geometry = cachedGeometry else { return }
         let frame = placement.frame(geometry, dictationState)
         if animated {
             panel.animator().setFrame(frame, display: false)
@@ -199,6 +231,11 @@ final class OverlayPanel<Content: View> {
             panel.setFrame(frame, display: false)
         }
     }
+
+    /// The screen the panel last resolved to. Refreshed on fresh shows and on
+    /// the screen-change notifications; reused for mid-dictation state changes
+    /// so they skip the window-list IPC in ``currentGeometry()``.
+    private var cachedGeometry: ScreenGeometry?
 
     /// The single screen seam. Lifts the preferred screen's rects into a
     /// ``ScreenGeometry`` the placement consumes; `nil` only when no display

@@ -8,8 +8,9 @@ import SwiftUI
 /// Timeline-style audio visualization with bars scrolling from right to left.
 /// Each bar represents a captured audio level sample, creating a waveform history.
 struct AudioBarsView: View {
-    let level: CGFloat
-    let phase: CGFloat  // unused, kept for API compatibility
+    /// Read directly (not passed as a value) so the 20 Hz level updates
+    /// invalidate only this subtree — never the pill chrome or its glass.
+    var overlayState: OverlayState
 
     @State private var samples: [CGFloat] = Array(repeating: 0.1, count: 20)
 
@@ -28,8 +29,8 @@ struct AudioBarsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onChange(of: level) { _, newLevel in
-            pushSample(newLevel)
+        .onChange(of: overlayState.audioLevel) { _, newLevel in
+            pushSample(max(0.06, min(CGFloat(newLevel), 1)))
         }
         .onAppear {
             samples = Array(repeating: 0.1, count: barCount)
@@ -64,10 +65,12 @@ struct AudioBarsView: View {
 }
 
 #Preview("Audio Bars") {
-    ZStack {
+    let state = OverlayState()
+    state.audioLevel = 0.5
+    return ZStack {
         Color.black.opacity(0.8)
 
-        AudioBarsView(level: 0.5, phase: 0)
+        AudioBarsView(overlayState: state)
             .frame(width: 120, height: 24)
             .padding()
     }

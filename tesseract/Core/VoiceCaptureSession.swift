@@ -130,8 +130,9 @@ final class VoiceCaptureSession {
             if let captureDump, isCaptureDumpEnabled() {
                 captureDump.save(raw)
             }
-            // The dump is `raw`'s only consumer — don't keep the native-rate
-            // samples (~3× the 16 kHz payload) alive through transcription.
+            // The dump is `raw`'s only consumer. (Bookkeeping more than memory
+            // now: `samples` shares the same native-rate storage since the
+            // recognizer took over the 16 kHz conversion.)
             audioData.raw = nil
         }
         return .audio(audioData)

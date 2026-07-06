@@ -6,12 +6,14 @@
 import SwiftUI
 
 /// Animated processing indicator with pulsing white dots.
-/// Uses external time input with onChange - same pattern as AudioBarsView.
-/// Animation flows left-to-right with gentle size variation.
+/// Animation flows left-to-right with gentle size variation. `phase` is derived
+/// straight from the driving `time` — mirroring it into `@State` (the old
+/// shape) doubled every 60 fps frame into two body evaluations and added a
+/// frame of latency for nothing: unlike AudioBarsView, no history is kept.
 struct ProcessingDotsView: View {
     let time: Double
 
-    @State private var phase: Double = 0
+    private var phase: Double { time * 3.5 }
 
     private let dotCount = 5
     private let dotSize: CGFloat = 8
@@ -30,10 +32,6 @@ struct ProcessingDotsView: View {
                 dotView(index: index)
                     .frame(width: containerSize, height: containerSize)
             }
-        }
-        .drawingGroup()  // GPU-accelerated rendering
-        .onChange(of: time) { _, newTime in
-            phase = newTime * 3.5
         }
     }
 

@@ -39,8 +39,11 @@ final class MenuBarManager: ObservableObject {
 
     func setupMenuBar() {
         // Subscribe to state changes for menu item text
+        // Deduplicated and left on the caller's (main) thread: updateState
+        // fires on every dictation-state change, and a re-dispatch would add a
+        // queue hop after the pill push for an unchanged value.
         $isRecording
-            .receive(on: DispatchQueue.main)
+            .removeDuplicates()
             .sink { [weak self] _ in
                 self?.updateMenuItems()
             }

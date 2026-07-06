@@ -14,7 +14,13 @@ struct GlowEffect: View {
     let theme: GlowTheme
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 120.0)) { timeline in
+        // 30 fps is visually indistinguishable here: the gradient oscillates
+        // with a ~42 s period and the audio level arrives at 20 Hz — at 120 fps
+        // this redrew four blurred full-screen stroke layers per frame for
+        // inputs that hadn't changed. No `.drawingGroup()`: Canvas already
+        // renders on the GPU, and flattening a full-screen overlay re-uploads
+        // a screen-sized texture every frame.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
 
             Canvas { context, size in
@@ -22,7 +28,6 @@ struct GlowEffect: View {
             }
         }
         .ignoresSafeArea()
-        .drawingGroup()  // Rasterize to GPU texture for better performance
     }
 
     private func drawGlowBorder(context: GraphicsContext, size: CGSize, time: Double) {

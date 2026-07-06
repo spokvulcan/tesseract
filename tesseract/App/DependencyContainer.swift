@@ -201,6 +201,7 @@ final class DependencyContainer: ObservableObject {
     lazy var pillOverlay = OverlayPanel(
         state: OverlayState(),
         placement: .pill,
+        hasShadow: true,
         content: { GlobalOverlayHUD(overlayState: $0) }
     )
     lazy var borderOverlay = OverlayPanel(
@@ -383,6 +384,9 @@ final class DependencyContainer: ObservableObject {
                 },
                 pushAudioLevelToBorder: { [borderOverlay] in
                     borderOverlay.handleAudioLevelChange($0)
+                },
+                prewarmAudioCapture: { [audioCaptureEngine] in
+                    audioCaptureEngine.prewarm()
                 },
                 updateDictationHotkey: { [hotkeyManager] in
                     hotkeyManager.updateHotkey($0)
