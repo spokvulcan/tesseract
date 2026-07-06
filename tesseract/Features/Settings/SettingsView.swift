@@ -148,7 +148,9 @@ struct AudioLevelMeter: View {
             isTestingMic = false
         } else {
             do {
-                try audioCapture.startCapture()
+                // Metering-only: the meter wants the level, not a recording —
+                // a long test must not accumulate audio or resample it on stop.
+                try audioCapture.startLevelMetering()
                 isTestingMic = true
             } catch {
                 Log.general.error("Failed to start mic test: \(error)")

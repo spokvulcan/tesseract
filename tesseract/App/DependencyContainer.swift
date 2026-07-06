@@ -385,6 +385,9 @@ final class DependencyContainer: ObservableObject {
                 pushAudioLevelToBorder: { [borderOverlay] in
                     borderOverlay.handleAudioLevelChange($0)
                 },
+                prewarmAudioCapture: { [audioCaptureEngine] in
+                    audioCaptureEngine.prewarm()
+                },
                 updateDictationHotkey: { [hotkeyManager] in
                     hotkeyManager.updateHotkey($0)
                 },

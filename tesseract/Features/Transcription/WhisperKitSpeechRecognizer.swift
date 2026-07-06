@@ -50,6 +50,17 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
 
         let startTime = Date()
 
+        // The capture arrives at its native rate; convert to Whisper's 16 kHz
+        // here, on this actor — the key-release path (which sits under the
+        // app's system-wide event tap) must not pay for it on the main thread.
+        let samples =
+            audioData.sampleRate == AudioConverter.whisperSampleRate
+            ? audioData.samples
+            : AudioConverter.resample(
+                audioData.samples,
+                from: audioData.sampleRate,
+                to: AudioConverter.whisperSampleRate)
+
         let options = DecodingOptions(
             task: .transcribe,
             language: language,
@@ -65,7 +76,7 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
         // Capture whisperKit in a local constant to satisfy concurrency checking
         let kit = whisperKit
         let results = try await kit.transcribe(
-            audioArray: audioData.samples,
+            audioArray: samples,
             decodeOptions: options
         )
 

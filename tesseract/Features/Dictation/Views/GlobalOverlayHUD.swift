@@ -17,7 +17,6 @@ struct GlobalOverlayHUD: View {
     /// Observable state shared with the panel controller (not replaced on updates)
     var overlayState: OverlayState
 
-    @State private var smoothedLevel: CGFloat = 0.08
     @State private var isVisible = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -33,9 +32,6 @@ struct GlobalOverlayHUD: View {
         }
         .onChange(of: overlayState.dictationState) { _, newState in
             updateVisibility(for: newState)
-        }
-        .onChange(of: overlayState.audioLevel) { _, newValue in
-            updateAudioLevel(newValue)
         }
         .onAppear {
             updateVisibility(for: overlayState.dictationState)
@@ -60,26 +56,25 @@ struct GlobalOverlayHUD: View {
     }
 
     private var recordingView: some View {
+        // AudioBarsView reads the level itself, so the 20 Hz meter invalidates
+        // only the bars subtree — the pill chrome and glass never re-diff
+        // during steady recording.
         pillContainer(style: .recording) {
-            AudioBarsView(level: smoothedLevel)
+            AudioBarsView(overlayState: overlayState)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
         }
     }
 
     private var processingView: some View {
-        Group {
+        // The TimelineView lives *inside* the pill so the glass chrome sits
+        // outside the 60 fps closure — only the dots row re-evaluates per frame.
+        pillContainer(style: .processing) {
             if reduceMotion {
-                pillContainer(style: .processing) {
-                    processingContent(time: nil)
-                }
+                processingContent(time: nil)
             } else {
                 TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-                    let time = timeline.date.timeIntervalSinceReferenceDate
-
-                    pillContainer(style: .processing) {
-                        processingContent(time: time)
-                    }
+                    processingContent(time: timeline.date.timeIntervalSinceReferenceDate)
                 }
             }
         }
@@ -160,7 +155,10 @@ struct GlobalOverlayHUD: View {
 
     private func updateVisibility(for newState: DictationState) {
         if newState.showsOverlay {
-            animateVisibility(show: true, response: 0.3, dampingFraction: 0.7)
+            // The single entrance animation (the panel no longer cross-fades on
+            // show) — snappy: the pill must read as "on" within ~100 ms of the
+            // press or dictation feels laggy.
+            animateVisibility(show: true, response: 0.2, dampingFraction: 0.75)
         } else {
             animateVisibility(show: false, response: 0.25, dampingFraction: 0.8)
         }
@@ -173,13 +171,6 @@ struct GlobalOverlayHUD: View {
         }
         withAnimation(.spring(response: response, dampingFraction: dampingFraction)) {
             isVisible = show
-        }
-    }
-
-    private func updateAudioLevel(_ newValue: Float) {
-        let clamped = max(0.06, min(CGFloat(newValue), 1))
-        withAnimation(.easeOut(duration: 0.1)) {
-            smoothedLevel = clamped
         }
     }
 }

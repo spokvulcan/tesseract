@@ -71,6 +71,10 @@ final class AppBindings {
         let pushDictationStateToMenuBar: @MainActor (DictationState) -> Void
         let pushAudioLevelToPill: @MainActor (Float) -> Void
         let pushAudioLevelToBorder: @MainActor (Float) -> Void
+        /// Builds the capture engine (incl. its Voice Processing configuration)
+        /// ahead of the first press, so no capture pays the VPIO setup cost
+        /// interactively.
+        let prewarmAudioCapture: @MainActor () -> Void
         let updateDictationHotkey: @MainActor (KeyCombo) -> Void
         let updateTTSHotkey: @MainActor (KeyCombo) -> Void
         let updateAgentHotkey: @MainActor (KeyCombo) -> Void
@@ -93,6 +97,7 @@ final class AppBindings {
             pushDictationStateToMenuBar: @escaping @MainActor (DictationState) -> Void,
             pushAudioLevelToPill: @escaping @MainActor (Float) -> Void,
             pushAudioLevelToBorder: @escaping @MainActor (Float) -> Void,
+            prewarmAudioCapture: @escaping @MainActor () -> Void = {},
             updateDictationHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateTTSHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateAgentHotkey: @escaping @MainActor (KeyCombo) -> Void,
@@ -112,6 +117,7 @@ final class AppBindings {
             self.pushDictationStateToMenuBar = pushDictationStateToMenuBar
             self.pushAudioLevelToPill = pushAudioLevelToPill
             self.pushAudioLevelToBorder = pushAudioLevelToBorder
+            self.prewarmAudioCapture = prewarmAudioCapture
             self.updateDictationHotkey = updateDictationHotkey
             self.updateTTSHotkey = updateTTSHotkey
             self.updateAgentHotkey = updateAgentHotkey
@@ -326,6 +332,8 @@ final class AppBindings {
                 }
             })
 
+        installCapturePrewarmSubscription()
+
         // Re-bind the dictation hotkey on change. The initial emission matches
         // the combo the wiring already bound, so the unchanged-combo guard makes
         // launch a no-op instead of a redundant re-bind.
@@ -340,6 +348,30 @@ final class AppBindings {
 
         // Re-bind the TTS and agent hotkeys on change; re-applying the current
         // combo at subscription time is a harmless re-register.
+        installAuxiliaryHotkeySubscriptions()
+
+        // Enable the overlay matching the current style and disable the other.
+        // Each panel's enabled flag gates both its visibility and its
+        // audio-frame handling, so the inactive overlay stays hidden and idle.
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await style in Observations({ self.settings.overlayStyle }) {
+                    switch style {
+                    case .pill:
+                        self.effects.setPillOverlayEnabled(true)
+                        self.effects.setBorderOverlayEnabled(false)
+                    case .fullScreenBorder:
+                        self.effects.setPillOverlayEnabled(false)
+                        self.effects.setBorderOverlayEnabled(true)
+                    }
+                }
+            })
+    }
+
+    /// The TTS / agent / appshot hotkey re-binds — same shape as the dictation
+    /// hotkey subscription, minus its unchanged-combo launch guard.
+    private func installAuxiliaryHotkeySubscriptions() {
         observationTasks.append(
             Task { [weak self] in
                 guard let self else { return }
@@ -361,22 +393,18 @@ final class AppBindings {
                     self.effects.updateAppshotHotkey(hotkey)
                 }
             })
+    }
 
-        // Enable the overlay matching the current style and disable the other.
-        // Each panel's enabled flag gates both its visibility and its
-        // audio-frame handling, so the inactive overlay stays hidden and idle.
+    /// Keeps the capture engine prewarmed for the Voice Processing setting so
+    /// no press pays the VPIO build interactively. The initial emission
+    /// prewarms at launch; later ones follow the settings toggle. (The effect
+    /// no-ops mid-capture and without microphone permission.)
+    private func installCapturePrewarmSubscription() {
         observationTasks.append(
             Task { [weak self] in
                 guard let self else { return }
-                for await style in Observations({ self.settings.overlayStyle }) {
-                    switch style {
-                    case .pill:
-                        self.effects.setPillOverlayEnabled(true)
-                        self.effects.setBorderOverlayEnabled(false)
-                    case .fullScreenBorder:
-                        self.effects.setPillOverlayEnabled(false)
-                        self.effects.setBorderOverlayEnabled(true)
-                    }
+                for await _ in Observations({ self.settings.voiceProcessingEnabled }) {
+                    self.effects.prewarmAudioCapture()
                 }
             })
     }

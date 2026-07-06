@@ -17,7 +17,14 @@ protocol TextInjecting: AnyObject {
 @MainActor
 final class TextInjector: ObservableObject, TextInjecting {
     private enum Defaults {
-        static let clipboardSettleDelay: Duration = .milliseconds(50)
+        /// Pause between writing the transcript to the pasteboard and posting the
+        /// synthetic Cmd+V. `setString` is synchronous IPC to the pasteboard
+        /// server, so this mostly buys margin for slow pasteboard extensions;
+        /// it is a fixed tax on every dictation, so it stays small.
+        static let clipboardSettleDelay: Duration = .milliseconds(20)
+        /// Pause between the paste and restoring the saved clipboard — the target
+        /// app must read the transcript off the pasteboard first. Runs off the
+        /// awaited path (see `inject`), so it delays nothing the user sees.
         static let clipboardRestoreDelay: Duration = .milliseconds(100)
     }
 
@@ -56,12 +63,18 @@ final class TextInjector: ObservableObject, TextInjecting {
             // Simulate Cmd+V paste
             simulatePaste()
 
-            // Small delay before restoring clipboard
-            try await Task.sleep(for: Defaults.clipboardRestoreDelay)
-
-            // Restore original clipboard contents
+            // Restore the original clipboard after the target app has read the
+            // transcript. Fire-and-forget: the caller's success feedback (sound,
+            // pill leaving "processing") must not lag the visible text by the
+            // restore delay, and the restore should complete even if the caller
+            // is cancelled right after the paste.
             if restoreClipboard {
-                restoreClipboardContents()
+                let contents = savedClipboardContents
+                savedClipboardContents = nil
+                Task {
+                    try? await Task.sleep(for: Defaults.clipboardRestoreDelay)
+                    Self.restoreClipboardContents(contents)
+                }
             }
         }
         // Own app focused with no editable text field: text remains on the
@@ -103,8 +116,10 @@ final class TextInjector: ObservableObject, TextInjecting {
         savedClipboardContents = contents.isEmpty ? nil : contents
     }
 
-    private func restoreClipboardContents() {
-        guard let contents = savedClipboardContents else { return }
+    private static func restoreClipboardContents(
+        _ contents: [NSPasteboard.PasteboardType: Data]?
+    ) {
+        guard let contents else { return }
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -112,8 +127,6 @@ final class TextInjector: ObservableObject, TextInjecting {
         for (type, data) in contents {
             pasteboard.setData(data, forType: type)
         }
-
-        savedClipboardContents = nil
     }
 
     // MARK: - Key Simulation

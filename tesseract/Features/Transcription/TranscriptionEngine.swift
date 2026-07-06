@@ -44,6 +44,12 @@ final class TranscriptionEngine: Transcribing {
     /// recognizer's `async cancel()`.
     private var recognizerCancelTask: Task<Void, Never>?
 
+    /// The in-flight model load. Retained so a transcription that races it
+    /// (`ensureModelLoaded` — e.g. a dictation issued while the launch load is
+    /// still running) awaits this load instead of starting a second full
+    /// WhisperKit load: double ANE prepare, double transient memory.
+    private var inFlightLoad: Task<Void, Error>?
+
     init(
         makeRecognizer: @escaping @Sendable () -> any SpeechRecognizer = {
             WhisperKitSpeechRecognizer()
@@ -82,12 +88,23 @@ final class TranscriptionEngine: Transcribing {
             throw DictationError.modelNotLoaded
         }
 
-        // Build a fresh adapter via the factory and load it.
+        // Build a fresh adapter via the factory and load it. The load runs in a
+        // retained task that also publishes the loaded recognizer, so a waiter
+        // on `inFlightLoad` observes the recognizer set the moment the task
+        // completes — no gap for a duplicate load to slip through.
         let recognizer = makeRecognizer()
-        try await recognizer.load(modelPath: modelPath)
-
-        self.recognizer = recognizer
-        isModelLoaded = true
+        let load = Task { [weak self] in
+            try await recognizer.load(modelPath: modelPath)
+            guard let self else { return }
+            self.recognizer = recognizer
+            self.isModelLoaded = true
+        }
+        inFlightLoad = load
+        defer {
+            // Identity-guarded: don't clear a successor load started meanwhile.
+            if inFlightLoad == load { inFlightLoad = nil }
+        }
+        try await load.value
     }
 
     func unloadModel() {
@@ -177,6 +194,14 @@ final class TranscriptionEngine: Transcribing {
 
     private func ensureModelLoaded() async throws {
         guard recognizer == nil else { return }
+
+        // A load already in flight (the launch load, or a model switch) is
+        // awaited, never duplicated.
+        if let inFlightLoad {
+            try await inFlightLoad.value
+            guard recognizer == nil else { return }
+        }
+
         guard let modelPath = configuredModelPath else {
             throw DictationError.modelNotLoaded
         }
