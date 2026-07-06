@@ -59,14 +59,6 @@ extension AssistantMessage {
     ) -> AssistantMessage {
         AssistantMessage(content: content, thinking: thinking, toolCalls: toolCalls)
     }
-
-    static func fromStream(
-        content: String,
-        thinking: String? = nil,
-        toolCalls: [ToolCallInfo] = []
-    ) -> AssistantMessage {
-        AssistantMessage(content: content, thinking: thinking, toolCalls: toolCalls)
-    }
 }
 
 extension ToolResultMessage {

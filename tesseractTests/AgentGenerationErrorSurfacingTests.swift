@@ -6,8 +6,8 @@
 //  server already returns the error to its client; the in-app loop historically
 //  only logged it (`Log.agent.error`) and emitted the normal turn/agent-end, so
 //  the chat just stopped with no banner. These pin the fix: the loop emits a
-//  `.generationError` carrying the message, and the coordinator surfaces it in
-//  the shared `error` banner — driven through the PUBLIC `sendMessage` path.
+//  `.generationError` carrying the message, and the Chat Session surfaces it in
+//  the composer's notice slot — driven through the PUBLIC `sendMessage` path.
 //
 
 import Foundation
@@ -41,12 +41,12 @@ struct AgentGenerationErrorSurfacingTests {
         )
     }
 
-    private func settle(_ coordinator: AgentCoordinator) async {
+    private func settle(_ session: ChatSession) async {
         let deadline = ContinuousClock.now + .seconds(3)
-        while coordinator.isGenerating {
+        while session.isGenerating {
             try? await Task.sleep(for: .milliseconds(10))
             if ContinuousClock.now >= deadline {
-                Issue.record("Coordinator did not settle within timeout")
+                Issue.record("Session did not settle within timeout")
                 break
             }
         }
@@ -56,19 +56,20 @@ struct AgentGenerationErrorSurfacingTests {
         let message =
             "this image set is too large to process: 35028 combined image patches. "
             + "Reduce the number or size of the attached images."
-        let coordinator = AgentCoordinator(
+        let session = ChatSession(
             agent: makeThrowingAgent(.generationFailed(message)),
             conversationStore: InMemoryAgentConversationStore(),
+            arbiter: InMemoryInferenceArbiter(),
             settings: SettingsManager(store: InMemorySettingsStore()),
-            arbiter: InMemoryInferenceArbiter()
+            liveMarkdownThrottle: .zero
         )
 
-        coordinator.sendMessage("describe these")
-        await settle(coordinator)
+        session.sendMessage("describe these")
+        await settle(session)
 
         // The rejection text the user needs to see is in the banner, and the
         // composer is no longer stuck in the generating state.
-        #expect(coordinator.error == message)
-        #expect(coordinator.isGenerating == false)
+        #expect(session.error == message)
+        #expect(session.isGenerating == false)
     }
 }

@@ -657,34 +657,32 @@ ToolCallParser (upstream); agent loop — this consumes one turn's raw stream, w
 the agent double-loop orchestrates turns and tool calls above it (say "stream loop"
 vs "agent loop").
 
-### Chat transcript projection
+### Chat rewrite vocabulary (ADR-0024)
 
-**Chat Transcript**:
-The pure, stateless projection of the agent message log into the flat `[ChatRow]`
-the chat list renders, grouped into **Turn**s. All inputs — expansion state, the
-live stream, formatting — are passed in; it reads no coordinator state and has no
-side effects.
-_Avoid_: rebuildRows (the duplicated body it replaced), row builder, ChatRowBuilder,
-view model, render model; ASR transcription — unrelated to `TranscriptionEngine` /
-`TranscriptionResult` (speech-to-text), so say "chat transcript".
+The canonical terms of the rewritten chat; they replaced the Chat Transcript
+projection family.
 
-**Turn**:
-The **Chat Transcript**'s grouping unit — a contiguous run from one user message (or
-compaction marker) through the assistant's complete response, possibly spanning
-several assistant messages when a tool-calling loop runs.
-_Avoid_: round, exchange, conversation turn, message group; loop turn — a transcript
-**Turn** can contain several agent-loop turns (say "transcript turn" vs "loop turn").
+**Content Part**:
+The typed, ordered unit of assistant message content — text, thinking, or tool
+call — a verbatim Swift mirror of pi-ai's content model. Stream events address a
+part by its content index within the message.
+_Avoid_: block, segment, chunk; Chat Row (a render atom, not a model unit);
+part (unqualified) when ambiguity with tool-result content is possible.
 
-**Chat Row**:
-The flat, render-ready `Equatable & Sendable` atom of the **Chat Transcript**, with
-every string pre-computed and a stable `id` — the unit SwiftUI diffs.
-_Avoid_: cell, item, list element, view model.
+**Live Part**:
+The single observable box holding the one **Content Part** currently streaming —
+the only mutable render state during generation; a token delta invalidates only
+its view, and at part end it commits into immutable value rows.
+_Avoid_: streaming bubble, stream message; partial message (in the pi-mono event
+protocol "partial" is the whole-message snapshot carried by every event, not the
+live box).
 
-**Chat Transcript Controller**:
-The stateful driver that feeds the pure **Chat Transcript** fold: it holds the
-view-interaction state (expansion, streaming throttle, splice point) and makes the
-full-rebuild-vs-tail-patch decision the stateless projection cannot.
-_Avoid_: view model, render model, ChatViewModel, row store.
+**Chat Session**:
+The single store holding the event fold for the active **Conversation** —
+messages, the **Live Part**, and run phase — and the sole agent-event subscriber.
+Leaf controllers (composer draft, voice, pills) live outside it, owned by views.
+_Avoid_: coordinator, dispatcher, view model; session (unqualified); Conversation
+(the persisted document a Chat Session folds live).
 
 ### Agent run lifecycle
 
@@ -708,11 +706,11 @@ _Avoid_: Generation Accumulator (the token-stream fold — say which "fold"), ev
 handler / `handleEvent` (this is the fold, not the notify wrapper that hosts it),
 dispatcher, state machine, store.
 
-### Agent coordinator leaves
+### Chat leaves
 
-The publisher-agnostic sub-controllers carved off `AgentCoordinator` that own their
-own state but never touch the event dispatcher — the *leaves*, as opposed to the
-dispatcher-coupled *spine* (**Agent Run**, **Chat Transcript Controller**).
+The sub-controllers that own their own state but never subscribe to agent events
+— the *leaves*, as opposed to the event-subscribing **Chat Session** and its
+**Agent Run**.
 
 **Voice Input**:
 The agent chat composer's push-to-talk capture→transcribe→emit module: it composes
@@ -778,7 +776,7 @@ _Avoid_: command (the palette concept), prompt template, tool (a callable
 capability, not an instruction), persona/mode.
 
 **Skill Pill**:
-The tappable pill above the agent chat composer that runs one **Skill** instantly
+The tappable pill inline in the agent chat composer's action row that runs one **Skill** instantly
 on tap — the composer's current text and pending images ride along as the skill's
 arguments and attachments, and a bare tap with an empty composer still fires.
 Presentation only: a surface over skills, never a second invocation mechanism.
@@ -786,7 +784,7 @@ _Avoid_: quick action, suggestion chip, shortcut button, mode/toggle (a pill arm
 nothing).
 
 **Skill Invocation Row**:
-The **Chat Transcript**'s compact rendering of a fired **Skill** — the skill name
+The chat's compact rendering of a fired **Skill** — the skill name
 plus the user's argument text and attachments, expandable to the full injected
 skill block. One rendering for every invocation surface (pill or slash command).
 _Avoid_: raw `<skill>` text as the user bubble, skill message (it is a rendering,

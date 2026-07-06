@@ -1,6 +1,6 @@
 import Foundation
 
-/// The seam the ``AgentCoordinator`` uses to load, persist, and switch agent
+/// The seam the ``ChatSession`` uses to load, persist, and switch agent
 /// conversations — exactly the members the coordinator calls, nothing more.
 ///
 /// The production adapter is ``AgentConversationStore`` (JSON files under

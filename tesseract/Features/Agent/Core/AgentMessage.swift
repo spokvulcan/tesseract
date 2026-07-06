@@ -94,45 +94,124 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
 
 // MARK: - AssistantMessage
 
-/// A response from the LLM, optionally containing thinking and tool calls.
+/// A response from the LLM — ordered **Content Part**s plus the pi-ai message
+/// envelope (api / provider / model, usage, stop reason), mirrored verbatim
+/// from `packages/ai/src/types.ts` (ADR-0024). SwiftUI row identity derives
+/// from (`id`, part index).
 nonisolated struct AssistantMessage: AgentMessageProtocol, Codable, Equatable, Identifiable,
     Sendable
 {
     let id: UUID
-    let content: String
-    let thinking: String?
-    let toolCalls: [ToolCallInfo]
+    var content: [ContentPart]
+    var api: String
+    var provider: String
+    var model: String
+    var usage: Usage
+    var stopReason: StopReason
+    var errorMessage: String?
     let timestamp: Date
 
+    init(
+        id: UUID = UUID(),
+        content: [ContentPart],
+        api: String = "mlx",
+        provider: String = "tesseract",
+        model: String = "",
+        usage: Usage = Usage(),
+        stopReason: StopReason = .stop,
+        errorMessage: String? = nil,
+        timestamp: Date = Date()
+    ) {
+        self.id = id
+        self.content = content
+        self.api = api
+        self.provider = provider
+        self.model = model
+        self.usage = usage
+        self.stopReason = stopReason
+        self.errorMessage = errorMessage
+        self.timestamp = timestamp
+    }
+
+    /// Flat-string convenience — fixtures, compaction summaries, and the
+    /// LLM-facing layers below the parts model construct through this shape.
+    /// Part order: thinking, then text, then tool calls (generation order).
     init(
         id: UUID = UUID(),
         content: String,
         thinking: String? = nil,
         toolCalls: [ToolCallInfo] = [],
+        stopReason: StopReason = .stop,
         timestamp: Date = Date()
     ) {
-        self.id = id
-        self.content = content
-        self.thinking = thinking
-        self.toolCalls = toolCalls
-        self.timestamp = timestamp
+        var parts: [ContentPart] = []
+        if let thinking, !thinking.isEmpty {
+            parts.append(.thinking(ThinkingPart(thinking: thinking)))
+        }
+        if !content.isEmpty {
+            parts.append(.text(TextPart(text: content)))
+        }
+        for call in toolCalls {
+            parts.append(
+                .toolCall(
+                    ToolCallPart(id: call.id, name: call.name, argumentsJSON: call.argumentsJSON)))
+        }
+        self.init(id: id, content: parts, stopReason: stopReason, timestamp: timestamp)
+    }
+
+    // MARK: Flat projections (the LLM context, compaction, and logging layers
+    // below the parts model keep reading the turn as flat strings)
+
+    /// All visible text, in part order.
+    var text: String {
+        content.compactMap { part in
+            if case .text(let t) = part { return t.text }
+            return nil
+        }.joined()
+    }
+
+    /// All thinking, in part order. `nil` when no thinking part exists —
+    /// preserves the "never opened a `<think>` block" distinction.
+    var thinking: String? {
+        let parts = content.compactMap { part -> String? in
+            if case .thinking(let t) = part { return t.thinking }
+            return nil
+        }
+        return parts.isEmpty ? nil : parts.joined()
+    }
+
+    /// Tool calls in part order, bridged to the execution layer's identity type.
+    var toolCalls: [ToolCallInfo] {
+        content.compactMap { part in
+            if case .toolCall(let call) = part {
+                return ToolCallInfo(
+                    id: call.id, name: call.name, argumentsJSON: call.argumentsJSON)
+            }
+            return nil
+        }
     }
 
     func toLLMMessage() -> LLMMessage? {
-        .assistant(
-            content: content,
+        let calls = toolCalls
+        return .assistant(
+            content: text,
             reasoning: thinking,
-            toolCalls: toolCalls.isEmpty ? nil : toolCalls
+            toolCalls: calls.isEmpty ? nil : calls
         )
     }
 
-    /// Carries something worth committing: visible text, thinking, or tool
-    /// calls. Empty turns (model errors before any tokens, cancel paths) are
-    /// dropped rather than polluting history with blank assistant messages.
-    /// The single definition both `runLoop` (on persist) and the **Agent State
-    /// Reducer** (on `messageEnd` commit) fold against.
+    /// Carries something worth committing: any non-empty part. Empty turns
+    /// (model errors before any tokens, cancel paths) are dropped rather than
+    /// polluting history with blank assistant messages. The single definition
+    /// both `runLoop` (on persist) and the Chat Session fold commit against.
     var hasContent: Bool {
-        !content.isEmpty || (thinking?.isEmpty == false) || !toolCalls.isEmpty
+        content.contains { part in
+            switch part {
+            case .text(let t): return !t.text.isEmpty
+            case .thinking(let t): return !t.thinking.isEmpty
+            case .toolCall: return true
+            }
+        }
     }
 }
 

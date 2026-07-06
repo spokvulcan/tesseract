@@ -317,7 +317,7 @@ nonisolated enum TokenEstimator: Sendable {
             return msg.content.utf8.count
 
         case let msg as AssistantMessage:
-            var count = msg.content.utf8.count
+            var count = msg.text.utf8.count
             if let thinking = msg.thinking {
                 count += thinking.utf8.count
             }
