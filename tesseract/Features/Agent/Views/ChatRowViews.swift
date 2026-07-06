@@ -546,7 +546,7 @@ struct AsyncImageAttachmentView: View {
         .frame(maxWidth: 200, maxHeight: 200)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(RoundedRectangle(cornerRadius: 8))
-        .onTapGesture { coordinator.imageDraft.openQuickLook(clicked: attachment.id) }
+        .onTapGesture { coordinator.composerDraft.openQuickLook(clicked: attachment.id) }
         .help("Click to view full size")
         .task(id: attachment.id) {
             let data = attachment.data
@@ -554,7 +554,7 @@ struct AsyncImageAttachmentView: View {
                 NSImage(data: data)
             }.value
             // Pre-warm the Quick Look temp file so the click opens instantly.
-            coordinator.imageDraft.prewarmImagePreview(attachment)
+            coordinator.composerDraft.prewarmImagePreview(attachment)
         }
     }
 }

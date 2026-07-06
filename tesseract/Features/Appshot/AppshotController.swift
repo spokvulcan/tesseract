@@ -5,8 +5,8 @@
 //  The **Appshot** flow (PRD #170): the frontmost-window capture invoked by the
 //  double-Command hotkey, staged as a pending composer image labeled with its
 //  source app and window title. Everything above the `AppshotCapturing` seam:
-//  ingest, staging through the Image Draft (whose vision-hint, cap, and notice
-//  rules apply unchanged), the one-shot composer prefill, failure routing, and
+//  ingest, staging through the Composer Draft (whose vision-hint, cap, and notice
+//  rules apply unchanged), the window-label prefill, failure routing, and
 //  the window summon.
 //
 
@@ -22,11 +22,6 @@ final class AppshotController {
     /// capture fails on the missing permission, cleared by the banner.
     var showPermissionExplainer = false
 
-    /// One-shot composer prefill naming the captured window — the content view
-    /// copies it into an *empty* composer and clears it (mirrors
-    /// `AgentCoordinator.editDraftRestore`, but never clobbers typed text).
-    var composerPrefill: String?
-
     // MARK: - Dependencies
 
     /// Summons the main window onto the Agent view. Wired by the app delegate,
@@ -34,11 +29,11 @@ final class AppshotController {
     @ObservationIgnored var onSummon: (() -> Void)?
 
     @ObservationIgnored private let capturer: any AppshotCapturing
-    @ObservationIgnored private let imageDraft: ImageDraftController
+    @ObservationIgnored private let composerDraft: ComposerDraftController
 
-    init(capturer: any AppshotCapturing, imageDraft: ImageDraftController) {
+    init(capturer: any AppshotCapturing, composerDraft: ComposerDraftController) {
         self.capturer = capturer
-        self.imageDraft = imageDraft
+        self.composerDraft = composerDraft
     }
 
     // MARK: - Flow
@@ -53,7 +48,7 @@ final class AppshotController {
         case .failure(.noPermission):
             showPermissionExplainer = true
         case .failure(.noCapturableWindow), .failure(.captureFailed):
-            imageDraft.showNotice("Couldn't capture the frontmost window.")
+            composerDraft.showNotice("Couldn't capture the frontmost window.")
         }
         onSummon?()
     }
@@ -66,15 +61,18 @@ final class AppshotController {
         )
         switch ingested {
         case .success(let attachment):
-            let added = imageDraft.handleGesture(ImageGesturePayload(attachments: [attachment]))
-            // Offer the prefill only when the shot actually staged — a switch
-            // hint or a full queue already speaks for itself.
-            if !added.isEmpty {
-                composerPrefill = Self.prefill(
+            let added = composerDraft.handleGesture(ImageGesturePayload(attachments: [attachment]))
+            // Offer the window label only when the shot actually staged (a switch
+            // hint or a full queue already speaks for itself) and the composer is
+            // empty — the user's own draft always wins. Written straight to the
+            // draft the composer owns, so it lands even if the view isn't mounted
+            // when the Appshot fires.
+            if !added.isEmpty, composerDraft.text.isEmpty {
+                composerDraft.text = Self.prefill(
                     appName: capture.appName, windowTitle: capture.windowTitle)
             }
         case .failure(let rejection):
-            imageDraft.handleGesture(ImageGesturePayload(rejections: [rejection]))
+            composerDraft.handleGesture(ImageGesturePayload(rejections: [rejection]))
         }
     }
 

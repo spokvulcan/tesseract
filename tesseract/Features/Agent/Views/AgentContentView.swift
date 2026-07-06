@@ -3,10 +3,8 @@ import UniformTypeIdentifiers
 
 struct AgentContentView: View {
     @Environment(AgentCoordinator.self) private var coordinator
-    @Environment(AppshotController.self) private var appshot
     @EnvironmentObject private var conversationStore: AgentConversationStore
     @Environment(SpeechCoordinator.self) private var speechCoordinator
-    @State private var inputText = ""
     @State private var showingHistory = false
     @State private var speakingMessageID: UUID?
     @Environment(SettingsManager.self) private var settings
@@ -19,9 +17,11 @@ struct AgentContentView: View {
     }
 
     var body: some View {
-        // The drop-target flag lives on the draft controller so the composer
-        // text view's AppKit drag tracking drives the same overlay (#167).
-        @Bindable var imageDraft = coordinator.imageDraft
+        // The composer draft is owned by the controller, not view `@State`, so it
+        // survives conversation switches (new chat / load / delete) and `/clear`
+        // can wipe it. This `@Bindable` sources the text field binding
+        // (`$composerDraft.text`) and the shared drag-target overlay flag (#167).
+        @Bindable var composerDraft = coordinator.composerDraft
 
         return VStack(spacing: 0) {
             AgentConversationListView(
@@ -73,11 +73,11 @@ struct AgentContentView: View {
                         // pill skills exist and the Setting is on; pills dim
                         // (never hide) during a run, so the layout stays put.
                         if coordinator.skillPills.isRowVisible {
-                            SkillPillRowView(inputText: $inputText)
+                            SkillPillRowView(inputText: $composerDraft.text)
                                 .padding(.horizontal, Theme.Spacing.md + 4)
                         }
 
-                        AgentInputBarView(inputText: $inputText)
+                        AgentInputBarView(inputText: $composerDraft.text)
                     }
                 }
                 .animation(
@@ -94,30 +94,20 @@ struct AgentContentView: View {
             .frame(minHeight: 0)
         }
         .navigationTitle("Agent")
-        .onChange(of: coordinator.editDraftRestore) { _, _ in
-            applyEditDraftRestore(allowClobber: true)
-        }
-        .onChange(of: appshot.composerPrefill) { _, _ in
-            applyAppshotPrefill()
-        }
-        .onAppear {
-            applyEditDraftRestore(allowClobber: false)
-            applyAppshotPrefill()
-        }
         .background(
             QuickLookContainer(
-                request: coordinator.imageDraft.quickLookRequest,
-                onClose: { coordinator.imageDraft.dismissQuickLook() }
+                request: coordinator.composerDraft.quickLookRequest,
+                onClose: { coordinator.composerDraft.dismissQuickLook() }
             )
         )
         // Full-window image drop (slice #117): dropping an image anywhere lands it
         // in the composer's pending strip. `isTargeted` only flips for drags whose
         // items conform to `.image`, so non-image drags never dim the window.
-        .onDrop(of: [.image], isTargeted: $imageDraft.isDropTargeted) { providers in
-            coordinator.imageDraft.handleWindowImageDrop(providers)
+        .onDrop(of: [.image], isTargeted: $composerDraft.isDropTargeted) { providers in
+            coordinator.composerDraft.handleWindowImageDrop(providers)
         }
         .overlay {
-            if imageDraft.isDropTargeted {
+            if composerDraft.isDropTargeted {
                 ZStack {
                     Color.black.opacity(0.4)
                     VStack(spacing: 12) {
@@ -135,7 +125,7 @@ struct AgentContentView: View {
                 .transition(.opacity)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: imageDraft.isDropTargeted)
+        .animation(.easeInOut(duration: 0.15), value: composerDraft.isDropTargeted)
         .onChange(of: speechCoordinator.state) { _, newState in
             if case .idle = newState { speakingMessageID = nil }
         }
@@ -189,32 +179,7 @@ struct AgentContentView: View {
     // MARK: - Slash Command Popup
 
     private func selectCommandFromPopup(_ command: SlashCommand) {
-        inputText = coordinator.commandPalette.autocompleteCommand(command)
-    }
-
-    /// Consume the one-shot **Edit & resend** text restore. At edit time
-    /// (`onChange`, this view mounted) the composer is REPLACED outright with the
-    /// edited message's text — even empty, for an image-only message, so a stale
-    /// draft is cleared rather than mixed with the restored images. The `onAppear`
-    /// fallback catches a restore set while this view was off-screen (a bare
-    /// `onChange` would miss that transition and strand the text), but must not
-    /// blank a draft the user has typed since, so it declines an empty restore
-    /// over a non-empty composer.
-    private func applyEditDraftRestore(allowClobber: Bool) {
-        guard let restored = coordinator.editDraftRestore else { return }
-        coordinator.editDraftRestore = nil
-        if !allowClobber, restored.isEmpty, !inputText.isEmpty { return }
-        inputText = restored
-    }
-
-    /// Consume the one-shot Appshot composer prefill. Unlike the edit restore,
-    /// it never replaces typed text — the appshot label is a convenience and
-    /// the user's draft always wins; the prefill is simply dropped then.
-    private func applyAppshotPrefill() {
-        guard let prefill = appshot.composerPrefill else { return }
-        appshot.composerPrefill = nil
-        guard inputText.isEmpty else { return }
-        inputText = prefill
+        coordinator.composerDraft.text = coordinator.commandPalette.autocompleteCommand(command)
     }
 
     // MARK: - Conversation History Popover

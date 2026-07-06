@@ -1,8 +1,8 @@
 //
-//  ImageDraftControllerTests.swift
+//  ComposerDraftControllerTests.swift
 //  tesseractTests
 //
-//  Tests the **Image Draft** leaf directly: pending-image queue state, model
+//  Tests the **Composer Draft** leaf directly: unsent text + pending-image queue,
 //  capability gating, and Quick Look request construction. No `Agent`, command
 //  registry, conversation store, SwiftUI view, or real filesystem is required.
 //
@@ -13,7 +13,7 @@ import Testing
 @testable import Tesseract_Agent
 
 @MainActor
-struct ImageDraftControllerTests {
+struct ComposerDraftControllerTests {
 
     private let root = URL(fileURLWithPath: "/image-draft-previews", isDirectory: true)
 
@@ -27,12 +27,12 @@ struct ImageDraftControllerTests {
 
     @Test
     func attachImagesCapsAtLimitAndDrainClearsTheDraft() {
-        let controller = ImageDraftController(conversationImages: { [] })
+        let controller = ComposerDraftController(conversationImages: { [] })
         let images = (0..<10).map { makeAttachment(byte: UInt8($0)) }
 
         controller.attachImages(images)
 
-        let expected = Array(images.prefix(ImageDraftController.maxPendingImages))
+        let expected = Array(images.prefix(ComposerDraftController.maxPendingImages))
         #expect(controller.pendingImages.map(\.id) == expected.map(\.id))
 
         let drained = controller.drainImages()
@@ -42,7 +42,7 @@ struct ImageDraftControllerTests {
 
     @Test
     func restoreImagesKeepsAttachmentsOnlyWhenImageInputIsAvailable() {
-        let controller = ImageDraftController(conversationImages: { [] })
+        let controller = ComposerDraftController(conversationImages: { [] })
         let images = [makeAttachment(byte: 1), makeAttachment(byte: 2)]
 
         controller.imageInputAvailable = true
@@ -64,7 +64,7 @@ struct ImageDraftControllerTests {
         let cache = ImagePreviewFileCache(root: root, fileSystem: fs)
         let conversation = [makeAttachment(byte: 1), makeAttachment(byte: 2)]
         let pending = [makeAttachment(byte: 3)]
-        let controller = ImageDraftController(
+        let controller = ComposerDraftController(
             conversationImages: { conversation },
             imagePreviewCache: cache
         )
@@ -83,7 +83,7 @@ struct ImageDraftControllerTests {
         let fs = InMemoryImagePreviewFileSystem()
         let cache = ImagePreviewFileCache(root: root, fileSystem: fs)
         let image = makeAttachment(byte: 9)
-        let controller = ImageDraftController(
+        let controller = ComposerDraftController(
             conversationImages: { [image] },
             imagePreviewCache: cache
         )
@@ -98,7 +98,8 @@ struct ImageDraftControllerTests {
         #expect(controller.quickLookRequest == nil)
 
         controller.openQuickLook(clicked: image.id)
-        controller.reset()
+        controller.resetEphemeral()
+        controller.clearDraft()
 
         #expect(controller.quickLookRequest == nil)
         #expect(controller.pendingImages.isEmpty)
@@ -108,7 +109,7 @@ struct ImageDraftControllerTests {
 
     @Test
     func textOnlyDropSurfacesSwitchHintWithoutAcceptingTheDrop() {
-        let controller = ImageDraftController(conversationImages: { [] })
+        let controller = ComposerDraftController(conversationImages: { [] })
 
         let accepted = controller.handleWindowImageDrop([])
 
@@ -121,7 +122,7 @@ struct ImageDraftControllerTests {
 
     @Test
     func gestureOnUnavailableModelSurfacesHintAndAttachesNothing() {
-        let controller = ImageDraftController(conversationImages: { [] })
+        let controller = ComposerDraftController(conversationImages: { [] })
         controller.imageInputAvailable = false
 
         controller.handleGesture(ImageGesturePayload(attachments: [makeAttachment(byte: 1)]))
@@ -133,7 +134,7 @@ struct ImageDraftControllerTests {
 
     @Test
     func gestureAttachesUnderCapWithoutANotice() {
-        let controller = ImageDraftController(conversationImages: { [] })
+        let controller = ComposerDraftController(conversationImages: { [] })
         controller.imageInputAvailable = true
         let images = [makeAttachment(byte: 1), makeAttachment(byte: 2)]
 
@@ -146,20 +147,20 @@ struct ImageDraftControllerTests {
 
     @Test
     func gestureOverCapAttachesWhatFitsAndReportsTheTrim() {
-        let controller = ImageDraftController(conversationImages: { [] })
+        let controller = ComposerDraftController(conversationImages: { [] })
         controller.imageInputAvailable = true
         let images = (0..<10).map { makeAttachment(byte: UInt8($0)) }
 
         controller.handleGesture(ImageGesturePayload(attachments: images))
 
-        #expect(controller.pendingImages.count == ImageDraftController.maxPendingImages)
+        #expect(controller.pendingImages.count == ComposerDraftController.maxPendingImages)
         let notice = controller.attachmentNotice
         #expect(notice?.contains("8 of 10") == true)
     }
 
     @Test
     func gestureWithRejectionsReportsThemInTheNotice() {
-        let controller = ImageDraftController(conversationImages: { [] })
+        let controller = ComposerDraftController(conversationImages: { [] })
         controller.imageInputAvailable = true
 
         controller.handleGesture(
@@ -176,7 +177,7 @@ struct ImageDraftControllerTests {
 
     @Test
     func emptyGesturePayloadIsANoOp() {
-        let controller = ImageDraftController(conversationImages: { [] })
+        let controller = ComposerDraftController(conversationImages: { [] })
         controller.imageInputAvailable = false
 
         controller.handleGesture(ImageGesturePayload())
@@ -188,27 +189,61 @@ struct ImageDraftControllerTests {
     @Test
     func gestureNoticeIsNilWhenEverythingAttached() {
         #expect(
-            ImageDraftController.gestureNotice(requested: 3, attached: 3, rejections: []) == nil)
+            ComposerDraftController.gestureNotice(requested: 3, attached: 3, rejections: []) == nil)
     }
 
     @Test
     func gestureNoticeReportsFullCapWhenNothingFit() {
-        let notice = ImageDraftController.gestureNotice(
+        let notice = ComposerDraftController.gestureNotice(
             requested: 2, attached: 0, rejections: [])
         #expect(notice?.contains("limit reached") == true)
     }
 
     @Test
     func resetClearsGestureFeedbackState() {
-        let controller = ImageDraftController(conversationImages: { [] })
+        let controller = ComposerDraftController(conversationImages: { [] })
         controller.imageInputAvailable = true
         controller.isDropTargeted = true
         controller.handleGesture(ImageGesturePayload(rejections: [.notAnImage]))
         #expect(controller.attachmentNotice != nil)
 
-        controller.reset()
+        controller.resetEphemeral()
 
         #expect(controller.attachmentNotice == nil)
         #expect(controller.isDropTargeted == false)
+    }
+
+    // MARK: - Composer Draft lifetime (text + images as one unit)
+
+    @Test
+    func resetEphemeralPreservesTheDraftButClearsTransientState() {
+        let controller = ComposerDraftController(conversationImages: { [] })
+        controller.imageInputAvailable = true
+        controller.text = "unsent thought"
+        controller.attachImages([makeAttachment(byte: 1)])
+        controller.showImageSwitchHint = true
+        controller.isDropTargeted = true
+
+        controller.resetEphemeral()
+
+        // The unsent draft survives a conversation switch...
+        #expect(controller.text == "unsent thought")
+        #expect(controller.pendingImages.count == 1)
+        // ...while the ephemeral view state is cleared.
+        #expect(controller.showImageSwitchHint == false)
+        #expect(controller.isDropTargeted == false)
+    }
+
+    @Test
+    func clearDraftDiscardsTextAndPendingImagesTogether() {
+        let controller = ComposerDraftController(conversationImages: { [] })
+        controller.imageInputAvailable = true
+        controller.text = "unsent thought"
+        controller.attachImages([makeAttachment(byte: 1), makeAttachment(byte: 2)])
+
+        controller.clearDraft()
+
+        #expect(controller.text == "")
+        #expect(controller.pendingImages.isEmpty)
     }
 }

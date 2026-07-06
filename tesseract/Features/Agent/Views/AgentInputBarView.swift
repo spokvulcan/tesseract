@@ -24,7 +24,7 @@ struct AgentInputBarView: View {
     @Environment(SettingsManager.self) private var settings
 
     // The pending-image queue and the "switch to a vision model" hint live on the
-    // coordinator (`coordinator.imageDraft.pendingImages` / `coordinator.imageDraft.showImageSwitchHint`)
+    // coordinator (`coordinator.composerDraft.pendingImages` / `coordinator.composerDraft.showImageSwitchHint`)
     // so a full-window drop, hosted above the composer, reaches the same queue
     // (slice #117).
 
@@ -45,7 +45,7 @@ struct AgentInputBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if coordinator.imageDraft.showImageSwitchHint {
+            if coordinator.composerDraft.showImageSwitchHint {
                 imageHintBanner
             }
 
@@ -53,12 +53,12 @@ struct AgentInputBarView: View {
                 appshotPermissionBanner
             }
 
-            if let notice = coordinator.imageDraft.attachmentNotice {
+            if let notice = coordinator.composerDraft.attachmentNotice {
                 attachmentNoticeBanner(notice)
             }
 
             ZStack(alignment: .topLeading) {
-                if inputText.isEmpty && coordinator.imageDraft.pendingImages.isEmpty {
+                if inputText.isEmpty && coordinator.composerDraft.pendingImages.isEmpty {
                     Text("Message…")
                         .font(.system(size: chatBodyFontSize))
                         .foregroundColor(.secondary)
@@ -75,10 +75,10 @@ struct AgentInputBarView: View {
                     // the draft controller: availability hint, cap, and
                     // rejection feedback all live there (issue #167).
                     onImageGesture: { payload in
-                        coordinator.imageDraft.handleGesture(payload)
+                        coordinator.composerDraft.handleGesture(payload)
                     },
                     onImageDragTargeted: { targeted in
-                        coordinator.imageDraft.isDropTargeted = targeted
+                        coordinator.composerDraft.isDropTargeted = targeted
                     },
                     isEnabled:
                         !(coordinator.voiceInput.voiceState == .recording
@@ -106,25 +106,25 @@ struct AgentInputBarView: View {
                 .frame(height: min(max(textHeight, 20), 150))
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
-                .padding(.bottom, coordinator.imageDraft.pendingImages.isEmpty ? 12 : 4)
+                .padding(.bottom, coordinator.composerDraft.pendingImages.isEmpty ? 12 : 4)
             }
 
             // Image preview strip
-            if !coordinator.imageDraft.pendingImages.isEmpty {
+            if !coordinator.composerDraft.pendingImages.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(coordinator.imageDraft.pendingImages) { attachment in
+                        ForEach(coordinator.composerDraft.pendingImages) { attachment in
                             ImageThumbnailView(
                                 attachment: attachment,
                                 onRemove: {
-                                    coordinator.imageDraft.pendingImages.removeAll {
+                                    coordinator.composerDraft.pendingImages.removeAll {
                                         $0.id == attachment.id
                                     }
                                 },
                                 onTap: {
-                                    coordinator.imageDraft.openQuickLook(
+                                    coordinator.composerDraft.openQuickLook(
                                         clicked: attachment.id,
-                                        includingPending: coordinator.imageDraft.pendingImages)
+                                        includingPending: coordinator.composerDraft.pendingImages)
                                 }
                             )
                         }
@@ -238,16 +238,16 @@ struct AgentInputBarView: View {
         .onChange(of: imageInputAvailable) { _, available in
             // Mirror availability to the coordinator so the full-window drop
             // (hosted above the composer) can decide attach-vs-hint (#117).
-            coordinator.imageDraft.imageInputAvailable = available
+            coordinator.composerDraft.imageInputAvailable = available
             if available {
                 // Vision input just became available (model switched / opt-in) —
                 // the hint is moot.
-                coordinator.imageDraft.showImageSwitchHint = false
+                coordinator.composerDraft.showImageSwitchHint = false
             } else {
                 // Clear any queued images when image input becomes unavailable
                 // (model switched to text-only, or vision opted out) — the LLM
                 // container would silently drop them.
-                coordinator.imageDraft.pendingImages = []
+                coordinator.composerDraft.pendingImages = []
             }
         }
         .onChange(of: settings.selectedAgentModelID) { _, _ in
@@ -258,7 +258,7 @@ struct AgentInputBarView: View {
         }
         .onAppear {
             refreshVisionCapability()
-            coordinator.imageDraft.imageInputAvailable = imageInputAvailable
+            coordinator.composerDraft.imageInputAvailable = imageInputAvailable
             coordinator.voiceInput.onVoiceTranscription = { text in
                 if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     inputText = text
@@ -350,7 +350,7 @@ struct AgentInputBarView: View {
 
     private var canSend: Bool {
         (!inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !coordinator.imageDraft.pendingImages.isEmpty)
+            || !coordinator.composerDraft.pendingImages.isEmpty)
             && !coordinator.isGenerating
     }
 
@@ -377,7 +377,7 @@ struct AgentInputBarView: View {
 
     private func send() {
         let text = inputText
-        let images = coordinator.imageDraft.drainImages()
+        let images = coordinator.composerDraft.drainImages()
         inputText = ""
         coordinator.sendMessage(text, images: images)
     }
@@ -398,7 +398,7 @@ struct AgentInputBarView: View {
             icon: "eye.slash", message: visionSwitch.message,
             actionTitle: visionSwitch.actionTitle, action: applyVisionSwitch
         ) {
-            coordinator.imageDraft.showImageSwitchHint = false
+            coordinator.composerDraft.showImageSwitchHint = false
         }
     }
 
@@ -422,7 +422,7 @@ struct AgentInputBarView: View {
     /// bytes. Same slot and chrome as the switch-model hint.
     private func attachmentNoticeBanner(_ notice: String) -> some View {
         composerBanner(icon: "exclamationmark.circle", message: notice) {
-            coordinator.imageDraft.attachmentNotice = nil
+            coordinator.composerDraft.attachmentNotice = nil
         }
     }
 
@@ -519,7 +519,7 @@ struct AgentInputBarView: View {
         case .noVisionModel:
             break
         }
-        coordinator.imageDraft.showImageSwitchHint = false
+        coordinator.composerDraft.showImageSwitchHint = false
     }
 
     private func openImagePicker() {
@@ -534,7 +534,7 @@ struct AgentInputBarView: View {
             // the same composer notice (issue #167).
             let payload = PasteboardImageReader.ingest(fileURLs: panel.urls)
             DispatchQueue.main.async {
-                coordinator.imageDraft.handleGesture(payload)
+                coordinator.composerDraft.handleGesture(payload)
             }
         }
     }

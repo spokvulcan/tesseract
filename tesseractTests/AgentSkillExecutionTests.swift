@@ -72,7 +72,7 @@ struct AgentSkillExecutionTests {
             arbiter: InMemoryInferenceArbiter(),
             discoverSkills: { skills }
         )
-        coordinator.imageDraft.imageInputAvailable = true
+        coordinator.composerDraft.imageInputAvailable = true
         return coordinator
     }
 
@@ -102,7 +102,7 @@ struct AgentSkillExecutionTests {
         let coordinator = makeCoordinator(agent: agent, settings: settings)
 
         let attachment = image("appshot")
-        coordinator.imageDraft.pendingImages = [attachment]
+        coordinator.composerDraft.pendingImages = [attachment]
         let pill = SkillPill(
             name: "proofread", label: "Proofread",
             description: "d", filePath: skillURL.path)
@@ -118,7 +118,7 @@ struct AgentSkillExecutionTests {
         #expect(user.content.hasSuffix("my draft text"))
         #expect(user.images.map(\.id) == [attachment.id])
         // The composer's pending strip was drained by the fire.
-        #expect(coordinator.imageDraft.pendingImages.isEmpty)
+        #expect(coordinator.composerDraft.pendingImages.isEmpty)
         // A user-initiated invocation records usage.
         #expect(settings.skillUsageCount(skillName: "proofread") == 1)
     }
@@ -160,22 +160,23 @@ struct AgentSkillExecutionTests {
         #expect(settings.skillUsageCount(skillName: "proofread") == 0)
     }
 
-    @Test func failedSkillLoadRestoresImagesAndCountsNothing() {
+    @Test func failedSkillLoadRestoresDraftAndCountsNothing() {
         let agent = makeScriptedAgent()
         let settings = SettingsManager(store: InMemorySettingsStore())
         let coordinator = makeCoordinator(agent: agent, settings: settings)
         let attachment = image("appshot")
-        coordinator.imageDraft.pendingImages = [attachment]
+        coordinator.composerDraft.pendingImages = [attachment]
         let pill = SkillPill(
             name: "ghost", label: "Ghost", description: "d",
             filePath: "/nonexistent/ghost/SKILL.md")
 
         coordinator.fireSkillPill(pill, composerText: "text")
 
-        // A failed fire surfaces the error, puts the Appshot back in the
-        // pending strip, counts nothing, and sends nothing.
+        // A failed fire surfaces the error and restores the whole draft the row
+        // cleared — text AND the Appshot — counting nothing and sending nothing.
         #expect(coordinator.error?.contains("Failed to load skill") == true)
-        #expect(coordinator.imageDraft.pendingImages.map(\.id) == [attachment.id])
+        #expect(coordinator.composerDraft.text == "text")
+        #expect(coordinator.composerDraft.pendingImages.map(\.id) == [attachment.id])
         #expect(settings.skillUsageCount(skillName: "ghost") == 0)
         #expect(agent.state.messages.isEmpty)
     }
