@@ -14,9 +14,9 @@
 //  Monochrome content layer — system primary/secondary/tertiary styles and
 //  system materials only. No glass here, ever (HIG: glass belongs to the
 //  navigation/control layer). Red appears exclusively as the semantic error
-//  tint. Assistant-text and tool-row actions stay always visible at low
-//  emphasis — hover-revealed controls are unreachable the moment the row
-//  loses hover.
+//  tint. Row actions (copy, speak, edit & resend, Show in Finder) live in
+//  right-click context menus — no visible button chrome, and nothing
+//  hover-revealed (unreachable the moment the row loses hover).
 //
 
 import SwiftUI
@@ -51,8 +51,8 @@ struct CollapseMarker: View {
 // MARK: - Assistant message
 
 /// One committed assistant message: its ordered Content Parts as flat rows.
-/// The copy/speak actions belong to the *text* — they follow the last
-/// non-empty text part, never a tool-call or thinking row.
+/// Copy and Speak live in the right-click context menu — no visible chrome
+/// on the prose.
 struct AssistantMessageView: View {
     let message: AssistantMessage
     var isSpeaking = false
@@ -61,38 +61,33 @@ struct AssistantMessageView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(message.content.enumerated()), id: \.offset) { index, part in
+            ForEach(Array(message.content.enumerated()), id: \.offset) { _, part in
                 AssistantPartView(part: part)
-
-                if index == lastTextPartIndex {
-                    textActions
-                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var lastTextPartIndex: Int? {
-        message.content.lastIndex { part in
-            if case .text(let text) = part { return !text.text.isEmpty }
-            return false
-        }
-    }
-
-    private var textActions: some View {
-        HStack(spacing: 12) {
-            ChatCopyButton(text: message.text)
-
-            if onPlay != nil || isSpeaking {
+        .contextMenu {
+            if !message.text.isEmpty {
                 Button {
-                    isSpeaking ? onStop?() : onPlay?()
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message.text, forType: .string)
                 } label: {
-                    Image(systemName: isSpeaking ? "stop.fill" : "play.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                    Label("Copy", systemImage: "doc.on.doc")
                 }
-                .buttonStyle(.plain)
-                .help(isSpeaking ? "Stop speaking" : "Speak this response")
+
+                if isSpeaking {
+                    Button {
+                        onStop?()
+                    } label: {
+                        Label("Stop Speaking", systemImage: "stop.fill")
+                    }
+                } else if onPlay != nil {
+                    Button {
+                        onPlay?()
+                    } label: {
+                        Label("Speak", systemImage: "speaker.wave.2")
+                    }
+                }
             }
         }
     }
@@ -196,8 +191,8 @@ struct ThinkingRowView: View {
 // MARK: - Tool call row
 
 /// One-line tool row: +/− marker (spinner while running), verb + target,
-/// duration badge — expanding to arguments, result, images. File tools carry
-/// an always-visible Show in Finder control.
+/// duration badge — expanding to arguments, result, images. File tools get
+/// Show in Finder in the right-click context menu.
 struct ToolCallRowView: View {
     let part: ToolCallPart
 
@@ -246,14 +241,12 @@ struct ToolCallRowView: View {
                 .buttonStyle(.plain)
                 .help(isExpanded ? "Hide details" : "Show arguments and result")
 
+            }
+            .contextMenu {
                 if props.filePath != nil {
                     Button(action: openContainingFolder) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
+                        Label("Show in Finder", systemImage: "folder")
                     }
-                    .buttonStyle(.plain)
-                    .help("Show in Finder")
                 }
             }
 
@@ -333,61 +326,43 @@ struct UserMessageRow: View {
 
     @Environment(ChatSession.self) private var session
     @Environment(ComposerDraftController.self) private var composerDraft
-    @State private var isHovering = false
 
     var body: some View {
         #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("UserMessageRow.body")
         #endif
-        VStack(alignment: .trailing, spacing: 4) {
-            VStack(alignment: .leading, spacing: 8) {
-                if !message.images.isEmpty {
-                    HStack(spacing: 8) {
-                        ForEach(message.images) { attachment in
-                            AsyncImageAttachmentView(attachment: attachment)
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            if !message.images.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(message.images) { attachment in
+                        AsyncImageAttachmentView(attachment: attachment)
                     }
                 }
-                if !message.content.isEmpty {
-                    Text(message.content)
-                        .font(.system(size: chatBodyFontSize))
-                        .textSelection(.enabled)
-                }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
-            .contextMenu {
-                Button {
-                    beginEditing()
-                } label: {
-                    Label("Edit & Resend", systemImage: "pencil")
-                }
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(message.content, forType: .string)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
+            if !message.content.isEmpty {
+                Text(message.content)
+                    .font(.system(size: chatBodyFontSize))
+                    .textSelection(.enabled)
             }
-            .help(message.timestamp.formatted(date: .abbreviated, time: .shortened))
-
-            HStack(spacing: 10) {
-                Button(action: beginEditing) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Edit & resend — trim the text or images and send again")
-
-                ChatCopyButton(text: message.content)
-            }
-            .opacity(isHovering ? 1 : 0)
-            .animation(.easeInOut(duration: 0.15), value: isHovering)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.quinary, in: RoundedRectangle(cornerRadius: 12))
+        .contextMenu {
+            Button {
+                beginEditing()
+            } label: {
+                Label("Edit & Resend", systemImage: "pencil")
+            }
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message.content, forType: .string)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+        }
+        .help(message.timestamp.formatted(date: .abbreviated, time: .shortened))
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .onHover { isHovering = $0 }
     }
 
     private func beginEditing() {

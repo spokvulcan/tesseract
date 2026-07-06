@@ -3,7 +3,7 @@
 //  tesseract
 //
 //  Shared pieces of the chat transcript views: type metrics, the readable
-//  column, the copy affordance, and the async image thumbnail (Quick Look).
+//  column, and the async image thumbnail (Quick Look).
 //
 
 import SwiftUI
@@ -21,32 +21,6 @@ enum ChatLayout {
     static let columnMaxWidth: CGFloat = 720
     /// Width of the +/− collapse-marker slot in collapsible rows.
     static let markerWidth: CGFloat = 14
-}
-
-// MARK: - Copy Button
-
-struct ChatCopyButton: View {
-    let text: String
-    @State private var copied = false
-
-    var body: some View {
-        Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-            withAnimation(.easeInOut(duration: 0.15)) { copied = true }
-            Task {
-                try? await Task.sleep(for: .seconds(1.2))
-                withAnimation(.easeInOut(duration: 0.2)) { copied = false }
-            }
-        } label: {
-            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 12))
-                .foregroundStyle(copied ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                .contentTransition(.symbolEffect(.replace))
-        }
-        .buttonStyle(.plain)
-        .help("Copy")
-    }
 }
 
 // MARK: - Async Image Attachment
