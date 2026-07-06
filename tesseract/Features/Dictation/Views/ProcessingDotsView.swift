@@ -5,7 +5,7 @@
 
 import SwiftUI
 
-/// Animated processing indicator with pulsing white dots.
+/// Animated processing indicator with pulsing dots.
 /// Animation flows left-to-right with gentle size variation. `phase` is derived
 /// straight from the driving `time` — mirroring it into `@State` (the old
 /// shape) doubled every 60 fps frame into two body evaluations and added a
@@ -23,8 +23,10 @@ struct ProcessingDotsView: View {
     // Container size to accommodate max scaled dot
     private var containerSize: CGFloat { dotSize * maxScale }
 
-    // Soft off-white color for elegance
-    private let dotColor = Color(white: 0.85)
+    // Follows the effective appearance: the pill's hosting view is forced
+    // light so its clear glass renders bright — fixed white dots would vanish
+    // on it.
+    private let dotColor = Color.primary
 
     var body: some View {
         HStack(spacing: dotSpacing) {

@@ -6,12 +6,11 @@
 import SwiftUI
 
 /// Global overlay HUD that displays recording waveform or processing indicator.
-/// A Liquid Glass pill floating on top of all applications: one `.glassEffect`
-/// capsule whose tint carries the state (recording red, error amber, processing
-/// neutral) with vibrant content on top — a floating control, exactly the layer
-/// the HIG sanctions glass for. The old hand-rolled treatment (material fill,
-/// moving sheen, gradient border, per-style shadow) is fully replaced by the
-/// system material, which also adapts to light/dark, the Clear/Tinted
+/// A Liquid Glass pill floating on top of all applications: one pure (untinted)
+/// `.glassEffect` capsule with vibrant content on top — the state reads through
+/// the content (red bars recording, amber icon on error), never through a glass
+/// tint, which over arbitrary desktops looks like a painted background instead
+/// of glass. The system material adapts to light/dark, the Clear/Tinted
 /// appearance setting, and Reduce Transparency on its own.
 struct GlobalOverlayHUD: View {
     /// Observable state shared with the panel controller (not replaced on updates)
@@ -59,7 +58,7 @@ struct GlobalOverlayHUD: View {
         // AudioBarsView reads the level itself, so the 20 Hz meter invalidates
         // only the bars subtree — the pill chrome and glass never re-diff
         // during steady recording.
-        pillContainer(style: .recording) {
+        pillContainer {
             AudioBarsView(overlayState: overlayState)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -69,7 +68,7 @@ struct GlobalOverlayHUD: View {
     private var processingView: some View {
         // The TimelineView lives *inside* the pill so the glass chrome sits
         // outside the 60 fps closure — only the dots row re-evaluates per frame.
-        pillContainer(style: .processing) {
+        pillContainer {
             if reduceMotion {
                 processingContent(time: nil)
             } else {
@@ -95,10 +94,11 @@ struct GlobalOverlayHUD: View {
     }
 
     private var errorView: some View {
-        pillContainer(style: .error) {
+        pillContainer {
             HStack(alignment: .center, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.orange)
                 Text(errorMessage)
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(2)
@@ -112,7 +112,6 @@ struct GlobalOverlayHUD: View {
     }
 
     private func pillContainer<Content: View>(
-        style: PillStyle,
         @ViewBuilder content: () -> Content
     ) -> some View {
         // Size from the shared PillMetrics keyed on the live dictation state, so the
@@ -121,29 +120,19 @@ struct GlobalOverlayHUD: View {
         // states, so the state→size lookup is always one of the three pill sizes.
         let size = PillMetrics.size(for: overlayState.dictationState)
 
+        // Pure, untinted `.clear` glass — the material *is* the pill; state
+        // color lives in the content. Chosen on side-by-side hardware
+        // evidence against Control Center: `.regular` composites a smoky
+        // near-opaque scrim in dark appearance, and `.clear` alone is still
+        // dark — the bright system look needs the *light appearance* the
+        // panel forces on this view's hosting view (see DependencyContainer).
+        // The glass still samples the actual backdrop, so it darkens
+        // naturally over dark windows. The trade-off is HIG-documented:
+        // `.clear` guarantees less text contrast over arbitrary backdrops,
+        // acceptable for a transient HUD.
         return content()
             .frame(width: size.width, height: size.height)
-            .glassEffect(style.glass, in: .capsule)
-    }
-
-    private enum PillStyle {
-        case recording
-        case processing
-        case error
-
-        /// Semantic tint only (HIG rule): red = the microphone is live, amber =
-        /// needs attention; processing stays neutral. The regular variant keeps
-        /// the content legible over whatever app the pill floats above.
-        var glass: Glass {
-            switch self {
-            case .recording:
-                return .regular.tint(.red.opacity(0.16))
-            case .processing:
-                return .regular
-            case .error:
-                return .regular.tint(.orange.opacity(0.16))
-            }
-        }
+            .glassEffect(.clear, in: .capsule)
     }
 
     private var errorMessage: String {

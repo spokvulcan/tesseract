@@ -198,10 +198,15 @@ final class DependencyContainer: ObservableObject {
     }()
 
     // Overlays — two configured instances of the one OverlayPanel module.
+    // The pill's glass is forced light: in dark appearance both public glass
+    // variants composite a smoky near-opaque fill (verified side by side with
+    // Control Center on hardware), while light-appearance `.clear` glass
+    // renders the bright, backdrop-sampling system look. The glass still
+    // samples what's behind, so it darkens naturally over dark windows.
     lazy var pillOverlay = OverlayPanel(
         state: OverlayState(),
         placement: .pill,
-        hasShadow: true,
+        contentAppearance: NSAppearance(named: .aqua),
         content: { GlobalOverlayHUD(overlayState: $0) }
     )
     lazy var borderOverlay = OverlayPanel(

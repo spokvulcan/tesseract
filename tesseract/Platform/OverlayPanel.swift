@@ -29,7 +29,7 @@ final class OverlayPanel<Content: View> {
     let state: OverlayState
 
     private let placement: OverlayPlacement
-    private let hasShadow: Bool
+    private let contentAppearance: NSAppearance?
     private let content: @MainActor (OverlayState) -> Content
 
     private var panel: NSPanel?
@@ -43,21 +43,20 @@ final class OverlayPanel<Content: View> {
     ///   - state: the `OverlayState` the caller owns; seed any initial pure view
     ///     data (e.g. the border's `glowTheme`) on it *before* calling ``setup()``.
     ///   - placement: where the panel sits and whether it animates its reposition.
-    ///   - hasShadow: whether the panel casts a window shadow matching the
-    ///     content's silhouette. On for the Liquid Glass pill (the system draws
-    ///     the shadow from the capsule's alpha, which a SwiftUI `.shadow` behind
-    ///     translucent glass can't do without muddying it); off for the
-    ///     full-screen border.
+    ///   - contentAppearance: forced `NSAppearance` for the hosted content, or
+    ///     `nil` to follow the system. Glass materials read the AppKit
+    ///     appearance (not the SwiftUI color scheme), so this is the seam that
+    ///     controls how the pill's Liquid Glass renders.
     ///   - content: builds the hosted SwiftUI view from the state.
     init(
         state: OverlayState,
         placement: OverlayPlacement,
-        hasShadow: Bool = false,
+        contentAppearance: NSAppearance? = nil,
         content: @escaping @MainActor (OverlayState) -> Content
     ) {
         self.state = state
         self.placement = placement
-        self.hasShadow = hasShadow
+        self.contentAppearance = contentAppearance
         self.content = content
     }
 
@@ -134,16 +133,23 @@ final class OverlayPanel<Content: View> {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.isReleasedWhenClosed = false
 
-        // Non-interactive (click-through), transparent.
+        // Non-interactive (click-through), transparent. No window shadow: the
+        // system derives it from the content's alpha silhouette and is known
+        // to leave it stale across `setFrame` resizes on transparent windows —
+        // behind a translucent glass capsule that reads as a second, offset
+        // pill outline. Depth, if wanted, belongs inside the hosted content.
         panel.ignoresMouseEvents = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = hasShadow
+        panel.hasShadow = false
         panel.hidesOnDeactivate = false
 
         // Hosting view reads `state`, which the caller has already seeded. Created
         // once and never replaced, so SwiftUI animation/`@State` survives updates.
         let hostingView = NSHostingView(rootView: content(state))
+        if let contentAppearance {
+            hostingView.appearance = contentAppearance
+        }
         hostingView.frame = panel.contentView?.bounds ?? .zero
         hostingView.autoresizingMask = [.width, .height]
         panel.contentView?.addSubview(hostingView)
