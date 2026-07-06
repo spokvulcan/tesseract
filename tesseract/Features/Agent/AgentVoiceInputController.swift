@@ -62,6 +62,13 @@ final class AgentVoiceInputController {
     // MARK: - Capture
 
     func start() {
+        // An error is feedback, never a gate (same rule as dictation's hotkey):
+        // starting again while one shows is the retry.
+        if case .error = voiceState {
+            voiceErrorResetTask?.cancel()
+            voiceErrorResetTask = nil
+            voiceState = .idle
+        }
         guard voiceState == .idle else { return }
         guard let session else {
             setVoiceError("Voice input not available")

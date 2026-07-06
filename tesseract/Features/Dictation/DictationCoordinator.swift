@@ -30,6 +30,13 @@ final class DictationCoordinator {
     /// capture lifecycle.
     private var recordingTask: Task<Void, Never>?
 
+    /// A hotkey press that arrived while a previous capture was still
+    /// `.processing`. Push-to-talk must never swallow a press: the intent is
+    /// honored the moment processing resolves — unless the key was released
+    /// first, which abandons it (a tap fully inside the processing window has
+    /// no audio to offer).
+    private var startPending = false
+
     init(
         audioCapture: any AudioCapturing,
         transcriptionEngine: any Transcribing,
@@ -52,11 +59,24 @@ final class DictationCoordinator {
     // MARK: - Public API
 
     func onHotkeyDown() {
-        guard state == .idle else { return }
-        startRecording()
+        switch state {
+        case .idle:
+            startRecording()
+        case .error:
+            // An error pill is feedback, never a gate: the press *is* the retry,
+            // so recording starts immediately instead of waiting out the
+            // error auto-reset.
+            state = .idle
+            startRecording()
+        case .processing:
+            startPending = true
+        case .recording, .listening:
+            break
+        }
     }
 
     func onHotkeyUp() {
+        startPending = false
         guard state == .recording || state == .listening else { return }
         stopRecordingAndProcess()
     }
@@ -78,6 +98,7 @@ final class DictationCoordinator {
     }
 
     func cancel() {
+        startPending = false
         recordingTask?.cancel()
         recordingTask = nil
         session.cancel()
@@ -161,14 +182,17 @@ final class DictationCoordinator {
                     playSound(.success)
                 }
                 state = .idle
+                drainPendingStart()
             case .empty:
                 handleError(.noSpeechDetected)
+                drainPendingStart()
             case .failed(let error):
                 if let dictationError = error as? DictationError {
                     handleError(dictationError)
                 } else {
                     handleError(.transcriptionFailed(error.localizedDescription))
                 }
+                drainPendingStart()
             case .cancelled:
                 state = .idle
             case .superseded:
@@ -177,6 +201,18 @@ final class DictationCoordinator {
                 break
             }
         }
+    }
+
+    /// Honors a hotkey press that arrived mid-`.processing`: the key is still
+    /// held (release clears the flag), so recording starts now. An error the
+    /// resolution just raised does not gate — same rule as a press on an idle
+    /// error pill, and the new recording replaces it.
+    private func drainPendingStart() {
+        guard startPending else { return }
+        startPending = false
+        if case .error = state { state = .idle }
+        guard state == .idle else { return }
+        startRecording()
     }
 
     private func handleError(_ error: DictationError) {

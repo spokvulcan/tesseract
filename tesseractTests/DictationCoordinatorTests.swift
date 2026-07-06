@@ -331,4 +331,118 @@ struct DictationCoordinatorTests {
         #expect(!capture.isCapturing)
         #expect(capture.stopCount == 1)
     }
+
+    // MARK: - Hotkey re-engagement (an error pill is feedback, never a gate)
+
+    /// A too-short tap used to park the hotkey behind the 3 s error auto-reset;
+    /// the next press must start recording immediately instead.
+    @Test
+    func hotkeyDownOnAnErrorPillRetriesImmediately() async throws {
+        // Below the 0.5s minimum.
+        let audio = AudioData(samples: [0.1], sampleRate: 16_000, duration: 0.1)
+        let capture = FakeAudioCapture(cannedAudio: audio)
+        let coordinator = DictationCoordinator(
+            audioCapture: capture,
+            transcriptionEngine: ControllableTranscribing(),
+            textInjector: FakeTextInjector(),
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore())
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        #expect(coordinator.state == .error(DictationError.recordingTooShort.localizedDescription))
+
+        coordinator.onHotkeyDown()
+        #expect(coordinator.state == .recording)
+        #expect(capture.startCount == 2)
+        #expect(coordinator.lastError == nil)
+    }
+
+    /// A press that lands while a previous capture is still transcribing is not
+    /// swallowed: if the key is still held when processing resolves, recording
+    /// starts right then — and the finished dictation still commits.
+    @Test
+    func hotkeyHeldThroughProcessingStartsRecordingWhenItResolves() async throws {
+        let engine = ControllableTranscribing()
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        let injector = FakeTextInjector()
+        let coordinator = DictationCoordinator(
+            audioCapture: capture,
+            transcriptionEngine: engine,
+            textInjector: injector,
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore())
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        #expect(coordinator.state == .processing)
+        while !engine.isAwaiting { await Task.yield() }
+
+        coordinator.onHotkeyDown()  // lands mid-processing, key stays held
+        #expect(coordinator.state == .processing)
+
+        engine.completeWithSuccess()
+        try await waitUntil { coordinator.state == .recording }
+        #expect(capture.startCount == 2)
+        #expect(injector.injected.count == 1)  // the finished dictation still committed
+    }
+
+    /// Releasing the key while still `.processing` abandons the pending start —
+    /// a tap wholly inside the processing window has no audio to offer.
+    @Test
+    func hotkeyReleasedDuringProcessingAbandonsThePendingStart() async throws {
+        let engine = ControllableTranscribing()
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        let coordinator = DictationCoordinator(
+            audioCapture: capture,
+            transcriptionEngine: engine,
+            textInjector: FakeTextInjector(),
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore())
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        while !engine.isAwaiting { await Task.yield() }
+
+        coordinator.onHotkeyDown()  // press mid-processing…
+        coordinator.onHotkeyUp()  // …released before it resolves
+
+        engine.completeWithSuccess()
+        try await waitUntil { coordinator.state == .idle }
+        #expect(capture.startCount == 1)
+    }
+
+    /// "No speech detected" resolving under a held key: the error does not gate
+    /// — recording starts immediately, because the press *is* the retry.
+    @Test
+    func noSpeechResolutionWithKeyHeldStartsRecordingImmediately() async throws {
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: "   ", segments: [], language: "en", processingTime: 0)
+        )
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        let coordinator = DictationCoordinator(
+            audioCapture: capture,
+            transcriptionEngine: engine,
+            textInjector: FakeTextInjector(),
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore())
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        while !engine.isAwaiting { await Task.yield() }
+
+        coordinator.onHotkeyDown()  // held while "no speech" resolves
+
+        engine.completeWithSuccess()
+        try await waitUntil { coordinator.state == .recording }
+        #expect(capture.startCount == 2)
+    }
 }
