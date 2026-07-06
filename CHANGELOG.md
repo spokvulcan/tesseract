@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.3.0](https://github.com/spokvulcan/tesseract/compare/v1.2.0...v1.3.0) (2026-07-06)
+
+
+### Features
+
+* **agent:** chat rewrite — pi-ai parts model, Live Part rendering, flat document UI ([#184](https://github.com/spokvulcan/tesseract/issues/184)) ([1cf84cc](https://github.com/spokvulcan/tesseract/commit/1cf84cc3a2e480d08612619d1ee78f1714c76bb4))
+* **agent:** Skill Pills — built-in essentials skills as instant-action pills above the composer ([#177](https://github.com/spokvulcan/tesseract/issues/177)) ([e25745e](https://github.com/spokvulcan/tesseract/commit/e25745ebad727ec4adf99bc98c467876e883337c))
+* **dictation:** instant re-record, kept capture engine, Liquid Glass pill ([#180](https://github.com/spokvulcan/tesseract/issues/180)) ([3c1720c](https://github.com/spokvulcan/tesseract/commit/3c1720c8c20a443669603be44c8ee42599348d73))
+* **dictation:** Voice Processing toggle, Capture Dump, anti-aliased resampler (PRD [#175](https://github.com/spokvulcan/tesseract/issues/175)) ([#178](https://github.com/spokvulcan/tesseract/issues/178)) ([b390ec9](https://github.com/spokvulcan/tesseract/commit/b390ec999836be96634613206f71a02dd8514bf0))
+* **server:** Batch Engine — concurrent completion lanes over one GPU lease ([#176](https://github.com/spokvulcan/tesseract/issues/176)) ([8fef7c0](https://github.com/spokvulcan/tesseract/commit/8fef7c0fb0ca9368aa86eafe382cf3768aca0352))
+
+
+### Bug Fixes
+
+* **agent:** preserve the composer draft across new chat and thread switches ([#182](https://github.com/spokvulcan/tesseract/issues/182)) ([3c455d5](https://github.com/spokvulcan/tesseract/commit/3c455d526d094e12c6c1ae7ef9d9c134b5e50a60))
+* **dictation:** arm Voice Processing per capture — idle no longer ducks system audio ([c687938](https://github.com/spokvulcan/tesseract/commit/c687938c983e44a3eccb7137a0c5226c33aa8f55))
+* **dictation:** pill back to regular glass following the system appearance ([5763887](https://github.com/spokvulcan/tesseract/commit/5763887822148882a28bdd8536ebc88504d87507))
+* **dictation:** pure clear Liquid Glass pill under forced light appearance ([6773e99](https://github.com/spokvulcan/tesseract/commit/6773e99829c5743a1afcf90eb94ebc6c7b622adf))
+
+
+### Reverts
+
+* feat(server): Batch Engine — concurrent completion lanes over one GPU lease ([#176](https://github.com/spokvulcan/tesseract/issues/176)) ([72d61ed](https://github.com/spokvulcan/tesseract/commit/72d61ed33e7f0133c415ef59c986e4a9b1e6472c))
+
 ## [1.2.0](https://github.com/spokvulcan/tesseract/compare/v1.1.0...v1.2.0) (2026-07-05)
 
 
