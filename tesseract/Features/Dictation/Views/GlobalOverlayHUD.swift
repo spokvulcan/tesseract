@@ -120,19 +120,16 @@ struct GlobalOverlayHUD: View {
         // states, so the state→size lookup is always one of the three pill sizes.
         let size = PillMetrics.size(for: overlayState.dictationState)
 
-        // Pure, untinted `.clear` glass — the material *is* the pill; state
-        // color lives in the content. Chosen on side-by-side hardware
-        // evidence against Control Center: `.regular` composites a smoky
-        // near-opaque scrim in dark appearance, and `.clear` alone is still
-        // dark — the bright system look needs the *light appearance* the
-        // panel forces on this view's hosting view (see DependencyContainer).
-        // The glass still samples the actual backdrop, so it darkens
-        // naturally over dark windows. The trade-off is HIG-documented:
-        // `.clear` guarantees less text contrast over arbitrary backdrops,
-        // acceptable for a transient HUD.
+        // Pure, untinted `.regular` glass — the material *is* the pill; state
+        // color lives in the content (owner-selected over the `.clear` +
+        // forced-light variant after on-hardware comparison). `.regular`
+        // keeps the HIG legibility guarantees over arbitrary backdrops; in
+        // dark appearance it renders as smoked glass rather than Control
+        // Center's bright material — that material is a private variant no
+        // third party can select.
         return content()
             .frame(width: size.width, height: size.height)
-            .glassEffect(.clear, in: .capsule)
+            .glassEffect(.regular, in: .capsule)
     }
 
     private var errorMessage: String {
