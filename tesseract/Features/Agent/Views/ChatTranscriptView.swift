@@ -42,7 +42,7 @@ struct ChatTranscriptView: View {
             // scrollTo mis-measure — FB threads 741406/761014), and swapping
             // container types mid-conversation resets the scroll position.
             // Rows are cheap value views; eagerness buys correctness.
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: ChatLayout.rowSpacing) {
                 ForEach(session.items) { item in
                     ChatItemRow(
                         item: item,
@@ -152,6 +152,11 @@ private struct ChatItemRow: View {
                 UserMessageRow(message: message)
             }
 
+        case .assistant(let message) where message.content.allSatisfy(\.isBlankRow):
+            // All parts blank — render nothing rather than a zero-height
+            // stack that would still consume the Row Rhythm twice.
+            EmptyView()
+
         case .assistant(let message):
             AssistantMessageView(
                 message: message,
@@ -185,12 +190,12 @@ private struct LiveMessageSection: View {
 
     var body: some View {
         if let message = session.liveMessage {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: ChatLayout.rowSpacing) {
                 ForEach(Array(message.content.enumerated()), id: \.offset) { index, part in
                     if let live = session.livePart, live.partIndex == index {
                         LivePartView(live: live)
-                    } else {
-                        AssistantPartView(part: part)
+                    } else if !part.isBlankRow {
+                        AssistantPartView(part: part, messageID: message.id, partIndex: index)
                     }
                 }
             }

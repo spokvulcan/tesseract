@@ -21,6 +21,28 @@ enum ChatLayout {
     static let columnMaxWidth: CGFloat = 720
     /// Width of the +/− collapse-marker slot in collapsible rows.
     static let markerWidth: CGFloat = 14
+    /// The Row Rhythm: the one vertical spacing between transcript rows —
+    /// between-item and within-message alike, no clustering exceptions. Every
+    /// row stack must use this constant so the rhythm cannot drift.
+    static let rowSpacing: CGFloat = 16
+    /// Durations below this render no badge — "0.0s" reads as broken, and a
+    /// near-instant operation has no cost worth flagging.
+    static let minBadgeDuration: Duration = .milliseconds(100)
+}
+
+// MARK: - Blank parts
+
+extension ContentPart {
+    /// Whether this part would render as an empty row: a whitespace-only text
+    /// part — the model's cosmetic "\n\n" between tool calls. The stored
+    /// message keeps them (state mirrors the event stream verbatim); the
+    /// document views skip them so blank rows don't double the Row Rhythm.
+    var isBlankRow: Bool {
+        if case .text(let part) = self {
+            return part.text.allSatisfy(\.isWhitespace)
+        }
+        return false
+    }
 }
 
 // MARK: - Async Image Attachment

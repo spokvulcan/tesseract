@@ -86,6 +86,20 @@ final class ChatSession {
     private var toolDurations: [String: Duration] = [:]
     @ObservationIgnored private var toolStartInstants: [String: ContinuousClock.Instant] = [:]
 
+    /// A thinking part's identity: parts carry no IDs, so message id + content
+    /// index — stable across the `turnEnd` resync — key its duration.
+    struct ThinkingPartKey: Hashable {
+        let messageID: UUID
+        let partIndex: Int
+    }
+
+    /// Wall-clock streaming time per finished thinking part — shown in the
+    /// expanded thought row. Session-scoped like `toolDurations` (gone on
+    /// conversation reload). Start instants are recorded on `thinkingStart`.
+    private var thinkingDurations: [ThinkingPartKey: Duration] = [:]
+    @ObservationIgnored private var thinkingStartInstants:
+        [ThinkingPartKey: ContinuousClock.Instant] = [:]
+
     /// Throttle for the Live Part's markdown republish (~10 Hz in production;
     /// `.zero` in tests for determinism).
     @ObservationIgnored private let liveThrottle: Duration
@@ -195,6 +209,7 @@ final class ChatSession {
             clearLiveState()
             runPhase = .idle
             pendingToolCalls.removeAll()
+            thinkingStartInstants.removeAll()
             autoSpeakIfEnabled()
 
         case .generationError(let message):
@@ -268,6 +283,12 @@ final class ChatSession {
         toolDurations[toolCallID]
     }
 
+    /// Streaming duration for a committed thinking part, if measured this
+    /// session.
+    func thinkingDuration(messageID: UUID, partIndex: Int) -> Duration? {
+        thinkingDurations[ThinkingPartKey(messageID: messageID, partIndex: partIndex)]
+    }
+
     // MARK: - The assistant stream fold
 
     private func fold(_ event: AssistantMessageEvent) {
@@ -284,6 +305,8 @@ final class ChatSession {
 
         case .thinkingStart(let index, let partial):
             liveMessage = partial
+            thinkingStartInstants[
+                ThinkingPartKey(messageID: partial.id, partIndex: index)] = .now
             livePart = LivePart(
                 messageID: partial.id, partIndex: index, kind: .thinking,
                 initial: textOfPart(at: index, in: partial), throttle: liveThrottle
@@ -299,10 +322,17 @@ final class ChatSession {
                 rebuildLivePart(at: index, from: partial)
             }
 
-        case .textEnd(_, _, let partial),
-            .thinkingEnd(_, _, let partial):
+        case .textEnd(_, _, let partial):
             liveMessage = partial
             livePart = nil
+
+        case .thinkingEnd(let index, _, let partial):
+            liveMessage = partial
+            livePart = nil
+            let key = ThinkingPartKey(messageID: partial.id, partIndex: index)
+            if let start = thinkingStartInstants.removeValue(forKey: key) {
+                thinkingDurations[key] = .now - start
+            }
 
         case .toolcallStart(_, let partial),
             .toolcallEnd(_, _, let partial):
@@ -367,6 +397,14 @@ final class ChatSession {
         case .text: kind = .text
         case .thinking: kind = .thinking
         case .toolCall: return
+        }
+        if kind == .thinking {
+            // Missed-start rebuild: begin timing now (undercounts, but the
+            // part still gets a duration instead of none).
+            let key = ThinkingPartKey(messageID: partial.id, partIndex: index)
+            if thinkingStartInstants[key] == nil {
+                thinkingStartInstants[key] = .now
+            }
         }
         livePart = LivePart(
             messageID: partial.id, partIndex: index, kind: kind,

@@ -60,9 +60,11 @@ struct AssistantMessageView: View {
     var onStop: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(message.content.enumerated()), id: \.offset) { _, part in
-                AssistantPartView(part: part)
+        VStack(alignment: .leading, spacing: ChatLayout.rowSpacing) {
+            ForEach(Array(message.content.enumerated()), id: \.offset) { index, part in
+                if !part.isBlankRow {
+                    AssistantPartView(part: part, messageID: message.id, partIndex: index)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -93,16 +95,20 @@ struct AssistantMessageView: View {
     }
 }
 
-/// Dispatch one Content Part to its row view.
+/// Dispatch one Content Part to its row view. `messageID` + `partIndex` are
+/// the part's identity (parts carry no IDs of their own) — the thinking row
+/// uses them to look up its session-scoped duration.
 struct AssistantPartView: View {
     let part: ContentPart
+    let messageID: UUID
+    let partIndex: Int
 
     var body: some View {
         switch part {
         case .text(let text):
             AssistantProseView(text: text.text)
         case .thinking(let thinking):
-            ThinkingRowView(text: thinking.thinking)
+            ThinkingRowView(text: thinking.thinking, messageID: messageID, partIndex: partIndex)
         case .toolCall(let call):
             ToolCallRowView(part: call)
         }
@@ -121,7 +127,7 @@ struct AssistantProseView: View {
         #endif
         if useMarkdown {
             StructuredText(markdown: text)
-                .textual.structuredTextStyle(.gitHub)
+                .textual.structuredTextStyle(ChatMarkdownStyle())
                 .textual.codeBlockStyle(CopyableCodeBlockStyle())
                 .textual.textSelection(.enabled)
                 .font(.system(size: chatBodyFontSize))
@@ -138,9 +144,14 @@ struct AssistantProseView: View {
 // MARK: - Thinking row
 
 /// One-line collapsible thinking row: "+ Thought" with an inline single-line
-/// preview; expands ("− Thought") to the full reasoning text.
+/// preview; expands ("− Thought") to the full reasoning text, with the
+/// session-measured duration taking the slot the preview vacates.
 struct ThinkingRowView: View {
     let text: String
+    let messageID: UUID
+    let partIndex: Int
+
+    @Environment(ChatSession.self) private var session
     @State private var isExpanded = false
 
     var body: some View {
@@ -156,7 +167,17 @@ struct ThinkingRowView: View {
                     Text("Thought")
                         .font(.system(size: chatBodyFontSize, weight: .medium))
                         .foregroundStyle(.secondary)
-                    if !isExpanded {
+                    if isExpanded {
+                        if let duration = session.thinkingDuration(
+                            messageID: messageID, partIndex: partIndex),
+                            duration >= ChatLayout.minBadgeDuration
+                        {
+                            Text(duration.chatBadge)
+                                .font(.system(size: chatBodyFontSize))
+                                .foregroundStyle(.tertiary)
+                                .monospacedDigit()
+                        }
+                    } else {
                         Text(previewLine)
                             .font(.system(size: chatBodyFontSize))
                             .foregroundStyle(.tertiary)
@@ -225,10 +246,17 @@ struct ToolCallRowView: View {
                         Text(props.title)
                             .font(.system(size: chatBodyFontSize))
                             .foregroundStyle(
-                                isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary)
+                                isError
+                                    ? AnyShapeStyle(DynamicColor.chatError)
+                                    : AnyShapeStyle(.secondary)
                             )
                             .lineLimit(1)
-                        if let duration = session.toolDuration(for: part.id) {
+                            // Middle truncation keeps both the verb and the
+                            // filename visible on long workspace paths.
+                            .truncationMode(.middle)
+                        if let duration = session.toolDuration(for: part.id),
+                            duration >= ChatLayout.minBadgeDuration
+                        {
                             Text(duration.chatBadge)
                                 .font(.system(size: chatBodyFontSize))
                                 .foregroundStyle(.tertiary)
@@ -295,7 +323,11 @@ struct ToolCallRowView: View {
 
             Text(text)
                 .font(.system(size: chatBodyFontSize, design: .monospaced))
-                .foregroundStyle(isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                .foregroundStyle(
+                    isError
+                        ? AnyShapeStyle(DynamicColor.chatError)
+                        : AnyShapeStyle(.secondary)
+                )
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(8)

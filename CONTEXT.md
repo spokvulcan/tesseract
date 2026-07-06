@@ -684,6 +684,34 @@ Leaf controllers (composer draft, voice, pills) live outside it, owned by views.
 _Avoid_: coordinator, dispatcher, view model; session (unqualified); Conversation
 (the persisted document a Chat Session folds live).
 
+**Workspace**:
+The user-facing name of the agent tool sandbox root — the directory file tools
+resolve paths against. Tool rows render their targets workspace-relative and say
+"workspace" for the root itself.
+_Avoid_: sandbox (the enforcement mechanism, not the place); root / home
+directory; "." as a user-facing label.
+
+**Tool Row Title**:
+The verb + target grammar of a tool-call row — an imperative verb (Read, Write,
+Edit, List, Load skill, Search, Fetch) plus a **Workspace**-relative target;
+unknown tools fall back to the raw tool name.
+_Avoid_: progressive verbs ("Reading…" — implies still running, which the
+spinner owns); bare tool names for known tools; filename-only targets.
+
+**Row Rhythm**:
+The single vertical spacing between every pair of transcript rows — between
+messages and within them alike, one shared constant, deliberately without
+clustering exceptions (a run of consecutive tool rows is *not* grouped tighter).
+_Avoid_: separate item-spacing / part-spacing knobs; section gap.
+
+**Prose Accent Palette**:
+The named color roles applied to assistant markdown syntax — heading, strong,
+emphasis, inline code, link, list marker — so document structure reads at a
+glance; adapted from OpenCode's default theme, with dark and light variants.
+The one sanctioned exception to the otherwise monochrome chat content layer.
+_Avoid_: coloring body prose or user messages; per-view ad-hoc colors outside
+the named roles.
+
 ### Agent run lifecycle
 
 **Agent Run**:

@@ -106,11 +106,16 @@ struct ChatSessionTests {
         #expect(session.livePart?.kind == .thinking)
         drive(session, &builder, .thinking("pondering"))
         #expect(session.livePart?.displayText == "pondering")
+        // No duration while the part is still streaming.
+        #expect(session.thinkingDuration(messageID: builder.messageID, partIndex: 0) == nil)
 
         drive(session, &builder, .thinkEnd)
         // Part committed into the live message; box dropped.
         #expect(session.livePart == nil)
         #expect(session.liveMessage?.thinking == "pondering")
+        // Duration measured between thinkingStart and thinkingEnd, keyed by
+        // message id + part index.
+        #expect(session.thinkingDuration(messageID: builder.messageID, partIndex: 0) != nil)
 
         drive(session, &builder, .text("Answer"))
         #expect(session.livePart?.kind == .text)

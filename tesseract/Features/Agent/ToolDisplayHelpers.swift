@@ -7,7 +7,6 @@ import os
 /// and compared.
 nonisolated struct ToolDisplayProps: Sendable, Equatable {
     let title: String
-    let icon: String
     let argsFormatted: String
     let filePath: String?
 }
@@ -17,60 +16,72 @@ nonisolated struct ToolDisplayProps: Sendable, Equatable {
 /// without inverting layering up into `Views`.
 nonisolated enum ToolDisplayHelpers {
 
-    /// Maps a tool name to an SF Symbol icon name.
-    static func iconForTool(_ name: String) -> String {
-        switch name.lowercased() {
-        case let n where n.contains("read"): return "doc.text"
-        case let n where n.contains("write"): return "square.and.pencil"
-        case let n where n.contains("edit"): return "pencil.line"
-        case "ls": return "folder"
-        case let n where n.contains("list"): return "folder"
-        case let n where n.contains("memory"): return "brain"
-        case let n where n.contains("task") || n.contains("goal"): return "checklist"
-        case let n where n.contains("search"): return "magnifyingglass"
-        default: return "wrench.adjustable"
-        }
-    }
-
-    /// Human-readable title for a tool call, extracting filenames from arguments.
+    /// The Tool Row Title: imperative verb + workspace-relative target,
+    /// matched against the actual tool registry (`read`, `write`, `edit`,
+    /// `ls`, `use_skill`, `web_search`, `web_fetch`). Imperative because a
+    /// committed row describes a completed act — the spinner owns "running".
+    /// Unknown tools fall back to the raw name.
     static func titleForTool(_ name: String, arguments: [String: JSONValue]?) -> String {
-        guard let args = arguments else { return name }
-
         switch name.lowercased() {
-        case "read_file":
-            if case .string(let path)? = args["path"] {
-                return "Reading \((path as NSString).lastPathComponent)"
+        case "read":
+            return fileTitle("Read", arguments)
+        case "write":
+            return fileTitle("Write", arguments)
+        case "edit":
+            return fileTitle("Edit", arguments)
+        case "ls":
+            guard let path = arguments?.string(for: "path"), !path.isEmpty else {
+                return "List workspace"
             }
-            return "Reading file"
-        case "write_file":
-            if case .string(let path)? = args["path"] {
-                return "Writing to \((path as NSString).lastPathComponent)"
+            let display = workspaceRelative(path)
+            return display == "." ? "List workspace" : "List \(display)"
+        case "use_skill":
+            if let skill = arguments?.string(for: "name"), !skill.isEmpty {
+                return "Load skill \(skill)"
             }
-            return "Writing file"
-        case "edit_file":
-            if case .string(let path)? = args["path"] {
-                return "Editing \((path as NSString).lastPathComponent)"
+            return "Load skill"
+        case "web_search":
+            if let query = arguments?.string(for: "query"), !query.isEmpty {
+                return "Search \u{201C}\(query)\u{201D}"
             }
-            return "Editing file"
-        case "ls", "list", "list_files", "list_directory":
-            if case .string(let path)? = args["path"] {
-                return "Listing files in \((path as NSString).lastPathComponent)"
+            return "Search the web"
+        case "web_fetch":
+            if let url = arguments?.string(for: "url"), !url.isEmpty {
+                return "Fetch \(displayURL(url))"
             }
-            return "Listing files"
-        case "search_files":
-            if case .string(let query)? = args["query"] {
-                return "Searching for \"\(query)\""
-            }
-            return "Searching files"
-        case "memory_save":
-            return "Saving memory"
-        case "task_create":
-            return "Creating task"
-        case "task_complete":
-            return "Completing task"
+            return "Fetch URL"
         default:
             return name
         }
+    }
+
+    /// `"Read notes/todo.md"` — bare verb while arguments are still streaming.
+    private static func fileTitle(_ verb: String, _ arguments: [String: JSONValue]?) -> String {
+        guard let path = arguments?.string(for: "path"), !path.isEmpty else { return verb }
+        return "\(verb) \(workspaceRelative(path))"
+    }
+
+    /// Render a tool path relative to the Workspace (the sandbox root):
+    /// absolute paths inside it are stripped to their relative form; relative
+    /// paths lose any leading "./".
+    private static func workspaceRelative(_ path: String) -> String {
+        if path.hasPrefix("/") {
+            return PathSandbox(root: PathSandbox.defaultRoot)
+                .displayPath(URL(fileURLWithPath: path))
+        }
+        var trimmed = path
+        while trimmed.hasPrefix("./") { trimmed.removeFirst(2) }
+        return trimmed.isEmpty ? "." : trimmed
+    }
+
+    /// A URL compacted for a one-line title: scheme and trailing slash dropped.
+    private static func displayURL(_ url: String) -> String {
+        var display = url
+        for scheme in ["https://", "http://"] where display.hasPrefix(scheme) {
+            display.removeFirst(scheme.count)
+        }
+        if display.hasSuffix("/") { display.removeLast() }
+        return display
     }
 
     /// Pretty-prints tool call arguments as JSON. Allocates a `JSONEncoder` per
@@ -99,7 +110,7 @@ nonisolated enum ToolDisplayHelpers {
     static func filePath(forTool name: String, arguments: [String: JSONValue]?) -> String? {
         guard let args = arguments else { return nil }
         switch name.lowercased() {
-        case "read", "read_file", "write", "write_file", "edit", "edit_file":
+        case "read", "write", "edit":
             if let path = args.string(for: "path"), !path.isEmpty { return path }
             return nil
         default:
@@ -145,7 +156,6 @@ nonisolated enum ToolDisplayHelpers {
         let args = info.parsedArguments
         return ToolDisplayProps(
             title: titleForTool(info.name, arguments: args),
-            icon: iconForTool(info.name),
             argsFormatted: formatArguments(args),
             filePath: filePath(forTool: info.name, arguments: args)
         )
