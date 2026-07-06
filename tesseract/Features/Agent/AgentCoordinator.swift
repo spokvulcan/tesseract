@@ -13,8 +13,8 @@ import Observation
 /// - ``AgentVoiceInputController`` (`voiceInput`) — push-to-talk capture→emit.
 /// - ``AgentSystemPromptInspector`` (`systemPromptInspector`) — the cancellable
 ///   raw-prompt / token-count transparency panel.
-/// - ``ImageDraftController`` (`imageDraft`) — pending-image queue, full-window drop,
-///   and Quick Look preview viewer.
+/// - ``ComposerDraftController`` (`composerDraft`) — the unsent **Composer Draft**
+///   (text + pending-image queue), full-window drop, and Quick Look preview viewer.
 /// - ``SlashCommandPaletteController`` (`commandPalette`) — slash-command popup.
 /// - ``SkillPillController`` (`skillPills`) — the Skill Pill row: membership ×
 ///   usage ranking × curated order, usage recording, invocation assembly.
@@ -32,7 +32,7 @@ final class AgentCoordinator {
     let agentRun: AgentRunController
     let transcript: ChatTranscriptController
     let voiceInput: AgentVoiceInputController
-    let imageDraft: ImageDraftController
+    let composerDraft: ComposerDraftController
     let systemPromptInspector: AgentSystemPromptInspector
     let commandPalette: SlashCommandPaletteController
     let skillPills: SkillPillController
@@ -42,12 +42,6 @@ final class AgentCoordinator {
     /// The shared error banner. Sub-modules that fail report here via an injected
     /// closure; voice input is the exception — its errors stay in `voiceState`.
     var error: String?
-
-    /// One-shot composer restore for **Edit & resend**. When the user edits a
-    /// sent message, its text lands here for the content view to copy into the
-    /// input field (the images go straight to `imageDraft.pendingImages`); the
-    /// content view clears it on apply. `nil` at rest.
-    var editDraftRestore: String?
 
     // MARK: - Hot-read passthroughs
 
@@ -118,7 +112,7 @@ final class AgentCoordinator {
             settings: settings,
             captureDump: captureDump
         )
-        self.imageDraft = ImageDraftController(conversationImages: { [agent] in
+        self.composerDraft = ComposerDraftController(conversationImages: { [agent] in
             agent.state.messages.flatMap { message -> [ImageAttachment] in
                 if let user = message.asUser { return user.images }
                 if let tool = message.asToolResult {
@@ -241,22 +235,30 @@ final class AgentCoordinator {
     /// attachments. A bare tap (empty composer, nothing pending) still fires —
     /// the skill body defines the no-arguments behavior. No-op while a run is
     /// active (the row renders dimmed then). If the skill file fails to load,
-    /// the drained images go back to the pending strip and nothing is counted —
-    /// a failed fire must not eat the user's Appshot.
-    func fireSkillPill(_ pill: SkillPill, composerText: String) {
+    /// the drained draft goes back to the composer and nothing is counted —
+    /// a failed fire must not eat the user's draft — text or Appshot.
+    func fireSkillPill(_ pill: SkillPill) {
         guard !agentRun.isGenerating else { return }
-        let images = imageDraft.drainImages()
+        // Drain the whole Composer Draft — text and images, one lifetime — so a
+        // successful fire consumes it and a failed one restores it whole. The
+        // coordinator owns the draft, so it drains text here rather than taking
+        // it as a parameter the caller has to clear first.
+        let text = composerDraft.text
+        let images = composerDraft.drainImages()
+        composerDraft.text = ""
         let sent = executeSkill(
             filePath: pill.filePath,
             skillName: pill.name,
             arguments: skillPills.assembleArguments(
-                skillName: pill.name, userText: composerText),
+                skillName: pill.name, userText: text),
             images: images
         )
         if sent {
             skillPills.recordUserInvocation(skillName: pill.name)
         } else {
-            imageDraft.restoreImages(images)
+            // A failed fire must not eat the user's draft: restore text and
+            // images together — they share one lifetime.
+            composerDraft.restore(text: text, images: images)
         }
     }
 
@@ -264,8 +266,10 @@ final class AgentCoordinator {
         switch name {
         case "compact":
             triggerCompaction(instructions: arguments.isEmpty ? nil : arguments)
-        case "new", "clear":
+        case "new":
             newConversation()
+        case "clear":
+            clearConversation()
         default:
             error = "Unknown built-in command: /\(name)"
         }
@@ -407,8 +411,12 @@ final class AgentCoordinator {
         }
     }
 
+    /// `/clear` is the hard reset: a fresh conversation AND a wiped composer.
+    /// `newConversation()` deliberately PRESERVES the Composer Draft (the new-chat
+    /// contract), so `/clear` is the one path that discards it explicitly.
     func clearConversation() {
         newConversation()
+        composerDraft.clearDraft()
     }
 
     // MARK: - Message Editing (Edit & resend)
@@ -463,15 +471,14 @@ final class AgentCoordinator {
         // they would render as chips and be silently dropped on send. Mirrors the
         // paste/drop gate; the vision-rejection recovery flow stays vision-capable,
         // so this is a no-op there.
-        imageDraft.restoreImages(user.images)
-        editDraftRestore = user.content
+        composerDraft.restore(text: user.content, images: user.images)
         // Leave `error` in place: the rejection banner's guidance ("Reduce the
         // number or size of the attached images") stays visible while the user
         // trims; `sendMessage` clears it on the next turn.
         rebuildTranscript()
         Log.agent.info(
             "Editing message \(messageID): truncated to \(head.count) message(s), "
-                + "restored \(imageDraft.pendingImages.count) image(s) to the composer")
+                + "restored \(composerDraft.pendingImages.count) image(s) to the composer")
     }
 
     // MARK: - Voice Output
@@ -615,7 +622,9 @@ final class AgentCoordinator {
     private func resetState() {
         transcript.reset()
         agentRun.finish()  // clear isGenerating synchronously
-        imageDraft.reset()
+        // Ephemeral view state only — the Composer Draft (text + pending images)
+        // rides across the switch. `/clear` discards it separately.
+        composerDraft.resetEphemeral()
     }
 
     /// Finds the last assistant message content directly from agent state.

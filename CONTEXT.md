@@ -722,15 +722,24 @@ from the spine — it touches no `Agent` and no arbiter.
 _Avoid_: dictation (the separate global system-wide overlay — say "agent voice
 input"), mic controller, voice state machine.
 
-**Image Draft**:
-The agent chat composer's image queue and preview module: it owns pending
-attachments, full-window image drops, model-capability hinting, and the Quick Look
-request projection. It receives committed conversation images through an injected
-read closure, so it stays a leaf rather than reaching into `Agent` or the
-conversation store.
-_Avoid_: image input (the broader UI affordance/capability concept), image cache
-(the server-side **Image Digest** cache path), Quick Look host (the AppKit bridge it
-feeds).
+**Composer Draft**:
+The agent chat composer's unsent staging area taken as one unit — the typed text
+together with the pending images (**Appshot**s, pastes, drops, picker adds) the user
+has staged but not yet sent — owned by the `ComposerDraftController` leaf (which also
+holds the pending-image previews, model-capability hinting, full-window drops, and the
+Quick Look request projection; committed conversation images arrive through an
+injected read closure, so it never reaches into `Agent` or the conversation store).
+The draft lives *above* any single **Conversation**: starting a new chat, loading
+another conversation, or deleting the current one resets the transcript but carries
+the whole draft across intact. It is consumed by **send** (and a **Skill Pill** fire),
+replaced wholesale by **Edit & resend**, and discarded (thrown away unsent) only by
+the explicit `/clear` hard reset — never dropped by mere navigation. Text and images
+share one lifetime: any path that clears one clears the other.
+_Avoid_: splitting the text and image halves into separate lifetimes; "Image Draft"
+(retired — the leaf owns the text too now, so it is the Composer Draft);
+per-conversation draft (one shared draft, not one per thread); **Image Input
+Availability** (the broader affordance/capability verdict); image cache (the
+server-side **Image Digest** path).
 
 **Image Gesture**:
 An inbound paste or drop into the agent chat whose payload carries image content —

@@ -59,7 +59,7 @@ struct AgentEditAndResendTests {
         )
         // The composer normally syncs this from the selected model; image-bearing
         // tests represent a vision-capable model unless they opt out.
-        coordinator.imageDraft.imageInputAvailable = visionAvailable
+        coordinator.composerDraft.imageInputAvailable = visionAvailable
         return coordinator
     }
 
@@ -94,8 +94,8 @@ struct AgentEditAndResendTests {
         #expect(userContents(coordinator).contains("first question") == true)
         #expect(assistantContents(coordinator).contains("an earlier answer") == true)
         // Its text and images are back in the composer for editing + re-send.
-        #expect(coordinator.editDraftRestore == "describe these")
-        #expect(coordinator.imageDraft.pendingImages.map(\.id) == [imgA.id, imgB.id])
+        #expect(coordinator.composerDraft.text == "describe these")
+        #expect(coordinator.composerDraft.pendingImages.map(\.id) == [imgA.id, imgB.id])
     }
 
     @Test func editingAMiddleMessageDropsItAndEverythingAfter() {
@@ -113,8 +113,8 @@ struct AgentEditAndResendTests {
         // survives intact.
         #expect(userContents(coordinator) == ["first question"])
         #expect(assistantContents(coordinator) == ["first answer"])
-        #expect(coordinator.editDraftRestore == "second question")
-        #expect(coordinator.imageDraft.pendingImages.isEmpty)
+        #expect(coordinator.composerDraft.text == "second question")
+        #expect(coordinator.composerDraft.pendingImages.isEmpty)
     }
 
     @Test func editingAnUnknownIdIsANoOp() {
@@ -125,7 +125,7 @@ struct AgentEditAndResendTests {
         coordinator.beginEditingMessage(UUID())
 
         #expect(userContents(coordinator) == ["only message"])
-        #expect(coordinator.editDraftRestore == nil)
+        #expect(coordinator.composerDraft.text == "")
     }
 
     @Test func editingAnAssistantMessageIsANoOp() {
@@ -141,7 +141,7 @@ struct AgentEditAndResendTests {
 
         #expect(userContents(coordinator) == ["a question"])
         #expect(assistantContents(coordinator) == ["the assistant reply"])
-        #expect(coordinator.editDraftRestore == nil)
+        #expect(coordinator.composerDraft.text == "")
     }
 
     @Test func editingTheFirstAndOnlyMessageDurablyDeletesTheBrickedConversation() {
@@ -158,14 +158,14 @@ struct AgentEditAndResendTests {
             settings: SettingsManager(store: InMemorySettingsStore()),
             arbiter: InMemoryInferenceArbiter()
         )
-        coordinator.imageDraft.imageInputAvailable = true
+        coordinator.composerDraft.imageInputAvailable = true
 
         coordinator.beginEditingMessage(target.id)
 
         // Transcript cleared; content restored to the composer.
         #expect(userContents(coordinator).isEmpty)
-        #expect(coordinator.editDraftRestore == "describe these")
-        #expect(coordinator.imageDraft.pendingImages.map(\.id) == [target.images[0].id])
+        #expect(coordinator.composerDraft.text == "describe these")
+        #expect(coordinator.composerDraft.pendingImages.map(\.id) == [target.images[0].id])
         // The bricked conversation is GONE, not merely emptied in place: `delete`
         // resets `currentConversation` to a fresh one (new id), whereas the buggy
         // empty-write path would keep the same id with cleared messages.
@@ -194,7 +194,7 @@ struct AgentEditAndResendTests {
             settings: SettingsManager(store: InMemorySettingsStore()),
             arbiter: InMemoryInferenceArbiter()
         )
-        coordinator.imageDraft.imageInputAvailable = true
+        coordinator.composerDraft.imageInputAvailable = true
 
         coordinator.beginEditingMessage(target.id)
 
@@ -202,8 +202,8 @@ struct AgentEditAndResendTests {
         // (fresh id), not rewritten to a head the store would silently drop.
         #expect(store.currentConversation?.id != conversation.id)
         #expect(store.currentConversation?.messages.isEmpty == true)
-        #expect(coordinator.editDraftRestore == "describe these")
-        #expect(coordinator.imageDraft.pendingImages.map(\.id) == [target.images[0].id])
+        #expect(coordinator.composerDraft.text == "describe these")
+        #expect(coordinator.composerDraft.pendingImages.map(\.id) == [target.images[0].id])
     }
 
     @Test func editingAnImageMessageUnderATextOnlyModelDropsImagesAndHints() {
@@ -218,8 +218,8 @@ struct AgentEditAndResendTests {
 
         coordinator.beginEditingMessage(target.id)
 
-        #expect(coordinator.editDraftRestore == "describe these")
-        #expect(coordinator.imageDraft.pendingImages.isEmpty)
-        #expect(coordinator.imageDraft.showImageSwitchHint == true)
+        #expect(coordinator.composerDraft.text == "describe these")
+        #expect(coordinator.composerDraft.pendingImages.isEmpty)
+        #expect(coordinator.composerDraft.showImageSwitchHint == true)
     }
 }

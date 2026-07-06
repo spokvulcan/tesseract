@@ -1,8 +1,9 @@
 //
-//  ImageDraftController.swift
+//  ComposerDraftController.swift
 //  tesseract
 //
-//  The **Image Draft** module: the composer's pending-image queue, the full-window
+//  The **Composer Draft** module: the composer's unsent draft — text and the
+//  pending-image queue owned as one unit — plus the full-window
 //  image drop, and the Quick Look preview viewer — carved out of `AgentCoordinator`
 //  as a publisher-agnostic leaf. Owns its own state and dependencies, testable
 //  through its interface without an Agent, command registry, or conversation store.
@@ -16,13 +17,19 @@ import Observation
 import UniformTypeIdentifiers
 
 @Observable @MainActor
-final class ImageDraftController {
+final class ComposerDraftController {
 
     // MARK: - Observable State
 
     /// Images queued in the composer awaiting send. Settable so the composer can
     /// remove individual images directly (ForEach with `removeAll`).
     var pendingImages: [ImageAttachment] = []
+
+    /// The composer's unsent text draft. Owned here — not as view `@State` — so
+    /// the conversation-lifecycle spine can carry it across a new chat / thread
+    /// switch and clear it on an explicit `/clear`. The two halves of the
+    /// **Composer Draft** (this text and `pendingImages`) share one lifetime.
+    var text: String = ""
 
     /// Whether the selected model can serve images, synced from the composer
     /// (which owns the capability probe). The window-level drop reads this to
@@ -77,7 +84,7 @@ final class ImageDraftController {
         self.imagePreviewCache = imagePreviewCache
     }
 
-    // MARK: - Image Draft
+    // MARK: - Pending images
 
     /// Append ingested images, capped to the room remaining under `maxPendingImages`.
     /// Returns the slice actually appended.
@@ -197,6 +204,16 @@ final class ImageDraftController {
         }
     }
 
+    /// Restore a whole **Composer Draft** — text and images together, one
+    /// lifetime — into the composer. Used when a drained draft must come back
+    /// intact (a failed **Skill Pill** fire) and when **Edit & resend** loads a
+    /// sent message for editing. Images route through `restoreImages`, so the
+    /// vision-capability gate governs both callers.
+    func restore(text: String, images: [ImageAttachment]) {
+        self.text = text
+        restoreImages(images)
+    }
+
     // MARK: - Quick Look Image Viewer (slice #114)
 
     /// Open the full-size Quick Look viewer on the clicked image, navigable
@@ -230,13 +247,24 @@ final class ImageDraftController {
 
     // MARK: - Lifecycle
 
-    /// Reset all image state and drop the previous conversation's temp previews.
-    func reset() {
+    /// Reset the ephemeral, conversation-scoped view state — the Quick Look
+    /// request and its temp-file previews, the switch hint, the transient notice,
+    /// and the drag-target flag — WITHOUT touching the unsent **Composer Draft**
+    /// (`text` + `pendingImages`), which lives above any one conversation. Called
+    /// on every conversation switch: new chat, thread load, and delete.
+    func resetEphemeral() {
         quickLookRequest = nil
         imagePreviewCache.clear()
-        pendingImages = []
         showImageSwitchHint = false
         attachmentNotice = nil
         isDropTargeted = false
+    }
+
+    /// Discard the unsent **Composer Draft** — text and pending images together,
+    /// one lifetime. The explicit `/clear` hard reset; never a mere-navigation
+    /// action.
+    func clearDraft() {
+        text = ""
+        pendingImages = []
     }
 }

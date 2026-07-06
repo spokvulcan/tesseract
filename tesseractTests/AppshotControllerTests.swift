@@ -3,7 +3,7 @@
 //  tesseractTests
 //
 //  Tests the Appshot flow above the `AppshotCapturing` seam with a fake
-//  capturer and a real `ImageDraftController`: what gets staged, how it's
+//  capturer and a real `ComposerDraftController`: what gets staged, how it's
 //  labeled, what the composer is offered, and how failures route. No
 //  ScreenCaptureKit, no event tap, no window.
 //
@@ -30,7 +30,7 @@ struct AppshotControllerTests {
 
     private struct Harness {
         let controller: AppshotController
-        let imageDraft: ImageDraftController
+        let composerDraft: ComposerDraftController
         let summons: () -> Int
     }
 
@@ -38,14 +38,14 @@ struct AppshotControllerTests {
         _ result: Result<AppshotCapture, AppshotCaptureError>,
         imageInputAvailable: Bool = true
     ) -> Harness {
-        let imageDraft = ImageDraftController(conversationImages: { [] })
-        imageDraft.imageInputAvailable = imageInputAvailable
+        let composerDraft = ComposerDraftController(conversationImages: { [] })
+        composerDraft.imageInputAvailable = imageInputAvailable
         let controller = AppshotController(
-            capturer: FakeCapturer(result), imageDraft: imageDraft)
+            capturer: FakeCapturer(result), composerDraft: composerDraft)
         let counter = SummonCounter()
         controller.onSummon = { counter.count += 1 }
         return Harness(
-            controller: controller, imageDraft: imageDraft, summons: { counter.count })
+            controller: controller, composerDraft: composerDraft, summons: { counter.count })
     }
 
     private final class SummonCounter {
@@ -66,9 +66,9 @@ struct AppshotControllerTests {
         let harness = makeHarness(.success(makeCapture()))
         await harness.controller.takeAppshot()
 
-        #expect(harness.imageDraft.pendingImages.count == 1)
-        #expect(harness.imageDraft.pendingImages.first?.filename == "Safari — PR #123.png")
-        #expect(harness.controller.composerPrefill == "Appshot of Safari — “PR #123”.")
+        #expect(harness.composerDraft.pendingImages.count == 1)
+        #expect(harness.composerDraft.pendingImages.first?.filename == "Safari — PR #123.png")
+        #expect(harness.composerDraft.text == "Appshot of Safari — “PR #123”.")
         #expect(harness.summons() == 1)
         #expect(!harness.controller.showPermissionExplainer)
     }
@@ -96,8 +96,8 @@ struct AppshotControllerTests {
         await harness.controller.takeAppshot()
 
         #expect(harness.controller.showPermissionExplainer)
-        #expect(harness.imageDraft.pendingImages.isEmpty)
-        #expect(harness.controller.composerPrefill == nil)
+        #expect(harness.composerDraft.pendingImages.isEmpty)
+        #expect(harness.composerDraft.text == "")
         #expect(harness.summons() == 1)
     }
 
@@ -106,9 +106,9 @@ struct AppshotControllerTests {
         let harness = makeHarness(.failure(.captureFailed))
         await harness.controller.takeAppshot()
 
-        #expect(harness.imageDraft.attachmentNotice != nil)
-        #expect(harness.imageDraft.pendingImages.isEmpty)
-        #expect(harness.controller.composerPrefill == nil)
+        #expect(harness.composerDraft.attachmentNotice != nil)
+        #expect(harness.composerDraft.pendingImages.isEmpty)
+        #expect(harness.composerDraft.text == "")
         #expect(harness.summons() == 1)
     }
 
@@ -119,27 +119,28 @@ struct AppshotControllerTests {
         let harness = makeHarness(.success(makeCapture()), imageInputAvailable: false)
         await harness.controller.takeAppshot()
 
-        #expect(harness.imageDraft.showImageSwitchHint)
-        #expect(harness.imageDraft.pendingImages.isEmpty)
-        #expect(harness.controller.composerPrefill == nil)
+        #expect(harness.composerDraft.showImageSwitchHint)
+        #expect(harness.composerDraft.pendingImages.isEmpty)
+        #expect(harness.composerDraft.text == "")
         #expect(harness.summons() == 1)
     }
 
     @Test
     func pendingCapIsRespectedWithoutPrefill() async {
         let harness = makeHarness(.success(makeCapture()))
-        let filler = (0..<ImageDraftController.maxPendingImages).map { index in
+        let filler = (0..<ComposerDraftController.maxPendingImages).map { index in
             ImageAttachment(
                 data: ImageTestFixtures.tinyPNGData, mimeType: "image/png",
                 filename: "filler-\(index).png")
         }
-        harness.imageDraft.attachImages(filler)
+        harness.composerDraft.attachImages(filler)
 
         await harness.controller.takeAppshot()
 
-        #expect(harness.imageDraft.pendingImages.count == ImageDraftController.maxPendingImages)
-        #expect(harness.controller.composerPrefill == nil)
-        #expect(harness.imageDraft.attachmentNotice != nil)
+        #expect(
+            harness.composerDraft.pendingImages.count == ComposerDraftController.maxPendingImages)
+        #expect(harness.composerDraft.text == "")
+        #expect(harness.composerDraft.attachmentNotice != nil)
         #expect(harness.summons() == 1)
     }
 }

@@ -12,8 +12,6 @@
 import SwiftUI
 
 struct SkillPillRowView: View {
-    @Binding var inputText: String
-
     @Environment(AgentCoordinator.self) private var coordinator
 
     var body: some View {
@@ -37,9 +35,7 @@ struct SkillPillRowView: View {
     /// active, so the layout never jumps.
     private func pillButton(_ pill: SkillPill) -> some View {
         Button {
-            let composerText = inputText
-            inputText = ""
-            coordinator.fireSkillPill(pill, composerText: composerText)
+            coordinator.fireSkillPill(pill)
         } label: {
             Text(pill.label)
                 .font(.system(size: 12, weight: .medium))

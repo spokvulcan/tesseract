@@ -140,11 +140,11 @@ final class DependencyContainer: ObservableObject {
     }()
 
     // Appshot — the double-Command frontmost-window capture (PRD #170). Stages
-    // through the agent coordinator's Image Draft; the app delegate attaches
+    // through the agent coordinator's Composer Draft; the app delegate attaches
     // the window-summon callback it owns.
     lazy var appshotController = AppshotController(
         capturer: ScreenCaptureKitAppshotCapturer(),
-        imageDraft: agentCoordinator.imageDraft
+        composerDraft: agentCoordinator.composerDraft
     )
 
     // Speech (TTS)
