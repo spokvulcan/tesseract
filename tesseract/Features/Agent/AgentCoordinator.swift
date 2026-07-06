@@ -62,7 +62,6 @@ final class AgentCoordinator {
     private let agent: Agent
     private let conversationStore: any AgentConversationStoring
     private let settings: SettingsManager?
-    private let arbiter: any InferenceArbitrating
     private let speechCoordinator: SpeechCoordinator?
     private let extensionHost: ExtensionHost?
     private let contextManager: ContextManager?
@@ -82,7 +81,7 @@ final class AgentCoordinator {
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
         captureDump: (any CaptureDumpStoring)? = nil,
-        arbiter: any InferenceArbitrating,
+        batchEngine: BatchEngine,
         formatRawPrompt: (
             @MainActor (String, [AgentToolDefinition]?) async throws -> (
                 text: String, tokenCount: Int
@@ -100,7 +99,6 @@ final class AgentCoordinator {
         self.agent = agent
         self.conversationStore = conversationStore
         self.settings = settings
-        self.arbiter = arbiter
         self.speechCoordinator = speechCoordinator
         self.extensionHost = extensionHost
         self.contextManager = contextManager
@@ -109,7 +107,8 @@ final class AgentCoordinator {
 
         // Construct the publisher-agnostic sub-modules from the injected deps.
         self.agentRun = AgentRunController(
-            agent: agent, arbiter: arbiter, toolRegistry: toolRegistry, settings: settings
+            agent: agent, batchEngine: batchEngine, toolRegistry: toolRegistry,
+            settings: settings
         )
         self.transcript = ChatTranscriptController()
         self.voiceInput = AgentVoiceInputController(

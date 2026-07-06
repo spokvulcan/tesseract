@@ -62,7 +62,7 @@ struct AgentCoordinatorDispatchOrderingTests {
             agent: makeScriptedAgent(),
             conversationStore: InMemoryAgentConversationStore(),
             settings: SettingsManager(store: InMemorySettingsStore()),
-            arbiter: InMemoryInferenceArbiter()
+            batchEngine: InMemoryInferenceArbiter().makeBatchEngine()
         )
 
         coordinator.sendMessage("hi")
