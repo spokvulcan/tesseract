@@ -96,6 +96,15 @@ jobs:
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
+      # Fail in seconds — not after the full archive — if Apple would reject
+      # the notarization for account reasons (expired agreement, revoked key).
+      - name: Notary service preflight
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+        run: scripts/release/notary-preflight.sh
+
       - name: Install Metal toolchain
         run: xcodebuild -downloadComponent MetalToolchain
 

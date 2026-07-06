@@ -115,11 +115,11 @@ tesseract/
 │   │   ├── TranscriptionHistory.swift # @Observable, JSON persistence
 │   │   └── TranscriptionPostProcessor.swift
 │   ├── Agent/
-│   │   ├── AgentCoordinator.swift     # @Observable spine; dispatches agent events
+│   │   ├── ChatSession.swift          # @Observable spine; folds agent events into ChatItems (ADR-0024)
 │   │   ├── AgentRunController.swift   # Foreground run: lease + isGenerating + cancel
-│   │   ├── ChatTranscriptController.swift # Drives the pure ChatTranscript fold
+│   │   ├── LivePart.swift             # Throttled observable box for the one streaming part
 │   │   ├── AgentVoiceInputController.swift  # Composer push-to-talk (leaf)
-│   │   ├── ImageDraftController.swift # Composer image queue/drop/Quick Look (leaf)
+│   │   ├── ComposerDraftController.swift # Composer draft: text + image queue/drop/Quick Look (leaf)
 │   │   ├── AgentEngine.swift          # @Observable, wraps LLMActor (chat path)
 │   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
 │   │   ├── LLMActor.swift             # MLX LLM inference actor
@@ -326,7 +326,7 @@ Coordinators manage user-facing flows as state machines:
 
 - **DictationCoordinator**: idle → recording → processing → idle (text injection happens during processing)
 - **SpeechCoordinator**: idle → capturingText → generating → streaming/playing → idle
-- **AgentCoordinator**: bridges the Agent double-loop to SwiftUI via cached `ChatRow` arrays
+- **ChatSession**: folds the Agent double-loop's events into committed `ChatItem` values plus one streaming `LivePart` (ADR-0024)
 
 ### 3. Actor Isolation
 

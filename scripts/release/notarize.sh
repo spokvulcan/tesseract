@@ -29,12 +29,21 @@ echo "$SUBMIT_OUTPUT"
 SUBMISSION_ID=$(awk '/^  id: /{print $2; exit}' <<<"$SUBMIT_OUTPUT")
 
 if [ "${SUBMIT_FAILED:-0}" = "1" ] || ! grep -q "status: Accepted" <<<"$SUBMIT_OUTPUT"; then
-    echo "✗ Notarization not accepted — fetching the log:" >&2
     if [ -n "$SUBMISSION_ID" ]; then
+        echo "✗ Notarization not accepted — fetching the log:" >&2
         xcrun notarytool log "$SUBMISSION_ID" \
             --key "$KEY_PATH" \
             --key-id "$ASC_API_KEY_ID" \
             --issuer "$ASC_API_ISSUER_ID" >&2 || true
+    elif grep -qi "agreement" <<<"$SUBMIT_OUTPUT"; then
+        cat >&2 <<'EOF'
+✗ Apple Developer agreement problem — notarization is blocked account-wide.
+  Fix: the Account Holder signs in at https://developer.apple.com/account and
+  accepts the pending agreement (also check App Store Connect → Agreements).
+  No code or secrets change is needed; re-run this workflow afterwards.
+EOF
+    else
+        echo "✗ Submission failed before Apple accepted it (no submission ID)." >&2
     fi
     exit 1
 fi

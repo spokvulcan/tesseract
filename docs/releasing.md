@@ -89,6 +89,16 @@ read workflow-file diffs yourself before merging.**
 - **Skip a commit from the changelog:** it can't be skipped retroactively;
   fix the PR title before merge. That is the entire reason `pr-title.yml`
   exists.
+- **"A required agreement is missing or has expired" (HTTP 403):** Apple
+  published an updated developer agreement and blocks notarization
+  account-wide until it's accepted — nothing on our side broke (this killed
+  the v1.3.0 build one day after v1.2.0 notarized fine). The Account Holder
+  signs in at <https://developer.apple.com/account> and accepts the pending
+  agreement (also check App Store Connect → Agreements), then re-runs the
+  workflow. Two guards exist: `release-build.yml` runs
+  `scripts/release/notary-preflight.sh` before the archive so this fails in
+  seconds, and `notary-health.yml` runs the same check weekly and opens an
+  issue so it's caught before release day.
 - **Notarization rejected:** the workflow prints the `notarytool log`
   output; the usual causes are a missing hardened runtime or an unsigned
   nested binary (both are caught earlier by `verify-signing.sh`).
