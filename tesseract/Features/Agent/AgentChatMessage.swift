@@ -90,7 +90,7 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
                     thinking: nil)
             case .assistant(let asst):
                 self.init(
-                    id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content,
+                    id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.text,
                     thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
             case .toolResult(let tr):
                 self.init(
@@ -104,7 +104,7 @@ struct AgentChatMessage: AgentMessageProtocol, Sendable, Codable, Identifiable {
                 thinking: nil)
         case let asst as AssistantMessage:
             self.init(
-                id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.content,
+                id: asst.id, timestamp: asst.timestamp, role: .assistant, content: asst.text,
                 thinking: asst.thinking, toolCalls: Self.convertToolCalls(asst.toolCalls))
         case let tr as ToolResultMessage:
             self.init(

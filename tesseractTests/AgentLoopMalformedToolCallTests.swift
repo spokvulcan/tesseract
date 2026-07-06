@@ -65,13 +65,13 @@ struct AgentLoopMalformedToolCallTests {
 
         // The committed message surfaces the dropped buffer as content...
         let assistant = try #require(recorder.last)
-        #expect(assistant.content == raw)
+        #expect(assistant.text == raw)
         #expect(assistant.toolCalls.isEmpty)
 
         // ...and the turn is persisted into context (hasContent == true), not
         // dropped as a blank turn.
         let persistedAssistants = context.messages.compactMap { $0 as? AssistantMessage }
-        #expect(persistedAssistants.contains { $0.content == raw })
+        #expect(persistedAssistants.contains { $0.text == raw })
     }
 
     @Test func plainEmptyTurnWithoutMalformedBufferStaysDropped() async throws {

@@ -184,12 +184,31 @@ struct AgentLoopToolExecutionTests {
         case .contextTransformStart: return "contextTransformStart"
         case .contextTransformEnd: return "contextTransformEnd"
         case .messageStart(let message): return "messageStart(\(messageKind(message)))"
-        case .messageUpdate: return "messageUpdate"
+        case .messageUpdate(_, let event): return "messageUpdate(\(streamKind(event)))"
         case .messageEnd(let message): return "messageEnd(\(messageKind(message)))"
         case .malformedToolCall: return "malformedToolCall"
         case .toolExecutionStart(_, let name, _): return "toolExecutionStart(\(name))"
         case .toolExecutionUpdate: return "toolExecutionUpdate"
         case .toolExecutionEnd(_, let name, _, _): return "toolExecutionEnd(\(name))"
+        }
+    }
+
+    /// Compact label for the pi-ai stream event riding on `.messageUpdate`, so
+    /// the golden sequences pin the part-boundary protocol (ADR-0024) too.
+    private nonisolated func streamKind(_ event: AssistantMessageEvent) -> String {
+        switch event {
+        case .start: return "start"
+        case .textStart: return "textStart"
+        case .textDelta: return "textDelta"
+        case .textEnd: return "textEnd"
+        case .thinkingStart: return "thinkingStart"
+        case .thinkingDelta: return "thinkingDelta"
+        case .thinkingEnd: return "thinkingEnd"
+        case .toolcallStart: return "toolcallStart"
+        case .toolcallDelta: return "toolcallDelta"
+        case .toolcallEnd: return "toolcallEnd"
+        case .done: return "done"
+        case .error: return "error"
         }
     }
 
@@ -239,11 +258,15 @@ struct AgentLoopToolExecutionTests {
             kinds(events) == [
                 "agentStart",
                 "messageStart(user)", "messageEnd(user)",
-                "messageStart(assistant)", "messageUpdate", "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)",
+                "messageUpdate(toolcallStart)", "messageUpdate(toolcallEnd)",
+                "messageUpdate(done)", "messageEnd(assistant)",
                 "messageStart(toolResult)", "messageEnd(toolResult)",
                 "turnEnd",
                 "turnStart",
-                "messageStart(assistant)", "messageUpdate", "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)", "messageUpdate(textStart)",
+                "messageUpdate(textDelta)", "messageUpdate(textEnd)", "messageUpdate(done)",
+                "messageEnd(assistant)",
                 "turnEnd",
                 "agentEnd",
             ])
@@ -288,11 +311,15 @@ struct AgentLoopToolExecutionTests {
             kinds(events) == [
                 "agentStart",
                 "messageStart(user)", "messageEnd(user)",
-                "messageStart(assistant)", "messageUpdate", "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)",
+                "messageUpdate(toolcallStart)", "messageUpdate(toolcallEnd)",
+                "messageUpdate(done)", "messageEnd(assistant)",
                 "messageStart(toolResult)", "messageEnd(toolResult)",
                 "turnEnd",
                 "turnStart",
-                "messageStart(assistant)", "messageUpdate", "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)", "messageUpdate(textStart)",
+                "messageUpdate(textDelta)", "messageUpdate(textEnd)", "messageUpdate(done)",
+                "messageEnd(assistant)",
                 "turnEnd",
                 "agentEnd",
             ])
@@ -332,7 +359,7 @@ struct AgentLoopToolExecutionTests {
         // The tool genuinely executed — with empty args — and its result was
         // committed as a success, not routed to any error branch.
         #expect(kinds(events).contains("toolExecutionStart(echo)"))
-        #expect(seenArgs.value == [:])
+        #expect(seenArgs.value?.isEmpty == true)
         let result = try #require(committed(events, as: ToolResultMessage.self).first)
         #expect(result.isError == false)
         #expect(result.content.textContent == "ok")
@@ -359,13 +386,17 @@ struct AgentLoopToolExecutionTests {
             kinds(events) == [
                 "agentStart",
                 "messageStart(user)", "messageEnd(user)",
-                "messageStart(assistant)", "messageUpdate", "messageUpdate",
-                "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)", "messageUpdate(textStart)",
+                "messageUpdate(textDelta)", "messageUpdate(textEnd)",
+                "messageUpdate(toolcallStart)", "messageUpdate(toolcallEnd)",
+                "messageUpdate(done)", "messageEnd(assistant)",
                 "toolExecutionStart(echo)", "toolExecutionEnd(echo)",
                 "messageStart(toolResult)", "messageEnd(toolResult)",
                 "turnEnd",
                 "turnStart",
-                "messageStart(assistant)", "messageUpdate", "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)", "messageUpdate(textStart)",
+                "messageUpdate(textDelta)", "messageUpdate(textEnd)", "messageUpdate(done)",
+                "messageEnd(assistant)",
                 "turnEnd",
                 "agentEnd",
             ])
@@ -384,7 +415,7 @@ struct AgentLoopToolExecutionTests {
         #expect(context.messages.count == 4)
         #expect((context.messages[1] as? AssistantMessage)?.toolCalls.count == 1)
         #expect((context.messages[2] as? ToolResultMessage) == result)
-        #expect((context.messages[3] as? AssistantMessage)?.content == "done")
+        #expect((context.messages[3] as? AssistantMessage)?.text == "done")
 
         // The follow-up generation consumed the committed result.
         #expect(llm.callCount == 2)
@@ -424,15 +455,19 @@ struct AgentLoopToolExecutionTests {
             kinds(events) == [
                 "agentStart",
                 "messageStart(user)", "messageEnd(user)",
-                "messageStart(assistant)", "messageUpdate", "messageUpdate",
-                "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)",
+                "messageUpdate(toolcallStart)", "messageUpdate(toolcallEnd)",
+                "messageUpdate(toolcallStart)", "messageUpdate(toolcallEnd)",
+                "messageUpdate(done)", "messageEnd(assistant)",
                 "toolExecutionStart(first)", "toolExecutionEnd(first)",
                 "messageStart(toolResult)", "messageEnd(toolResult)",
                 "messageStart(toolResult)", "messageEnd(toolResult)",
                 "turnEnd",
                 "turnStart",
                 "messageStart(user)", "messageEnd(user)",
-                "messageStart(assistant)", "messageUpdate", "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)", "messageUpdate(textStart)",
+                "messageUpdate(textDelta)", "messageUpdate(textEnd)", "messageUpdate(done)",
+                "messageEnd(assistant)",
                 "turnEnd",
                 "agentEnd",
             ])
@@ -496,8 +531,10 @@ struct AgentLoopToolExecutionTests {
             kinds(events) == [
                 "agentStart",
                 "messageStart(user)", "messageEnd(user)",
-                "messageStart(assistant)", "messageUpdate", "messageUpdate",
-                "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)",
+                "messageUpdate(toolcallStart)", "messageUpdate(toolcallEnd)",
+                "messageUpdate(toolcallStart)", "messageUpdate(toolcallEnd)",
+                "messageUpdate(done)", "messageEnd(assistant)",
                 "toolExecutionStart(first)", "toolExecutionEnd(first)",
                 "messageStart(toolResult)", "messageEnd(toolResult)",
                 "turnEnd",
@@ -539,20 +576,26 @@ struct AgentLoopToolExecutionTests {
             kinds(events) == [
                 "agentStart",
                 "messageStart(user)", "messageEnd(user)",
-                // Turn 1 (first turn: no turnStart): tool call + commit.
-                "messageStart(assistant)", "messageUpdate", "messageUpdate",
-                "messageEnd(assistant)",
+                // Turn 1 (first turn: no turnStart): text part, tool-call part, commit.
+                "messageStart(assistant)", "messageUpdate(start)", "messageUpdate(textStart)",
+                "messageUpdate(textDelta)", "messageUpdate(textEnd)",
+                "messageUpdate(toolcallStart)", "messageUpdate(toolcallEnd)",
+                "messageUpdate(done)", "messageEnd(assistant)",
                 "toolExecutionStart(echo)", "toolExecutionEnd(echo)",
                 "messageStart(toolResult)", "messageEnd(toolResult)",
                 "turnEnd",
                 // Turn 2: the follow-up generation over the tool result.
                 "turnStart",
-                "messageStart(assistant)", "messageUpdate", "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)", "messageUpdate(textStart)",
+                "messageUpdate(textDelta)", "messageUpdate(textEnd)", "messageUpdate(done)",
+                "messageEnd(assistant)",
                 "turnEnd",
                 // Turn 3: the queued follow-up message opens an outer-loop round.
                 "turnStart",
                 "messageStart(user)", "messageEnd(user)",
-                "messageStart(assistant)", "messageUpdate", "messageEnd(assistant)",
+                "messageStart(assistant)", "messageUpdate(start)", "messageUpdate(textStart)",
+                "messageUpdate(textDelta)", "messageUpdate(textEnd)", "messageUpdate(done)",
+                "messageEnd(assistant)",
                 "turnEnd",
                 "agentEnd",
             ])

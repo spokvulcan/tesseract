@@ -2,7 +2,8 @@ import SwiftUI
 import os
 
 struct AgentSystemPromptView: View {
-    @Environment(AgentCoordinator.self) private var coordinator
+    @Environment(AgentSystemPromptInspector.self) private var inspector
+    @Environment(ChatSession.self) private var session
     @State private var isExpanded = false
     @State private var selectedTab: PromptTab = .assembled
 
@@ -11,7 +12,7 @@ struct AgentSystemPromptView: View {
         case rawChatML = "Raw ChatML"
     }
 
-    private var hasRawPrompt: Bool { coordinator.systemPromptInspector.rawChatMLPrompt != nil }
+    private var hasRawPrompt: Bool { inspector.rawChatMLPrompt != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -25,7 +26,7 @@ struct AgentSystemPromptView: View {
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
 
-                        if let count = coordinator.systemPromptInspector.systemPromptTokenCount {
+                        if let count = inspector.systemPromptTokenCount {
                             Text("(\(count) tokens)")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.tertiary)
@@ -66,15 +67,15 @@ struct AgentSystemPromptView: View {
         .task(id: hasRawPrompt) {
             Log.agent.info("SystemPromptView .task fired — hasRawPrompt=\(hasRawPrompt)")
             if !hasRawPrompt {
-                coordinator.systemPromptInspector.fetchRawSystemPrompt()
+                inspector.fetchRawSystemPrompt()
             }
         }
-        .onChange(of: coordinator.isGenerating) {
+        .onChange(of: session.isGenerating) {
             Log.agent.info(
-                "SystemPromptView .onChange(isGenerating) — isGenerating=\(coordinator.isGenerating), hasRawPrompt=\(hasRawPrompt)"
+                "SystemPromptView .onChange(isGenerating) — isGenerating=\(session.isGenerating), hasRawPrompt=\(hasRawPrompt)"
             )
-            if !coordinator.isGenerating, !hasRawPrompt {
-                coordinator.systemPromptInspector.fetchRawSystemPrompt()
+            if !session.isGenerating, !hasRawPrompt {
+                inspector.fetchRawSystemPrompt()
             }
         }
     }
@@ -83,9 +84,9 @@ struct AgentSystemPromptView: View {
     private var promptContent: some View {
         switch selectedTab {
         case .assembled:
-            monoText(coordinator.systemPromptInspector.assembledSystemPrompt)
+            monoText(inspector.assembledSystemPrompt)
         case .rawChatML:
-            if let raw = coordinator.systemPromptInspector.rawChatMLPrompt {
+            if let raw = inspector.rawChatMLPrompt {
                 monoText(raw)
             } else {
                 Text("Load a model to view the raw ChatML prompt")

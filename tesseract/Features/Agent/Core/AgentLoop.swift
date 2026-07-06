@@ -22,10 +22,11 @@ typealias LLMGenerateFunction =
         _ signal: CancellationToken?
     ) -> AsyncThrowingStream<AgentGeneration, Error>
 
-// MARK: - StopReason
+// MARK: - TurnStop
 
-/// Why the assistant stopped generating.
-private enum StopReason: Sendable {
+/// Why the assistant stopped generating, as the loop's control flow sees it.
+/// (The message-level `StopReason` is the pi-ai mirror on `AssistantMessage`.)
+private enum TurnStop: Sendable {
     case endOfTurn
     case cancelled
     case error(Error)
@@ -136,7 +137,7 @@ private func runLoop(
             )
 
             let assistantMessage: AssistantMessage
-            let stopReason: StopReason
+            let stopReason: TurnStop
 
             switch streamResult {
             case .success(let msg, let reason):
@@ -252,7 +253,7 @@ private func runLoop(
 /// Result of streaming an assistant response.
 /// Always returns the (possibly partial) assistant message so it can be preserved.
 private enum StreamResult: Sendable {
-    case success(AssistantMessage, StopReason)
+    case success(AssistantMessage, TurnStop)
 }
 
 /// Calls the LLM with the current context, streams chunks, and builds the final
@@ -286,31 +287,41 @@ private func streamAssistantResponse(
     let stream = generate(context.systemPrompt, llmMessages, context.tools, signal)
 
     // d-g. Process stream chunks and build the assistant message as
-    // ingest → step → emit. The shared accumulation (text/thinking/…) is folded
-    // in one place by the Generation Accumulator; this caller's own concrete
-    // Generation Projection (`AssistantMessageProjection`) owns tool-call
-    // identity and maps each folded event to what this driver emits. All side
-    // effects — the emits, the `.malformedToolCall` event, both logs — stay here.
+    // ingest → step → emit. The shared accumulation is still folded by the
+    // Generation Accumulator (it owns the malformed-buffer predicate shared
+    // with the server's `CompletionProjection`); the `AssistantPartsBuilder`
+    // projects the same events into ordered Content Parts and the pi-ai
+    // stream events this driver emits. All side effects — the emits, the
+    // `.malformedToolCall` event, both logs — stay here.
     var accumulator = GenerationAccumulator()
-    var projection = AssistantMessageProjection()
+    var builder = AssistantPartsBuilder()
+    builder.model = config.model.id
 
-    // Emit messageStart with a placeholder
-    let placeholderMessage = AssistantMessage.create(content: "")
+    // messageStart with the empty snapshot, then the protocol's `start`.
+    let placeholderMessage = builder.snapshot()
     emit(.messageStart(message: placeholderMessage))
+    emit(.messageUpdate(message: placeholderMessage, event: .start(partial: placeholderMessage)))
+
+    func emitAborted() -> AssistantMessage {
+        let msg = builder.snapshot(stopReason: .aborted)
+        emit(.messageUpdate(message: msg, event: .error(reason: .aborted, error: msg)))
+        emit(.messageEnd(message: msg))
+        return msg
+    }
 
     do {
         for try await generation in stream {
             if signal?.isCancelled == true {
-                let msg = projection.snapshot(accumulator)
-                emit(.messageEnd(message: msg))
-                return .success(msg, .cancelled)
+                return .success(emitAborted(), .cancelled)
             }
 
             accumulator.ingest(generation)
 
-            switch projection.step(generation, accumulator) {
-            case .update(let message, let delta):
-                emit(.messageUpdate(message: message, streamDelta: delta))
+            switch builder.ingest(generation) {
+            case .events(let events):
+                for event in events {
+                    emit(.messageUpdate(message: event.partial, event: event))
+                }
             case .malformed(let raw):
                 Log.agent.warning("Malformed tool call ignored: \(raw)")
                 emit(.malformedToolCall(raw: raw))
@@ -319,25 +330,35 @@ private func streamAssistantResponse(
             }
         }
     } catch {
-        let msg = projection.snapshot(accumulator)
-        emit(.messageEnd(message: msg))
         if signal?.isCancelled == true {
-            return .success(msg, .cancelled)
+            return .success(emitAborted(), .cancelled)
         }
-        // Preserve the partial message — runLoop will append it to context
+        // Preserve the partial message — runLoop will append it to context.
+        let msg = builder.snapshot(stopReason: .error, errorMessage: error.localizedDescription)
+        emit(.messageUpdate(message: msg, event: .error(reason: .error, error: msg)))
+        emit(.messageEnd(message: msg))
         return .success(msg, .error(error))
     }
 
-    // Terminal end-of-turn: `finalize` applies the malformed→text fallback. Log
-    // the surfacing here (the projection stays pure), gated on the same shared
-    // predicate it consumes.
+    // Terminal end-of-turn: close any open part, apply the malformed→text
+    // fallback (gated on the accumulator's shared predicate), then `done`.
+    for event in builder.closeForTerminal() {
+        emit(.messageUpdate(message: event.partial, event: event))
+    }
+    let surfacedBuffer: String?
     if accumulator.surfacesMalformedBuffer {
+        surfacedBuffer = accumulator.malformedToolCallRaw
         Log.agent.info(
             "Surfaced dropped tool-call buffer as message content — "
                 + "rawLen=\(accumulator.malformedToolCallRaw.count)"
         )
+    } else {
+        surfacedBuffer = nil
     }
-    let finalMessage = projection.finalize(accumulator)
+    let reason = builder.terminalStopReason
+    let finalMessage = builder.finalize(
+        stopReason: reason, surfacingMalformedBuffer: surfacedBuffer)
+    emit(.messageUpdate(message: finalMessage, event: .done(reason: reason, message: finalMessage)))
     emit(.messageEnd(message: finalMessage))
     return .success(finalMessage, .endOfTurn)
 }

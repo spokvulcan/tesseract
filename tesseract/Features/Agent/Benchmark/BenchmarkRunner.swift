@@ -667,15 +667,17 @@ final class TurnEventCollector {
 
     func handleEvent(_ event: AgentEvent) {
         switch event {
-        case .messageUpdate(let message, let delta):
-            if let textDelta = delta.textDelta {
-                currentRound.text += textDelta
-            }
-            if let thinkingDelta = delta.thinkingDelta {
-                currentRound.thinking = (currentRound.thinking ?? "") + thinkingDelta
+        case .messageUpdate(let message, let event):
+            switch event {
+            case .textDelta(_, let delta, _):
+                currentRound.text += delta
+            case .thinkingDelta(_, let delta, _):
+                currentRound.thinking = (currentRound.thinking ?? "") + delta
+            default:
+                break
             }
             // Update full assistant text from the latest message
-            assistantText = message.content
+            assistantText = message.text
             attemptedToolCalls = message.toolCalls.map { call in
                 (
                     name: call.name,

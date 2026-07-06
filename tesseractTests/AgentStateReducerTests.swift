@@ -78,7 +78,7 @@ struct AgentStateReducerTests {
 
         #expect(state.streamMessage == nil)
         #expect(state.messages.count == 1)
-        #expect(state.messages.first?.asAssistant?.content == "final answer")
+        #expect(state.messages.first?.asAssistant?.text == "final answer")
     }
 
     /// The `hasContent` guard: an empty assistant message (no text, thinking, or
@@ -145,12 +145,11 @@ struct AgentStateReducerTests {
             [
                 .messageUpdate(
                     message: partial,
-                    streamDelta: AssistantStreamDelta(
-                        textDelta: "stream…", thinkingDelta: nil, toolCallDelta: nil))
+                    event: .textDelta(contentIndex: 0, delta: "stream…", partial: partial))
             ],
             into: state)
 
-        #expect(state.streamMessage?.content == "stream…")
+        #expect(state.streamMessage?.asAssistant?.text == "stream…")
     }
 
     // MARK: - Lifecycle phase
@@ -181,7 +180,7 @@ struct AgentStateReducerTests {
 
         #expect(state.phase == .streaming)
         #expect(state.messages.count == 1)
-        #expect(state.messages.first?.asAssistant?.content == "summary")
+        #expect(state.messages.first?.asAssistant?.text == "summary")
     }
 
     /// A non-mutating `.contextTransformEnd` leaves `messages` untouched but
@@ -215,14 +214,13 @@ struct AgentStateReducerTests {
                 .messageStart(message: final),
                 .messageUpdate(
                     message: partial,
-                    streamDelta: AssistantStreamDelta(
-                        textDelta: "hel", thinkingDelta: nil, toolCallDelta: nil)),
+                    event: .textDelta(contentIndex: 0, delta: "hel", partial: partial)),
                 .messageEnd(message: final),
             ], into: state)
 
         #expect(state.phase == .streaming)  // finishRun owns the .idle transition, not the fold
         #expect(state.streamMessage == nil)
         #expect(state.messages.count == 1)
-        #expect(state.messages.first?.asAssistant?.content == "hello")
+        #expect(state.messages.first?.asAssistant?.text == "hello")
     }
 }

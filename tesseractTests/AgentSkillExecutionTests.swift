@@ -2,11 +2,12 @@
 //  AgentSkillExecutionTests.swift
 //  tesseractTests
 //
-//  Coordinator-level tests for skill execution (PRD #174): a Skill Pill fire
-//  and a skill slash command drive the PUBLIC coordinator interface against a
-//  scripted `Agent` (yield → finish, the dispatch-ordering fixture), asserting
-//  the observable outcome — the message the agent actually received (injected
-//  skill block, argument text, forwarded images) and the recorded usage count.
+//  Session-level tests for skill execution (PRD #174): a Skill Pill fire and a
+//  skill slash command drive the PUBLIC Chat Session interface against a
+//  scripted `Agent` (yield → finish), asserting the observable outcome — the
+//  message the agent actually received (injected skill block, argument text,
+//  forwarded images) and the recorded usage count. The session's skill hooks
+//  are wired to a real `SkillPillController`, the production assembly path.
 //
 
 import Foundation
@@ -62,26 +63,31 @@ struct AgentSkillExecutionTests {
         return url
     }
 
-    private func makeCoordinator(
-        agent: Agent, settings: SettingsManager, skills: [SkillMetadata] = []
-    ) -> AgentCoordinator {
-        let coordinator = AgentCoordinator(
+    private func makeSession(agent: Agent, settings: SettingsManager) -> ChatSession {
+        // The production wiring shape: assembly and usage recording resolve on
+        // a real Skill Pill controller (DependencyContainer does the same).
+        let skillPills = SkillPillController(discoverSkills: { [] }, settings: settings)
+        return ChatSession(
             agent: agent,
             conversationStore: InMemoryAgentConversationStore(),
-            settings: settings,
             arbiter: InMemoryInferenceArbiter(),
-            discoverSkills: { skills }
+            settings: settings,
+            assembleSkillArguments: { name, text in
+                skillPills.assembleArguments(skillName: name, userText: text)
+            },
+            recordSkillInvocation: { name in
+                skillPills.recordUserInvocation(skillName: name)
+            },
+            liveMarkdownThrottle: .zero
         )
-        coordinator.composerDraft.imageInputAvailable = true
-        return coordinator
     }
 
-    private func settle(_ coordinator: AgentCoordinator) async throws {
+    private func settle(_ session: ChatSession) async throws {
         let deadline = ContinuousClock.now + .seconds(3)
-        while coordinator.isGenerating {
+        while session.isGenerating {
             try await Task.sleep(for: .milliseconds(10))
             if ContinuousClock.now >= deadline {
-                Issue.record("Coordinator did not settle within timeout")
+                Issue.record("Session did not settle within timeout")
                 break
             }
         }
@@ -99,20 +105,18 @@ struct AgentSkillExecutionTests {
 
         let agent = makeScriptedAgent()
         let settings = SettingsManager(store: InMemorySettingsStore())
-        let coordinator = makeCoordinator(agent: agent, settings: settings)
+        let session = makeSession(agent: agent, settings: settings)
 
         let attachment = image("appshot")
-        // Stage a representative draft on the controller the coordinator owns —
-        // typed text plus a pending image — exactly as the composer would.
-        coordinator.composerDraft.text = "my draft text"
-        coordinator.composerDraft.pendingImages = [attachment]
         let pill = SkillPill(
             name: "proofread", label: "Proofread",
             description: "d", filePath: skillURL.path)
 
-        coordinator.fireSkillPill(pill)
-        try await settle(coordinator)
+        // The pill row drains the composer draft and hands it to the fire.
+        let sent = session.fireSkillPill(pill, draftText: "my draft text", images: [attachment])
+        try await settle(session)
 
+        #expect(sent == true)
         let user = try #require(firstUserMessage(agent))
         // The injected skill block wraps the body; the composer text rides as
         // arguments; the pending images are forwarded (the PRD's known gap).
@@ -120,9 +124,6 @@ struct AgentSkillExecutionTests {
         #expect(user.content.contains("Fix errors only."))
         #expect(user.content.hasSuffix("my draft text"))
         #expect(user.images.map(\.id) == [attachment.id])
-        // The whole draft — text and pending strip — was drained by the fire.
-        #expect(coordinator.composerDraft.text == "")
-        #expect(coordinator.composerDraft.pendingImages.isEmpty)
         // A user-initiated invocation records usage.
         #expect(settings.skillUsageCount(skillName: "proofread") == 1)
     }
@@ -132,14 +133,15 @@ struct AgentSkillExecutionTests {
         defer { try? FileManager.default.removeItem(at: skillURL.deletingLastPathComponent()) }
 
         let agent = makeScriptedAgent()
-        let coordinator = makeCoordinator(
+        let session = makeSession(
             agent: agent, settings: SettingsManager(store: InMemorySettingsStore()))
         let pill = SkillPill(
             name: "summarize", label: "Summarize", description: "d", filePath: skillURL.path)
 
-        coordinator.fireSkillPill(pill)
-        try await settle(coordinator)
+        let sent = session.fireSkillPill(pill, draftText: "", images: [])
+        try await settle(session)
 
+        #expect(sent == true)
         let user = try #require(firstUserMessage(agent))
         #expect(user.content.hasPrefix("<skill name=\"summarize\""))
         #expect(user.content.hasSuffix("</skill>"))
@@ -152,36 +154,37 @@ struct AgentSkillExecutionTests {
 
         let agent = makeScriptedAgent()
         let settings = SettingsManager(store: InMemorySettingsStore())
-        let coordinator = makeCoordinator(agent: agent, settings: settings)
+        let session = makeSession(agent: agent, settings: settings)
         let pill = SkillPill(
             name: "proofread", label: "Proofread", description: "d", filePath: skillURL.path)
 
         // Occupy the run envelope, then try to fire.
-        coordinator.sendMessage("first message")
-        #expect(coordinator.isGenerating == true)
-        coordinator.fireSkillPill(pill)
+        session.sendMessage("first message")
+        #expect(session.isGenerating == true)
+        let sent = session.fireSkillPill(pill, draftText: "", images: [])
 
+        // A refused fire returns false — the pill row keeps the draft — and
+        // counts nothing.
+        #expect(sent == false)
         #expect(settings.skillUsageCount(skillName: "proofread") == 0)
     }
 
-    @Test func failedSkillLoadRestoresDraftAndCountsNothing() {
+    @Test func failedSkillLoadReturnsFalseAndCountsNothing() {
         let agent = makeScriptedAgent()
         let settings = SettingsManager(store: InMemorySettingsStore())
-        let coordinator = makeCoordinator(agent: agent, settings: settings)
+        let session = makeSession(agent: agent, settings: settings)
         let attachment = image("appshot")
-        coordinator.composerDraft.text = "text"
-        coordinator.composerDraft.pendingImages = [attachment]
         let pill = SkillPill(
             name: "ghost", label: "Ghost", description: "d",
             filePath: "/nonexistent/ghost/SKILL.md")
 
-        coordinator.fireSkillPill(pill)
+        let sent = session.fireSkillPill(pill, draftText: "text", images: [attachment])
 
-        // A failed fire surfaces the error and restores the whole draft it drained
-        // — text AND the Appshot — counting nothing and sending nothing.
-        #expect(coordinator.error?.contains("Failed to load skill") == true)
-        #expect(coordinator.composerDraft.text == "text")
-        #expect(coordinator.composerDraft.pendingImages.map(\.id) == [attachment.id])
+        // A failed fire surfaces the error and reports failure so the pill row
+        // (which drained the draft) restores it whole — counting nothing and
+        // sending nothing.
+        #expect(sent == false)
+        #expect(session.error?.contains("Failed to load skill") == true)
         #expect(settings.skillUsageCount(skillName: "ghost") == 0)
         #expect(agent.state.messages.isEmpty)
     }
@@ -194,13 +197,13 @@ struct AgentSkillExecutionTests {
 
         let agent = makeScriptedAgent()
         let settings = SettingsManager(store: InMemorySettingsStore())
-        let coordinator = makeCoordinator(agent: agent, settings: settings)
+        let session = makeSession(agent: agent, settings: settings)
 
         let command = SlashCommand(
             name: "explain", description: "d",
             source: .skill(filePath: skillURL.path), argumentHint: nil)
-        coordinator.executeCommand(command, arguments: "this error")
-        try await settle(coordinator)
+        session.executeCommand(command, arguments: "this error")
+        try await settle(session)
 
         let user = try #require(firstUserMessage(agent))
         #expect(user.content.hasPrefix("<skill name=\"explain\""))
@@ -215,13 +218,12 @@ struct AgentSkillExecutionTests {
         let agent = makeScriptedAgent()
         let settings = SettingsManager(store: InMemorySettingsStore())
         settings.translateTargetLanguage = "Ukrainian"
-        let coordinator = makeCoordinator(agent: agent, settings: settings)
+        let session = makeSession(agent: agent, settings: settings)
         let pill = SkillPill(
             name: "translate", label: "Translate", description: "d", filePath: skillURL.path)
 
-        coordinator.composerDraft.text = "guten Tag"
-        coordinator.fireSkillPill(pill)
-        try await settle(coordinator)
+        session.fireSkillPill(pill, draftText: "guten Tag", images: [])
+        try await settle(session)
 
         let user = try #require(firstUserMessage(agent))
         #expect(user.content.hasSuffix("guten Tag\n\nDefault target language: Ukrainian"))

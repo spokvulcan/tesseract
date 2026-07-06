@@ -76,7 +76,7 @@ struct ContextManagerCompactionTests {
         let prompt = try #require(prompts.first)
         #expect(prompt.contains("Summarize the following conversation history"))
         #expect(prompt.contains(Self.oldUser.content))
-        #expect(prompt.contains(Self.oldAssistant.content))
+        #expect(prompt.contains(Self.oldAssistant.text))
         #expect(!prompt.contains(Self.recentUser.content))
 
         // The first message must be the summary produced by the injected

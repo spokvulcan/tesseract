@@ -67,7 +67,9 @@ final class AgentDebugLogger {
             "type": "turn",
             "turn": turnIndex,
             "timestamp": Self.iso8601.string(from: Date()),
-            "assistantContent": message.content,
+            // Flat text projection — `content` is `[ContentPart]` (ADR-0024),
+            // which JSONSerialization would reject at runtime.
+            "assistantContent": message.text,
             "messageCount": messageCount,
         ]
 

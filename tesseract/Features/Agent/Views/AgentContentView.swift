@@ -1,13 +1,28 @@
+//
+//  AgentContentView.swift
+//  tesseract
+//
+//  The agent chat page: the flat document transcript with the glass composer
+//  floating in the bottom safe-area inset. The chat's two custom glass
+//  surfaces — the composer and the slash-command popup — share the one
+//  GlassEffectContainer here; everything above them is content layer and
+//  stays glass-free (HIG).
+//
+
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct AgentContentView: View {
-    @Environment(AgentCoordinator.self) private var coordinator
-    @EnvironmentObject private var conversationStore: AgentConversationStore
+    @Environment(ChatSession.self) private var session
+    @Environment(ComposerDraftController.self) private var composerDraft
+    @Environment(SlashCommandPaletteController.self) private var commandPalette
+    @Environment(AgentVoiceInputController.self) private var voiceInput
     @Environment(SpeechCoordinator.self) private var speechCoordinator
+    @Environment(SettingsManager.self) private var settings
+    @EnvironmentObject private var conversationStore: AgentConversationStore
+
     @State private var showingHistory = false
     @State private var speakingMessageID: UUID?
-    @Environment(SettingsManager.self) private var settings
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
 
     private var isSpeechActive: Bool {
@@ -17,72 +32,59 @@ struct AgentContentView: View {
     }
 
     var body: some View {
-        // The composer draft is owned by the controller, not view `@State`, so it
-        // survives conversation switches (new chat / load / delete) and `/clear`
-        // can wipe it. This `@Bindable` sources the text field binding
-        // (`$composerDraft.text`) and the shared drag-target overlay flag (#167).
-        @Bindable var composerDraft = coordinator.composerDraft
+        @Bindable var composerDraft = composerDraft
 
-        return VStack(spacing: 0) {
-            AgentConversationListView(
-                speakingMessageID: $speakingMessageID,
-                isSpeechActive: isSpeechActive
-            )
-            .overlay(alignment: .bottom) {
-                AgentInputStatusStrip()
-                    .padding(.horizontal, Theme.Spacing.lg)
-                    .padding(.bottom, Theme.Spacing.xs)
-            }
-        }
+        return ChatTranscriptView(
+            speakingMessageID: $speakingMessageID,
+            isSpeechActive: isSpeechActive
+        )
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
                 if isSpeechActive {
                     AgentSpeechIndicatorBar(onStop: {
-                        coordinator.stopSpeaking()
+                        session.stopSpeaking()
                         speakingMessageID = nil
                     })
                 }
 
                 ZStack(alignment: .bottom) {
-                    if coordinator.commandPalette.showCommandPopup {
+                    if commandPalette.showCommandPopup {
                         Color.clear
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                coordinator.commandPalette.dismissCommandPopup()
+                                commandPalette.dismissCommandPopup()
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
 
-                    VStack(spacing: 0) {
-                        if coordinator.commandPalette.showCommandPopup,
-                            !coordinator.commandPalette.commandFilteredResults.isEmpty
-                        {
-                            SlashCommandPopupView(
-                                commands: coordinator.commandPalette.commandFilteredResults,
-                                selectedIndex: coordinator.commandPalette.commandSelectedIndex,
-                                onSelect: { command in
-                                    selectCommandFromPopup(command)
-                                }
-                            )
-                            .padding(.horizontal, Theme.Spacing.md + 16)
-                            .padding(.bottom, 4)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
+                    // The one glass container: the popup and the composer
+                    // morph within a shared sampling context.
+                    GlassEffectContainer {
+                        VStack(spacing: 0) {
+                            if commandPalette.showCommandPopup,
+                                !commandPalette.commandFilteredResults.isEmpty
+                            {
+                                SlashCommandPopupView(
+                                    commands: commandPalette.commandFilteredResults,
+                                    selectedIndex: commandPalette.commandSelectedIndex,
+                                    onSelect: { command in
+                                        composerDraft.text =
+                                            commandPalette.autocompleteCommand(command)
+                                    }
+                                )
+                                .padding(.horizontal, Theme.Spacing.md + 16)
+                                .padding(.bottom, 4)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
 
-                        // The Skill Pill row (PRD #174) — always visible while
-                        // pill skills exist and the Setting is on; pills dim
-                        // (never hide) during a run, so the layout stays put.
-                        if coordinator.skillPills.isRowVisible {
-                            SkillPillRowView()
-                                .padding(.horizontal, Theme.Spacing.md + 4)
+                            AgentComposerView()
+                                .padding(Theme.Spacing.md)
                         }
-
-                        AgentInputBarView(inputText: $composerDraft.text)
                     }
                 }
-                .animation(
-                    .easeOut(duration: 0.15), value: coordinator.commandPalette.showCommandPopup)
+                .animation(.easeOut(duration: 0.15), value: commandPalette.showCommandPopup)
             }
+            .frame(maxWidth: ChatLayout.columnMaxWidth + 2 * Theme.Spacing.md)
             // Min-size shield, load-bearing (macOS 26 framework bug): the
             // scene measures NavigationSplitView's detail minimum by probing
             // at near-zero width, where any wrapping `.fixedSize(vertical:)`
@@ -96,15 +98,16 @@ struct AgentContentView: View {
         .navigationTitle("Agent")
         .background(
             QuickLookContainer(
-                request: coordinator.composerDraft.quickLookRequest,
-                onClose: { coordinator.composerDraft.dismissQuickLook() }
+                request: composerDraft.quickLookRequest,
+                onClose: { composerDraft.dismissQuickLook() }
             )
         )
-        // Full-window image drop (slice #117): dropping an image anywhere lands it
-        // in the composer's pending strip. `isTargeted` only flips for drags whose
-        // items conform to `.image`, so non-image drags never dim the window.
+        // Full-window image drop (slice #117): dropping an image anywhere lands
+        // it in the composer's pending strip. `isTargeted` only flips for drags
+        // whose items conform to `.image`, so non-image drags never dim the
+        // window.
         .onDrop(of: [.image], isTargeted: $composerDraft.isDropTargeted) { providers in
-            coordinator.composerDraft.handleWindowImageDrop(providers)
+            composerDraft.handleWindowImageDrop(providers)
         }
         .overlay {
             if composerDraft.isDropTargeted {
@@ -131,19 +134,19 @@ struct AgentContentView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: isSpeechActive)
         .onExitCommand {
-            if coordinator.voiceInput.voiceState == .recording {
-                coordinator.voiceInput.cancel()
+            if voiceInput.voiceState == .recording {
+                voiceInput.cancel()
             }
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    coordinator.newConversation()
+                    session.newConversation()
                 } label: {
                     Image(systemName: "plus.message")
                 }
                 .help("New conversation")
-                .disabled(coordinator.isGenerating)
+                .disabled(session.isGenerating)
 
                 Button {
                     showingHistory.toggle()
@@ -176,12 +179,6 @@ struct AgentContentView: View {
         }
     }
 
-    // MARK: - Slash Command Popup
-
-    private func selectCommandFromPopup(_ command: SlashCommand) {
-        coordinator.composerDraft.text = coordinator.commandPalette.autocompleteCommand(command)
-    }
-
     // MARK: - Conversation History Popover
 
     private var conversationHistoryPopover: some View {
@@ -206,7 +203,7 @@ struct AgentContentView: View {
     private func conversationRow(_ summary: AgentConversationSummary) -> some View {
         let isCurrent = conversationStore.currentConversation?.id == summary.id
         return Button {
-            coordinator.loadConversation(summary.id)
+            session.loadConversation(summary.id)
             showingHistory = false
         } label: {
             HStack {
@@ -231,10 +228,40 @@ struct AgentContentView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button(role: .destructive) {
-                coordinator.deleteConversation(summary.id)
+                session.deleteConversation(summary.id)
             } label: {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+}
+
+// MARK: - Speech Indicator
+
+/// Slim "Speaking…" strip above the composer while TTS plays, with a stop
+/// control. Content-layer chrome — system materials only.
+struct AgentSpeechIndicatorBar: View {
+    let onStop: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "speaker.wave.2.fill")
+                .foregroundStyle(.tint)
+                .symbolEffect(.variableColor.iterative, options: .repeating)
+            Text("Speaking\u{2026}")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                onStop()
+            } label: {
+                Image(systemName: "stop.circle.fill")
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.tint.opacity(0.08))
     }
 }

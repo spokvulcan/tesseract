@@ -33,15 +33,26 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
 
     /// Bump this when on-disk message schemas change in incompatible ways.
     /// Mismatched versions wipe the conversations directory on launch.
-    private static let storageVersion = 2
+    /// Version 3: the ADR-0024 parts-based `AssistantMessage` format — v2
+    /// flat-string conversations are wiped on first launch (explicit decision,
+    /// no migrator).
+    private static let storageVersion = 3
 
-    init() {
-        let appSupport =
-            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        conversationsDir =
-            appSupport
-            .appendingPathComponent("Tesseract Agent/agent/conversations", isDirectory: true)
+    /// `directory` overrides the Application Support location — the seam the
+    /// wipe-on-version-mismatch tests use to run against a temp directory.
+    init(directory: URL? = nil) {
+        if let directory {
+            conversationsDir = directory
+        } else {
+            let appSupport =
+                FileManager.default.urls(
+                    for: .applicationSupportDirectory, in: .userDomainMask
+                ).first
+                ?? FileManager.default.temporaryDirectory
+            conversationsDir =
+                appSupport
+                .appendingPathComponent("Tesseract Agent/agent/conversations", isDirectory: true)
+        }
 
         ensureDirectory()
         migrateStorageVersionIfNeeded()

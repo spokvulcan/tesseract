@@ -101,11 +101,16 @@ extension View {
             .environment(container.speechEngine)
     }
 
-    /// Agent feature: coordinator, engine, conversation store.
+    /// Agent feature: the Chat Session, its leaf controllers, engine, store.
     @MainActor
     func injectAgentDependencies(from container: DependencyContainer) -> some View {
         self
-            .environment(container.agentCoordinator)
+            .environment(container.chatSession)
+            .environment(container.composerDraft)
+            .environment(container.commandPalette)
+            .environment(container.skillPills)
+            .environment(container.agentVoiceInput)
+            .environment(container.agentSystemPromptInspector)
             .environment(container.agentEngine)
             .environment(container.appshotController)
             .environmentObject(container.agentConversationStore)

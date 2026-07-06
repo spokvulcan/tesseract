@@ -17,22 +17,51 @@ struct ContextTransformResult: Sendable {
     let reason: ContextTransformReason
 }
 
-// MARK: - ToolCallDelta
+// MARK: - AssistantMessageEvent
 
-/// Incremental streaming update for a single tool call being parsed.
-nonisolated struct ToolCallDelta: Sendable {
-    let toolCallId: String
-    let name: String?
-    let argumentsDelta: String?
-}
+/// The assistant-message stream protocol — pi-ai's `AssistantMessageEvent`,
+/// verbatim (ADR-0024): `start`, then part-scoped `*_start / *_delta / *_end`
+/// events addressed by `contentIndex` into the partial message's `content`,
+/// terminated by `done` (stop / length / toolUse) or `error` (error /
+/// aborted). Every event carries the partial `AssistantMessage` so a consumer
+/// can always resync its fold from the snapshot.
+nonisolated enum AssistantMessageEvent: Sendable {
+    case start(partial: AssistantMessage)
+    case textStart(contentIndex: Int, partial: AssistantMessage)
+    case textDelta(contentIndex: Int, delta: String, partial: AssistantMessage)
+    case textEnd(contentIndex: Int, content: String, partial: AssistantMessage)
+    case thinkingStart(contentIndex: Int, partial: AssistantMessage)
+    case thinkingDelta(contentIndex: Int, delta: String, partial: AssistantMessage)
+    case thinkingEnd(contentIndex: Int, content: String, partial: AssistantMessage)
+    case toolcallStart(contentIndex: Int, partial: AssistantMessage)
+    case toolcallDelta(contentIndex: Int, delta: String, partial: AssistantMessage)
+    case toolcallEnd(contentIndex: Int, toolCall: ToolCallPart, partial: AssistantMessage)
+    /// Terminal success. `reason` is `.stop`, `.length`, or `.toolUse`.
+    case done(reason: StopReason, message: AssistantMessage)
+    /// Terminal failure. `reason` is `.error` or `.aborted`; the message
+    /// preserves the partial content produced before the failure.
+    case error(reason: StopReason, error: AssistantMessage)
 
-// MARK: - AssistantStreamDelta
-
-/// A single streaming chunk from the LLM response.
-nonisolated struct AssistantStreamDelta: Sendable {
-    let textDelta: String?
-    let thinkingDelta: String?
-    let toolCallDelta: ToolCallDelta?
+    /// The message snapshot this event carries, regardless of case.
+    var partial: AssistantMessage {
+        switch self {
+        case .start(let partial),
+            .textStart(_, let partial),
+            .textDelta(_, _, let partial),
+            .textEnd(_, _, let partial),
+            .thinkingStart(_, let partial),
+            .thinkingDelta(_, _, let partial),
+            .thinkingEnd(_, _, let partial),
+            .toolcallStart(_, let partial),
+            .toolcallDelta(_, _, let partial),
+            .toolcallEnd(_, _, let partial):
+            return partial
+        case .done(_, let message):
+            return message
+        case .error(_, let error):
+            return error
+        }
+    }
 }
 
 // MARK: - AgentEvent
@@ -69,7 +98,9 @@ enum AgentEvent: Sendable {
 
     // -- Message lifecycle --
     case messageStart(message: any AgentMessageProtocol & Sendable)
-    case messageUpdate(message: AssistantMessage, streamDelta: AssistantStreamDelta)
+    /// Streaming update for the in-flight assistant message: the pi-ai stream
+    /// event plus the partial message it carries (pi-mono's `message_update`).
+    case messageUpdate(message: AssistantMessage, event: AssistantMessageEvent)
     case messageEnd(message: any AgentMessageProtocol & Sendable)
     case malformedToolCall(raw: String)
 

@@ -110,24 +110,58 @@ final class DependencyContainer: ObservableObject {
     lazy var httpServer = HTTPServer(port: HTTPServer.clampedPort(settingsManager.serverPort))
 
     lazy var terminationCoordinator = makeTerminationCoordinator()
-    lazy var agentCoordinator: AgentCoordinator = {
-        AgentCoordinator(
-            agent: agent,
-            conversationStore: agentConversationStore,
-            audioCapture: audioCaptureEngine,
-            transcriptionEngine: transcriptionEngine,
-            settings: settingsManager,
-            captureDump: captureDumpStore,
-            arbiter: inferenceArbiter,
+
+    // Chat leaves (ADR-0024): standalone controllers for everything not
+    // derived from agent events. Constructed here — not in the views — because
+    // cross-cutting surfaces need them too (Appshot stages into the Composer
+    // Draft; the push-to-talk hotkey drives voice input).
+    lazy var agentVoiceInput = AgentVoiceInputController(
+        audioCapture: audioCaptureEngine,
+        transcriptionEngine: transcriptionEngine,
+        settings: settingsManager,
+        captureDump: captureDumpStore
+    )
+    lazy var composerDraft = ComposerDraftController(conversationImages: { [agent] in
+        agent.state.messages.flatMap { message -> [ImageAttachment] in
+            if let user = message.asUser { return user.images }
+            if let tool = message.asToolResult {
+                return tool.content.imageAttachments(namespace: tool.id)
+            }
+            return []
+        }
+    })
+    lazy var agentSystemPromptInspector: AgentSystemPromptInspector = {
+        AgentSystemPromptInspector(
+            promptSource: { [agent] in (agent.state.systemPrompt, agent.state.tools) },
             formatRawPrompt: { [weak self] systemPrompt, tools in
                 guard let self else { throw AgentEngineError.modelNotLoaded }
                 return try await self.agentEngine.formatRawPrompt(
                     systemPrompt: systemPrompt, tools: tools)
-            },
-            speechCoordinator: speechCoordinator,
+            }
+        )
+    }()
+    lazy var commandPalette = SlashCommandPaletteController(
+        extensionHost: extensionHost, packageRegistry: packageRegistry
+    )
+    lazy var skillPills = SkillPillController(
+        discoverSkills: { [packageRegistry] in
+            PackageBootstrap.discoverAgentSkills(packageRegistry: packageRegistry)
+        },
+        settings: settingsManager
+    )
+
+    // The Chat Session (ADR-0024): the single agent-event subscriber and the
+    // store every chat view reads. Leaf behavior it needs (slash registry,
+    // skill argument assembly, draft clearing) arrives as closures so the
+    // session never holds the controllers.
+    lazy var chatSession: ChatSession = {
+        ChatSession(
+            agent: agent,
+            conversationStore: agentConversationStore,
+            arbiter: inferenceArbiter,
             toolRegistry: newToolRegistry,
-            extensionHost: extensionHost,
-            packageRegistry: packageRegistry,
+            settings: settingsManager,
+            speechCoordinator: speechCoordinator,
             contextManager: contextManager,
             contextWindow: 262_144,
             summarize: makeSummarizeClosure(
@@ -135,16 +169,29 @@ final class DependencyContainer: ObservableObject {
                 parametersProvider: { [settingsManager] in
                     settingsManager.makeAgentGenerateParameters()
                 }
-            )
+            ),
+            commandRegistry: { [commandPalette] in commandPalette.commandRegistry },
+            assembleSkillArguments: { [skillPills] name, text in
+                skillPills.assembleArguments(skillName: name, userText: text)
+            },
+            recordSkillInvocation: { [skillPills] name in
+                skillPills.recordUserInvocation(skillName: name)
+            },
+            clearComposerDraft: { [composerDraft] in composerDraft.clearDraft() },
+            onConversationSwitch: { [composerDraft, agentSystemPromptInspector, skillPills] in
+                composerDraft.resetEphemeral()
+                agentSystemPromptInspector.reset()
+                skillPills.refreshPills()
+            }
         )
     }()
 
     // Appshot — the double-Command frontmost-window capture (PRD #170). Stages
-    // through the agent coordinator's Composer Draft; the app delegate attaches
-    // the window-summon callback it owns.
+    // through the Composer Draft; the app delegate attaches the window-summon
+    // callback it owns.
     lazy var appshotController = AppshotController(
         capturer: ScreenCaptureKitAppshotCapturer(),
-        composerDraft: agentCoordinator.composerDraft
+        composerDraft: composerDraft
     )
 
     // Speech (TTS)
@@ -222,8 +269,8 @@ final class DependencyContainer: ObservableObject {
                 stopHotkeys: { [hotkeyManager] in
                     hotkeyManager.stopListening()
                 },
-                cancelForegroundGenerationAndWait: { [agentCoordinator] in
-                    await agentCoordinator.cancelGenerationAndWait()
+                cancelForegroundGenerationAndWait: { [chatSession] in
+                    await chatSession.cancelGenerationAndWait()
                 },
                 stopHTTPServerAndDrain: { [httpServer] in
                     await httpServer.stopAndDrain()
@@ -279,8 +326,8 @@ final class DependencyContainer: ObservableObject {
         hotkeyManager.registerHotkey(
             id: "agent",
             combo: settingsManager.agentHotkey,
-            onDown: { [weak self] in self?.agentCoordinator.voiceInput.start() },
-            onUp: { [weak self] in self?.agentCoordinator.voiceInput.finishCapture() }
+            onDown: { [weak self] in self?.agentVoiceInput.start() },
+            onUp: { [weak self] in self?.agentVoiceInput.finishCapture() }
         )
         // Register Appshot hotkey (one-shot tap, no held state)
         hotkeyManager.registerHotkey(

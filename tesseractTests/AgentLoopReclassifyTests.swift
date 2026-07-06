@@ -64,7 +64,7 @@ struct AgentLoopReclassifyTests {
         )
 
         let assistant = try #require(recorder.last)
-        #expect(assistant.content == "preR")
+        #expect(assistant.text == "preR")
         #expect(assistant.thinking == nil)
     }
 }
