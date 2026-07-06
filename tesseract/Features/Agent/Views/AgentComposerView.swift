@@ -5,12 +5,21 @@
 //  The composer: one of exactly two custom glass surfaces in the chat (the
 //  other is the slash-command popup; both live in the content view's shared
 //  GlassEffectContainer). Hosts the text field, the pending-image strip, the
-//  model pill, and the single in-composer notice slot every hint/error feeds —
+//  model button, and the single in-composer notice slot every hint/error feeds —
 //  there is no separate status strip or floating error banner.
 //
 
 import SwiftUI
 import UniformTypeIdentifiers
+
+/// Shared metrics for the composer action-row icons: one glyph size, one hit
+/// frame, one spacing, so the six controls read as a single family. Two
+/// deliberate exceptions keep their own glyph treatment inside the shared
+/// frame: send/stop (the row's one primary action) and + (highlighted with a
+/// circle background).
+private let actionIconFont: Font = .system(size: 15, weight: .medium)
+private let actionIconFrame: CGFloat = 26
+private let actionIconSpacing: CGFloat = 10
 
 struct AgentComposerView: View {
     @Environment(ChatSession.self) private var session
@@ -101,7 +110,8 @@ struct AgentComposerView: View {
                         return true
                     }
                 )
-                .frame(height: min(max(textHeight, 20), 150))
+                // Taller-than-one-line minimum — a one-line composer feels cramped.
+                .frame(height: min(max(textHeight, 32), 150))
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, composerDraft.pendingImages.isEmpty ? 8 : 4)
@@ -133,9 +143,7 @@ struct AgentComposerView: View {
                 .padding(.bottom, 4)
             }
 
-            HStack(spacing: 14) {
-                ModelPillView()
-
+            HStack(spacing: actionIconSpacing) {
                 if imageInputAvailable {
                     Button {
                         openImagePicker()
@@ -145,6 +153,7 @@ struct AgentComposerView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 22, height: 22)
                             .background(.quinary, in: Circle())
+                            .frame(width: actionIconFrame, height: actionIconFrame)
                     }
                     .buttonStyle(.plain)
                     .help("Add image")
@@ -155,10 +164,13 @@ struct AgentComposerView: View {
                     settings.webAccessEnabled.toggle()
                 } label: {
                     Image(systemName: "globe")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(actionIconFont)
                         .foregroundStyle(
                             settings.webAccessEnabled
-                                ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                                ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)
+                        )
+                        .frame(width: actionIconFrame, height: actionIconFrame)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help(
@@ -175,10 +187,13 @@ struct AgentComposerView: View {
                     }
                 } label: {
                     Image(systemName: "slash.circle")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(actionIconFont)
                         .foregroundStyle(
                             commandPalette.showCommandPopup
-                                ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                                ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)
+                        )
+                        .frame(width: actionIconFrame, height: actionIconFrame)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Commands")
@@ -192,32 +207,35 @@ struct AgentComposerView: View {
                     Spacer()
                 }
 
-                HStack(spacing: 12) {
-                    micButton
+                ModelButtonView()
 
-                    if session.isGenerating {
-                        Button {
-                            session.cancelGeneration()
-                        } label: {
-                            Image(systemName: "stop.circle.fill")
-                                .font(.system(size: 22))
-                                .foregroundStyle(.red)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Stop generating")
-                    } else {
-                        Button {
-                            send()
-                        } label: {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.system(size: 22))
-                                .foregroundStyle(
-                                    canSend ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canSend)
-                        .help("Send message")
+                micButton
+
+                if session.isGenerating {
+                    Button {
+                        session.cancelGeneration()
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.red)
+                            .frame(width: actionIconFrame, height: actionIconFrame)
                     }
+                    .buttonStyle(.plain)
+                    .help("Stop generating")
+                } else {
+                    Button {
+                        send()
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(
+                                canSend ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary)
+                            )
+                            .frame(width: actionIconFrame, height: actionIconFrame)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
+                    .help("Send message")
                 }
             }
             .padding(.horizontal, 12)
@@ -412,8 +430,8 @@ struct AgentComposerView: View {
         let state = voiceInput.voiceState
 
         return micIcon(for: state)
-            .font(.title2)
-            .frame(width: 28, height: 28)
+            .font(actionIconFont)
+            .frame(width: actionIconFrame, height: actionIconFrame)
             .contentShape(Circle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -611,13 +629,14 @@ struct AgentComposerView: View {
     }
 }
 
-// MARK: - Model Pill
+// MARK: - Model Button
 
-/// The model selector: a quiet menu pill showing the selected agent model and
-/// its honest load state — spinner + status while loading, a hollow dot while
-/// idle-unloaded, a filled dot once resident. Switching models writes
-/// `selectedAgentModelID`; the engine's auto-load reacts to the setting.
-private struct ModelPillView: View {
+/// The model selector: a quiet icon-only menu button in the composer's right
+/// cluster, ChatGPT-style — model selection is a rare action, so it gets no
+/// text at rest. A spinner replaces the icon while a model loads; the tooltip
+/// carries the selected model's name and honest load state. Switching models
+/// writes `selectedAgentModelID`; the engine's auto-load reacts to the setting.
+private struct ModelButtonView: View {
     @Environment(AgentEngine.self) private var agentEngine
     @Environment(SettingsManager.self) private var settings
     @Environment(ChatSession.self) private var session
@@ -625,7 +644,8 @@ private struct ModelPillView: View {
 
     var body: some View {
         Menu {
-            ForEach(downloadManager.downloadedModels(in: .agent)) { model in
+            let models = downloadManager.downloadedModels(in: .agent)
+            ForEach(models) { model in
                 Button {
                     settings.selectedAgentModelID = model.id
                 } label: {
@@ -636,42 +656,38 @@ private struct ModelPillView: View {
                     }
                 }
             }
-        } label: {
-            HStack(spacing: 5) {
-                statusDot
-                Text(selectedDisplayName)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+            if models.isEmpty {
+                Button("Download Models…") {
+                    (NSApp.delegate as? AppDelegate)?.navigateToSettings()
+                }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.quinary, in: Capsule())
-            .contentShape(Capsule())
+        } label: {
+            Image(systemName: "brain")
+                .font(actionIconFont)
+                .foregroundStyle(
+                    session.isGenerating
+                        ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.secondary)
+                )
+                // While loading, the glyph yields its footprint to the spinner
+                // overlaid below — kept out of the label because a ProgressView
+                // inside a Menu label does not render on macOS.
+                .opacity(agentEngine.isLoading ? 0 : 1)
+                .frame(width: actionIconFrame, height: actionIconFrame)
+                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
         .disabled(session.isGenerating)
         .help(loadStateHelp)
-    }
-
-    @ViewBuilder
-    private var statusDot: some View {
-        if agentEngine.isLoading {
-            ProgressView()
-                .controlSize(.mini)
-                .scaleEffect(0.6)
-                .frame(width: 8, height: 8)
-        } else {
-            Circle()
-                .fill(
-                    agentEngine.isModelLoaded ? AnyShapeStyle(.green) : AnyShapeStyle(.quaternary)
-                )
-                .frame(width: 6, height: 6)
+        .overlay {
+            if agentEngine.isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
+                    .allowsHitTesting(false)
+            }
         }
     }
 
