@@ -6,7 +6,13 @@
 import SwiftUI
 
 /// Global overlay HUD that displays recording waveform or processing indicator.
-/// Designed as a floating pill that appears on top of all applications.
+/// A Liquid Glass pill floating on top of all applications: one `.glassEffect`
+/// capsule whose tint carries the state (recording red, error amber, processing
+/// neutral) with vibrant content on top — a floating control, exactly the layer
+/// the HIG sanctions glass for. The old hand-rolled treatment (material fill,
+/// moving sheen, gradient border, per-style shadow) is fully replaced by the
+/// system material, which also adapts to light/dark, the Clear/Tinted
+/// appearance setting, and Reduce Transparency on its own.
 struct GlobalOverlayHUD: View {
     /// Observable state shared with the panel controller (not replaced on updates)
     var overlayState: OverlayState
@@ -16,11 +22,13 @@ struct GlobalOverlayHUD: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack {
-            if shouldShow {
-                hudContent
-                    .opacity(isVisible ? 1 : 0)
-                    .scaleEffect(isVisible ? 1 : 0.85)
+        GlassEffectContainer {
+            ZStack {
+                if shouldShow {
+                    hudContent
+                        .opacity(isVisible ? 1 : 0)
+                        .scaleEffect(isVisible ? 1 : 0.85)
+                }
             }
         }
         .onChange(of: overlayState.dictationState) { _, newState in
@@ -52,33 +60,24 @@ struct GlobalOverlayHUD: View {
     }
 
     private var recordingView: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            let phase = CGFloat(time * 2.2)
-
-            pillContainer(style: .recording, time: time) {
-                visualizationContent(level: smoothedLevel, phase: phase)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-            }
+        pillContainer(style: .recording) {
+            AudioBarsView(level: smoothedLevel)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
         }
-    }
-
-    private func visualizationContent(level: CGFloat, phase: CGFloat) -> some View {
-        AudioBarsView(level: level, phase: phase)
     }
 
     private var processingView: some View {
         Group {
             if reduceMotion {
-                pillContainer(style: .processing, time: nil) {
+                pillContainer(style: .processing) {
                     processingContent(time: nil)
                 }
             } else {
                 TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
                     let time = timeline.date.timeIntervalSinceReferenceDate
 
-                    pillContainer(style: .processing, time: time) {
+                    pillContainer(style: .processing) {
                         processingContent(time: time)
                     }
                 }
@@ -101,7 +100,7 @@ struct GlobalOverlayHUD: View {
     }
 
     private var errorView: some View {
-        pillContainer(style: .error, time: nil) {
+        pillContainer(style: .error) {
             HStack(alignment: .center, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 12, weight: .semibold))
@@ -119,7 +118,6 @@ struct GlobalOverlayHUD: View {
 
     private func pillContainer<Content: View>(
         style: PillStyle,
-        time: TimeInterval?,
         @ViewBuilder content: () -> Content
     ) -> some View {
         // Size from the shared PillMetrics keyed on the live dictation state, so the
@@ -127,127 +125,30 @@ struct GlobalOverlayHUD: View {
         // reads the same source). `hudContent` only renders for overlay-showing
         // states, so the state→size lookup is always one of the three pill sizes.
         let size = PillMetrics.size(for: overlayState.dictationState)
-        let cornerRadius = size.height / 2
 
-        return ZStack {
-            // Glass background
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(backgroundMaterial(for: style))
-
-            if let time, !reduceMotion {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(sheenGradient(for: style))
-                    .opacity(0.18)
-                    .offset(x: sheenOffset(for: time))
-                    .blendMode(.screen)
-                    .mask(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            }
-
-            // Subtle gradient border
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(borderGradient(for: style), lineWidth: borderWidth(for: style))
-
-            // Content
-            content()
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius - 2, style: .continuous))
-        }
-        .frame(width: size.width, height: size.height)
-        .shadow(color: shadowColor(for: style), radius: shadowRadius(for: style), y: 3)
+        return content()
+            .frame(width: size.width, height: size.height)
+            .glassEffect(style.glass, in: .capsule)
     }
 
     private enum PillStyle {
         case recording
         case processing
         case error
-    }
 
-    private func backgroundMaterial(for style: PillStyle) -> Material {
-        switch style {
-        case .error:
-            return .thickMaterial
-        case .recording, .processing:
-            return .thickMaterial
+        /// Semantic tint only (HIG rule): red = the microphone is live, amber =
+        /// needs attention; processing stays neutral. The regular variant keeps
+        /// the content legible over whatever app the pill floats above.
+        var glass: Glass {
+            switch self {
+            case .recording:
+                return .regular.tint(.red.opacity(0.16))
+            case .processing:
+                return .regular
+            case .error:
+                return .regular.tint(.orange.opacity(0.16))
+            }
         }
-    }
-
-    private func borderGradient(for style: PillStyle) -> LinearGradient {
-        switch style {
-        case .error:
-            return LinearGradient(
-                colors: [
-                    Color.white.opacity(0.2),
-                    Color.white.opacity(0.08),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        case .recording, .processing:
-            return LinearGradient(
-                colors: [
-                    Color.white.opacity(0.2),
-                    Color.white.opacity(0.08),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-    }
-
-    private func borderWidth(for style: PillStyle) -> CGFloat {
-        switch style {
-        case .error:
-            return 0
-        case .recording, .processing:
-            return 0.5
-        }
-    }
-
-    private func shadowColor(for style: PillStyle) -> Color {
-        switch style {
-        case .error:
-            return Color.black.opacity(0.12)
-        case .recording, .processing:
-            return Color.black.opacity(0.12)
-        }
-    }
-
-    private func shadowRadius(for style: PillStyle) -> CGFloat {
-        switch style {
-        case .error:
-            return 8
-        case .recording, .processing:
-            return 6
-        }
-    }
-
-    private func sheenGradient(for style: PillStyle) -> LinearGradient {
-        switch style {
-        case .error:
-            return LinearGradient(
-                colors: [
-                    Color.white.opacity(0.0),
-                    Color.white.opacity(0.25),
-                    Color.white.opacity(0.0),
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-        case .recording, .processing:
-            return LinearGradient(
-                colors: [
-                    Color.white.opacity(0.0),
-                    Color.white.opacity(0.18),
-                    Color.white.opacity(0.0),
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-        }
-    }
-
-    private func sheenOffset(for time: TimeInterval) -> CGFloat {
-        let progress = CGFloat((time * 0.12).truncatingRemainder(dividingBy: 1.0))
-        return (progress * 2 - 1) * 50
     }
 
     private var errorMessage: String {
@@ -289,7 +190,11 @@ struct GlobalOverlayHUD: View {
     state.audioLevel = 0.5
     return GlobalOverlayHUD(overlayState: state)
         .padding(50)
-        .background(Color.gray.opacity(0.3))
+        .background(
+            LinearGradient(
+                colors: [.blue, .purple, .orange],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            ))
 }
 
 #Preview("Processing") {
@@ -298,5 +203,21 @@ struct GlobalOverlayHUD: View {
     state.audioLevel = 0
     return GlobalOverlayHUD(overlayState: state)
         .padding(50)
-        .background(Color.gray.opacity(0.3))
+        .background(
+            LinearGradient(
+                colors: [.blue, .purple, .orange],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            ))
+}
+
+#Preview("Error") {
+    let state = OverlayState()
+    state.dictationState = .error("No speech was detected.")
+    return GlobalOverlayHUD(overlayState: state)
+        .padding(50)
+        .background(
+            LinearGradient(
+                colors: [.blue, .purple, .orange],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            ))
 }

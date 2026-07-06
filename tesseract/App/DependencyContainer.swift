@@ -201,6 +201,7 @@ final class DependencyContainer: ObservableObject {
     lazy var pillOverlay = OverlayPanel(
         state: OverlayState(),
         placement: .pill,
+        hasShadow: true,
         content: { GlobalOverlayHUD(overlayState: $0) }
     )
     lazy var borderOverlay = OverlayPanel(

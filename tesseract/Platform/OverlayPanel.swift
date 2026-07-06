@@ -29,6 +29,7 @@ final class OverlayPanel<Content: View> {
     let state: OverlayState
 
     private let placement: OverlayPlacement
+    private let hasShadow: Bool
     private let content: @MainActor (OverlayState) -> Content
 
     private var panel: NSPanel?
@@ -42,14 +43,21 @@ final class OverlayPanel<Content: View> {
     ///   - state: the `OverlayState` the caller owns; seed any initial pure view
     ///     data (e.g. the border's `glowTheme`) on it *before* calling ``setup()``.
     ///   - placement: where the panel sits and whether it animates its reposition.
+    ///   - hasShadow: whether the panel casts a window shadow matching the
+    ///     content's silhouette. On for the Liquid Glass pill (the system draws
+    ///     the shadow from the capsule's alpha, which a SwiftUI `.shadow` behind
+    ///     translucent glass can't do without muddying it); off for the
+    ///     full-screen border.
     ///   - content: builds the hosted SwiftUI view from the state.
     init(
         state: OverlayState,
         placement: OverlayPlacement,
+        hasShadow: Bool = false,
         content: @escaping @MainActor (OverlayState) -> Content
     ) {
         self.state = state
         self.placement = placement
+        self.hasShadow = hasShadow
         self.content = content
     }
 
@@ -121,7 +129,7 @@ final class OverlayPanel<Content: View> {
         panel.ignoresMouseEvents = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false
+        panel.hasShadow = hasShadow
         panel.hidesOnDeactivate = false
 
         // Hosting view reads `state`, which the caller has already seeded. Created

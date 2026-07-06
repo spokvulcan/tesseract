@@ -9,7 +9,6 @@ import SwiftUI
 /// Each bar represents a captured audio level sample, creating a waveform history.
 struct AudioBarsView: View {
     let level: CGFloat
-    let phase: CGFloat  // unused, kept for API compatibility
 
     @State private var samples: [CGFloat] = Array(repeating: 0.1, count: 20)
 
@@ -67,7 +66,7 @@ struct AudioBarsView: View {
     ZStack {
         Color.black.opacity(0.8)
 
-        AudioBarsView(level: 0.5, phase: 0)
+        AudioBarsView(level: 0.5)
             .frame(width: 120, height: 24)
             .padding()
     }
