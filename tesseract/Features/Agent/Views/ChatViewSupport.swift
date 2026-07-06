@@ -8,17 +8,19 @@
 
 import SwiftUI
 
-/// Base size for chat message body text. The markdown renderer (Textual)
-/// derives all its font-scaled metrics from the environment font, so applying
+/// The one transcript type size — body, thinking, tool rows, badges, user
+/// text all read at this size; hierarchy comes from color and weight, never
+/// from size. The markdown renderer (Textual) derives all its font-scaled
+/// metrics from the environment font, so applying
 /// `.font(.system(size: chatBodyFontSize))` keeps every render mode identical.
-let chatBodyFontSize: CGFloat = 15
+let chatBodyFontSize: CGFloat = 16
 
 /// Metrics of the flat document transcript.
 enum ChatLayout {
     /// Readable column width — content never stretches past this.
     static let columnMaxWidth: CGFloat = 720
-    /// Secondary rows (tool calls, thinking) type size.
-    static let stepFontSize: CGFloat = 12.5
+    /// Width of the +/− collapse-marker slot in collapsible rows.
+    static let markerWidth: CGFloat = 14
 }
 
 // MARK: - Copy Button

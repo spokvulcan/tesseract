@@ -3,9 +3,24 @@
 //  tesseract
 //
 //  The flat document transcript (ADR-0024): committed `ChatItem` value rows
-//  plus the one Live Part, laid out in a readable column. Auto-follows the
-//  stream while the user is near the bottom; committed rows never re-render
-//  on a token delta — only the Live Part's `Text` invalidates.
+//  plus the one Live Part, laid out in a readable column. Committed rows
+//  never re-render on a token delta — only the Live Part's `Text`
+//  invalidates.
+//
+//  Scrolling contract (rewritten from scratch, per the user's spec):
+//   1. Sending a message always lands it at the bottom, immediately.
+//   2. While a response streams and the user sits at the bottom, the view
+//      follows the growing content.
+//   3. When the response finishes, settle smoothly at the absolute bottom.
+//   4. The moment the user scrolls up, auto-follow disengages completely;
+//      it re-arms only when *they* return to the bottom.
+//
+//  Mechanics: a `ScrollPosition` for programmatic scrolls (declarative — safe
+//  to set mid-update, unlike `ScrollViewReader.scrollTo`), one geometry
+//  observer deriving the near-bottom gate (`isPositionedByUser` distinguishes
+//  the user's scrolls from our own), and a second geometry observer that
+//  follows measured content *growth* — driving off geometry, not token
+//  events, is what makes the follow land after layout has the true height.
 //
 
 import SwiftUI
@@ -15,90 +30,92 @@ struct ChatTranscriptView: View {
     var isSpeechActive: Bool
 
     @Environment(ChatSession.self) private var session
-    @State private var isNearBottom = true
-    @State private var pendingScrollTask: Task<Void, Never>?
 
-    private let bottomAnchorID = "chat-transcript-bottom"
+    @State private var scrollPosition = ScrollPosition()
+    @State private var isNearBottom = true
+    @State private var autoFollow = true
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                transcriptStack
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 16)
-                    .frame(maxWidth: ChatLayout.columnMaxWidth)
-                    .frame(maxWidth: .infinity)
+        ScrollView {
+            // A plain (eager) VStack, deliberately: LazyVStack + bottom
+            // anchoring is a documented macOS minefield (blank realization,
+            // scrollTo mis-measure — FB threads 741406/761014), and swapping
+            // container types mid-conversation resets the scroll position.
+            // Rows are cheap value views; eagerness buys correctness.
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(session.items) { item in
+                    ChatItemRow(
+                        item: item,
+                        speakingMessageID: $speakingMessageID,
+                        isSpeechActive: isSpeechActive
+                    )
+                }
+
+                LiveMessageSection()
             }
-            .defaultScrollAnchor(session.items.isEmpty ? .top : .bottom)
-            // Soft edge under the floating composer; the top edge gets the
-            // same treatment from the hosting split-view detail column.
-            .scrollEdgeEffectStyle(.soft, for: .bottom)
-            .onScrollGeometryChange(for: Bool.self) { geo in
-                geo.contentSize.height > 0 && geo.visibleRect.maxY >= geo.contentSize.height - 80
-            } action: { _, nearBottom in
-                isNearBottom = nearBottom
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+            .frame(maxWidth: ChatLayout.columnMaxWidth)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollPosition($scrollPosition, anchor: .bottom)
+        .defaultScrollAnchor(session.items.isEmpty ? .top : .bottom, for: .initialOffset)
+        // Soft edge under the floating composer; the top edge gets the
+        // same treatment from the hosting split-view detail column.
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
+        // The auto-follow gate. Re-arms whenever the user is at the bottom;
+        // disarms only on a *user* scroll away — content growing under a
+        // programmatic pin also momentarily leaves the bottom, but that never
+        // has `isPositionedByUser` set.
+        .onScrollGeometryChange(for: Bool.self) { geo in
+            geo.contentSize.height > 0
+                && geo.visibleRect.maxY >= geo.contentSize.height - 80
+        } action: { _, nearBottom in
+            isNearBottom = nearBottom
+            if nearBottom {
+                autoFollow = true
+            } else if scrollPosition.isPositionedByUser {
+                autoFollow = false
             }
-            .onChange(of: session.items.count) { _, _ in
-                if isNearBottom { scheduleScrollToBottom(proxy: proxy) }
+        }
+        // The follow engine: any measured content growth (token deltas, part
+        // commits, tool results, images) pins back to the bottom while the
+        // gate is armed.
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentSize.height
+        } action: { oldHeight, newHeight in
+            if autoFollow, newHeight > oldHeight {
+                scrollPosition.scrollTo(edge: .bottom)
             }
-            // Streaming auto-follow, isolated so the transcript body doesn't
-            // observe the Live Part.
-            .overlay {
-                LiveScrollTrigger(
-                    proxy: proxy,
-                    bottomAnchorID: bottomAnchorID,
-                    isNearBottom: isNearBottom
-                )
+        }
+        // A send always shows the new message: jump to the bottom and re-arm,
+        // even if the user had scrolled up into history.
+        .onChange(of: session.items.count) { _, _ in
+            if case .user = session.items.last {
+                autoFollow = true
+                scrollPosition.scrollTo(edge: .bottom)
             }
-            .overlay {
-                if session.items.isEmpty && !session.isGenerating {
-                    emptyState
+        }
+        // Conversation switch (first item's identity changes): land at the
+        // bottom of the loaded conversation.
+        .onChange(of: session.items.first?.id) { _, _ in
+            autoFollow = true
+            scrollPosition.scrollTo(edge: .bottom)
+        }
+        // End of a run: settle smoothly at the absolute bottom.
+        .onChange(of: session.isGenerating) { _, generating in
+            if !generating, autoFollow {
+                withAnimation(.smooth) {
+                    scrollPosition.scrollTo(edge: .bottom)
                 }
             }
-            .onDisappear {
-                pendingScrollTask?.cancel()
-                pendingScrollTask = nil
+        }
+        .overlay {
+            if session.items.isEmpty && !session.isGenerating {
+                emptyState
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // MARK: - Rows
-
-    /// SwiftUI's lazy prefetch path still re-enters AppKit constraint updates
-    /// under high-frequency row mutation + auto-scroll. Keep the stack eager
-    /// while a generation is actively streaming, then return to lazy loading
-    /// for idle conversations.
-    @ViewBuilder
-    private var transcriptStack: some View {
-        if session.isGenerating {
-            VStack(alignment: .leading, spacing: 16) {
-                rowContents
-            }
-        } else {
-            LazyVStack(alignment: .leading, spacing: 16) {
-                rowContents
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var rowContents: some View {
-        SystemPromptSection()
-
-        ForEach(session.items) { item in
-            ChatItemRow(
-                item: item,
-                speakingMessageID: $speakingMessageID,
-                isSpeechActive: isSpeechActive
-            )
-        }
-
-        LiveMessageSection()
-
-        Color.clear
-            .frame(height: 1)
-            .id(bottomAnchorID)
     }
 
     private var emptyState: some View {
@@ -111,28 +128,6 @@ struct ChatTranscriptView: View {
                 .foregroundStyle(.secondary)
         }
         .allowsHitTesting(false)
-    }
-
-    private func scheduleScrollToBottom(proxy: ScrollViewProxy) {
-        pendingScrollTask = deferredScrollToBottom(
-            proxy, anchor: bottomAnchorID, cancelling: pendingScrollTask)
-    }
-}
-
-/// Defers a scroll-to-bottom until the current layout pass completes.
-/// Triggering `scrollTo` synchronously while SwiftUI is still reconciling a
-/// lazy stack can provoke AppKit constraint exceptions in Release builds.
-/// Returns the deferred task; callers keep it so the next call (or
-/// `onDisappear`) can cancel it.
-@MainActor
-private func deferredScrollToBottom(
-    _ proxy: ScrollViewProxy, anchor: String, cancelling task: Task<Void, Never>?
-) -> Task<Void, Never> {
-    task?.cancel()
-    return Task { @MainActor in
-        await Task.yield()
-        guard !Task.isCancelled else { return }
-        proxy.scrollTo(anchor, anchor: .bottom)
     }
 }
 
@@ -207,53 +202,6 @@ private struct LiveMessageSection: View {
             ProgressView()
                 .controlSize(.small)
                 .padding(.vertical, 2)
-        }
-    }
-}
-
-/// Reads only the Live Part's `displayText` — fires auto-follow at the
-/// throttled republish rate without re-evaluating the transcript body.
-private struct LiveScrollTrigger: View {
-    let proxy: ScrollViewProxy
-    let bottomAnchorID: String
-    let isNearBottom: Bool
-
-    @Environment(ChatSession.self) private var session
-    @State private var pendingScrollTask: Task<Void, Never>?
-
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onChange(of: session.livePart?.displayText) { _, newValue in
-                if isNearBottom, newValue != nil {
-                    scheduleScrollToBottom()
-                }
-            }
-            .onChange(of: session.liveMessage?.content.count) { _, newValue in
-                if isNearBottom, newValue != nil {
-                    scheduleScrollToBottom()
-                }
-            }
-            .onDisappear {
-                pendingScrollTask?.cancel()
-                pendingScrollTask = nil
-            }
-    }
-
-    private func scheduleScrollToBottom() {
-        pendingScrollTask = deferredScrollToBottom(
-            proxy, anchor: bottomAnchorID, cancelling: pendingScrollTask)
-    }
-}
-
-/// Reads only the System Prompt Inspector — changes don't diff the ForEach.
-private struct SystemPromptSection: View {
-    @Environment(AgentSystemPromptInspector.self) private var inspector
-
-    var body: some View {
-        if !inspector.assembledSystemPrompt.isEmpty {
-            AgentSystemPromptView()
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

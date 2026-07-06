@@ -4,14 +4,19 @@
 //
 //  The transcript rows of the flat document chat (ADR-0024): assistant text
 //  as first-class flat prose in the readable column, user messages as neutral
-//  blocks, and thinking / tool calls as one-line collapsible secondary rows.
-//  Committed rows are pure value views over `ChatItem`; only the Live Part
-//  view observes streaming state.
+//  blocks, and thinking / tool calls as one-line collapsible rows with +/−
+//  markers (OpenCode structure, macOS-native dress — no icon zoo). Committed
+//  rows are pure value views over `ChatItem`; only the Live Part view
+//  observes streaming state.
 //
-//  Design language: monochrome content layer — system primary/secondary/
-//  tertiary styles and system materials only. No glass here, ever (HIG:
-//  glass belongs to the navigation/control layer). Red appears exclusively
-//  as the semantic error tint.
+//  Design language: one type size (`chatBodyFontSize`) for every piece of
+//  transcript text — hierarchy comes from color and weight, never from size.
+//  Monochrome content layer — system primary/secondary/tertiary styles and
+//  system materials only. No glass here, ever (HIG: glass belongs to the
+//  navigation/control layer). Red appears exclusively as the semantic error
+//  tint. Assistant-text and tool-row actions stay always visible at low
+//  emphasis — hover-revealed controls are unreachable the moment the row
+//  loses hover.
 //
 
 import SwiftUI
@@ -27,47 +32,69 @@ import os
 // the Live Part's row does.
 // swiftlint:disable redundant_discardable_let
 
+// MARK: - Collapse marker
+
+/// The +/− disclosure marker of a collapsible row: "+" collapsed, "−"
+/// expanded (OpenCode's convention). Fixed width so toggling never shifts
+/// the title.
+struct CollapseMarker: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        Text(isExpanded ? "\u{2212}" : "+")
+            .font(.system(size: chatBodyFontSize, weight: .medium))
+            .foregroundStyle(.tertiary)
+            .frame(width: ChatLayout.markerWidth)
+    }
+}
+
 // MARK: - Assistant message
 
 /// One committed assistant message: its ordered Content Parts as flat rows.
-/// A hover-revealed action row (copy, speak) follows the last part.
+/// The copy/speak actions belong to the *text* — they follow the last
+/// non-empty text part, never a tool-call or thinking row.
 struct AssistantMessageView: View {
     let message: AssistantMessage
     var isSpeaking = false
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
 
-    @State private var isHovering = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(message.content.enumerated()), id: \.offset) { _, part in
+            ForEach(Array(message.content.enumerated()), id: \.offset) { index, part in
                 AssistantPartView(part: part)
-            }
 
-            if !message.text.isEmpty {
-                HStack(spacing: 10) {
-                    ChatCopyButton(text: message.text)
-
-                    if onPlay != nil || isSpeaking {
-                        Button {
-                            isSpeaking ? onStop?() : onPlay?()
-                        } label: {
-                            Image(systemName: isSpeaking ? "stop.fill" : "play.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(isSpeaking ? "Stop speaking" : "Speak this response")
-                    }
+                if index == lastTextPartIndex {
+                    textActions
                 }
-                .opacity(isHovering || isSpeaking ? 1 : 0)
-                .animation(.easeInOut(duration: 0.15), value: isHovering)
-                .animation(.easeInOut(duration: 0.15), value: isSpeaking)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onHover { isHovering = $0 }
+    }
+
+    private var lastTextPartIndex: Int? {
+        message.content.lastIndex { part in
+            if case .text(let text) = part { return !text.text.isEmpty }
+            return false
+        }
+    }
+
+    private var textActions: some View {
+        HStack(spacing: 12) {
+            ChatCopyButton(text: message.text)
+
+            if onPlay != nil || isSpeaking {
+                Button {
+                    isSpeaking ? onStop?() : onPlay?()
+                } label: {
+                    Image(systemName: isSpeaking ? "stop.fill" : "play.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(isSpeaking ? "Stop speaking" : "Speak this response")
+            }
+        }
     }
 }
 
@@ -115,8 +142,8 @@ struct AssistantProseView: View {
 
 // MARK: - Thinking row
 
-/// One-line collapsible thinking row: "Thought" with an inline single-line
-/// preview; expands to the full reasoning text in secondary type.
+/// One-line collapsible thinking row: "+ Thought" with an inline single-line
+/// preview; expands ("− Thought") to the full reasoning text.
 struct ThinkingRowView: View {
     let text: String
     @State private var isExpanded = false
@@ -129,17 +156,14 @@ struct ThinkingRowView: View {
             Button {
                 withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    CollapseMarker(isExpanded: isExpanded)
                     Text("Thought")
-                        .font(.system(size: ChatLayout.stepFontSize, weight: .medium))
+                        .font(.system(size: chatBodyFontSize, weight: .medium))
                         .foregroundStyle(.secondary)
                     if !isExpanded {
                         Text(previewLine)
-                            .font(.system(size: ChatLayout.stepFontSize))
+                            .font(.system(size: chatBodyFontSize))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -153,11 +177,11 @@ struct ThinkingRowView: View {
 
             if isExpanded {
                 Text(text)
-                    .font(.system(size: ChatLayout.stepFontSize))
+                    .font(.system(size: chatBodyFontSize))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 15)
+                    .padding(.leading, ChatLayout.markerWidth + 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -171,14 +195,14 @@ struct ThinkingRowView: View {
 
 // MARK: - Tool call row
 
-/// One-line tool row: status glyph, verb + target, duration badge — expanding
-/// to arguments, result, images, and Show in Finder for file tools.
+/// One-line tool row: +/− marker (spinner while running), verb + target,
+/// duration badge — expanding to arguments, result, images. File tools carry
+/// an always-visible Show in Finder control.
 struct ToolCallRowView: View {
     let part: ToolCallPart
 
     @Environment(ChatSession.self) private var session
     @State private var isExpanded = false
-    @State private var isHovering = false
 
     private var props: ToolDisplayProps {
         ToolDisplayHelpers.displayProps(
@@ -202,42 +226,36 @@ struct ToolCallRowView: View {
                     withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
                 } label: {
                     HStack(spacing: 8) {
-                        statusGlyph(icon: props.icon)
+                        markerSlot
                         Text(props.title)
-                            .font(.system(size: ChatLayout.stepFontSize))
+                            .font(.system(size: chatBodyFontSize))
                             .foregroundStyle(
                                 isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary)
                             )
                             .lineLimit(1)
                         if let duration = session.toolDuration(for: part.id) {
                             Text(duration.chatBadge)
-                                .font(.system(size: 11))
+                                .font(.system(size: chatBodyFontSize))
                                 .foregroundStyle(.tertiary)
                                 .monospacedDigit()
                         }
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                            .opacity(isHovering || isExpanded ? 1 : 0)
                         Spacer(minLength: 0)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help(isExpanded ? "Hide details" : "Show arguments and result")
 
                 if props.filePath != nil {
                     Button(action: openContainingFolder) {
                         Image(systemName: "folder")
-                            .font(.system(size: 11))
+                            .font(.system(size: 12))
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
                     .help("Show in Finder")
-                    .opacity(isHovering ? 1 : 0)
                 }
             }
-            .animation(.easeInOut(duration: 0.15), value: isHovering)
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 10) {
@@ -260,35 +278,30 @@ struct ToolCallRowView: View {
                         }
                     }
                 }
-                .padding(.leading, 15)
+                .padding(.leading, ChatLayout.markerWidth + 8)
             }
         }
-        .onHover { isHovering = $0 }
     }
 
     @ViewBuilder
-    private func statusGlyph(icon: String) -> some View {
+    private var markerSlot: some View {
         if isRunning {
             ProgressView()
                 .controlSize(.mini)
-                .frame(width: 14, height: 14)
+                .frame(width: ChatLayout.markerWidth)
         } else {
-            Image(systemName: isError ? "exclamationmark.circle" : icon)
-                .font(.system(size: 11))
-                .foregroundStyle(isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
-                .frame(width: 14, height: 14)
+            CollapseMarker(isExpanded: isExpanded)
         }
     }
 
     private func detailSection(_ label: String, text: String, isError: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: chatBodyFontSize, weight: .medium))
                 .foregroundStyle(.tertiary)
-                .textCase(.uppercase)
 
             Text(text)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: chatBodyFontSize, design: .monospaced))
                 .foregroundStyle(isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -313,7 +326,8 @@ struct ToolCallRowView: View {
 // MARK: - User message
 
 /// The user's message: a trailing-aligned neutral block on the system
-/// quaternary fill — no brand color in the content layer.
+/// quinary fill — no brand color in the content layer. (Owner-approved as-is;
+/// do not restyle.)
 struct UserMessageRow: View {
     let message: UserMessage
 
@@ -392,12 +406,12 @@ struct SystemNoteRow: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.system(size: 10))
+                .font(.system(size: 12))
             Text(text)
-                .font(.system(size: 11))
+                .font(.system(size: chatBodyFontSize))
         }
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .background(.quinary, in: Capsule())
         .frame(maxWidth: .infinity, alignment: .center)
@@ -435,17 +449,14 @@ struct LiveThinkingRowView: View {
             Button {
                 withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    CollapseMarker(isExpanded: isExpanded)
                     Text("Thinking…")
-                        .font(.system(size: ChatLayout.stepFontSize, weight: .medium))
+                        .font(.system(size: chatBodyFontSize, weight: .medium))
                         .foregroundStyle(.secondary)
                     if !isExpanded {
                         Text(tailPreview)
-                            .font(.system(size: ChatLayout.stepFontSize))
+                            .font(.system(size: chatBodyFontSize))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .truncationMode(.head)
@@ -458,11 +469,11 @@ struct LiveThinkingRowView: View {
 
             if isExpanded {
                 Text(live.displayText)
-                    .font(.system(size: ChatLayout.stepFontSize))
+                    .font(.system(size: chatBodyFontSize))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 15)
+                    .padding(.leading, ChatLayout.markerWidth + 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }

@@ -3,10 +3,10 @@
 //  tesseract
 //
 //  The **Skill Invocation Row** (PRD #174): the compact, trailing-aligned
-//  rendering of a fired skill — name, the user's argument text, attachment
-//  thumbnails — expandable to the exact injected `<skill>` block (the same
-//  transparency philosophy as the System Prompt Inspector). Replaces the
-//  wall-of-text user block for every invocation surface (pill or slash).
+//  user-block rendering of a fired skill — name, the user's argument text,
+//  attachment thumbnails — expandable (+/−) to the exact injected `<skill>`
+//  block. Wears the same block dress as a typed user message (it *is* a user
+//  turn — owner-approved as-is; do not restyle).
 //
 
 import SwiftUI
@@ -32,7 +32,7 @@ struct SkillInvocationRowView: View {
 
             if !block.argumentText.isEmpty {
                 Text(block.argumentText)
-                    .font(.system(size: chatBodyFontSize - 2))
+                    .font(.system(size: chatBodyFontSize))
                     .foregroundStyle(.primary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -40,7 +40,7 @@ struct SkillInvocationRowView: View {
 
             if isExpanded {
                 Text(block.injectedBlock)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(.system(size: chatBodyFontSize, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -56,24 +56,17 @@ struct SkillInvocationRowView: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
-    /// Skill badge + the expansion chevron. The whole line toggles the
-    /// injected-block detail.
+    /// Marker + skill name. The whole line toggles the injected-block detail.
     private var header: some View {
         Button {
             withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                CollapseMarker(isExpanded: isExpanded)
                 Text(block.displayLabel)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: chatBodyFontSize, weight: .medium))
                     .foregroundStyle(.primary)
                 Spacer(minLength: 12)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
             }
             .contentShape(Rectangle())
         }
