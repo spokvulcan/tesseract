@@ -88,22 +88,55 @@ final class AudioCaptureEngine: AudioCapturing {
         /// Voice Processing ramp-up. Matches the session's minimum recording
         /// duration, below which the capture is discarded as "too short" anyway.
         static let emptyCaptureGrace: TimeInterval = 0.5
+        /// How long the kept engine stays *armed* (Voice Processing enabled)
+        /// after a capture ends. Within the grace, a re-record skips the VPIO
+        /// arm cost entirely; when it lapses, VP is disarmed to fully lift the
+        /// system-audio duck — an armed VPIO ducks for as long as it exists,
+        /// stopped or not, and no ducking level reaches zero.
+        static let voiceProcessingDisarmGrace: TimeInterval = 10
+        /// Arm/disarm and start/stop reconfigure the engine's own graph and
+        /// fire `AVAudioEngineConfigurationChange` for our own doing; a
+        /// notification landing within this window of an intentional
+        /// reconfiguration is ignored instead of marking the engine dirty.
+        static let selfInflictedConfigChangeWindow: TimeInterval = 1.0
+    }
+
+    /// The Voice Processing IO unit ducks all other system audio for as long
+    /// as it is armed — engine running *or stopped* — and `.min` only softens
+    /// that duck (measured elsewhere; it cannot reach zero). So the duck is
+    /// scoped two ways: while armed, `.min` outside a real dictation capture
+    /// and the standard level during one; and the unit itself is disarmed
+    /// after ``Defaults/voiceProcessingDisarmGrace`` so idle leaves other
+    /// audio completely untouched.
+    private enum Ducking {
+        static let idle = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+            enableAdvancedDucking: false, duckingLevel: .min)
+        static let recording = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(
+            enableAdvancedDucking: false, duckingLevel: .default)
     }
 
     private(set) var isCapturing = false
     private(set) var audioLevel: Float = 0
 
-    /// Kept alive across captures. Configuring Voice Processing tears down and
-    /// rebuilds the input's whole IO unit — hundreds of milliseconds — so paying
-    /// it per press made push-to-talk laggy, and rapid create/destroy cycles are
-    /// exactly the pattern that wedges CoreAudio input. Built at ``prewarm()``
-    /// (app setup) or lazily on first capture; rebuilt only when the Voice
-    /// Processing setting flips, the device configuration changes, or a capture
-    /// comes back empty.
+    /// Kept alive across captures — engine create/destroy cycles are the
+    /// pattern that wedges CoreAudio input. Voice Processing, however, is
+    /// **armed only around captures**: an armed VPIO ducks all other system
+    /// audio for its whole lifetime, so the engine idles disarmed (plain
+    /// input node, zero duck) and ``startCapture()`` arms it in place — a
+    /// stopped engine accepts `setVoiceProcessingEnabled` without a rebuild.
+    /// The arm cost is paid once per burst of dictations, not per press:
+    /// ``scheduleVoiceProcessingDisarm()`` keeps it armed for a short grace.
     private var audioEngine: AVAudioEngine?
-    /// The Voice Processing setting `audioEngine` was built under (requested,
-    /// not necessarily accepted) — a mismatch with the live setting rebuilds.
-    private var engineBuiltWithVoiceProcessing = false
+    /// Whether Voice Processing is currently enabled on the kept engine —
+    /// requested AND accepted by the platform. Tags the `RawCapture`.
+    private var voiceProcessingArmed = false
+    /// Lifts the duck once the post-capture grace lapses; cancelled by the
+    /// next capture (which reuses the still-armed engine at no cost).
+    private var disarmTask: Task<Void, Never>?
+    /// When we last reconfigured the engine ourselves (build, arm/disarm,
+    /// start, stop) — used to tell our own `AVAudioEngineConfigurationChange`
+    /// echoes apart from real device/format changes.
+    private var lastIntentionalReconfigure: Date = .distantPast
     /// Raised by `AVAudioEngineConfigurationChange` (default input device or
     /// format changed): the kept engine is not trusted, the next capture rebuilds.
     private var engineNeedsRebuild = false
@@ -128,28 +161,21 @@ final class AudioCaptureEngine: AudioCapturing {
     /// push-to-talk without restart.
     private let isVoiceProcessingEnabled: () -> Bool
 
-    /// Whether the *current/last* capture actually ran voice-processed —
-    /// requested AND accepted by the platform. Tags the `RawCapture`.
-    private var voiceProcessingActive = false
-
     init(isVoiceProcessingEnabled: @escaping () -> Bool = { false }) {
         self.isVoiceProcessingEnabled = isVoiceProcessingEnabled
     }
 
-    /// Builds the engine (and its Voice Processing configuration) ahead of the
-    /// first press, so no capture pays the VPIO setup cost interactively. Called
-    /// at app setup and when the Voice Processing setting flips; a no-op while
-    /// capturing (the next start rebuilds) and without microphone permission —
+    /// Builds the engine ahead of the first press. Deliberately built *plain*
+    /// (no Voice Processing): an armed VPIO ducks all other system audio even
+    /// while the engine merely sits stopped, so arming waits for an actual
+    /// capture. A no-op while capturing and without microphone permission —
     /// prewarming must never surface a permission prompt on its own.
     func prewarm() {
         guard !isCapturing else { return }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
 
-        let wantsVoiceProcessing = isVoiceProcessingEnabled()
-        if audioEngine == nil || engineNeedsRebuild
-            || engineBuiltWithVoiceProcessing != wantsVoiceProcessing
-        {
-            rebuildEngine(voiceProcessing: wantsVoiceProcessing)
+        if audioEngine == nil || engineNeedsRebuild {
+            rebuildEngine(voiceProcessing: false)
         }
     }
 
@@ -162,14 +188,18 @@ final class AudioCaptureEngine: AudioCapturing {
             throw DictationError.microphonePermissionDenied
         }
 
+        // The capture reuses the still-armed engine; the pending disarm (if
+        // any) must not fire mid-recording.
+        disarmTask?.cancel()
+        disarmTask = nil
+
         let wantsVoiceProcessing = isVoiceProcessingEnabled()
-        if audioEngine == nil || engineNeedsRebuild
-            || engineBuiltWithVoiceProcessing != wantsVoiceProcessing
-        {
+        if audioEngine == nil || engineNeedsRebuild {
             rebuildEngine(voiceProcessing: wantsVoiceProcessing)
             try beginCapture()
         } else {
             do {
+                try reconcileVoiceProcessing(wantsVoiceProcessing)
                 try beginCapture()
             } catch {
                 // A kept-alive engine can go stale in ways no configuration-change
@@ -182,6 +212,26 @@ final class AudioCaptureEngine: AudioCapturing {
                 try beginCapture()
             }
         }
+    }
+
+    /// Arms or disarms Voice Processing in place on the kept engine — legal
+    /// only while the engine is stopped, which is always the case between
+    /// captures. This is the once-per-burst cost the disarm grace amortizes.
+    private func reconcileVoiceProcessing(_ wanted: Bool) throws {
+        guard let audioEngine, voiceProcessingArmed != wanted else { return }
+
+        let clock = Date()
+        lastIntentionalReconfigure = clock
+        try audioEngine.inputNode.setVoiceProcessingEnabled(wanted)
+        voiceProcessingArmed = wanted
+        if wanted {
+            audioEngine.inputNode.voiceProcessingOtherAudioDuckingConfiguration = Ducking.idle
+        }
+        Log.audio.info(
+            """
+            Voice processing \(wanted ? "armed" : "disarmed") in \
+            \(String(format: "%.0f", Date().timeIntervalSince(clock) * 1000)) ms
+            """)
     }
 
     /// Starts a metering-only capture for the settings level meter. Shares the
@@ -205,12 +255,14 @@ final class AudioCaptureEngine: AudioCapturing {
         tearDownEngine()
 
         let buildStart = Date()
+        lastIntentionalReconfigure = buildStart
         let engine = AVAudioEngine()
-        voiceProcessingActive = false
+        voiceProcessingArmed = false
         if voiceProcessing {
             do {
                 try engine.inputNode.setVoiceProcessingEnabled(true)
-                voiceProcessingActive = true
+                engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration = Ducking.idle
+                voiceProcessingArmed = true
             } catch {
                 Log.audio.error(
                     "Voice processing unavailable, capturing raw: \(error.localizedDescription)")
@@ -220,25 +272,35 @@ final class AudioCaptureEngine: AudioCapturing {
             """
             Capture engine built in \
             \(String(format: "%.0f", Date().timeIntervalSince(buildStart) * 1000)) ms \
-            (voice processing: \(voiceProcessingActive))
+            (voice processing: \(voiceProcessingArmed))
             """)
 
         audioEngine = engine
-        engineBuiltWithVoiceProcessing = voiceProcessing
         engineNeedsRebuild = false
 
         configChangeCancellable = NotificationCenter.default
             .publisher(for: .AVAudioEngineConfigurationChange, object: engine)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.engineNeedsRebuild = true
+                guard let self else { return }
+                // Our own arm/disarm and start/stop reconfigure the graph and
+                // echo this notification; only an outside change (device swap,
+                // format change) marks the kept engine dirty.
+                guard
+                    Date().timeIntervalSince(self.lastIntentionalReconfigure)
+                        >= Defaults.selfInflictedConfigChangeWindow
+                else { return }
+                self.engineNeedsRebuild = true
             }
     }
 
     private func tearDownEngine() {
+        disarmTask?.cancel()
+        disarmTask = nil
         configChangeCancellable = nil
         tearDownAudioEngine(audioEngine)
         audioEngine = nil
+        voiceProcessingArmed = false
     }
 
     /// Starts one capture on the current engine: tap, level timer, engine start.
@@ -305,7 +367,16 @@ final class AudioCaptureEngine: AudioCapturing {
         RunLoop.main.add(timer, forMode: .common)
         levelUpdateTimer = timer
 
+        // Duck other system audio only for a real dictation capture — the
+        // settings meter keeps the softest level. Set before start so the
+        // level is baked into this run of the IO unit.
+        if voiceProcessingArmed {
+            inputNode.voiceProcessingOtherAudioDuckingConfiguration =
+                meteringOnly ? Ducking.idle : Ducking.recording
+        }
+
         let startClock = Date()
+        lastIntentionalReconfigure = startClock
         do {
             audioEngine.prepare()
             try audioEngine.start()
@@ -338,11 +409,19 @@ final class AudioCaptureEngine: AudioCapturing {
         // for the next press. Same order as teardown: stop before removing the
         // tap, so AudioOutputUnitStop never races a nil tap callback.
         let stopClock = Date()
+        lastIntentionalReconfigure = stopClock
         if let audioEngine {
             audioEngine.stop()
             if inputTapInstalled {
                 audioEngine.inputNode.removeTap(onBus: 0)
                 inputTapInstalled = false
+            }
+            if voiceProcessingArmed {
+                // Soften the duck the moment the capture ends, and schedule
+                // the disarm that lifts it entirely once the re-record grace
+                // lapses.
+                audioEngine.inputNode.voiceProcessingOtherAudioDuckingConfiguration = Ducking.idle
+                scheduleVoiceProcessingDisarm()
             }
         }
         Log.audio.info(
@@ -389,12 +468,35 @@ final class AudioCaptureEngine: AudioCapturing {
             raw: RawCapture(
                 samples: samples,
                 sampleRate: inputSampleRate,
-                voiceProcessed: voiceProcessingActive
+                voiceProcessed: voiceProcessingArmed
             )
         )
     }
 
     // MARK: - Private
+
+    /// Starts the post-capture grace after which Voice Processing is disarmed.
+    /// Within the grace a new capture reuses the armed engine at no cost; after
+    /// it, the disarm fully lifts the VPIO's system-audio duck (deallocation
+    /// or disarm are the only things that do — no ducking *level* reaches zero).
+    private func scheduleVoiceProcessingDisarm() {
+        disarmTask?.cancel()
+        disarmTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Defaults.voiceProcessingDisarmGrace))
+            guard !Task.isCancelled, let self, !self.isCapturing else { return }
+            do {
+                try self.reconcileVoiceProcessing(false)
+            } catch {
+                // A lingering duck is the one outcome this exists to prevent —
+                // discard the engine instead (deallocation provably lifts it);
+                // the next press rebuilds.
+                Log.audio.error(
+                    "Voice processing disarm failed, discarding engine: \(error.localizedDescription)"
+                )
+                self.tearDownEngine()
+            }
+        }
+    }
 
     private func tearDownAudioEngine(_ engine: AVAudioEngine?) {
         guard let engine else {

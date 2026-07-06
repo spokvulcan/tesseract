@@ -395,10 +395,11 @@ final class AppBindings {
             })
     }
 
-    /// Keeps the capture engine prewarmed for the Voice Processing setting so
-    /// no press pays the VPIO build interactively. The initial emission
-    /// prewarms at launch; later ones follow the settings toggle. (The effect
-    /// no-ops mid-capture and without microphone permission.)
+    /// Builds the capture engine ahead of the first press. The initial
+    /// emission prewarms at launch; later ones (the Voice Processing toggle)
+    /// are effectively no-ops — VP is armed per capture, not baked into the
+    /// prewarmed engine, because an armed VPIO ducks system audio even while
+    /// idle. (The effect also no-ops mid-capture and without mic permission.)
     private func installCapturePrewarmSubscription() {
         observationTasks.append(
             Task { [weak self] in
