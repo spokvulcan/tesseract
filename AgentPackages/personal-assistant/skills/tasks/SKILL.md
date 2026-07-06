@@ -1,38 +1,29 @@
 ---
 name: task-management
-description: Use this skill when the user wants to create, list, complete, or manage tasks and to-do items.
+description: Create, list, complete, or delete tasks in tasks.md. Load when the user mentions to-dos, reminders, or things they need to do.
 ---
 
 # Task Management
 
-## File
-`tasks.md` in the agent working directory.
+File: `tasks.md` in the working directory. One task per line, markdown checkboxes:
 
-## Format
 ```
-- [ ] Task description
-- [x] Completed task description
+- [ ] Pending task
+- [x] Completed task
 ```
 
-Markdown checkbox format. One task per line.
+## Creating
 
-## Workflow
+Read `tasks.md`, then append `- [ ] {description}` with edit — or write the file if it doesn't exist yet.
 
-### Creating a task
-1. Read `tasks.md`
-2. If the file is empty or doesn't exist, use write to create it with `- [ ] {task description}`
-3. If the file already has content, use edit to append a new line: `- [ ] {task description}`
+## Listing
 
-### Listing tasks
-1. Read `tasks.md`
-2. Summarize pending tasks (lines with `- [ ]`)
-3. Optionally mention recently completed tasks
+Read `tasks.md`. Report the pending tasks; mention recent completions only briefly.
 
-### Completing a task
-1. Read `tasks.md`
-2. Find the exact line matching the task
-3. Use edit to replace `- [ ]` with `- [x]`
+## Completing
 
-### Deleting a task
-1. Read `tasks.md`
-2. Find and remove the line using edit
+Read the file, find the task's exact line, edit its `- [ ]` to `- [x]`.
+
+## Deleting
+
+Read the file, remove the task's line with edit.

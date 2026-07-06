@@ -1,37 +1,28 @@
 ---
 name: memory-management
-description: Use this skill when the user wants to remember, update, or forget personal facts, preferences, or important information.
+description: Save, update, or delete personal facts and preferences in memories.md. Load when the user shares a lasting fact or asks to remember, change, or forget something.
 ---
 
 # Memory Management
 
-## File
-`memories.md` in the agent working directory.
+File: `memories.md` in the working directory. One fact per line, plain text — the line itself is the identifier.
 
-## Format
-One fact per line. Plain text. No bullet points or numbering needed — the line position is the identifier.
+Save durable facts: preferences, people, habits, dates. Not one-off details of the current conversation.
 
-## Workflow
+## Saving
 
-### Saving a new memory
-1. Read `memories.md` using the read tool
-2. Check for duplicates or near-duplicates
-3. If a similar memory exists, use edit to update it instead of adding a new line
-4. If truly new and the file is empty or has no content, use write to create the file with the new fact
-5. If truly new and the file already has content, use edit to append a new line at the end
-6. If the file doesn't exist, use write to create it
+1. Read `memories.md`.
+2. If a similar fact already exists, edit that line instead of adding a new one.
+3. Otherwise append the fact as a new line with edit — or write the file if it doesn't exist yet.
 
-### Updating a memory
-1. Read `memories.md`
-2. Find the exact line to update
-3. Use edit with the exact old text and the new text
+## Updating
 
-### Deleting a memory
-1. Read `memories.md`
-2. Find the exact line to remove
-3. Use edit to replace the line (and its trailing newline) with empty string
+Read the file, find the exact line, edit it to the corrected fact.
 
-### Consolidation
-If memories.md has grown large or has duplicates:
-1. Read the full file
-2. Write a consolidated version that merges duplicates and removes outdated facts
+## Deleting
+
+Read the file, edit the line (including its trailing newline) to an empty string.
+
+## Consolidating
+
+When the file has grown large or repetitive: read it all, then write a merged version — duplicates combined, outdated facts dropped.

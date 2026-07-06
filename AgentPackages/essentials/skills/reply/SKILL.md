@@ -2,6 +2,7 @@
 name: reply
 description: Draft a reply to the message on screen — email, Slack, X, or chat — in the user's voice, matched to the medium's register and length.
 composer-pill: true
+disable-model-invocation: true
 ---
 
 # Reply

@@ -1,31 +1,22 @@
 ---
 name: note-capture
-description: Use this skill when the user wants to save a note, write down thoughts, or capture information for later reference.
+description: Save or update notes as markdown files in notes/. Load when the user wants to write something down or capture information for later.
 ---
 
 # Note Capture
 
-## Directory
-`notes/` in the agent working directory.
+Directory: `notes/` in the working directory. One markdown file per note, slug-named: `notes/meeting-with-sarah.md`, `notes/recipe-ideas.md`.
 
-## Format
-Each note is a separate markdown file named with a slug derived from the content or title.
+## Saving
 
-Example: `notes/meeting-with-sarah.md`, `notes/recipe-ideas.md`
+1. ls `notes/` so you don't clobber an existing note.
+2. Pick a descriptive slug: lowercase, hyphens, `.md`.
+3. write the file with a `# Title` header and the content.
 
-## Workflow
+## Finding
 
-### Saving a note
-1. Use list to check what notes already exist in `notes/`
-2. Choose a descriptive filename (lowercase, hyphens, .md extension)
-3. Use write to create the note file
-4. Include a `# Title` header and the content
+ls `notes/`, then read the likely file.
 
-### Finding a note
-1. Use list on `notes/` to see all notes
-2. Read the relevant note file
+## Updating
 
-### Updating a note
-1. Read the existing note
-2. Use edit to make precise changes
-3. Or use write for a full rewrite if the structure has changed significantly
+Read the note, then edit for precise changes — or write with overwrite: true when restructuring it entirely.

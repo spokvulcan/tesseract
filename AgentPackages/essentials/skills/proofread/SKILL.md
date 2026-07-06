@@ -2,6 +2,7 @@
 name: proofread
 description: Fix objective errors in English text (spelling, grammar, punctuation, real typos) while preserving the author's voice exactly. Never rewrites, never rephrases.
 composer-pill: true
+disable-model-invocation: true
 ---
 
 # Proofread
@@ -9,6 +10,10 @@ composer-pill: true
 Correct the text the user provides. If no text follows this skill, proofread
 the most recent substantial text in the conversation (including text visible in
 an attached screenshot — transcribe your corrected version of it).
+
+**On a screenshot:** if a text input or compose box with a draft is visible,
+that draft is the target — transcribe and correct only it, ignoring the rest of
+the page. Only when no input field exists, proofread the main body text.
 
 ## What to fix — and nothing else
 

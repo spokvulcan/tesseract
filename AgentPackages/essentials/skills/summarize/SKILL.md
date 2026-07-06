@@ -2,6 +2,7 @@
 name: summarize
 description: Condense the attached or pasted content — lead with the one-sentence takeaway, keep length proportional to the input.
 composer-pill: true
+disable-model-invocation: true
 ---
 
 # Summarize

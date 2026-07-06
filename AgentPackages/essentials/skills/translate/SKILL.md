@@ -2,6 +2,7 @@
 name: translate
 description: Translate anything into the user's configured target language; text already in the target language goes to English instead. Faithful register, copyable output.
 composer-pill: true
+disable-model-invocation: true
 ---
 
 # Translate
@@ -9,6 +10,10 @@ composer-pill: true
 Translate the content the user provides — pasted text or text visible in an
 attached screenshot. If nothing follows this skill, translate the most recent
 substantial text in the conversation.
+
+**On a screenshot:** translate all the meaningful text you can identify —
+posts, messages, headings, body copy — skipping UI chrome like menus, buttons,
+and timestamps.
 
 ## Direction rule
 

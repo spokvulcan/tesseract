@@ -80,9 +80,9 @@ nonisolated enum SkillRegistry: Sendable {
         guard !eligible.isEmpty else { return "" }
 
         var lines = """
-            ## Skills (mandatory)
-            Before replying, scan the skills below. If one clearly matches your task, \
-            load it with use_skill(name: "skill-name") and follow its instructions.
+            ## Skills
+            Skills are task instructions you load on demand. If the request matches a \
+            skill below, call use_skill(name: "skill-name") first and follow what it says.
 
             <available_skills>
             """
@@ -92,7 +92,7 @@ nonisolated enum SkillRegistry: Sendable {
         }
 
         lines += "\n</available_skills>"
-        lines += "\n\nIf none match, proceed normally without loading a skill."
+        lines += "\n\nIf none match, answer normally."
         return lines
     }
 

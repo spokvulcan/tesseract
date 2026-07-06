@@ -2,6 +2,7 @@
 name: proofread-tweet
 description: Polish a tweet or tweet thread for reach — hook-first, formatted for skimming, engagement-bait stripped. Returns 2–3 copyable variants for a single tweet, one polished pass for a thread.
 composer-pill: true
+disable-model-invocation: true
 ---
 
 # Proofread Tweet
@@ -9,6 +10,10 @@ composer-pill: true
 Polish the tweet or thread the user provides. If nothing follows this skill,
 use the most recent draft in the conversation (including text visible in an
 attached screenshot).
+
+**On a screenshot:** the draft is the text inside the compose box if one is
+visible — not the surrounding timeline, replies, or UI text. Only when no
+compose box exists, take the most draft-like text on screen.
 
 ## Craft rules
 

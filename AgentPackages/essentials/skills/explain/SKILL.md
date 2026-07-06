@@ -2,6 +2,7 @@
 name: explain
 description: Explain the thing on screen in plain language — code, an error, a config, a contract clause — what it is, then what it means for the user.
 composer-pill: true
+disable-model-invocation: true
 ---
 
 # Explain
