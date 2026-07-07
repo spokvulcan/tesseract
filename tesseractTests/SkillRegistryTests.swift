@@ -182,9 +182,11 @@ struct SkillRegistryTests {
     // MARK: - Bundled essentials package validation
 
     /// The shipped `essentials` package must parse into exactly the six pill
-    /// skills of PRD #174, each with a name, a non-empty description, and the
-    /// `composer-pill` membership key. Guards against a frontmatter typo
-    /// silently dropping a pill from the row.
+    /// skills of PRD #174, each with a name, a non-empty description, the
+    /// `composer-pill` membership key, and `disable-model-invocation` (they are
+    /// pill-only — triggered from the row, never auto-loaded by the model).
+    /// Guards against a frontmatter typo silently dropping a pill from the row
+    /// or leaking one into the model-facing skills prompt.
     @Test func bundledEssentialsSkillsParseWithPillKey() throws {
         let bundled = try #require(
             Bundle.main.url(forResource: "AgentPackages", withExtension: nil),
@@ -205,7 +207,7 @@ struct SkillRegistryTests {
             let skill = try #require(byName[name], "missing bundled skill: \(name)")
             #expect(!skill.description.isEmpty)
             #expect(skill.composerPill == true)
-            #expect(skill.disableModelInvocation == false)
+            #expect(skill.disableModelInvocation == true)
         }
     }
 }
