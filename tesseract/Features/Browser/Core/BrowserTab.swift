@@ -104,25 +104,67 @@ final class BrowserTab {
         return status
     }
 
-    private func runNavigation(
+    /// Wait for a navigation to finish, bounded by ``navigationTimeout``.
+    ///
+    /// Internal (not private) so the timeout is exercisable headlessly: a
+    /// synthetic event stream that never yields `.finished` models a WebKit
+    /// navigation whose event sequence stalls (e.g. a back-forward-cache
+    /// restore), and this must raise ``BrowserTabError/timeout`` rather than
+    /// hang forever.
+    func runNavigation(
         _ events: some AsyncSequence<WebPage.NavigationEvent, any Error>
     ) async throws {
-        let timeoutTask = Task { try await Task.sleep(for: navigationTimeout) }
-        defer { timeoutTask.cancel() }
-
         do {
-            for try await event in events where event == .finished {
-                // Allow SPA frameworks a moment to hydrate before we read.
-                try? await Task.sleep(for: hydrationSettle)
-                return
+            // Race the event loop against the timeout. A stalled navigation
+            // stream (never `.finished`, never ends, never errors) loses to the
+            // timer, so this returns in bounded time instead of hanging.
+            try await Self.withTimeout(navigationTimeout) {
+                for try await event in events where event == .finished {
+                    return
+                }
+                // Sequence ended without an explicit `.finished` — treat the
+                // final committed state as loaded rather than failing.
+                // Navigation failures arrive as a thrown `NavigationError`.
             }
-            // Sequence ended without an explicit `.finished` — treat the
-            // final committed state as loaded rather than failing. Navigation
-            // failures arrive as a thrown `NavigationError`, handled below.
-        } catch is CancellationError {
-            throw BrowserTabError.timeout
+            // Allow SPA frameworks a moment to hydrate before we read.
+            try? await Task.sleep(for: hydrationSettle)
         } catch let error as WebPage.NavigationError {
             throw BrowserTabError.navigationFailed(error.localizedDescription)
+        }
+        // `BrowserTabError.timeout` from the race propagates unchanged.
+    }
+
+    /// Run a MainActor operation bounded by `timeout`, throwing
+    /// ``BrowserTabError/timeout`` if it does not complete in time. On timeout
+    /// the operation task is cancelled; a truly wedged operation is abandoned
+    /// (its result discarded) rather than allowed to block the caller forever.
+    ///
+    /// This is the one place a browser await is made interruptible — every path
+    /// that can hang on WebKit (navigation *and* `callJavaScript`) is fenced
+    /// through here or through ``BrowserToolExecutor``'s per-tool budget.
+    static func withTimeout<T: Sendable>(
+        _ timeout: Duration,
+        operation: @escaping @MainActor () async throws -> T
+    ) async throws -> T {
+        // The operation runs as its own MainActor task so the group children
+        // only ever capture the `Sendable` task handle — racing `.value`
+        // against the timer, rather than a `@MainActor` closure the
+        // region-isolation checker can't reason about inside `addTask`.
+        let operationTask = Task { @MainActor in try await operation() }
+        return try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operationTask.value }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw BrowserTabError.timeout
+            }
+            defer {
+                group.cancelAll()
+                operationTask.cancel()
+            }
+            guard let result = try await group.next() else {
+                throw BrowserTabError.timeout
+            }
+            return result
         }
     }
 

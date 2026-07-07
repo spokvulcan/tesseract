@@ -21,19 +21,39 @@ final class BrowserToolExecutor {
     static let maxReadChars = 60_000
     private static let maxEvaluateChars = 20_000
 
+    /// Hard per-tool-call budget. No single browser operation may block its
+    /// caller — Tesseract's own agent or an external MCP client — longer than
+    /// this. It is the backstop that fences the tools whose underlying WebKit
+    /// await has no timeout of its own (every `callJavaScript`-based tool:
+    /// `read_page`, `page_map`, `evaluate`, `find`, `click`, `type`,
+    /// `screenshot`), so a wedged page fails cleanly instead of freezing the
+    /// session. Navigation additionally self-times-out at `navigationTimeout`.
+    static let toolTimeoutSeconds = 30
+
     init(browser: AgentBrowser) {
         self.browser = browser
     }
 
     /// Dispatch a call. Runs serialized within the session so a single client's
-    /// pipelined calls don't interleave.
+    /// pipelined calls don't interleave, and bounded by ``toolTimeoutSeconds``
+    /// so one stuck tool can never hang the caller.
     func call(
         _ name: String,
         session: BrowserSession,
         arguments: [String: JSONValue]
     ) async -> BrowserToolResult {
         await session.serialized {
-            await self.run(name, session: session, arguments: arguments)
+            do {
+                return try await BrowserTab.withTimeout(.seconds(Self.toolTimeoutSeconds)) {
+                    await self.run(name, session: session, arguments: arguments)
+                }
+            } catch {
+                // `run` never throws; the only escape is the timeout race.
+                return .error(
+                    "Browser tool '\(name)' timed out after \(Self.toolTimeoutSeconds)s — "
+                        + "the page may be stuck loading or running script. "
+                        + "Try again, or navigate somewhere else.")
+            }
         }
     }
 
