@@ -494,6 +494,49 @@ advertises exactly the downloaded agent models a client may pick.
 _Avoid_: ignoring `request.model`, advertising undownloaded catalogue models,
 treating the selected agent model as the server's only routable model.
 
+### Agent browser and MCP
+
+**Agent Browser**:
+The app-owned WebKit browser that agents drive — the single web-access path for
+every Tesseract web capability, always rendered in visible windows so the user
+can watch and intervene.
+_Avoid_: headless browser (visibility is the point), webview, computer use.
+
+**Agent Profile**:
+The persistent credential silo behind the **Agent Browser** — only the logins the
+user deliberately performs inside it, never imported from and never shared with
+the user's personal browsers. Curating what it is logged into *is* the security
+model.
+_Avoid_: cookie import, session sync, real/default profile.
+
+**Browser Session**:
+One MCP client's private set of tabs over the shared **Agent Profile**; sessions
+never see each other's tabs while login state is common to all.
+_Avoid_: shared tab set, global browser state.
+
+**Ephemeral Page**:
+A cookieless page outside the **Agent Profile** — the anonymous mode backing
+plain fetch and search, so casual reads don't carry the agent's identity.
+_Avoid_: incognito, private browsing.
+
+**Page Read**:
+The default read path — a readability-distilled markdown extraction of the
+current page, paginated under a hard token cap.
+_Avoid_: page source, raw HTML dump.
+
+**Page Map**:
+The interaction representation — a pruned accessibility-tree outline with stable
+element refs, requested only when the agent must act on the page rather than
+read it.
+_Avoid_: snapshot (collides with the prefix-cache Snapshot vocabulary), a11y
+dump, DOM tree.
+
+**Browser MCP Server**:
+The MCP endpoint the running app serves so external agents can drive the
+**Agent Browser**; Tesseract's own agent consumes it through its MCP client
+exactly like an external client.
+_Avoid_: standalone server, stdio server, plugin API.
+
 ### Settings persistence
 
 **Settings Store**:
