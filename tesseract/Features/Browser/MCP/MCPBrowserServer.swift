@@ -109,7 +109,7 @@ final class MCPBrowserServer {
     private func initialize(_ object: [String: JSONValue]) -> HTTPResponse {
         let id = object["id"] ?? .null
         let requested = object["params"]?.asObject?["protocolVersion"]?.asString
-        let version = (requested?.isEmpty == false) ? requested! : MCPProtocol.version
+        let version = requested.flatMap { $0.isEmpty ? nil : $0 } ?? MCPProtocol.version
 
         let sessionID = UUID().uuidString
         _ = browser.session(id: sessionID)  // create the Browser Session now
@@ -175,7 +175,11 @@ final class MCPBrowserServer {
     /// carries its site's origin, which is not loopback.
     private func originRejection(_ request: HTTPRequest) -> HTTPResponse? {
         guard let origin = request.header("Origin") else { return nil }
-        if origin == "null" { return nil }
+        // A loopback Origin is the browser dev-server case (localhost:5173, …) —
+        // allow it. Everything else is rejected fail-closed: a real remote site
+        // (classic DNS-rebinding) *and* an opaque `null` origin (sandboxed iframe
+        // / file://), which the rebinding vector can elicit and from which no
+        // legitimate client browses.
         if let url = URL(string: origin), let host = url.host?.lowercased(),
             ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
         {
@@ -193,31 +197,20 @@ final class MCPBrowserServer {
         var headers: [(name: String, value: String)] = [("Content-Type", "application/json")]
         if let sessionID { headers.append(("Mcp-Session-Id", sessionID)) }
         return HTTPResponse(
-            statusCode: status, statusText: Self.statusText(status), headers: headers, body: body)
+            statusCode: status, statusText: HTTPResponse.statusText(for: status), headers: headers,
+            body: body)
     }
 
     private func empty(_ status: Int) -> HTTPResponse {
         HTTPResponse(
-            statusCode: status, statusText: Self.statusText(status), headers: [], body: nil)
+            statusCode: status, statusText: HTTPResponse.statusText(for: status), headers: [],
+            body: nil)
     }
 
     private func plain(_ status: Int, _ message: String) -> HTTPResponse {
         HTTPResponse(
-            statusCode: status, statusText: Self.statusText(status),
+            statusCode: status, statusText: HTTPResponse.statusText(for: status),
             headers: [("Content-Type", "text/plain; charset=utf-8")],
             body: Data(message.utf8))
-    }
-
-    private static func statusText(_ status: Int) -> String {
-        switch status {
-        case 200: "OK"
-        case 202: "Accepted"
-        case 400: "Bad Request"
-        case 403: "Forbidden"
-        case 404: "Not Found"
-        case 405: "Method Not Allowed"
-        case 503: "Service Unavailable"
-        default: "OK"
-        }
     }
 }

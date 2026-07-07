@@ -15,14 +15,15 @@ final class BrowserToolExecutor {
     /// Default character budget for a single `read_page` / `fetch` chunk — well
     /// under a typical agent's MCP response cap, paginated beyond it.
     static let defaultReadChars = 20_000
+    /// Hard ceiling on a single `read_page` / `fetch` response, regardless of a
+    /// caller-supplied `max_chars`, so one response always sits comfortably under
+    /// an MCP client's token cap; the paginator's steering text points onward.
+    static let maxReadChars = 60_000
     private static let maxEvaluateChars = 20_000
 
     init(browser: AgentBrowser) {
         self.browser = browser
     }
-
-    /// Names this executor can handle (mirrors the catalog).
-    var toolNames: [String] { BrowserToolCatalog.all.map(\.name) }
 
     /// Dispatch a call. Runs serialized within the session so a single client's
     /// pipelined calls don't interleave.
@@ -70,7 +71,7 @@ final class BrowserToolExecutor {
     private func navigate(_ session: BrowserSession, _ args: [String: JSONValue]) async throws
         -> BrowserToolResult
     {
-        guard let raw = args.string(for: "url"), let url = Self.normalizeURL(raw) else {
+        guard let raw = args.string(for: "url"), let url = BrowserURL.normalized(from: raw) else {
             return .error("navigate requires a valid `url`.")
         }
         let tab = session.requireActiveTab()
@@ -96,7 +97,7 @@ final class BrowserToolExecutor {
         }
         let content = try await tab.pageContent()
         let cursor = args.int(for: "cursor") ?? 0
-        let maxChars = args.int(for: "max_chars") ?? Self.defaultReadChars
+        let maxChars = Self.readBudget(args.int(for: "max_chars"))
         let chunk = PageReadPaginator.paginate(content.content, cursor: cursor, maxChars: maxChars)
 
         var out = ""
@@ -171,7 +172,7 @@ final class BrowserToolExecutor {
         switch action {
         case "open":
             let tab = session.openTab()
-            if let raw = args.string(for: "url"), let url = Self.normalizeURL(raw) {
+            if let raw = args.string(for: "url"), let url = BrowserURL.normalized(from: raw) {
                 do { try await tab.navigate(to: url) } catch {
                     return .error("Opened a tab but navigation failed: \(Self.describe(error))")
                 }
@@ -231,11 +232,11 @@ final class BrowserToolExecutor {
     }
 
     private func fetch(_ args: [String: JSONValue]) async throws -> BrowserToolResult {
-        guard let raw = args.string(for: "url"), let url = Self.normalizeURL(raw) else {
+        guard let raw = args.string(for: "url"), let url = BrowserURL.normalized(from: raw) else {
             return .error("fetch requires a valid `url`.")
         }
         let content = try await EphemeralPageReader.read(url: url)
-        let maxChars = args.int(for: "max_chars") ?? Self.defaultReadChars
+        let maxChars = Self.readBudget(args.int(for: "max_chars"))
         let chunk = PageReadPaginator.paginate(content.content, cursor: 0, maxChars: maxChars)
         var out = "Title: \(content.title)\nURL: \(content.url.absoluteString)\n\n\(chunk.text)"
         if chunk.nextCursor != nil {
@@ -255,11 +256,11 @@ final class BrowserToolExecutor {
         }.joined(separator: "\n")
     }
 
-    private static func normalizeURL(_ raw: String) -> URL? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.contains("://") { return URL(string: trimmed) }
-        return URL(string: "https://\(trimmed)")
+    /// Effective character budget for a single `read_page`/`fetch` response: the
+    /// caller's `max_chars` (or the default), floored at 1 and clamped to the
+    /// hard ceiling so one response always fits under an MCP client's token cap.
+    private static func readBudget(_ requested: Int?) -> Int {
+        min(max(requested ?? defaultReadChars, 1), maxReadChars)
     }
 
     private static func describe(_ error: Error) -> String {

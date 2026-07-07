@@ -8,6 +8,7 @@ import SwiftUI
 
 struct ServerConfigurationView: View {
     @Environment(SettingsManager.self) private var settings
+    @Environment(AgentBrowser.self) private var agentBrowser
     @State private var portText: String = ""
     @FocusState private var isFocused: Bool
 
@@ -88,6 +89,15 @@ struct ServerConfigurationView: View {
 
             Section {
                 Toggle("Enable Browser Access (MCP)", isOn: $settings.browserMCPServerEnabled)
+
+                LabeledContent("Agent Profile") {
+                    Button("Open Agent Browser…") {
+                        agentBrowser.openUserBrowserWindow()
+                    }
+                    .help(
+                        "Open a visible browser window on the Agent Profile to log into the sites you want to grant agents. Logins persist across launches and are shared by every agent session."
+                    )
+                }
 
                 if settings.browserMCPServerEnabled {
                     if settings.isServerEnabled {

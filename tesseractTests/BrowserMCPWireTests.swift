@@ -312,6 +312,20 @@ struct BrowserMCPWireTests {
     }
 
     @Test
+    func nullOriginIsRejected() async {
+        let h = await makeHarness()
+        defer { h.mcp.stop(); h.fixtures.stop() }
+
+        // A sandboxed iframe / file:// context sends `Origin: null`; the
+        // DNS-rebinding guard must fail closed on it, not wave it through.
+        let response = await rpc(
+            port: h.mcpPort, method: "initialize",
+            params: ["protocolVersion": "2025-06-18"],
+            origin: "null")
+        #expect(response.status == 403)
+    }
+
+    @Test
     func localhostOriginIsAllowed() async {
         let h = await makeHarness()
         defer { h.mcp.stop(); h.fixtures.stop() }

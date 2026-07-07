@@ -44,6 +44,27 @@ struct PageReadPaginatorTests {
     }
 
     @Test
+    func breaksOnLineBoundaryWhenNoParagraph() {
+        // No blank line within the window, but a newline is — break there rather
+        // than mid-word. (Covers the single-`\n` branch that `web_fetch`'s old
+        // `truncateAtBoundary` used to own before it was folded in here.)
+        let content = "Line one.\nLine two.\n" + String(repeating: "x", count: 5000)
+        let chunk = PageReadPaginator.paginate(content, cursor: 0, maxChars: 25)
+        #expect(chunk.text == "Line one.\nLine two.")
+        #expect(chunk.nextCursor == "Line one.\nLine two.".count)
+    }
+
+    @Test
+    func hardCutsAtCapWhenNoBoundary() {
+        // An unbroken run longer than the cap is cut exactly at maxChars — the
+        // last-resort branch, guaranteeing forward progress.
+        let content = "One very long line without any breaks at all in this text."
+        let chunk = PageReadPaginator.paginate(content, cursor: 0, maxChars: 20)
+        #expect(chunk.text == "One very long line w")
+        #expect(chunk.nextCursor == 20)
+    }
+
+    @Test
     func concatenatingAllChunksReconstructsContentExactly() {
         let content =
             (1...40)

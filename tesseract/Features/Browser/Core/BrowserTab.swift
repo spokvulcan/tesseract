@@ -138,7 +138,7 @@ final class BrowserTab {
 
         let html = try await currentHTML()
         let base = page.url ?? URL(string: "about:blank")!
-        let content = await WebContentExtractor.extractRendered(html: html, url: base)
+        let content = await WebContentExtractor.extract(html: html, url: base)
         readCache = (currentURL, content)
         return content
     }
@@ -292,7 +292,7 @@ final class BrowserTab {
 
     // MARK: - Screenshot
 
-    /// PNG snapshot of the current page contents, re-encoded to guarantee the
+    /// PNG capture of the current page contents, re-encoded to guarantee the
     /// declared MIME. Width-capped to bound token cost when a VLM consumes it.
     func screenshot(maxWidth: CGFloat = 1200) async throws -> Data {
         let raw = try await page.exported(

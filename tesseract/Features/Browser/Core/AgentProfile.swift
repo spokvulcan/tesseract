@@ -46,7 +46,11 @@ final class AgentProfile {
     func makePageConfiguration() -> WebPage.Configuration {
         var config = WebPage.Configuration()
         config.websiteDataStore = dataStore
-        config.applicationNameForUserAgent = Self.userAgent
+        // The UA is applied per-page via `WebPage.customUserAgent` (which fully
+        // replaces the string) in BrowserTab / the login window — not here:
+        // `applicationNameForUserAgent` only *appends* to the default UA, so
+        // setting it to the full Safari string would malform the UA if it ever
+        // took effect. One source of truth, applied correctly.
         return config
     }
 }

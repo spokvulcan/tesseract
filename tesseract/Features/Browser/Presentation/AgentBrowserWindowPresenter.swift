@@ -23,6 +23,10 @@ final class AgentBrowserWindowPresenter: NSObject, AgentBrowserPresenting {
     private var windowToSession: [ObjectIdentifier: String] = [:]
     private var cascadePoint = NSPoint(x: 140, y: 140)
 
+    /// The user's own login window (User Story #1) — at most one, reused across
+    /// reopens; distinct from the per-session mirror windows above.
+    private var userWindow: NSWindow?
+
     func present(sessionID: String, page: WebPage, title: String) {
         let entry = entries[sessionID] ?? makeEntry(for: sessionID)
 
@@ -46,11 +50,20 @@ final class AgentBrowserWindowPresenter: NSObject, AgentBrowserPresenting {
         entry.window.close()
     }
 
+    func presentUserBrowser(page: WebPage) {
+        let window = userWindow ?? makeUserWindow()
+        window.contentView = NSHostingView(rootView: AgentBrowserWindow(page: page))
+        window.makeKeyAndOrderFront(nil)
+    }
+
     // MARK: - Private
 
-    private func makeEntry(for sessionID: String) -> Entry {
+    /// Build a window with the shared browser-window chrome (style, title,
+    /// tabbing, cascade, delegate). Callers own the bookkeeping that differs —
+    /// a per-session mirror vs. the single login window.
+    private func makeChromeWindow(width: CGFloat, height: CGFloat) -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -60,11 +73,21 @@ final class AgentBrowserWindowPresenter: NSObject, AgentBrowserPresenting {
         window.tabbingMode = .disallowed
         cascadePoint = window.cascadeTopLeft(from: cascadePoint)
         window.delegate = self
+        return window
+    }
 
+    private func makeEntry(for sessionID: String) -> Entry {
+        let window = makeChromeWindow(width: 1000, height: 760)
         let entry = Entry(window: window)
         entries[sessionID] = entry
         windowToSession[ObjectIdentifier(window)] = sessionID
         return entry
+    }
+
+    private func makeUserWindow() -> NSWindow {
+        let window = makeChromeWindow(width: 1100, height: 820)
+        userWindow = window
+        return window
     }
 }
 
@@ -74,8 +97,12 @@ extension AgentBrowserWindowPresenter: NSWindowDelegate {
     /// When the user closes a session window, forget it (without tearing the
     /// session down) so the next `present` reopens a fresh window.
     func windowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow,
-            let sessionID = windowToSession.removeValue(forKey: ObjectIdentifier(window))
+        guard let window = notification.object as? NSWindow else { return }
+        if window == userWindow {
+            userWindow = nil
+            return
+        }
+        guard let sessionID = windowToSession.removeValue(forKey: ObjectIdentifier(window))
         else { return }
         entries[sessionID] = nil
     }

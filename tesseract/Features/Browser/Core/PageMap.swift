@@ -38,13 +38,9 @@ nonisolated struct PageMapElement: Codable, Sendable, Equatable {
 /// included (ref-less) so the agent has document scaffolding. Hidden and
 /// zero-size elements are skipped.
 ///
-/// The script caps its own output at `hardElementCap` to keep the round-trip
-/// bounded; `PageMapFormatter` applies the display cap on top.
+/// The script caps its own output at a hard element limit (`HARD_CAP`) to keep
+/// the round-trip bounded; `PageMapFormatter` applies the display cap on top.
 nonisolated enum PageMapScript {
-
-    /// Upper bound on elements the script will emit, independent of the display
-    /// cap — a guard against pathological pages, not the token budget.
-    static let hardElementCap = 800
 
     static let source = #"""
         const HARD_CAP = 800;

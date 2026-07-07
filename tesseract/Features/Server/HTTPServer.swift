@@ -155,10 +155,14 @@ struct HTTPResponse: Sendable {
         )
     }
 
-    fileprivate static func statusText(for code: Int) -> String {
+    /// Reason phrase for a status code. Internal so the MCP transport
+    /// (`MCPBrowserServer`) shares this one table instead of copying it.
+    static func statusText(for code: Int) -> String {
         switch code {
         case 200: "OK"
+        case 202: "Accepted"
         case 400: "Bad Request"
+        case 403: "Forbidden"
         case 404: "Not Found"
         case 405: "Method Not Allowed"
         case 500: "Internal Server Error"

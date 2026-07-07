@@ -3,10 +3,12 @@ import WebKit
 
 // MARK: - WebAddressGuard
 
-/// SSRF guard for the *anonymous* web paths (`fetch`). The authenticated
-/// **Agent Browser** deliberately omits this — it is the user's own browser and
-/// may reach localhost — but `fetch` takes an untrusted URL as a convenience and
-/// must not be turned into a private-network probe.
+/// SSRF guard for the *anonymous* web paths — the single home for this policy,
+/// applied by both the browser `fetch` tool and the agent's `web_fetch` (which
+/// routes through ``EphemeralPageReader``). The authenticated **Agent Browser**
+/// deliberately omits it — it is the user's own browser and may reach localhost
+/// — but the anonymous readers take an untrusted URL as a convenience and must
+/// not be turned into a private-network probe.
 nonisolated enum WebAddressGuard {
 
     enum GuardError: LocalizedError, Sendable {

@@ -17,6 +17,10 @@ protocol AgentBrowserPresenting: AnyObject {
     func present(sessionID: String, page: WebPage, title: String)
     /// Close and forget the window for `sessionID`.
     func close(sessionID: String)
+    /// Show (or resurface) the user's own **Agent Browser** window — the
+    /// deliberate login surface (User Story #1), with navigation chrome — on the
+    /// shared profile page `page`.
+    func presentUserBrowser(page: WebPage)
 }
 
 // MARK: - NoOpBrowserPresenter
@@ -35,5 +39,11 @@ final class NoOpBrowserPresenter: AgentBrowserPresenting {
 
     func close(sessionID: String) {
         presented[sessionID] = nil
+    }
+
+    /// Records that a user browser window was asked for, without showing one.
+    private(set) var userBrowserPresented = false
+    func presentUserBrowser(page: WebPage) {
+        userBrowserPresented = true
     }
 }
