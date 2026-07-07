@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.0](https://github.com/spokvulcan/tesseract/compare/v1.4.0...v1.5.0) (2026-07-07)
+
+
+### Features
+
+* **dictation:** always-armed Voice Processing with SPI un-duck (ADR-0025) ([7a22ba4](https://github.com/spokvulcan/tesseract/commit/7a22ba472eb1141683b44f0c1cac3534449f4673)), closes [#188](https://github.com/spokvulcan/tesseract/issues/188)
+* **models:** point Ornith 9B at vision-capable MLX 6-bit build ([762fd0b](https://github.com/spokvulcan/tesseract/commit/762fd0b9f833f80a9efe77a9f8a1ecfc70570dbc))
+
+
+### Tests
+
+* **agent:** essentials skills are pill-only (disable-model-invocation) ([b353003](https://github.com/spokvulcan/tesseract/commit/b3530034eebb5f741652871f8b0c656847523c1b))
+
 ## [1.4.0](https://github.com/spokvulcan/tesseract/compare/v1.3.0...v1.4.0) (2026-07-07)
 
 
