@@ -116,9 +116,11 @@ struct ServerConfigurationView: View {
                 Text("Browser Access")
             } footer: {
                 Text(
-                    "Exposes a Model Context Protocol server so agents (Claude Code, etc.) can drive a local browser using your logged-in sessions. Agent browsing always opens visible windows. Add it with: claude mcp add --transport http tesseract-browser http://127.0.0.1:\(settings.serverPort)/mcp"
+                    "Exposes a Model Context Protocol server so agents (Claude Code, etc.) — and Tesseract's own agent — can drive a local browser using your logged-in sessions. Turning this on also gives the in-app agent all 12 browser tools in chat. Agent browsing always opens visible windows. Add external agents with: claude mcp add --transport http tesseract-browser http://127.0.0.1:\(settings.serverPort)/mcp"
                 )
             }
+
+            MCPServersSection()
 
             ServerPromptCacheBudgetSection()
 

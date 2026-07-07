@@ -270,4 +270,79 @@ struct AgentRunControllerTests {
         await run.cancelAndWait()
         #expect(run.isGenerating == false)
     }
+
+    // MARK: - Web-access gating of browser MCP tools (PRD #190, US #16)
+
+    private func makeRegistry(extraToolNames: [String]) -> ToolRegistry {
+        let host = ExtensionHost()
+        host.register(StubToolsExtension(names: extraToolNames))
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-gating-\(UUID().uuidString)", isDirectory: true)
+        return ToolRegistry(sandbox: PathSandbox(root: root), extensionHost: host)
+    }
+
+    /// With web access off, the switch now gates the built-in Browser server's
+    /// MCP tools too (not just `web_search`/`web_fetch`), while a non-browser MCP
+    /// tool is untouched — one switch keeps meaning what it says (#190, US #16).
+    @Test func webAccessOffGatesBrowserMCPToolsButNotOtherServers() async throws {
+        let agent = makeAgent()
+        let settings = SettingsManager(store: InMemorySettingsStore())
+        settings.webAccessEnabled = false
+        let run = AgentRunController(
+            agent: agent, arbiter: InMemoryInferenceArbiter(),
+            toolRegistry: makeRegistry(extraToolNames: [
+                "web_search", "web_fetch", "browser.navigate", "browser.read_page", "files.list",
+            ]),
+            settings: settings, reportError: { _ in })
+
+        run.send(CoreMessage.user(UserMessage(content: "hi")))
+        let names = Set(agent.state.tools.map(\.name))
+
+        #expect(!names.contains("web_search"))
+        #expect(!names.contains("web_fetch"))
+        #expect(!names.contains("browser.navigate"))
+        #expect(!names.contains("browser.read_page"))
+        #expect(names.contains("files.list"))  // a non-browser MCP tool survives
+
+        await run.cancelAndWait()
+    }
+
+    /// With web access on, browser MCP tools are present.
+    @Test func webAccessOnKeepsBrowserMCPTools() async throws {
+        let agent = makeAgent()
+        let settings = SettingsManager(store: InMemorySettingsStore())
+        settings.webAccessEnabled = true
+        let run = AgentRunController(
+            agent: agent, arbiter: InMemoryInferenceArbiter(),
+            toolRegistry: makeRegistry(extraToolNames: ["web_search", "browser.navigate"]),
+            settings: settings, reportError: { _ in })
+
+        run.send(CoreMessage.user(UserMessage(content: "hi")))
+        let names = Set(agent.state.tools.map(\.name))
+
+        #expect(names.contains("web_search"))
+        #expect(names.contains("browser.navigate"))
+
+        await run.cancelAndWait()
+    }
+}
+
+/// A minimal extension that exposes tools with the given names — enough to test
+/// the run controller's web-access gating without standing up real tools.
+private final class StubToolsExtension: AgentExtension, @unchecked Sendable {
+    let path = "stub-tools"
+    let commands: [String: RegisteredCommand] = [:]
+    let handlers: [ExtensionEventType: [ExtensionEventHandler]] = [:]
+    let tools: [String: AgentToolDefinition]
+
+    init(names: [String]) {
+        var built: [String: AgentToolDefinition] = [:]
+        for name in names {
+            built[name] = AgentToolDefinition(
+                name: name, label: name, description: "",
+                parameterSchema: JSONSchema(type: "object", properties: [:], required: []),
+                execute: { _, _, _, _ in .text("") })
+        }
+        tools = built
+    }
 }

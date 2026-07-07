@@ -378,6 +378,13 @@ final class SettingsManager {
         }
     }
 
+    /// User-configured MCP servers the agent connects to as a client (#190). The
+    /// built-in Browser server is synthesized from `browserMCPServerEnabled`, so
+    /// it never appears in this list.
+    var mcpServers: [MCPServerConfig] {
+        didSet { SettingsCatalogue.mcpServers.write(mcpServers, to: store) }
+    }
+
     // MARK: - SSD Prefix Cache
 
     // Changes to these settings take effect on the next model unload/reload.
@@ -473,6 +480,7 @@ final class SettingsManager {
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
         self.serverPort = SettingsCatalogue.serverPort.load(from: store)
         self.browserMCPServerEnabled = SettingsCatalogue.browserMCPServerEnabled.load(from: store)
+        self.mcpServers = SettingsCatalogue.mcpServers.load(from: store)
         self.prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.load(from: store)
         self.prefixCacheRAMBudgetCapBytes = SettingsCatalogue.prefixCacheRAMBudgetCapBytes.load(
             from: store)
@@ -579,6 +587,7 @@ final class SettingsManager {
         isServerEnabled = SettingsCatalogue.isServerEnabled.default
         serverPort = SettingsCatalogue.serverPort.default
         browserMCPServerEnabled = SettingsCatalogue.browserMCPServerEnabled.default
+        mcpServers = SettingsCatalogue.mcpServers.default
         prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.default
         prefixCacheRAMBudgetCapBytes = SettingsCatalogue.prefixCacheRAMBudgetCapBytes.default
         prefixCacheSSDBudgetCapBytes = SettingsCatalogue.prefixCacheSSDBudgetCapBytes.default

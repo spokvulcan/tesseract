@@ -18,7 +18,8 @@ enum AgentFactory {
         extensionHost: ExtensionHost,
         toolRegistry: ToolRegistry,
         contextManager: ContextManager,
-        settingsManager: SettingsManager
+        settingsManager: SettingsManager,
+        mcpToolsExtension: MCPToolsExtension? = nil
     ) -> Agent {
         let agentRoot = PathSandbox.defaultRoot
 
@@ -27,7 +28,8 @@ enum AgentFactory {
             packageRegistry: packageRegistry,
             extensionHost: extensionHost,
             agentRoot: agentRoot,
-            settingsManager: settingsManager
+            settingsManager: settingsManager,
+            mcpToolsExtension: mcpToolsExtension
         )
 
         // 2. Refresh extension tools after package bootstrap

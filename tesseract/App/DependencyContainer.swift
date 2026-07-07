@@ -102,7 +102,8 @@ final class DependencyContainer: ObservableObject {
         extensionHost: extensionHost,
         toolRegistry: newToolRegistry,
         contextManager: contextManager,
-        settingsManager: settingsManager
+        settingsManager: settingsManager,
+        mcpToolsExtension: mcpClientManager.toolsExtension
     )
     // HTTP Server
     lazy var httpServer = HTTPServer(port: HTTPServer.clampedPort(settingsManager.serverPort))
@@ -117,6 +118,38 @@ final class DependencyContainer: ObservableObject {
         browser: agentBrowser,
         executor: browserToolExecutor,
         isEnabled: { [settingsManager] in settingsManager.browserMCPServerEnabled }
+    )
+
+    // MCP client (PRD #190): the in-app agent connects to configured HTTP MCP
+    // servers, and to its own Browser MCP server in-process (ADR-0027 dogfood).
+    // The built-in Browser server is enabled by the one "Browser Access" switch
+    // (`browserMCPServerEnabled`); user servers come from settings. Reaching the
+    // browser server in-process — not over the loopback socket — decouples
+    // browser-use in chat from the inference HTTP listener (which only starts
+    // with `isServerEnabled`). Tools land in `newToolRegistry` via the manager's
+    // `MCPToolsExtension`, refreshed whenever a connection's tool set changes.
+    lazy var mcpClientManager = MCPClientManager(
+        configsProvider: { [settingsManager] in
+            [MCPServerConfig.builtInBrowser(enabled: settingsManager.browserMCPServerEnabled)]
+                + settingsManager.mcpServers
+        },
+        makeTransport: { [mcpBrowserServer] config in
+            switch config.transport {
+            case .inProcessBrowser:
+                return InProcessMCPTransport(handle: { request in
+                    await mcpBrowserServer.handle(request: request)
+                })
+            case .http:
+                // An unparseable persisted URL yields a nil endpoint; the
+                // transport then fails the connection cleanly (US #6) rather
+                // than pointing at a fabricated host.
+                return HTTPMCPTransport(
+                    endpoint: URL(string: config.url), headers: config.headers)
+            }
+        },
+        refreshRegistry: { [newToolRegistry, extensionHost] in
+            newToolRegistry.refreshExtensionTools(from: extensionHost)
+        }
     )
 
     lazy var terminationCoordinator = makeTerminationCoordinator()
@@ -361,6 +394,14 @@ final class DependencyContainer: ObservableObject {
         // Hand off to App Bindings: the launch ordering and every runtime
         // subscription with a rule live (and are tested) there.
         appBindings.start()
+
+        // Wire the MCP client (PRD #190). Materialize the agent first so its
+        // MCP tools extension is registered with the ExtensionHost before the
+        // manager refreshes the registry; then connect the configured servers
+        // (the built-in Browser server plus any user-added ones) and keep them
+        // reconciled with settings.
+        _ = agent
+        mcpClientManager.start()
     }
 
     private func makeAppBindings() -> AppBindings {
