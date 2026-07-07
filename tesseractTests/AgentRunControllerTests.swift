@@ -281,9 +281,10 @@ struct AgentRunControllerTests {
         return ToolRegistry(sandbox: PathSandbox(root: root), extensionHost: host)
     }
 
-    /// With web access off, the switch now gates the built-in Browser server's
-    /// MCP tools too (not just `web_search`/`web_fetch`), while a non-browser MCP
-    /// tool is untouched — one switch keeps meaning what it says (#190, US #16).
+    /// With web access off, the switch gates the built-in Browser server's MCP
+    /// tools — the sole web surface now that search and fetch live under
+    /// `browser.*` (ADR-0028) — while a non-browser MCP tool is untouched, so one
+    /// switch keeps meaning what it says (#190, US #16).
     @Test func webAccessOffGatesBrowserMCPToolsButNotOtherServers() async throws {
         let agent = makeAgent()
         let settings = SettingsManager(store: InMemorySettingsStore())
@@ -291,15 +292,13 @@ struct AgentRunControllerTests {
         let run = AgentRunController(
             agent: agent, arbiter: InMemoryInferenceArbiter(),
             toolRegistry: makeRegistry(extraToolNames: [
-                "web_search", "web_fetch", "browser.navigate", "browser.read_page", "files.list",
+                "browser.navigate", "browser.read_page", "files.list",
             ]),
             settings: settings, reportError: { _ in })
 
         run.send(CoreMessage.user(UserMessage(content: "hi")))
         let names = Set(agent.state.tools.map(\.name))
 
-        #expect(!names.contains("web_search"))
-        #expect(!names.contains("web_fetch"))
         #expect(!names.contains("browser.navigate"))
         #expect(!names.contains("browser.read_page"))
         #expect(names.contains("files.list"))  // a non-browser MCP tool survives
@@ -314,14 +313,14 @@ struct AgentRunControllerTests {
         settings.webAccessEnabled = true
         let run = AgentRunController(
             agent: agent, arbiter: InMemoryInferenceArbiter(),
-            toolRegistry: makeRegistry(extraToolNames: ["web_search", "browser.navigate"]),
+            toolRegistry: makeRegistry(extraToolNames: ["browser.navigate", "browser.read_page"]),
             settings: settings, reportError: { _ in })
 
         run.send(CoreMessage.user(UserMessage(content: "hi")))
         let names = Set(agent.state.tools.map(\.name))
 
-        #expect(names.contains("web_search"))
         #expect(names.contains("browser.navigate"))
+        #expect(names.contains("browser.read_page"))
 
         await run.cancelAndWait()
     }

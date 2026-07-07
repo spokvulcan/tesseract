@@ -536,7 +536,13 @@ The MCP endpoint the running app serves so external agents can drive the
 **Agent Browser**; Tesseract's own agent consumes it through its **MCP Client**,
 speaking the same protocol over an in-process transport (not the loopback
 socket, so browser-use in chat never depends on the inference server running).
-_Avoid_: standalone server, stdio server, plugin API.
+It is the _sole_ web-access surface — search, fetch, and interactive browsing all
+live here, with no standalone web tools beside it — and is governed by two
+independently-default-on switches: **Web Access** (its tools reach the in-app
+agent over the in-process transport, no port opened) and **HTTP exposure** (its
+loopback listener admits outside clients).
+_Avoid_: standalone server, stdio server, plugin API, web\_search/web\_fetch (the
+retired standalone tools).
 
 **MCP Client**:
 The in-app agent's client for Model Context Protocol servers (#190): it connects
@@ -549,8 +555,9 @@ _Avoid_: plugin loader, tool proxy, RPC bridge.
 **Connected Server**:
 One configured MCP server the **MCP Client** talks to — URL, display name,
 enabled flag, optional headers. The **Browser MCP Server** is the pre-registered
-first entry (enabled by the one Browser Access switch); user servers are added
-deliberately and persist through the **Settings Catalogue**.
+first entry (default-on; governed by the Web Access and HTTP-exposure switches
+above); user servers are added deliberately and persist through the
+**Settings Catalogue**.
 _Avoid_: integration, plugin, AgentExtension (that is the in-app tool-source type).
 
 **Tool Consent**:

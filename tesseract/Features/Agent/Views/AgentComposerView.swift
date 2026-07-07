@@ -175,8 +175,8 @@ struct AgentComposerView: View {
                 .buttonStyle(.plain)
                 .help(
                     settings.webAccessEnabled
-                        ? "Web search enabled — click to disable"
-                        : "Web search disabled — click to enable")
+                        ? "Web access enabled — click to disable"
+                        : "Web access disabled — click to enable")
 
                 Button {
                     if commandPalette.showCommandPopup {

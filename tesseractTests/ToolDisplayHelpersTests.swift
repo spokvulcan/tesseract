@@ -48,11 +48,12 @@ struct ToolDisplayHelpersTests {
             ToolDisplayHelpers.titleForTool("use_skill", arguments: ["name": .string("proofread")])
                 == "Load skill proofread")
         #expect(
-            ToolDisplayHelpers.titleForTool("web_search", arguments: ["query": .string("swift 6")])
+            ToolDisplayHelpers.titleForTool(
+                "browser.search", arguments: ["query": .string("swift 6")])
                 == "Search \u{201C}swift 6\u{201D}")
         #expect(
             ToolDisplayHelpers.titleForTool(
-                "web_fetch", arguments: ["url": .string("https://example.com/docs/")])
+                "browser.fetch", arguments: ["url": .string("https://example.com/docs/")])
                 == "Fetch example.com/docs")
         #expect(ToolDisplayHelpers.titleForTool("mystery_tool", arguments: nil) == "mystery_tool")
     }

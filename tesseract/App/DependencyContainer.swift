@@ -122,16 +122,18 @@ final class DependencyContainer: ObservableObject {
 
     // MCP client (PRD #190): the in-app agent connects to configured HTTP MCP
     // servers, and to its own Browser MCP server in-process (ADR-0027 dogfood).
-    // The built-in Browser server is enabled by the one "Browser Access" switch
-    // (`browserMCPServerEnabled`); user servers come from settings. Reaching the
-    // browser server in-process — not over the loopback socket — decouples
-    // browser-use in chat from the inference HTTP listener (which only starts
-    // with `isServerEnabled`). Tools land in `newToolRegistry` via the manager's
-    // `MCPToolsExtension`, refreshed whenever a connection's tool set changes.
+    // The built-in Browser server is always connected in-process; the *Web
+    // Access* switch (`webAccessEnabled`) governs whether its tools reach the
+    // agent, applied per-turn by AgentRunController. The separate *HTTP exposure*
+    // switch (`browserMCPServerEnabled`) gates only the loopback `/mcp` listener,
+    // not this in-process path (ADR-0028). Reaching the browser server in-process
+    // — not over the loopback socket — decouples browser-use in chat from the
+    // inference HTTP listener (which only starts with `isServerEnabled`). Tools
+    // land in `newToolRegistry` via the manager's `MCPToolsExtension`, refreshed
+    // whenever a connection's tool set changes.
     lazy var mcpClientManager = MCPClientManager(
         configsProvider: { [settingsManager] in
-            [MCPServerConfig.builtInBrowser(enabled: settingsManager.browserMCPServerEnabled)]
-                + settingsManager.mcpServers
+            [MCPServerConfig.builtInBrowser(enabled: true)] + settingsManager.mcpServers
         },
         makeTransport: { [mcpBrowserServer] config in
             switch config.transport {

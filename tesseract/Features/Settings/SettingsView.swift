@@ -515,12 +515,13 @@ struct RecordingSettingsSection: View {
             }
 
             Section("Web Access") {
-                Toggle("Enable Web Search", isOn: $settings.webAccessEnabled)
+                Toggle("Enable web access", isOn: $settings.webAccessEnabled)
                 Text(
-                    "Search queries are sent to DuckDuckGo. No conversation data leaves your device."
+                    "Lets the agent search, read, and browse the web through a local browser. Only your search queries and the pages the agent visits leave your device — no conversation data."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Vision") {

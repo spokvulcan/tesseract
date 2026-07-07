@@ -4,10 +4,9 @@ import os
 // MARK: - MCPToolsExtension
 
 /// The ``AgentExtension`` that surfaces every connected MCP server's tools to the
-/// agent, mirroring ``WebToolsExtension``. Unlike the web tools (fixed at init),
-/// MCP tools materialize and vanish as servers connect, disconnect, or change
-/// their list — so the tool set is a snapshot the ``MCPClientManager`` pushes in
-/// via ``update(_:)``.
+/// agent. Unlike a fixed-at-init extension, MCP tools materialize and vanish as
+/// servers connect, disconnect, or change their list — so the tool set is a
+/// snapshot the ``MCPClientManager`` pushes in via ``update(_:)``.
 ///
 /// The snapshot lives behind a lock so `tools` is safe to read from any context
 /// (the `ExtensionHost` aggregates on the MainActor; the lock keeps that honest

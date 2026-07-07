@@ -135,16 +135,17 @@ enum SettingsCatalogue {
     static let serverPort = Setting.int("serverPort", default: 8321)
 
     /// Exposes the **Browser MCP Server** (`/mcp`) on the running HTTP server so
-    /// agents can drive the **Agent Browser**. Opt-in and off by default: the
-    /// capability lets whatever agent connects act in the user's authenticated
-    /// browser, so the user turns it on deliberately (ADR-0026/0027). Doubles as
-    /// the "Browser Access" switch for the in-app agent's own browser-use — the
-    /// built-in Browser MCP client server tracks this flag (#190).
-    static let browserMCPServerEnabled = Setting.bool("browserMCPServerEnabled", default: false)
+    /// agents can drive the **Agent Browser**. This is the *HTTP exposure* switch
+    /// — it gates only the loopback `/mcp` listener that admits outside clients
+    /// (Claude Code, OpenCode). The in-app agent's own browser-use is governed by
+    /// the separate *Web Access* switch (`webAccessEnabled`) over the in-process
+    /// transport, so the two are independent (ADR-0028). On by default; the origin
+    /// guard fails closed on non-loopback requests.
+    static let browserMCPServerEnabled = Setting.bool("browserMCPServerEnabled", default: true)
 
     /// User-configured MCP servers the in-app agent connects to as an MCP client
-    /// (#190). The built-in Browser server is synthesized separately (keyed to
-    /// `browserMCPServerEnabled`) and never stored here. Persisted as JSON;
+    /// (#190). The built-in Browser server is synthesized separately (always
+    /// connected in-process) and never stored here. Persisted as JSON;
     /// header values live in the app-sandbox settings for v1 (a Keychain move for
     /// secret headers is the recorded follow-up).
     static let mcpServers = Setting.json("mcpServers", default: [MCPServerConfig]())

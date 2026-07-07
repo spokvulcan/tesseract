@@ -23,7 +23,7 @@ nonisolated enum WebContentExtractor: Sendable {
     ///
     /// The caller hands in the live HTML *after* its `WebPage` has executed the
     /// page's JavaScript — the **Agent Browser** for authenticated reads, an
-    /// **Ephemeral Page** for anonymous `web_fetch`/`fetch`. Because the DOM is
+    /// **Ephemeral Page** for anonymous `browser.fetch`. Because the DOM is
     /// already hydrated there is no separate SPA re-render step (retiring the old
     /// headless renderer): Readability+Demark first, regex fallback if that
     /// yields nothing.
