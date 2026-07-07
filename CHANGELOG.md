@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.4.0](https://github.com/spokvulcan/tesseract/compare/v1.3.0...v1.4.0) (2026-07-07)
+
+
+### Features
+
+* **agent:** icon-only model button in the composer's right cluster ([46bb480](https://github.com/spokvulcan/tesseract/commit/46bb480c31c72271d4af8ef4cbc503dcaefd8bfe))
+* **agent:** stream tool calls in the chat — Open Tool Call row + Tool Clock ([5e06b7a](https://github.com/spokvulcan/tesseract/commit/5e06b7aafdbce8e51084be66c0798265b0aef73b))
+* **agent:** tighten system prompt and skills for small-model clarity ([d6607c5](https://github.com/spokvulcan/tesseract/commit/d6607c57dd58cc5cac47f68a4dc6d9577b054a01))
+* **agent:** transcript rhythm, tool row titles, and markdown accents ([0e48587](https://github.com/spokvulcan/tesseract/commit/0e48587733755712a36f460ac07c03a9419bd29d))
+
+
+### Code Refactoring
+
+* **agent:** hoist tool-call name-lock to the producers, tidy the fold ([baf6101](https://github.com/spokvulcan/tesseract/commit/baf610147787f2848e752ff9ca08d0a4a7da67a3))
+
+
+### Continuous Integration
+
+* **release:** fail fast and alert when Apple notary access is blocked ([#185](https://github.com/spokvulcan/tesseract/issues/185)) ([7599a1b](https://github.com/spokvulcan/tesseract/commit/7599a1b2efed1342e5d52d89a828a14d78629fa9))
+
 ## [1.3.0](https://github.com/spokvulcan/tesseract/compare/v1.2.0...v1.3.0) (2026-07-06)
 
 
