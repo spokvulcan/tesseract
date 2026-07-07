@@ -15,6 +15,14 @@ import SwiftUI
 /// `.font(.system(size: chatBodyFontSize))` keeps every render mode identical.
 let chatBodyFontSize: CGFloat = 16
 
+/// Line spacing of transcript prose. Textual's GitHub paragraph style renders
+/// markdown at `.fontScaled(0.25)` — 0.25 × the font size, i.e. SwiftUI
+/// `.lineSpacing(4)` at the transcript's 16pt. Every plain-`Text` render of
+/// multi-line prose (the markdown-off mode, expanded thinking) must apply the
+/// same number, or the two render modes read at visibly different line
+/// heights.
+let chatLineSpacing: CGFloat = chatBodyFontSize * 0.25
+
 /// Metrics of the flat document transcript.
 enum ChatLayout {
     /// Readable column width — content never stretches past this.
@@ -31,6 +39,18 @@ enum ChatLayout {
 }
 
 // MARK: - Blank parts
+
+extension String {
+    /// Edge-trim for multi-line transcript text rendered through a plain
+    /// `Text`. The model brackets parts with cosmetic newlines ("\n\n" around
+    /// think and tool blocks, a trailing "\n" before a block close); the
+    /// markdown renderer collapses them, but `Text` draws each as a blank
+    /// line — phantom vertical space that breaks the Row Rhythm. Interior
+    /// formatting is untouched.
+    var chatDisplayTrimmed: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
 
 extension ContentPart {
     /// Whether this part would render as an empty row: a whitespace-only text

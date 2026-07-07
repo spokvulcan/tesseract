@@ -209,7 +209,14 @@ private struct LiveMessageSection: View {
     @Environment(AgentEngine.self) private var agentEngine
 
     var body: some View {
-        if let message = session.liveMessage {
+        // Render the live stack only when it has a visible row. `messageStart`
+        // raises `liveMessage` with empty content before prefill; an empty
+        // VStack is still a zero-height child of the transcript stack and
+        // draws a phantom Row Rhythm gap above the Waiting Row that collapses
+        // at the first delta — a visible jump.
+        if let message = session.liveMessage,
+            session.livePart != nil || message.content.contains(where: { !$0.isBlankRow })
+        {
             VStack(alignment: .leading, spacing: ChatLayout.rowSpacing) {
                 ForEach(Array(message.content.enumerated()), id: \.offset) { index, part in
                     if let live = session.livePart, live.partIndex == index {
@@ -240,18 +247,24 @@ private struct LiveMessageSection: View {
 }
 
 /// The Waiting Row: the placeholder for a turn that is waiting on the model —
-/// a spinner in the marker slot (the running-tool-row convention) and a stage
-/// label, "Loading model…" until the load completes, "Reading context…"
-/// through prefill. Same geometry as the live thinking row it hands off to,
-/// so the transition never shifts layout; only the text swaps.
+/// a spinner in the marker slot and a stage label, "Loading model…" until the
+/// load completes, "Reading context…" through prefill. It clones the live
+/// thinking row's collapsed header exactly — a hidden `CollapseMarker` keeps
+/// the marker slot's real text metrics (a bare `ProgressView` has no text
+/// baseline, so `.firstTextBaseline` would drop it to its bottom edge) and
+/// the spinner is overlaid centered on it. The handoff to "Thinking…" then
+/// changes nothing but the glyph and the words.
 private struct WaitingRow: View {
     let isModelLoaded: Bool
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            ProgressView()
-                .controlSize(.mini)
-                .frame(width: ChatLayout.markerWidth)
+            CollapseMarker(isExpanded: false)
+                .hidden()
+                .overlay {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
             Text(isModelLoaded ? "Reading context…" : "Loading model…")
                 .font(.system(size: chatBodyFontSize, weight: .medium))
                 .foregroundStyle(.secondary)

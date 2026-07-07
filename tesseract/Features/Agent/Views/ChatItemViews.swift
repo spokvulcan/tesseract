@@ -133,8 +133,9 @@ struct AssistantProseView: View {
                 .font(.system(size: chatBodyFontSize))
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            Text(text)
+            Text(text.chatDisplayTrimmed)
                 .font(.system(size: chatBodyFontSize))
+                .lineSpacing(chatLineSpacing)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -192,8 +193,9 @@ struct ThinkingRowView: View {
             .help(isExpanded ? "Hide reasoning" : "Show reasoning")
 
             if isExpanded {
-                Text(text)
+                Text(text.chatDisplayTrimmed)
                     .font(.system(size: chatBodyFontSize))
+                    .lineSpacing(chatLineSpacing)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -320,7 +322,10 @@ struct ToolCallRowView: View {
                 .font(.system(size: chatBodyFontSize, weight: .medium))
                 .foregroundStyle(.tertiary)
 
-            Text(text)
+            // Newlines-only edge trim: tool results routinely end with "\n"
+            // (a blank line inside the box), but leading spaces can be real
+            // indentation in monospaced output — keep those.
+            Text(text.trimmingCharacters(in: .newlines))
                 .font(.system(size: chatBodyFontSize, design: .monospaced))
                 .foregroundStyle(
                     isError
@@ -503,8 +508,9 @@ struct LiveThinkingRowView: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                Text(live.displayText)
+                Text(live.displayText.chatDisplayTrimmed)
                     .font(.system(size: chatBodyFontSize))
+                    .lineSpacing(chatLineSpacing)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
