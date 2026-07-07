@@ -80,6 +80,7 @@ extension View {
     func injectCoreDependencies(from container: DependencyContainer) -> some View {
         self
             .environment(container.settingsManager)
+            .environment(container.agentBrowser)
             .environmentObject(container.permissionsManager)
     }
 

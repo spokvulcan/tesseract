@@ -155,10 +155,14 @@ struct HTTPResponse: Sendable {
         )
     }
 
-    fileprivate static func statusText(for code: Int) -> String {
+    /// Reason phrase for a status code. Internal so the MCP transport
+    /// (`MCPBrowserServer`) shares this one table instead of copying it.
+    static func statusText(for code: Int) -> String {
         switch code {
         case 200: "OK"
+        case 202: "Accepted"
         case 400: "Bad Request"
+        case 403: "Forbidden"
         case 404: "Not Found"
         case 405: "Method Not Allowed"
         case 500: "Internal Server Error"
@@ -554,6 +558,10 @@ final class HTTPServer {
     private(set) var isStarting = false
     private(set) var activeConnections = 0
     private(set) var totalRequestsServed = 0
+    /// The actually-bound port once `.ready`. Equals the configured port in
+    /// normal use; when constructed with `port: 0` it holds the OS-assigned
+    /// ephemeral port (used by tests that drive a real listener on a free port).
+    private(set) var boundPort: UInt16?
     /// Non-nil when the most recent enable attempt failed to bind or the listener
     /// transitioned to `.failed`. Cleared on successful start or user-initiated
     /// stop. Used by the Dashboard to distinguish "starting" from "failed".
@@ -618,18 +626,22 @@ final class HTTPServer {
         guard !isRunning, !isStarting else { return }
         isStopping = false
 
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            Log.server.error("Invalid port: \(self.port)")
-            isStarting = false
-            lastStartError = "Invalid port \(port)"
-            return
-        }
-
         let params = NWParameters.tcp
-        params.requiredLocalEndpoint = NWEndpoint.hostPort(
-            host: .ipv4(.loopback),
-            port: nwPort
-        )
+        if port != 0 {
+            guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+                Log.server.error("Invalid port: \(self.port)")
+                isStarting = false
+                lastStartError = "Invalid port \(port)"
+                return
+            }
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(
+                host: .ipv4(.loopback),
+                port: nwPort
+            )
+        }
+        // port == 0 → OS-assigned ephemeral port, read back as `boundPort` on
+        // `.ready`. Used by tests that bind a real listener on a free port so
+        // parallel test processes never collide on a fixed port.
 
         do {
             let newListener = try NWListener(using: params)
@@ -671,6 +683,7 @@ final class HTTPServer {
         listener = nil
         isStarting = false
         isRunning = false
+        boundPort = nil
         lastStartError = nil
         Log.server.info("Server stopped")
     }
@@ -681,6 +694,7 @@ final class HTTPServer {
         listener = nil
         isStarting = false
         isRunning = false
+        boundPort = nil
         lastStartError = nil
         let connections = Array(trackedConnections.values)
         Log.server.info("Server stopping — draining \(connections.count) connection task(s)")
@@ -711,7 +725,8 @@ final class HTTPServer {
     private func handleListenerState(_ state: NWListener.State) {
         switch state {
         case .ready:
-            Log.server.info("Server ready on 127.0.0.1:\(self.port)")
+            boundPort = listener?.port?.rawValue ?? (port == 0 ? nil : port)
+            Log.server.info("Server ready on 127.0.0.1:\(self.boundPort ?? self.port)")
             isStarting = false
             isRunning = true
             lastStartError = nil

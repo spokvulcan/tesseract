@@ -134,6 +134,12 @@ enum SettingsCatalogue {
     static let isServerEnabled = Setting.bool("isServerEnabled", default: false)
     static let serverPort = Setting.int("serverPort", default: 8321)
 
+    /// Exposes the **Browser MCP Server** (`/mcp`) on the running HTTP server so
+    /// agents can drive the **Agent Browser**. Opt-in and off by default: the
+    /// capability lets whatever agent connects act in the user's authenticated
+    /// browser, so the user turns it on deliberately (ADR-0026/0027).
+    static let browserMCPServerEnabled = Setting.bool("browserMCPServerEnabled", default: false)
+
     // MARK: - Prefix Cache
 
     static let prefixCacheSSDEnabled = Setting.bool("prefixCacheSSDEnabled", default: true)

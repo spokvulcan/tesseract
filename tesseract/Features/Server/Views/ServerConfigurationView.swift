@@ -8,6 +8,7 @@ import SwiftUI
 
 struct ServerConfigurationView: View {
     @Environment(SettingsManager.self) private var settings
+    @Environment(AgentBrowser.self) private var agentBrowser
     @State private var portText: String = ""
     @FocusState private var isFocused: Bool
 
@@ -83,6 +84,39 @@ struct ServerConfigurationView: View {
             } footer: {
                 Text(
                     "Run the command in a terminal to configure OpenCode for this server — every downloaded model, image input included. Re-run it after downloading models or changing the port."
+                )
+            }
+
+            Section {
+                Toggle("Enable Browser Access (MCP)", isOn: $settings.browserMCPServerEnabled)
+
+                LabeledContent("Agent Profile") {
+                    Button("Open Agent Browser…") {
+                        agentBrowser.openUserBrowserWindow()
+                    }
+                    .help(
+                        "Open a visible browser window on the Agent Profile to log into the sites you want to grant agents. Logins persist across launches and are shared by every agent session."
+                    )
+                }
+
+                if settings.browserMCPServerEnabled {
+                    if settings.isServerEnabled {
+                        LabeledContent("MCP Endpoint") {
+                            Text("http://127.0.0.1:\(settings.serverPort)/mcp")
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    } else {
+                        Text("Turn on the HTTP Server above to expose the browser endpoint.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Browser Access")
+            } footer: {
+                Text(
+                    "Exposes a Model Context Protocol server so agents (Claude Code, etc.) can drive a local browser using your logged-in sessions. Agent browsing always opens visible windows. Add it with: claude mcp add --transport http tesseract-browser http://127.0.0.1:\(settings.serverPort)/mcp"
                 )
             }
 
