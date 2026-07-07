@@ -191,13 +191,13 @@ extension ModelDefinition {
             id: "ornith-9b",
             displayName: "Ornith 1.0 9B (MLX 6-bit)",
             description:
-                "Compact agentic-coding agent from DeepReinforce (Qwen3.5 dense, text-only).",
+                "Compact agentic-coding agent from DeepReinforce (Qwen3.5 dense, vision-capable). Retains the Qwen3.5-VL vision tower; image understanding is inherited from the base and unvalidated by DeepReinforce's text/code post-training.",
             category: .agent,
             source: .huggingFace(
-                repo: "AtomicChat/ornith-9b-MLX-6bit",
+                repo: "mlx-community/Ornith-1.0-9B-6bit",
                 requiredExtension: "safetensors"
             ),
-            sizeDescription: "~7.3 GB",
+            sizeDescription: "~8.2 GB",
             dependencies: []
         ),
         ModelDefinition(
