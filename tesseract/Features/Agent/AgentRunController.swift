@@ -168,12 +168,11 @@ final class AgentRunController {
         }
     }
 
-    /// Tool names the web-access switch governs: the anonymous web tools *and*
-    /// the built-in Browser server's MCP tools (PRD #190, US #16), so one switch
-    /// keeps meaning what it says now that browser-use arrives via MCP. The
-    /// browser names come from ``MCPServerConfig/browserToolNames`` — the same
-    /// namespace the live tools are built with — so the gated set and the
-    /// materialized tools can't drift (a test pins the equality).
-    private static let webGatedToolNames: Set<String> =
-        MCPServerConfig.browserToolNames.union(["web_search", "web_fetch"])
+    /// Tool names the **Web Access** switch governs: the built-in Browser
+    /// server's MCP tools — the sole web surface now that search and fetch live
+    /// under `browser.*` (ADR-0028). The names come from
+    /// ``MCPServerConfig/browserToolNames`` — the same namespace the live tools
+    /// are built with — so the gated set and the materialized tools can't drift
+    /// (a test pins the equality).
+    private static let webGatedToolNames: Set<String> = MCPServerConfig.browserToolNames
 }

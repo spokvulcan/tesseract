@@ -30,7 +30,9 @@ final class MCPBrowserServer {
         self.isEnabled = isEnabled
     }
 
-    /// Register the `/mcp` routes on the shared HTTP server.
+    /// Register the `/mcp` routes on the shared HTTP server. Requests go through
+    /// ``handleOverHTTP(request:)``, which applies the loopback-only gates; the
+    /// in-process transport instead calls ``handle(request:)`` directly.
     func attach(to httpServer: HTTPServer, path: String = "/mcp") {
         for method in [HTTPMethod.POST, .DELETE] {
             httpServer.route(method, path) { [weak self] request, writer in
@@ -38,10 +40,26 @@ final class MCPBrowserServer {
                     try await writer.send(.serviceUnavailable("Browser MCP server unavailable"))
                     return
                 }
-                let response = await self.handle(request: request)
+                let response = await self.handleOverHTTP(request: request)
                 try await writer.send(response)
             }
         }
+    }
+
+    /// The loopback-listener entry point: applies the **HTTP-exposure** gate
+    /// (`isEnabled`) and the DNS-rebinding origin guard, then dispatches to
+    /// ``handle(request:)``. These gates live here, *not* in `handle`, so the
+    /// in-process transport (the in-app agent) reaches `handle` directly with no
+    /// port open and regardless of this switch — the two enablement switches are
+    /// thereby separable (ADR-0028).
+    func handleOverHTTP(request: HTTPRequest) async -> HTTPResponse {
+        guard isEnabled() else {
+            return plain(503, "Browser MCP server is disabled in Tesseract settings.")
+        }
+        if let rejection = originRejection(request) {
+            return rejection
+        }
+        return await handle(request: request)
     }
 
     /// Close every client session (server stop / app termination).
@@ -51,14 +69,11 @@ final class MCPBrowserServer {
 
     // MARK: - Request handling
 
+    /// Handle one MCP request. Pure protocol dispatch — the HTTP-exposure gate and
+    /// the origin guard are applied by ``attach(to:path:)`` on the loopback
+    /// listener, *not* here, so the in-process transport (the in-app agent) reaches
+    /// this directly (ADR-0027/0028).
     func handle(request: HTTPRequest) async -> HTTPResponse {
-        guard isEnabled() else {
-            return plain(503, "Browser MCP server is disabled in Tesseract settings.")
-        }
-        if let rejection = originRejection(request) {
-            return rejection
-        }
-
         switch request.method {
         case .DELETE:
             if let sessionID = request.header("Mcp-Session-Id") {

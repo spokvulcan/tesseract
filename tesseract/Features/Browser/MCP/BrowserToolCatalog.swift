@@ -169,8 +169,9 @@ nonisolated enum BrowserToolCatalog {
     static let search = BrowserToolSpec(
         name: "search",
         description:
-            "Search the web (DuckDuckGo) anonymously and return titles, URLs, and snippets. "
-            + "Runs cookieless, outside your logged-in profile.",
+            "Search the web anonymously (cookieless, outside your logged-in profile) and return "
+            + "titles, URLs, and snippets. Snippets are only hints for picking pages — open the "
+            + "result URLs with fetch (or navigate + read_page) to read the real content.",
         inputSchema: JSONSchema(
             type: "object",
             properties: [

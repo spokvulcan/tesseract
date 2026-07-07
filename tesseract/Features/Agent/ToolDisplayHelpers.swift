@@ -18,8 +18,8 @@ nonisolated enum ToolDisplayHelpers {
 
     /// The Tool Row Title: imperative verb + workspace-relative target,
     /// matched against the actual tool registry (`read`, `write`, `edit`,
-    /// `ls`, `use_skill`, `web_search`, `web_fetch`). Imperative because a
-    /// committed row describes a completed act — the spinner owns "running".
+    /// `ls`, `use_skill`, `browser.search`, `browser.fetch`). Imperative because
+    /// a committed row describes a completed act — the spinner owns "running".
     /// Unknown tools fall back to the raw name.
     static func titleForTool(_ name: String, arguments: [String: JSONValue]?) -> String {
         switch name.lowercased() {
@@ -40,12 +40,12 @@ nonisolated enum ToolDisplayHelpers {
                 return "Load skill \(skill)"
             }
             return "Load skill"
-        case "web_search":
+        case "browser.search":
             if let query = arguments?.string(for: "query"), !query.isEmpty {
                 return "Search \u{201C}\(query)\u{201D}"
             }
             return "Search the web"
-        case "web_fetch":
+        case "browser.fetch":
             if let url = arguments?.string(for: "url"), !url.isEmpty {
                 return "Fetch \(displayURL(url))"
             }

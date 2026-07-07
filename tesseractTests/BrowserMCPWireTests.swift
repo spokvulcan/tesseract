@@ -77,6 +77,31 @@ private enum Fixture {
         <!DOCTYPE html><html><head><title>Page Two</title></head>
         <body><main><h1>Second</h1><p>You reached page two successfully.</p></main></body></html>
         """
+
+    /// A DuckDuckGo-shaped results page: one redirect-wrapped result link (to
+    /// exercise `uddg` unwrapping) and one direct link.
+    static let serp = """
+        <!DOCTYPE html><html><head><title>Results</title></head><body>
+        <div class="result results_links web-result">
+          <h2 class="result__title">
+            <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fwidgets&rut=abc">Widgets Explained</a>
+          </h2>
+          <a class="result__snippet">Everything about widgets and gadgets in one place.</a>
+        </div>
+        <div class="result results_links web-result">
+          <h2 class="result__title">
+            <a class="result__a" href="https://example.org/gadgets">Gadgets Direct</a>
+          </h2>
+          <a class="result__snippet">A directly linked gadgets resource.</a>
+        </div>
+        </body></html>
+        """
+
+    /// A results page with no result nodes — exercises the readable-text fallback.
+    static let serpEmpty = """
+        <!DOCTYPE html><html><head><title>No Results</title></head>
+        <body><main><p>No results found for your query about zzzznothing.</p></main></body></html>
+        """
 }
 
 /// Primary browser test seam: drive the **Browser MCP Server** exactly as an
@@ -98,7 +123,10 @@ struct BrowserMCPWireTests {
         let mcpServer: MCPBrowserServer
     }
 
-    private func makeHarness(enabled: Bool = true) async -> Harness {
+    /// - Parameter serpPath: when set, the browser tool executor's search engine
+    ///   is pointed at this loopback fixture path, so `browser.search` renders and
+    ///   extracts a local results page instead of the live web.
+    private func makeHarness(enabled: Bool = true, serpPath: String? = nil) async -> Harness {
         // Fixture "web" server.
         let fixtures = HTTPServer(port: 0)
         func serve(_ path: String, _ html: String) {
@@ -112,6 +140,8 @@ struct BrowserMCPWireTests {
         }
         serve("/hello", Fixture.hello)
         serve("/page2", Fixture.page2)
+        serve("/serp", Fixture.serp)
+        serve("/serp-empty", Fixture.serpEmpty)
         await fixtures.start()
         let fixturePort = await ScriptedMCPServer.waitForPort(fixtures)
 
@@ -120,7 +150,12 @@ struct BrowserMCPWireTests {
         let browser = AgentBrowser(
             profile: AgentProfile(dataStore: .nonPersistent()),
             presenter: NoOpBrowserPresenter())
-        let executor = BrowserToolExecutor(browser: browser)
+        let engine: SearchEngine =
+            serpPath.map {
+                SearchEngine.duckDuckGo.pointedAt(
+                    URL(string: "http://127.0.0.1:\(fixturePort)\($0)")!)
+            } ?? .duckDuckGo
+        let executor = BrowserToolExecutor(browser: browser, searchEngine: engine)
         let mcpServer = MCPBrowserServer(
             browser: browser, executor: executor, isEnabled: { enabled })
         let mcp = HTTPServer(port: 0)
@@ -236,6 +271,48 @@ struct BrowserMCPWireTests {
             sessionID: session)
         #expect(!click.isError)
         #expect(click.contentText.contains("/page2"))
+    }
+
+    // MARK: - Search
+
+    /// `browser.search` renders the engine's results page in an Ephemeral Page
+    /// and lifts structured `{title, url, snippet}` from its DOM — including
+    /// resolving a DuckDuckGo redirect-wrapped link to its real destination.
+    @Test
+    func searchExtractsStructuredResultsFromRenderedResultsPage() async {
+        let h = await makeHarness(serpPath: "/serp")
+        defer { h.mcp.stop(); h.fixtures.stop() }
+        let session = await initialize(h.mcpPort)
+
+        let search = await rpc(
+            port: h.mcpPort, method: "tools/call", id: 2,
+            params: ["name": "search", "arguments": ["query": "widgets"]],
+            sessionID: session)
+        #expect(!search.isError)
+        // Redirect-wrapped result link resolved to its real destination.
+        #expect(search.contentText.contains("Widgets Explained"))
+        #expect(search.contentText.contains("https://example.com/widgets"))
+        #expect(search.contentText.contains("gadgets in one place"))
+        // Direct result link preserved as-is.
+        #expect(search.contentText.contains("Gadgets Direct"))
+        #expect(search.contentText.contains("https://example.org/gadgets"))
+    }
+
+    /// When the results page has no result nodes, search returns the page's
+    /// readable text so the agent can still recover.
+    @Test
+    func searchFallsBackToReadableTextWhenNoResults() async {
+        let h = await makeHarness(serpPath: "/serp-empty")
+        defer { h.mcp.stop(); h.fixtures.stop() }
+        let session = await initialize(h.mcpPort)
+
+        let search = await rpc(
+            port: h.mcpPort, method: "tools/call", id: 2,
+            params: ["name": "search", "arguments": ["query": "zzzznothing"]],
+            sessionID: session)
+        #expect(!search.isError)
+        #expect(search.contentText.contains("No structured results"))
+        #expect(search.contentText.contains("No results found for your query"))
     }
 
     // MARK: - Session isolation

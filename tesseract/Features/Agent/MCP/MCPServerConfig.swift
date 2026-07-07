@@ -67,9 +67,11 @@ nonisolated struct MCPServerConfig: Codable, Sendable, Hashable, Identifiable {
 
     var isBuiltInBrowser: Bool { id == Self.browserServerID }
 
-    /// The synthetic Browser MCP server entry. Its `enabled` tracks
-    /// `browserMCPServerEnabled` (the one "Browser Access" switch): flip it on
-    /// and the agent's 12 browser tools appear in chat; off and they vanish.
+    /// The synthetic Browser MCP server entry, reached in-process. Production
+    /// keeps it always `enabled`: the *Web Access* switch governs whether its 12
+    /// tools reach the agent (a per-turn filter), and *HTTP exposure* separately
+    /// gates the loopback listener (ADR-0028). `enabled` stays a parameter so the
+    /// manager treats it like any other server and tests can disable it.
     static func builtInBrowser(enabled: Bool) -> MCPServerConfig {
         MCPServerConfig(
             id: browserServerID, name: "Browser", url: "", enabled: enabled, headers: [:],

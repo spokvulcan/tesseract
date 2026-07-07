@@ -55,13 +55,6 @@ enum PackageBootstrap {
             }
         }
 
-        // Register standalone extensions (not package-managed).
-        // Always register web tools — dynamic filtering happens in AgentCoordinator
-        // based on settingsManager.webAccessEnabled before each prompt.
-        let webExt = WebToolsExtension()
-        extensionHost.register(webExt)
-        registeredPaths.append(webExt.path)
-
         // MCP client tools (PRD #190): the tool set is dynamic (servers connect,
         // disconnect, change their list), so the MCPClientManager owns the
         // extension and pushes snapshots into it; here we only register it.

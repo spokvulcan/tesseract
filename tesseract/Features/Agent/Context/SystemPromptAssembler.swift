@@ -21,6 +21,17 @@ nonisolated enum SystemPromptAssembler: Sendable {
         - Keep replies brief; refer to files by their paths
         """
 
+    /// A short web-orientation block, injected only when the turn carries browser
+    /// tools (ADR-0028). It gives a small model the search → read → interact order
+    /// up front — so it doesn't flail — and the rule to cite pages, not snippets.
+    static let webOrientation = """
+        Web access: when you need current or external information, work through the browser tools in order —
+        - browser.search to find candidate pages (returns titles, URLs, and snippets),
+        - browser.fetch (or navigate + read_page) to read a page's actual content,
+        - navigate / page_map / click / type to interact with pages that are gated or dynamic.
+        Search snippets are navigation hints, not facts: open and read a page before relying on it, and cite the pages you read.
+        """
+
     // MARK: - Private
 
     /// Shared date formatter (thread-safe after initialization).
@@ -67,6 +78,16 @@ nonisolated enum SystemPromptAssembler: Sendable {
             if !skillsListing.isEmpty {
                 sections.append(skillsListing)
             }
+        }
+
+        // 3.5 Web orientation — only when the turn carries browser tools (ADR-0028).
+        // Membership uses the Web Access gate's own source of truth
+        // (`browserToolNames`), so "is a browser tool" means exactly one thing:
+        // a user MCP server that happens to sanitize into the `browser` namespace
+        // can't trip the block the way a bare `browser.` prefix check would.
+        let browserTools = MCPServerConfig.browserToolNames
+        if tools.contains(where: { browserTools.contains($0.name) }) {
+            sections.append(webOrientation)
         }
 
         // 4. Context files

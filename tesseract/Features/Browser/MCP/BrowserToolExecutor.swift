@@ -12,6 +12,11 @@ final class BrowserToolExecutor {
 
     private let browser: AgentBrowser
 
+    /// The engine `search` renders (ADR-0028). Injected so it can be swapped and
+    /// so tests point it at a local fixture results page — search is then
+    /// exercisable end-to-end offline.
+    private let searchEngine: SearchEngine
+
     /// Default character budget for a single `read_page` / `fetch` chunk — well
     /// under a typical agent's MCP response cap, paginated beyond it.
     static let defaultReadChars = 20_000
@@ -30,8 +35,9 @@ final class BrowserToolExecutor {
     /// session. Navigation additionally self-times-out at `navigationTimeout`.
     static let toolTimeoutSeconds = 30
 
-    init(browser: AgentBrowser) {
+    init(browser: AgentBrowser, searchEngine: SearchEngine = .duckDuckGo) {
         self.browser = browser
+        self.searchEngine = searchEngine
     }
 
     /// Dispatch a call. Runs serialized within the session so a single client's
@@ -243,12 +249,25 @@ final class BrowserToolExecutor {
             !query.isEmpty
         else { return .error("search requires a non-empty `query`.") }
         let maxResults = min(max(args.int(for: "max_results") ?? 5, 1), 10)
-        let results = try await DuckDuckGoClient.search(query: query, maxResults: maxResults)
-        if results.isEmpty { return .text("No results for \"\(query)\".") }
-        let rendered = results.enumerated().map { index, result in
-            "\(index + 1). \(result.title)\n   \(result.url)\n   \(result.snippet)"
-        }.joined(separator: "\n\n")
-        return .text(rendered)
+
+        // Render the engine's results page in a cookieless Ephemeral Page and
+        // lift structured results from its DOM (ADR-0028) — no HTTP scrape.
+        let outcome = try await EphemeralPageReader.search(
+            query: query, engine: searchEngine, maxResults: maxResults)
+        switch outcome {
+        case .results(let results):
+            let rendered = results.enumerated().map { index, result in
+                "\(index + 1). \(result.title)\n   \(result.url)\n   \(result.snippet)"
+            }.joined(separator: "\n\n")
+            return .text(rendered)
+        case .fallbackText(let content):
+            // No structured results — hand back the readable page text so the
+            // agent can still recover (a "no results" or challenge page).
+            let rendered = Self.renderPageContent(content, maxChars: Self.defaultReadChars)
+            return .text(
+                "No structured results for \"\(query)\". Showing the results page text:\n\n"
+                    + rendered.text)
+        }
     }
 
     private func fetch(_ args: [String: JSONValue]) async throws -> BrowserToolResult {
@@ -257,15 +276,26 @@ final class BrowserToolExecutor {
         }
         let content = try await EphemeralPageReader.read(url: url)
         let maxChars = Self.readBudget(args.int(for: "max_chars"))
-        let chunk = PageReadPaginator.paginate(content.content, cursor: 0, maxChars: maxChars)
-        var out = "Title: \(content.title)\nURL: \(content.url.absoluteString)\n\n\(chunk.text)"
-        if chunk.nextCursor != nil {
+        let rendered = Self.renderPageContent(content, maxChars: maxChars)
+        var out = rendered.text
+        if rendered.truncated {
             out += "\n\n[Content truncated at \(maxChars) characters.]"
         }
         return .text(out)
     }
 
     // MARK: - Helpers
+
+    /// Render distilled page content as a `Title:/URL:` header + paginated body —
+    /// the shared shape for `fetch` and search's zero-results fallback. Reports
+    /// whether the body was truncated so the caller can add its own note.
+    private static func renderPageContent(
+        _ content: WebContentExtractor.ExtractedContent, maxChars: Int
+    ) -> (text: String, truncated: Bool) {
+        let chunk = PageReadPaginator.paginate(content.content, cursor: 0, maxChars: maxChars)
+        let text = "Title: \(content.title)\nURL: \(content.url.absoluteString)\n\n\(chunk.text)"
+        return (text, chunk.nextCursor != nil)
+    }
 
     private static func renderTabs(_ tabs: [TabSummary]) -> String {
         guard !tabs.isEmpty else { return "No tabs open." }

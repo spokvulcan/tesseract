@@ -2,8 +2,8 @@ import Foundation
 
 // MARK: - HTMLUtilities
 
-/// Shared HTML entity decoding and tag stripping used by both
-/// DuckDuckGoClient (search snippets) and WebContentExtractor (full pages).
+/// Shared HTML entity decoding and tag stripping used by
+/// ``WebContentExtractor`` when distilling fetched/read pages.
 nonisolated enum HTMLUtilities: Sendable {
 
     // MARK: - Regex Patterns

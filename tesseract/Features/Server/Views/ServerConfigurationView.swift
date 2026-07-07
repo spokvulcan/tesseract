@@ -88,7 +88,9 @@ struct ServerConfigurationView: View {
             }
 
             Section {
-                Toggle("Enable Browser Access (MCP)", isOn: $settings.browserMCPServerEnabled)
+                Toggle(
+                    "Expose browser to other apps (MCP over HTTP)",
+                    isOn: $settings.browserMCPServerEnabled)
 
                 LabeledContent("Agent Profile") {
                     Button("Open Agent Browser…") {
@@ -113,10 +115,10 @@ struct ServerConfigurationView: View {
                     }
                 }
             } header: {
-                Text("Browser Access")
+                Text("Browser Access for Other Apps")
             } footer: {
                 Text(
-                    "Exposes a Model Context Protocol server so agents (Claude Code, etc.) — and Tesseract's own agent — can drive a local browser using your logged-in sessions. Turning this on also gives the in-app agent all 12 browser tools in chat. Agent browsing always opens visible windows. Add external agents with: claude mcp add --transport http tesseract-browser http://127.0.0.1:\(settings.serverPort)/mcp"
+                    "Exposes a Model Context Protocol server over loopback HTTP so other apps (Claude Code, OpenCode, …) can drive a local browser using your logged-in sessions. Tesseract's own agent already has these browser tools via Web Access — this switch is only for outside apps. Agent browsing always opens visible windows. Add an external agent with: claude mcp add --transport http tesseract-browser http://127.0.0.1:\(settings.serverPort)/mcp"
                 )
             }
 
